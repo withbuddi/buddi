@@ -104,6 +104,13 @@ export interface DirArea {
   readonly legacyPath: string | undefined;
 }
 
+/**
+ * What a manifest's `register` hook is handed: the parts of the host that need
+ * no call — the version, the plugin's name and its directory — for a plugin
+ * that fixes something (a profile's place) before any context exists.
+ */
+export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir'>;
+
 /** The owner's decisions about this plugin's own tools. */
 export interface ApprovalsArea {
   /** Throw unless `envelope` is the effect the owner approved on this call. */
@@ -210,6 +217,8 @@ export interface ProposalsArea {
   proposePolicy(
     ctx: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null,
     input: Omit<ProposePolicyInput, 'plugin'>,
+    /** A `db.transaction`'s handle, for a proposal that must commit with the plugin's own rows. */
+    within?: DbTransaction,
   ): Promise<CreateProposalResult>;
   /** How many of this plugin's policy proposals are open. */
   countOpen(): Promise<number>;

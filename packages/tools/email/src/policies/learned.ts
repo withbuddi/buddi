@@ -29,10 +29,6 @@ import type {
   ProposePolicyInput,
   UntrustedSource,
 } from '@buddi/core/plugin';
-// Not yet on ctx.buddi: core hands a policy handler a PolicyHandlerContext
-// ({ db, now }), which carries no host, and the adoption below proposes inside
-// its own transaction, which ctx.buddi.proposals cannot join.
-import { proposePolicy } from '@buddi/core';
 import { POLICY_ACTIONS, POLICY_SCOPES, type PolicyAction, type PolicyParams, type PolicyScope } from './gate.js';
 import { createPolicy, normalizeMatcher, refusalFor, PolicyRefusal } from './store.js';
 
@@ -197,11 +193,13 @@ function adoptedWhy(action: string, count: number): string {
  * untouched. Returns how many rows moved.
  */
 export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<number> {
-  const client = await ctx.db.connect();
-  let moved = 0;
-  try {
-    await client.query('begin');
-    const { rows } = await client.query(
+  const proposals = ctx.buddi?.proposals;
+  if (ctx.buddi === undefined || proposals === undefined) {
+    throw new Error('email cannot move its proposed rules without its host (buddi.proposals).');
+  }
+  return ctx.buddi.db.transaction(async (tx) => {
+    let moved = 0;
+    const { rows } = await tx.query(
       `select id, account_id, scope, matcher, action, params, created_from
          from email.policies
         where proposed = true and revoked_at is null
@@ -213,7 +211,7 @@ export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<
         .filter((v: any) => v && typeof v.messageId === 'string')
         .map((v: any) => ({ messageId: String(v.messageId), processingVersion: Number(v.processingVersion ?? 0) }));
       const params = (row.params ?? {}) as PolicyParams & { note?: string };
-      const input = await learnedPolicyInput(client, {
+      const input = await learnedPolicyInput(tx, {
         accountId: row.account_id === null ? null : String(row.account_id),
         scope: row.scope as PolicyScope,
         sender: String(row.matcher),
@@ -221,20 +219,14 @@ export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<
         params,
         verdicts: createdFrom,
         why: typeof params.note === 'string' && params.note ? params.note : adoptedWhy(row.action, createdFrom.length),
-        sources: await mailSources(client, createdFrom.map((v) => v.messageId)),
+        sources: await mailSources(tx, createdFrom.map((v) => v.messageId)),
       });
-      await proposePolicy(client, null, input, ctx.now);
-      await client.query(`delete from email.policies where id = $1`, [row.id]);
+      await proposals.proposePolicy(null, input, tx);
+      await tx.query(`delete from email.policies where id = $1`, [row.id]);
       moved += 1;
     }
-    await client.query('commit');
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-  return moved;
+    return moved;
+  });
 }
 
 /** What the email plugin registers with core for kind `policy`. */

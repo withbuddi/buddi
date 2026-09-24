@@ -26,7 +26,8 @@ import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQ
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
-import { hostBindingOf, withPluginHost, type HostBinding } from './host/build.js';
+import { hostBindingOf, pluginDir, withPluginHost, type HostBinding } from './host/build.js';
+import { HOST_API_VERSION } from './plugin/version.js';
 import { registerSecretDestination } from './secrets/destinations.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
@@ -392,6 +393,7 @@ export class ToolRegistry {
         inputSchema: schemas.get(tool.name)!,
       });
     }
+    manifest.register?.({ version: HOST_API_VERSION, plugin: manifest.name, dir: pluginDir(manifest.name) });
   }
 
   manifests(): PluginManifest[] {

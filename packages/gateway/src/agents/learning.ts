@@ -18,10 +18,12 @@
  */
 import {
   appendEvent,
+  createPluginHost,
   createProposal,
   describeUntrustedSource,
   expireStaleProposals,
   findEchoes,
+  hostBindingOf,
   takeUntoldDecisions,
   toolSet,
   proposalTitle,
@@ -306,13 +308,17 @@ export async function adoptPluginPolicies(
   manifests: readonly PluginManifest[],
   now: Date,
   log: (line: string) => void = () => undefined,
+  timezone = 'UTC',
 ): Promise<Record<string, number>> {
   const moved: Record<string, number> = {};
   for (const manifest of manifests) {
     const adopt = manifest.policies?.adopt;
     if (!adopt) continue;
     try {
-      moved[manifest.name] = await adopt.call(manifest.policies, { db: pool, now });
+      // The plugin's own host, as a tool call would get it, so the adoption
+      // proposes through `buddi.proposals` and not through core's internals.
+      const buddi = createPluginHost(hostBindingOf(manifest), { db: pool, now: () => now, timezone, log });
+      moved[manifest.name] = await adopt.call(manifest.policies, { db: pool, now, buddi });
       if (moved[manifest.name]! > 0) log(`learning: moved ${moved[manifest.name]} proposed ${manifest.name} rule(s) to Settings → Proposals`);
     } catch (err) {
       log(`learning: could not move ${manifest.name}'s proposed rules: ${err instanceof Error ? err.message : String(err)}`);

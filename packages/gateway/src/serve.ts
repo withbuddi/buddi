@@ -57,7 +57,7 @@ import {
   type Suspension,
 } from '@buddi/core';
 import type { Pool } from 'pg';
-import { hostBrowser } from '@buddi/tool-browser';
+import { browserHost } from './browser-host.js';
 import { hostService } from '@buddi/tool-host';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
@@ -521,7 +521,7 @@ export async function main(): Promise<void> {
     // "Your browser" mode drives the owner's Chrome through the dashboard's
     // own WebSocket endpoint. Handed over before `enable`, which is what
     // builds the driver for whichever mode the owner last chose.
-    try { await hostBrowser(process.env, { extensionBridge: () => extensionEndpoint(process.env) }).enable(); }
+    try { await browserHost(process.env, { extensionBridge: () => extensionEndpoint(process.env) }).enable(); }
     catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
     // The mail account this installation sends and receives as, from the named
     // environment variable. Idempotent, and a no-op when none is configured —
@@ -933,7 +933,7 @@ export async function main(): Promise<void> {
       );
     }
     // A plugin's rules proposed before they came through core move here once.
-    if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line));
+    if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line), wiring.timezone);
     const proposalLoop = recovering ? idle.loop : startLoop({
       name: 'proposals',
       everyMs: PROPOSAL_SWEEP_MS,
@@ -1099,7 +1099,7 @@ export async function main(): Promise<void> {
       proposalLoop.stop();
       closingDashboard = dashboard?.close();
       closingDashboard?.catch(() => {});
-      void hostBrowser(process.env).shutdown();
+      void browserHost(process.env).shutdown();
       void Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
@@ -1109,7 +1109,7 @@ export async function main(): Promise<void> {
     await closingDashboard?.catch(() => {});
     console.log('buddi serve stopped cleanly');
   } finally {
-    await hostBrowser(process.env).shutdown();
+    await browserHost(process.env).shutdown();
     await pool.end();
   }
 }

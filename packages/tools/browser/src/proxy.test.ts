@@ -1,8 +1,12 @@
 import { createServer, createConnection, type AddressInfo, type Socket } from 'node:net';
 import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_POLICY } from '@buddi/core/plugin';
+import { DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
+import { guardedLookup, type LookupAll } from '@buddi/core/testing';
 import { startProxy } from './proxy.js';
+
+/** Core's guard over a fixture resolver, as the gateway hands it in. */
+const guard = (resolve: LookupAll) => (policy: AddressPolicy) => guardedLookup(resolve, policy);
 
 async function connect(proxyUrl: string, host: string, port: number): Promise<Socket> {
   const socket = createConnection({ host: '127.0.0.1', port: Number(new URL(proxyUrl).port) });
@@ -26,9 +30,12 @@ async function connect(proxyUrl: string, host: string, port: number): Promise<So
 }
 
 describe('browser egress proxy', () => {
+  it('is not started without the address guard', async () => {
+    await expect(startProxy()).rejects.toThrow('without the address guard');
+  });
   it('refuses private destinations, custom ports, and DNS rebinding answers', async () => {
     let lookups = 0;
-    const proxy = await startProxy({ resolve: async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; } });
+    const proxy = await startProxy({ lookup: guard(async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; }) });
     try {
       await expect(connect(proxy.url, '127.0.0.1', 80)).rejects.toThrow('refused');
       await expect(connect(proxy.url, 'public.example', 4317)).rejects.toThrow('refused');
@@ -42,7 +49,7 @@ describe('browser egress proxy', () => {
     const port = (target.address() as AddressInfo).port;
     let lookups = 0;
     const proxy = await startProxy({ policy: { ...DEFAULT_POLICY, ports: [port], blocked: () => null },
-      resolve: async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; } });
+      lookup: guard(async () => { lookups++; return [{ address: '127.0.0.1', family: 4 }]; }) });
     try {
       const socket = await connect(proxy.url, 'fixture.example', port);
       const reply = once(socket, 'data'); socket.write('fixture');

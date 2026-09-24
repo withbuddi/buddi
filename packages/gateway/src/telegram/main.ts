@@ -35,7 +35,7 @@ import {
 import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
 import { hostService } from '@buddi/tool-host';
-import { hostBrowser } from '@buddi/tool-browser';
+import { browserHost } from '../browser-host.js';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
 import { browserTabUrl, webConfig } from '../web/config.js';
 import { BROWSER_ACT, BrowserPhotos, runBrowserCommand } from './browser-view.js';
@@ -400,7 +400,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
    */
   const photos = new BrowserPhotos({
     api,
-    browser: hostBrowser(env),
+    browser: browserHost(env),
     link: (agentId, conversationId) => browserTabUrl(webConfig(env), agentId, conversationId),
     allowedHosts: env.BUDDI_BROWSER_HOSTS?.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean) ?? [],
     log,
@@ -435,8 +435,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         })()
       : { recapMissionId: deps.recapMissionId }),
     approvals,
-    onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, hostBrowser(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
-    browserControl: (command) => runBrowserCommand(hostBrowser(env), command),
+    onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, browserHost(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+    browserControl: (command) => runBrowserCommand(browserHost(env), command),
     hostControl: async (ownerId, command) => {
       const host = hostService(env);
       const permissions = (await listToolPermissions(pool, ownerId)).filter(p => p.tool === 'host.exec');

@@ -116,6 +116,7 @@ export type {
   OwnerArea,
   PagesArea,
   ProposalsArea,
+  RegisterHost,
   ScheduleArea,
   SecretBinding,
   SecretDeliveryContext,

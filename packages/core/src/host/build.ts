@@ -52,6 +52,7 @@ import type {
   AccountsArea,
   BuddiHost,
   DbArea,
+  DirArea,
   EnqueueRunInput,
   FileRow,
   FilesArea,
@@ -209,7 +210,6 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     },
   };
 
-  let dirMade: string | undefined;
   const host: BuddiHost = {
     version: HOST_API_VERSION,
     plugin,
@@ -225,19 +225,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       today: () => localDateString(facts.now(), facts.timezone),
     },
     db,
-    dir: {
-      get path(): string {
-        if (dirMade === undefined) {
-          const dir = path.join(resolveDataDir(env()), 'plugins-data', plugin);
-          mkdirSync(dir, { recursive: true });
-          dirMade = dir;
-        }
-        return dirMade;
-      },
-      get legacyPath(): string | undefined {
-        return LEGACY_DIRS.has(plugin) ? path.join(resolveDataDir(env()), plugin) : undefined;
-      },
-    },
+    dir: pluginDir(plugin),
     approvals: {
       assert: (ctx, envelope) => assertApprovedEffect(ctx, envelope),
       async standing(tool) {
@@ -301,6 +289,30 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   // `memory` is a type only in 1.0 (§11): a plugin that declares it gets
   // nothing yet, and a call is `undefined`.
   return host;
+}
+
+/**
+ * A plugin's `dir` area, the same one its `ctx.buddi.dir` is: what `register()`
+ * hands the manifest's `register` hook, and what the composition root hands a
+ * built-in's factory, before any context exists. Created on first read of
+ * `path`; the data directory is read then, from `env` or the host's.
+ */
+export function pluginDir(plugin: string, env?: EnvLike): DirArea {
+  const dataDir = (): string => resolveDataDir(env ?? services.env ?? process.env);
+  let made: string | undefined;
+  return {
+    get path(): string {
+      if (made === undefined) {
+        const dir = path.join(dataDir(), 'plugins-data', plugin);
+        mkdirSync(dir, { recursive: true });
+        made = dir;
+      }
+      return made;
+    },
+    get legacyPath(): string | undefined {
+      return LEGACY_DIRS.has(plugin) ? path.join(dataDir(), plugin) : undefined;
+    },
+  };
 }
 
 /**
@@ -544,7 +556,8 @@ function filesArea(
 
 function proposalsArea(binding: HostBinding, facts: HostFacts): ProposalsArea {
   return {
-    proposePolicy: (ctx, input) => proposePolicy(facts.db, ctx, { ...input, plugin: binding.plugin }, facts.now()),
+    proposePolicy: (ctx, input, within) =>
+      proposePolicy(within ?? facts.db, ctx, { ...input, plugin: binding.plugin }, facts.now()),
     async countOpen() {
       const { rows } = await facts.db.query(
         `select count(*)::int as n from core.proposals

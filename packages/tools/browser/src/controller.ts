@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { ToolContext } from '@buddi/core/plugin';
 import { BrowserManager } from './manager.js';
 import { PlaywrightHost } from './host.js';
+import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
@@ -24,6 +25,7 @@ export class HostController implements BrowserController {
     bridge?: () => ComputerBridge;
     extensionBridge?: () => ExtensionBridge;
     manager?: (settings: ControlSettings) => BrowserManager;
+    lookup?: GuardedLookup;
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -45,7 +47,7 @@ export class HostController implements BrowserController {
     if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts), {
       controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
     });
-    const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts });
+    const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}) });
     return new BrowserManager(() => new PlaywrightDriver(host.options, host), { controlFile: path.join(this.dir, 'control.json'), closeHost: () => host.close() });
   }
   async enable(): Promise<void> {

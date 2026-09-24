@@ -9,7 +9,7 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations } from '@buddi/core';
+import { createPool, runMigrations } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
@@ -22,8 +22,8 @@ import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { SourceContext, ToolContext } from '../types.js';
 import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
 import { adoptProposedPolicies, applyLearnedPolicy, revokeLearnedPolicy } from './learned.js';
-import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
 function hosted<C>(facts: C): C {
@@ -642,7 +642,7 @@ suite('email policies (postgres + fake imap)', () => {
         accountId, scope: 'sender', matcher: 'kept@shop.test', action: 'ignore', origin: 'learned', proposed: false,
       }, NOW);
 
-      expect(await adoptProposedPolicies({ db: pool, now: NOW })).toBe(1);
+      expect(await adoptProposedPolicies({ db: pool, now: NOW, buddi: createPluginHost(hostBindingOf(manifest), { db: pool, now: () => NOW, timezone: 'UTC' }) })).toBe(1);
       const rows = await loadPolicies(pool, accountId);
       expect(rows.map((r) => [r.matcher, r.proposed])).toEqual([['kept@shop.test', false]]);
       const open = await listOpenProposals(pool);
@@ -652,7 +652,7 @@ suite('email policies (postgres + fake imap)', () => {
       expect(open[0]!.provenance.sources.map((x) => x.ref)).toEqual(['"Sale" from old@shop.test', '"Sale 2" from old@shop.test']);
 
       // Idempotent: nothing is left to move, and the card is not doubled.
-      expect(await adoptProposedPolicies({ db: pool, now: NOW })).toBe(0);
+      expect(await adoptProposedPolicies({ db: pool, now: NOW, buddi: createPluginHost(hostBindingOf(manifest), { db: pool, now: () => NOW, timezone: 'UTC' }) })).toBe(0);
       expect(await listOpenProposals(pool)).toHaveLength(1);
       expect(await getProposal(pool, open[0]!.id)).not.toBeNull();
     });

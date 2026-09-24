@@ -1,7 +1,7 @@
 import { mkdir, chmod } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
-import { startProxy } from './proxy.js';
+import { startProxy, type GuardedLookup } from './proxy.js';
 
 export interface DriverOptions {
   profileDir: string;
@@ -10,6 +10,8 @@ export interface DriverOptions {
   channel?: 'chrome' | 'chromium';
   policy?: AddressPolicy;
   allowedHosts?: readonly string[];
+  /** Core's `guardedLookup`, for the SOCKS guard. Without it Playwright mode does not launch. */
+  lookup?: GuardedLookup;
 }
 export interface TabOwner { adopt(page: Page): void }
 
@@ -38,7 +40,7 @@ export class PlaywrightHost {
     await this.#proxy?.close();
     await mkdir(this.options.profileDir, { recursive: true, mode: 0o700 });
     await chmod(this.options.profileDir, 0o700);
-    const proxy = await startProxy({ policy: this.options.policy }); this.#proxy = proxy;
+    const proxy = await startProxy({ policy: this.options.policy, lookup: this.options.lookup }); this.#proxy = proxy;
     try {
       const context = await chromium.launchPersistentContext(this.options.profileDir, {
         headless: this.options.headless ?? false,
