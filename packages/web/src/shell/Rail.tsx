@@ -18,7 +18,7 @@ import { api } from '../api';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, WELCOME_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PageIcon, PluginPageDescriptor } from '../pages/types';
 import type { ThemeChoice } from '../theme';
-import { Segment, useAsync } from '../ui';
+import { Icon, Segment, useAsync } from '../ui';
 
 export function Rail({
   attention,
@@ -184,57 +184,13 @@ function RailLink({
   );
 }
 
-const stroke = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.6,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
 const ICONS: Record<string, JSX.Element> = {
-  // Files: two sheets, the front one with a folded corner — the shape a
-  // person reads as documents at a glance.
-  [FILES_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M7.5 2.8h5.2L16.5 6.6v8.6a1.2 1.2 0 0 1-1.2 1.2H7.5a1.2 1.2 0 0 1-1.2-1.2V4a1.2 1.2 0 0 1 1.2-1.2z" />
-      <path d="M12.7 2.8v3.8h3.8" />
-      <path d="M4.4 6.2v9.4a1.6 1.6 0 0 0 1.6 1.6h6.6" />
-    </svg>
-  ),
-  [HOME_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M3.5 9.2 10 3.6l6.5 5.6" />
-      <path d="M5.2 8.4v7.4a1 1 0 0 0 1 1h2.6v-4.6h2.4v4.6h2.6a1 1 0 0 0 1-1V8.4" />
-    </svg>
-  ),
-  [CHAT_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M17 10.6a4.9 4.9 0 0 1-4.9 4.9H7.8L3.6 18l.9-3A4.9 4.9 0 0 1 3 11V8.2A4.9 4.9 0 0 1 7.9 3.3h4.2A4.9 4.9 0 0 1 17 8.2Z" />
-      <path d="M7 8.3h6M7 11.3h3.6" />
-    </svg>
-  ),
-  [AGENTS_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <circle cx="7.5" cy="7" r="2.8" />
-      <path d="M2.8 16.2a4.7 4.7 0 0 1 9.4 0" />
-      <circle cx="14" cy="7.8" r="2.2" />
-      <path d="M13.2 12.5a3.9 3.9 0 0 1 4.3 3.7" />
-    </svg>
-  ),
-  [ACTIVITY_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M2.8 10.5h3.4l2-5.2 3.4 9.8 2.2-4.6h3.4" />
-    </svg>
-  ),
-  [SETTINGS_ROUTE]: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M3 5.5h14M3 10h14M3 14.5h14" />
-      <circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" />
-      <circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" />
-      <circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" />
-    </svg>
-  ),
+  [FILES_ROUTE]: <Icon name="files" />,
+  [HOME_ROUTE]: <Icon name="home" />,
+  [CHAT_ROUTE]: <Icon name="chat" />,
+  [AGENTS_ROUTE]: <Icon name="agents" />,
+  [ACTIVITY_ROUTE]: <Icon name="activity" />,
+  [SETTINGS_ROUTE]: <Icon name="settings" />,
 };
 
 /**
@@ -245,56 +201,14 @@ const ICONS: Record<string, JSX.Element> = {
  * that names none of them gets the plug.
  */
 const PLUGIN_ICONS: Record<PageIcon, JSX.Element> = {
-  // An envelope, the flap drawn as the fold.
-  mail: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <rect x="3" y="5" width="14" height="10.5" rx="1.4" />
-      <path d="M3.4 6 10 11l6.6-5" />
-    </svg>
-  ),
-  money: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <rect x="2.6" y="5.2" width="14.8" height="9.6" rx="1.6" />
-      <circle cx="10" cy="10" r="2.2" />
-      <path d="M5.4 10h.5M14.1 10h.5" />
-    </svg>
-  ),
-  calendar: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <rect x="3" y="4.4" width="14" height="12.2" rx="1.6" />
-      <path d="M3 8.2h14M6.8 2.9v2.6M13.2 2.9v2.6" />
-    </svg>
-  ),
-  people: ICONS[AGENTS_ROUTE] as JSX.Element,
-  file: ICONS[FILES_ROUTE] as JSX.Element,
-  chart: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M3.2 16.4V8.6M8.4 16.4V3.9M13.6 16.4v-5.8M3.2 16.4h13.6" />
-    </svg>
-  ),
-  bell: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M5.4 13.6V9a4.6 4.6 0 0 1 9.2 0v4.6l1.2 1.7H4.2Z" />
-      <path d="M8.4 17.1a1.8 1.8 0 0 0 3.2 0" />
-    </svg>
-  ),
-  plug: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <path d="M7.4 2.8v3.4M12.6 2.8v3.4" />
-      <path d="M5 6.2h10v3.1a5 5 0 0 1-10 0Z" />
-      <path d="M10 14.3v3" />
-    </svg>
-  ),
-  key: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <circle cx="6.6" cy="10" r="3.2" />
-      <path d="M9.8 10h7.2M14.4 10v2.6M16.6 10v1.8" />
-    </svg>
-  ),
-  globe: (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" {...stroke}>
-      <circle cx="10" cy="10" r="7.1" />
-      <path d="M2.9 10h14.2M10 2.9c3.4 3.7 3.4 10.5 0 14.2-3.4-3.7-3.4-10.5 0-14.2Z" />
-    </svg>
-  ),
+  mail: <Icon name="mail" />,
+  money: <Icon name="money" />,
+  calendar: <Icon name="calendar" />,
+  people: <Icon name="agents" />,
+  file: <Icon name="files" />,
+  chart: <Icon name="chart" />,
+  bell: <Icon name="bell" />,
+  plug: <Icon name="plug" />,
+  key: <Icon name="key" />,
+  globe: <Icon name="globe" />,
 };

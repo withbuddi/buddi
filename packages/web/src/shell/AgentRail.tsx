@@ -36,6 +36,7 @@ import { fmtRelative } from '../format';
 import { badgeOf, canGroup, waitingText, type AgentAttention, type AgentGroups } from './roster';
 import type { GroupView } from '../chat/types';
 import { FaceMark } from '../views/parts/Avatar';
+import { Icon } from '../ui/Icon';
 import { accentAttrs, accentOf } from './accent';
 
 export interface AgentRailProps {
@@ -136,7 +137,7 @@ export function AgentRail({
               <span className="wb-groups-label">Groups</span>
               {onNewGroup ? (
                 <button type="button" className="ui-icon-btn" data-size="sm" aria-label="New group" title="A team of agents in one conversation" onClick={onNewGroup}>
-                  <PlusIcon />
+                  <Icon name="plus" />
                 </button>
               ) : null}
             </div>
@@ -185,7 +186,7 @@ export function AgentRail({
           aria-pressed={collapsed}
           onClick={() => setCollapsed((value) => { storeCollapsed(!value); return !value; })}
         >
-          <ChevronIcon direction={collapsed ? 'right' : 'left'} />
+          <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} />
         </button>
       ) : null}
     </nav>
@@ -267,7 +268,7 @@ export function AgentFace({
           ) : null}
           {agent.available ? null : (
             <span className="wb-face-out" aria-hidden="true">
-              <OutIcon />
+              <Icon name="out" />
             </span>
           )}
         </button>
@@ -301,37 +302,5 @@ export function tintOf(agentId: string): number {
   return (hash % 6) + 1;
 }
 
-/** A struck-through circle: out of service, not merely quiet. */
-function OutIcon(): JSX.Element {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 12 12"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-    >
-      <circle cx="6" cy="6" r="4.4" />
-      <path d="M3.4 8.6 8.6 3.4" />
-    </svg>
-  );
-}
 
-function ChevronIcon({ direction }: { direction: 'left' | 'right' }): JSX.Element {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      {direction === 'left' ? <path d="M9 2.5 4.5 7 9 11.5" /> : <path d="M5 2.5 9.5 7 5 11.5" />}
-    </svg>
-  );
-}
 
-function PlusIcon(): JSX.Element {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-      <path d="M7 2.5v9M2.5 7h9" />
-    </svg>
-  );
-}

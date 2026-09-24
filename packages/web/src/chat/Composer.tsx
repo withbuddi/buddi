@@ -30,6 +30,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { chatApi, ApiError } from '../api';
+import { Icon } from '../ui';
 import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
 import type { UploadedAttachment } from './types';
@@ -521,7 +522,7 @@ export const Composer = forwardRef<ComposerHandle, {
             onClick={() => fileInput.current?.click()}
             disabled={disabled}
           >
-            <ClipIcon />
+            <Icon name="clip" />
           </button>
 
           {model ? (
@@ -607,7 +608,7 @@ export const Composer = forwardRef<ComposerHandle, {
             onClick={send}
             disabled={!canSend}
           >
-            <SendIcon />
+            <Icon name="send" />
           </button>
         </div>
       </div>
@@ -624,27 +625,3 @@ function asBlock(uploaded: UploadedAttachment): AttachmentBlock {
   return { type: 'attachment', artifactId: uploaded.artifactId, filename: uploaded.filename, mime: uploaded.mime, kind: uploaded.kind, sizeBytes: uploaded.sizeBytes };
 }
 
-const stroke = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
-function ClipIcon(): JSX.Element {
-  return (
-    <svg width="17" height="17" viewBox="0 0 17 17" aria-hidden="true" {...stroke}>
-      <path d="M13.2 8 8.4 12.8a3 3 0 0 1-4.2-4.2l5.1-5.1a2 2 0 1 1 2.8 2.8l-5 5" />
-    </svg>
-  );
-}
-
-/** Up, not right: the message leaves the box and goes to the thread above. */
-function SendIcon(): JSX.Element {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" {...stroke} strokeWidth={1.8}>
-      <path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2" />
-    </svg>
-  );
-}
