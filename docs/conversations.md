@@ -113,6 +113,39 @@ Where it lives: `packages/runtime/src/loop.ts`,
 `packages/web/src/chat/Composer.tsx`,
 `packages/gateway/src/telegram/surface.ts`.
 
+## An approval inside a delegation
+
+When a colleague reached through `agent.delegate` stops on an approval, the
+asking agent waits for it instead of getting an empty answer. Nothing is held
+open while it waits: the colleague's run ends awaiting the action, the tool
+writes `delegation.waiting` in the asker's conversation, and `ctx.suspend`
+ends the asker's run awaiting that same action, as a gate of its own would.
+
+The owner sees the approval where they are. The root conversation's transcript
+carries `delegatedApprovals`, which are the pending rows of every conversation
+under its delegations. The dock shows each one with a line like "@art, asked by
+@playground", the Delegation panel says "Waiting for your approval", and both
+agents' faces are badged. It is the colleague's own row, so a decision in
+either thread is the same decision.
+
+A decision from any surface resumes the colleague's conversation. The
+dashboard runs it on as the delegate it was: one level deep, on the nested
+budget, and without the owner-facing tools. Its answer then resumes the asker,
+as the deferred result of its `agent.delegate` call. If the colleague asks for
+another approval, the asker keeps waiting on that one. A rejection or an expiry
+reaches the asker as a failure with the reason. The approval's own expiry is
+the longest the asker waits, and a sweep once a minute enforces it. A decision
+made on Telegram is handed to the dashboard, as a group's is.
+
+A colleague that ends with no final words still returns something: its last
+message in its thread, the files it saved (library ids), its failed calls, and
+a `status` with a `note`.
+
+Where it lives: `packages/runtime/src/delegate.ts`,
+`packages/gateway/src/agents/delegation-chain.ts`,
+`packages/gateway/src/web/chat.ts` (`#resumeDelegate`,
+`sweepExpiredDelegations`).
+
 ## Related
 
 - [browser.md](browser.md) and [computer-use.md](computer-use.md) — what an

@@ -529,8 +529,19 @@ export function ChatPage({
   const inlineApproval = inlineApprovals.at(-1) ?? null;
   /** What the dock holds: every pending approval here, oldest first. */
   const docked: DockedApproval[] = useMemo(
-    () => inlineApprovals.map((item) => ({ approvalId: (item.props as { approvalId: string }).approvalId, toolUseId: item.id })),
-    [inlineApprovals],
+    () => [
+      ...inlineApprovals.map((item) => ({ approvalId: (item.props as { approvalId: string }).approvalId, toolUseId: item.id })),
+      // A colleague's approval under one of this thread's delegations is
+      // decided here as well: the owner is here, not in the colleague's thread.
+      ...(conversation?.delegatedApprovals ?? []).map((item) => ({
+        approvalId: item.approvalId,
+        toolUseId: item.toolUseId ?? '',
+        askedBy: askedByLine(item.chain, everyone),
+      })),
+    ],
+    // `everyone` is only read for handles; the roster is stable for a render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inlineApprovals, conversation?.delegatedApprovals],
   );
 
   /*
@@ -1473,4 +1484,12 @@ function HeadMenu({ items, disabled }: { items: HeadMenuItem[]; disabled: boolea
       ) : null}
     </div>
   );
+}
+
+/** "@art, asked by @playground" — the chain, from the agent that raised it up. */
+export function askedByLine(chain: readonly string[], agents: readonly ChatAgent[]): string {
+  const handle = (id: string): string => `@${agents.find((agent) => agent.id === id)?.handle ?? id}`;
+  const [raised, ...askers] = chain;
+  if (raised === undefined) return '';
+  return [handle(raised), ...askers.map((id) => `asked by ${handle(id)}`)].join(', ');
 }

@@ -1126,7 +1126,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         // and the run ends resumable on that action.
         if (suspendedBy !== undefined && pendingActionId === undefined) {
           pendingActionId = suspendedBy;
-          opts.onApprovalRequired?.(suspendedBy, 'a member of the group is waiting for the owner');
+          opts.onApprovalRequired?.(suspendedBy, 'a colleague is waiting for the owner');
         }
         results.push({
           type: 'tool_result',

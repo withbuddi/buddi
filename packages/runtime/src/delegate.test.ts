@@ -193,6 +193,7 @@ describe('agent.delegate', () => {
       agent: 'credit-coach',
       handle: 'credo',
       name: 'Credit Coach',
+      status: 'answered',
       conversationId: 'conv-1',
       runId: expect.any(String),
       text: 'Pay 200 before the 18th.',
@@ -380,5 +381,104 @@ describe('delegation.started', () => {
     await registry.invoke(DELEGATE_TOOL, task, { ...ctx, toolUseId: 'toolu_7' });
     const started = db.events.find((e) => e.kind === 'delegation.started');
     expect(captured[0]?.runId).toBe(started?.payload.runId);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * A colleague that wrote no final words
+ * ------------------------------------------------------------------ */
+
+/**
+ * The owner's case: @art called `image.generate`, the call became an approval,
+ * and its run ended there with nothing said. The delegation used to hand the
+ * asker `text: ""` and nothing else, which it read as "returned an empty
+ * result" and offered to retry — a fresh conversation, and a fresh approval.
+ */
+describe('a delegation whose colleague ended without an answer', () => {
+  const GATED = '11111111-2222-4333-8444-555555555555';
+
+  function scripted(
+    write: (db: FakeDb, conversationId: string) => void,
+    result: { text: string; stopped: 'end_turn' | 'max_turns' | 'awaiting-approval'; pendingActionId?: string },
+  ): { db: FakeDb; registry: ToolRegistry; ctx: ToolContext; suspended: string[] } {
+    const db = new FakeDb();
+    const registry = new ToolRegistry();
+    const suspended: string[] = [];
+    registry.register({
+      name: 'agent', version: '0.1.0', schema: 'agent', migrationsDir: '',
+      tools: [createDelegateTool({
+        catalog: () => fakeCatalog(),
+        registry,
+        provider: () => provider,
+        pool: db,
+        allowlistFor: () => ['credit-coach'],
+        runAgent: async (opts) => {
+          write(db, opts.conversationId as string);
+          return { ...result, turns: 1, usage: { input: 1, output: 1 }, snapshot: {} as never };
+        },
+      })],
+    });
+    const ctx: ToolContext = {
+      db: db as unknown as ToolContext['db'],
+      ownerId: 'owner',
+      now: () => new Date('2026-09-13T00:00:00Z'),
+      timezone: 'UTC',
+      agentId: 'finance-advisor',
+      conversationId: 'conv-caller',
+      toolUseId: 'toolu_ask',
+      suspend: (id) => suspended.push(id),
+    };
+    return { db, registry, ctx, suspended };
+  }
+
+  it('says the colleague is waiting on the owner, pauses the asker on that approval, and does not finish', async () => {
+    const { db, registry, ctx, suspended } = scripted((db, conversationId) => {
+      db.messages.push(
+        { conversation_id: conversationId, role: 'assistant', content: [{ type: 'thinking', text: '' }, { type: 'tool_use', id: 'toolu_img', name: 'image.generate', input: { prompt: 'a fisherman' } }] },
+        { conversation_id: conversationId, role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_img', content: `awaiting owner approval (action ${GATED}); this effect has not happened` }] },
+      );
+    }, { text: '', stopped: 'awaiting-approval', pendingActionId: GATED });
+
+    const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
+    expect(out.ok).toBe(true);
+    const output = out.ok ? (out.output as Record<string, unknown>) : {};
+    expect(output).toMatchObject({ status: 'awaiting-approval', waitingOn: { action: GATED, tool: 'image.generate' } });
+    expect(String(output.note)).toContain('@credo needs the owner\'s approval for image.generate');
+    // Not an `actionId`: that would draw the call as gated itself.
+    expect(JSON.stringify(output)).not.toContain('"actionId"');
+    // The asker stops on the colleague's approval, as on a gate of its own.
+    expect(suspended).toEqual([GATED]);
+    expect(db.kinds()).toContain('delegation.waiting');
+    expect(db.kinds()).not.toContain('delegation.finished');
+    const waiting = db.events.find((e) => e.kind === 'delegation.waiting');
+    expect(waiting?.conversation_id).toBe('conv-caller');
+    expect(waiting?.payload).toMatchObject({ actionId: GATED, parentActionId: GATED, toolUseId: 'toolu_ask', conversationId: 'conv-1' });
+  });
+
+  it('hands back what failed and a note, never a bare empty string, when the run ended on tool results', async () => {
+    const { registry, ctx, suspended } = scripted((db, conversationId) => {
+      db.messages.push(
+        { conversation_id: conversationId, role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'image.generate', input: {} }] },
+        { conversation_id: conversationId, role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', is_error: true, content: 'tool-error: no image account is chosen' }] },
+      );
+    }, { text: '', stopped: 'max_turns' });
+
+    const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
+    const output = out.ok ? (out.output as Record<string, unknown>) : {};
+    expect(output).toMatchObject({
+      status: 'no-answer',
+      text: '',
+      errors: [{ tool: 'image.generate', error: 'tool-error: no image account is chosen' }],
+    });
+    expect(String(output.note)).toContain('@credo ended without an answer; what failed is under errors');
+    expect(suspended).toEqual([]);
+  });
+
+  it("falls back to the colleague's last words in its thread when the run itself said nothing", async () => {
+    const { registry, ctx } = scripted((db, conversationId) => {
+      db.messages.push({ conversation_id: conversationId, role: 'assistant', content: [{ type: 'text', text: 'Saved it as fisherman.png.' }] });
+    }, { text: '', stopped: 'end_turn' });
+    const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
+    expect(out.ok && out.output).toMatchObject({ status: 'answered', text: 'Saved it as fisherman.png.' });
   });
 });

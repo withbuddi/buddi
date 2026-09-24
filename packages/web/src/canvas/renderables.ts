@@ -56,6 +56,12 @@ export interface DelegatePanelProps {
   runId: string | null;
   /** The delegation's own result, once the call has come back. */
   result: { ok: boolean; text: string | null } | null;
+  /**
+   * Set while the colleague is paused on the owner, or carrying on after a
+   * decision: the call has not come back. `approvalId` is the approval still
+   * up, when there is one.
+   */
+  waiting?: { approvalId: string | null } | null;
 }
 
 /**
@@ -219,6 +225,15 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // result does not open a second tab: it finishes the one that is there,
       // and the colleague's answer stays on it as the summary.
       const delegate = collected.find((item) => item.source === 'delegate' && item.id === block.toolUseId);
+      if (delegate && block.delegation?.state === 'waiting') {
+        delegate.props = {
+          ...(delegate.props as DelegatePanelProps),
+          result: null,
+          waiting: { approvalId: block.delegation.approvalId },
+        } satisfies DelegatePanelProps;
+        if (block.delegation.approvalId) delegate.tone = 'warning';
+        continue;
+      }
       if (delegate) {
         delegate.props = {
           ...(delegate.props as DelegatePanelProps),

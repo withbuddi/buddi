@@ -50,6 +50,7 @@ import {
   type GroupContext,
   type GroupRequestRow,
   type GroupRow,
+  expireDueApprovals,
   getAction,
   getArtifact,
   listOpenOffers,
@@ -83,9 +84,13 @@ import {
   budgetedProvider,
   createConversation,
   createGroupAskTool,
+  delegationOutput,
+  DELEGATION_WAITING,
+  MAX_NESTED_TURNS,
   projectTranscript,
   runAgent,
   type AttachmentRef,
+  type RunResult,
   type Interjection,
   type InterjectionSource,
   type RunAgentOptions,
@@ -125,6 +130,7 @@ import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js'
 import { type ArtifactStore } from '../telegram/attachments.js';
 import { LiveTurns } from './live.js';
 import { pictureUrl } from '../agents/avatars.js';
+import { descendants, waitingDelegation, type WaitingDelegation } from '../agents/delegation-chain.js';
 
 /** The surface id every web run is attributed to in the event log. */
 export const WEB_CHAT_SURFACE = WEB_SURFACE.id;
@@ -357,7 +363,16 @@ export async function readChatConversations(
 export type ChatBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string } }
+  | {
+      type: 'tool_result'; toolUseId: string; name: string; ok: boolean; output: unknown; error?: string; approval?: { id: string; state: string };
+      /**
+       * An `agent.delegate` call whose colleague is paused on the owner, or
+       * carrying on after a decision: the call has not come back yet, whatever
+       * its first result said. `approvalId` is the colleague's approval still
+       * waiting, when there is one.
+       */
+      delegation?: { state: 'waiting'; approvalId: string | null };
+    }
   | { type: 'attachment'; artifactId: string; filename: string | null; mime: string; kind: string; sizeBytes: number | null }
   | { type: 'thinking'; text: string }
   /**
@@ -459,6 +474,21 @@ export interface ChatTranscript {
    * it is not something the owner said.
    */
   carriedOver?: string;
+  /**
+   * Approvals waiting anywhere under this conversation's delegations — a
+   * colleague's, or a colleague's colleague's. The same rows the colleague's
+   * own conversation shows, not copies: deciding one here is the decision.
+   * `toolUseId` is the call in *this* conversation the work went out through;
+   * `chain` is who is asking, from the agent that raised it up to this one.
+   */
+  delegatedApprovals?: DelegatedApprovalView[];
+}
+
+export interface DelegatedApprovalView {
+  approvalId: string;
+  toolUseId: string | null;
+  tool: string;
+  chain: string[];
 }
 
 /**
@@ -542,6 +572,8 @@ export async function readChatTranscript(
       where a.conversation_id = $1::uuid`, [conversationId, now],
   );
   const approvals = new Map<string, TranscriptApproval>(actions.map(a => [String(a.id), a as TranscriptApproval]));
+  // What this conversation's delegations are paused on, and what came back.
+  const under = await delegatedState(pool, conversationId, String(conversation.agent_id), now);
 
   // Untaken, unexpired, this conversation's. A chip the owner clicks goes
   // through the same claim-once take the Telegram tap does.
@@ -583,9 +615,10 @@ export async function readChatTranscript(
       role: m.role,
       at: m.at,
       blocks: m.speaker === APPROVAL_RESUME_SPEAKER
-        ? approvalResultBlocks(m.raw, approvals)
+        ? approvalResultBlocks(m.raw, approvals, under.resumed)
         : m.raw.map((block) => toChatBlock(block, toolNames, artifacts, approvals))
             .map((block) => withDelegation(block, delegations))
+            .map((block) => withDelegationOutcome(block, under))
             .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
     })),
@@ -600,7 +633,88 @@ export async function readChatTranscript(
       speaker: OWNER_INTERJECTION_SPEAKER,
     }))],
     ...(await runsOf(pool, conversationId)),
+    ...(under.approvals.length > 0 ? { delegatedApprovals: under.approvals } : {}),
   };
+}
+
+/** A delegation's state as the asking conversation's reader needs it. */
+interface DelegatedState {
+  approvals: DelegatedApprovalView[];
+  /** The last `delegation.waiting` / `delegation.finished` per asking call. */
+  latest: Map<string, { kind: string; payload: Record<string, any> }>;
+  /** The action an asking run stopped on → the call it stopped in. */
+  resumed: Map<string, string>;
+}
+
+/**
+ * Everything under this conversation's delegations that the page draws here.
+ *
+ * The approvals are read by conversation, from the one table every surface
+ * decides from — so a card in the root dock and the card in the colleague's
+ * own thread are one row, and a decision in either settles both.
+ */
+async function delegatedState(pool: Pool, conversationId: string, agentId: string, now: Date): Promise<DelegatedState> {
+  const empty: DelegatedState = { approvals: [], latest: new Map(), resumed: new Map() };
+  let below: Awaited<ReturnType<typeof descendants>>;
+  try {
+    below = await descendants(pool, conversationId, agentId);
+  } catch {
+    return empty;
+  }
+  if (below.length === 0) return empty;
+  const { rows: pending } = await pool.query(
+    `select a.id, a.tool, a.conversation_id from core.actions a join core.approvals p on p.action_id = a.id
+      where a.conversation_id = any($1::uuid[]) and p.state = 'pending' and a.expires_at > $2
+      order by a.created_at asc`,
+    [below.map((d) => d.conversationId), now],
+  );
+  const approvals = pending.map((row): DelegatedApprovalView => {
+    const where = below.find((d) => d.conversationId === String(row.conversation_id));
+    return { approvalId: String(row.id), toolUseId: where?.toolUseId ?? null, tool: String(row.tool), chain: where?.chain ?? [] };
+  });
+  const { rows: marks } = await pool.query(
+    `select kind, payload from core.events
+      where conversation_id = $1::uuid and kind in ($2, 'delegation.finished')
+      order by id asc`,
+    [conversationId, DELEGATION_WAITING],
+  );
+  const latest = new Map<string, { kind: string; payload: Record<string, any> }>();
+  const resumed = new Map<string, string>();
+  for (const row of marks) {
+    const payload = (row.payload ?? {}) as Record<string, any>;
+    if (typeof payload.toolUseId !== 'string') continue;
+    latest.set(payload.toolUseId, { kind: String(row.kind), payload });
+    if (row.kind === DELEGATION_WAITING && typeof payload.parentActionId === 'string') resumed.set(payload.parentActionId, payload.toolUseId);
+  }
+  return { approvals, latest, resumed };
+}
+
+/**
+ * A delegate call's result, as it stands now rather than as it first came back.
+ *
+ * A call whose colleague stopped on an approval returned `awaiting-approval`,
+ * and the transcript row still says so — the run ended there. What happened
+ * next is in the log: still waiting (drawn as waiting, with the approval that
+ * is up), or answered after the decision (drawn as that answer, or as the
+ * failure it was). The same move the reader makes for a gated call, whose
+ * row is joined to the action's state.
+ */
+function withDelegationOutcome(block: ChatBlock, state: DelegatedState): ChatBlock {
+  if (block.type !== 'tool_result' || block.name !== DELEGATE_TOOL_NAME) return block;
+  const output = block.output as { status?: unknown } | null;
+  if (output === null || typeof output !== 'object' || output.status !== 'awaiting-approval') return block;
+  const mark = state.latest.get(block.toolUseId);
+  if (mark?.kind === 'delegation.finished') {
+    const ok = mark.payload.ok === true;
+    return {
+      ...block,
+      ok,
+      output: mark.payload.output ?? { status: mark.payload.status ?? (ok ? 'answered' : 'failed') },
+      ...(ok ? {} : { error: String(mark.payload.error ?? 'the delegation failed') }),
+    };
+  }
+  const up = state.approvals.find((a) => a.toolUseId === block.toolUseId);
+  return { ...block, delegation: { state: 'waiting', approvalId: up?.approvalId ?? null } };
 }
 
 /** The tool whose calls open a conversation of their own. */
@@ -694,10 +808,16 @@ const RESUMED_APPROVAL = /^tool result \(deferred\) for action ([0-9a-f-]{36}): 
 function approvalResultBlocks(
   raw: Array<Record<string, any>>,
   approvals: Map<string, TranscriptApproval>,
+  delegated: Map<string, string> = new Map(),
 ): ChatBlock[] {
   const text = raw.find((block) => block.type === 'text')?.text;
   const match = typeof text === 'string' ? RESUMED_APPROVAL.exec(text) : null;
   if (!match) return raw.map((block) => toChatBlock(block, new Map(), new Map(), approvals));
+  // A delegation coming back: the action is the colleague's, not this
+  // conversation's, and what came back is the colleague's answer.
+  if (delegated.has(match[1] as string)) {
+    return [{ type: 'approval_result', actionId: match[1] as string, name: DELEGATE_TOOL_NAME, state: match[2] as string, output: resultOf(text as string) }];
+  }
   const action = approvals.get(match[1] as string);
   const state = action?.state ?? (match[2] as string);
   return [{
@@ -1014,6 +1134,15 @@ interface RunTurn {
    * run is given them as its turn and writes nothing new.
    */
   promoted?: boolean;
+  /**
+   * A colleague's run continued after an approval, inside a delegation that
+   * is still open: it runs as the delegate it was — one level deep, on the
+   * platform's nested budget, with none of the owner-facing tools — because
+   * its answer goes back to the agent that asked, not to the owner.
+   */
+  delegated?: { depth: number };
+  /** Told how the run ended — `undefined` when it threw or was cancelled. */
+  onResult?: (result: RunResult | undefined) => void;
 }
 
 interface LiveRun {
@@ -1413,8 +1542,114 @@ export class WebChat {
         this.#enqueue(groupKey(groupId), () => this.#resumeGroup(groupId, conversationId, agent, resume, action.tool));
         return;
       }
+      // A colleague's conversation whose asker is paused on it: the colleague
+      // runs on as the delegate it is, and its answer resumes the asker.
+      const waiting = await waitingDelegation(this.#deps.pool, conversationId).catch((err) => {
+        this.#log(`web chat: reading the delegation above ${conversationId} failed: ${message(err)}`);
+        return null;
+      });
+      if (waiting) {
+        this.#enqueue(conversationId, () => this.#resumeDelegate(waiting, agent, resume, action.tool));
+        return;
+      }
       this.#enqueue(conversationId, async () => { await this.#run({ agent, conversationId, runId: randomUUID(), text: '', files: [], resume, approval: { tool: action.tool } }); });
     })();
+  }
+
+  /**
+   * A delegation that waited on the owner, carried on.
+   *
+   * No process held anything while the owner decided: the asking run ended
+   * awaiting the colleague's action, exactly as a gated call of its own would
+   * have, and the colleague's run ended the same way. So this is two resumes,
+   * in order, each on its own conversation's queue — the colleague's run with
+   * the decision, then the asker's with the colleague's answer as the
+   * deferred result of its `agent.delegate` call. A colleague that stops on
+   * another approval keeps the asker waiting, now on that one.
+   *
+   * A rejected or expired approval still lets the colleague say what it does
+   * instead, in its own thread; the asker is handed a failure with the reason.
+   */
+  async #resumeDelegate(waiting: WaitingDelegation, agent: CatalogAgent, resume: NonNullable<RunAgentOptions['resume']>, tool?: string): Promise<void> {
+    const pool = this.#deps.pool;
+    const { link } = waiting;
+    const runId = randomUUID();
+    let result: RunResult | undefined;
+    await this.#run({
+      agent, conversationId: link.childConversationId, runId, text: '', files: [], resume,
+      approval: { tool }, delegated: { depth: 1 }, onResult: (r) => { result = r; },
+    });
+    const asker = this.#deps.catalog.get(link.parentAgentId);
+    const event = (kind: string, payload: Record<string, unknown>): Promise<void> => pool.query(
+      `insert into core.events (kind, conversation_id, payload) values ($1, $2, $3::jsonb)`,
+      [kind, link.parentConversationId, JSON.stringify({
+        from: link.parentAgentId, to: link.childAgentId, conversationId: link.childConversationId, runId,
+        ...(link.toolUseId ? { toolUseId: link.toolUseId } : {}), ...payload,
+      })],
+    ).then(() => undefined);
+
+    if (result?.stopped === 'awaiting-approval' && result.pendingActionId) {
+      await event(DELEGATION_WAITING, { actionId: result.pendingActionId, parentActionId: waiting.parentActionId });
+      return;
+    }
+    const target = { id: agent.id, handle: agent.handle, name: agent.name };
+    const output = result
+      ? await delegationOutput(pool, { target, conversationId: link.childConversationId, runId, result })
+      : null;
+    const decided = resume.state === 'succeeded';
+    const reason = !decided
+      ? delegateFailure(agent.handle, tool, resume.state, resume.error)
+      : output === null
+        ? `@${agent.handle} could not carry on after the approval; its thread says why.`
+        : null;
+    const answer = output
+      ? { ...output, ...(reason ? { status: 'failed' as const, note: reason } : {}) }
+      : null;
+    await event('delegation.finished', {
+      ok: reason === null,
+      status: answer?.status ?? 'failed',
+      ...(result ? { turns: result.turns, stopped: result.stopped } : {}),
+      ...(reason ? { error: reason } : {}),
+      ...(answer ? { output: answer } : {}),
+    });
+    if (!asker) {
+      this.#log(`web chat: @${agent.handle} answered, but the agent that asked (${link.parentAgentId}) is not installed`);
+      return;
+    }
+    this.resumeHost(
+      { agentId: asker.id, conversationId: link.parentConversationId, tool: DELEGATE_TOOL },
+      reason === null
+        ? { actionId: waiting.parentActionId, tool: DELEGATE_TOOL, state: 'succeeded', result: answer }
+        : {
+            actionId: waiting.parentActionId, tool: DELEGATE_TOOL, state: 'failed',
+            error: answer?.text.trim() ? `${reason} @${agent.handle} said: ${answer.text.trim()}` : reason,
+          },
+    );
+  }
+
+  /**
+   * Approvals past their expiry, moved to `expired`, and any delegation that
+   * was waiting on one handed back as a failure. Nothing else wakes on an
+   * expiry: a run the owner started in the open simply stays where it
+   * stopped, as it always has. The asking agent is different — it is owed an
+   * answer — so the approval's own expiry is the upper bound on its wait.
+   */
+  async sweepExpiredDelegations(): Promise<number> {
+    const pool = this.#deps.pool;
+    const expired = await expireDueApprovals(pool, { now: this.#deps.now() });
+    let resumed = 0;
+    for (const actionId of expired) {
+      const action = await getAction(pool, actionId).catch(() => undefined);
+      if (!action?.conversationId || action.jobId) continue;
+      const waiting = await waitingDelegation(pool, action.conversationId).catch(() => null);
+      if (!waiting || waiting.actionId !== actionId) continue;
+      this.resumeHost(
+        { agentId: action.agentId, conversationId: action.conversationId, tool: action.tool },
+        { actionId, tool: action.tool, state: 'expired', error: 'the approval expired before the owner decided' },
+      );
+      resumed += 1;
+    }
+    return resumed;
   }
 
   /* ------------------------------------------------------------------ *
@@ -1708,9 +1943,18 @@ export class WebChat {
    */
   async #run(turn: RunTurn): Promise<'ran' | 'suspended' | 'failed'> {
     const interjections = new LivePendingInput(this.#deps.pool, turn.conversationId, turn.runId, this.#log);
+    // A listener is told exactly once however the turn ends — a refusal, a
+    // throw, a cancel — so a delegation waiting on this run is never stranded.
+    let told = false;
+    const tell = (result: RunResult | undefined): void => {
+      if (told) return;
+      told = true;
+      turn.onResult?.(result);
+    };
     try {
-      return await this.#turn(turn, interjections);
+      return await this.#turn({ ...turn, onResult: tell }, interjections);
     } finally {
+      tell(undefined);
       // The window shuts first, so nothing can be handed to a run that is no
       // longer there to take it, and only then is what is left promoted.
       interjections.close();
@@ -1881,9 +2125,11 @@ export class WebChat {
     // tool the agent used a moment ago fails the instant it is resumed. A
     // resume with no decision behind it (nothing produces one today) gets the
     // bare context, because nothing about it would be the owner speaking.
-    const baseCtx = turn.resume
+    const ownerCtx = turn.resume
       ? (turn.approval ? approvalResumeContext(deps.ctx, turn.approval, runId) : deps.ctx)
       : ownerRequestContext(deps.ctx, turn.text, runId);
+    const baseCtx = turn.delegated ? { ...ownerCtx, delegationDepth: turn.delegated.depth } : ownerCtx;
+    const delegated = turn.delegated !== undefined;
     const options: RunAgentOptions = {
       // In a room, delegation is the ask tool and nothing else: an agent
       // that could delegate would reach a non-member, off budget, off record.
@@ -1900,13 +2146,18 @@ export class WebChat {
          * of the owner's first impression.
          */
         ...(turn.opening ? { thinking: 'off' as const } : {}),
-        tools: [
+        // A delegate's budget is the platform's nested cap, as it was when
+        // the delegation first ran it.
+        ...(delegated ? { maxTurns: Math.min(base.maxTurns, MAX_NESTED_TURNS) } : {}),
+        tools: delegated ? base.tools : [
           ...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools),
           ...OFFER_TOOLS,
           ...(turn.opening ? [] : ASK_TOOLS),
           ...(room?.askTool ? [GROUP_ASK_TOOL] : []),
         ],
       },
+      // Its words go back to the agent that asked, which is not the owner.
+      ...(delegated ? { budgetNotice: false } : {}),
       provider,
       registry,
       ctx: room ? { ...baseCtx, group: room.context } : baseCtx,
@@ -1930,7 +2181,7 @@ export class WebChat {
         : turn.offer
           ? { openingSpeaker: offerTurnSpeaker(turn.offer.label) }
           : {}),
-      systemSuffix: [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
+      systemSuffix: delegated ? systemSuffix : [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),
       ...(attachments.length > 0 ? { attachments } : {}),
@@ -1975,6 +2226,7 @@ export class WebChat {
     );
     // However it ended, nothing stays half-written on anybody's screen.
     this.live.end(conversationId, runId);
+    turn.onResult?.(result);
 
     if (cancelled) {
       await this.#failed(
@@ -2257,4 +2509,15 @@ export async function conversationAgent(pool: Pool, conversationId: string): Pro
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Why a delegation failed, for the agent that asked: who, which call, and what happened to it. */
+export function delegateFailure(handle: string, tool: string | undefined, state: string, error?: string): string {
+  const call = tool ? ` ${tool}` : '';
+  const what = state === 'rejected'
+    ? `the owner rejected @${handle}'s${call}`
+    : state === 'expired'
+      ? `the owner did not decide @${handle}'s${call} before it expired`
+      : `@${handle}'s${call} ended ${state}${error ? `: ${error}` : ''}`;
+  return `The delegation failed: ${what}.`;
 }

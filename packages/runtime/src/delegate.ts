@@ -40,7 +40,7 @@ import {
   type ToolRegistry,
 } from '@buddi/core';
 import type { RuntimeProvider } from './anthropic.js';
-import { createConversation, runAgent as defaultRunAgent, type Queryable } from './loop.js';
+import { createConversation, runAgent as defaultRunAgent, type Queryable, type RunResult } from './loop.js';
 
 /** The tool name. Namespaced like every other tool; the plugin family is `agent`. */
 export const DELEGATE_TOOL = 'agent.delegate';
@@ -121,6 +121,31 @@ export const delegateInput = z.object({
 
 export type DelegateInput = z.infer<typeof delegateInput>;
 
+/** Written in the caller's conversation while its colleague waits on the owner. */
+export const DELEGATION_WAITING = 'delegation.waiting';
+
+/**
+ * How the colleague's run ended, in one word, so the caller never has to read
+ * it off an empty string.
+ *
+ * - `answered`: it wrote an answer and stopped on its own.
+ * - `stopped`: it wrote something but ran out of budget first.
+ * - `no-answer`: it ended without writing anything; what it made, or what
+ *   failed, is still listed.
+ * - `awaiting-approval`: it is paused on an approval the owner has been asked
+ *   for. The caller's run pauses with it and resumes when the owner decides.
+ * - `failed`: the approval it waited on was rejected or expired, or its run
+ *   could not go on.
+ */
+export type DelegationStatus = 'answered' | 'stopped' | 'no-answer' | 'awaiting-approval' | 'failed';
+
+export interface DelegatedArtifact {
+  id: string;
+  filename: string | null;
+  mime: string;
+  kind: string;
+}
+
 export interface DelegateOutput {
   agent: string;
   /** The target's handle, without the `@`: what the answer is attributed to. */
@@ -130,6 +155,19 @@ export interface DelegateOutput {
   /** The nested run's own id, so a reader can follow it while it is alive. */
   runId: string;
   text: string;
+  status: DelegationStatus;
+  /** What the caller should do with this, when `text` alone would mislead. */
+  note?: string;
+  /** Files the colleague saved in its conversation, by library id. */
+  artifacts?: DelegatedArtifact[];
+  /** The colleague's failed tool calls, newest last. */
+  errors?: Array<{ tool: string; error: string }>;
+  /**
+   * The approval the colleague is paused on. Deliberately not `actionId`: a
+   * reader that finds an `actionId` in a result draws it as this call's own
+   * gate, and this call is not gated — its colleague is.
+   */
+  waitingOn?: { action: string; tool: string | null };
 }
 
 /** Insert one row into the event log. Same SQL shape as the loop's. */
@@ -152,6 +190,119 @@ export function delegationMessage(input: DelegateInput, from: string): string {
   const header = `You are being asked a question by ${from}, another of the owner's agents. Answer it directly, with the numbers you can look up yourself. Your answer is read by ${from}, not by the owner.`;
   const body = context === '' ? input.task : `${input.task}\n\nContext from ${from}:\n${context}`;
   return `${header}\n\n${body}`;
+}
+
+/** What `delegationOutput` needs to know about the colleague's run. */
+export interface DelegationRun {
+  target: Pick<DelegateAgent, 'id' | 'handle' | 'name'>;
+  conversationId: string;
+  runId: string;
+  result: Pick<RunResult, 'text' | 'stopped' | 'pendingActionId'>;
+}
+
+/**
+ * What a delegation hands back, from the colleague's run and its thread.
+ *
+ * Never a bare empty string: a run that ended on a tool result, or paused on
+ * an approval, wrote no final words, and `""` with nothing beside it is what
+ * made a caller tell the owner its colleague "returned an empty result". So
+ * the colleague's last words in its thread stand in for missing ones, the
+ * files it saved come back as library ids, its failed calls come back with
+ * their reasons, and `status` and `note` say which of those the caller has.
+ *
+ * Shared by the tool and by the host that continues a delegation after an
+ * approval, so both return one shape.
+ */
+export async function delegationOutput(pool: Queryable, run: DelegationRun): Promise<DelegateOutput> {
+  const { target, conversationId, runId, result } = run;
+  const who = `@${target.handle}`;
+  const thread = await readThread(pool, conversationId);
+  const text = result.text.trim() !== '' ? result.text : thread.lastSaid;
+  // Whatever the colleague produced travels back with its words: a poster
+  // is the answer, not a sentence about a poster. Ids only; the caller
+  // attaches or describes them with the artifact tools it holds.
+  let artifacts: DelegatedArtifact[] = [];
+  try {
+    artifacts = (await listArtifacts(pool as never, { conversationId, limit: 20 })).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, kind: a.kind }));
+  } catch {
+    /* The reply stands on its own; a listing that fails costs the attachments, not the answer. */
+  }
+  const base = {
+    agent: target.id,
+    handle: target.handle,
+    name: target.name,
+    conversationId,
+    runId,
+    text,
+    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(thread.errors.length > 0 ? { errors: thread.errors } : {}),
+  };
+  if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
+    const tool = thread.gates.get(result.pendingActionId) ?? null;
+    return {
+      ...base,
+      status: 'awaiting-approval',
+      waitingOn: { action: result.pendingActionId, tool },
+      note:
+        `${who} needs the owner's approval${tool ? ` for ${tool}` : ''} before it can go on, and the owner has been asked in this conversation. ` +
+        'Say so in one line and end your turn. Its answer comes back to you when the owner decides; do not ask again or retry.',
+    };
+  }
+  if (text.trim() !== '') {
+    return { ...base, status: result.stopped === 'end_turn' ? 'answered' : 'stopped' };
+  }
+  const note = artifacts.length > 0
+    ? `${who} ended without writing an answer; what it made is under artifacts.`
+    : thread.errors.length > 0
+      ? `${who} ended without an answer; what failed is under errors. Tell the owner what failed; do not retry blindly.`
+      : `${who} ended without an answer or a file (stopped: ${result.stopped}). Say so plainly; do not invent one.`;
+  return { ...base, status: 'no-answer', note };
+}
+
+/** The gate text the loop answers a gated call with. See `awaitingApprovalText`. */
+const GATE = /^awaiting owner approval \(action ([0-9a-f-]{36})\)/;
+
+/** The colleague's thread, read once: its last words, its failures, its gates. */
+async function readThread(pool: Queryable, conversationId: string): Promise<{
+  lastSaid: string;
+  errors: Array<{ tool: string; error: string }>;
+  gates: Map<string, string>;
+}> {
+  const gates = new Map<string, string>();
+  let rows: Array<{ role: string; content: unknown }>;
+  try {
+    ({ rows } = await pool.query(
+      `select role, content from core.messages where conversation_id = $1 order by created_at asc, id asc`,
+      [conversationId],
+    ));
+  } catch {
+    return { lastSaid: '', errors: [], gates };
+  }
+  const names = new Map<string, string>();
+  const errors: Array<{ tool: string; error: string }> = [];
+  let lastSaid = '';
+  for (const row of rows ?? []) {
+    const blocks = Array.isArray(row.content) ? (row.content as Array<Record<string, unknown>>) : [];
+    if (row.role === 'assistant') {
+      const said = blocks
+        .filter((b) => b.type === 'text')
+        .map((b) => String(b.text ?? '').trim())
+        .filter((t) => t !== '')
+        .join('\n\n');
+      if (said !== '') lastSaid = said;
+      for (const b of blocks) if (b.type === 'tool_use') names.set(String(b.id), String(b.name));
+      continue;
+    }
+    for (const b of blocks) {
+      if (b.type !== 'tool_result') continue;
+      const tool = names.get(String(b.tool_use_id)) ?? 'tool';
+      const content = typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? null);
+      const gate = GATE.exec(content);
+      if (gate) gates.set(gate[1] as string, tool);
+      if (b.is_error === true) errors.push({ tool, error: content.length > 400 ? `${content.slice(0, 399)}…` : content });
+    }
+  }
+  return { lastSaid, errors: errors.slice(-3), gates };
 }
 
 export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateInput, DelegateOutput> {
@@ -289,6 +440,38 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
         throw err;
       }
 
+      const output = await delegationOutput(pool, { target, conversationId, runId, result });
+
+      if (output.status === 'awaiting-approval' && result.pendingActionId) {
+        /*
+         * The colleague is paused on the owner, and so is this run: `suspend`
+         * ends the caller's turn awaiting the very same action, exactly as a
+         * gate of its own would, and nothing is held open while the owner
+         * decides. This event is how the decision finds its way back: the
+         * host continues the colleague's run with the outcome, and the
+         * colleague's answer resumes the caller (docs/groups.md does the same
+         * for a room).
+         */
+        await appendEvent(
+          pool,
+          DELEGATION_WAITING,
+          {
+            from,
+            to: target.id,
+            conversationId,
+            runId,
+            actionId: result.pendingActionId,
+            // What the caller's own run stopped on. It stays the same however
+            // many approvals the colleague asks for on the way.
+            parentActionId: result.pendingActionId,
+            ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
+          },
+          ctx.conversationId ?? conversationId,
+        );
+        ctx.suspend?.(result.pendingActionId);
+        return output;
+      }
+
       await appendEvent(
         pool,
         'delegation.finished',
@@ -300,28 +483,12 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
           ok: true,
           turns: result.turns,
           stopped: result.stopped,
+          status: output.status,
+          ...(ctx.toolUseId ? { toolUseId: ctx.toolUseId } : {}),
         },
         ctx.conversationId ?? conversationId,
       );
-
-      // Whatever the colleague produced travels back with its words: a poster
-      // is the answer, not a sentence about a poster. Ids only; the caller
-      // attaches or describes them with the artifact tools it holds.
-      let artifacts: Array<{ id: string; filename: string | null; mime: string; kind: string }> = [];
-      try {
-        artifacts = (await listArtifacts(pool as never, { conversationId, limit: 20 })).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, kind: a.kind }));
-      } catch {
-        /* The reply stands on its own; a listing that fails costs the attachments, not the answer. */
-      }
-      return {
-        agent: target.id,
-        handle: target.handle,
-        name: target.name,
-        conversationId,
-        runId,
-        text: result.text,
-        ...(artifacts.length > 0 ? { artifacts } : {}),
-      };
+      return output;
     },
   };
 }
