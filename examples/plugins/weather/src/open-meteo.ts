@@ -5,7 +5,6 @@
  * takes a `FetchForecast`, so the installed plugin uses this and the tests use
  * a stub.
  */
-import { defaultHttpTransport } from '@buddi/runtime';
 import type { DailyForecast, FetchForecast } from './ports.js';
 
 export const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
@@ -46,7 +45,8 @@ export function toDays(payload: unknown): DailyForecast[] {
   }));
 }
 
-export const openMeteo: FetchForecast = async (query) => {
+export const openMeteo: FetchForecast = async (query, http) => {
+  if (http === undefined) throw new Error('weather: no http area, so no forecast (declare uses: http)');
   const url = new URL(OPEN_METEO_URL);
   url.searchParams.set('latitude', String(query.latitude));
   url.searchParams.set('longitude', String(query.longitude));
@@ -54,13 +54,11 @@ export const openMeteo: FetchForecast = async (query) => {
   url.searchParams.set('forecast_days', String(query.days));
   url.searchParams.set('daily', 'temperature_2m_min,temperature_2m_max,weather_code');
 
-  // Not the global `fetch`: undici pools a connection per origin, and a pooled
-  // connection the far end has already closed is handed back for ever — which
-  // is what wedged the provider path for hours. A sentinel runs inside
-  // `buddi serve` for weeks, so it has exactly that hazard. The shared
-  // transport opens one connection per request and keeps nothing.
-  // See packages/runtime/src/transport.ts.
-  const response = await defaultHttpTransport(url.toString(), {
+  // Through `ctx.buddi.http`, never the global `fetch`: it is the one
+  // transport every long-lived caller shares, one connection per request,
+  // with the address guard in front (docs/specs/plugin-host-api.md §4).
+  const response = await http.request({
+    url: url.toString(),
     method: 'GET',
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),

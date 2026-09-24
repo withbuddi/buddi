@@ -2,7 +2,7 @@
  * `weather.forecast` — a read over the world plus one stored row. Tier `auto`:
  * it changes nothing, so no approval gates it.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { loadLocation, NO_LOCATION } from '../location.js';
 import type { DailyForecast, FetchForecast } from '../ports.js';
@@ -36,7 +36,7 @@ export function createForecastTool(
     tier: 'auto',
     input: forecastInput,
     async execute(input, ctx) {
-      const location = await loadLocation(ctx.db);
+      const location = await loadLocation(ctx.buddi!.db);
       // Fail closed and say the line that fixes it; never guess a city.
       if (!location) throw new Error(NO_LOCATION);
       const days = await fetchForecast({
@@ -44,9 +44,9 @@ export function createForecastTool(
         longitude: location.longitude,
         // The owner's zone, from the context — a forecast rendered in UTC is a
         // forecast for the wrong day after 8 PM in New York.
-        timezone: ctx.timezone,
+        timezone: ctx.buddi!.owner.timezone,
         days: input.days ?? DEFAULT_DAYS,
-      });
+      }, ctx.buddi!.http);
       return { place: location.label, days };
     },
   };

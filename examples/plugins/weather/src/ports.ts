@@ -6,6 +6,8 @@
  * socket. `@buddi/tool-email` does the same thing with IMAP and SMTP.
  */
 
+import type { HttpArea } from '@buddi/core/plugin';
+
 /** One day of forecast, as this plugin understands a day. */
 export interface DailyForecast {
   /** `YYYY-MM-DD` in the owner's timezone. */
@@ -22,4 +24,8 @@ export interface ForecastQuery {
   days: number;
 }
 
-export type FetchForecast = (query: ForecastQuery) => Promise<DailyForecast[]>;
+/**
+ * `http` is the plugin's `ctx.buddi.http`: the real adapter goes through it, a
+ * stub ignores it.
+ */
+export type FetchForecast = (query: ForecastQuery, http: HttpArea | undefined) => Promise<DailyForecast[]>;

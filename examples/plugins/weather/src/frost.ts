@@ -5,7 +5,7 @@
  * numbers and no database — the same split the finance sentinels use
  * (`packages/tools/finance/src/sentinels/helpers.ts`).
  */
-import type { Finding } from '@buddi/core';
+import type { Finding } from '@buddi/core/plugin';
 import type { DailyForecast } from './ports.js';
 
 /** Below this, tomorrow's low is worth saying out loud tonight. */
