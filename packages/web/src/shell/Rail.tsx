@@ -16,7 +16,8 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, WELCOME_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
-import type { PageIcon, PluginPageDescriptor } from '../pages/types';
+import type { PluginPageDescriptor } from '../pages/types';
+import { pageIcon } from '../pages/icons';
 import type { ThemeChoice } from '../theme';
 import { Icon, Mark, Segment, useAsync } from '../ui';
 
@@ -71,7 +72,7 @@ export function Rail({
             badge={0}
             onClick={() => onNavigate(route)}
           >
-            {PLUGIN_ICONS[page.icon ?? 'plug']}
+            <Icon name={pageIcon(page.icon)} />
           </RailLink>
         );
       })}
@@ -191,24 +192,4 @@ const ICONS: Record<string, JSX.Element> = {
   [AGENTS_ROUTE]: <Icon name="agents" />,
   [ACTIVITY_ROUTE]: <Icon name="activity" />,
   [SETTINGS_ROUTE]: <Icon name="settings" />,
-};
-
-/**
- * The pinned icon set a plugin page may ask for.
- *
- * Drawn here, in the same hand as the core places, and never an image the
- * plugin supplies: a rail of twenty strangers' logos is not a rail. A page
- * that names none of them gets the plug.
- */
-const PLUGIN_ICONS: Record<PageIcon, JSX.Element> = {
-  mail: <Icon name="mail" />,
-  money: <Icon name="money" />,
-  calendar: <Icon name="calendar" />,
-  people: <Icon name="agents" />,
-  file: <Icon name="files" />,
-  chart: <Icon name="chart" />,
-  bell: <Icon name="bell" />,
-  plug: <Icon name="plug" />,
-  key: <Icon name="key" />,
-  globe: <Icon name="globe" />,
 };
