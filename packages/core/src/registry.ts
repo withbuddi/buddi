@@ -20,6 +20,7 @@ import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
 import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolContext, ToolDefinition } from './tools.js';
+import { isToolRefusal } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
 import type { HomeContribution } from './home.js';
@@ -570,6 +571,7 @@ export class ToolRegistry {
       try {
         decided = await tool.tierFor(parsed.data, ctx);
       } catch (err) {
+        if (isToolRefusal(err)) return { ok: false, reason: 'tool-error', message: err.message };
         return {
           ok: false,
           reason: 'tool-error',
@@ -695,6 +697,7 @@ export class ToolRegistry {
           // preview is their JSON. Honest, complete, and plainly a fallback.
           { envelope: args, preview: `${tool.name} ${JSON.stringify(args ?? null)}` };
     } catch (err) {
+      if (isToolRefusal(err)) return { ok: false, reason: 'tool-error', message: err.message };
       return {
         ok: false,
         reason: 'tool-error',

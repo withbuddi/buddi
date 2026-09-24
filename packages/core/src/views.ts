@@ -203,6 +203,11 @@ export interface ImageMap {
   src: string;
   title?: ValueRef;
   caption?: ValueRef;
+  /**
+   * Names the caption and folds it away under that name — "Prompt" for a
+   * picture made from one. Without it the caption shows in full beneath.
+   */
+  captionLabel?: ValueRef;
 }
 
 /**
@@ -448,6 +453,7 @@ const imageMapSchema = z
     src: viewPathSchema,
     title: valueRefSchema.optional(),
     caption: valueRefSchema.optional(),
+    captionLabel: valueRefSchema.optional(),
   })
   .strict();
 

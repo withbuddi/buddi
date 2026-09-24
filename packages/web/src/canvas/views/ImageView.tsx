@@ -14,7 +14,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
 import { downloadUrl, formatBytes, previewUrl } from '../../chat/attachments';
-import { ButtonLink, Toolbar } from '../../ui';
+import { ButtonLink, Details, Toolbar } from '../../ui';
 import { libraryFileId } from '../resolve';
 import type { ImageProps } from '../types';
 
@@ -83,7 +83,11 @@ export function ImageView({ props }: { props: ImageProps }): JSX.Element {
             Download
           </ButtonLink>
         </Toolbar>
-        {props.caption ? <p className="wb-image-note">{props.caption}</p> : null}
+        {props.caption && props.captionLabel ? (
+          <Details summary={props.captionLabel} className="wb-image-note">
+            <p className="wb-image-note-body">{props.caption}</p>
+          </Details>
+        ) : props.caption ? <p className="wb-image-note">{props.caption}</p> : null}
       </figcaption>
     </figure>
   );

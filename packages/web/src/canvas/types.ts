@@ -121,6 +121,8 @@ export interface ImageMap {
   src: string;
   title?: ValueRef;
   caption?: ValueRef;
+  /** Names the caption and folds it away under that name. */
+  captionLabel?: ValueRef;
 }
 
 /** A loopback process of the owner's, framed beside what it is printing. */
@@ -238,6 +240,8 @@ export interface ImageProps {
   artifactId: string | null;
   title: string | null;
   caption: string | null;
+  /** Set when the caption is folded away under this name. */
+  captionLabel?: string | null;
 }
 
 export interface PreviewProps {

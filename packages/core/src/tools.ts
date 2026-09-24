@@ -230,6 +230,43 @@ export interface OwnerChoice {
   default: string;
 }
 
+/**
+ * The key of a tool result's text for the model only.
+ *
+ * A result is read by two audiences: the agent, which gets all of it, and the
+ * owner, who sees it drawn on the canvas. An instruction such as "you have not
+ * seen this picture; say what you asked for" is written for the first and
+ * reads as nonsense to the second. A plugin puts such a sentence under this
+ * key at the top level of its result: the model receives it like any other
+ * field, and the canvas never draws it — not through a view descriptor, not in
+ * the generic fallback. Owner-facing words belong in their own field.
+ */
+export const AGENT_ONLY_FIELD = 'forAgent';
+
+/**
+ * A refusal a tool raises on purpose, whose message is already the sentence
+ * the agent and the owner should read.
+ *
+ * Thrown from `tierFor` or `describe`, an ordinary error is a defect and is
+ * reported as one ("could not decide what this call needs: …"). A refusal is
+ * not a defect: it is the tool saying no before anyone is asked — no account
+ * chosen, a limit reached — so its message is passed through as it stands and
+ * no approval is raised. Recognised by the `refusal` flag rather than by
+ * class, so a plugin built against another copy of core is understood too.
+ */
+export class ToolRefusal extends Error {
+  readonly refusal = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolRefusal';
+  }
+}
+
+/** Whether a thrown value is a deliberate refusal (see `ToolRefusal`). */
+export function isToolRefusal(err: unknown): err is Error & { refusal: true } {
+  return err instanceof Error && (err as { refusal?: unknown }).refusal === true;
+}
+
 export interface ToolDefinition<I = unknown, O = unknown> {
   /** Namespaced, e.g. 'finance.project_cashflow'. */
   name: string;

@@ -339,6 +339,7 @@ export function resolveImage(output: unknown, map: ImageMap): ImageProps {
     artifactId: map.src ? libraryFileId(readPath(output, map.src)) : null,
     title: asString(readRef(output, map.title)),
     caption: asString(readRef(output, map.caption)),
+    ...(map.captionLabel ? { captionLabel: asString(readRef(output, map.captionLabel)) } : {}),
   };
 }
 

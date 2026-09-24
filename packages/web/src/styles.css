@@ -1843,6 +1843,7 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-image-name { min-width: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .wb-image-facts { color: var(--text-muted); font-size: var(--text-sm); }
 .wb-image-note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+.wb-image-note-body { margin: var(--space-1) 0 0; white-space: pre-wrap; }
 
 /* ---- a running process, framed beside its output ---- */
 /* ---- preview: the app is the tab; buddi is one thin strip above it ---- */
