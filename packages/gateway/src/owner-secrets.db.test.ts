@@ -37,7 +37,7 @@ import {
   listAccounts,
   secretNameFor,
 } from '@buddi/tool-email';
-import { adoptMailboxSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
+import { adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames, ownerSecretVault } from './owner-secrets.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -161,4 +161,42 @@ suite('mailbox passwords as owner secrets (postgres)', () => {
     expect(uses.every((u) => u.outcome === 'held')).toBe(true);
     for (const name of [GMAIL_SECRET_NAME, WORK_SECRET]) expect(process.env[name]).toBeUndefined();
   }, 60_000);
+
+  it('adopts provider account credentials into owner secrets bound to their rows, and the adapters read through the translated vault', async () => {
+    await pool.query(
+      `insert into core.provider_accounts
+         (id, label, kind, auth, base_url, default_model, secret_ref, enabled, legacy_env)
+       values ('11111111-1111-4111-8111-111111111111', 'Work key', 'anthropic', 'api-key', 'https://api.anthropic.com', 'claude-sonnet-5', 'PROVIDER_ACCOUNT_ADOPTED_1', true, null),
+              ('22222222-2222-4222-8222-222222222222', 'Legacy key', 'anthropic', 'api-key', 'https://api.anthropic.com', 'claude-sonnet-5', 'ANTHROPIC_API_KEY', true, 'ANTHROPIC_API_KEY')`,
+    );
+    const vault = createMemoryVault({ seed: {
+      PROVIDER_ACCOUNT_ADOPTED_1: 'sk-ant-adopted-credential',
+      ANTHROPIC_API_KEY: 'sk-ant-legacy-key',
+    } });
+
+    const first = await adoptProviderAccountSecrets(pool, vault);
+    expect(first.outcomes).toEqual({
+      '11111111-1111-4111-8111-111111111111': 'adopted',
+      '22222222-2222-4222-8222-222222222222': 'skipped',
+    });
+    const again = await adoptProviderAccountSecrets(pool, vault);
+    expect(again.outcomes['11111111-1111-4111-8111-111111111111']).toBe('already');
+
+    // The adopted value lives under the owner secret, the old entry is gone.
+    const secret = (await findSecret(pool, 'PROVIDER_ACCOUNT_ADOPTED_1'))!;
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('sk-ant-adopted-credential');
+    expect(await vault.get('PROVIDER_ACCOUNT_ADOPTED_1')).toBeNull();
+    const { rows: bindings } = await pool.query(
+      `select kind, target, rule from core.secret_bindings where secret_id = $1`, [secret.id]);
+    expect(bindings).toEqual([{ kind: 'accounts.provider', target: '11111111-1111-4111-8111-111111111111', rule: 'pre-approved' }]);
+
+    // The translated vault: an adapter asking by the old name reaches the
+    // owner secret's value; writes land under the same owner secret.
+    const translated = ownerSecretVault(vault, pool);
+    expect(await translated.get('PROVIDER_ACCOUNT_ADOPTED_1')).toBe('sk-ant-adopted-credential');
+    await translated.set('PROVIDER_ACCOUNT_ADOPTED_1', 'sk-ant-refreshed-value');
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('sk-ant-refreshed-value');
+    expect(await translated.get('ANTHROPIC_API_KEY')).toBe('sk-ant-legacy-key'); // untouched: buddi's own key
+    await expect(translated.get('NOTHING_BY_THAT_NAME')).resolves.toBeNull();
+  }, 30_000);
 });

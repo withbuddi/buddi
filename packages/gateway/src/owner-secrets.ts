@@ -15,12 +15,111 @@
  *    passwords. What else can go, and what cannot yet, is said on
  *    `mailboxSecretNames`.
  */
-import { adoptVaultEntry, type AdoptOutcome, type Vault } from '@buddi/core';
+import {
+  adoptVaultEntry,
+  deleteOwnerSecret,
+  findSecret,
+  ownerSecretVaultName,
+  type AdoptOutcome,
+  type SecretDestination,
+  type Vault,
+} from '@buddi/core';
 import { ACCOUNT_KIND, GMAIL_SECRET_NAME, listAccounts } from '@buddi/tool-email';
 import type { Pool } from 'pg';
 
 /** The shape of a page-added mailbox's old vault name (`secretNameFor`). Not `EMAIL_BACKFILL`. */
 const MAILBOX_SECRET_RE = /^EMAIL_[A-Z0-9_]+_[0-9a-f]{8}$/;
+
+/**
+ * The provider accounts' destination (docs/specs/owner-secrets.md §3, §7):
+ * `<plugin>.account` shape under the gateway's own `accounts` name. The target
+ * is the account row's id, and the destination checks it against the live
+ * table — a removed account's binding delivers nothing. Pre-approved, because
+ * the owner typed the credential on this account's own page.
+ */
+export const ACCOUNTS_PROVIDER_KIND = 'accounts.provider';
+
+export function accountsProviderDestination(
+  accountExists: (id: string) => Promise<boolean>,
+  /** Sync, from the service's own loaded rows: `describe` has no async in the contract. */
+  describe: (id: string) => string,
+): SecretDestination {
+  return {
+    kind: ACCOUNTS_PROVIDER_KIND,
+    maxRule: 'pre-approved',
+    async checkTarget(target) {
+      return typeof target === 'string' && (await accountExists(target));
+    },
+    describe(target) {
+      return typeof target === 'string' ? describe(target) : 'a provider account';
+    },
+    deliver() {
+      // The gateway's own modules take the value through `deliverInto` (the
+      // same core-internal path the `http` area uses); this runs only on a
+      // defect, and a defect delivers nowhere.
+      throw new Error('accounts.provider delivers through the gateway itself, never through a destination');
+    },
+  };
+}
+
+/**
+ * The vault the OAuth adapters see, with the account credentials' names
+ * translated onto the owner secrets they were adopted into (owner-secrets §7).
+ *
+ * An adapter keeps asking for `PROVIDER_ACCOUNT_…` by name; the value it
+ * reaches is the owner secret of that name, stored under `owner-secret:<id>`.
+ * A name with no owner secret passes through untouched, so a not-yet-adopted
+ * entry and buddi's own keys answer exactly as before. Writes go the same way:
+ * a token refresh lands under the same `owner-secret:<id>`, the rows untouched.
+ */
+export function ownerSecretVault(vault: Vault, pool: Pick<Pool, 'query'>): Vault {
+  const secretIdFor = async (name: string): Promise<string | null> => {
+    const secret = await findSecret(pool, name);
+    return secret?.id ?? null;
+  };
+  return {
+    kind: vault.kind,
+    async get(name) {
+      const id = await secretIdFor(name);
+      return id === null ? vault.get(name) : vault.get(ownerSecretVaultName(id));
+    },
+    async set(name, value) {
+      const id = await secretIdFor(name);
+      if (id === null) await vault.set(name, value);
+      else await vault.set(ownerSecretVaultName(id), value);
+    },
+    async delete(name) {
+      const id = await secretIdFor(name);
+      return id === null ? vault.delete(name) : vault.delete(ownerSecretVaultName(id));
+    },
+    list: () => vault.list(),
+  };
+}
+
+/**
+ * Delete a provider account's credential wherever it lives today: the owner
+ * secret whole (rows and value) when one was adopted or saved, the raw vault
+ * entry when not. A vault that cannot delete fails closed — the caller refuses
+ * the removal rather than leaving a live credential behind.
+ */
+export async function deleteAccountSecret(
+  pool: Pick<Pool, 'query'>,
+  vault: Vault | undefined,
+  secretRef: string | undefined,
+): Promise<void> {
+  if (vault === undefined || secretRef === undefined) return;
+  const secret = await findSecret(pool, secretRef).catch(() => null);
+  if (secret === null) {
+    await vault.delete(secretRef);
+    return;
+  }
+  await deleteOwnerSecret(pool, vault, secretRef).catch(() => false);
+  // `deleteOwnerSecret` swallows a refused delete; the read-back is what makes
+  // the failure a failure.
+  if ((await vault.get(ownerSecretVaultName(secret.id))) !== null) {
+    throw new Error(`the credential of "${secretRef}" could not be removed from the vault`);
+  }
+}
 
 export interface MailboxAdoption {
   /** Account address → what happened to its password. Never a value. */
@@ -97,4 +196,55 @@ export function clearFromEnvironment(env: NodeJS.ProcessEnv, names: readonly str
     }
   }
   return cleared;
+}
+
+export interface ProviderAccountAdoption {
+  /** Account id → what happened to its credential. Never a value. */
+  outcomes: Record<string, AdoptOutcome | 'failed' | 'skipped'>;
+  /** One line per failure, naming the account and never the value. */
+  problems: string[];
+}
+
+/**
+ * Move every provider account's credential into an owner secret bound to its
+ * account row (owner-secrets §7, "Migrating what plugins hold today").
+ *
+ * The account row's `secretRef` stays the *name*; the value moves from the raw
+ * vault entry to `owner-secret:<id>`, and the old entry is deleted only once
+ * the new one reads back. Idempotent, run once at start. Legacy accounts — the
+ * ones that read a named environment variable — keep that variable: buddi's
+ * own keys are not bindable (§6) and their rows carry `legacyEnv`.
+ */
+export async function adoptProviderAccountSecrets(
+  pool: Pool,
+  vault: Vault | undefined,
+): Promise<ProviderAccountAdoption> {
+  const result: ProviderAccountAdoption = { outcomes: {}, problems: [] };
+  if (vault === undefined) {
+    result.problems.push('this installation has no vault, so provider account credentials cannot become owner secrets');
+    return result;
+  }
+  const { rows } = await pool.query(
+    `select id, label, secret_ref as "secretRef", legacy_env as "legacyEnv"
+       from core.provider_accounts where secret_ref is not null`,
+  );
+  for (const row of rows as Array<{ id: string; label: string; secretRef: string; legacyEnv: string | null }>) {
+    if (row.legacyEnv !== null) {
+      result.outcomes[row.id] = 'skipped';
+      continue;
+    }
+    try {
+      result.outcomes[row.id] = await adoptVaultEntry(pool, vault, {
+        from: row.secretRef,
+        name: row.secretRef,
+        bindings: [{ kind: ACCOUNTS_PROVIDER_KIND, target: row.id, rule: 'pre-approved' }],
+      });
+    } catch (err) {
+      result.outcomes[row.id] = 'failed';
+      result.problems.push(
+        `${row.label}: its credential stays where it was (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
+  return result;
 }
