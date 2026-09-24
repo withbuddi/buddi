@@ -38,6 +38,13 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
   const tabs = new Map<number, FakeTab>();
   const windows = new Map<number, { id: number; focused: boolean }>([[1, { id: 1, focused: true }]]);
   const failures: { attach?: string } = {};
+  /*
+   * What the page side answers when the worker reads a field it is about to act
+   * on — `locate` today, `readFieldRef`/`prepareSecretRef` for the secret flow.
+   * Tests mutate it to play a moved page.
+   */
+  const field = { ok: true, reason: undefined as string | undefined, point: { x: 10, y: 20 },
+    origin: 'https://example.test', password: false, name: 'Email' };
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -62,7 +69,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
         if (injection.target.frameIds) {
           located.push(String(injection.target.frameIds[0]));
-          return [{ frameId: injection.target.frameIds[0]!, result: { ok: true, point: { x: 10, y: 20 } } }];
+          return [{ frameId: injection.target.frameIds[0]!, result: field }];
         }
         return frames;
       },
@@ -81,7 +88,7 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
@@ -563,5 +570,96 @@ describe('the owner’s input', () => {
     await expect(input({ kind: 'mouse', type: 'mousePressed', x: 1, y: 1 })).rejects.toThrow(/The owner took this tab/);
     await expect(commands.run(command('input', { kind: 'mouse', type: 'mousePressed', x: 1, y: 1 }, true)))
       .rejects.toThrow(/No screencast is running/);
+  });
+});
+
+/*
+ * The owner's secret: one read to aim the use, one write that delivers it. The
+ * value is real here so the tests can prove it reaches the browser and appears
+ * nowhere else — not in a result, not in an error, not in a log line.
+ */
+describe('the owner’s secret', () => {
+  const SECRET = 'correct-horse-battery-staple';
+  const fill = (args: Record<string, unknown>) => command('secretFill', args);
+
+  it('answers the field facts the page reports, inside the observation passthrough', async () => {
+    const { commands } = await opened();
+    await commands.run(command('observe'));
+    const { observation } = await commands.run(command('fieldInfo', { ref: 'e3' }));
+    expect((observation as { field?: { origin: string; password: boolean; name: string } })?.field)
+      .toEqual({ origin: 'https://example.test', password: false, name: 'Email' });
+  });
+
+  it('refuses the read before the first observation, in a watched tab, and on an unbindable origin', async () => {
+    const unobserved = await opened();
+    await expect(unobserved.commands.run(command('fieldInfo', { ref: 'e3' }))).rejects.toThrow(/Stale page observation/);
+    expect(unobserved.dispatched).toEqual([]);
+
+    const watched = await opened();
+    await watched.commands.run(command('observe'));
+    [...watched.tabs.values()][0]!.active = true;
+    await expect(watched.commands.run(command('fieldInfo', { ref: 'e3' }))).rejects.toThrow(/only acts in background tabs/);
+    expect(watched.dispatched).toEqual([]);
+
+    const opaque = await opened();
+    await opaque.commands.run(command('observe'));
+    opaque.field.origin = 'null';
+    await expect(opaque.commands.run(command('fieldInfo', { ref: 'e3' }))).rejects.toThrow(/no web origin/);
+  });
+
+  it('inserts through the debugger for the main frame, and the page writes its own subframe', async () => {
+    const main = await opened();
+    await main.commands.run(command('observe'));
+    await expect(main.commands.run(fill({ ref: 'e3', value: SECRET, expectedOrigin: 'https://example.test' }))).resolves.toEqual({});
+    expect(main.sent.at(-1)).toEqual({ method: 'Input.insertText', params: { text: SECRET } });
+
+    const subframe = await opened([
+      { frameId: 0, result: structuredClone(PAGE) },
+      { frameId: 4, result: { url: 'https://example.test/form', title: '', scroll: { x: 0, y: 0 },
+        tree: '- textbox "Card" [ref=l1]', elements: [{ id: 'l1', role: 'textbox', name: 'Card' }] } },
+    ]);
+    await subframe.commands.run(command('observe'));
+    await expect(subframe.commands.run(fill({ ref: 'e5', value: SECRET, expectedOrigin: 'https://example.test' }))).resolves.toEqual({});
+    expect(subframe.dispatched).not.toContain('Input.insertText');
+    expect(subframe.located).toContain('4');
+  });
+
+  it('refuses the fill when the page moved since the approval, and when the answer disagrees with it', async () => {
+    const moved = await opened();
+    await moved.commands.run(command('observe'));
+    moved.field.ok = false;
+    moved.field.reason = 'The page moved since the owner approved this fill. Nothing was entered.';
+    const failure = await moved.commands.run(fill({ ref: 'e3', value: SECRET, expectedOrigin: 'https://example.test' })).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PreconditionError);
+    expect(String((failure as Error).message)).toContain('Nothing was entered');
+    expect(moved.dispatched).toEqual([]);
+
+    // The page answered anyway, but from somewhere else: the worker checks what
+    // answered against the origin the use was approved for.
+    moved.field.ok = true;
+    moved.field.reason = undefined;
+    moved.field.origin = 'https://elsewhere.test';
+    await expect(moved.commands.run(fill({ ref: 'e3', value: SECRET, expectedOrigin: 'https://example.test' })))
+      .rejects.toThrow(/no longer sits on the origin/);
+    expect(moved.dispatched).toEqual([]);
+  });
+
+  it('carries the value in the one input call and in nothing else', async () => {
+    const { commands, sent, dispatched } = await opened();
+    await commands.run(command('observe'));
+    await expect(commands.run(fill({ ref: 'e3', value: SECRET, expectedOrigin: 'https://example.test' }))).resolves.toEqual({});
+    // The wire carries it once, into the browser; no answer echoes it back.
+    expect(sent.filter((call) => JSON.stringify(call).includes(SECRET))).toEqual([{ method: 'Input.insertText', params: { text: SECRET } }]);
+    await expect(commands.run(fill({ ref: 'e3', value: SECRET, expectedOrigin: 'https://elsewhere.test' }))).rejects.toThrow(PreconditionError);
+    const failure = await commands.run(fill({ ref: 'nope', value: SECRET, expectedOrigin: 'https://example.test' })).catch((error: unknown) => error);
+    expect(String(failure)).not.toContain(SECRET);
+    expect(dispatched.filter((method) => method === 'Input.insertText')).toHaveLength(1);
+  });
+
+  it('refuses a fill that arrived without the origin it was approved for, or with nothing in it', async () => {
+    const { commands } = await opened();
+    await commands.run(command('observe'));
+    await expect(commands.run(fill({ ref: 'e3', value: SECRET }))).rejects.toThrow(/without the origin/);
+    await expect(commands.run(fill({ ref: 'e3', value: '', expectedOrigin: 'https://example.test' }))).rejects.toThrow(/nothing in it/);
   });
 });
