@@ -6,7 +6,7 @@
  * so every note stores the agent that wrote it and the conversation it came
  * from, and deletion is a soft delete that keeps the row auditable.
  */
-import type { ToolDefinition, ToolContext } from '@buddi/core';
+import type { ToolDefinition, ToolContext } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   DEFAULT_RECALL_LIMIT,
@@ -64,13 +64,13 @@ export const note: ToolDefinition<z.infer<typeof noteInput>, NoteView> = {
   input: noteInput,
   async execute(input, ctx) {
     const scope = resolveScope(input.scope, ctx);
-    const now = ctx.now();
+    const now = ctx.buddi!.clock.now();
     const expiresAt =
       input.expiresInDays === undefined
         ? null
         : new Date(now.getTime() + input.expiresInDays * 86_400_000);
 
-    const { rows } = await ctx.db.query(
+    const { rows } = await ctx.buddi!.db.query(
       `insert into memory.notes
          (content, kind, scope, source_conversation_id, created_by_agent, created_at, expires_at)
        values ($1, $2, $3, $4, $5, $6, $7)
@@ -174,9 +174,9 @@ export const recall: ToolDefinition<
   tier: 'auto',
   input: recallInput,
   async execute(input, ctx) {
-    const notes = await selectNotes(ctx.db, {
+    const notes = await selectNotes(ctx.buddi!.db, {
       scopes: visibleScopes(ctx),
-      now: ctx.now(),
+      now: ctx.buddi!.clock.now(),
       query: input.query,
       kind: input.kind,
       limit: input.limit ?? DEFAULT_RECALL_LIMIT,
@@ -199,11 +199,11 @@ export const forget: ToolDefinition<
   tier: 'auto',
   input: forgetInput,
   async execute(input, ctx) {
-    const { rows } = await ctx.db.query(
+    const { rows } = await ctx.buddi!.db.query(
       `update memory.notes set deleted_at = $3
         where id = $1 and deleted_at is null and scope = any($2::text[])
         returning content`,
-      [input.id, visibleScopes(ctx), ctx.now()],
+      [input.id, visibleScopes(ctx), ctx.buddi!.clock.now()],
     );
     const row = rows[0];
     return {

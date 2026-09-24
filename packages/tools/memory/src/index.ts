@@ -13,7 +13,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
 import { getPreferences, rememberPreference } from './tools/preferences.js';
 import { forget, note, recall } from './tools/notes.js';
 
@@ -30,6 +30,7 @@ export const manifest: PluginManifest = {
   schema: 'memory',
   migrationsDir: MIGRATIONS_DIR,
   tools: [rememberPreference, getPreferences, note, recall, forget],
+  uses: [],
 };
 
 export default manifest;

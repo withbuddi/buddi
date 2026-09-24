@@ -1,5 +1,5 @@
 /** Shared helpers for the memory tools. */
-import type { ToolContext } from '@buddi/core';
+import type { ToolContext } from '@buddi/core/plugin';
 import { z } from 'zod';
 
 /** How many notes the preamble and a default recall return. */

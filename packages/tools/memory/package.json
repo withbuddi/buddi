@@ -11,6 +11,10 @@
       "default": "./dist/index.js"
     }
   },
+  "buddi": {
+    "uses": [],
+    "hostApi": "^1.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --emitDeclarationOnly && tsc -p tsconfig.test.json",
