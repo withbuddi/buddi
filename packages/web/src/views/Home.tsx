@@ -13,12 +13,14 @@ import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
 import { waitingText } from '../shell/roster';
+import { accentAttrs, accentOf } from '../shell/accent';
 import {
   AgentAvatar,
   Avatar,
   Button,
   Empty,
   ErrorBanner,
+  GradientField,
   List,
   ListRow,
   Notice,
@@ -72,12 +74,17 @@ export function Home({
   const moreOffers = allOffers.length - onOffer.length;
 
   return (
+    <>
+      {/* The hero band on the quiet field: the one place on a working page
+          where the first-run colours come back, behind three short lines. */}
+      <GradientField quiet className="home-band">
+        <header className="home-hero">
+          <p className="home-date">{fmtDay(data?.now, timezone)}</p>
+          <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
+          <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
+        </header>
+      </GradientField>
     <div className="home">
-      <header className="home-hero">
-        <p className="home-date">{fmtDay(data?.now, timezone)}</p>
-        <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
-        <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
-      </header>
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
       {note ? <Notice tone="good" role="status">{note}</Notice> : null}
@@ -139,6 +146,7 @@ export function Home({
                 <a
                   key={agent.id}
                   className="home-face"
+                  {...accentAttrs(accentOf(agent))}
                   href={chatRoute(agent.id)}
                   onClick={go(chatRoute(agent.id))}
                   data-waiting={waiting ? 'true' : undefined}
@@ -246,6 +254,7 @@ export function Home({
         </p>
       ) : null}
     </div>
+    </>
   );
 }
 

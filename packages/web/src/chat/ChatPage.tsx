@@ -31,7 +31,7 @@ import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
-import { AgentAvatar } from '../ui';
+import { AgentAvatar, GradientField } from '../ui';
 import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
@@ -941,9 +941,11 @@ export function ChatPage({
   const defaultAgentName = everyone.find((a) => a.id === defaultAgentId)?.name ?? null;
   const starters = group ? [] : startersOf(agent, defaultAgentName);
   const opening = !group && agent ? (
+    <GradientField quiet still className="wb-chat-field">
     <div className="wb-chat-opening" data-testid="chat-opening">
       <AgentAvatar agents={everyone} id={agent.id} size="xl" />
-      <p className="wb-chat-empty">{introOf(agent)}</p>
+      <h2 className="wb-chat-hello">{`Hi, I'm ${agent.name}.`}</h2>
+      <p className="wb-chat-intro">{introOf(agent)}</p>
       {starters.length > 0 ? (
         <div className="wb-starters" role="group" aria-label={`Things to ask ${agent.name}`}>
           {starters.map((starter) => (
@@ -962,6 +964,7 @@ export function ChatPage({
         </div>
       ) : null}
     </div>
+    </GradientField>
   ) : null;
 
   /**
