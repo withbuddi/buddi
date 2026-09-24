@@ -123,6 +123,10 @@ with a written brief; in order:
 
 Small, whenever a slot opens:
 
+- Canvas empty state per agent — every agent's empty canvas suggests the
+  finance examples (Projected balance, Accounts, Spending by category), even
+  agents with no finance tools. Suggest only what the agent's own granted
+  tools can draw (2026-09-23).
 - Kept email rules first — built 2026-09-23 (buddi `3462a7c`); a rule kept from Proposals shows at the top of
   the email page's rules with "kept <when>", not under the date it was
   learned; and a rule card's untrusted notice reads "learned from mail you
