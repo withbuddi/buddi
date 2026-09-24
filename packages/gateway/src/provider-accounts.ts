@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   resolveProviderAccount, vaultState, type AgentCatalog, type AgentFrontmatter,
-  type LoadAgentCatalogOptions, type ProviderAccount, type ProviderRef, type ResolvedProvider, type Vault,
+  type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
 import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
@@ -414,6 +414,33 @@ export class ProviderAccounts {
       const result = { ...diagnostic, checkedAt: new Date().toISOString() };
       this.#tests.set(id, result); return result;
     } finally { this.#testing.delete(id); }
+  }
+
+  /**
+   * What a plugin sees (`ToolContext.providerAccounts`): the listing, an HTTP
+   * account resolved as a run resolves it, and a Codex account's profile
+   * staged under its lock. Never the vault reference.
+   */
+  pluginAccess(): ProviderAccountsAccess {
+    return {
+      list: () => this.view().accounts.map((a) => ({
+        id: a.id, label: a.label, kind: a.kind, enabled: a.enabled, configured: a.configured, defaultModel: a.defaultModel,
+      })),
+      resolve: async (id, model, signal) => {
+        const row = await this.#row(id);
+        if (row.deleting) throw new ProviderAccountError(409, 'This account is being removed.');
+        return resolveProviderAccount(row, model, await this.#usableSecret(row, signal));
+      },
+      withCodexProfile: async (id, use, signal) => {
+        const row = await this.#row(id);
+        if (row.kind !== 'codex') throw new ProviderAccountError(400, 'This is not a Codex account.');
+        if (!this.codex) throw new ProviderAccountError(409, 'Codex experiment is not enabled in this process.');
+        if (!row.enabled || row.deleting) throw new ProviderAccountError(409, `Provider account “${row.label}” is disabled.`);
+        const lease = await this.#codexCompletionAccess(row, signal);
+        try { return await this.codex.withProfile(lease.access, use); }
+        finally { await lease.release(); }
+      },
+    };
   }
 
   async #cancelCodex(id: string) {

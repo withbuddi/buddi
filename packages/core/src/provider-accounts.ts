@@ -65,3 +65,56 @@ export function resolveProviderAccount(account: ProviderAccount, model: string, 
     ...(account.kind === 'openai-compatible' ? { compatible: true } : {}),
   };
 }
+
+/**
+ * One account as a plugin may see it: identity and state, never a secret or a
+ * vault reference. What Settings → Model accounts lists.
+ */
+export interface ProviderAccountListing {
+  id: string;
+  label: string;
+  kind: ProviderAccountKind;
+  enabled: boolean;
+  /** A credential is in the vault (or none is needed). */
+  configured: boolean;
+  defaultModel: string;
+}
+
+/**
+ * A staged, private Codex profile: `home` is the `CODEX_HOME` a native child
+ * runs under, holding this account's credential and nothing of the owner's own
+ * `~/.codex`. `env` is the whole environment that child gets — the same short
+ * list the chat adapter passes, ambient provider keys excluded, `CODEX_HOME`
+ * set. Valid only inside the `withCodexProfile` callback.
+ */
+export interface CodexProfile {
+  home: string;
+  env: Record<string, string>;
+}
+
+/**
+ * The owner's provider accounts, for a plugin that calls a model on the
+ * owner's behalf with an account the owner picked on its settings page
+ * (the image plugin is the first). Set by the gateway; absent in a process
+ * that holds no accounts, and a tool that needs it refuses when it is.
+ *
+ * This is in-process code reaching credentials, which a plugin could already
+ * do: it runs with everything buddi can do (docs/plugins.md §8). What the hook
+ * adds is that it reaches them through the same resolver and the same
+ * account lock the runtime uses, and never through ambient environment. No
+ * model is ever shown any of it.
+ */
+export interface ProviderAccountsAccess {
+  list(): ProviderAccountListing[];
+  /**
+   * An HTTP account's endpoint and key, resolved exactly as an agent's run
+   * resolves them. A Codex account is refused: it has no key to hand out.
+   */
+  resolve(accountId: string, model: string, signal?: AbortSignal): Promise<ResolvedProvider>;
+  /**
+   * Run `use` with this Codex account's credential staged in a fresh private
+   * profile, under the account's lock. A credential Codex refreshed meanwhile
+   * is saved back; the profile is removed afterwards.
+   */
+  withCodexProfile<T>(accountId: string, use: (profile: CodexProfile) => Promise<T>, signal?: AbortSignal): Promise<T>;
+}

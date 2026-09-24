@@ -136,6 +136,12 @@ Other intentional limits:
   unknown. Do not interpret the app's API-cost/token totals as subscription billing;
   tool-proposal usage reporting is incomplete.
 - No credentials were migrated and no existing CLI login was reused.
+- The image plugin reaches a Codex account through `ToolContext.providerAccounts`
+  `withCodexProfile`: the same vault read, account lock, private profile, scrubbed
+  child environment and refresh-save as a completion, but the plugin runs its own
+  `codex exec` with only native image generation on (shell, exec, web search,
+  browser, MCP, apps and plugins off). It does not check the pinned App Server
+  version: it does not use the App Server protocol.
 
 ## Repeat the offline checks
 

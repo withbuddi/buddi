@@ -118,14 +118,23 @@ export function spawnCodexRpc(options: {
   cwd: string;
   args: readonly string[];
 }): CodexRpc {
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of ['PATH', 'HOME', 'USERPROFILE', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG']) {
-    if (process.env[name]) env[name] = process.env[name];
-  }
-  // CODEX_HOME is the native client's documented per-account configuration,
-  // not a change to this process or the owner's CLI environment.
-  env.CODEX_HOME = options.profileDir;
   return createCodexRpc(spawn(options.executable, ['app-server', ...options.args], {
-    cwd: options.cwd, env, stdio: 'pipe', shell: false,
+    cwd: options.cwd, env: codexChildEnv(options.profileDir), stdio: 'pipe', shell: false,
   }));
+}
+
+/**
+ * The whole environment a native Codex child gets: a short allowlist, so no
+ * ambient provider key (OPENAI_API_KEY and the like) and no owner CODEX_HOME
+ * reaches it. CODEX_HOME is the native client's documented per-account
+ * configuration, not a change to this process or the owner's CLI environment.
+ */
+export function codexChildEnv(profileDir: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of ['PATH', 'HOME', 'USERPROFILE', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TEMP', 'TMP', 'LANG']) {
+    const value = process.env[name];
+    if (value) env[name] = value;
+  }
+  env.CODEX_HOME = profileDir;
+  return env;
 }

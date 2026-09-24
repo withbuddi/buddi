@@ -111,3 +111,43 @@ describe('Codex subscription session lifecycle', () => {
     expect(JSON.stringify(f.service.view(f.access.id))).not.toContain('sensitive');
   });
 });
+
+describe('Codex profile for a native child (image plugin)', () => {
+  it('stages the credential in a private CODEX_HOME with a scrubbed env, saves a refresh, and removes the profile', async () => {
+    const { readFile, writeFile, stat } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
+    const before = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'ambient-should-not-leak';
+    const refreshed = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'new-access', refresh_token: 'new-refresh' } });
+    let home = '';
+    try {
+      const out = await f.service.withProfile(f.access, async (profile) => {
+        home = profile.home;
+        expect(profile.env.CODEX_HOME).toBe(profile.home);
+        expect(profile.env.OPENAI_API_KEY).toBeUndefined();
+        expect(JSON.parse(await readFile(join(profile.home, 'auth.json'), 'utf8')).tokens.access_token).toBe('fake-access');
+        expect((await stat(profile.home)).mode & 0o077).toBe(0);
+        await writeFile(join(profile.home, 'auth.json'), refreshed);
+        return 'done';
+      });
+      expect(out).toBe('done');
+    } finally {
+      if (before === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = before;
+    }
+    expect(await f.vault.get(f.access.secretRef)).toBe(refreshed);
+    await expect(stat(home)).rejects.toThrow();
+    expect(f.access.check).toHaveBeenCalled();
+  });
+
+  it('refuses with no credential and holds the account exclusively', async () => {
+    const f = fixture();
+    await expect(f.service.withProfile(f.access, async () => 1)).rejects.toThrow(/Connect this Codex/);
+    await f.vault.set(f.access.secretRef, secret);
+    let release: (() => void) | undefined;
+    const held = f.service.withProfile(f.access, () => new Promise<void>((resolve) => { release = resolve; }));
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await expect(f.service.withProfile(f.access, async () => 1)).rejects.toThrow(/busy/);
+    release!(); await held;
+  });
+});

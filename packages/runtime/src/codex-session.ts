@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { CODEX_EXPERIMENT_CONFIG, codexConfigArgs } from './codex-policy.js';
-import { spawnCodexRpc, type CodexRpc } from './codex-rpc.js';
+import { codexChildEnv, spawnCodexRpc, type CodexRpc } from './codex-rpc.js';
 
 export interface CodexSession {
   rpc: CodexRpc;
@@ -106,4 +106,56 @@ export async function openCodexSession(credential: string | null, executable = '
     await rm(dir, { recursive: true, force: true });
     throw error;
   }
+}
+
+/**
+ * A private profile with this credential staged in it, and no process: for a
+ * caller that runs its own native child (`codex exec`) rather than the App
+ * Server. Same directory shape, modes and orphan marker as a session, so the
+ * same cleanup recognises it; the marker names no child because this module
+ * never starts one.
+ */
+export interface StagedCodexProfile {
+  home: string;
+  workspace: string;
+  env: Record<string, string>;
+  /** Call only after the caller's child has exited. */
+  credential(): Promise<string | null>;
+  dispose(): Promise<void>;
+}
+
+export async function stageCodexProfile(credential: string): Promise<StagedCodexProfile> {
+  if (process.platform === 'win32') throw new Error('Codex experiment needs a verified private-directory ACL on Windows before it can run.');
+  credential = validateCodexCredential(credential);
+  await cleanupCodexSessions();
+  const dir = await mkdtemp(join(tmpdir(), 'buddi-codex-session-'));
+  const home = join(dir, 'profile');
+  const workspace = join(dir, 'workspace');
+  const authFile = join(home, 'auth.json');
+  try {
+    await chmod(dir, 0o700);
+    await mkdir(home, { mode: 0o700 });
+    await mkdir(workspace, { mode: 0o700 });
+    await writeFile(join(dir, 'owner.json'), JSON.stringify({ version: 1, parent: process.pid, child: null }), { mode: 0o600, flag: 'wx' });
+    await writeFile(authFile, credential, { mode: 0o600, flag: 'wx' });
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
+  let disposed = false;
+  return {
+    home, workspace, env: codexChildEnv(home),
+    async credential() {
+      if (disposed) throw new Error('Codex profile already disposed.');
+      const stat = await lstat(authFile).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!stat) return null;
+      if (!stat.isFile() || stat.size > 64 * 1024) throw new Error('Invalid native credential file.');
+      return validateCodexCredential(await readFile(authFile, 'utf8'));
+    },
+    async dispose() {
+      if (disposed) return;
+      await rm(dir, { recursive: true, force: true });
+      disposed = true;
+    },
+  };
 }

@@ -13,6 +13,7 @@ import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
+import type { ProviderAccountsAccess } from './provider-accounts.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -167,6 +168,13 @@ export interface ToolContext {
    * set by the composition root; a tool that writes files checks them.
    */
   protectedPaths?: readonly string[];
+  /**
+   * The owner's provider accounts (Settings → Model accounts), for a plugin
+   * that calls a model with an account the owner chose on its own settings
+   * page. Set by the gateway's composition root; absent elsewhere, and a tool
+   * that needs it refuses. See `ProviderAccountsAccess`.
+   */
+  providerAccounts?: ProviderAccountsAccess;
 }
 
 /**

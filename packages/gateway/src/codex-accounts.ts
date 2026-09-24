@@ -1,6 +1,6 @@
-import type { Vault } from '@buddi/core';
+import type { CodexProfile, Vault } from '@buddi/core';
 import {
-  createCodexAppServerAdapter, initializeCodex, openCodexSession, assertCodexIsolation,
+  createCodexAppServerAdapter, initializeCodex, openCodexSession, assertCodexIsolation, stageCodexProfile,
   type CodexSession, type CompletionRequest, type CompletionResponse,
   modelOptions, type AccountModels,
 } from '@buddi/runtime';
@@ -151,6 +151,34 @@ export class CodexAccounts {
           }
         }
       } finally { try { await session?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
+    }
+  }
+
+  /**
+   * Stage this account's credential in a private profile and hand it to `use`,
+   * which runs its own native child (the image plugin's `codex exec`). The
+   * same exclusivity, recheck and refresh-save as a completion; the profile is
+   * removed afterwards whatever happened.
+   */
+  async withProfile<T>(access: CodexAccountAccess, use: (profile: CodexProfile) => Promise<T>): Promise<T> {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    let cancelled = false;
+    this.#reserve(access.id, async () => { cancelled = true; await finished; });
+    let staged: Awaited<ReturnType<typeof stageCodexProfile>> | undefined;
+    try {
+      const credential = await this.deps.vault.get(access.secretRef);
+      if (!credential) throw new Error('Connect this Codex subscription account first.');
+      await access.check();
+      staged = await stageCodexProfile(credential);
+      return await use({ home: staged.home, env: staged.env });
+    } finally {
+      try {
+        if (staged) {
+          const refreshed = await staged.credential().catch(() => null);
+          if (refreshed && !cancelled) { await access.check(); await this.deps.vault.set(access.secretRef, refreshed); }
+        }
+      } finally { try { await staged?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
     }
   }
 
