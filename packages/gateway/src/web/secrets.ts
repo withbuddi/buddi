@@ -39,13 +39,6 @@ function writeRateLimited(session: string, at: number): boolean {
   return false;
 }
 
-/** The query named `name`, run as the owner on the same pool the page reads with. */
-function runQuery(deps: SecretsDeps, name: string, params: unknown): Promise<unknown> {
-  const query = SECRETS_QUERIES.find((q) => q.name === name);
-  if (query === undefined) throw new Error(`no secrets query ${name}`);
-  return query.produce(params, { ...deps.ctx, db: deps.pool, now: deps.now ?? (() => new Date()) } as CoreToolContext);
-}
-
 /** One write: the tool by name, invoked as the owner, the answer the tool's own. */
 async function invoke(deps: SecretsDeps, tool: string, args: unknown, session: string): Promise<RouteReply> {
   const now = deps.now ?? (() => new Date());
