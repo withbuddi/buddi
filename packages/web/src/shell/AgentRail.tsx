@@ -111,6 +111,10 @@ export function AgentRail({
       {agents.top.length > 0 && agents.middle.length > 0 ? (
         <span className="wb-agent-sep" data-testid="agent-rail-sep" aria-hidden="true" />
       ) : null}
+      {/* The kit's heading over the colleagues, in the open column only. */}
+      {orientation === 'vertical' && !collapsed && agents.middle.length > 0 ? (
+        <span className="wb-roster-label">Your team</span>
+      ) : null}
 
       {/*
         The middle is the part that scrolls. That is what keeps both ends

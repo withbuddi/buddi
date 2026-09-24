@@ -8,7 +8,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Canvas, examplesFor } from './Canvas';
+import { Canvas, emptyLine, examplesFor } from './Canvas';
 import type { ViewDescriptor } from './types';
 
 afterEach(cleanup);
@@ -39,18 +39,22 @@ function empty(grantedTools?: string[]): void {
 describe('the empty canvas', () => {
   it('names only what the agent’s granted tools draw', () => {
     empty(['paint.make', 'memory.note']);
-    expect(screen.getByText('Things it can put here:')).toBeInTheDocument();
-    expect(screen.getByText('Picture')).toBeInTheDocument();
-    expect(screen.getByText('a picture')).toBeInTheDocument();
-    expect(screen.queryByText('Projected line')).toBeNull();
+    expect(screen.getByText('What your agent shows you lands here: pictures.')).toBeInTheDocument();
+    expect(screen.queryByText(/charts/)).toBeNull();
   });
 
   it('lists nothing when none of its tools draws a view, or when it is not known whose canvas it is', () => {
     empty(['memory.note']);
-    expect(screen.queryByText('Things it can put here:')).toBeNull();
+    expect(screen.getByText('What your agent shows you lands here.')).toBeInTheDocument();
     cleanup();
     empty();
-    expect(screen.queryByText('Things it can put here:')).toBeNull();
+    expect(screen.getByText('What your agent shows you lands here.')).toBeInTheDocument();
+  });
+
+  it('names the agent and folds what its tools draw into one line', () => {
+    expect(emptyLine('Scout', examplesFor(descriptors, ['code.change', 'code.run', 'ledger.accounts']))).toBe(
+      'What Scout shows you lands here: tables, diffs, command output.',
+    );
   });
 
   it('prefers different shapes: a change and a run before a second change', () => {

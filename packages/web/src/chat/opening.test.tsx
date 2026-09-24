@@ -85,12 +85,14 @@ describe('the agent an empty thread opens on', () => {
     expect(chatApi.send).not.toHaveBeenCalled();
   });
 
-  it('says on the canvas what this agent makes, in the agent’s own words', async () => {
+  it('shows the agent’s face on the empty canvas over one line in its name', async () => {
     render(<App />);
     await screen.findByTestId('chat-opening');
     const empty = document.querySelector('.wb-canvas-body-empty');
-    expect(empty?.textContent).toContain(INTRO);
-    expect(empty?.textContent).toContain('What Keeper makes appears here');
+    expect(empty?.querySelector('.wb-empty-face .ui-avatar')).not.toBeNull();
+    expect(empty?.textContent).toContain('What Keeper shows you lands here');
+    // The intro is the opening's, said once in the thread, not again here.
+    expect(empty?.textContent).not.toContain(INTRO);
     // The finance-flavoured copy is gone from both empty states.
     expect(document.body.textContent).not.toContain('a projection, a document, a decision');
   });

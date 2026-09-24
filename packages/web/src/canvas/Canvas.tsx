@@ -32,7 +32,7 @@ import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
 import { FilesView, type FilesViewProps } from './views/FilesView';
 import type { ChatAgent } from '../chat/types';
-import { Icon, ICON_NAMES, type IconName } from '../ui/Icon';
+import { Icon } from '../ui/Icon';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -47,8 +47,8 @@ const TAB_WIDTH = 152;
 /** The room the overflow control takes, reserved whether or not it is shown. */
 const OVERFLOW_WIDTH = 104;
 
-/** The strip's own side padding, which is not available to tabs. */
-const STRIP_PADDING = 28;
+/** The strip's own side padding and the Canvas label before the tabs, neither available to tabs. */
+const STRIP_PADDING = 28 + 72;
 
 /**
  * Never fewer than two, so a strip still reads as a strip on a phone, and
@@ -64,7 +64,7 @@ export function Canvas({
   timezone,
   onDecided,
   onChangeAgent,
-  emptyHint,
+  face,
   descriptors,
   grantedTools,
   agentName,
@@ -80,7 +80,8 @@ export function Canvas({
   onDecided?: (action: ApprovalRow) => void;
   /** Where the properties panel's one button goes: the maker, with a subject. */
   onChangeAgent?: ProfileProps['onChange'];
-  emptyHint?: string;
+  /** The face of the agent whose canvas this is, drawn over the empty line. */
+  face?: ReactNode;
   /** The installed view descriptors, used to say what could appear here. */
   descriptors?: ViewDescriptor[];
   /**
@@ -110,17 +111,11 @@ export function Canvas({
           <span className="wb-canvas-label">Canvas</span>
         </div>
         <div className="wb-canvas-body wb-canvas-body-empty">
+          {/* The kit's empty canvas: the agent's face, and one line that
+              names what its own tools can put here — nothing it cannot. */}
           <div className="wb-empty">
-            <span className="wb-empty-mark" aria-hidden="true">
-              <Icon name="frame" />
-            </span>
-            <h2 className="wb-empty-title">
-              {agentName ? `What ${agentName} finds is drawn here` : 'What the run finds is drawn here'}
-            </h2>
-            <p className="wb-empty-body">
-              {emptyHint ?? 'Ask for something. Whatever the run looks at will be drawn here.'}
-            </p>
-            <Examples descriptors={descriptors ?? []} grantedTools={grantedTools ?? []} />
+            {face ? <span className="wb-empty-face">{face}</span> : null}
+            <p className="ui-empty wb-empty-line">{emptyLine(agentName, examplesFor(descriptors ?? [], grantedTools ?? []))}</p>
           </div>
         </div>
       </div>
@@ -137,6 +132,7 @@ export function Canvas({
     <div className="wb-canvas" data-testid="canvas">
       <Tabs.Root value={active} onValueChange={onActivate} className="contents">
         <div className="wb-canvas-tabs" ref={strip}>
+          <span className="wb-canvas-label" aria-hidden="true">Canvas</span>
           <Tabs.List className="wb-tabstrip" aria-label="Canvas">
             {shown.map((item) => (
               <div key={item.id} className="wb-tab-item">
@@ -368,42 +364,30 @@ function clock(at: string | null, timezone: string): string | null {
 }
 
 
-/**
- * Two or three things this agent can actually draw, each shown as the shape
- * it would take: the view descriptors of the tools it is granted, and nothing
- * else. An agent none of whose tools declares a view — or a canvas that does
- * not know whose it is — promises nothing, because there is nothing honest to
- * promise. Different shapes come first, so an agent that can draw a diff and
- * a terminal says both rather than three kinds of table.
- */
-export function Examples({
-  descriptors,
-  grantedTools,
-}: {
-  descriptors: ViewDescriptor[];
-  grantedTools: readonly string[];
-}): JSX.Element | null {
-  const examples = examplesFor(descriptors, grantedTools);
-  if (examples.length === 0) return null;
+/** What each shape is called in the empty canvas's one line. */
+const PLURAL: Record<RendererName, string> = {
+  timeseries: 'charts',
+  table: 'tables',
+  bars: 'comparisons',
+  keyvalue: 'figures',
+  document: 'pages it read',
+  diff: 'diffs',
+  terminal: 'command output',
+  image: 'pictures',
+  preview: 'running apps',
+  envelope: 'drafts',
+  structured: 'results',
+};
 
-  return (
-    <>
-      <p className="wb-empty-lead">Things it can put here:</p>
-      <ul className="wb-empty-list">
-        {examples.map((descriptor) => (
-          <li key={descriptor.tool} className="wb-empty-item">
-            <span className="wb-empty-icon" aria-hidden="true">
-              <Icon name={shapeIcon(descriptor.renderer)} />
-            </span>
-            <span className="wb-empty-item-text">
-              <span className="wb-empty-item-title">{titleOf(descriptor)}</span>
-              <span className="wb-empty-item-shape">{SHAPE[descriptor.renderer] ?? 'a view'}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </>
-  );
+/**
+ * The empty canvas's line: whose canvas it is, and up to three things its
+ * granted tools can actually draw. An agent none of whose tools declares a
+ * view promises nothing, because there is nothing honest to promise.
+ */
+export function emptyLine(agentName: string | undefined, examples: readonly ViewDescriptor[]): string {
+  const who = agentName ? `What ${agentName} shows you` : 'What your agent shows you';
+  const kinds = [...new Set(examples.map((d) => PLURAL[d.renderer] ?? 'results'))].slice(0, 3);
+  return kinds.length > 0 ? `${who} lands here: ${kinds.join(', ')}.` : `${who} lands here.`;
 }
 
 /** The descriptors an agent's granted tools produce, one per title, shapes varied. */
@@ -438,25 +422,7 @@ function titleOf(descriptor: ViewDescriptor): string {
 }
 
 /** What each renderer looks like, said in words rather than in jargon. */
-const SHAPE: Record<RendererName, string> = {
-  timeseries: 'a line over time',
-  table: 'a table of rows',
-  bars: 'a bar comparison',
-  keyvalue: 'a list of figures',
-  document: 'a document to read',
-  diff: 'a change to review',
-  terminal: 'what a command printed',
-  image: 'a picture',
-  preview: 'the app, running',
-  envelope: 'a decision to make',
-  structured: 'the result, laid out',
-};
 
-/** Each renderer drawn as the mark it makes; an unknown one as a structured result. */
-function shapeIcon(renderer: RendererName): IconName {
-  const name = `shape-${renderer}`;
-  return (ICON_NAMES as string[]).includes(name) ? (name as IconName) : 'shape-structured';
-}
 
 /**
  * Panels read as data rather than as a result: they keep the plain surface

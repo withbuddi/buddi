@@ -31,7 +31,7 @@ import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
-import { AgentAvatar, GradientField } from '../ui';
+import { AgentAvatar, GradientField, Icon } from '../ui';
 import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
@@ -45,7 +45,8 @@ import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, Up
 import { accentAttrs, accentOf } from '../shell/accent';
 
 const MIN_WIDTH = 320;
-const DEFAULT_WIDTH = 440;
+/* Until the owner drags the grip, the column has no width of its own: the
+   kit's flex (420px basis, 600px at most) shares the window with the canvas. */
 const WIDTH_KEY = 'buddi.chatWidth';
 
 export interface ChatPageProps {
@@ -154,7 +155,8 @@ export function ChatPage({
   const [takenOffers, setTakenOffers] = useState<string[]>([]);
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [width, setWidth] = useState(readWidth);
+  const [width, setWidth] = useState<number | null>(readWidth);
+  const columnRef = useRef<HTMLElement>(null);
   /*
    * The properties panel, when the owner has asked for one. It is held here
    * rather than fetched by the canvas because it belongs to the *agent*, not to
@@ -916,7 +918,7 @@ export function ChatPage({
       if (!dragging.current) return;
       dragging.current = false;
       try {
-        window.localStorage.setItem(WIDTH_KEY, String(width));
+        if (width !== null) window.localStorage.setItem(WIDTH_KEY, String(width));
       } catch {
         /* a private window keeps the default; nothing breaks */
       }
@@ -967,15 +969,6 @@ export function ChatPage({
     </GradientField>
   ) : null;
 
-  /**
-   * What an empty canvas says, in the agent's own words rather than in a
-   * domain's. The page knows no domains: the sentence comes from the agent
-   * file, and what could land here comes from the installed view descriptors.
-   */
-  const madeHere = agent
-    ? `${introOf(agent)} What ${agent.name} makes appears here, beside the answer rather than inside it.`
-    : 'Ask for something. Whatever the run looks at is drawn here, beside the answer rather than inside it.';
-
   const canvas = (
     <Canvas
       renderables={renderables}
@@ -1008,7 +1001,7 @@ export function ChatPage({
       descriptors={descriptors}
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
-      emptyHint={conversation ? `Nothing in this conversation has produced a view yet. ${madeHere}` : madeHere}
+      {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" /> } : {})}
     />
   );
 
@@ -1020,6 +1013,11 @@ export function ChatPage({
    * message will start a new thread because this one has aged out. That is not
    * decoration — it is the one piece of state the transcript itself hides.
    */
+  // The conversation's own title, as the kit's head writes it: what the owner
+  // first asked, or "New conversation" before anything is said.
+  const firstAsk = [...(conversation?.messages ?? []), ...optimistic]
+    .find((m) => m.role === 'user')?.blocks.find((b): b is { type: 'text'; text: string } => b.type === 'text')?.text.trim();
+  const headTitle = firstAsk ? firstAsk.split('\n')[0]! : 'New conversation';
   const line = conversationLine({
     lifetime: conversation?.lifetime ?? null,
     startedAt: conversation?.startedAt ?? null,
@@ -1031,7 +1029,9 @@ export function ChatPage({
     <>
       <section
         className="wb-chat"
-        style={narrow ? undefined : { width }}
+        ref={columnRef}
+        style={narrow || width === null ? undefined : { width }}
+        data-sized={!narrow && width !== null ? 'true' : undefined}
         data-testid="chat-column"
         data-dropping={dropping || undefined}
         onDragEnter={(event) => {
@@ -1081,19 +1081,32 @@ export function ChatPage({
             <div className="wb-head-text">
               {group ? (
                 <span className="wb-head-title">{group.name}</span>
-              ) : agent ? (
-                /* Name and handle together: the handle is what you type to
-                   reach this agent, and it belongs beside the name it names. */
-                <a className="wb-head-title" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>
-                  {agent.name}
-                  <span className="wb-head-handle">@{agent.handle}</span>
-                </a>
-              ) : <span className="wb-head-title">No agent</span>}
+              ) : (
+                /* The kit's head: what this conversation is about on top, and
+                   whose it is beneath — the name, the handle you type to reach
+                   it, and how old the thread is. */
+                <span className="wb-head-title" title={headTitle}>{headTitle}</span>
+              )}
               <span className="wb-head-meta" data-tone={line.tone} title={group ? `${members.map((m) => m.name).join(', ')}. Coordinator: ${agent?.name ?? group.coordinator}.` : line.title}>
-                {group ? `${members.map((m) => m.name).join(', ')} · ${line.text}` : line.text}
+                {group ? `${members.map((m) => m.name).join(', ')} · ${line.text}` : agent ? (
+                  <>
+                    <a className="wb-head-name" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a>
+                    {' '}<span className="wb-head-handle">@{agent.handle}</span>
+                    {` · ${line.tone === 'quiet' && line.text === 'New conversation' ? 'on this Mac' : line.text}`}
+                  </>
+                ) : 'No agent'}
               </span>
             </div>
-            <button className="ui-btn" data-variant="accent" disabled={!agentId} onClick={() => { setHistoryOpen(false); startNew(); }}>New chat</button>
+            <button
+              className="ui-icon-btn wb-head-more"
+              data-size="sm"
+              aria-label="New chat"
+              title="New chat"
+              disabled={!agentId}
+              onClick={() => { setHistoryOpen(false); startNew(); }}
+            >
+              <Icon name="plus" size={16} />
+            </button>
             <button
               className="ui-icon-btn wb-head-more"
               aria-label="History"
@@ -1314,8 +1327,9 @@ export function ChatPage({
               event.currentTarget.setPointerCapture?.(event.pointerId);
             }}
             onKeyDown={(event) => {
-              if (event.key === 'ArrowLeft') setWidth((current) => Math.max(MIN_WIDTH, current - 16));
-              if (event.key === 'ArrowRight') setWidth((current) => Math.min(720, current + 16));
+              const from = (current: number | null): number => current ?? columnRef.current?.offsetWidth ?? MIN_WIDTH;
+              if (event.key === 'ArrowLeft') setWidth((current) => Math.max(MIN_WIDTH, from(current) - 16));
+              if (event.key === 'ArrowRight') setWidth((current) => Math.min(720, from(current) + 16));
             }}
           />
           {canvas}
@@ -1325,12 +1339,13 @@ export function ChatPage({
   );
 }
 
-function readWidth(): number {
+function readWidth(): number | null {
   try {
-    const stored = Number(window.localStorage.getItem(WIDTH_KEY));
-    return Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : DEFAULT_WIDTH;
+    const raw = window.localStorage.getItem(WIDTH_KEY);
+    const stored = Number(raw);
+    return raw !== null && Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : null;
   } catch {
-    return DEFAULT_WIDTH;
+    return null;
   }
 }
 
