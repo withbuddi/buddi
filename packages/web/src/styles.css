@@ -166,7 +166,7 @@ main[data-ground='plain'] { background: var(--bg); }
 
 /* Settings → Appearance: one row per choice, the words left, the control right. */
 .pref-row { display: flex; flex-direction: row; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
-.pref-text { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-0); }
+.pref-text { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; }
 .pref-label { font-size: var(--text-md); font-weight: var(--weight-medium); }
 
 /* ---- the conversation column ---- */

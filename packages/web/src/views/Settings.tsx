@@ -41,7 +41,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
     <div className="ui-page">
       <header className="ui-page-head">
         <h2 className="ui-page-title">Settings</h2>
-        <p className="ui-page-lede">How this installation runs. Changes here apply to new runs; a run already in flight finishes on what it started with.</p>
+        <p className="ui-page-lede">How this installation runs, and where it reaches.</p>
       </header>
       <Tabs>
         {SETTINGS_SECTIONS.map((s) => (

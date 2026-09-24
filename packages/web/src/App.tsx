@@ -417,9 +417,10 @@ export function App(): JSX.Element {
  * Activity, Files and every plugin page (mail, tables). No gradient is drawn
  * behind data. Home and Agents sit on the quiet page gradient.
  */
-export function plainGround(place: string, hash: string): boolean {
-  if (parsePluginPageRoute(hash)) return true;
-  return place === SETTINGS_ROUTE || place === ACTIVITY_ROUTE || place === FILES_ROUTE;
+export function plainGround(_place: string, hash: string): boolean {
+  // The kit draws every built-in page on the page's field; a plugin's own
+  // screen is its data, and keeps the flat ground.
+  return parsePluginPageRoute(hash) !== null;
 }
 
 export interface PlaceProps {
