@@ -117,7 +117,7 @@ function packageJson(name: string, peer: string, link: string): string {
       main: './dist/index.js',
       types: './dist/index.d.ts',
       exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
-      buddi: { manifest: 'manifest', core: peer },
+      buddi: { manifest: 'manifest', core: peer, uses: [], hostApi: '^1.0' },
       scripts: {
         build: 'tsc -p tsconfig.json',
         typecheck: 'tsc -p tsconfig.json --emitDeclarationOnly',
@@ -168,15 +168,16 @@ function indexTs(name: string, schema: string): string {
   return `/**
  * ${name} — a buddi plugin.
  *
- * The whole contract is \`PluginManifest\` in \`@buddi/core\`. This file is the
- * smallest honest example of it: one tool at tier \`auto\` (a read of this
+ * The whole contract is \`PluginManifest\` in \`@buddi/core/plugin\`, and
+ * everything a tool reaches beyond its arguments is on \`ctx.buddi\`. This file is
+ * the smallest honest example of both: one tool at tier \`auto\` (a read of this
  * plugin's own schema, which runs inline the moment a model calls it) and one
  * at tier \`gated\` (it changes something the owner cannot get back, so the call
  * becomes an action the owner approves before \`execute\` is ever reached).
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { EffectDescription, PluginManifest, ToolDefinition } from '@buddi/core';
+import type { EffectDescription, PluginManifest, ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 
 /**
@@ -219,7 +220,9 @@ export const listNotes: ToolDefinition<z.infer<typeof listInput>, { notes: Note[
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
-    const { rows } = await ctx.db.query(
+    // \`ctx.buddi\` is the host, bound to this plugin: core sets it on every
+    // context it hands you. Reach the database, the clock and the rest there.
+    const { rows } = await ctx.buddi!.db.query(
       \`select id::text as id, body, created_at from ${schema}.note order by created_at desc limit $1\`,
       [input.limit ?? 20],
     );
@@ -255,7 +258,7 @@ export const forgetNote: ToolDefinition<z.infer<typeof forgetInput>, { deleted: 
    * envelope and never from anything a model wrote.
    */
   async describe(input, ctx): Promise<EffectDescription> {
-    const { rows } = await ctx.db.query(\`select body from ${schema}.note where id = $1\`, [input.id]);
+    const { rows } = await ctx.buddi!.db.query(\`select body from ${schema}.note where id = $1\`, [input.id]);
     const body = (rows[0] as { body: string } | undefined)?.body;
     return {
       envelope: { tool: '${name}.forget_note', id: input.id, body: body ?? null },
@@ -274,7 +277,7 @@ export const forgetNote: ToolDefinition<z.infer<typeof forgetInput>, { deleted: 
       throw new Error('${name}.forget_note: no approved action id in the tool context; refusing');
     }
     // One atomic statement, so a replay of the same action cannot act twice.
-    const { rowCount } = await ctx.db.query(\`delete from ${schema}.note where id = $1\`, [input.id]);
+    const { rowCount } = await ctx.buddi!.db.query(\`delete from ${schema}.note where id = $1\`, [input.id]);
     return { deleted: (rowCount ?? 0) > 0 };
   },
 };
@@ -289,14 +292,14 @@ export const forgetNote: ToolDefinition<z.infer<typeof forgetInput>, { deleted: 
  * transaction as the rows it stands for, and \`dedupKey\` is stable for the life
  * of that row.
  *
- * import type { Source } from '@buddi/core';
+ * import type { Source } from '@buddi/core/plugin';
  *
  * export const poll: Source = {
  *   id: '${name}.poll',
  *   description: 'Looks for new work every ten minutes.',
  *   every: 600,
  *   async poll(ctx) {
- *     ctx.log('${name}: nothing to do');
+ *     ctx.buddi!.log('nothing to do');
  *   },
  * };
  */
@@ -317,6 +320,11 @@ export const manifest: PluginManifest = {
   // Every host you intend to reach, and why. Documentation, not a sandbox —
   // and it is compared with your buddi.md at install.
   network: [],
+  // The areas of \`ctx.buddi\` you reach beyond your own schema, directory and
+  // approvals: \`http\`, \`files\`, \`accounts\`, ... Repeated as \`buddi.uses\` in
+  // package.json, because the install card is drawn before this file is
+  // imported; the two must match. This plugin reaches nothing else.
+  uses: [],
 };
 
 export default manifest;
