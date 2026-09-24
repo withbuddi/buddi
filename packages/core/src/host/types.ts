@@ -163,11 +163,14 @@ export interface AccountsArea {
 }
 
 /** A file in the Files library, as a plugin sees it: no path on disk. */
-export type FileRow = Omit<ArtifactRow, 'storagePath'>;
+export interface FileRow extends Omit<ArtifactRow, 'storagePath'> {
+  /** The conversation it was handed into or made in, when that conversation exists. */
+  conversationId: string | null;
+}
 
 /** The Files library, scoped to what this plugin saved and what its conversation was handed. */
 export interface FilesArea {
-  save(input: { bytes: Buffer; mime: string; filename?: string; source?: ArtifactSource }): Promise<FileRow>;
+  save(input: { bytes: Buffer; mime: string; filename?: string; caption?: string; source?: ArtifactSource }): Promise<FileRow>;
   get(id: string): Promise<FileRow | null>;
   read(id: string): Promise<Buffer>;
   list(opts?: { since?: Date; before?: Date; kind?: ArtifactKind; limit?: number }): Promise<FileRow[]>;

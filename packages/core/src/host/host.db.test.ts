@@ -189,6 +189,22 @@ suite('ctx.buddi', () => {
     expect((await other.files!.list()).map((f) => f.id)).not.toContain(saved.id);
   });
 
+  it('keeps a caption, and names the conversation only when it exists', async () => {
+    configurePluginHost({ env: { BUDDI_DATA_DIR: dataDir } });
+    const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('assistant') returning id::text as id`);
+    const conversationId = rows[0].id as string;
+    const inIt = createPluginHost(hostBindingOf(plugin('garden', { uses: ['files'] })), ctx({ conversationId }));
+    const kept = await inIt.files!.save({ bytes: Buffer.from('bulbs'), mime: 'text/plain', caption: 'spring bulbs' });
+    expect(kept).toMatchObject({ caption: 'spring bulbs', conversationId });
+    expect((await inIt.files!.get(kept.id))?.conversationId).toBe(conversationId);
+    const nowhere = createPluginHost(
+      hostBindingOf(plugin('garden', { uses: ['files'] })),
+      ctx({ conversationId: '00000000-0000-4000-8000-00000000abcd' }),
+    );
+    const loose = await nowhere.files!.save({ bytes: Buffer.from('loose'), mime: 'text/plain' });
+    expect(loose.conversationId).toBeNull();
+  });
+
   it('resolves only an account the owner bound, and only the owner binds', async () => {
     await pool.query(
       `insert into core.provider_accounts (id, label, kind, auth, base_url, default_model)

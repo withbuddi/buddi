@@ -2768,7 +2768,7 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `save` | `({bytes, mime, filename?, source?}) => Promise<FileRow>` | yes | 1.0 | Keep a file in the Files library. Who made it and where it lives are filled in by core. |
+| `save` | `({bytes, mime, filename?, caption?, source?}) => Promise<FileRow>` | yes | 1.0 | Keep a file in the Files library. Who made it, where it lives and the conversation it belongs to (the call's, when that conversation exists) are filled in by core. A `FileRow` is the library's row without its path on disk, with `conversationId`. |
 | `get` | `(id) => Promise<FileRow \| null>` | yes | 1.0 | One file in scope, or `null`. |
 | `read` | `(id) => Promise<Buffer>` | yes | 1.0 | Its bytes. |
 | `list` | `({since?, before?, kind?, limit?}) => Promise<FileRow[]>` | yes | 1.0 | Newest first, at most 100. In scope: the files you saved and the files handed into the conversation your tool runs in — every file with `files:library`. |
