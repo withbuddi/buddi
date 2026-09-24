@@ -71,7 +71,8 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 0. [MCP server](specs/mcp.md) — configure buddi from Claude Code: reads at
    once, every write an approval card, `buddi.ask` to talk to an agent.
-   Taken ahead of Learning step 4 on 2026-09-23.
+   Built 2026-09-23 (buddi a329cf6); `claude mcp add buddi -- buddi mcp`, see
+   [mcp.md](mcp.md).
 1. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
 2. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
    but never see.
