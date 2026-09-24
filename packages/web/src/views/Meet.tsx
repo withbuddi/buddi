@@ -484,11 +484,11 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         card, and the page itself never scrolls.
       */}
         <header className="meet-head">
+          <Mark size="lg" />
           <span className="meet-head-who">
-            <Mark size="lg" />
             <span className="meet-head-name">buddi</span>
+            <span className="meet-head-line">{SCRIPT.tagline}</span>
           </span>
-          <p className="meet-head-line">{SCRIPT.tagline}</p>
         </header>
 
         <div className="meet-board">
