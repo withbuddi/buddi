@@ -413,6 +413,14 @@ function filesArea(
         params.push(opts.kind);
         where.push(`a.kind = $${params.length}`);
       }
+      if (opts.sha256 !== undefined) {
+        params.push(opts.sha256);
+        where.push(`a.sha256 = $${params.length}`);
+      }
+      if (opts.surface !== undefined) {
+        params.push(opts.surface);
+        where.push(`a.source_surface = $${params.length}`);
+      }
       const scoped = scope(params.length + 1);
       params.push(...scoped.params);
       where.push(scoped.sql);

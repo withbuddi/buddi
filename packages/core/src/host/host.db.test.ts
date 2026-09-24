@@ -205,6 +205,16 @@ suite('ctx.buddi', () => {
     expect(loose.conversationId).toBeNull();
   });
 
+  it('finds a file by its bytes and the surface that handed it in', async () => {
+    configurePluginHost({ env: { BUDDI_DATA_DIR: dataDir } });
+    const host = createPluginHost(hostBindingOf(plugin('mail', { uses: ['files:library'] })), ctx());
+    const bytes = Buffer.from('an invoice');
+    const kept = await host.files!.save({ bytes, mime: 'text/plain', source: { surface: 'email' } });
+    const digest = kept.sha256;
+    expect((await host.files!.list({ sha256: digest, surface: 'email' })).map((f) => f.id)).toEqual([kept.id]);
+    expect(await host.files!.list({ sha256: digest, surface: 'telegram' })).toEqual([]);
+  });
+
   it('resolves only an account the owner bound, and only the owner binds', async () => {
     await pool.query(
       `insert into core.provider_accounts (id, label, kind, auth, base_url, default_model)
