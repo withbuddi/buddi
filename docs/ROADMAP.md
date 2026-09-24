@@ -114,12 +114,12 @@ with a written brief; in order:
 
 Small, whenever a slot opens:
 
-- Kept email rules first — a rule kept from Proposals shows at the top of
+- Kept email rules first — built 2026-09-23 (buddi `3462a7c`); a rule kept from Proposals shows at the top of
   the email page's rules with "kept <when>", not under the date it was
   learned; and a rule card's untrusted notice reads "learned from mail you
   received" rather than the skill/change wording about hidden instructions
   (2026-09-23).
-- Sensitive plugin queries — a plugin marks a page query `sensitive` the
+- Sensitive plugin queries — built 2026-09-23 (buddi `3462a7c`); no shipped query is marked yet, because finance contributes no page queries (its balances reach the dashboard only as its Home block, already sensitive). A plugin marks a page query `sensitive` the
   way a Home block already is; the page masks it like Home does and
   `buddi mcp` leaves it out unless asked. Today finance balances come back
   unmarked from `buddi.page_query` (2026-09-23).
@@ -141,7 +141,7 @@ Small, whenever a slot opens:
   having and cannot exist until a poll refreshes `\Seen` on rows it already
   has. Today flags are written once at ingest (`on conflict … do nothing`), so
   the count only climbs and a goal on it would be missed by construction.
-- `ToolRef.pending` on plugin pages — a sentence drawn above a gated action's
+- `ToolRef.pending` on plugin pages — built 2026-09-23 (buddi `3462a7c`); a sentence drawn above a gated action's
   approval card while it waits ("Nothing has been sent…"); the one Mail
   behaviour the port could not express.
 
