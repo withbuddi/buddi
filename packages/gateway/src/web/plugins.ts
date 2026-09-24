@@ -28,6 +28,8 @@ import type { Pool } from 'pg';
 import {
   contributionOf,
   OWNER_AGENT_ID,
+  PLUGIN_USE_WORDS,
+  pluginUsesChange,
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
@@ -121,6 +123,21 @@ function refusalReply(err: unknown): RouteReply {
  * `dir` and `packageDir` are where this installation put the package, and the
  * page has no use for either. They stay here.
  */
+function stagedUses(staged: StagedPlugin): {
+  areas: Array<{ use: string; words: string; added: boolean }>;
+  dropped: Array<{ use: string; words: string }>;
+} {
+  const uses = staged.uses ?? [];
+  const change =
+    staged.previous === undefined
+      ? { added: [], removed: [] }
+      : pluginUsesChange(staged.previousUses ?? [], uses);
+  return {
+    areas: uses.map((use) => ({ use, words: PLUGIN_USE_WORDS[use], added: change.added.includes(use) })),
+    dropped: change.removed.map((use) => ({ use, words: PLUGIN_USE_WORDS[use] })),
+  };
+}
+
 function stagedView(staged: StagedPlugin): Record<string, unknown> {
   return {
     id: staged.id,
@@ -141,6 +158,12 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     /** The package's own lifecycle scripts, which also run as somebody else. */
     scripts: staged.scripts,
     ...(staged.previous === undefined ? {} : { previous: staged.previous }),
+    /**
+     * What it reaches in buddi beyond itself, one plain line each, from its
+     * package.json. On an upgrade `added` marks what the installed version did
+     * not declare, and `dropped` lists what it no longer does.
+     */
+    uses: stagedUses(staged),
     /** What the file was called on the owner's machine, for an upload. */
     ...(staged.uploadedName === undefined ? {} : { uploadedName: staged.uploadedName }),
     ...(staged.plan === undefined ? {} : { plan: staged.plan }),

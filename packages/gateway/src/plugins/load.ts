@@ -27,16 +27,19 @@
  *    already uses, for the same reason.
  */
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import {
   contributionOf,
   isPluginSchemaName,
+  parsePluginUses,
+  pluginUsesMismatch,
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
   type PluginContribution,
   type PluginManifest,
+  type PluginUse,
 } from '@buddi/core';
 import { agentSearchPath, builtInManifests } from '../agents/catalog.js';
 import { createMissionManifest } from '../missions/report.js';
@@ -197,6 +200,46 @@ export function manifestProblem(
   return undefined;
 }
 
+/**
+ * The `buddi.uses` of the package an entry point belongs to: the nearest
+ * `package.json` above it. What the install card listed, read back.
+ *
+ * A package.json with no `buddi.uses` declares nothing, and so does an entry
+ * with no package.json above it at all (a bare built file, in a test).
+ */
+export function packageUses(entry: string): { ok: true; uses: PluginUse[] } | { ok: false; message: string } {
+  let dir = path.dirname(entry);
+  for (let i = 0; i < 8; i += 1) {
+    const file = path.join(dir, 'package.json');
+    if (existsSync(file)) {
+      let pkg: { buddi?: { uses?: unknown } };
+      try {
+        pkg = JSON.parse(readFileSync(file, 'utf8')) as typeof pkg;
+      } catch (err) {
+        return { ok: false, message: `its package.json cannot be read: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      return parsePluginUses(pkg.buddi?.uses, "its package.json's buddi.uses");
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return { ok: true, uses: [] };
+}
+
+/**
+ * Why a loaded manifest's `uses` cannot register, or undefined: an area this
+ * build does not have, or a list that is not the one its package.json — and
+ * so the install card — declared (docs/specs/plugin-host-api.md §5).
+ */
+export function usesProblem(manifest: PluginManifest, entry: string): string | undefined {
+  const declared = parsePluginUses(manifest.uses, `plugin "${manifest.name}"'s manifest uses`);
+  if (!declared.ok) return declared.message;
+  const shown = packageUses(entry);
+  if (!shown.ok) return shown.message;
+  return pluginUsesMismatch(manifest.name, declared.uses, shown.uses);
+}
+
 /** Import one entry point and validate what comes back. */
 export async function loadManifest(
   entry: string,
@@ -218,6 +261,8 @@ export async function loadManifest(
   const candidate = mod.manifest ?? mod.default;
   const problem = manifestProblem(candidate, expected, env);
   if (problem !== undefined) return { ok: false, message: problem };
+  const uses = usesProblem(candidate as PluginManifest, entry);
+  if (uses !== undefined) return { ok: false, message: uses };
   return { ok: true, manifest: candidate as PluginManifest };
 }
 

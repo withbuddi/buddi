@@ -123,6 +123,33 @@ describe('the plugins section', () => {
     await waitFor(() => expect(api.approveStaged).toHaveBeenCalledWith('stage-1', { integrity: '' }));
   });
 
+  it('lists what it reaches in buddi, one line each, and marks what an update adds', async () => {
+    const update: StagedPluginView = {
+      ...STAGED,
+      previous: { name: 'weather', version: '2.0.0' },
+      uses: {
+        areas: [
+          { use: 'http', words: 'sends web requests', added: false },
+          { use: 'files:library', words: 'reads every file in your Files library', added: true },
+        ],
+        dropped: [{ use: 'schedule', words: 'starts agent runs by itself' }],
+      },
+    };
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [update] }));
+    render(<Plugins />);
+    expect(await screen.findByText('What it reaches in buddi')).toBeInTheDocument();
+    expect(screen.getByText(/It sends web requests\./)).toBeInTheDocument();
+    expect(screen.getByText(/It reads every file in your Files library\./)).toBeInTheDocument();
+    expect(screen.getByText('new in 2.1.0')).toBeInTheDocument();
+    expect(screen.getByText('No longer: starts agent runs by itself.')).toBeInTheDocument();
+  });
+
+  it('says a package that declares no areas reaches nothing beyond itself', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED] }));
+    render(<Plugins />);
+    expect(await screen.findByText(/Nothing beyond its own tables/)).toBeInTheDocument();
+  });
+
   it('shows the hash of the files on disk beside the tarball\'s', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED] }));
     render(<Plugins />);

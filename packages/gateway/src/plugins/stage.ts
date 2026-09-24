@@ -41,7 +41,7 @@ import {
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { PluginSource } from '@buddi/core';
+import { hostApiProblem, parsePluginUses, type PluginSource, type PluginUse } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
@@ -111,7 +111,16 @@ export interface StagedPlugin {
   /** The name its manifest must answer to: `buddi.name`, or the package name. */
   declaredName: string;
   /** The `buddi` field of package.json, if any. */
-  buddi?: { manifest?: string; core?: string };
+  buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string };
+  /**
+   * The areas of buddi it says it reaches beyond itself — `buddi.uses` in its
+   * package.json, read without importing anything, which is what the card
+   * lists (docs/specs/plugin-host-api.md §5). The manifest must say the same
+   * when it loads. Absent on a stage written before this existed.
+   */
+  uses?: PluginUse[];
+  /** On an upgrade, what the installed version declared: the card marks what is new. */
+  previousUses?: PluginUse[];
   /** The peer range it wants on `@buddi/core`. */
   coreRange?: string;
   /** Lifecycle scripts the package itself declares. */
@@ -163,6 +172,8 @@ export interface StageOptions {
   onPhase?: (phase: StagePhase) => void;
   /** Set by `updatePlugin`, so approval knows what it replaces. */
   previous?: { name: string; version: string };
+  /** Set by `updatePlugin`: the areas the installed version declared. */
+  previousUses?: PluginUse[];
   now?: () => Date;
   /** Skip the dependency install. Only the fixtures that have none use it. */
   skipDependencies?: boolean;
@@ -583,6 +594,26 @@ export async function stagePlugin(
         ? (pkg.buddi.name as string).trim()
         : (pkg.name as string);
 
+    /*
+     * What it reaches in buddi, and which buddi it was built for — both read
+     * from package.json, because nothing of the package may be imported yet,
+     * and both refused here, before its dependencies are even installed.
+     */
+    const uses = parsePluginUses(pkg.buddi?.uses, `${String(pkg.name)}'s package.json buddi.uses`);
+    if (!uses.ok) throw new StageRefusal('bad-uses', `${uses.message}. Nothing of it is kept.`);
+    if (pkg.buddi?.hostApi !== undefined) {
+      const problem =
+        typeof pkg.buddi.hostApi === 'string'
+          ? hostApiProblem(pkg.buddi.hostApi)
+          : 'its buddi.hostApi is not a version range such as "^1.0"';
+      if (problem !== undefined) {
+        throw new StageRefusal(
+          'host-api',
+          `${String(pkg.name)} ${String(pkg.version)} cannot run on this buddi: ${problem} Nothing of it is kept.`,
+        );
+      }
+    }
+
     if (parsed.kind !== 'directory' && opts.skipDependencies !== true) {
       phase('installing-dependencies');
       const registry = parsed.kind === 'registry' ? parsed.registry : undefined;
@@ -621,7 +652,18 @@ export async function stagePlugin(
       integrity,
       stagedHash,
       declaredName,
-      ...(pkg.buddi === undefined ? {} : { buddi: { manifest: pkg.buddi.manifest, core: pkg.buddi.core } }),
+      ...(pkg.buddi === undefined
+        ? {}
+        : {
+            buddi: {
+              manifest: pkg.buddi.manifest,
+              core: pkg.buddi.core,
+              ...(pkg.buddi.uses === undefined ? {} : { uses: pkg.buddi.uses }),
+              ...(typeof pkg.buddi.hostApi === 'string' ? { hostApi: pkg.buddi.hostApi } : {}),
+            },
+          }),
+      uses: uses.uses,
+      ...(opts.previousUses === undefined ? {} : { previousUses: opts.previousUses }),
       ...(typeof pkg.peerDependencies?.['@buddi/core'] === 'string'
         ? { coreRange: pkg.peerDependencies['@buddi/core'] as string }
         : {}),

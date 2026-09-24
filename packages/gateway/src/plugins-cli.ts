@@ -34,6 +34,8 @@ import {
   migrate,
   readPluginsFile,
   renderContribution,
+  renderUses,
+  pluginUsesChange,
   type InstalledPlugin,
   type PluginContribution,
 } from '@buddi/core';
@@ -396,6 +398,8 @@ function renderStaged(staged: StagedPlugin): string[] {
     lines.push(`  it declares the lifecycle script${staged.scripts.length === 1 ? '' : 's'} ${staged.scripts.join(', ')}; none was run`);
   }
   lines.push('');
+  lines.push(...renderStagedUses(staged));
+  lines.push('');
   lines.push('WHAT IT SAYS ABOUT ITSELF (its buddi.md — its claim, not a fact)');
   if (staged.claims.missing) {
     lines.push('  It ships no buddi.md. It stated nothing in advance about what it does.');
@@ -404,6 +408,19 @@ function renderStaged(staged: StagedPlugin): string[] {
   }
   lines.push('');
   lines.push(...wrap(TRUST_SENTENCE, 86).map((line) => `  ${line}`));
+  return lines;
+}
+
+/**
+ * What it reaches in buddi beyond itself, from its package.json — and on an
+ * upgrade, what this version adds to or drops from the installed one.
+ */
+export function renderStagedUses(staged: Pick<StagedPlugin, 'uses' | 'previous' | 'previousUses'>): string[] {
+  const uses = staged.uses ?? [];
+  if (staged.previous === undefined) return renderUses(uses);
+  const change = pluginUsesChange(staged.previousUses ?? [], uses);
+  const lines = renderUses(uses, change.added);
+  for (const dropped of change.removed) lines.push(`  No longer: ${dropped} (${staged.previous.version} declared it).`);
   return lines;
 }
 

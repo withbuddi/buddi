@@ -449,6 +449,39 @@ function Install({
  * A staged package, and the two approvals
  * ------------------------------------------------------------------ */
 
+/**
+ * What it reaches in buddi beyond itself, one plain line each — read from its
+ * package.json, before anything of it runs. On an update, what this version
+ * adds is marked, and what it no longer asks for is said.
+ */
+function StagedUses({ staged }: { staged: StagedPluginView }): JSX.Element {
+  const areas = staged.uses?.areas ?? [];
+  const dropped = staged.uses?.dropped ?? [];
+  return (
+    <Section title="What it reaches in buddi">
+      <Stack gap="sm">
+        {areas.length === 0 ? (
+          <p className="ui-card-meta">Nothing beyond its own tables, its own folder and its own tools' approvals.</p>
+        ) : (
+          <ul className="plugin-uses">
+            {areas.map((area) => (
+              <li key={area.use}>
+                It {area.words}.{' '}
+                {area.added ? <Pill tone="warning">new in {staged.version}</Pill> : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {dropped.length > 0 ? (
+          <p className="ui-card-meta">
+            No longer: {dropped.map((area) => area.words).join('; ')}.
+          </p>
+        ) : null}
+      </Stack>
+    </Section>
+  );
+}
+
 function Staged({
   staged,
   onInstalled,
@@ -549,6 +582,7 @@ function Staged({
               },
             ]}
           />
+          <StagedUses staged={staged} />
           <Section title="What the package says about itself">
             <Stack gap="sm">
               <p className="ui-card-meta">

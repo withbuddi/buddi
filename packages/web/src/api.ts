@@ -1107,6 +1107,16 @@ export interface StagedPluginView {
   scripts: string[];
   /** Set when this stage came from an update: what it would replace. */
   previous?: { name: string; version: string };
+  /**
+   * What it reaches in buddi beyond itself, from its package.json, one plain
+   * line each. On an update, `added` marks what the installed version did not
+   * declare and `dropped` is what it no longer does. Optional while the
+   * gateway that sends it is still landing.
+   */
+  uses?: {
+    areas: Array<{ use: string; words: string; added: boolean }>;
+    dropped: Array<{ use: string; words: string }>;
+  };
   plan?: PluginPlan;
   state: 'staged' | 'approved' | 'planned';
 }
