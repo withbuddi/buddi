@@ -7,7 +7,7 @@
  * agent file — and a starter is a *draft*: it fills the composer and stops,
  * because nothing on this page may send a message the owner did not send.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../App';
@@ -103,5 +103,57 @@ describe('the agent an empty thread opens on', () => {
     const opening = await screen.findByTestId('chat-opening');
     expect(opening).toHaveTextContent('A description and nothing else');
     expect(opening.querySelectorAll('.wb-starter')).toHaveLength(0);
+  });
+});
+
+describe('an existing conversation on its way', () => {
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+  const transcript = (id: string) => ({
+    conversationId: id, agentId: 'keeper',
+    messages: [{ id: `m-${id}`, role: 'assistant', at: '', blocks: [{ type: 'text', text: `Transcript ${id}` }] }],
+  });
+
+  it('never says hello while its messages load, then shows them', async () => {
+    vi.spyOn(chatApi, 'conversations').mockResolvedValue({ conversations: [
+      { id: 'c-old', startedAt: '2026-09-18T12:00:00Z', lastMessageAt: '2026-09-18T13:00:00Z', preview: 'Earlier', messageCount: 1 },
+    ] } as never);
+    const pending = deferred<ReturnType<typeof transcript>>();
+    vi.spyOn(chatApi, 'conversation').mockReturnValue(pending.promise as never);
+    render(<App />);
+    await waitFor(() => expect(chatApi.conversation).toHaveBeenCalledWith('c-old'));
+    expect(screen.queryByTestId('chat-opening')).toBeNull();
+    expect(document.body.textContent).not.toContain("Hi, I'm Keeper.");
+    expect(document.body.textContent).not.toContain('Nothing here yet');
+    // The canvas keeps the same rule: no face and line for a thread still arriving.
+    expect(document.querySelector('.wb-canvas-body-empty .wb-empty')).toBeNull();
+
+    pending.resolve(transcript('c-old'));
+    expect(await screen.findByText('Transcript c-old')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-opening')).toBeNull();
+  });
+
+  it('does not say hello between two existing conversations', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValueOnce(transcript('c-a') as never);
+    window.history.replaceState(null, '', chatRoute('keeper', 'c-a'));
+    render(<App />);
+    await screen.findByText('Transcript c-a');
+    const pending = deferred<ReturnType<typeof transcript>>();
+    vi.spyOn(chatApi, 'conversation').mockReturnValue(pending.promise as never);
+    await act(async () => { window.location.hash = chatRoute('keeper', 'c-b'); });
+    await waitFor(() => expect(chatApi.conversation).toHaveBeenCalledWith('c-b'));
+    expect(screen.queryByTestId('chat-opening')).toBeNull();
+    pending.resolve(transcript('c-b'));
+    expect(await screen.findByText('Transcript c-b')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-opening')).toBeNull();
+  });
+
+  it('still opens a brand-new conversation on the agent', async () => {
+    window.history.replaceState(null, '', chatRoute('keeper', 'new'));
+    render(<App />);
+    expect(await screen.findByTestId('chat-opening')).toHaveTextContent("Hi, I'm Keeper.");
   });
 });
