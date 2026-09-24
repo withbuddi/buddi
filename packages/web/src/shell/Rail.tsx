@@ -139,7 +139,7 @@ function OwnerMenu({
             </div>
             <DropdownMenu.Separator className="ui-menu-sep" />
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
-              Appearance
+              Change appearance
             </DropdownMenu.Item>
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(WELCOME_ROUTE)}>
               Replay first run

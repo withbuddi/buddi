@@ -160,7 +160,7 @@ export function Home({
                   <span className="home-face-text">
                     <span className="home-face-name">{agent.name}</span>
                     <span className="home-face-status">
-                      {waiting ? capitalise(waiting) : agent.available ? truncate(agent.description, 60) : agent.unavailableReason ?? 'Cannot run right now'}
+                      {waiting ? capitalise(waiting) : agent.available ? truncate(agent.description, 60) : agent.unavailableReason ?? 'Cannot run right now.'}
                     </span>
                   </span>
                 </a>
@@ -435,7 +435,7 @@ export function needsSentence(needs: number, approvals: number, failed: number, 
   const parts: string[] = [];
   if (approvals > 0) parts.push(`${approvals} approval${approvals === 1 ? '' : 's'} waiting`);
   if (failed > 0) parts.push(`${failed} failed job${failed === 1 ? '' : 's'}`);
-  if (urgent > 0) parts.push(`${urgent} urgent finding${urgent === 1 ? '' : 's'}`);
+  if (urgent > 0) parts.push(`${urgent} urgent alert${urgent === 1 ? '' : 's'}`);
   if (paused) parts.push('the installation is paused');
   if (proposals > 0) parts.push(`${proposals} proposal${proposals === 1 ? '' : 's'} to review`);
   const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
