@@ -9,11 +9,11 @@ import { PlaywrightHost } from './host.js';
 import { BrowserManager } from './manager.js';
 import { commandSchema } from './types.js';
 import { DEFAULT_POLICY } from '@buddi/core/plugin';
-import { ToolRegistry, createPluginHost, guardedLookup, hostBindingOf, type AgentDefinition, type ToolContext } from '@buddi/core/testing';
+import { ToolRegistry, createPluginHost, guardedLookup, hostBindingOf, type AgentDefinition, type CoreToolContext } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
-const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
+const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { runAgent, type RuntimeProvider, type NeutralMessage } from '@buddi/runtime';
 import { BrowserService } from './service.js';
 import { createBrowserManifest } from './index.js';
@@ -120,7 +120,7 @@ describe.skipIf(!enabled)('real host browser fixture (opt in with BUDDI_BROWSER_
     } };
     const agent: AgentDefinition = { id: 'fixture-agent', name: 'Fixture', tools: ['browser.act'], systemPrompt: 'Complete only the owner task.', maxTurns: 8,
       provider: { kind: 'anthropic', model: 'fixture', credential: { kind: 'api-key', env: 'UNUSED' } } };
-    const ctx: ToolContext = hosted({ db: db as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
+    const ctx: CoreToolContext = hosted({ db: db as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
       ownerRequest: { id: 'fixture-owner-request', text: 'Book my fixture appointment for 11:00.', expiresAt: Date.now() + 60_000 } });
     try {
       const outcome = await runAgent({ agent, provider, registry, ctx, pool: db, conversationId: 'fixture-conversation', userMessage: ctx.ownerRequest!.text });
@@ -210,7 +210,7 @@ describe.skipIf(!enabled)('real host browser fixture (opt in with BUDDI_BROWSER_
       vi.spyOn(child, 'adopt').mockImplementation((page) => { pages.push(page); PlaywrightDriver.prototype.adopt.call(child, page); });
       drivers.push(child); return child;
     }, { closeHost: () => host.close() });
-    const ctx = (agentId: string): ToolContext => hosted({ db: {} as never, ownerId: 'owner', agentId, conversationId: agentId, now: () => new Date(), timezone: 'UTC',
+    const ctx = (agentId: string): CoreToolContext => hosted({ db: {} as never, ownerId: 'owner', agentId, conversationId: agentId, now: () => new Date(), timezone: 'UTC',
       ownerRequest: { id: agentId, text: 'Read the fixture and leave it open', expiresAt: Date.now() + 60_000 } });
     try {
       await manager.enable();

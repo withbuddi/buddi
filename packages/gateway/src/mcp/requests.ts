@@ -26,7 +26,7 @@ import {
   type ActionRecord,
   type AgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
   type ToolRegistry,
 } from '@buddi/core';
@@ -178,7 +178,7 @@ function checkScope(catalog: AgentCatalog, scope: string): void {
   }
 }
 
-function ownerCtx(ctx: ToolContext): ToolContext {
+function ownerCtx(ctx: CoreToolContext): CoreToolContext {
   return { ...ctx, agentId: OWNER_AGENT_ID };
 }
 
@@ -276,7 +276,7 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
    * The inner tool is reached through `lookup`, the executor's accessor, only
    * from `execute`, which only the executor calls, under this approval.
    */
-  const innerEffect = async (input: PageActInput, ctx: ToolContext) => {
+  const innerEffect = async (input: PageActInput, ctx: CoreToolContext) => {
     if (registry.pluginOf(input.tool) !== input.plugin || !registry.pageTools(input.plugin).includes(input.tool)) {
       throw new Error(`${input.plugin} has no page that writes through ${input.tool}.`);
     }
@@ -298,7 +298,7 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
     tier: 'gated',
     ownerOnly: true,
     input: pageActInput,
-    async describe(input, ctx) {
+    async describe(input, ctx: CoreToolContext) {
       const inner = await innerEffect(input, ctx);
       return {
         envelope: {
@@ -309,7 +309,7 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
         preview: preview(input, [`${input.plugin} page: ${inner.preview}`]),
       };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const inner = await innerEffect(input, ctx);
       const run = { ...ownerCtx(ctx), approvedEffect: { envelope: inner.envelope } };
       if (inner.tool.claim) await inner.tool.claim(inner.args, run);
@@ -433,7 +433,7 @@ export function createMcpManifest(registry: ToolRegistry): PluginManifest {
 
 export interface McpRequestDeps {
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   pool: Pool;
   /** Post the new card to the owner's Telegram chat, as an unattended run's would be. */

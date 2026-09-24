@@ -417,7 +417,7 @@ export class ProviderAccounts {
   }
 
   /**
-   * What a plugin sees (`ToolContext.providerAccounts`): the listing, an HTTP
+   * What a plugin sees (`CoreToolContext.providerAccounts`): the listing, an HTTP
    * account resolved as a run resolves it, and a Codex account's profile
    * staged under its lock. Never the vault reference.
    */

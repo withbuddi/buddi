@@ -64,7 +64,7 @@ import {
   type ProviderKind,
   type SuggestedAgent,
   type SuggestedSkill,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
   type ToolRegistry,
   type ToolSpec,
@@ -1778,7 +1778,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'coordinator that brings members in. Read this before proposing a group, so you do not propose one that exists.',
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const groups = await coreListGroups(ctx.db);
       return {
@@ -1807,7 +1807,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'keeps its own account, tools and approvals — and what is said in the room is seen by the room.',
     tier: 'gated',
     input: createGroupInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const find = (ref: string): CatalogAgent | undefined => {
         const wanted = ref.trim().replace(/^@/, '');
@@ -1854,7 +1854,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
     }));
 
   /** The group the owner named, by name or id, or a refusal saying so. */
-  const findGroup = async (ref: string, db: ToolContext['db']): Promise<GroupRow> => {
+  const findGroup = async (ref: string, db: CoreToolContext['db']): Promise<GroupRow> => {
     const groups = await coreListGroups(db);
     const wanted = ref.trim().toLowerCase();
     const group = groups.find((g) => g.id === ref.trim() || g.name.trim().toLowerCase() === wanted);
@@ -1872,7 +1872,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
    */
   const planGroupUpdate = async (
     input: UpdateGroupInput,
-    db: ToolContext['db'],
+    db: CoreToolContext['db'],
   ): Promise<{ group: GroupRow; envelope: GroupUpdateEnvelope; names: (id: string) => string }> => {
     const binding = resolved(registry);
     const group = await findGroup(input.group, db);
@@ -1919,11 +1919,11 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: updateGroupInput,
-    async describe(input, ctx) {
+    async describe(input, ctx: CoreToolContext) {
       const planned = await planGroupUpdate(input, ctx.db);
       return { envelope: planned.envelope, preview: renderGroupUpdate(planned.envelope, planned.names) };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const planned = await planGroupUpdate(input, ctx.db);
       assertApprovedEffect(ctx, planned.envelope);
       const binding = resolved(registry);
@@ -1951,14 +1951,14 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       'Only when the owner asks for it, naming the group.',
     tier: 'gated',
     input: archiveInput,
-    async describe(input, ctx) {
+    async describe(input, ctx: CoreToolContext) {
       const group = await findGroup(input.group, ctx.db);
       return {
         envelope: { tool: 'platform.archive_group', id: group.id, name: group.name },
         preview: `Archive ${group.name}: it leaves the dashboard's roster and takes no new requests. Everything said in it stays readable.`,
       };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const group = await findGroup(input.group, ctx.db);
       assertApprovedEffect(ctx, { tool: 'platform.archive_group', id: group.id, name: group.name });
       const gone = await coreArchiveGroup(ctx.db, group.id, ctx.now());
@@ -2144,7 +2144,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: createInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: CreateInput) =>
@@ -2152,7 +2152,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         (envelope) => renderCreatePreview(envelope, specsFor(registry)),
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       // Rebuild and compare at the write boundary, after the executor's check.
       const envelope = buildCreateEnvelope(withCore(input), {
@@ -2194,7 +2194,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: updateInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: UpdateInput) =>
@@ -2202,7 +2202,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         (envelope) => renderUpdatePreview(envelope, specsFor(registry)),
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const envelope = buildUpdateEnvelope(input, {
         binding,
@@ -2255,14 +2255,14 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: skillInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: SkillInput) => buildSkillEnvelope(i, { binding, proposedBy: ctx.agentId ?? 'unknown' }),
         renderSkillPreview,
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const envelope = buildSkillEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' });
       assertApprovedEffect(ctx, envelope);
@@ -2342,7 +2342,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: acceptAgentInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: AcceptAgentInput) =>
@@ -2350,7 +2350,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         (envelope) => renderAcceptAgentPreview(envelope, specsFor(registry)),
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const envelope = buildAcceptAgentEnvelope(input, {
         binding,
@@ -2406,7 +2406,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: acceptSkillInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: AcceptSkillInput) =>
@@ -2419,7 +2419,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
           ].join('\n'),
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const envelope = buildAcceptSkillEnvelope(input, {
         binding,
@@ -2449,7 +2449,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: deleteInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       return describing(
         (i: z.infer<typeof deleteInput>) =>
@@ -2457,7 +2457,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         renderDeletePreview,
       )(input);
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
       const envelope = buildDeleteEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' });
       assertApprovedEffect(ctx, envelope);

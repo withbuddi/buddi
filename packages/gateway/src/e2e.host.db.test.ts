@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPool, runMigrations, ToolRegistry, decideApproval, executeApproved,
   listToolPermissions, revokeToolPermission, saveArtifact, getAction, readArtifactBytes, getArtifact,
-  type ToolContext } from '@buddi/core';
+  type CoreToolContext } from '@buddi/core';
 import { ensureOwner, completeOnboarding, pairSurfaceIdentity, configurePluginHost, createPluginHost, hostBindingOf } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createHostManifest, hostService, type HostService, execInput } from '@buddi/tool-host';
@@ -19,7 +19,7 @@ const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const name = `buddi_host_e2e_${process.pid}`;
 suite('host execution permissions and file workflow', () => {
-  let admin: Pool, pool: Pool, dir: string, service: HostService, registry: ToolRegistry, ctx: ToolContext;
+  let admin: Pool, pool: Pool, dir: string, service: HostService, registry: ToolRegistry, ctx: CoreToolContext;
   beforeAll(async () => {
     admin = createPool(databaseUrl!);
     await admin.query(`create database ${name}`);
@@ -38,7 +38,7 @@ suite('host execution permissions and file workflow', () => {
     service = hostService({ ...process.env, BUDDI_DATA_DIR: dir });
     registry = new ToolRegistry(); registry.register(createHostManifest(service));
     const { rows } = await pool.query("insert into core.conversations (agent_id) values ('ledger') returning id");
-    const facts: ToolContext = { db: pool, ownerId: 'owner', agentId: 'ledger', conversationId: rows[0].id, now: () => new Date(), timezone: 'UTC' };
+    const facts: CoreToolContext = { db: pool, ownerId: 'owner', agentId: 'ledger', conversationId: rows[0].id, now: () => new Date(), timezone: 'UTC' };
     // The host core hands the plugin: the Files library read from this data dir.
     configurePluginHost({ env: service.env });
     ctx = { ...facts, buddi: createPluginHost(hostBindingOf(createHostManifest(service)), facts) };

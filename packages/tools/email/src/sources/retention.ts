@@ -40,7 +40,7 @@ export function createRetentionSource(opts: RetentionSourceOptions = {}): Source
     every: RETENTION_EVERY_SECONDS,
 
     async poll(ctx: SourceContext): Promise<void> {
-      const log = ctx.buddi?.log ?? ctx.log ?? ((line: string) => console.error(line));
+      const log = ctx.buddi?.log ?? ((line: string) => console.error(line));
       const outcome = await purgeBodies(ctx.buddi!.db, ctx.buddi!.clock.now(), {
         batchSize: opts.batchSize ?? PURGE_BATCH,
         ...(opts.retentionDays !== undefined ? { retentionDays: opts.retentionDays } : {}),

@@ -21,7 +21,7 @@ import {
   loadAgentCatalog,
   type PluginManifest,
   type SuggestedAgent,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
 } from '@buddi/core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -106,7 +106,7 @@ interface Harness {
   registry: ReturnType<typeof createToolRegistry>;
   catalog: ReloadableAgentCatalog;
   tool(name: string): ToolDefinition<any, any>;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
 }
 
 function harness(agents: SuggestedAgent[] = [GARDENER], accounts?: PlatformAccounts): Harness {
@@ -157,7 +157,7 @@ function harness(agents: SuggestedAgent[] = [GARDENER], accounts?: PlatformAccou
       now: () => new Date('2026-09-15T12:00:00Z'),
       timezone: 'Europe/Paris',
       agentId: 'agent-father',
-    } satisfies ToolContext,
+    } satisfies CoreToolContext,
   };
 }
 

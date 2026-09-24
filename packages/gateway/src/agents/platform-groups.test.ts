@@ -14,7 +14,7 @@
  * without a Postgres.
  */
 import { randomUUID } from 'node:crypto';
-import type { ToolContext, ToolDefinition } from '@buddi/core';
+import type { CoreToolContext, ToolDefinition } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import { createToolRegistry, type ReloadableAgentCatalog } from './catalog.js';
 import {
@@ -49,7 +49,7 @@ interface StoredGroup {
  * Recognised by what they say, because that is all a stand-in can do — and if
  * core's SQL changes shape, this stops answering rather than lying.
  */
-function fakeDb(groups: StoredGroup[]): ToolContext['db'] {
+function fakeDb(groups: StoredGroup[]): CoreToolContext['db'] {
   const rowOf = (g: StoredGroup): Record<string, unknown> => ({
     id: g.id,
     name: g.name,
@@ -92,12 +92,12 @@ function fakeDb(groups: StoredGroup[]): ToolContext['db'] {
       }
       throw new Error(`the fake database was asked something it does not know: ${sql}`);
     },
-  } as unknown as ToolContext['db'];
+  } as unknown as CoreToolContext['db'];
 }
 
 function harness(): {
   tool(name: string): ToolDefinition<any, any>;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   groups: StoredGroup[];
   group: StoredGroup;
 } {
@@ -125,7 +125,7 @@ function harness(): {
     now: () => new Date('2026-09-21T09:00:00Z'),
     timezone: 'Europe/Paris',
     agentId: 'agent-father',
-  } satisfies ToolContext;
+  } satisfies CoreToolContext;
   return {
     groups,
     group,
@@ -136,7 +136,7 @@ function harness(): {
       // Stands in for the executor's approved snapshot: describe, then execute.
       return {
         ...found,
-        execute: async (input: unknown, c: ToolContext) =>
+        execute: async (input: unknown, c: CoreToolContext) =>
           found.execute(input, { ...c, approvedEffect: c.approvedEffect ?? (await found.describe!(input, c)) }),
       } as ToolDefinition<any, any>;
     },

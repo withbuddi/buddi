@@ -13,6 +13,7 @@
  *  - a discarded or lapsed draft is refused at describe time, before anybody is
  *    asked to approve anything.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,16 +47,16 @@ import {
   updateDraftRow,
 } from '../drafts.js';
 import type { DraftRecord } from '../rows.js';
-import type { ToolContext } from '../types.js';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
   return ctx;
 }
@@ -73,12 +74,12 @@ suite('the draft lifecycle (postgres)', () => {
   let dataDir: string;
   let smtp: FakeSmtpServer;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let messageId: string;
-  let sendTool: { describe: (input: any, ctx: ToolContext) => Promise<any> };
+  let sendTool: { describe: (input: any, ctx: CoreToolContext) => Promise<any> };
   let manifestVersion: string;
 
-  const call = async (name: string, args: unknown, over: Partial<ToolContext> = {}): Promise<any> => {
+  const call = async (name: string, args: unknown, over: Partial<CoreToolContext> = {}): Promise<any> => {
     const result = await registry.invoke(name, args, { ...ctx, ...over });
     if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
     return result.output;
@@ -632,7 +633,7 @@ suite('the draft lifecycle (postgres)', () => {
       const interleaving = {
         lookup: () => ({
           ...real,
-          describe: async (input: unknown, c: ToolContext) => {
+          describe: async (input: unknown, c: CoreToolContext) => {
             const described = await real.describe!(input, c);
             if (!saved) {
               saved = true;
@@ -869,7 +870,7 @@ suite('the draft lifecycle (postgres)', () => {
         db: pool,
         now: () => NOW,
         timezone: 'UTC',
-        log: (line) => lines.push(line),
+        log: (line: string) => lines.push(line),
         enqueueRun: async () => {
           enqueued += 1;
         },

@@ -19,7 +19,7 @@
  */
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
-import type { PluginManifest, Source, SourceContext } from '../tools.js';
+import type { PluginManifest, Source, CoreSourceContext } from '../tools.js';
 import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
 
 /** Every source the installed plugins ship, in manifest order. */
@@ -50,7 +50,7 @@ export type RunSourcesInput = {
   now: Date;
   timezone: string;
   /** How a source originates a run. Idempotent on `dedupKey`. */
-  enqueueRun: SourceContext['enqueueRun'];
+  enqueueRun: CoreSourceContext['enqueueRun'];
   log?: (line: string) => void;
 };
 
@@ -98,7 +98,7 @@ async function pollOne(
   log: (line: string) => void,
   binding: HostBinding | undefined,
 ): Promise<SourceOutcome> {
-  const ctx: SourceContext = {
+  const ctx: CoreSourceContext = {
     db: pool,
     now: () => input.now,
     timezone: input.timezone,

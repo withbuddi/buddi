@@ -39,7 +39,7 @@ import {
   upsertMission,
   type MetricDefinition,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { localDateString } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -91,7 +91,7 @@ function goalRegistry(): ToolRegistry {
 suite('goals (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let registry: ToolRegistry;
 
   beforeAll(async () => {
@@ -130,7 +130,7 @@ suite('goals (postgres)', () => {
     });
   });
 
-  const agentCtx = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const agentCtx = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
     ...ctx,
     agentId: HOLDER,
     conversationId: undefined,
@@ -140,7 +140,7 @@ suite('goals (postgres)', () => {
   /** Propose a goal, approve it, execute it. The whole card, end to end. */
   async function setGoal(
     input: Record<string, unknown>,
-    over: Partial<ToolContext> = {},
+    over: Partial<CoreToolContext> = {},
   ): Promise<{ preview: string; output: unknown }> {
     const proposed = await registry.invoke('goal.set', input, agentCtx(over));
     if (proposed.ok || proposed.reason !== 'approval-required') {

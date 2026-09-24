@@ -7,7 +7,7 @@ import {
   type AgentCatalog,
   type Mission,
   type Occurrence,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
@@ -200,8 +200,8 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
   // A mission agent's file may grant agent.delegate, so the registry a mission
   // runs against must carry it too. It is unbound here: delegation refuses.
   registry.register(createDelegationManifest(registry));
-  const ctx: ToolContext = {
-    db: {} as ToolContext['db'],
+  const ctx: CoreToolContext = {
+    db: {} as CoreToolContext['db'],
     ownerId: 'owner',
     now: () => new Date('2026-09-11T12:00:00Z'),
     timezone: 'UTC',

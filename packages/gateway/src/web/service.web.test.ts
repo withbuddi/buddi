@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 
@@ -38,7 +38,7 @@ async function fakeSupervisor(): Promise<{ socket: string; seen: string[] }> {
 async function dashboard(env: NodeJS.ProcessEnv): Promise<WebServer> {
   const app = await startWebServer({
     pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
-    ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
+    ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', env,
   });
   servers.push(app);

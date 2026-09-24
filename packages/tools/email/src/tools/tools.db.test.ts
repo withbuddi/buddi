@@ -4,6 +4,7 @@
  * Skipped unless DATABASE_URL is set. Artifacts are written under a temporary
  * data dir, so a draft never lands in the developer's own store.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,7 +17,8 @@ import { createEmailManifest } from '../index.js';
 import { FakeSmtpServer } from '../smtp/fake.js';
 import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
-import type { GatedToolDefinition, ToolContext } from '../types.js';
+import type { GatedToolDefinition } from '../types.js';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
 import { CATEGORIES, PROCESSING_VERSION } from './shared.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -24,10 +26,10 @@ import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
   return ctx;
 }
@@ -44,10 +46,10 @@ suite('email tools (postgres)', () => {
   let dataDir: string;
   let smtp: FakeSmtpServer;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let sendTool: GatedToolDefinition<SendInput, SendResult, SendEnvelope>;
 
-  const call = async (name: string, args: unknown, over: Partial<ToolContext> = {}): Promise<any> => {
+  const call = async (name: string, args: unknown, over: Partial<CoreToolContext> = {}): Promise<any> => {
     const result = await registry.invoke(name, args, { ...ctx, ...over });
     if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
     return result.output;

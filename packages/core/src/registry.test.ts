@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
-import type { PluginManifest, Tier, ToolContext } from './tools.js';
+import type { PluginManifest, Tier, CoreToolContext } from './tools.js';
 import { ToolRefusal } from './tools.js';
 
-const ctx: ToolContext = {
-  db: {} as ToolContext['db'],
+const ctx: CoreToolContext = {
+  db: {} as CoreToolContext['db'],
   ownerId: 'owner-1',
   now: () => new Date('2026-01-01T00:00:00Z'),
   timezone: 'UTC',
@@ -124,7 +124,7 @@ describe('ToolRegistry', () => {
     };
     const res = await r.invoke('demo.double', { n: 1 }, {
       ...ctx,
-      db: db as ToolContext['db'],
+      db: db as CoreToolContext['db'],
       agentId: 'agent-1',
     });
     expect(res).toMatchObject({
@@ -144,7 +144,7 @@ describe('ToolRegistry', () => {
         throw new Error('database is down');
       },
     };
-    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db: db as unknown as ToolContext['db'] });
+    const res = await r.invoke('demo.double', { n: 1 }, { ...ctx, db: db as unknown as CoreToolContext['db'] });
     expect(res).toMatchObject({ ok: false, reason: 'tool-error' });
     expect(execute).not.toHaveBeenCalled();
   });
@@ -184,7 +184,7 @@ describe('ToolRegistry', () => {
 describe('tierFor: a tier decided per call', () => {
   /** Every insert this fake sees, so a test can read the preview it recorded. */
   function recordingDb(watch?: (sql: string) => void): {
-    db: ToolContext['db'];
+    db: CoreToolContext['db'];
     previews: string[];
     tiers: Array<string | null>;
   } {
@@ -219,7 +219,7 @@ describe('tierFor: a tier decided per call', () => {
         };
       },
     };
-    return { db: db as unknown as ToolContext['db'], previews, tiers };
+    return { db: db as unknown as CoreToolContext['db'], previews, tiers };
   }
 
   /** A tool that is `session` by declaration and decides each call. */
@@ -245,7 +245,7 @@ describe('tierFor: a tier decided per call', () => {
   }
 
   /** The context a declared-`session` tool needs before anything runs. */
-  const granted = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const granted = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
     ...ctx,
     ownerRequest: { id: 'r1', text: 'run the tests', expiresAt: Date.now() + 60_000 },
     sessionTools: ['demo.double'],
@@ -272,7 +272,7 @@ describe('tierFor: a tier decided per call', () => {
     const r = new ToolRegistry();
     const { manifest: m, execute } = deciding(async () => ({ tier: 'auto' }));
     r.register(m);
-    const refusals: Array<[string, ToolContext]> = [
+    const refusals: Array<[string, CoreToolContext]> = [
       // A delegate. `sessionTools` is empty for one, and the depth is the
       // second lock: the developer spec promises a delegate gets none of this.
       ['a delegate', granted({ delegationDepth: 1 })],

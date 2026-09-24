@@ -45,7 +45,7 @@ import {
   type PageDescriptor,
   type PageQuery,
   type QueryRef,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
   type ViewDescriptor,
 } from '@buddi/core';
@@ -181,7 +181,7 @@ export function createGoalHome(source: MetricSource): HomeContribution {
   return {
     id: 'goal.goals',
     title: 'Goals',
-    async produce(ctx: ToolContext): Promise<HomeBlock | null> {
+    async produce(ctx: CoreToolContext): Promise<HomeBlock | null> {
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       if (goals.length === 0) return null;
       const now = ctx.now();
@@ -252,7 +252,7 @@ interface GoalListRow {
 /**
  * Both page queries, over one registry's metrics.
  *
- * They are handed a `ToolContext` whose `db` refuses anything but a `select`
+ * They are handed a `CoreToolContext` whose `db` refuses anything but a `select`
  * (`readOnlyPool`), so "a page cannot write" is enforced by Postgres rather
  * than promised here.
  */
@@ -263,7 +263,7 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
   const goals: PageQuery = {
     name: 'goals',
     params: z.object({}),
-    async produce(_params, ctx) {
+    async produce(_params, ctx: CoreToolContext) {
       const all = await listGoals(ctx.db, { limit: MAX_GOALS_LISTED });
       const now = ctx.now();
       // One statement for every goal's checks, not two per goal: this list is
@@ -312,7 +312,7 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
   const one: PageQuery = {
     name: 'goal',
     params: z.object({ id: z.string().min(1) }),
-    async produce(params, ctx) {
+    async produce(params, ctx: CoreToolContext) {
       const { id } = params as { id: string };
       const goal = await getGoal(ctx.db, id).catch(() => null);
       // The owner asked for this one, so the refusal is an *answer* — a 400
@@ -442,7 +442,7 @@ function crossingOf(
 
 /** What the watcher has said about this goal, newest first. */
 async function goalFindings(
-  ctx: ToolContext,
+  ctx: CoreToolContext,
   goalId: string,
 ): Promise<Array<Record<string, string>>> {
   /*
@@ -512,7 +512,7 @@ export function createGoalOwnerClose(): ToolDefinition<z.infer<typeof ownerClose
     tier: 'auto',
     ownerOnly: true,
     input: ownerCloseInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const goal = await getGoal(ctx.db, input.id).catch(() => null);
       // A throw here is the act route's 400 carrying this sentence, which is
       // what the owner reads. Neither of these is a defect.

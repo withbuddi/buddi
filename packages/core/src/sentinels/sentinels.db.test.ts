@@ -18,6 +18,7 @@ import {
   SENTINEL_WAKE_MISSION_ID,
   URGENT_COOLDOWN_MS,
   type Finding,
+  type CoreSentinelContext,
   type Sentinel,
   type SentinelResult,
 } from './types.js';
@@ -304,7 +305,7 @@ suite('sentinels (postgres)', () => {
         id: 'owner-watcher',
         description: 'records the owner it was run for',
         every: 60,
-        async run(ctx) {
+        async run(ctx: CoreSentinelContext) {
           seen.push(ctx.ownerId);
           return [];
         },

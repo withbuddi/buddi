@@ -26,7 +26,7 @@ import {
   type CatalogAgent,
   type SecretProblem,
   type SecretSource,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
@@ -193,7 +193,7 @@ export interface Wiring {
   now: () => Date;
   /** The owner's timezone (`BUDDI_TZ`), the one the scheduler already uses. */
   timezone: string;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   /** Where secrets came from this boot. Absent when nothing hydrated them. */
   secrets?: SecretHydration;
 }

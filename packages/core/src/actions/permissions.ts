@@ -1,5 +1,5 @@
 import type { Queryable } from '../owner.js';
-import type { ToolContext } from '../tools.js';
+import type { CoreToolContext } from '../tools.js';
 import { emitActionEvent } from './store.js';
 
 export type PermissionScope = 'once' | 'conversation' | 'always';
@@ -16,7 +16,7 @@ export async function listToolPermissions(pool: Queryable, ownerId: string): Pro
   const { rows } = await pool.query('select * from core.tool_permissions where owner_id = $1 order by created_at', [ownerId]);
   return rows.map(view);
 }
-export async function findToolPermission(pool: Queryable, ctx: ToolContext, tool: string, version: string): Promise<ToolPermission | undefined> {
+export async function findToolPermission(pool: Queryable, ctx: CoreToolContext, tool: string, version: string): Promise<ToolPermission | undefined> {
   if (!ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0) return undefined;
   const { rows } = await pool.query(`select * from core.tool_permissions
     where owner_id=$1 and agent_id=$2 and tool=$3 and tool_version=$4

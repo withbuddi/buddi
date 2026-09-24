@@ -35,7 +35,7 @@ import {
   type Decision,
   type JobControl,
   type Queryable,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
   type PermissionScope,
   type OwnerChoice,
@@ -260,7 +260,7 @@ export interface ApprovalsOptions {
   /** Needed to execute an approved action; the Executor looks tools up in it. */
   registry: ToolRegistry;
   /** The context an approved effect runs with. */
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   timezone: string;
   /**
    * The queue, when this build has one wired. Absent: a decision is still

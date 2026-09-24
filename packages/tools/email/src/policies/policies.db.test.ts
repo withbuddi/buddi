@@ -7,6 +7,7 @@
  * called — the gate is deterministic by construction, which is what lets the
  * measurement at the end of this file mean anything.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
@@ -19,17 +20,17 @@ import { listPolicies, policyLists, revokeEmailPolicy, setPolicy, policiesView }
 import { policyLine } from '../pages/format.js';
 import { triageRecord } from '../tools/triage.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
-import type { SourceContext, ToolContext } from '../types.js';
+import type { CoreSourceContext, CoreToolContext } from '@buddi/core/testing';
 import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
 import { adoptProposedPolicies, applyLearnedPolicy, revokeLearnedPolicy } from './learned.js';
 import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
   return ctx;
 }
@@ -79,7 +80,7 @@ suite('email policies (postgres + fake imap)', () => {
     mailboxId = String(rows[0].id);
   });
 
-  function sourceContext(): SourceContext & {
+  function sourceContext(): CoreSourceContext & {
     runs: Array<{ agentId: string; prompt: string; dedupKey: string }>;
   } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
@@ -95,14 +96,14 @@ suite('email policies (postgres + fake imap)', () => {
     });
   }
 
-  function toolContext(): ToolContext {
+  function toolContext(): CoreToolContext {
     return hosted({
       db: pool,
       ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentId: 'mail-triage',
-    } as unknown as ToolContext);
+    } as unknown as CoreToolContext);
   }
 
   /**

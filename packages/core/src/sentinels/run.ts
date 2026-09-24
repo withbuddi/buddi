@@ -31,7 +31,7 @@ import {
   toSentinelFinding,
   type Finding,
   type Sentinel,
-  type SentinelContext,
+  type CoreSentinelContext,
   type SentinelFinding,
   type SentinelFindingRow,
   type SentinelOutcome,
@@ -168,7 +168,7 @@ async function runOne(
 ): Promise<SentinelOutcome> {
   let result: SentinelResult;
   try {
-    const ctx: SentinelContext = { db: pool, ownerId, now: () => now, timezone, agentForRole };
+    const ctx: CoreSentinelContext = { db: pool, ownerId, now: () => now, timezone, agentForRole };
     if (binding !== undefined) ctx.buddi = createPluginHost(binding, ctx);
     result = await sentinel.run(ctx);
   } catch (err) {

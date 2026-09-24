@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadAgentCatalog, ToolRegistry, type ToolContext } from '@buddi/core';
+import { loadAgentCatalog, ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { DELEGATE_TOOL } from '@buddi/runtime';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 import {
@@ -21,8 +21,8 @@ function agentsDirWith(files: Record<string, string>): string {
   return dir;
 }
 
-const ctx: ToolContext = {
-  db: {} as ToolContext['db'],
+const ctx: CoreToolContext = {
+  db: {} as CoreToolContext['db'],
   ownerId: 'owner',
   now: () => new Date('2026-09-13T00:00:00Z'),
   timezone: 'UTC',

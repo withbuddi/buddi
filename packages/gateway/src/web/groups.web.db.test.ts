@@ -20,7 +20,7 @@ import {
   ToolRegistry,
   type AgentCatalog,
   type AgentSummary,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
@@ -131,7 +131,7 @@ suite('the group routes', () => {
     pool = createPool(url.toString());
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     web = await startWebServer({
       pool,
       registry: new ToolRegistry(),

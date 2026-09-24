@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
-import { getOwnerProfile, isKnownTimezone, localDateTimeString, type PluginManifest, type SystemContext, type ToolContext } from '@buddi/core';
+import { getOwnerProfile, isKnownTimezone, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -46,7 +46,7 @@ export function hostFacts(): Promise<HostFacts> {
   cached = { at: Date.now(), value }; return value;
 }
 
-export async function systemTime(ctx: ToolContext) {
+export async function systemTime(ctx: CoreToolContext) {
   let timezone = isKnownTimezone(ctx.timezone) ? ctx.timezone : 'UTC';
   let timezoneSource = 'configured fallback';
   try {
@@ -59,13 +59,13 @@ export async function systemTime(ctx: ToolContext) {
   return { utc: now.toISOString(), local: localDateTimeString(now, timezone), timezone, timezoneSource };
 }
 
-export async function systemInfo(ctx: ToolContext) {
+export async function systemInfo(ctx: CoreToolContext) {
   const [time, host] = await Promise.all([systemTime(ctx), hostFacts()]);
   return { time, host, note: 'Host facts do not grant access. Use granted host/browser status tools for live permissions and availability. Existing schedules retain their saved timezone.' };
 }
 
 export async function systemContext(
-  ctx: ToolContext,
+  ctx: CoreToolContext,
   run?: { agentId: string; tools: readonly string[] },
 ): Promise<SystemContext> {
   const [info, owner, learning] = await Promise.all([
@@ -83,7 +83,7 @@ export async function systemContext(
  * a blank profile adds nothing, and nothing here is an instruction the model
  * may act on — it is how to address a person, not a grant.
  */
-export async function ownerLines(ctx: ToolContext): Promise<string> {
+export async function ownerLines(ctx: CoreToolContext): Promise<string> {
   let profile;
   try { profile = await getOwnerProfile(ctx.db); } catch { return ''; }
   const lines: string[] = [];
@@ -99,7 +99,7 @@ export const SYSTEM_PLUGIN = 'system';
 
 export function createSystemManifest(): PluginManifest {
   return { name: SYSTEM_PLUGIN, version: '0.1.0', schema: 'system', migrationsDir: '', tools: [
-    { name: 'system.time', description: 'Read the current UTC and owner-local date/time and confirmed timezone. Always available; no approval needed.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx) => systemTime(ctx) },
-    { name: 'system.info', description: 'Read server-host OS/version, architecture, hardware model when detectable, host timezone, and current owner-local time. Not the dashboard client. No credentials or serial numbers.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx) => systemInfo(ctx) },
+    { name: 'system.time', description: 'Read the current UTC and owner-local date/time and confirmed timezone. Always available; no approval needed.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx: CoreToolContext) => systemTime(ctx) },
+    { name: 'system.info', description: 'Read server-host OS/version, architecture, hardware model when detectable, host timezone, and current owner-local time. Not the dashboard client. No credentials or serial numbers.', tier: 'auto', input: z.object({}).strict(), execute: async (_input, ctx: CoreToolContext) => systemInfo(ctx) },
   ] };
 }

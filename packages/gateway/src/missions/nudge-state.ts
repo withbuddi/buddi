@@ -18,8 +18,8 @@
  *    is not there yet reads as "no record" too. The cost of a missing migration
  *    must not be a mission run that throws every morning.
  */
-import { getOnboarding, OWNER_ID, type Onboarding, type Queryable } from '@buddi/core';
-import { currentPreferences, rememberPreference } from '@buddi/tool-memory';
+import { getOnboarding, hostBindingOf, OWNER_ID, withPluginHost, type CoreToolContext, type Onboarding, type Queryable } from '@buddi/core';
+import { currentPreferences, manifest as memoryManifest, rememberPreference } from '@buddi/tool-memory';
 import { ENGAGEMENT_KEY, parseEngagement, type Engagement } from './nudge-policy.js';
 
 /** Postgres codes that mean "this installation has not migrated that yet". */
@@ -139,8 +139,11 @@ export async function writeEngagement(
   now: () => Date,
   timezone: string,
 ): Promise<void> {
+  // The memory plugin's own tool, so the context carries its host, as the
+  // registry would hand it.
+  const facts: CoreToolContext = { db: pool as never, ownerId: OWNER_ID, now, timezone };
   await rememberPreference.execute(
     { key: ENGAGEMENT_KEY, value, scope: 'shared' },
-    { db: pool as never, ownerId: OWNER_ID, now, timezone },
+    withPluginHost(hostBindingOf(memoryManifest), facts),
   );
 }

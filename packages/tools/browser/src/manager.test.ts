@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ToolContext } from '@buddi/core/testing';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { ToolRegistry, createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
-const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
+const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { BrowserManager } from './manager.js';
 import { createBrowserManifest } from './index.js';
 import { commandSchema, type BrowserDriver } from './types.js';
@@ -16,7 +16,7 @@ const managers: BrowserManager[] = [];
 afterEach(async () => { await Promise.all(managers.splice(0).map((manager) => manager.shutdown())); });
 const navigate = commandSchema.parse({ action: 'navigate', url: 'https://example.com/' });
 const observe = commandSchema.parse({ action: 'observe' });
-function context(agentId: string, conversationId = agentId): ToolContext {
+function context(agentId: string, conversationId = agentId): CoreToolContext {
   return hosted({ db: {} as never, ownerId: 'owner', agentId, conversationId, sessionTools: ['browser.act'], now: () => new Date(), timezone: 'UTC',
     ownerRequest: { id: `${agentId}:${conversationId}`, text: 'Use the fixture', expiresAt: Date.now() + 60_000 } });
 }

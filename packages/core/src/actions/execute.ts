@@ -22,7 +22,7 @@
  * registry refuses gated tools, and this function only ever runs one that an
  * approval row says was approved.
  */
-import type { EffectDescription, ToolContext } from '../tools.js';
+import type { CoreToolContext, EffectDescription } from '../tools.js';
 import type { Queryable } from '../owner.js';
 import { emitActionEvent } from './store.js';
 import {
@@ -47,8 +47,8 @@ export interface ExecutableTool {
   input: { safeParse(value: unknown): { success: boolean; data?: unknown } };
   /** The tool's own deadline; `DEFAULT_EFFECT_TIMEOUT_MS` when it declares none. */
   timeoutMs?: number | undefined;
-  execute(input: any, ctx: ToolContext): Promise<unknown>;
-  describe?(input: any, ctx: ToolContext): EffectDescription | Promise<EffectDescription>;
+  execute(input: any, ctx: CoreToolContext): Promise<unknown>;
+  describe?(input: any, ctx: CoreToolContext): EffectDescription | Promise<EffectDescription>;
   /**
    * Take exclusive hold of whatever this effect is about, immediately before
    * the ledger row is written — the last moment at which "nothing has
@@ -65,7 +65,7 @@ export interface ExecutableTool {
    * which is the honest record: the claim is what decides whether anything is
    * attempted at all, so a claim that failed means nothing was.
    */
-  claim?(input: any, ctx: ToolContext): Promise<void>;
+  claim?(input: any, ctx: CoreToolContext): Promise<void>;
 }
 
 export interface ToolLookup {
@@ -77,7 +77,7 @@ export interface ExecuteApprovedInput {
   actionId: string;
   registry: ToolLookup;
   /** The tool context the effect runs with. Credentials live here, not in agents. */
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   /** Who is executing: a worker id, recorded on the claim. */
   worker: string;
   now?: Date;
@@ -219,7 +219,7 @@ export async function executeApproved(
     });
   }
 
-  const ctx: ToolContext = {
+  const ctx: CoreToolContext = {
     ...input.ctx,
     actionId: action.id,
     approvedEffect: { envelope: structuredClone(action.envelope) },

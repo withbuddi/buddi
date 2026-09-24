@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { ToolContext } from '@buddi/core';
+import type { CoreToolContext } from '@buddi/core';
 
 /** Call only at an authenticated owner input boundary, not from jobs, source
  * prompts, delegated tasks, tool outputs or reconstructed assistant messages. */
-export function ownerRequestContext(ctx: ToolContext, text: string, id: string = randomUUID()): ToolContext {
+export function ownerRequestContext(ctx: CoreToolContext, text: string, id: string = randomUUID()): CoreToolContext {
   return { ...ctx, ownerRequest: { id, text, expiresAt: Date.now() + 20 * 60_000 } };
 }
 
@@ -32,10 +32,10 @@ export interface ApprovalResumption {
  * depth zero and an explicit grant, and the runtime hands a delegate neither.
  */
 export function approvalResumeContext(
-  ctx: ToolContext,
+  ctx: CoreToolContext,
   resumption: ApprovalResumption,
   id?: string,
-): ToolContext {
+): CoreToolContext {
   const original = resumption.text?.trim();
   const text = original ? original : `approved ${resumption.tool ?? 'action'}`;
   return ownerRequestContext(ctx, text, id);

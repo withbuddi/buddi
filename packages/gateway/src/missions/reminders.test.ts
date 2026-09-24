@@ -7,7 +7,7 @@
  * pin down. The rows themselves are core's, and `reminders.db.test.ts` there
  * holds the store to the real thing.
  */
-import { MAX_PENDING_PER_AGENT, ToolRegistry, type ToolContext } from '@buddi/core';
+import { MAX_PENDING_PER_AGENT, ToolRegistry, type CoreToolContext } from '@buddi/core';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -156,7 +156,7 @@ class FakeDb {
   }
 }
 
-function contextFor(db: FakeDb, agentId = 'finance-advisor'): ToolContext {
+function contextFor(db: FakeDb, agentId = 'finance-advisor'): CoreToolContext {
   return {
     db: db as unknown as Pool,
     ownerId: 'owner',

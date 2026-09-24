@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
-import { ToolRegistry, type AgentCatalog, type PluginManifest, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type PluginManifest, type CoreToolContext } from '@buddi/core';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadGatewayCatalog } from '../agents/catalog.js';
@@ -317,7 +317,7 @@ describe('an agent profile', () => {
         pool: {} as Pool,
         registry,
         catalog,
-        ctx: { ownerId: 'owner' } as unknown as ToolContext,
+        ctx: { ownerId: 'owner' } as unknown as CoreToolContext,
         timezone: 'Europe/Paris',
         now: () => new Date('2026-09-15T09:00:00Z'),
         config: { enabled: true, host: '127.0.0.1', port: 0 },

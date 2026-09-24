@@ -35,7 +35,7 @@ import { z } from 'zod';
 import {
   listArtifacts,
   type AgentDefinition,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
   type ToolRegistry,
 } from '@buddi/core';
@@ -97,7 +97,7 @@ export interface DelegateDeps {
   /** Defaults to the caller's `ctx.db`; injected in tests. */
   pool?: Queryable;
   /** Defaults to the caller's own context (owner, clock, db). */
-  ctxBase?: ToolContext;
+  ctxBase?: CoreToolContext;
   runAgent?: RunAgentFn;
   /** The caller's allowlist. Unknown caller or missing file: `[]`. */
   allowlistFor(agentId: string): string[];
@@ -321,7 +321,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       'carries, written with an @ — "@credo says: ...".',
     tier: 'auto',
     input: delegateInput,
-    async execute(input, ctx): Promise<DelegateOutput> {
+    async execute(input, ctx: CoreToolContext): Promise<DelegateOutput> {
       const from = ctx.agentId;
       if (!from) {
         throw new Error(

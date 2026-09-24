@@ -2,11 +2,11 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
-const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
+const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { HostController } from './controller.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge, type ExtensionCommand } from './extension.js';
 import { BrowserPreconditionError, commandSchema } from './types.js';
@@ -30,7 +30,7 @@ function bridge(answers: Partial<Record<string, unknown>> = {}, connected = true
 const page = { observation: { url: 'https://example.com/', title: 'Example', tree: 'Frame 0\n  link "Next"', targets: [{ ref: 'e1', frame: 0, role: 'link', name: 'Next', href: 'https://example.com/next' }], tabs: [{ id: 'tab-1', url: 'https://example.com/', title: 'Example' }] } };
 const shot = { screenshot: Buffer.from('png').toString('base64') };
 const command = (input: Record<string, unknown>) => commandSchema.parse(input);
-const ctx = (id = 'a'): ToolContext => hosted({ ownerId: 'owner', db: {} as never, now: () => new Date(), timezone: 'UTC', agentId: id, conversationId: id,
+const ctx = (id = 'a'): CoreToolContext => hosted({ ownerId: 'owner', db: {} as never, now: () => new Date(), timezone: 'UTC', agentId: id, conversationId: id,
   ownerRequest: { id: `request-${id}`, text: 'Open the website', expiresAt: Date.now() + 60_000 } });
 
 const dirs: string[] = [];

@@ -25,7 +25,7 @@ import {
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { DEMO_DATA, demoPagesManifest, demoWrites } from '@buddi/core/testing/pages';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -183,7 +183,7 @@ suite('the plugin page routes', () => {
       ],
       files: { workspace: 'root', list: 'root', stat: 'root', read: 'root', archive: 'root' },
     });
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
 
     web = await startWebServer({
       pool,

@@ -23,7 +23,7 @@
 import { z, type ZodObject, type ZodTypeAny } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { readOnlyPool } from './pages.js';
-import type { ToolContext } from './tools.js';
+import type { CoreToolContext, ToolContext } from './tools.js';
 
 /** What a metric can be. Decides how a goal's numbers are rendered. */
 export const METRIC_UNITS = ['number', 'currency', 'percent', 'count', 'minutes'] as const;
@@ -217,7 +217,7 @@ export async function measureMetric(
   source: MetricSource,
   id: string,
   params: unknown,
-  ctx: ToolContext,
+  ctx: CoreToolContext,
 ): Promise<MetricReading | null> {
   const result = await measureMetricResult(source, id, params, ctx);
   return result.ok ? result.reading : null;
@@ -234,7 +234,7 @@ export async function measureMetricResult(
   source: MetricSource,
   id: string,
   params: unknown,
-  ctx: ToolContext,
+  ctx: CoreToolContext,
 ): Promise<MetricMeasurement> {
   const metric = source.metric(id);
   if (metric === undefined) {
@@ -287,6 +287,6 @@ export async function measureMetricResult(
  * place of the real one. The mirror of `pageQueryContext`, except that the
  * agent is not the owner — it is whoever holds the goal.
  */
-export function metricContext(ctx: ToolContext): ToolContext {
+export function metricContext(ctx: CoreToolContext): CoreToolContext {
   return { ...ctx, db: readOnlyPool(ctx.db) };
 }

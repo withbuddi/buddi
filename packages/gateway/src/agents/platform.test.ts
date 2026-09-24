@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_MAX_TURNS, loadAgentCatalog, type ToolContext, type ToolDefinition } from '@buddi/core';
+import { DEFAULT_MAX_TURNS, loadAgentCatalog, type CoreToolContext, type ToolDefinition } from '@buddi/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   createToolRegistry,
@@ -68,7 +68,7 @@ interface Harness {
   catalog: ReloadableAgentCatalog;
   registry: ReturnType<typeof createToolRegistry>;
   tool(name: string): ToolDefinition<any, any>;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   reloads: number;
   /** The installation's recorded default agent, as this harness holds it. */
   recorded(): string | undefined;
@@ -118,7 +118,7 @@ function harness(caller = 'agent-father', accounts?: PlatformAccounts): Harness 
     now: () => new Date('2026-09-15T12:00:00Z'),
     timezone: 'Europe/Paris',
     agentId: caller,
-  } satisfies ToolContext;
+  } satisfies CoreToolContext;
 
   return {
     root,

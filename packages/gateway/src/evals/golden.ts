@@ -34,7 +34,7 @@ import {
   PROVIDER_KINDS,
   type CatalogAgent,
   type ProviderKind,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { createConversation, createProvider, runAgent, type RuntimeProvider } from '@buddi/runtime';
 import { config as loadDotenv } from 'dotenv';
@@ -512,7 +512,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     await runMigrations(pool, installedManifests());
 
     const now = (): Date => EVAL_NOW;
-    const ctx: ToolContext = { db: pool, ownerId: OWNER_ID, now, timezone: EVAL_TIMEZONE };
+    const ctx: CoreToolContext = { db: pool, ownerId: OWNER_ID, now, timezone: EVAL_TIMEZONE };
     const memoryPreamble = memoryPreambleFor(pool);
 
     console.log(

@@ -26,7 +26,7 @@ import {
   ToolRegistry,
   runMigrations,
   type Job,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -327,7 +327,7 @@ suite('end to end: mail in, approved send out', () => {
 
     /* ---- 3. the worker runs @postman ---- */
     const telegram = new FakeTelegram();
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now: () => NOW, timezone: 'UTC' };
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => NOW, timezone: 'UTC' };
     const approvals = new TelegramApprovals({
       api: telegram,
       pool,

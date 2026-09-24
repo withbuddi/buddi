@@ -31,7 +31,7 @@ import {
   type AgentCatalog,
   type CatalogAgent,
   type Queryable,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -159,7 +159,7 @@ export interface ChatSessionDeps {
   pool: Queryable;
   catalog: AgentCatalog;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   timezone?: string;
   /** The adapter for one agent — its own pinned provider, never the process's. */

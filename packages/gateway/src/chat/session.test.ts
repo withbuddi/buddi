@@ -4,7 +4,7 @@
  * ports, so everything the owner would see is a string this test can read.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, roleProblemMessage, type Queryable, type ToolContext } from '@buddi/core';
+import { ToolRegistry, roleProblemMessage, type Queryable, type CoreToolContext } from '@buddi/core';
 import { z } from 'zod';
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { AgentCatalog, CatalogAgent } from '../telegram/types.js';
@@ -333,7 +333,7 @@ function harness(
   const answers = opts.answers ?? [];
   const asked: string[] = [];
   const catalog = fakeCatalog(opts.agents ?? [LEDGER, SCOUT]);
-  const ctx: ToolContext = {
+  const ctx: CoreToolContext = {
     db: db as never,
     ownerId: 'owner',
     now: () => new Date('2026-09-14T12:00:00Z'),
@@ -1150,7 +1150,7 @@ describe('a conversation has a lifetime here too', () => {
  */
 describe('a session-tier tool at the prompt', () => {
   /** Records the context the tool was actually reached with. */
-  const seen: Array<ToolContext> = [];
+  const seen: Array<CoreToolContext> = [];
 
   function sessionRegistry(): ToolRegistry {
     const registry = new ToolRegistry();
@@ -1165,7 +1165,7 @@ describe('a session-tier tool at the prompt', () => {
           description: 'Do something only a live owner request may reach.',
           tier: 'session',
           input: z.object({ what: z.string() }),
-          async execute(_args, ctx: ToolContext) {
+          async execute(_args, ctx: CoreToolContext) {
             seen.push(ctx);
             return { did: 'it' };
           },
@@ -1188,7 +1188,7 @@ describe('a session-tier tool at the prompt', () => {
     await h.session.handle('look at the repository');
 
     expect(seen).toHaveLength(1);
-    const ctx = seen[0] as ToolContext;
+    const ctx = seen[0] as CoreToolContext;
     // The request is the owner's own words, and it stands for twenty minutes.
     expect(ctx.ownerRequest?.text).toBe('look at the repository');
     expect(ctx.ownerRequest?.expiresAt).toBeGreaterThan(Date.now());
@@ -1205,7 +1205,7 @@ describe('a session-tier tool at the prompt', () => {
       responses: [toolResponse('dev.run', { what: 'look' }), textResponse('Looked.')],
     });
     await h.session.handle('look at the repository');
-    const ctx = seen[0] as ToolContext;
+    const ctx = seen[0] as CoreToolContext;
 
     seen.length = 0;
     // Same context, one step down: the owner's standing is the owner's.

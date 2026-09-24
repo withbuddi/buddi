@@ -27,7 +27,7 @@ import {
   type MetricDefinition,
   type PageQuery,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
@@ -95,7 +95,7 @@ const metricPlugin: PluginManifest = {
 suite('the Goals page reads (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let registry: ToolRegistry;
 
   beforeAll(async () => {

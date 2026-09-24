@@ -73,7 +73,7 @@ import {
   type AgentHoldBack,
   type ArtifactRow,
   type CatalogAgent,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import {
   BudgetExhausted,
@@ -1081,7 +1081,7 @@ export interface WebChatDeps {
   pool: Pool;
   catalog: AgentCatalog;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   timezone: string;
   /** The adapter for one agent — its own pinned provider, never the process's. */

@@ -19,7 +19,7 @@ import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
-import type { EffectDescription, PluginManifest, PreviewProvider, Tier, ToolContext, ToolDefinition } from './tools.js';
+import type { EffectDescription, PluginManifest, PreviewProvider, Tier, CoreToolContext, ToolDefinition } from './tools.js';
 import { isToolRefusal } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
@@ -52,7 +52,7 @@ export const PER_CALL_TIERS: readonly Tier[] = ['auto', 'gated', 'session'];
  * `tierFor` decided that call costs — the declaration is what the runtime
  * resolved a grant from, so it is also what the grant is checked against.
  */
-function sessionAuthorized(name: string, ctx: ToolContext): boolean {
+function sessionAuthorized(name: string, ctx: CoreToolContext): boolean {
   return Boolean(
     ctx.ownerRequest &&
       ctx.ownerRequest.expiresAt > Date.now() &&
@@ -271,7 +271,7 @@ export class ToolRegistry {
    * plugin's `ctx.buddi` on it. Every road from here into plugin code goes
    * through this, so a plugin always sees its own host and never another's.
    */
-  #host<C extends ToolContext>(plugin: string, ctx: C): C {
+  #host<C extends CoreToolContext>(plugin: string, ctx: C): C {
     const binding = this.#bindings.get(plugin);
     return binding === undefined ? ctx : withPluginHost(binding, ctx);
   }
@@ -370,7 +370,7 @@ export class ToolRegistry {
         manifest.name,
         metrics.map((metric) => ({
           ...metric,
-          measure: (params: unknown, ctx: ToolContext) => metric.measure(params, this.#host(manifest.name, ctx)),
+          measure: (params: unknown, ctx: CoreToolContext) => metric.measure(params, this.#host(manifest.name, ctx)),
         })),
       );
     }
@@ -380,7 +380,7 @@ export class ToolRegistry {
         manifest.name,
         contributions.queries.map((query) => ({
           ...query,
-          produce: (params: unknown, ctx: ToolContext) => query.produce(params, this.#host(manifest.name, ctx)),
+          produce: (params: unknown, ctx: CoreToolContext) => query.produce(params, this.#host(manifest.name, ctx)),
         })),
       );
       this.#pageTools.set(manifest.name, new Set(contributions.tools));
@@ -465,7 +465,7 @@ export class ToolRegistry {
   previews(plugin: string): PreviewProvider | undefined {
     const previews = this.#manifests.get(plugin)?.previews;
     if (previews === undefined) return undefined;
-    return { resolve: (name, ctx) => previews.resolve(name, this.#host(plugin, ctx)) };
+    return { resolve: (name, ctx: CoreToolContext) => previews.resolve(name, this.#host(plugin, ctx)) };
   }
 
   /** Every Home block the installed plugins contribute, in registration order. */
@@ -473,7 +473,7 @@ export class ToolRegistry {
     return [...this.#manifests.values()].flatMap((m) =>
       (m.home ?? []).map((block) => ({
         ...block,
-        produce: (ctx: ToolContext) => block.produce(this.#host(m.name, ctx)),
+        produce: (ctx: CoreToolContext) => block.produce(this.#host(m.name, ctx)),
       })),
     );
   }
@@ -514,7 +514,7 @@ export class ToolRegistry {
     return this.#tools.get(name)?.tool.untrusted;
   }
 
-  async image(name: string, output: unknown, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined> {
+  async image(name: string, output: unknown, ctx: CoreToolContext): Promise<{ mime: string; data: string } | undefined> {
     const entry = this.#tools.get(name);
     return entry?.tool.image?.(output, this.#host(entry.plugin, ctx));
   }
@@ -547,7 +547,7 @@ export class ToolRegistry {
     const entry = this.#tools.get(name);
     if (!entry) return undefined;
     const { tool, version, plugin } = entry;
-    const host = (ctx: ToolContext): ToolContext => this.#host(plugin, ctx);
+    const host = (ctx: CoreToolContext): CoreToolContext => this.#host(plugin, ctx);
     return {
       name: tool.name,
       version,
@@ -555,21 +555,21 @@ export class ToolRegistry {
       ...(tool.producesArtifacts ? { producesArtifacts: true } : {}),
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
-      ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, host(ctx)) } : {}),
+      ...(tool.describe ? { describe: (input: unknown, ctx: CoreToolContext) => tool.describe!(input, host(ctx)) } : {}),
       // `claim` travels with the rest. A tool declares it so that a lost race
       // settles `refused` with nothing in the effect ledger; a lookup that
       // dropped it would leave the hook silently never called, and the
       // executor would go on to record an attempt for something that was
       // never attempted.
-      ...(tool.claim ? { claim: (input: unknown, ctx: ToolContext) => tool.claim!(input, host(ctx)) } : {}),
-      execute: (input: unknown, ctx: ToolContext) => tool.execute(input, host(ctx)),
+      ...(tool.claim ? { claim: (input: unknown, ctx: CoreToolContext) => tool.claim!(input, host(ctx)) } : {}),
+      execute: (input: unknown, ctx: CoreToolContext) => tool.execute(input, host(ctx)),
     };
   }
 
   async invoke(
     name: string,
     rawArgs: unknown,
-    caller: ToolContext,
+    caller: CoreToolContext,
   ): Promise<InvokeResult> {
     caller.signal?.throwIfAborted();
     const entry = this.#tools.get(name);
@@ -733,7 +733,7 @@ export class ToolRegistry {
     tool: ToolDefinition<any, any>,
     version: string,
     args: unknown,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
     /** Why this call is gated, when a `tierFor` decided it and said so. */
     tierReason?: string,
     /** Whether a `tierFor` chose this call's tier at all. */

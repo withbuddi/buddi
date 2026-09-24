@@ -29,7 +29,7 @@ import {
   type AgentCatalog,
   type Job,
   type JobContext,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -121,7 +121,7 @@ function decidingProvider(
 suite('reminders and proposed schedules (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -244,7 +244,7 @@ suite('reminders and proposed schedules (postgres)', () => {
 
   it('records an approval first and only then writes the mission and its schedule', async () => {
     const registry = createToolRegistry();
-    const agentCtx: ToolContext = { ...ctx, agentId: 'finance-advisor' };
+    const agentCtx: CoreToolContext = { ...ctx, agentId: 'finance-advisor' };
 
     const proposed = await registry.invoke(
       'schedule.propose',
@@ -318,7 +318,7 @@ suite('reminders and proposed schedules (postgres)', () => {
 
   it('lets an agent stop its own schedule without asking, and nobody else\'s', async () => {
     const registry = createToolRegistry();
-    const agentCtx: ToolContext = { ...ctx, agentId: 'finance-advisor' };
+    const agentCtx: CoreToolContext = { ...ctx, agentId: 'finance-advisor' };
     const proposed = await registry.invoke(
       'schedule.propose',
       { name: 'Monday card check', cron: '0 8 * * MON', prompt: 'Check the transfers.' },
@@ -353,7 +353,7 @@ suite('reminders and proposed schedules (postgres)', () => {
 
   it('lists an agent\'s own schedules and never the owner\'s', async () => {
     const registry = createToolRegistry();
-    const agentCtx: ToolContext = { ...ctx, agentId: 'finance-advisor' };
+    const agentCtx: CoreToolContext = { ...ctx, agentId: 'finance-advisor' };
     const proposed = await registry.invoke(
       'schedule.propose',
       { name: 'Monday card check', cron: '0 8 * * MON', prompt: 'Check the transfers.' },

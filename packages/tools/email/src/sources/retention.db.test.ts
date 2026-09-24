@@ -9,6 +9,7 @@
  * threshold go, the batch bounds one statement, headers and triage survive,
  * and a second pass is a no-op.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
@@ -21,16 +22,16 @@ import {
   purgeLogLine,
   setRetentionDays,
 } from '../retention.js';
-import type { SourceContext } from '../types.js';
+import type { CoreSourceContext } from '@buddi/core/testing';
 import { createRetentionSource, RETENTION_EVERY_SECONDS, RETENTION_SOURCE_ID } from './retention.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
   return ctx;
 }
@@ -209,11 +210,11 @@ suite('email.retention (postgres)', () => {
 
     const lines: string[] = [];
     let enqueued = 0;
-    const ctx: SourceContext = hosted({
+    const ctx: CoreSourceContext = hosted({
       db: pool,
       now: () => NOW,
       timezone: 'UTC',
-      log: (line) => lines.push(line),
+      log: (line: string) => lines.push(line),
       enqueueRun: async () => {
         enqueued += 1;
       },

@@ -7,7 +7,7 @@ import {
   type AgentCatalog,
   type Mission,
   type Occurrence,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
@@ -407,8 +407,8 @@ function realExecutorOver(db: FakeDb, provider: RuntimeProvider): MissionExecute
   registry.register(createReminderManifest());
   registry.register(createScheduleManifest());
   registry.register(createDelegationManifest(registry));
-  const ctx: ToolContext = {
-    db: {} as ToolContext['db'],
+  const ctx: CoreToolContext = {
+    db: {} as CoreToolContext['db'],
     ownerId: 'owner',
     now: () => NOW,
     timezone: 'UTC',

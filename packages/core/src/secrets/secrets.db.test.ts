@@ -17,7 +17,7 @@ import { decideApproval } from '../actions/approvals.js';
 import { executeApproved } from '../actions/execute.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from '../host/build.js';
 import type { BuddiHost, SecretDestination } from '../host/types.js';
-import type { PluginManifest, ToolContext } from '../tools.js';
+import type { PluginManifest, CoreToolContext } from '../tools.js';
 import { createMemoryVault } from '../vault/memory.js';
 import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import { createSecretsManifest } from './approval.js';
@@ -59,7 +59,7 @@ suite('ctx.buddi.secrets', () => {
     destinations,
   });
 
-  const facts = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const facts = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
     db: pool,
     ownerId: 'owner',
     now: () => now,
@@ -68,7 +68,7 @@ suite('ctx.buddi.secrets', () => {
     ...over,
   });
 
-  const hostFor = (m: PluginManifest, over: Partial<ToolContext> = {}): BuddiHost =>
+  const hostFor = (m: PluginManifest, over: Partial<CoreToolContext> = {}): BuddiHost =>
     createPluginHost(hostBindingOf(m), facts(over));
 
   const mail = manifest('mail', [

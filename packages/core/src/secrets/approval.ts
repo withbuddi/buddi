@@ -12,7 +12,7 @@
  * way it runs is from an approved action.
  */
 import { z } from 'zod';
-import type { EffectDescription, PluginManifest, ToolDefinition } from '../tools.js';
+import type { CoreToolContext, EffectDescription, PluginManifest, ToolDefinition } from '../tools.js';
 import { secretDestination } from './destinations.js';
 
 export const SECRETS_PLUGIN = 'secrets';
@@ -63,7 +63,7 @@ const useTool: ToolDefinition<SecretUseApproval, unknown> = {
   ownerOnly: true,
   input,
   describe: (args) => describeSecretUse(args),
-  async execute(args, ctx) {
+  async execute(args, ctx: CoreToolContext) {
     if (args.rule === 'first-time') {
       await ctx.db.query(
         `update core.secret_bindings set first_approved_at = coalesce(first_approved_at, $2) where id = $1`,

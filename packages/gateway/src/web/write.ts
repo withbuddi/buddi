@@ -45,7 +45,7 @@ import {
   type Decision,
   type JobControl,
   type MisfirePolicy,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
   type PermissionScope,
   type ActionRecord,
@@ -63,7 +63,7 @@ export interface WriteDeps {
   resumeInteractive?: (action: ActionRecord, outcome: { actionId: string; state: ApprovalState; result?: unknown; error?: string }) => void;
   pool: Pool;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   /** The queue, when this process has one. Absent: a decision wakes nothing. */
   jobs?: JobControl | undefined;

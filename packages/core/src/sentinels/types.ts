@@ -62,7 +62,11 @@ export interface Finding {
 export interface SentinelContext {
   /** The host, bound to the plugin this sentinel belongs to. See `ToolContext.buddi`. */
   buddi?: BuddiHost;
-  /** @deprecated Use `ctx.buddi.db`. */
+}
+
+/** What core runs a sentinel with: the host's facts beside it. Core's own, like `CoreToolContext`. */
+export interface CoreSentinelContext extends SentinelContext {
+  /** The pool: `buddi.db`. */
   db: Pool;
   /**
    * The owner this installation belongs to.
@@ -72,16 +76,12 @@ export interface SentinelContext {
    * `ToolContext`, and a `ToolContext` has an owner. Core's goal watcher is
    * the first, and rather than let it invent the string, the tick passes down
    * the same id every other part of the process runs as.
-   *
-   * @deprecated Use `ctx.buddi.owner.id`.
    */
   ownerId: string;
-  /** @deprecated Use `ctx.buddi.clock.now`. */
+  /** The clock: `buddi.clock.now`. */
   now: () => Date;
   /**
    * The owner's timezone: a sentinel that needs a *day* renders it in this zone.
-   *
-   * @deprecated Use `ctx.buddi.owner.timezone`.
    */
   timezone: string;
   /**
@@ -97,8 +97,6 @@ export interface SentinelContext {
    * `undefined` is an answer, not a failure — leave `Finding.agentId` unset
    * and the wake mission's agent speaks, which is by construction an agent
    * that exists.
-   *
-   * @deprecated Use `ctx.buddi.owner.agentForRole`.
    */
   agentForRole(role: string): string | undefined;
 }

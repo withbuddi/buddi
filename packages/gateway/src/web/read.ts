@@ -35,7 +35,7 @@ import {
   type ActionRecord,
   type Job,
   type JobState,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
   type HomeBlock,
   type Offer,
@@ -934,7 +934,7 @@ export async function readOverview(deps: {
   registry: ToolRegistry;
   /** Consulted for the `overview` role; absent means "no roles here". */
   catalog?: AgentCatalog;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   timezone: string;
   now: Date;
 }): Promise<Overview> {
@@ -1018,7 +1018,7 @@ export async function readOverview(deps: {
  * section. Core with zero plugins produces an empty list, which is a valid
  * running state.
  */
-export async function readHome(deps: { registry: ToolRegistry; ctx: ToolContext }): Promise<HomeBlock[]> {
+export async function readHome(deps: { registry: ToolRegistry; ctx: CoreToolContext }): Promise<HomeBlock[]> {
   const blocks: HomeBlock[] = [];
   for (const contribution of deps.registry.home()) {
     try {

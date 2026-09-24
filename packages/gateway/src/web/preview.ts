@@ -60,7 +60,7 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders, type In
 import { StringDecoder } from 'node:string_decoder';
 import type { Duplex } from 'node:stream';
 import { connect, type Socket } from 'node:net';
-import type { PreviewProvider, ToolContext, ToolRegistry } from '@buddi/core';
+import type { PreviewProvider, CoreToolContext, ToolRegistry } from '@buddi/core';
 import { CSRF_COOKIE, SESSION_COOKIE, cookieHeader, parseCookies, parseUrl } from './http.js';
 
 /** The route's own prefix. Everything below it is the app's. */
@@ -432,7 +432,7 @@ export async function loopbackHost(port: number): Promise<string> {
 
 export interface PreviewDeps {
   registry: Pick<ToolRegistry, 'previews'>;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   log: (line: string) => void;
   tickets: PreviewTickets;
   /** The origins allowed to frame a preview: the dashboard's, and no others. */

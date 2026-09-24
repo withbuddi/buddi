@@ -21,7 +21,7 @@ import {
 import { ToolRegistry } from './registry.js';
 import { demoPagesManifest, demoPages, demoQueries } from './pages/__fixtures__/demo.js';
 import type { Pool } from 'pg';
-import type { PluginManifest, ToolContext } from './tools.js';
+import type { PluginManifest, CoreToolContext } from './tools.js';
 
 /** A descriptor, with whatever is wrong with it today. Deliberately untyped:
  *  the point of these tests is what happens to a descriptor the types would
@@ -353,9 +353,9 @@ describe('the registry', () => {
     registry.register(demoPagesManifest);
     const base = { db: null as unknown as Pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     const args = { address: 'a@example.com', password: 'x' };
-    const asOwner = await registry.invoke('demo.add_account', args, { ...base, agentId: 'owner' } as ToolContext);
+    const asOwner = await registry.invoke('demo.add_account', args, { ...base, agentId: 'owner' } as CoreToolContext);
     expect(asOwner).toEqual({ ok: true, output: { added: true } });
-    const asAgent = await registry.invoke('demo.add_account', args, { ...base, agentId: 'scribe' } as ToolContext);
+    const asAgent = await registry.invoke('demo.add_account', args, { ...base, agentId: 'scribe' } as CoreToolContext);
     expect(asAgent).toEqual({ ok: false, reason: 'unknown-tool', message: 'unknown tool: demo.add_account' });
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { CLI_SURFACE, OWNER_INTERJECTION_SPEAKER, SCHEDULED_SURFACE, TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
-import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
+import type { AgentDefinition, PluginManifest, CoreToolContext } from '@buddi/core';
 import type {
   CompletionRequest,
   CompletionResponse,
@@ -113,8 +113,8 @@ class FakeDb implements Queryable {
 
 /* ---------------- fixtures ---------------- */
 
-const ctx: ToolContext = {
-  db: {} as ToolContext['db'],
+const ctx: CoreToolContext = {
+  db: {} as CoreToolContext['db'],
   ownerId: 'owner-1',
   now: () => new Date('2026-01-01T00:00:00Z'),
   timezone: 'UTC',
@@ -189,7 +189,7 @@ it('injects platform context on every surface and applies owner timezone to tool
     let seenTimezone = '';
     registry.register({ name: 'check', version: '0.1.0', schema: 'check', migrationsDir: '', tools: [{
       name: 'check.timezone', description: 'Check timezone', tier: 'auto', input: z.object({}),
-      execute: async (_input, toolCtx) => { seenTimezone = toolCtx.timezone; return {}; },
+      execute: async (_input, toolCtx) => { seenTimezone = toolCtx.buddi!.owner.timezone; return {}; },
     }] });
     const provider = scriptedProvider([
       { model: 'fixture', content: [{ type: 'tool_use', id: 'tz', name: 'check.timezone', input: {} }], stopReason: 'tool_use', usage },
@@ -405,7 +405,7 @@ describe('runAgent', () => {
   it('stops between calls in a batch when the run is cancelled', async () => {
     const db = new FakeDb();
     const controller = new AbortController();
-    const execute = vi.fn(async (_input: unknown, _ctx: ToolContext) => { controller.abort(new Error('stop now')); return 'stopped'; });
+    const execute = vi.fn(async (_input: unknown, _ctx: CoreToolContext) => { controller.abort(new Error('stop now')); return 'stopped'; });
     const registry = new ToolRegistry();
     registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [{
       name: 'demo.double', description: 'probe', tier: 'auto', input: z.object({}), execute,
@@ -563,7 +563,7 @@ describe('runAgent', () => {
   it('gives tools the run provenance without mutating the caller context', async () => {
     const db = new FakeDb();
     const conversationId = await createConversation(db, 'finance');
-    const seen: ToolContext[] = [];
+    const seen: CoreToolContext[] = [];
     const manifest: PluginManifest = {
       name: 'probe',
       version: '0.0.1',
@@ -575,7 +575,7 @@ describe('runAgent', () => {
           description: 'Reports its context.',
           tier: 'auto',
           input: z.object({}),
-          execute: async (_input: unknown, toolCtx: ToolContext) => {
+          execute: async (_input: unknown, toolCtx: CoreToolContext) => {
             seen.push(toolCtx);
             return { ok: true };
           },
@@ -1268,7 +1268,7 @@ describe('runAgent and approvals', () => {
       agent: mailAgent,
       provider,
       registry: registryWithGatedSend(execute),
-      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      ctx: { ...ctx, db: db as unknown as CoreToolContext['db'] },
       pool: db,
       conversationId,
       userMessage: 'email a@b.c',
@@ -1306,7 +1306,7 @@ describe('runAgent and approvals', () => {
       agent: mailAgent,
       provider,
       registry: registryWithGatedSend(),
-      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      ctx: { ...ctx, db: db as unknown as CoreToolContext['db'] },
       pool: db,
       conversationId,
       resume: { actionId: ACTION_ID, state: 'succeeded', result: { messageId: 'mid-1' } },
@@ -1332,7 +1332,7 @@ describe('runAgent and approvals', () => {
       agent: mailAgent,
       provider,
       registry: registryWithGatedSend(),
-      ctx: { ...ctx, db: db as unknown as ToolContext['db'] },
+      ctx: { ...ctx, db: db as unknown as CoreToolContext['db'] },
       pool: db,
       conversationId,
       resume: { actionId: ACTION_ID, state: 'rejected' },
@@ -2231,7 +2231,7 @@ describe('provenance for a tool call', () => {
       { model: 'fixture', content: [{ type: 'tool_use', id: 'p1', name: 'page.probe', input: {} }], stopReason: 'tool_use', usage },
       { model: 'fixture', content: [{ type: 'text', text: 'Done' }], stopReason: 'end_turn', usage },
     ]);
-    const runCtx: ToolContext = { ...ctx, systemContext: async (run) => { asked.push(run); return { timezone: 'UTC', prompt: 'ctx' }; } };
+    const runCtx: CoreToolContext = { ...ctx, systemContext: async (run) => { asked.push(run); return { timezone: 'UTC', prompt: 'ctx' }; } };
     await runAgent({ agent: { ...agent, tools: ['page.probe'] }, provider, registry: registryWithPage(seen), ctx: runCtx, pool: db,
       conversationId: await createConversation(db, agent.id), userMessage: 'hello' });
     expect(seen).toEqual([{ runId: null, turn: 1, step: 1, sources: [], texts: [] }]);

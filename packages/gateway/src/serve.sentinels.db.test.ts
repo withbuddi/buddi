@@ -47,7 +47,7 @@ const creditWatcher: Sentinel = {
   description: 'a watcher that addresses its finding by role',
   every: 60,
   async run(ctx): Promise<Finding[]> {
-    const agentId = ctx.agentForRole('credit') ?? ctx.agentForRole('overview');
+    const agentId = ctx.buddi!.owner.agentForRole('credit') ?? ctx.buddi!.owner.agentForRole('overview');
     return [
       {
         key: 'test.credit:2026-09-21',

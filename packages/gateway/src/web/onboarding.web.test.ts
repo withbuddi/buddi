@@ -9,7 +9,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { createFirstAgent } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
@@ -178,7 +178,7 @@ async function boot(opts: {
     pool: opts.pool as never,
     registry,
     catalog,
-    ctx: { ownerId: 'owner' } as ToolContext,
+    ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC',
     now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 },

@@ -30,7 +30,7 @@ import {
   type AgentCatalog,
   type JobHandler,
   type Suspension,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import {
   createConversation,
@@ -117,7 +117,7 @@ export interface AgentRunDeps {
   catalog: AgentCatalog;
   provider: RuntimeProvider;
   providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   /** Where a `mission.report` goes. Defaults to Telegram in `buddi serve`. */
   deliver: Deliver;
@@ -195,7 +195,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
         : `agent-run ${job.id}: @${payload.agentId} -> conversation ${conversationId}`,
     );
 
-    const ctx: ToolContext = { ...deps.ctx, jobId: job.id, signal: jobContext.signal };
+    const ctx: CoreToolContext = { ...deps.ctx, jobId: job.id, signal: jobContext.signal };
 
     const result = await runAgent({
       agent,

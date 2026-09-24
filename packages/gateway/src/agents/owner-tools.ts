@@ -20,6 +20,7 @@
  * does: agent files are resolved *against* the registry, so the registry cannot
  * be handed a catalog at construction.
  */
+import type { CoreToolContext } from '@buddi/core';
 import {
   HANDLE,
   HANDLE_MAX,
@@ -196,7 +197,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       INTERVIEW_RULES,
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const [profile, onboarding] = await Promise.all([
         getOwnerProfile(ctx.db),
         getOnboarding(ctx.db),
@@ -222,7 +223,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       INTERVIEW_RULES,
     tier: 'auto',
     input: setProfileInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       if (input.timezone !== undefined && !isKnownTimezone(input.timezone)) {
         return {
           ok: false,
@@ -251,7 +252,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       INTERVIEW_RULES,
     tier: 'auto',
     input: renameInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       if (input.name === undefined && input.handle === undefined) {
         return { ok: false, reason: 'nothing-to-do', message: 'give a name, a handle, or both' };
       }
@@ -329,7 +330,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
       INTERVIEW_RULES,
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const onboarding = await completeOnboarding(ctx.db, bound()?.surface ?? UNKNOWN_SURFACE);
       const profile = await getOwnerProfile(ctx.db);
       return {

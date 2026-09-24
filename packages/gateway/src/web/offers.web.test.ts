@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
-import { OFFER_LAPSED_MESSAGE, type JobControl, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { OFFER_LAPSED_MESSAGE, type JobControl, type CoreToolContext, type ToolRegistry } from '@buddi/core';
 import {
   OFFER_EXPIRED,
   OFFER_TAKEN_ALREADY,
@@ -117,7 +117,7 @@ function deps(pool: Pool): WriteDeps {
   return {
     pool,
     registry: {} as ToolRegistry,
-    ctx: {} as ToolContext,
+    ctx: {} as CoreToolContext,
     now: () => NOW,
     // A queue exists in this process — which is exactly why "no job was
     // enqueued" is worth asserting.

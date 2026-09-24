@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { createSystemManifest, hostFacts, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
-  const ctx: ToolContext = { db: { query } as unknown as ToolContext['db'], ownerId: 'owner',
+  const ctx: CoreToolContext = { db: { query } as unknown as CoreToolContext['db'], ownerId: 'owner',
     timezone: 'Europe/Paris', now: () => new Date('2026-09-19T02:00:00Z') };
   return { ctx, query };
 }

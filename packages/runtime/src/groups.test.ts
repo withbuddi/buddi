@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ToolContext, ToolRegistry } from '@buddi/core';
+import type { CoreToolContext, ToolRegistry } from '@buddi/core';
 import { ProviderError, type CompletionResponse, type RuntimeProvider } from './anthropic.js';
 import { BudgetExhausted, SYNTHESIS_NOTE, budgetedProvider, createGroupAskTool, type Reservation } from './groups.js';
 
@@ -93,7 +93,7 @@ describe('group.ask', () => {
     ['outsider', { id: 'outsider', handle: 'outsider', name: 'Outsider', definition: () => ({ id: 'outsider', name: 'Outsider', systemPrompt: '', tools: [], provider: {} as any, maxTurns: 12 }) }],
   ]);
   const group = { id: 'g1', name: 'Money', coordinator: 'concierge', members: ['concierge', 'ledger'], requestId: 'r1' };
-  const base = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const base = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
     db: {} as any, ownerId: 'o', now: () => new Date('2026-09-20T00:00:00Z'), timezone: 'UTC',
     agentId: 'concierge', conversationId: 'c1', group, ...over,
   });

@@ -25,7 +25,7 @@
  * be asked to ask. Mentioning a colleague in prose schedules nothing.
  */
 import { z } from 'zod';
-import type { AgentDefinition, GroupContext, ToolContext, ToolDefinition, ToolRegistry } from '@buddi/core';
+import type { AgentDefinition, GroupContext, CoreToolContext, ToolDefinition, ToolRegistry } from '@buddi/core';
 import { ProviderError, type CompletionRequest, type CompletionResponse, type RuntimeProvider } from './anthropic.js';
 import { runAgent as defaultRunAgent, type Queryable, type RunAgentOptions, type RunResult } from './loop.js';
 import type { RunAgentFn } from './delegate.js';
@@ -172,7 +172,7 @@ export interface GroupAskDeps {
 }
 
 /** The coordinator's context minus its identity; the loop stamps the member's own. */
-function memberContext(ctx: ToolContext): ToolContext {
+function memberContext(ctx: CoreToolContext): CoreToolContext {
   const { agentId: _agentId, ...rest } = ctx;
   return rest;
 }
@@ -198,7 +198,7 @@ export function createGroupAskTool(deps: GroupAskDeps): ToolDefinition<GroupAskI
       'Each ask spends from the request budget you were told about.',
     tier: 'auto',
     input: groupAskInput,
-    async execute(input, ctx): Promise<GroupAskOutput> {
+    async execute(input, ctx: CoreToolContext): Promise<GroupAskOutput> {
       const group = ctx.group;
       const from = ctx.agentId;
       if (!group || !from) throw new Error('group.ask refused: this run is not a group run');
