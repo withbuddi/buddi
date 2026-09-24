@@ -7,7 +7,7 @@
  */
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations } from '@buddi/core';
+import { createPool, runMigrations } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
@@ -22,7 +22,7 @@ import {
   triageDedupKey,
 } from './inbox-poll.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
 function hosted<C>(facts: C): C {

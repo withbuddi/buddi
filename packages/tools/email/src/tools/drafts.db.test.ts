@@ -26,7 +26,7 @@ import {
   getAction,
   runMigrations,
   ToolRegistry,
-} from '@buddi/core';
+} from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
@@ -48,7 +48,7 @@ import {
 import type { DraftRecord } from '../rows.js';
 import type { ToolContext } from '../types.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */

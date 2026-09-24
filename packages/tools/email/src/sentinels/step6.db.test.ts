@@ -28,7 +28,7 @@ import {
   type Finding,
   type Sentinel,
   type SentinelContext,
-} from '@buddi/core';
+} from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { manifest } from '../index.js';
@@ -42,7 +42,7 @@ import {
   suspiciousSender,
   unansweredByThem,
 } from './index.js';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
 function hosted<C>(facts: C): C {

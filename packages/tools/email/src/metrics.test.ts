@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { emailMetrics, inboxUnread, stalestSync, waitingOnMe } from './metrics.js';
 import { createEmailManifest } from './index.js';
-import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from './index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */

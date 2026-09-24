@@ -342,7 +342,7 @@ function testTs(name: string): string {
  * will load — and it needs no database.
  */
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry } from '@buddi/core';
+import { ToolRegistry } from '@buddi/core/testing';
 import { manifest } from './index.js';
 
 describe('${name} manifest', () => {

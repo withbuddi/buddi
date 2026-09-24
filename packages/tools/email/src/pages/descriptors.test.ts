@@ -12,7 +12,7 @@
  * of the tools those screens write through is a tool a model can see.
  */
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry } from '@buddi/core';
+import { ToolRegistry } from '@buddi/core/testing';
 import { createEmailManifest } from '../index.js';
 
 /** A deep copy, so a test may break one without breaking the next. */
