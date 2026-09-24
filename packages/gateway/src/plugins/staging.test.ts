@@ -29,7 +29,7 @@ import {
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, resetAdoptedPlugins } from './load.js';
 import { isPluginSchemaName } from '@buddi/core';
@@ -49,6 +49,7 @@ import {
   lifecycleScripts,
   listStaged,
   rejectStaged,
+  resolveCoreDir,
   scanDependencies,
   stagePlugin,
   sweepStages,
@@ -223,6 +224,36 @@ describe('staging', () => {
     const linked = path.join(staged.packageDir, 'node_modules', '@buddi', 'core');
     expect(existsSync(path.join(linked, 'package.json'))).toBe(true);
     expect(JSON.parse(readFileSync(path.join(linked, 'package.json'), 'utf8')).name).toBe('@buddi/core');
+  });
+
+  it('links a core whose only export is the plugin API, the running one\'s own', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    const linked = path.join(staged.packageDir, 'node_modules', '@buddi', 'core');
+    expect(lstatSync(linked).isSymbolicLink()).toBe(false);
+    expect(Object.keys(JSON.parse(readFileSync(path.join(linked, 'package.json'), 'utf8')).exports)).toEqual([
+      './plugin',
+      './package.json',
+    ]);
+    // Resolved as the plugin resolves it: from inside its own package.
+    const probe = path.join(staged.packageDir, 'probe.mjs');
+    writeFileSync(probe, '');
+    const require_ = createRequire(probe);
+    expect(() => require_.resolve('@buddi/core')).toThrow();
+    expect(() => require_.resolve('@buddi/core/testing')).toThrow();
+    expect(() => require_.resolve('@buddi/core/dist/index.js')).toThrow();
+    // The same objects core holds, not a copy, so `instanceof QueryRefusal`
+    // still means something. Asked of plain Node, as the gateway loads a plugin
+    // (vitest keeps a module graph of its own).
+    writeFileSync(probe, "export * as api from '@buddi/core/plugin';\n");
+    const own = pathToFileURL(path.join(resolveCoreDir()!, 'dist', 'plugin', 'index.js')).href;
+    const same = execFileSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `const { api } = await import(${JSON.stringify(pathToFileURL(probe).href)});` +
+        `const own = await import(${JSON.stringify(own)});` +
+        `process.stdout.write(String(api.QueryRefusal === own.QueryRefusal && api.HOST_API_VERSION === own.HOST_API_VERSION));`,
+    ]).toString();
+    expect(same).toBe('true');
   });
 
   it('names every dependency that wanted to run code at install', () => {
