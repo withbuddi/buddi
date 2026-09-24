@@ -275,16 +275,15 @@ Where the build bent this document, one line each.
   the browser registers `browser.field`, `browser.native.type` and
   `browser.form.data`, not `native.type` and `form.data`. Same rule, same
   owners; the names name the plugin that answers for them.
-- **A TOTP code goes into `browser.form.data` fields too.** §4 said "into
-  `browser.field` only", and that stands for the rule the sentence was making:
-  nowhere else. But an authenticator field is rarely marked as a password, and
-  `browser.field` fills only password-marked fields — so the code also goes
-  into `browser.form.data`, which is the stricter path of the two (every use a
-  card, every use logged with the field).
-- **A password secret fills only password-marked fields; anything else a fill
-  targets is `browser.form.data`.** The fill tool routes on what the page
-  marks, so a card number goes through the every-time destination and a
-  password cannot land in a visible field.
+- **The fill tool routes on what the page marks.** §3 named `browser.field`
+  the login destination and `form.data` the card-and-account one; the tool
+  `secret.fill` reads the field the ref names and asks for the kind that field
+  is: a TOTP secret fills any field the ref names (an authenticator field is
+  rarely marked as a password, and §4's "into `browser.field` only" is about
+  the destination, not the field's type), a password-marked field is
+  `browser.field`, and anything else is `browser.form.data` — so a password
+  cannot land in a visible field and a card number always goes through the
+  every-time destination.
 - **Core's save-time look covers events, the transcript and memory** — notes
   and preferences — and skips a place that is not installed. Learned skills are
   clean by construction (a proposal's payload is scrubbed when it is created,
