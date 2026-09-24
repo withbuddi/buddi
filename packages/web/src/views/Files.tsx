@@ -89,7 +89,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
     <div className="ui-page files" data-selected={selectedId ? 'true' : undefined}>
       <header className="ui-page-head">
         <h2 className="ui-page-title">Files</h2>
-        <p className="ui-page-lede">What your agents made and what you sent them, across every conversation.</p>
+        <p className="ui-page-lede">What your agents made or were given.</p>
       </header>
       <div className="files-body">
         <section className="files-list" aria-label="Files">
@@ -112,7 +112,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
           {entries === null ? (
             <Empty>Loading…</Empty>
           ) : entries.length === 0 ? (
-            <Empty mascot>{q || origin || family ? 'No file matches that.' : 'No files yet. Send an agent a file, or ask one for a report, and it lands here.'}</Empty>
+            q || origin || family ? <Empty>No file matches that.</Empty> : <Empty warm title="Nothing here yet">Drop a file into any conversation and it shows up here too.</Empty>
           ) : (
             <ul className="files-rows" role="list">
               {entries.map((entry) => (
