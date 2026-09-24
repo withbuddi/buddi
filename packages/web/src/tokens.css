@@ -211,6 +211,8 @@
   --agent-calendar: #1fb5b0; --agent-calendar-soft: #ddf5f4; --agent-calendar-ink: #0e716e;
   --agent-files: #f5c23e;    --agent-files-soft: #fff5d6;    --agent-files-ink: #876000;
   --agent-memory: #4c5bd4;   --agent-memory-soft: #e8eafb;   --agent-memory-ink: #3440b0;
+  /* Not in the kit's seven: a magenta-pink in the same hand, for the agents that draw. */
+  --agent-art: #e0569e;      --agent-art-soft: #fdeaf4;      --agent-art-ink: #a8246a;
   /* The front desk wears Buddi blue. */
   --agent-buddi: var(--buddi-blue); --agent-buddi-soft: var(--accent-soft); --agent-buddi-ink: var(--accent);
 
@@ -307,6 +309,7 @@
     --agent-calendar-soft: #0f2f30; --agent-calendar-ink: #6fd8d3;
     --agent-files-soft: #33290f;    --agent-files-ink: #f2cf6c;
     --agent-memory-soft: #1d2148;   --agent-memory-ink: #9ea8f5;
+    --agent-art-soft: #3a1a2e;      --agent-art-ink: #f59ccb;
 
     color-scheme: dark;
   }
@@ -372,6 +375,7 @@
   --agent-calendar-soft: #0f2f30; --agent-calendar-ink: #6fd8d3;
   --agent-files-soft: #33290f;    --agent-files-ink: #f2cf6c;
   --agent-memory-soft: #1d2148;   --agent-memory-ink: #9ea8f5;
+  --agent-art-soft: #3a1a2e;      --agent-art-ink: #f59ccb;
 
   color-scheme: dark;
 }
@@ -407,6 +411,7 @@
 [data-agent='calendar'] { --agent-fill: var(--agent-calendar); --agent-soft: var(--agent-calendar-soft); --agent-ink: var(--agent-calendar-ink); }
 [data-agent='files'] { --agent-fill: var(--agent-files); --agent-soft: var(--agent-files-soft); --agent-ink: var(--agent-files-ink); }
 [data-agent='memory'] { --agent-fill: var(--agent-memory); --agent-soft: var(--agent-memory-soft); --agent-ink: var(--agent-memory-ink); }
+[data-agent='art'] { --agent-fill: var(--agent-art); --agent-soft: var(--agent-art-soft); --agent-ink: var(--agent-art-ink); }
 [data-agent='buddi'] { --agent-fill: var(--agent-buddi); --agent-soft: var(--agent-buddi-soft); --agent-ink: var(--agent-buddi-ink); }
 [data-agent='own'] {
   --agent-soft: color-mix(in oklab, var(--agent-fill) 16%, var(--surface));

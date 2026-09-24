@@ -429,6 +429,8 @@ export function Picture({ agent, onChanged }: { agent: AgentRow; onChanged: () =
   const face: Face = {
     avatar: iconOf(agent),
     ...(agent.accent ? { accent: agent.accent } : {}),
+    roles: agent.roles,
+    tools: agent.tools,
     ...(preview ?? agent.picture ? { picture: (preview ?? agent.picture)! } : {}),
   };
   return (
