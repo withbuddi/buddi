@@ -232,13 +232,16 @@ function normalize(url: string): string {
 /**
  * Only an http(s) origin is one a binding can name: about:blank, a file and a
  * sandboxed frame report `null` or their own scheme, and none of those is a
- * place an owner secret can be bound to.
+ * place an owner secret can be bound to. The origin the page reports is
+ * canonical already; parsing re-derives it and refuses everything else.
  */
 function checkOrigin(origin: unknown): string {
-  if (typeof origin !== 'string' || !(origin.startsWith('http://') || origin.startsWith('https://'))) {
+  let parsed: URL | undefined;
+  if (typeof origin === 'string') { try { parsed = new URL(origin); } catch { parsed = undefined; } }
+  if (parsed === undefined || (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')) {
     throw new PreconditionError('That field sits in a frame with no web origin buddi can bind a secret to. Observe a page on an http or https address first.');
   }
-  return origin;
+  return parsed.origin;
 }
 
 /** The one field fact pair a secret's card shows, shaped for the wire. */

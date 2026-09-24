@@ -150,3 +150,42 @@ describe('what the driver does with a browser that went quiet', () => {
     expect(sent.map((command) => command.name)).toEqual(['observe', 'observe']);
   });
 });
+
+/*
+ * The owner's secret pair on the extension wire: the facts ride inside the
+ * observation the gateway relays untouched, and the fill carries the value once,
+ * to the browser, and nothing else.
+ */
+describe('the secret pair on the extension wire', () => {
+  const VALUE = 'correct-horse-battery-staple';
+  const fieldInfo = { observation: { field: { origin: 'https://example.com', password: false, name: 'Card number' } } };
+
+  it('reads the field facts out of the passthrough and refuses a stale observation first', async () => {
+    const { fake, sent } = bridge({ fieldInfo });
+    const driver = new ExtensionDriver(fake);
+    await expect(driver.secretFieldInfo('o1', 'e3')).rejects.toThrow('Stale page observation');
+    await driver.observe();
+    await expect(driver.secretFieldInfo((await driver.observe()).id, 'e3')).resolves.toEqual({ origin: 'https://example.com', password: false, name: 'Card number' });
+    expect(sent.at(-1)).toMatchObject({ name: 'fieldInfo', args: { ref: 'e3' } });
+  });
+
+  it('refuses an unbindable origin, and answers a password field as one', async () => {
+    const opaque = new ExtensionDriver(bridge({ fieldInfo: { observation: { field: { origin: 'null', password: false, name: 'x' } } } }).fake);
+    await opaque.observe();
+    await expect(opaque.secretFieldInfo((await opaque.observe()).id, 'e3')).rejects.toThrow(/no web origin/);
+    const password = new ExtensionDriver(bridge({ fieldInfo: { observation: { field: { origin: 'https://example.com', password: true, name: 'Password' } } } }).fake);
+    await password.observe();
+    await expect(password.secretFieldInfo((await password.observe()).id, 'e3')).resolves.toMatchObject({ password: true });
+  });
+
+  it('sends the fill with the approved origin, spends its evidence, and never answers the value', async () => {
+    const { fake, sent } = bridge({ observe: page });
+    const driver = new ExtensionDriver(fake);
+    await driver.observe();
+    const id = (await driver.observe()).id;
+    await expect(driver.secretFillField(id, 'e3', VALUE, 'https://example.com')).resolves.toBeUndefined();
+    expect(sent.at(-1)).toMatchObject({ name: 'secretFill', args: { ref: 'e3', expectedOrigin: 'https://example.com' } });
+    // The evidence is spent: the same observation cannot fill twice.
+    await expect(driver.secretFillField(id, 'e3', VALUE, 'https://example.com')).rejects.toThrow('Stale page observation');
+  });
+});

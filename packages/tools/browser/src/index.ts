@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { DirArea, PluginManifest, SecretDestination } from '@buddi/core/plugin';
+import type { DirArea, PluginManifest } from '@buddi/core/plugin';
 import { z } from 'zod';
 import type { BrowserController } from './service.js';
 import type { SecretFillInput, SecretTypeInput } from './service.js';
@@ -67,7 +67,7 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
   return {
     name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', uses: ['secrets'],
     description: 'Owner-directed computer control: macOS screenshots, accessibility and native input by default; optional Playwright browser automation.',
-    destinations: [fieldDestination, formDataDestination, nativeTypeDestination] as SecretDestination[],
+    destinations: [fieldDestination, formDataDestination, nativeTypeDestination],
     tools: [
       { name: 'browser.status', tier: 'auto', description: 'Read computer/browser mode, owner-allowed apps, permissions and this conversation’s controlling task. Does not open an app.',
         input: z.object({}).strict(), execute: async (_input, ctx) => service().status({ agentId: ctx.agentId, conversationId: ctx.conversationId }) },
