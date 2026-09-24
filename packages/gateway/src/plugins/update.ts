@@ -15,7 +15,7 @@
  */
 import { compareSemver, parseSemver, readPluginsFile, type InstalledPlugin } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
-import { recordFile } from './load.js';
+import { packageUses, recordFile } from './load.js';
 import { rejectStaged, stagePlugin, type StageOptions, type StagedPlugin } from './stage.js';
 
 // The comparison itself lives in `@buddi/core` (`semver.ts`): the supervisor's
@@ -72,10 +72,14 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
   }
 
   const previous = { name: record.name, version: record.version };
+  // What the installed version declared it reaches, so the card can say what
+  // the new one adds. Unreadable is nothing: the card then lists every area.
+  const installedUses = packageUses(record.entry);
   const staged = await stagePlugin(specFor(record, opts.version), {
     ...opts,
     env,
     previous,
+    previousUses: installedUses.ok ? installedUses.uses : [],
   });
 
   let newer = true;
