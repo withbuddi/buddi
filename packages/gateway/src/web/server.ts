@@ -77,6 +77,7 @@ import {
   runPageQuery,
   type PagesDeps,
 } from './pages.js';
+import { listSecrets, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
@@ -843,6 +844,8 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
     /** What the plugin page routes need: the registry, and the owner's context. */
     const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now, log });
+    /** The Keys and secrets page (docs/specs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
+    const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
     /** The same, for the version and upgrade routes. */
     const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
@@ -1247,6 +1250,10 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/plugins':
           return reply(res, await listPlugins(pluginDeps()));
+        case '/api/secrets':
+          return reply(res, await listSecrets(secretsDeps()));
+        case '/api/secrets/uses':
+          return reply(res, await secretUses(secretsDeps(), url));
         case '/api/onboarding':
           return sendJson(res, 200, await readOnboarding(onboardingDeps()));
         /*
@@ -2365,6 +2372,16 @@ export function createWebApp(deps: WebServerDeps): Server {
     const pageAct = /^\/api\/pages\/([a-z][a-z0-9_-]{0,39})\/act$/.exec(path);
     if (pageAct) {
       return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body, session));
+    }
+
+    /*
+     * The Keys and secrets page's writes (owner-secrets §6): core's own
+     * ownerOnly tools, invoked as the owner — the same atomic transition the
+     * act route runs, behind the same rate limit, with the value crossing one
+     * boundary into the tool that stores it.
+     */
+    if (path === '/api/secrets/act') {
+      return reply(res, await secretsAct(secretsDeps(), body, session));
     }
 
     /*

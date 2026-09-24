@@ -150,6 +150,32 @@ export class ComputerDriver implements BrowserDriver {
       tree: targets.map((t) => `${t.ref} ${t.role} ${JSON.stringify(t.name)} ${JSON.stringify(snapshot.nodes[Number(t.ref.slice(2))]?.value ?? '')}`).join('\n').slice(0, 32_000), targets, tabs: [], capturedAt: new Date().toISOString(), screenshotSize: { width: snapshot.width, height: snapshot.height } };
     return this.#observation;
   }
+  /**
+   * The app the owner is using right now, as the helper reports it — never the
+   * agent's claim (owner-secrets.md §8). Remembered so the typing goes to the
+   * same app the use was delivered for: an app switch in between is refused.
+   */
+  #focused?: string;
+  async focusedBundleId(): Promise<string | undefined> {
+    const result = await this.bridge.run({ operation: 'focused' });
+    const appId = typeof result.appId === 'string' ? result.appId.trim() : '';
+    this.#focused = appId === '' ? undefined : appId;
+    return this.#focused;
+  }
+  /**
+   * The owner's secret into the focused field, over the same chunked keyboard
+   * write `browser.act`'s fill uses — focus guards included on the helper's
+   * side. Unlike that fill there is no observed target here: the field is
+   * whatever the owner left focused, which is exactly why every use is a card.
+   */
+  async nativeType(value: string): Promise<void> {
+    const appId = this.#focused;
+    if (!appId) throw new BrowserPreconditionError('No focused application was read for this use. Ask which app is in front again, then ask for the secret.');
+    const generation = this.#generation;
+    this.#invalidate(); // Never replay evidence once dispatch may have started.
+    await this.bridge.run({ operation: 'secretType', appId, value });
+    if (generation !== this.#generation) throw new Error('Computer action cancelled');
+  }
   async screenshot(): Promise<Buffer | undefined> { return this.#picture; }
   async close(): Promise<void> { ++this.#generation; this.bridge.cancel(); this.#invalidate(); /* Never close a user's applications. */ }
   async takeover(): Promise<void> { ++this.#generation; this.bridge.cancel(); this.#invalidate(); }

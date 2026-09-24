@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
+import { fieldOrigin } from './secrets.js';
 import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */
-export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot'] as const;
+export const EXTENSION_COMMANDS = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'screenshot', 'fieldInfo', 'secretFill'] as const;
 /**
  * The take-over's own three, kept out of the list above.
  *
  * Nothing an agent can name reaches them: they exist for the owner's hand, and
- * the extension keeps the same split on its side.
+ * the extension keeps the same split on its side. `fieldInfo` and `secretFill`
+ * are the owner's-secret pair — `secret.fill` rides them the way `browser.act`
+ * rides the rest — and only the driver sends them.
  */
 export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
 export type ExtensionCommandName = (typeof EXTENSION_COMMANDS)[number] | (typeof HAND_COMMANDS)[number];
@@ -32,6 +35,8 @@ export interface ExtensionResult {
   observation?: unknown;
   /** A base64 PNG, when the command was one that captures. */
   screenshot?: string | null;
+  /** The field facts `fieldInfo` answered; they ride inside `observation` on the wire. */
+  field?: { origin: string; password: boolean; name: string };
 }
 
 /**
@@ -157,6 +162,42 @@ export class ExtensionDriver implements BrowserDriver {
       ...(command.key !== undefined ? { key: command.key } : {}), ...(command.direction !== undefined ? { direction: command.direction } : {}) };
     this.#invalidate(); // Never replay evidence once dispatch may have started.
     await this.#send(command.action, args);
+  }
+
+  /**
+   * The facts a secret fill is aimed by, as the extension's page side read them.
+   *
+   * The driver holds the evidence identity (same refusal as any acting
+   * command); the extension holds the refs and answers the field's own frame
+   * origin, its password mark and its accessible name. `fieldInfo` rides the
+   * result frame's passthrough observation, which is the one channel the
+   * gateway relays untouched.
+   */
+  async secretFieldInfo(observation: string, ref: string): Promise<{ origin: string; password: boolean; name: string }> {
+    if (!this.#observation || observation !== this.#observation.id) throw new BrowserPreconditionError('Stale page observation. Use the latest observation.id and target ref.');
+    const result = await this.#send('fieldInfo', { ref });
+    const field = (result.observation as { field?: unknown } | null | undefined)?.field;
+    if (!field || typeof field !== 'object' || typeof (field as { origin?: unknown }).origin !== 'string') {
+      throw new BrowserPreconditionError('The field could not be read. Observe again and pick a fresh ref.');
+    }
+    const { origin, password, name } = field as { origin: string; password?: unknown; name?: unknown };
+    // A second, local guard: the target a use is asked for is canonical or nothing.
+    return { origin: fieldOrigin(origin), password: password === true, name: typeof name === 'string' ? name : '' };
+  }
+
+  /**
+   * One owner secret into one field, through the debugger's insertText.
+   *
+   * The extension re-resolves the ref and re-reads the frame's origin and
+   * refuses unless it is still `expectedOrigin` — the navigation between the
+   * owner's approval and the fill refuses before anything is entered. The value
+   * crosses the loopback socket to buddi's own paired extension (owner-secrets
+   * §10's decision) and is kept by nothing on the way.
+   */
+  async secretFillField(observation: string, ref: string, value: string, expectedOrigin: string): Promise<void> {
+    if (!this.#observation || observation !== this.#observation.id) throw new BrowserPreconditionError('Stale page observation. Use the latest observation.id and target ref.');
+    this.#invalidate(); // Never replay evidence once dispatch may have started.
+    await this.#send('secretFill', { ref, value, expectedOrigin });
   }
 
   async observe(): Promise<Observation> {

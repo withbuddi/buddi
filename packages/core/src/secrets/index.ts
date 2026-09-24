@@ -5,3 +5,4 @@ export * from './use.js';
 export * from './approval.js';
 export * from './scrub.js';
 export * from './totp.js';
+export * from './settings.js';
