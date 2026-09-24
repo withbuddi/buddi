@@ -26,7 +26,7 @@
  * The watcher settings change what the *watchers* do on their next tick.
  * Nothing here runs a watcher, and nothing here speaks to the owner.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   DEFAULT_RETENTION_DAYS,
@@ -114,7 +114,7 @@ export const getSettings: ToolDefinition<z.infer<typeof getInput>, unknown> = {
   tier: 'auto',
   input: getInput,
   async execute(_input, ctx) {
-    return summarise(ctx.db);
+    return summarise(ctx.buddi!.db);
   },
 };
 
@@ -189,7 +189,7 @@ export const setSettings: ToolDefinition<z.infer<typeof setInput>, unknown> = {
   input: setInput,
   async execute(input, ctx) {
     if (input.retentionDays !== undefined) {
-      await setRetentionDays(ctx.db, input.retentionDays, ctx.now());
+      await setRetentionDays(ctx.buddi!.db, input.retentionDays, ctx.buddi!.clock.now());
     }
     const patch: WatcherSettingsPatch = {
       ...(input.waitingDays === undefined ? {} : { waitingDays: input.waitingDays }),
@@ -201,10 +201,10 @@ export const setSettings: ToolDefinition<z.infer<typeof setInput>, unknown> = {
       ...(input.nudgeDays === undefined ? {} : { nudgeDays: input.nudgeDays }),
     };
     if (Object.keys(patch).length > 0) {
-      await setWatcherSettings(ctx.db, patch, ctx.now());
+      await setWatcherSettings(ctx.buddi!.db, patch, ctx.buddi!.clock.now());
     }
     return {
-      ...(await summarise(ctx.db)),
+      ...(await summarise(ctx.buddi!.db)),
       // What the owner is told on the settings page. The watchers do not
       // re-read this until their next tick, and saying so is the difference
       // between "saved" and "in force".

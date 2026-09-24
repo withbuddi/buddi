@@ -11,7 +11,7 @@
  * The gate itself never asks. That is the point of it. Which is exactly why the
  * moment the rule is *written* has to be the moment somebody agrees to it.
  */
-import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core';
+import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   POLICY_ACTIONS,
@@ -99,15 +99,15 @@ export const listPolicies: ToolDefinition<z.infer<typeof listInput>, unknown> = 
   async execute(input, ctx) {
     // Scoped like every other read tool: a named account sees its own rules and
     // the installation-wide ones, and saying nothing sees them all.
-    const scope = await accountScope(ctx.db, input.account);
-    const { rows } = await ctx.db.query(
+    const scope = await accountScope(ctx.buddi!.db, input.account);
+    const { rows } = await ctx.buddi!.db.query(
       `select ${POLICY_COLUMNS} from email.policies
         where ($1::bool or revoked_at is null)
           and (account_id is null or account_id = any($2::uuid[]))
         order by created_at desc, id desc`,
       [input.includeRevoked ?? false, scope.ids],
     );
-    const stats = await policyStats(ctx.db);
+    const stats = await policyStats(ctx.buddi!.db);
     const all = rows.map(toPolicy);
     return {
       applied: all
@@ -242,10 +242,10 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
     const matcher = normalizeMatcher(input.scope, input.matcher);
     // Which mailbox this rule is about is part of the sentence being approved:
     // "ignore this sender" reads differently for work mail than for personal.
-    const account = await requireOneAccount(_ctx.db, input.account);
+    const account = await requireOneAccount(_ctx.buddi!.db, input.account);
     const verdicts =
       input.scope === 'sender'
-        ? (await senderVerdicts(_ctx.db, account.id, matcher, 20)).length
+        ? (await senderVerdicts(_ctx.buddi!.db, account.id, matcher, 20)).length
         : 0;
     return {
       envelope: {
@@ -268,9 +268,9 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
       params: paramsOf(input),
     });
     if (refusal) throw new PolicyRefusal(refusal);
-    const account = await requireOneAccount(ctx.db, input.account);
+    const account = await requireOneAccount(ctx.buddi!.db, input.account);
     const policy = await createPolicy(
-      ctx.db,
+      ctx.buddi!.db,
       {
         accountId: account.id,
         scope: input.scope,
@@ -280,7 +280,7 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
         origin: 'owner',
         proposed: false,
       },
-      ctx.now(),
+      ctx.buddi!.clock.now(),
     );
     return { policy: viewOf(policy), applied: true };
   },
@@ -302,9 +302,9 @@ export const revokeEmailPolicy: GatedToolDefinition<
   input: revokeInput,
 
   async describe(input, ctx: ToolContext) {
-    const policy = await findPolicy(ctx.db, input.policyId);
+    const policy = await findPolicy(ctx.buddi!.db, input.policyId);
     if (!policy) throw new Error(`unknown policy: ${input.policyId}`);
-    const stats = (await policyStats(ctx.db)).get(policy.id);
+    const stats = (await policyStats(ctx.buddi!.db)).get(policy.id);
     const saved = stats?.runsSaved ?? 0;
     return {
       envelope: {
@@ -323,7 +323,7 @@ export const revokeEmailPolicy: GatedToolDefinition<
   },
 
   async execute(input, ctx) {
-    const policy = await revokePolicy(ctx.db, input.policyId, ctx.now());
+    const policy = await revokePolicy(ctx.buddi!.db, input.policyId, ctx.buddi!.clock.now());
     if (!policy) throw new Error(`unknown policy: ${input.policyId}`);
     return { policy: viewOf(policy), revoked: true };
   },

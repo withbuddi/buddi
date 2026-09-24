@@ -11,7 +11,7 @@
  * provenance, and the draft row points at that version. That is what lets an
  * approval reference a version and what makes the preview *be* what ships.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   DraftWriteConflict,
@@ -130,13 +130,13 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
   input: draftReplyInput,
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
-    const original = await requireMessage(ctx.db, input.inReplyTo);
+    const original = await requireMessage(ctx.buddi!.db, input.inReplyTo);
     // docs/specs/email.md §4: "`send` and `draft_reply` take the account from the
     // thread they answer". There is no argument for it and there must not be
     // one — a reply leaves from the mailbox it arrived in, and an agent that
     // could choose otherwise could answer a client from the owner's private
     // address without anyone naming the swap.
-    const account = await accountOf(ctx.db, original.accountId);
+    const account = await accountOf(ctx.buddi!.db, original.accountId);
 
     // Every rule about who may be on a reply lives in one pure function, so
     // the default cannot drift and the exclusions cannot be half-applied.
@@ -161,8 +161,8 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
     // draft" (§12.4) — with the one exception that makes the whole lifecycle
     // safe: a draft the *owner* has edited is the owner's words, and an agent
     // does not get to write over those without having read them.
-    const threadId = original.threadId ?? (await threadOfMessageId(ctx.db, original.id));
-    const live = threadId ? await liveDraftForThread(ctx.db, threadId) : null;
+    const threadId = original.threadId ?? (await threadOfMessageId(ctx.buddi!.db, original.id));
+    const live = threadId ? await liveDraftForThread(ctx.buddi!.db, threadId) : null;
 
     // The account's own address. Never an alias picked off the original's To or
     // Cc — those are headers the sender wrote (see `identityChoices`); the owner
@@ -200,7 +200,8 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
     if (live) {
       try {
         record = await updateDraftRow({
-          db: ctx.db,
+          db: ctx.buddi!.db,
+          files: ctx.buddi!.files!,
           draftId: live.id,
           ...fields,
           editedBy: agentId,
@@ -211,7 +212,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
           // neither the owner nor either agent would ever know.
           expectedArtifactId: live.artifactId,
           conversationId: ctx.conversationId ?? null,
-          now: ctx.now(),
+          now: ctx.buddi!.clock.now(),
         });
       } catch (err) {
         // Somebody wrote in the window this exists to close: the owner
@@ -229,14 +230,15 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
     } else {
       try {
         record = await insertLiveDraft({
-          db: ctx.db,
+          db: ctx.buddi!.db,
+          files: ctx.buddi!.files!,
           accountId: account.id,
           inReplyTo: original.id,
           threadId,
           ...fields,
           agentId,
           conversationId: ctx.conversationId,
-          now: ctx.now(),
+          now: ctx.buddi!.clock.now(),
         });
       } catch (err) {
         // The insert lost the race, and the winner is a draft the owner had
@@ -366,14 +368,15 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
     const agentId = requireAgentId(ctx.agentId, 'email.draft_new');
     // One account, named — or refused with the list to choose from. An
     // installation with a single mailbox never has to say which.
-    const account = await requireOneAccount(ctx.db, input.account);
+    const account = await requireOneAccount(ctx.buddi!.db, input.account);
     const to = normalizeAddresses(Array.isArray(input.to) ? input.to : [input.to]);
     if (to.length === 0) throw new Error('email.draft_new: at least one recipient is required');
     // `draft_new` always creates. It answers nothing, so there is no thread to
     // hold a live draft, and two new messages to the same stranger are two
     // messages rather than one rewritten (docs/specs/email.md §8).
     const record = await insertLiveDraft({
-      db: ctx.db,
+      db: ctx.buddi!.db,
+      files: ctx.buddi!.files!,
       accountId: account.id,
       inReplyTo: null,
       threadId: null,
@@ -384,7 +387,7 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
       bodyText: input.bodyText,
       agentId,
       conversationId: ctx.conversationId,
-      now: ctx.now(),
+      now: ctx.buddi!.clock.now(),
     });
     // Nothing was addressed to an alias, so this is the account speaking.
     return { ...draftView(record, { from: account.address, account: account.address }), wrote: true };
@@ -435,22 +438,22 @@ export const readDraft: ToolDefinition<z.infer<typeof readDraftInput>, unknown> 
       throw new Error('email.read_draft: give either a draftId or a threadId');
     }
     const record = input.draftId
-      ? await requireDraft(ctx.db, input.draftId)
-      : await liveDraftForThread(ctx.db, input.threadId as string);
+      ? await requireDraft(ctx.buddi!.db, input.draftId)
+      : await liveDraftForThread(ctx.buddi!.db, input.threadId as string);
     if (!record) {
       return {
         draft: null,
         note: 'That conversation has no live draft. email.draft_reply would write a new one.',
       };
     }
-    const account = record.accountId ? await accountOf(ctx.db, record.accountId) : null;
+    const account = record.accountId ? await accountOf(ctx.buddi!.db, record.accountId) : null;
     const identity = {
       from: account ? identityFor(account) : '',
       account: account ? account.address : '',
     };
     const older =
       input.includeOlder && record.threadId
-        ? (await listDraftsForThread(ctx.db, record.threadId))
+        ? (await listDraftsForThread(ctx.buddi!.db, record.threadId))
             .filter((d) => d.id !== record.id)
             .map((d) => draftView(d, identity, ''))
         : undefined;

@@ -24,7 +24,6 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { assertApprovedEffect } from '@buddi/core';
 import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
@@ -216,7 +215,7 @@ async function sendingAccount(ctx: ToolContext, draft: DraftRecord) {
       `email.send: draft ${draft.id} does not say which mailbox it leaves from; draft the reply again`,
     );
   }
-  return accountOf(ctx.db, draft.accountId);
+  return accountOf(ctx.buddi!.db, draft.accountId);
 }
 
 /** Build the envelope from rows. Pure with respect to the world. */
@@ -224,7 +223,7 @@ export async function buildEnvelope(
   ctx: ToolContext,
   draftId: string,
 ): Promise<SendEnvelope> {
-  const draft = await requireDraft(ctx.db, draftId);
+  const draft = await requireDraft(ctx.buddi!.db, draftId);
   /*
    * docs/specs/email.md §8: a draft that is discarded or lapsed is refused
    * here, at describe time — before an approval card is ever put in front of
@@ -239,7 +238,7 @@ export async function buildEnvelope(
   const refusal = sendRefusalFor(draft, ctx.actionId ?? null);
   if (refusal) throw new Error(refusal);
   const account = await sendingAccount(ctx, draft);
-  const original = draft.inReplyTo ? await findMessage(ctx.db, draft.inReplyTo) : null;
+  const original = draft.inReplyTo ? await findMessage(ctx.buddi!.db, draft.inReplyTo) : null;
   const references = original?.threadKey
     ? original.messageId && original.messageId !== original.threadKey
       ? [original.threadKey, original.messageId]
@@ -442,7 +441,7 @@ export function createSendTool(
       if (!actionId) {
         throw new Error('email.send: no approved action id in the tool context; refusing to send');
       }
-      const draft = await requireDraft(ctx.db, input.draftId);
+      const draft = await requireDraft(ctx.buddi!.db, input.draftId);
       if (draft.sentActionId === actionId && draft.sentAt) return; // a replay
 
       // Configuration and the envelope are checked *before* the claim, so a
@@ -457,14 +456,14 @@ export function createSendTool(
       // subject, a recipient and a whole rewritten letter alike, and the owner
       // is about to be told their mail did not go.
       assertUnchangedSinceApproval(envelope, ctx);
-      assertApprovedEffect(ctx, envelope);
+      ctx.buddi!.approvals.assert(ctx, envelope);
 
       await claimDraftForSend({
-        db: ctx.db,
+        db: ctx.buddi!.db,
         draftId: input.draftId,
         actionId,
         artifactId: envelope.artifactId,
-        now: ctx.now(),
+        now: ctx.buddi!.clock.now(),
       });
     },
 
@@ -476,7 +475,7 @@ export function createSendTool(
         throw new Error('email.send: no approved action id in the tool context; refusing to send');
       }
 
-      const found = await requireDraft(ctx.db, input.draftId);
+      const found = await requireDraft(ctx.buddi!.db, input.draftId);
       if (found.sentActionId === actionId && found.sentAt) {
         // The same approved action, executed again: hand back the receipt
         // rather than putting a second copy on the wire.
@@ -490,7 +489,7 @@ export function createSendTool(
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 
       const envelope = await buildEnvelope(ctx, input.draftId);
-      assertApprovedEffect(ctx, envelope);
+      ctx.buddi!.approvals.assert(ctx, envelope);
       if (account.address !== envelope.accountAddress) {
         throw new Error('the sending account changed; propose the send again');
       }
@@ -507,13 +506,13 @@ export function createSendTool(
        * reachable directly.
        */
       const claimed = await claimDraftForSend({
-        db: ctx.db,
+        db: ctx.buddi!.db,
         draftId: input.draftId,
         actionId,
         artifactId: envelope.artifactId,
-        now: ctx.now(),
+        now: ctx.buddi!.clock.now(),
       });
-      if (claimed === 'replayed') return receipt(await requireDraft(ctx.db, input.draftId), actionId, true);
+      if (claimed === 'replayed') return receipt(await requireDraft(ctx.buddi!.db, input.draftId), actionId, true);
       const draft = claimed;
 
       // The identity the owner picked on the card, or the envelope's default.
@@ -535,13 +534,13 @@ export function createSendTool(
       try {
         ctx.signal?.throwIfAborted();
         const result = await client.send(wire);
-        const { rows } = await ctx.db.query(
+        const { rows } = await ctx.buddi!.db.query(
           `update email.drafts
               set sent_at = $2, sent_message_id = $3, sent_response = $4, send_error = null,
                   status = 'sent', updated_at = $2
             where id = $1
           returning ${DRAFT_COLUMNS}`,
-          [draft.id, ctx.now(), result.messageId, result.response],
+          [draft.id, ctx.buddi!.clock.now(), result.messageId, result.response],
         );
         const sent = toDraft(rows[0] as Record<string, unknown>);
         return {
@@ -558,7 +557,7 @@ export function createSendTool(
         // The claim stays. Whether the message left is genuinely unknown, and
         // an unknown attempt is reviewed by the owner, never retried blindly.
         const message = err instanceof Error ? err.message : String(err);
-        await ctx.db
+        await ctx.buddi!.db
           .query(`update email.drafts set send_error = $2 where id = $1`, [draft.id, message])
           .catch(() => {});
         throw new Error(

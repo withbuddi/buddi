@@ -28,14 +28,15 @@
  *
  * The rule is a pure function; the query around it is the only database part.
  */
-import type { Pool, PoolClient } from 'pg';
-import { proposePolicy, type Proposal as CoreProposal, type ToolContext } from '@buddi/core';
+import type { DbArea } from '@buddi/core/plugin';
+import type { ProposalsArea, Proposal as CoreProposal, ToolContext } from '@buddi/core/plugin';
 import { normalizeAddress } from '../mail.js';
 import { policyForSender } from './store.js';
 import type { PolicyAction } from './gate.js';
 import { learnedPolicyInput, mailSources } from './learned.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** How many verdicts running make a pattern. Three: two is a coincidence. */
 export const CONSISTENT_VERDICTS = 3;
@@ -294,6 +295,7 @@ export interface LearnedPolicy {
  */
 export async function learnFromVerdict(
   db: Db,
+  proposals: ProposalsArea,
   input: { from: string; accountId: string },
   now: Date,
   run: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null = null,
@@ -327,7 +329,7 @@ export async function learnFromVerdict(
     why: proposal.why,
     sources: await mailSources(db, proposal.createdFrom.map((v) => v.messageId)),
   });
-  const result = await proposePolicy(db, run, ask, now);
+  const result = await proposals.proposePolicy(run, ask);
   if (!result.ok) return null;
   return { proposal: result.proposal, action: proposal.action, matcher: address };
 }

@@ -19,7 +19,7 @@
  *    holds or it does not. A row's own button is the same tool with one id, so
  *    there is one implementation of what keeping a rule means.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { normalizeAddress } from '../mail.js';
 import { POLICY_ACTIONS, POLICY_SCOPES, type PolicyParams } from '../policies/gate.js';
@@ -140,7 +140,7 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
           );
         }
         // The picker sends an id; a hand-written call may send the address.
-        const { rows } = await ctx.db.query<{ id: string }>(
+        const { rows } = await ctx.buddi!.db.query<{ id: string }>(
           `select id from email.accounts where address = $1 or id::text = $1`,
           [mailbox],
         );
@@ -154,7 +154,7 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
        * what the gate matches and a Message-ID is not something an owner has.
        */
       if (input.scope === 'thread') {
-        const { rows } = await ctx.db
+        const { rows } = await ctx.buddi!.db
           .query<{ account_id: string }>(`select account_id from email.threads where id = $1::uuid`, [
             matcher.toLowerCase(),
           ])
@@ -168,7 +168,7 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
 
       try {
         const policy = await createPolicy(
-          ctx.db,
+          ctx.buddi!.db,
           {
             accountId,
             scope: input.scope,
@@ -177,7 +177,7 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
             params,
             origin: 'owner',
           },
-          ctx.now(),
+          ctx.buddi!.clock.now(),
         );
         return {
           added: true,
@@ -223,7 +223,7 @@ function idsTool(
     ownerOnly: true,
     input: idsInput,
     async execute(input, ctx) {
-      const result = await bulkPolicies(ctx.db, action, input.ids, ctx.now());
+      const result = await bulkPolicies(ctx.buddi!.db, action, input.ids, ctx.buddi!.clock.now());
       /*
        * A selection that touched nothing is a refusal, not a success.
        *

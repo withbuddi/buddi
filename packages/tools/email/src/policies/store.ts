@@ -4,7 +4,7 @@
  * Everything with SQL in it lives here, so `gate.ts` can stay a pure function
  * and `learn.ts` can stay a pure rule. Nothing in this file decides anything.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { normalizeAddress, normalizeListId } from '../mail.js';
 import {
   domainOf,
@@ -19,7 +19,8 @@ import {
   type PolicyScope,
 } from './gate.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 export const POLICY_COLUMNS =
   'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at, kept_at';
@@ -246,7 +247,7 @@ export interface BulkPolicyResult {
  * something already revoked counts as revoked rather than missing.
  */
 export async function bulkPolicies(
-  pool: Pool,
+  pool: DbArea,
   action: 'keep' | 'revoke',
   ids: readonly string[],
   now: Date,
@@ -254,10 +255,7 @@ export async function bulkPolicies(
   const unique = [...new Set(ids.map((id) => String(id ?? '').trim()).filter((id) => id !== ''))];
   if (unique.length === 0) return { kept: 0, revoked: 0, missing: 0 };
 
-  const client = await pool.connect();
-  let touched = 0;
-  try {
-    await client.query('begin');
+  const touched = await pool.transaction(async (client) => {
     const { rows } =
       action === 'keep'
         ? await client.query(
@@ -272,14 +270,8 @@ export async function bulkPolicies(
               returning id`,
             [unique, now],
           );
-    touched = rows.length;
-    await client.query('commit');
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+    return rows.length;
+  });
   return {
     kept: action === 'keep' ? touched : 0,
     revoked: action === 'revoke' ? touched : 0,

@@ -25,10 +25,11 @@
  * keeps it quiet. The catch-up sweep therefore reads every inbound message,
  * including the ones the gate ignored.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { classifyAsk, type AskKind, type AskReading } from './phrases.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** How many unscanned messages one sentinel tick reads. */
 export const SUSPICION_SCAN_BATCH = 200;

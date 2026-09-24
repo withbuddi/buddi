@@ -23,6 +23,16 @@ import type { SourceContext, ToolContext } from '../types.js';
 import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
 import { adoptProposedPolicies, applyLearnedPolicy, revokeLearnedPolicy } from './learned.js';
 import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
+  return ctx;
+}
 
 const FULL_SYNC = 10_000;
 const databaseUrl = await testDatabaseUrl();
@@ -73,7 +83,7 @@ suite('email policies (postgres + fake imap)', () => {
     runs: Array<{ agentId: string; prompt: string; dedupKey: string }>;
   } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
-    return {
+    return hosted({
       db: pool,
       now: () => NOW,
       timezone: 'UTC',
@@ -82,17 +92,17 @@ suite('email policies (postgres + fake imap)', () => {
       async enqueueRun(input) {
         runs.push({ agentId: input.agentId, prompt: input.prompt, dedupKey: input.dedupKey });
       },
-    };
+    });
   }
 
   function toolContext(): ToolContext {
-    return {
+    return hosted({
       db: pool,
       ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentId: 'mail-triage',
-    } as unknown as ToolContext;
+    } as unknown as ToolContext);
   }
 
   /**
@@ -770,7 +780,7 @@ suite('email policies (postgres + fake imap)', () => {
 
     it('keeps only the proposals named, and leaves the rest proposals', async () => {
       const [first, second, third] = await three();
-      const result = await bulkPolicies(pool, 'keep', [first!, third!], NOW);
+      const result = await bulkPolicies(toolContext().buddi!.db, 'keep', [first!, third!], NOW);
       expect(result).toEqual({ kept: 2, revoked: 0, missing: 0 });
 
       const view = await policiesView(pool);
@@ -780,7 +790,7 @@ suite('email policies (postgres + fake imap)', () => {
 
     it('revokes only the rules named, and the others keep deciding', async () => {
       const [first, second, third] = await three();
-      const result = await bulkPolicies(pool, 'revoke', [second!], NOW);
+      const result = await bulkPolicies(toolContext().buddi!.db, 'revoke', [second!], NOW);
       expect(result).toEqual({ kept: 0, revoked: 1, missing: 0 });
 
       const live = (await loadPolicies(pool, accountId)).map((p) => p.id).sort();
@@ -789,11 +799,11 @@ suite('email policies (postgres + fake imap)', () => {
 
     it('counts an id it could not touch as missing rather than failing the lot', async () => {
       const [first] = await three();
-      await bulkPolicies(pool, 'revoke', [first!], NOW);
+      await bulkPolicies(toolContext().buddi!.db, 'revoke', [first!], NOW);
       // A revoked row is no longer something a keep can act on; the other id
       // is not a policy at all. Neither stops the one that is.
       const result = await bulkPolicies(
-        pool,
+        toolContext().buddi!.db,
         'keep',
         [first!, '00000000-0000-0000-0000-000000000000', (await three())[1]!],
         NOW,
@@ -803,9 +813,9 @@ suite('email policies (postgres + fake imap)', () => {
 
     it('is idempotent, and does nothing for an empty selection', async () => {
       const [first] = await three();
-      expect(await bulkPolicies(pool, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
-      expect(await bulkPolicies(pool, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
-      expect(await bulkPolicies(pool, 'keep', [], NOW)).toEqual({ kept: 0, revoked: 0, missing: 0 });
+      expect(await bulkPolicies(toolContext().buddi!.db, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
+      expect(await bulkPolicies(toolContext().buddi!.db, 'revoke', [first!], NOW)).toMatchObject({ revoked: 1 });
+      expect(await bulkPolicies(toolContext().buddi!.db, 'keep', [], NOW)).toEqual({ kept: 0, revoked: 0, missing: 0 });
     });
   });
 

@@ -25,7 +25,7 @@
  * a judgement, and a sentinel has none: the finding carries the two actions §7
  * asks for and the agent does them after it has read the message.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
 import {
   RECEIPT_SCAN_BATCH,
   receiptsSince,
@@ -55,7 +55,7 @@ export const MAX_RECEIPT_FINDINGS = 20;
  * gives the finding to the wake mission's own agent.
  */
 export function receiptAgent(ctx: SentinelContext): string | undefined {
-  return ctx.agentForRole('overview') ?? ctx.agentForRole('mail');
+  return ctx.buddi!.owner.agentForRole('overview') ?? ctx.buddi!.owner.agentForRole('mail');
 }
 
 export function createReceiptOrBillSentinel(): Sentinel {
@@ -66,8 +66,8 @@ export function createReceiptOrBillSentinel(): Sentinel {
       'total when one could be read, and offers to hand it on and record it.',
     every: EVERY_HOUR,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const settings = await loadWatcherSettings(ctx.db);
-      const now = ctx.now();
+      const settings = await loadWatcherSettings(ctx.buddi!.db);
+      const now = ctx.buddi!.clock.now();
       const since = new Date(now.getTime() - RECEIPT_WINDOW_DAYS * 86_400_000);
 
       /*
@@ -79,12 +79,12 @@ export function createReceiptOrBillSentinel(): Sentinel {
        * exactly the fortnight it exists for. What ages out unread is stamped
        * in one statement instead.
        */
-      await stampOldReceipts(ctx.db, since, now);
+      await stampOldReceipts(ctx.buddi!.db, since, now);
       let failed = 0;
       let firstError = '';
-      for (const message of await unscannedReceipts(ctx.db, since, RECEIPT_SCAN_BATCH)) {
+      for (const message of await unscannedReceipts(ctx.buddi!.db, since, RECEIPT_SCAN_BATCH)) {
         try {
-          await scanMessageReceipt(ctx.db, message, now);
+          await scanMessageReceipt(ctx.buddi!.db, message, now);
         } catch (err) {
           /*
            * Nothing is stamped: the reading and the stamp are one statement
@@ -105,7 +105,7 @@ export function createReceiptOrBillSentinel(): Sentinel {
         );
       }
 
-      const hits = await receiptsSince(ctx.db, since, settings.receiptConfidence);
+      const hits = await receiptsSince(ctx.buddi!.db, since, settings.receiptConfidence);
       const agentId = receiptAgent(ctx);
 
       const keys: string[] = [];

@@ -21,12 +21,15 @@
  * page left open while an agent rewrote the draft saves nothing instead of
  * quietly putting the stale text back.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { discardDraftRow, updateDraftRow, DraftWriteConflict } from '../drafts.js';
 import { toDraft, DRAFT_COLUMNS, LIVE_DRAFT_STATUSES, type DraftRecord } from '../rows.js';
 import { normalizeAddresses } from '../mail.js';
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /**
  * A body longer than this is not a draft, it is a file. In **bytes**, because
@@ -42,7 +45,7 @@ export class DraftRefusal extends Error {
   }
 }
 
-async function findDraftRow(db: Pool, id: string): Promise<DraftRecord | null> {
+async function findDraftRow(db: Db, id: string): Promise<DraftRecord | null> {
   const { rows } = await db.query(`select ${DRAFT_COLUMNS} from email.drafts where id = $1::uuid`, [id]);
   return rows[0] ? toDraft(rows[0]) : null;
 }
@@ -106,7 +109,7 @@ export function createSaveDraftTool(): ToolDefinition<SaveDraftInput, unknown> {
     ownerOnly: true,
     input: saveInput,
     async execute(input, ctx) {
-      const draft = await findDraftRow(ctx.db, input.draftId);
+      const draft = await findDraftRow(ctx.buddi!.db, input.draftId);
       if (!draft) throw new DraftRefusal('No draft here has that id.');
       if (draft.sentActionId !== null) {
         throw new DraftRefusal('This draft is being sent right now and cannot be changed.');
@@ -130,7 +133,8 @@ export function createSaveDraftTool(): ToolDefinition<SaveDraftInput, unknown> {
 
       try {
         const saved = await updateDraftRow({
-          db: ctx.db,
+          db: ctx.buddi!.db,
+          files: ctx.buddi!.files!,
           draftId: draft.id,
           to,
           cc: addressesOf(input.cc ?? ''),
@@ -142,7 +146,7 @@ export function createSaveDraftTool(): ToolDefinition<SaveDraftInput, unknown> {
           editedBy: 'owner',
           byOwner: true,
           expectedUpdatedAt: input.version,
-          now: ctx.now(),
+          now: ctx.buddi!.clock.now(),
         });
         return {
           saved: true,
@@ -169,9 +173,9 @@ export function createDiscardDraftTool(): ToolDefinition<z.infer<typeof discardI
     ownerOnly: true,
     input: discardInput,
     async execute(input, ctx) {
-      const draft = await findDraftRow(ctx.db, input.draftId);
+      const draft = await findDraftRow(ctx.buddi!.db, input.draftId);
       if (!draft) throw new DraftRefusal('No draft here has that id.');
-      const discarded = await discardDraftRow(ctx.db, draft.id, ctx.now());
+      const discarded = await discardDraftRow(ctx.buddi!.db, draft.id, ctx.buddi!.clock.now());
       if (!discarded) {
         throw new DraftRefusal(`This draft is ${draft.status}; only a live draft can be discarded.`);
       }

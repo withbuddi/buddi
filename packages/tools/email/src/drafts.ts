@@ -19,8 +19,7 @@
  *    editing a draft after a send was proposed invalidates the approval by
  *    construction rather than by anybody remembering to check.
  */
-import { saveArtifact } from '@buddi/core';
-import type { Pool } from 'pg';
+import type { DbArea, FilesArea } from '@buddi/core/plugin';
 import {
   DRAFT_COLUMNS,
   LIVE_DRAFT_STATUSES,
@@ -28,6 +27,9 @@ import {
   type DraftRecord,
   type DraftStatus,
 } from './rows.js';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** What `edited_by` says when the owner wrote the words that are in it. */
 export const OWNER_EDITOR = 'owner';
@@ -54,7 +56,7 @@ export function draftFilename(subject: string, at: Date): string {
 }
 
 /** The thread a message belongs to, or null for a row from before threads. */
-export async function threadOfMessageId(db: Pool, messageId: string): Promise<string | null> {
+export async function threadOfMessageId(db: Db, messageId: string): Promise<string | null> {
   const { rows } = await db.query(`select thread_id from email.messages where id = $1`, [messageId]);
   const value = rows[0]?.thread_id;
   return value === null || value === undefined ? null : String(value);
@@ -69,7 +71,7 @@ export async function threadOfMessageId(db: Pool, messageId: string): Promise<st
  * not a thing to throw on.
  */
 export async function liveDraftForThread(
-  db: Pool,
+  db: Db,
   threadId: string,
 ): Promise<DraftRecord | null> {
   const { rows } = await db.query(
@@ -83,7 +85,7 @@ export async function liveDraftForThread(
 }
 
 /** Every draft on a conversation, newest first, whatever its status. */
-export async function listDraftsForThread(db: Pool, threadId: string): Promise<DraftRecord[]> {
+export async function listDraftsForThread(db: Db, threadId: string): Promise<DraftRecord[]> {
   const { rows } = await db.query(
     `select ${DRAFT_COLUMNS} from email.drafts
       where thread_id = $1
@@ -94,7 +96,9 @@ export async function listDraftsForThread(db: Pool, threadId: string): Promise<D
 }
 
 export interface SaveDraftBodyInput {
-  db: Pool;
+  db: Db;
+  /** Where the body is kept: `ctx.buddi.files`. */
+  files: FilesArea;
   subject: string;
   bodyText: string;
   /** Whose words these are, for the artifact's provenance. */
@@ -105,18 +109,18 @@ export interface SaveDraftBodyInput {
 
 /** The body, into the artifact store, before any row points at it. */
 export async function saveDraftBody(input: SaveDraftBodyInput): Promise<{ id: string }> {
-  return saveArtifact(input.db, {
+  return input.files.save({
     bytes: Buffer.from(input.bodyText, 'utf8'),
     mime: 'text/plain',
     filename: draftFilename(input.subject, input.now),
     caption: input.subject,
-    createdBy: input.createdBy,
-    conversationId: input.conversationId ?? null,
   });
 }
 
 export interface InsertDraftInput {
-  db: Pool;
+  db: Db;
+  /** Where the body is kept: `ctx.buddi.files`. */
+  files: FilesArea;
   /** The mailbox this draft will leave from. Never inferred at send time. */
   accountId: string;
   inReplyTo: string | null;
@@ -153,6 +157,7 @@ export async function insertLiveDraft(input: InsertDraftInput): Promise<DraftRec
     if (!winner) throw err;
     return updateDraftRow({
       db: input.db,
+      files: input.files,
       draftId: winner.id,
       to: input.to,
       cc: input.cc,
@@ -176,6 +181,7 @@ export async function insertDraftRow(input: InsertDraftInput): Promise<DraftReco
   // reference an approval would later try to render.
   const artifact = await saveDraftBody({
     db: input.db,
+    files: input.files,
     subject: input.subject,
     bodyText: input.bodyText,
     createdBy: input.agentId,
@@ -209,7 +215,9 @@ export async function insertDraftRow(input: InsertDraftInput): Promise<DraftReco
 }
 
 export interface UpdateDraftInput {
-  db: Pool;
+  db: Db;
+  /** Where the body is kept: `ctx.buddi.files`. */
+  files: FilesArea;
   draftId: string;
   to: string[];
   cc: string[];
@@ -274,7 +282,7 @@ export class DraftWriteConflict extends Error {
  * racy in a way that matters: the write already failed.
  */
 async function refusalFor(
-  db: Pool,
+  db: Db,
   draftId: string,
   byOwner: boolean,
   expectedArtifactId?: string | null,
@@ -332,6 +340,7 @@ async function refusalFor(
 export async function updateDraftRow(input: UpdateDraftInput): Promise<DraftRecord> {
   const artifact = await saveDraftBody({
     db: input.db,
+    files: input.files,
     subject: input.subject,
     bodyText: input.bodyText,
     createdBy: input.editedBy,
@@ -389,7 +398,7 @@ export async function updateDraftRow(input: UpdateDraftInput): Promise<DraftReco
 
 /** The owner saying no. Terminal, and still readable afterwards. */
 export async function discardDraftRow(
-  db: Pool,
+  db: Db,
   draftId: string,
   now: Date,
 ): Promise<DraftRecord | null> {
@@ -407,7 +416,7 @@ export async function discardDraftRow(
 }
 
 export interface ClaimDraftInput {
-  db: Pool;
+  db: Db;
   draftId: string;
   /** The approved action id — the idempotency key the claim is written under. */
   actionId: string;
@@ -504,7 +513,7 @@ export interface LapseOutcome {
  * stay, under "Older drafts".
  */
 export async function lapseDueDrafts(
-  db: Pool,
+  db: Db,
   now: Date,
   opts: { days?: number } = {},
 ): Promise<LapseOutcome> {

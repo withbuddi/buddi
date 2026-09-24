@@ -48,6 +48,17 @@ import {
 import type { DraftRecord } from '../rows.js';
 import type { ToolContext } from '../types.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { manifest as emailManifestForHost } from '../index.js';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -92,13 +103,13 @@ suite('the draft lifecycle (postgres)', () => {
     sendTool = manifest.tools.find((t) => t.name === 'email.send') as never;
     manifestVersion = manifest.version;
 
-    ctx = {
+    ctx = hosted({
       db: pool,
       ownerId: 'test',
       now: () => NOW,
       timezone: 'UTC',
       agentId: 'mail-triage',
-    };
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -131,13 +142,13 @@ suite('the draft lifecycle (postgres)', () => {
       }),
     );
     const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 });
-    await source.poll({
+    await source.poll(hosted({
       db: pool,
       now: ctx.now,
       timezone: 'UTC',
       log: () => {},
       enqueueRun: async () => {},
-    });
+    }));
     const { rows } = await pool.query(`select id from email.messages order by uid`);
     messageId = String(rows[0].id);
   });
@@ -178,6 +189,7 @@ suite('the draft lifecycle (postgres)', () => {
       const first = await call('email.draft_reply', { inReplyTo: messageId, bodyText: 'Agent words.' });
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: first.id,
         to: first.to,
         cc: [],
@@ -233,6 +245,7 @@ suite('the draft lifecycle (postgres)', () => {
       // The owner edits it after approving — the exact race this exists for.
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: draft.id,
         to: draft.to,
         cc: [],
@@ -303,6 +316,7 @@ suite('the draft lifecycle (postgres)', () => {
     const ownerSave = (draftId: string, bodyText: string, expectedUpdatedAt?: string | null) =>
       updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId,
         to: ['alerts@bank.test'],
         cc: [],
@@ -326,6 +340,7 @@ suite('the draft lifecycle (postgres)', () => {
       await expect(
         updateDraftRow({
           db: pool,
+          files: ctx.buddi!.files!,
           draftId: first.id,
           to: first.to,
           cc: [],
@@ -352,6 +367,7 @@ suite('the draft lifecycle (postgres)', () => {
       // always has in life and what this suite has to say explicitly.
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: first.id,
         to: first.to,
         cc: [],
@@ -380,6 +396,7 @@ suite('the draft lifecycle (postgres)', () => {
       const rewrite = (body: string, expectedArtifactId: string | null) =>
         updateDraftRow({
           db: pool,
+          files: ctx.buddi!.files!,
           draftId: first.id,
           to: first.to,
           cc: [],
@@ -409,6 +426,7 @@ suite('the draft lifecycle (postgres)', () => {
       // Another run rewrites it between this run's read and its write.
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: first.id,
         to: first.to,
         cc: [],
@@ -431,6 +449,7 @@ suite('the draft lifecycle (postgres)', () => {
       const stale = await liveDraftForThread(pool, first.threadId as string);
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: first.id,
         to: first.to,
         cc: [],
@@ -444,6 +463,7 @@ suite('the draft lifecycle (postgres)', () => {
       await expect(
         updateDraftRow({
           db: pool,
+          files: ctx.buddi!.files!,
           draftId: first.id,
           to: first.to,
           cc: [],
@@ -470,6 +490,7 @@ suite('the draft lifecycle (postgres)', () => {
       const insert = (body: string) =>
         insertLiveDraft({
           db: pool,
+          files: ctx.buddi!.files!,
           accountId: account,
           inReplyTo: messageId,
           threadId,
@@ -503,6 +524,7 @@ suite('the draft lifecycle (postgres)', () => {
       // `describe` cannot close, because `describe` reads and this writes.
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: draft.id,
         to: draft.to,
         cc: [],
@@ -544,6 +566,7 @@ suite('the draft lifecycle (postgres)', () => {
       // approved envelope named.
       await updateDraftRow({
         db: pool,
+        files: ctx.buddi!.files!,
         draftId: draft.id,
         to: draft.to,
         cc: [],
@@ -617,6 +640,7 @@ suite('the draft lifecycle (postgres)', () => {
               // the claim is taken.
               await updateDraftRow({
                 db: pool,
+                files: ctx.buddi!.files!,
                 draftId: draft.id,
                 to: draft.to,
                 cc: [],
@@ -662,6 +686,7 @@ suite('the draft lifecycle (postgres)', () => {
       await expect(
         updateDraftRow({
           db: pool,
+          files: ctx.buddi!.files!,
           draftId: draft.id,
           to: draft.to,
           cc: [],
@@ -840,7 +865,7 @@ suite('the draft lifecycle (postgres)', () => {
       ]);
       const lines: string[] = [];
       let enqueued = 0;
-      await createRetentionSource().poll({
+      await createRetentionSource().poll(hosted({
         db: pool,
         now: () => NOW,
         timezone: 'UTC',
@@ -848,7 +873,7 @@ suite('the draft lifecycle (postgres)', () => {
         enqueueRun: async () => {
           enqueued += 1;
         },
-      });
+      }));
       expect(enqueued).toBe(0);
       expect(lines.some((line) => line.includes('1 draft lapsed'))).toBe(true);
     });

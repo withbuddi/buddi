@@ -24,8 +24,8 @@
  * carries `suggestedAction: 'set-a-reminder'` and the agent calls
  * `reminder.set` once it has read the message and agrees.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
-import { localDateString } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
+import { localDateString } from '@buddi/core/plugin';
 import { DATE_WINDOW_DAYS } from '../dates.js';
 import {
   DATE_SCAN_BATCH,
@@ -59,34 +59,34 @@ export function createDateStatedSentinel(): Sentinel {
       'Reports a date stated in a message that falls in the next 14 days and has no reminder yet.',
     every: EVERY_HOUR,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const settings = await loadWatcherSettings(ctx.db);
-      const now = ctx.now();
+      const settings = await loadWatcherSettings(ctx.buddi!.db);
+      const now = ctx.buddi!.clock.now();
 
       // Catch-up first, so a date found this tick can raise its finding in the
       // same tick rather than waiting an hour for the next one.
-      for (const message of await unscannedMessages(ctx.db, DATE_SCAN_BATCH)) {
+      for (const message of await unscannedMessages(ctx.buddi!.db, DATE_SCAN_BATCH)) {
         if (message.ignored) {
           // A sender the owner silenced. Stamped, not read: see dates-store.ts.
-          await skipDates(ctx.db, message.id, now);
+          await skipDates(ctx.buddi!.db, message.id, now);
           continue;
         }
         try {
           await scanMessageDates(
-            ctx.db,
+            ctx.buddi!.db,
             { id: message.id, bodyText: message.bodyText, subject: message.subject },
-            { at: message.at, timezone: ctx.timezone },
+            { at: message.at, timezone: ctx.buddi!.owner.timezone },
             now,
           );
         } catch {
           // One unreadable message must not cost the tick its findings. It is
           // stamped with no rows so the sweep moves on rather than looping.
-          await recordDates(ctx.db, message.id, [], now).catch(() => {});
+          await recordDates(ctx.buddi!.db, message.id, [], now).catch(() => {});
         }
       }
 
-      const today = localDateString(now, ctx.timezone);
+      const today = localDateString(now, ctx.buddi!.owner.timezone);
       const hits = await statedDatesBetween(
-        ctx.db,
+        ctx.buddi!.db,
         today,
         addDays(today, DATE_WINDOW_DAYS),
         settings.dateConfidence,
@@ -98,7 +98,7 @@ export function createDateStatedSentinel(): Sentinel {
       // reminder's context and is treated as uncovered.
       const threadIds = [...new Set(hits.map((h) => h.threadId).filter((id): id is string => id !== null))];
       const days = [...new Set(hits.map((h) => h.date))];
-      const covered = await remindersFor(ctx.db, threadIds, days, ctx.timezone);
+      const covered = await remindersFor(ctx.buddi!.schedule!, threadIds, days);
 
       const agentId = mailAgent(ctx);
       const findings: Finding[] = [];

@@ -11,7 +11,7 @@
  * conversation itself. Each appears on the Watchers page with its own switch,
  * which comes from core rather than from anything here.
  */
-import type { Sentinel } from '@buddi/core';
+import type { Sentinel } from '@buddi/core/plugin';
 import { dateStated } from './date-stated.js';
 import { promisedReply } from './promised-reply.js';
 import { receiptOrBill } from './receipt-or-bill.js';

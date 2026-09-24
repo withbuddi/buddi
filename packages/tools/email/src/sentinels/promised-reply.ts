@@ -26,7 +26,7 @@
  * over is a conversation and the owner's own sentence, for an agent to read
  * before it says a word.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
 import { findPromise } from '../phrases.js';
 import {
   PROMISE_WINDOW_DAYS,
@@ -142,7 +142,7 @@ export function createPromisedReplySentinel(): Sentinel {
       'written for you, and nothing has left this mailbox since.',
     every: EVERY_12H,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const settings = await loadWatcherSettings(ctx.db);
+      const settings = await loadWatcherSettings(ctx.buddi!.db);
       /*
        * The history window contains the setting rather than being pinned
        * beside it: a `promisedDays` of 45 against a fixed thirty-day ceiling
@@ -151,12 +151,12 @@ export function createPromisedReplySentinel(): Sentinel {
        * `historyWindowDays`.
        */
       const window = historyWindowDays(settings.promisedDays, PROMISE_WINDOW_DAYS);
-      const bounds = [ctx.now(), settings.promisedDays, window];
+      const bounds = [ctx.buddi!.clock.now(), settings.promisedDays, window];
       const agentId = mailAgent(ctx);
 
       const [promises, drafts] = await Promise.all([
-        ctx.db.query(PROMISES_SQL, bounds),
-        ctx.db.query(DRAFTS_SQL, bounds),
+        ctx.buddi!.db.query(PROMISES_SQL, bounds),
+        ctx.buddi!.db.query(DRAFTS_SQL, bounds),
       ]);
 
       /*

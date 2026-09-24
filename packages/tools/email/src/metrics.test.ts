@@ -10,6 +10,17 @@
 import { describe, expect, it } from 'vitest';
 import { emailMetrics, inboxUnread, stalestSync, waitingOnMe } from './metrics.js';
 import { createEmailManifest } from './index.js';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { manifest as emailManifestForHost } from './index.js';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
+  return ctx;
+}
 
 const NOW = new Date('2026-09-22T09:00:00Z');
 const FRESH = new Date('2026-09-22T08:55:00Z');
@@ -40,7 +51,7 @@ function ctx(rows: Array<[string, unknown[]]>): never {
     }
     return { rows: [] };
   };
-  return { db: { query }, ownerId: 'owner', now: () => NOW, timezone: 'UTC' } as never;
+  return hosted({ db: { query }, ownerId: 'owner', now: () => NOW, timezone: 'UTC' } as never);
 }
 
 const ACCOUNTS = [account('a1', 'owner@example.test'), account('a2', 'owner@work.test')];

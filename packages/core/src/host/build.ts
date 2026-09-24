@@ -144,7 +144,9 @@ function toFileRow(row: Record<string, any>): FileRow {
 export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiHost {
   const { plugin, schema } = binding;
   const declared = new Set<PluginUse>(binding.uses);
-  const pool = facts.db;
+  // Read at each call, not once: the context is the caller's, and what it
+  // carries when the call is made is what the call runs on.
+  const pool = (): Pool => facts.db;
   const env = (): EnvLike => services.env ?? process.env;
   const log = (line: string): void => {
     const sink = facts.log ?? services.log ?? ((text: string) => console.error(text));
@@ -158,11 +160,11 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
 
   const db: DbArea = {
     async query(sql, params) {
-      const result = await pool.query(sql, params as unknown[] | undefined);
+      const result = await pool().query(sql, params as unknown[] | undefined);
       return { rows: result.rows, rowCount: result.rowCount ?? null };
     },
     async transaction(fn) {
-      const client: PoolClient = await pool.connect();
+      const client: PoolClient = await pool().connect();
       let failure: Error | undefined;
       try {
         await client.query('begin');
@@ -219,7 +221,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       async standing(tool) {
         ownTool(tool);
         const ctx = { ...facts, ownerId: facts.ownerId ?? OWNER_ID } as ToolContext;
-        return (await findToolPermission(pool, ctx, tool, binding.version)) ?? null;
+        return (await findToolPermission(pool(), ctx, tool, binding.version)) ?? null;
       },
       async approvedInConversation(tool, conversationId) {
         ownTool(tool);
@@ -227,7 +229,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
         // owner's: the family is the root conversation and every conversation
         // delegated from it. Moved from the image plugin, unchanged but for
         // the tool, which was always its own.
-        const { rows } = await pool.query(
+        const { rows } = await pool().query(
           `with root as (
              select coalesce(
                (select e.conversation_id from core.events e
@@ -331,7 +333,7 @@ function filesArea(
   library: boolean,
   env: () => EnvLike,
 ): FilesArea {
-  const pool: Pool = facts.db;
+  const pool = (): Pool => facts.db;
   /*
    * In scope: every file with `files:library`; otherwise the files this plugin
    * saved, and the files used in the conversation its tool is running in.
@@ -349,7 +351,7 @@ function filesArea(
   const get = async (id: string): Promise<(FileRow & { storagePath: string }) | null> => {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const where = scope(2);
-    const { rows } = await pool.query(
+    const { rows } = await pool().query(
       `select ${FILE_COLUMNS}, a.storage_path from core.artifacts a
         where a.id = $1 and a.deleted_at is null and ${where.sql}`,
       [id, ...where.params],
@@ -364,11 +366,11 @@ function filesArea(
       // library's reference to it would not hold.
       let conversationId: string | null = null;
       if (facts.conversationId !== undefined && /^[0-9a-f-]{36}$/i.test(facts.conversationId)) {
-        const { rows } = await pool.query(`select 1 from core.conversations where id = $1`, [facts.conversationId]);
+        const { rows } = await pool().query(`select 1 from core.conversations where id = $1`, [facts.conversationId]);
         if (rows.length > 0) conversationId = facts.conversationId;
       }
       const saved = await saveArtifact(
-        pool,
+        pool(),
         {
           bytes: input.bytes,
           mime: input.mime,
@@ -380,7 +382,7 @@ function filesArea(
         },
         env(),
       );
-      await pool.query(
+      await pool().query(
         `insert into core.plugin_files (plugin, artifact_id) values ($1, $2) on conflict do nothing`,
         [binding.plugin, saved.id],
       );
@@ -425,7 +427,7 @@ function filesArea(
       params.push(...scoped.params);
       where.push(scoped.sql);
       params.push(Math.min(Math.max(1, Math.trunc(opts.limit ?? 20)), 100));
-      const { rows } = await pool.query(
+      const { rows } = await pool().query(
         `select ${FILE_COLUMNS} from core.artifacts a
           where ${where.join(' and ')}
           order by a.created_at desc, a.id desc

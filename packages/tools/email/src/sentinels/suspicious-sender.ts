@@ -28,7 +28,7 @@
  * fenced first line, the phrase that fired, and ids — and the instruction that
  * the agent is to describe it to the owner and reply to nothing.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
 import {
   SUSPICION_SCAN_BATCH,
   asksSince,
@@ -60,18 +60,18 @@ export function createSuspiciousSenderSentinel(): Sentinel {
       'asking for a password, a transfer or a gift card.',
     every: EVERY_HOUR,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const now = ctx.now();
+      const now = ctx.buddi!.clock.now();
       const since = new Date(now.getTime() - SUSPICION_WINDOW_DAYS * 86_400_000);
 
       // Catch-up: read the bodies nothing has read, inside the window only.
       // Every inbound message, silenced senders included — see the module
       // note. What ages out unread is stamped in one bounded statement.
-      await stampOldSuspicions(ctx.db, since, now);
+      await stampOldSuspicions(ctx.buddi!.db, since, now);
       let failed = 0;
       let firstError = '';
-      for (const message of await unscannedSuspicions(ctx.db, since, SUSPICION_SCAN_BATCH)) {
+      for (const message of await unscannedSuspicions(ctx.buddi!.db, since, SUSPICION_SCAN_BATCH)) {
         try {
-          await scanMessageAsk(ctx.db, message, now);
+          await scanMessageAsk(ctx.buddi!.db, message, now);
         } catch (err) {
           // Unstamped on purpose: the reading and the stamp are one statement,
           // so a body that could not be stored is read again rather than
@@ -87,8 +87,8 @@ export function createSuspiciousSenderSentinel(): Sentinel {
       }
 
       const [lookAlikes, asks] = await Promise.all([
-        lookAlikesSince(ctx.db, since, now),
-        asksSince(ctx.db, since),
+        lookAlikesSince(ctx.buddi!.db, since, now),
+        asksSince(ctx.buddi!.db, since),
       ]);
 
       /*

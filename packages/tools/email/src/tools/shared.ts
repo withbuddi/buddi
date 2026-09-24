@@ -3,7 +3,7 @@
  * *owner* configured: a tool argument may narrow that to one of them, and it
  * can never widen it to a mailbox nobody added.
  */
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { findAccount, listAccounts } from '../config.js';
 import { normalizeAddress } from '../mail.js';
@@ -16,6 +16,9 @@ import {
   type DraftRecord,
   type MessageRecord,
 } from '../rows.js';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /**
  * The triage policy version these tools write. Bump it when the categories or
@@ -183,7 +186,7 @@ function scopeOf(accounts: AccountRecord[]): AccountScope {
 const NONE_CONFIGURED =
   'no mail account is configured on this installation — add one under Settings → Email, or set GMAIL_USER and restart';
 
-export async function accountScope(db: Pool, ref?: string | undefined): Promise<AccountScope> {
+export async function accountScope(db: Db, ref?: string | undefined): Promise<AccountScope> {
   const named = ref?.trim();
   if (named) {
     const account = await findAccount(db, named);
@@ -203,7 +206,7 @@ export async function accountScope(db: Pool, ref?: string | undefined): Promise<
 }
 
 /** Exactly one account — for a tool that has to send *from* somewhere. */
-export async function requireOneAccount(db: Pool, ref?: string | undefined): Promise<AccountRecord> {
+export async function requireOneAccount(db: Db, ref?: string | undefined): Promise<AccountRecord> {
   const scope = await accountScope(db, ref);
   if (scope.only) return scope.only;
   throw new Error(
@@ -214,7 +217,7 @@ export async function requireOneAccount(db: Pool, ref?: string | undefined): Pro
 }
 
 /** The account a stored row belongs to. Never guessed, never defaulted. */
-export async function accountOf(db: Pool, accountId: string): Promise<AccountRecord> {
+export async function accountOf(db: Db, accountId: string): Promise<AccountRecord> {
   const account = await findAccount(db, accountId, { enabledOnly: false });
   if (!account) throw new Error(`unknown mail account: ${accountId}`);
   return account;
@@ -275,7 +278,7 @@ export function identityFor(account: AccountRecord): string {
   return normalizeAddress(account.address);
 }
 
-export async function findMessage(db: Pool, id: string): Promise<MessageRecord | null> {
+export async function findMessage(db: Db, id: string): Promise<MessageRecord | null> {
   const { rows } = await db.query(
     `select ${MESSAGE_COLUMNS} from email.messages where id = $1`,
     [id],
@@ -283,18 +286,18 @@ export async function findMessage(db: Pool, id: string): Promise<MessageRecord |
   return rows[0] ? toMessage(rows[0]) : null;
 }
 
-export async function requireMessage(db: Pool, id: string): Promise<MessageRecord> {
+export async function requireMessage(db: Db, id: string): Promise<MessageRecord> {
   const message = await findMessage(db, id);
   if (!message) throw new Error(`unknown message: ${id}`);
   return message;
 }
 
-export async function findDraft(db: Pool, id: string): Promise<DraftRecord | null> {
+export async function findDraft(db: Db, id: string): Promise<DraftRecord | null> {
   const { rows } = await db.query(`select ${DRAFT_COLUMNS} from email.drafts where id = $1`, [id]);
   return rows[0] ? toDraft(rows[0]) : null;
 }
 
-export async function requireDraft(db: Pool, id: string): Promise<DraftRecord> {
+export async function requireDraft(db: Db, id: string): Promise<DraftRecord> {
   const draft = await findDraft(db, id);
   if (!draft) throw new Error(`unknown draft: ${id}`);
   return draft;
@@ -313,7 +316,7 @@ export async function requireDraft(db: Pool, id: string): Promise<DraftRecord> {
  * it by rendering nothing.
  */
 export async function latestTriage(
-  db: Pool,
+  db: Db,
   messageId: string,
 ): Promise<{
   category: string;

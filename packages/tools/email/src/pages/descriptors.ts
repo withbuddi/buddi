@@ -17,7 +17,7 @@
  *    as an agent would call it: the page draws the approval card in place,
  *    with the identity select on it, and nothing here reaches SMTP.
  */
-import type { Component, Field, PageDescriptor, QueryRef } from '@buddi/core';
+import type { Component, Field, PageDescriptor, QueryRef } from '@buddi/core/plugin';
 import {
   MAX_DATE_CONFIDENCE,
   MAX_NUDGE_DAYS,

@@ -37,6 +37,16 @@ import {
 import { policiesView } from './tools/policies.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
 import type { SourceContext, ToolContext } from './types.js';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
+  return ctx;
+}
 
 const FULL_SYNC = 10_000;
 const databaseUrl = await testDatabaseUrl();
@@ -81,7 +91,7 @@ suite('email threads (postgres + fake imap)', () => {
     runs: Array<{ agentId: string; prompt: string; dedupKey: string }>;
   } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
-    return {
+    return hosted({
       db: pool,
       now: () => NOW,
       timezone: 'UTC',
@@ -90,17 +100,17 @@ suite('email threads (postgres + fake imap)', () => {
       async enqueueRun(input) {
         runs.push({ agentId: input.agentId, prompt: input.prompt, dedupKey: input.dedupKey });
       },
-    };
+    });
   }
 
   function toolContext(): ToolContext {
-    return {
+    return hosted({
       db: pool,
       ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentId: 'mail-triage',
-    } as unknown as ToolContext;
+    } as unknown as ToolContext);
   }
 
   /** A server with an inbox and a Sent folder the server itself labels. */
