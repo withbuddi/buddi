@@ -62,7 +62,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
       {tab === 'team' ? <DefaultAgentPicker /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
-          <Empty>No agents are installed. Agent files live under the installation's agents directory.</Empty>
+          <Empty mascot>No agents are installed. Agent files live under the installation's agents directory.</Empty>
         ) : (
           <div className="team-grid">
             {agents.map((agent) => {
@@ -264,7 +264,7 @@ function AgentConversations({ agentId, navigate }: { agentId: string; navigate: 
       {!data ? (
         <Empty>Loading…</Empty>
       ) : rows.length === 0 ? (
-        <Empty>No conversations yet.</Empty>
+        <Empty mascot>No conversations yet.</Empty>
       ) : (
         <List>
           {rows.map((c) => (

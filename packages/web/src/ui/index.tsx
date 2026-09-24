@@ -10,7 +10,8 @@ import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'reac
 
 export { useAsync } from './async';
 export { Icon, ICON_NAMES, type IconName } from './Icon';
-export { Avatar, AgentAvatar } from '../views/parts/Avatar';
+export { Avatar, AgentAvatar, Mascot, MascotProvider } from '../views/parts/Avatar';
+import { Mascot } from '../views/parts/Avatar';
 
 export type Tone = 'good' | 'warning' | 'critical' | 'accent' | 'muted';
 
@@ -175,8 +176,19 @@ export function ErrorBanner({ message }: { message: string | null | undefined })
   );
 }
 
-export function Empty({ children }: { children: ReactNode }): JSX.Element {
-  return <p className="ui-empty">{children}</p>;
+/**
+ * Nothing here, said quietly. `mascot` leaves room for the default agent's
+ * uploaded face beside the words; without one the state reads exactly as
+ * before. Reserve it for a page's own empty state, not a row inside a list.
+ */
+export function Empty({ mascot, children }: { mascot?: boolean; children: ReactNode }): JSX.Element {
+  if (!mascot) return <p className="ui-empty">{children}</p>;
+  return (
+    <div className="ui-empty" data-mascot="true">
+      <Mascot size="sm" />
+      <p>{children}</p>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ *

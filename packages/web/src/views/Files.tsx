@@ -112,7 +112,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
           {entries === null ? (
             <Empty>Loading…</Empty>
           ) : entries.length === 0 ? (
-            <Empty>{q || origin || family ? 'No file matches that.' : 'No files yet. Send an agent a file, or ask one for a report, and it lands here.'}</Empty>
+            <Empty mascot>{q || origin || family ? 'No file matches that.' : 'No files yet. Send an agent a file, or ask one for a report, and it lands here.'}</Empty>
           ) : (
             <ul className="files-rows" role="list">
               {entries.map((entry) => (
