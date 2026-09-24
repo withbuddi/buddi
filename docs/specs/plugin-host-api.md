@@ -1,6 +1,6 @@
 # The plugin host API
 
-Status: spec written 2026-09-24, not started
+Status: built 2026-09-24 on branch plugin-host-api
 Captured: 2026-09-24
 
 ## 1. The problem
@@ -429,3 +429,51 @@ About a week.
 ## 11a. Open questions
 
 - None at the moment.
+
+## 12. As built
+
+Where the build bent the spec, one line each. docs/plugins.md §1 and §9b
+describe what is there.
+
+- **`db.query` sets no `search_path`.** It is one statement on the shared pool
+  and a plugin names its tables with its schema; only `db.transaction` puts the
+  schema first. Both answer `rowCount` beside `rows`, which template's delete
+  and finance's merge needed.
+- **`checkUrl` is in core.** It moved from the web plugin to
+  `@buddi/core/plugin` with the address rules; `guardedLookup` moved to core
+  too, but not to `/plugin`, and the gateway hands it to browser's proxy.
+- **`http` carries the guard for every plugin.** `checkUrl` in front and
+  `guardedLookup` in the socket, so this machine, its network and ports other
+  than 80 and 443 are refused; redirects are not followed; an undeclared host
+  is logged, not refused.
+- **`files.save` takes a `caption`,** and a `FileRow` says its
+  `conversationId` only when that conversation exists; `files.list` also
+  finds by `sha256` and `surface`. Migration 042 attributes files saved before
+  the host to the plugin their provenance names.
+- **`register` hook.** A manifest's `register({ version, plugin, dir })` runs
+  once at `register()`, for a plugin that fixes something before any context
+  exists; `dir.legacyPath` names `<data>/<plugin>` for browser and host.
+- **`secrets` has another shape.** `registerDestination`, `use(name, kind,
+  target)`, `list`, `put`, `rename`, `rebind`, `delete`; no `store` or
+  `remove`, and `use` takes no context.
+- **The `<plugin>.account` exception.** A use of an account kind is recorded
+  `held`: the plugin's connection keeps the value for as long as it lives
+  (email's mailbox password), the one stated exception to "never held".
+- **The narrowed link is written, not linked.** Staging writes a
+  `@buddi/core` whose only export is `./plugin`, re-exporting the running
+  core's `dist/plugin`; it is not hashed. A directory install and
+  `plugins dev` keep the checkout's own `link:`, whole.
+- **The environment is cleared of mailbox passwords only.** `DATABASE_URL`,
+  `BUDDI_VAULT_KEY` and the provider, Telegram and search keys stay, each still
+  read after boot (`owner-secrets.ts` says by what).
+- **Per-plugin database roles are deferred** (§11); acceptance 5 is not met,
+  and the import test's `core.` check is the scope rule for `db`.
+- **The old context fields were removed, not kept a release.** Core runs
+  plugins on `CoreToolContext`, `CoreSourceContext` and `CoreSentinelContext`,
+  never exported from `/plugin`; tests import `@buddi/core/testing`.
+- **`proposals.proposePolicy` takes a nullable call and a `within`
+  transaction,** and a policy handler's context carries the plugin's host.
+- **`memory` is a type only** (§11).
+- **Known, not fixed:** a tarball install of the scaffold needs the `link:`
+  devDependency removed, the peer resolution fixed and `buddi.name` in the
+  scaffold (docs/plugins.md §8). It predates this work.

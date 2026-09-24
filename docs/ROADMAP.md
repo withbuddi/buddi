@@ -77,18 +77,18 @@ next. Checked against the code and `git log` on 2026-09-21.
 ## In progress
 
 - [Plugin host API](specs/plugin-host-api.md), then
-  [Owner secrets](specs/owner-secrets.md). Next in the main list; specs
-  written 2026-09-24, not started. The small items were all cleared on
-  2026-09-23.
+  [Owner secrets](specs/owner-secrets.md). The host API is built, on the
+  branch `plugin-host-api`, pending merge; of owner secrets, the secrets area
+  is built. The small items were all cleared on 2026-09-23.
 
 ## Next, in order
 
 1. [Plugin host API](specs/plugin-host-api.md) — one `ctx.buddi` surface
-   per plugin, then migrate every plugin. Spec written 2026-09-24, not
-   started.
+   per plugin, then migrate every plugin. Built, on the branch, pending
+   merge (2026-09-24).
 2. [Owner secrets](specs/owner-secrets.md) — secrets the agent can use but
-   never see, on the host API's secrets area. Spec written 2026-09-24, not
-   started.
+   never see, on the host API's secrets area. Secrets area built (host API
+   step 3); the rest not started.
 3. macOS app — a packaged desktop app around the existing service.
 4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
