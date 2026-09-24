@@ -124,8 +124,12 @@ interface Conformance {
   sectionAction: Same<CoreSectionAction, SectionAction>;
   /** The web's `ListComponent` is core's list arm, named so it can be reused. */
   listComponent: Exact<Extract<CoreComponent, { kind: 'list' }>, ListComponent>;
-  /** The served descriptor is core's, plus the plugin the route carries. */
-  descriptor: Exact<CorePageDescriptor & { plugin: string }, PluginPageDescriptor>;
+  /**
+   * The served descriptor is core's, plus the plugin the route carries and
+   * the names of that plugin's sensitive queries (a query's flag, not the
+   * descriptor's: the route adds it).
+   */
+  descriptor: Exact<CorePageDescriptor & { plugin: string; sensitive?: string[] }, PluginPageDescriptor>;
   workspaceFiles: Exact<CoreWorkspaceFiles, WorkspaceFiles>;
 }
 

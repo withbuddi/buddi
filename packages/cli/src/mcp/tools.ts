@@ -203,7 +203,7 @@ export function withoutSensitive(overview: Record<string, unknown>): Record<stri
 
 interface PagesRoute {
   pages: Array<{ plugin: string; id: string; title: string; place: string } & Record<string, unknown>>;
-  queries?: Array<{ plugin: string; name: string; params: Record<string, string> }>;
+  queries?: Array<{ plugin: string; name: string; params: Record<string, string>; sensitive?: boolean }>;
 }
 
 /** Every `{ query: name }` in a descriptor, in the order the page reads them. */
@@ -224,6 +224,7 @@ function queriesIn(node: unknown, out: Set<string>): Set<string> {
  */
 export function summarizePages(route: PagesRoute): unknown {
   const params = new Map((route.queries ?? []).map((q) => [`${q.plugin}/${q.name}`, q.params]));
+  const sensitive = new Set((route.queries ?? []).filter((q) => q.sensitive === true).map((q) => `${q.plugin}/${q.name}`));
   return {
     pages: route.pages.map((p) => ({
       plugin: p.plugin,
@@ -233,6 +234,7 @@ export function summarizePages(route: PagesRoute): unknown {
       queries: [...queriesIn([p.data, p.body], new Set())].map((name) => ({
         name,
         params: params.get(`${p.plugin}/${name}`) ?? {},
+        ...(sensitive.has(`${p.plugin}/${name}`) ? { sensitive: true } : {}),
       })),
     })),
   };
@@ -393,12 +395,17 @@ export const TOOLS: McpTool[] = [
   },
   {
     name: 'buddi.page_query',
-    description: 'Run one plugin page query, exactly as the dashboard page does, with its parameters.',
+    description:
+      'Run one plugin page query, exactly as the dashboard page does, with its parameters. A query the plugin marks sensitive (balances and the like) is only named unless includeSensitive is set.',
     inputSchema: object(
       {
         plugin: str('The plugin, e.g. finance.'),
         query: str('The query name, from buddi.pages_list.'),
         params: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'The query parameters.' },
+        includeSensitive: {
+          type: 'boolean',
+          description: 'Return the data of a query the plugin marks sensitive. Off by default: it is then only named.',
+        },
       },
       ['plugin', 'query'],
     ),
@@ -412,6 +419,17 @@ export const TOOLS: McpTool[] = [
       }
       for (const [k, v] of Object.entries((given as Record<string, unknown> | undefined) ?? {})) {
         if (v !== undefined && v !== null) params.set(k, String(v));
+      }
+      /*
+       * The same rule buddi.overview follows for Home: a sensitive read is
+       * named, not run, unless the caller asked. Checked before the query is
+       * asked, so the data never reaches this process either.
+       */
+      if (args.includeSensitive !== true) {
+        const route = await rt.gateway.get<PagesRoute>('/api/pages');
+        if ((route.queries ?? []).some((q) => q.plugin === plugin && q.name === query && q.sensitive === true)) {
+          return { plugin, query, sensitive: true, omitted: SENSITIVE_OMITTED };
+        }
       }
       const qs = params.toString();
       return rt.gateway.get(`/api/pages/${enc(plugin)}/${enc(query)}${qs ? `?${qs}` : ''}`);

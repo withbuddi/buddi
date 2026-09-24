@@ -236,6 +236,8 @@ const drafts: Component = {
           label: 'Send',
           tone: 'accent',
           busy: 'Proposing…',
+          pending:
+            'Nothing has been sent. This is the envelope, exactly as it will go out — approve it to send it, and pick the address it leaves from here.',
           args: { draftId: { path: 'id' } },
         },
       ],

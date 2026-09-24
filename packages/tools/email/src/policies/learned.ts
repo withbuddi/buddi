@@ -140,6 +140,7 @@ export async function applyLearnedPolicy(proposal: Proposal, ctx: PolicyHandlerC
         params: rule.params,
         origin: 'learned',
         proposed: false,
+        kept: true,
         createdFrom: rule.verdicts.map((v) => ({ messageId: v.messageId, processingVersion: v.processingVersion })),
       },
       ctx.now,

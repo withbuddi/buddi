@@ -381,9 +381,16 @@ function ProposalCard({
           .
         </p>
         {proposal.untrusted ? (
-          <Notice tone="warning" title="Made with untrusted text in view.">
-            Something written by someone other than you was in the agent's context when it proposed this. Read it for
-            instructions that came from there rather than from you.
+          <Notice tone="warning" title={proposal.kind === 'policy' ? 'Learned from mail you received.' : 'Made with untrusted text in view.'}>
+            {/*
+              A rule is counted by its plugin from the owner's own decisions;
+              no model read the mail to write it, so "look for instructions
+              that came from there" would send the owner hunting for nothing.
+              Keyed off the kind, never off a plugin's name.
+            */}
+            {proposal.kind === 'policy'
+              ? 'The plugin counted this rule from your own triage decisions; no instruction in that mail can change what it does.'
+              : "Something written by someone other than you was in the agent's context when it proposed this. Read it for instructions that came from there rather than from you."}
             <ul className="proposal-sources">
               {proposal.sources.map((source) => (
                 <li key={source} className="mono">

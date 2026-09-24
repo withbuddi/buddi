@@ -15,7 +15,8 @@ import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
-import { listPolicies, revokeEmailPolicy, setPolicy, policiesView } from '../tools/policies.js';
+import { listPolicies, policyLists, revokeEmailPolicy, setPolicy, policiesView } from '../tools/policies.js';
+import { policyLine } from '../pages/format.js';
 import { triageRecord } from '../tools/triage.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { SourceContext, ToolContext } from '../types.js';
@@ -581,6 +582,29 @@ suite('email policies (postgres + fake imap)', () => {
       expect(await revokeLearnedPolicy(kept, { db: pool, now: NOW })).toEqual({ note: 'Revoked the email rule about news@shop.test.' });
       expect(await loadPolicies(pool, accountId)).toHaveLength(0);
       expect(await revokeLearnedPolicy(kept, { db: pool, now: NOW })).toEqual({ note: 'Nothing to revoke: it was never kept.' });
+    });
+
+    it('lists a rule kept from Proposals first, saying when it was kept', async () => {
+      const LATER = new Date(NOW.getTime() + 3 * 24 * 60 * 60 * 1000);
+      // An older rule the owner wrote, and one learned and added long ago.
+      await createPolicy(pool, { accountId, scope: 'sender', matcher: 'mine@shop.test', action: 'ignore', origin: 'owner' }, new Date(NOW.getTime() - 60_000));
+      await createPolicy(pool, { accountId, scope: 'sender', matcher: 'old@shop.test', action: 'ignore', origin: 'learned' }, NOW);
+      const ctx = toolContext();
+      for (let i = 0; i < 3; i += 1) {
+        const id = await storeMessage({ from: 'news@shop.test', at: `2026-09-0${i + 1}T09:00:00Z` });
+        await triageRecord.execute({ messageId: id, category: 'promo', urgency: 'low', summary: 'ad' }, ctx);
+      }
+      const [card] = await listOpenProposals(pool);
+      const kept = (await keepProposal(pool, { id: card!.id, now: LATER })) as CoreProposal;
+      await manifest.policies!.apply(kept, { db: pool, now: LATER });
+
+      const { applied } = await policyLists(pool);
+      expect(applied.map((p) => p.matcher)).toEqual(['news@shop.test', 'old@shop.test', 'mine@shop.test']);
+      expect(applied[0]!.keptAt).toBe(LATER.toISOString());
+      expect(applied[1]!.keptAt).toBeNull();
+      const soon = new Date(LATER.getTime() + 7 * 60_000);
+      expect(policyLine(applied[0]!, soon)).toMatch(/· kept 7 minutes ago$/);
+      expect(policyLine(applied[1]!, soon)).not.toMatch(/kept/);
     });
 
     it('refuses to apply a card that is not an email rule it can write', async () => {

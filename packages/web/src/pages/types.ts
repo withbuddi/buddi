@@ -62,6 +62,8 @@ export interface ToolRef {
   busy?: string;
   /** What the page says once it worked; a `ValueRef` reads the tool's result. */
   done?: string | ValueRef;
+  /** A gated tool's sentence, drawn above its approval card while it waits. */
+  pending?: string;
   /** Left of the toolbar, with a spacer after it. The primary stays rightmost. */
   placement?: 'leading';
   then?: 'refresh' | 'close' | { route: RouteRef };
@@ -216,6 +218,11 @@ export type Component =
 /** A descriptor as `GET /api/pages` serves it: the plugin, then the screen. */
 export interface PluginPageDescriptor {
   plugin: string;
+  /**
+   * This plugin's queries marked sensitive. Every section that reads one is
+   * masked until the owner asks, as Home masks a sensitive block.
+   */
+  sensitive?: string[];
   id: string;
   title: string;
   place: 'rail' | 'settings';
