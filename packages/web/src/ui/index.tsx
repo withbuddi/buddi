@@ -259,25 +259,63 @@ export function PageFrame({
   );
 }
 
-/** A titled group on a page. */
+/**
+ * A titled group on a page.
+ *
+ * The head sits on the page's ground: the title on the left, a note (`aside`)
+ * and what can be done to the section (`actions`) on the right. With `panel`,
+ * what the section holds — a form, a table, rows — goes in one white panel
+ * under the head, and `foot` is that panel's last row, right-aligned behind a
+ * hairline: where a form's Save sits. Groups inside the panel are divided by
+ * hairlines (`Stack divided`), never by a second panel.
+ *
+ * Without `panel` it is a plain group — inside a panel, a group of it.
+ */
 export function Section({
   title,
   aside,
+  actions,
+  panel,
+  flush,
+  foot,
   children,
 }: {
   title?: ReactNode;
   aside?: ReactNode;
-  children: ReactNode;
+  actions?: ReactNode;
+  /** Hold the content in a white panel under the head. */
+  panel?: boolean;
+  /** A table or a list in the panel meets its edges. */
+  flush?: boolean;
+  /** The panel's last row: its primary action, on the right. */
+  foot?: ReactNode;
+  children?: ReactNode;
 }): JSX.Element {
-  return (
-    <section className="ui-section">
-      {title || aside ? (
-        <div className="ui-section-head">
-          {title ? <h3 className="ui-section-title">{title}</h3> : <span />}
-          {aside}
+  const head = title || aside || actions ? (
+    <div className="ui-section-head">
+      {title ? <h3 className="ui-section-title">{title}</h3> : <span />}
+      {aside || actions ? (
+        <div className="ui-section-side">
+          {aside ? <span className="ui-section-aside">{aside}</span> : null}
+          {actions ? <div className="ui-section-actions">{actions}</div> : null}
         </div>
       ) : null}
-      {children}
+    </div>
+  ) : null;
+  return (
+    <section className="ui-section" data-panel={panel ? 'true' : undefined}>
+      {head}
+      {panel ? (
+        <div className="ui-panel" data-flush={flush ? 'true' : undefined}>
+          {children}
+          {foot ? <div className="ui-panel-foot">{foot}</div> : null}
+        </div>
+      ) : (
+        <>
+          {children}
+          {foot ? <div className="ui-toolbar" data-align="end">{foot}</div> : null}
+        </>
+      )}
     </section>
   );
 }

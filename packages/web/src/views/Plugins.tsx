@@ -40,7 +40,6 @@ import {
   Field,
   KV,
   Notice,
-  Panel,
   Pill,
   Section,
   Spacer,
@@ -187,7 +186,7 @@ export function Plugins(): JSX.Element {
       <ErrorBanner message={view.error ?? failed ?? jobError} />
       {data?.unavailable ? <Notice tone="warning">{data.unavailable}</Notice> : null}
 
-      <Panel title="Plugins">
+      <Section title="Plugins" panel>
         <Stack divided>
           <Section>
             {/* Verbatim, and above everything: it is what the two approvals
@@ -216,7 +215,7 @@ export function Plugins(): JSX.Element {
             </Section>
           ) : null}
         </Stack>
-      </Panel>
+      </Section>
 
       {(data?.staged ?? []).map((staged) => (
         <Staged
@@ -235,7 +234,7 @@ export function Plugins(): JSX.Element {
         <RestartToLoad checkout={checkout} name={installed} />
       ) : null}
 
-      <Panel title="Installed">
+      <Section title="Installed" panel>
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.installed.length === 0 ? (
@@ -249,10 +248,10 @@ export function Plugins(): JSX.Element {
             ))}
           </Stack>
         )}
-      </Panel>
+      </Section>
 
       {(data?.builtIn ?? []).length > 0 ? (
-        <Panel title="Ships with buddi">
+        <Section title="Ships with buddi" panel>
           <Stack divided>
             {(data?.builtIn ?? []).map((plugin) => (
               <Section key={plugin.name}>
@@ -260,7 +259,7 @@ export function Plugins(): JSX.Element {
               </Section>
             ))}
           </Stack>
-        </Panel>
+        </Section>
       ) : null}
     </Stack>
   );
@@ -630,7 +629,7 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
   const [failed, setFailed] = useState<string | null>(null);
   const what = name ? `${name} is installed.` : 'Something is installed that this buddi has not loaded.';
   return (
-    <Panel title="Restart to load it">
+    <Section title="Restart to load it" panel>
       <Section>
         <Stack gap="sm">
           <ErrorBanner message={failed} />
@@ -657,7 +656,7 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
           )}
         </Stack>
       </Section>
-    </Panel>
+    </Section>
   );
 }
 

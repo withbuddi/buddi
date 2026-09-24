@@ -779,14 +779,35 @@ function Fields({
  * The components
  * ------------------------------------------------------------------ */
 
-/** A header for a component that asked for one, and its one line. */
-function Heading({ title, note }: { title?: string; note?: string }): JSX.Element | null {
-  if (!title && !note) return null;
+/**
+ * True for a piece drawn at the top of a settings page. It keeps its head on
+ * the ground and what it holds in one white panel under it; anything inside
+ * that panel is a group of it, divided by hairlines, never a second panel.
+ */
+const Boxed = createContext(false);
+
+/** True directly inside a boxed piece's panel: a form's Save is that panel's foot. */
+const PanelTop = createContext(false);
+
+/** A piece's titled group: a panel under its head when it is boxed. */
+function PieceSection({
+  title,
+  note,
+  actions,
+  children,
+}: {
+  title?: string | undefined;
+  note?: string | undefined;
+  actions?: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  const boxed = useContext(Boxed);
   return (
-    <div className="ui-section-head">
-      {title ? <h3 className="ui-section-title">{title}</h3> : <span />}
-      {note ? <span className="muted">{note}</span> : null}
-    </div>
+    <Section title={title} aside={note} actions={actions} panel={boxed}>
+      <Boxed.Provider value={false}>
+        <PanelTop.Provider value={boxed}>{children}</PanelTop.Provider>
+      </Boxed.Provider>
+    </Section>
   );
 }
 
@@ -877,42 +898,50 @@ function SectionPiece({ component, data }: { component: Of<'section'>; data: unk
   const [revealed, toggle] = useReveal();
   const gated = !unmasked && readsSensitive(component.body, scope.sensitive);
   const masked = gated && !revealed;
-  const actions = component.actions ?? [];
+  const boxed = useContext(Boxed);
+  /*
+   * Boxed, a button, a link or a drawer's button that ends the body is something done to the
+   * section rather than a row of it: it moves up into the head, where the
+   * section's own actions are, instead of sitting alone at the panel's foot.
+   */
+  let end = component.body.length;
+  const headable = (piece: Component): boolean =>
+    piece.kind === 'button' || piece.kind === 'link' || (piece.kind === 'form' && piece.drawer !== undefined && !piece.title);
+  while (boxed && end > 0 && headable(component.body[end - 1]!)) end -= 1;
+  const body = component.body.slice(0, end);
+  const actions = [...(component.actions ?? []), ...component.body.slice(end)];
   return (
-    <Section
+    <PieceSection
       title={component.title}
-      aside={
-        /*
-         * The right of the heading: where this section's own way out
-         * goes — "Mailboxes and rules" — rather than a button lost at
-         * the bottom of a list.
-         */
+      note={component.note}
+      /*
+       * The right of the heading: where this section's own way out goes —
+       * "Mailboxes and rules" — rather than a button lost at the bottom of a
+       * list.
+       */
+      actions={
         actions.length > 0 || gated ? (
-          <Toolbar align="end">
-            {!actions.length && component.note ? <span className="muted">{component.note}</span> : null}
+          <>
             {actions.map((action, index) => (
               <Piece key={index} component={action} data={data} />
             ))}
             {gated ? <RevealButton revealed={revealed} onToggle={toggle} /> : null}
-          </Toolbar>
-        ) : component.note ? (
-          <span className="muted">{component.note}</span>
+          </>
         ) : undefined
       }
     >
-      <Stack gap="lg">
-        {component.note && actions.length > 0 ? <p className="ui-card-meta">{component.note}</p> : null}
+      <Stack gap="lg" divided={boxed}>
         {masked ? (
           <MaskedNote />
         ) : (
           <Unmasked.Provider value={unmasked || gated}>
-            {component.body.map((child, index) => (
+            {body.map((child, index) => (
               <Piece key={index} component={child} data={data} />
             ))}
           </Unmasked.Provider>
         )}
       </Stack>
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -943,7 +972,7 @@ function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }
 function StatsPiece({ component, data }: { component: Of<'stats'>; data: unknown }): JSX.Element {
   const query = usePageQuery(component.query, data);
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       {query.data === undefined ? (
         <Empty>{component.empty ?? 'Loading…'}</Empty>
@@ -959,7 +988,7 @@ function StatsPiece({ component, data }: { component: Of<'stats'>; data: unknown
           ))}
         </Stats>
       )}
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1167,7 +1196,7 @@ function ListPiece({
     });
 
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       <ActOutcome act={act} />
       {groups.every((group) => group.rows.length === 0) ? (
@@ -1233,7 +1262,7 @@ function ListPiece({
           })}
         </Toolbar>
       ) : null}
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1243,7 +1272,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
   const act = useAct();
   const rows = rowsOf(query.data, component.rows);
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       <ActOutcome act={act} />
       {rows.length === 0 ? (
@@ -1294,7 +1323,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
           </tbody>
         </Table>
       )}
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1335,7 +1364,7 @@ function DetailPiece({ component, data }: { component: Of<'detail'>; data: unkno
   if (query.error) return <ErrorBanner message={query.error} />;
   if (query.data === undefined) return <Empty>{component.empty ?? 'Loading…'}</Empty>;
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <Stack gap="lg">
         {component.fields.length > 0 ? (
           <KV
@@ -1350,7 +1379,7 @@ function DetailPiece({ component, data }: { component: Of<'detail'>; data: unkno
           <Piece key={index} component={child} data={query.data} />
         ))}
       </Stack>
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1374,25 +1403,30 @@ function FormPiece({ component, data }: { component: Of<'form'>; data: unknown }
   );
   if (!component.drawer) {
     return (
-      <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+      <PieceSection title={component.title} note={component.note}>
         <ErrorBanner message={initial.error} />
         {body}
-      </Section>
+      </PieceSection>
     );
   }
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    // No panel: what it holds is a button, and a panel with nothing in it
+    // until a write answers is a white box saying nothing.
+    <Section
+      title={component.title}
+      aside={component.note}
+      actions={
+        <Button variant="accent" onClick={() => setOpen(true)}>
+          {component.drawer.button}
+        </Button>
+      }
+    >
       {/*
         What the write said, on the page rather than in the sheet: a form whose
         `then` is `close` has no sheet left to say it in, and "Rule added" is
         the one thing the owner is waiting to read.
       */}
       <ActOutcome act={act} />
-      <Toolbar align="end">
-        <Button variant="accent" onClick={() => setOpen(true)}>
-          {component.drawer.button}
-        </Button>
-      </Toolbar>
       {open ? (
         <Sheet title={component.drawer.title} onClose={() => setOpen(false)}>
           {body}
@@ -1415,6 +1449,7 @@ function FormBody({
   act: ActState;
   onDone: () => void;
 }): JSX.Element {
+  const top = useContext(PanelTop);
   const scope = useScope();
   const [values, setValues] = useState<Values>(() => initialValues(component.fields, initialData));
   /*
@@ -1438,7 +1473,7 @@ function FormBody({
         onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
       />
       {component.drawer ? null : <ActOutcome act={act} />}
-      <Toolbar align="end">
+      <Toolbar align="end" className={top ? 'ui-panel-foot' : undefined}>
         <ActionButton
           action={component.submit}
           args={resolveArgs(component.submit.args, {
@@ -1476,7 +1511,7 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
   };
 
   return (
-    <Section title={component.title} aside={component.note ? undefined : undefined}>
+    <PieceSection title={component.title}>
       <Stack>
         <Fields
           fields={component.fields}
@@ -1554,7 +1589,7 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
           )
         ) : null}
       </Stack>
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1620,7 +1655,7 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
   const query = usePageQuery(component.query, data);
   const rows = rowsOf(query.data, component.rows);
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       {rows.length === 0 ? (
         <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
@@ -1641,7 +1676,7 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
           ))}
         </Stack>
       )}
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1767,7 +1802,7 @@ function EditorBody({
     />
   );
   return (
-    <Section title={component.title} aside={component.note ? <span className="muted">{component.note}</span> : undefined}>
+    <PieceSection title={component.title} note={component.note}>
       <Stack>
         <Fields
           fields={component.fields}
@@ -1791,7 +1826,7 @@ function EditorBody({
         )}
         {component.footnote ? <p className="ui-toolbar-note">{component.footnote}</p> : null}
       </Stack>
-    </Section>
+    </PieceSection>
   );
 }
 
@@ -1849,7 +1884,7 @@ export function PluginPage({
   return (
     <Scope.Provider value={scope}>
       <PageFrame embedded={embedded} title={page.title}>
-        <PageBody page={page} />
+        <PageBody page={page} boxed={embedded === true} />
       </PageFrame>
     </Scope.Provider>
   );
@@ -1864,28 +1899,36 @@ export function PluginPage({
  * Its own component so the hook is unconditional whether or not the descriptor
  * declares one.
  */
-function PageBody({ page }: { page: PluginPageDescriptor }): JSX.Element {
+function PageBody({ page, boxed }: { page: PluginPageDescriptor; boxed: boolean }): JSX.Element {
   const scope = useScope();
   // A page whose own read is sensitive is masked whole: every `when` and
   // every notice on it is drawn against that read.
   if (page.data && scope.sensitive.has(page.data.query)) {
     return (
       <SensitiveGate>
-        <PageBodyShown page={page} />
+        <PageBodyShown page={page} boxed={boxed} />
       </SensitiveGate>
     );
   }
-  return <PageBodyShown page={page} />;
+  return <PageBodyShown page={page} boxed={boxed} />;
 }
 
-function PageBodyShown({ page }: { page: PluginPageDescriptor }): JSX.Element {
+function PageBodyShown({ page, boxed }: { page: PluginPageDescriptor; boxed: boolean }): JSX.Element {
   const root = usePageQuery(page.data, null);
+  /*
+   * In a Settings tab each piece at the top is a panel under its own head,
+   * as every core tab is, so the air between them is the division; on a
+   * place of its own the page stays dense, on the plain ground, with
+   * hairlines between.
+   */
   return (
-    <Stack gap="lg" divided>
+    <Stack gap="lg" divided={!boxed}>
       <ErrorBanner message={root.error} />
-      {page.body.map((component, index) => (
-        <Piece key={index} component={component} data={root.data ?? null} />
-      ))}
+      <Boxed.Provider value={boxed}>
+        {page.body.map((component, index) => (
+          <Piece key={index} component={component} data={root.data ?? null} />
+        ))}
+      </Boxed.Provider>
     </Stack>
   );
 }
