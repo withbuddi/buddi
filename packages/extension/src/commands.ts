@@ -246,6 +246,11 @@ function fieldFacts(read: FieldRead): FieldFacts {
   return { origin: checkOrigin(read.origin), password: read.password === true, name: read.name ?? '' };
 }
 
+/** The field facts, packed as the observation the gateway relays untouched. */
+function fieldObservation(read: FieldRead): Observation {
+  return { field: fieldFacts(read) } as unknown as Observation;
+}
+
 export interface Executor { run(command: Command, cancel?: Cancellation): Promise<CommandResult> }
 
 export class BrowserCommands implements Executor {
@@ -870,7 +875,7 @@ export class BrowserCommands implements Executor {
     });
     const read = frame?.result;
     if (!read?.ok) throw new PreconditionError(read?.reason ?? 'The referenced element changed or disappeared.');
-    return { observation: { field: fieldFacts(read) } };
+    return { observation: fieldObservation(read) };
   }
 
   /**
