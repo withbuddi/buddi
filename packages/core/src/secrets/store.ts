@@ -16,6 +16,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { SecretBinding, SecretListing, SecretUseOutcome } from '../host/types.js';
 import type { Queryable } from '../owner.js';
 import { ownerSecretVaultName, type Vault } from '../vault/types.js';
+import { invalidateSecretScrubber } from './scrub.js';
 import { isAccountKind, isSecretKind, isSecretRule } from './destinations.js';
 
 /** A secret's row. */
@@ -149,6 +150,9 @@ export async function putOwnerSecret(
     const secret = toSecret(rows[0]);
     await writeBindings(client, secret.id, bindings);
     await vault.set(ownerSecretVaultName(secret.id), input.value);
+    // The automaton that scrubs output is rebuilt for the new value before
+    // the next tool result, event or log line goes anywhere (owner-secrets §5).
+    invalidateSecretScrubber();
     return secret;
   });
 }
@@ -162,6 +166,7 @@ export async function renameOwnerSecret(db: Queryable, name: string, to: string)
     `update core.secrets set name = $2, updated_at = now() where name = $1 returning id`,
     [name, next],
   );
+  if (rows.length > 0) invalidateSecretScrubber();
   return rows.length > 0;
 }
 
@@ -201,6 +206,7 @@ export async function deleteOwnerSecret(db: Queryable, vault: Vault, name: strin
   const { rows } = await db.query(`delete from core.secrets where name = $1 returning id`, [name]);
   if (!rows[0]) return false;
   await vault.delete(ownerSecretVaultName(String(rows[0].id))).catch(() => false);
+  invalidateSecretScrubber();
   return true;
 }
 

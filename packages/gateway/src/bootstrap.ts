@@ -15,6 +15,8 @@ import {
   configurePluginHost,
   createPool,
   createVault,
+  loadScrubEntries,
+  setSecretScrubSource,
   hydrateDatabaseUrl,
   resolveDatabaseUrl,
   resolveProvider,
@@ -373,6 +375,19 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
+  /*
+   * The output scrubber's source, once per process (docs/specs/owner-secrets.md
+   * §5): every owner secret by name, buddi's own keys under theirs. Set here,
+   * where every entry point builds its pool, so `buddi chat`, `buddi ask`,
+   * `buddi serve` and the dashboard all scrub. The first async choke point
+   * (a tool result, an event, a provider request) builds the automaton; a
+   * save, rename or delete invalidates it and the next one rebuilds.
+   */
+  try {
+    setSecretScrubSource(() => loadScrubEntries(pool, createVault({ env }), env));
+  } catch (error) {
+    console.error(`output scrubbing unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const provider: RuntimeProvider = {
     get capabilities() { return providerFor(catalog.defaultAgent()).capabilities; },
     complete: request => providerFor(catalog.defaultAgent()).complete(request),

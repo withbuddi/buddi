@@ -29,6 +29,14 @@ export interface BuddiHost {
   readonly plugin: string;
   /** An operational log line, prefixed with the plugin's name. Never the owner's channel. */
   log(line: string): void;
+  /**
+   * Replace any stored value a text contains with `‹secret:NAME›`
+   * (docs/specs/owner-secrets.md §5) — buddi's own keys included, under their
+   * own names. Never the reverse, and never a read: the only thing a plugin
+   * learns is *that* a value was there, which is exactly what it must refuse
+   * to store. Always present, like `log`.
+   */
+  scrub(text: string): string;
   owner: OwnerArea;
   clock: ClockArea;
   db: DbArea;

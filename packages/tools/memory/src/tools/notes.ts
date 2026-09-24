@@ -70,13 +70,21 @@ export const note: ToolDefinition<z.infer<typeof noteInput>, NoteView> = {
         ? null
         : new Date(now.getTime() + input.expiresInDays * 86_400_000);
 
+    /*
+     * Choke point 5 of the scrub (owner-secrets §5): the note is what the
+     * agent kept, and a pasted value echoed into it would be kept with it.
+     * `buddi.scrub` replaces any stored value with its marker; what the agent
+     * wrote survives, the value does not.
+     */
+    const content = ctx.buddi!.scrub(input.content);
+
     const { rows } = await ctx.buddi!.db.query(
       `insert into memory.notes
          (content, kind, scope, source_conversation_id, created_by_agent, created_at, expires_at)
        values ($1, $2, $3, $4, $5, $6, $7)
        returning id, content, kind, scope, created_at, expires_at, created_by_agent, source_conversation_id`,
       [
-        input.content,
+        content,
         input.kind,
         scope,
         ctx.conversationId ?? null,
