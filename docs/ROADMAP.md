@@ -137,10 +137,11 @@ Small, whenever a slot opens:
   once, and a plugin's newer suggestions sit on top, one click each.
 - Save errors beside the button — built 2026-09-23 (buddi `c8c2e1c`); a refused
   "Save who it is" says why next to the button instead of in a banner at the top.
-- `email.inbox_unread` needs IMAP flag re-sync first — the metric is worth
-  having and cannot exist until a poll refreshes `\Seen` on rows it already
-  has. Today flags are written once at ingest (`on conflict … do nothing`), so
-  the count only climbs and a goal on it would be missed by construction.
+- `email.inbox_unread` and IMAP flag re-sync — built 2026-09-23 (buddi `12381d5`);
+  each inbox poll re-reads FLAGS for the newest 2,000 rows (CONDSTORE
+  `CHANGEDSINCE` on Gmail, ~0.2s; a full capped fetch otherwise, ~0.6s) and the
+  metric counts what is still unread. No "still in the inbox" field, so a
+  message archived unread keeps its last flags.
 - `ToolRef.pending` on plugin pages — built 2026-09-23 (buddi `3462a7c`); a sentence drawn above a gated action's
   approval card while it waits ("Nothing has been sent…"); the one Mail
   behaviour the port could not express.
