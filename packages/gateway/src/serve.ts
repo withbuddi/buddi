@@ -49,6 +49,7 @@ import {
   type Mission,
   type ActionRecord,
   type Occurrence,
+  type PluginManifest,
   type SourceContext,
   type Suspension,
 } from '@buddi/core';
@@ -79,8 +80,9 @@ import { createDigestPrepare } from './missions/recap.js';
 import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
 import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
+import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './agents/learning-digest.js';
 import { startLoop } from './loop.js';
-import { ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
+import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
@@ -311,6 +313,42 @@ export async function queueOccurrence(
 }
 
 /**
+ * The learning digest runs on the mission scheduler but is not an agent run:
+ * its occurrence is answered by `runLearningDigest`, and every other mission
+ * goes to the executor it was given.
+ */
+export function withLearningDigest(
+  execute: (occurrence: Occurrence, mission: Mission, control?: MissionRunControl) => Promise<MissionRunResult>,
+  deps: {
+    pool: Pool;
+    now: () => Date;
+    manifests: () => readonly PluginManifest[];
+    proposalsUrl: string;
+    deliver: (text: string) => Promise<unknown>;
+    log?: (line: string) => void;
+  },
+): (occurrence: Occurrence, mission: Mission, control?: MissionRunControl) => Promise<MissionRunResult> {
+  return async (occurrence, mission, control) => {
+    if (mission.id !== LEARNING_DIGEST_ID) return execute(occurrence, mission, control);
+    const result = await runLearningDigest({
+      pool: deps.pool,
+      now: deps.now(),
+      manifests: deps.manifests(),
+      proposalsUrl: deps.proposalsUrl,
+      deliver: deps.deliver,
+    });
+    deps.log?.(`learning digest: ${result.delivered ? 'sent' : result.skipped ?? 'not sent'}`);
+    return {
+      conversationId: '',
+      text: result.text,
+      delivered: result.delivered,
+      decision: result.delivered ? 'report' : 'silent',
+      ...(result.skipped ? { reason: result.skipped } : {}),
+    };
+  };
+}
+
+/**
  * The `mission-run` handler: the mission executor, plus closing the occurrence.
  *
  * The occurrence is *this* handler's to finish — the scheduler only decided the
@@ -375,7 +413,8 @@ export function createMissionJobHandler(deps: {
       }
       await finishOccurrence(deps.pool, occurrence.id, {
         state: 'succeeded',
-        runConversationId: result.conversationId,
+        // A run with no conversation (the learning digest) leaves it unset.
+        ...(result.conversationId ? { runConversationId: result.conversationId } : {}),
       });
       log(
         result.delivered
@@ -764,7 +803,14 @@ export async function main(): Promise<void> {
       worker: `serve:${process.pid}`,
       kinds: JOB_KINDS,
       handlers: {
-        [MISSION_JOB_KIND]: createMissionJobHandler({ pool, execute }),
+        [MISSION_JOB_KIND]: createMissionJobHandler({ pool, execute: withLearningDigest(execute, {
+          pool,
+          now,
+          manifests: () => wiring.registry.manifests(),
+          proposalsUrl: dashboardRouteUrl(webConfig(process.env), '#/settings/proposals'),
+          deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
+          log: (line) => console.log(line),
+        }) }),
         // A source's run. Same lease, same retries, same suspension on an
         // approval — the only difference is that nothing scheduled it.
         [AGENT_RUN_JOB_KIND]: createAgentRunHandler({
@@ -843,6 +889,13 @@ export async function main(): Promise<void> {
     // Proposals nobody decided in 30 days are expired, each with a line in
     // Activity. Hourly: the clock is a month long.
     const proposalSweep = createProposalSweep({ pool, now, log: (line) => console.log(line) });
+    // The weekly learning digest is a mission of its own; the owner moves its
+    // day and hour on Settings → Proposals, and that schedule is kept.
+    if (!recovering) {
+      await ensureDigestMission(pool, wiring.timezone).catch((err) =>
+        console.error(`learning digest: not scheduled: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    }
     // A plugin's rules proposed before they came through core move here once.
     if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line));
     const proposalLoop = recovering ? idle.loop : startLoop({

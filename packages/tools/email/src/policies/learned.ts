@@ -233,8 +233,28 @@ export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<
 }
 
 /** What the email plugin registers with core for kind `policy`. */
+/**
+ * How many messages the gate acted on this week through a learned rule the
+ * owner kept: the digest's "stopped doing". Read from the gate's own audit
+ * (`email.events`), where every decision names the policy it applied; a
+ * message nothing matched, or an action refused, is not counted.
+ */
+export async function countLearnedApplications(ctx: PolicyHandlerContext, since: Date): Promise<number> {
+  const { rows } = await ctx.db.query(
+    `select count(*)::int as n
+       from email.events e
+       join email.policies p on p.id = e.policy_id
+      where p.origin = 'learned' and p.proposed = false
+        and e.at >= $1 and e.at <= $2
+        and e.action not in ('none', 'refused') and e.status = 'done'`,
+    [since, ctx.now],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
 export const emailPolicyHandler: PolicyHandler = {
   apply: applyLearnedPolicy,
   revoke: revokeLearnedPolicy,
   adopt: adoptProposedPolicies,
+  applied: countLearnedApplications,
 };

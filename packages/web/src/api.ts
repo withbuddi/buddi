@@ -382,6 +382,40 @@ export interface ProposalRow {
    * proposal is the version that loads now.
    */
   skill?: { name: string; version: number; proposal: string; steps: string; live: boolean } | null;
+  /**
+   * A change to the agent's own file, open: that part as the file says it now,
+   * the tools the proposed list adds to the grant, and the refusal keeping it
+   * as proposed would meet.
+   */
+  change?: { part: 'instructions' | 'tools'; current: string | null; added: string[]; refusal: string | null } | null;
+}
+
+/** One kind's count over the week, and up to three names. */
+export interface DigestTally {
+  count: number;
+  names: string[];
+}
+
+/** The weekly learning digest, as the last run recorded it. */
+export interface DigestRow {
+  at: string;
+  since: string;
+  memory: DigestTally;
+  skills: DigestTally;
+  rules: DigestTally;
+  changes: DigestTally;
+  open: number;
+  /** Times a kept learned rule acted this week, per plugin; null when nothing records it. */
+  stopped: { total: number; byPlugin: Record<string, number> } | null;
+  delivered: boolean;
+}
+
+/** When the digest runs: day 0 is Sunday. */
+export interface DigestSchedule {
+  day: number;
+  hour: number;
+  timezone: string;
+  next: string | null;
 }
 
 /** One skill an agent loads, on its sheet's Skills tab. */
@@ -1258,7 +1292,15 @@ export const api = {
   dismissOffers: (ids: readonly string[]) =>
     post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
   /** Open proposals, and under `closed` what was kept, discarded or expired this week. */
-  proposals: () => get<{ open: ProposalRow[]; closed: ProposalRow[] }>('/proposals'),
+  proposals: () =>
+    get<{
+      open: ProposalRow[];
+      closed: ProposalRow[];
+      digest?: { latest: DigestRow | null; schedule: DigestSchedule };
+    }>('/proposals'),
+  /** Move the weekly digest to another day and hour, in the installation's zone. */
+  setDigestSchedule: (day: number, hour: number) =>
+    post<{ schedule: DigestSchedule }>('/proposals/digest-schedule', { day, hour }),
   /** Keep one, optionally with the owner's corrected text. */
   keepProposal: (id: string, text?: string) =>
     post<{ proposal: ProposalRow; applied: boolean; note: string }>(

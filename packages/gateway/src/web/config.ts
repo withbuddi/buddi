@@ -124,6 +124,12 @@ export function webAssetsDir(env: NodeJS.ProcessEnv = process.env): string {
   return explicit !== '' ? explicit : path.join(REPO_ROOT, 'packages', 'web', 'dist');
 }
 
+/** A dashboard route (`#/settings/proposals`) as a link to hand a human: the public origin when there is one. */
+export function dashboardRouteUrl(config: Pick<WebConfig, 'host' | 'port' | 'publicOrigin'>, route: string): string {
+  const origin = config.publicOrigin ?? webUrl(config).replace(/\/$/, '');
+  return `${origin}/${route.replace(/^\//, '')}`;
+}
+
 /**
  * The deep link to one conversation's Browser tab, and whether it is loopback.
  *

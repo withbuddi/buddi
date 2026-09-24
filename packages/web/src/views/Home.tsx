@@ -7,7 +7,7 @@
  * the agent that runs it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConversationSummary, type HomeBlock, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
+import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -180,6 +180,10 @@ export function Home({
             ))}
           </div>
         </Section>
+      ) : null}
+
+      {proposals.data?.digest?.latest ? (
+        <LearnedThisWeek digest={proposals.data.digest.latest} go={go} />
       ) : null}
 
       <div className="home-columns">
@@ -358,6 +362,59 @@ function fmtDay(iso: string | undefined, timezone: string): string {
   } catch {
     return fmtTime(iso ?? null, timezone);
   }
+}
+
+/** One kind's line on the digest card: the count, and up to three names. */
+export function tallyLine(t: DigestTally, one: string, many: string): string | null {
+  if (t.count === 0) return null;
+  return `${t.count} ${t.count === 1 ? one : many}${t.names.length > 0 ? `: ${t.names.join('; ')}${t.count > t.names.length ? '; …' : ''}` : ''}`;
+}
+
+/** The latest weekly digest, until the next one replaces it. */
+export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route: string) => (e: { preventDefault: () => void }) => void }): JSX.Element {
+  const learned = [
+    tallyLine(digest.memory, 'memory note', 'memory notes'),
+    tallyLine(digest.skills, 'skill kept', 'skills kept'),
+    tallyLine(digest.rules, 'rule kept', 'rules kept'),
+    tallyLine(digest.changes, 'change to an agent kept', 'changes to agents kept'),
+  ].filter((line): line is string => line !== null);
+  const stopped =
+    digest.stopped === null
+      ? 'Not measured yet.'
+      : digest.stopped.total > 0
+        ? `Rules you kept acted ${digest.stopped.total} time${digest.stopped.total === 1 ? '' : 's'} (${Object.entries(digest.stopped.byPlugin)
+            .filter(([, n]) => n > 0)
+            .map(([plugin, n]) => `${plugin} ${n}`)
+            .join(', ')}).`
+        : 'No rule you kept acted this week.';
+  return (
+    <Section title="What buddi learned this week" aside={<span className="muted">{fmtRelative(digest.at)}</span>}>
+      <Panel>
+        <Stack divided>
+          <div>
+            <p className="ui-card-meta">Learned</p>
+            {learned.length === 0 ? <p>Nothing new.</p> : <ul className="home-digest-list">{learned.map((line) => <li key={line}>{line}</li>)}</ul>}
+          </div>
+          <div>
+            <p className="ui-card-meta">Proposes</p>
+            <p>
+              {digest.open > 0 ? (
+                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
+                  {digest.open} proposal{digest.open === 1 ? '' : 's'} waiting for you to keep or discard.
+                </a>
+              ) : (
+                'Nothing was waiting for you.'
+              )}
+            </p>
+          </div>
+          <div>
+            <p className="ui-card-meta">Stopped doing</p>
+            <p>{stopped}</p>
+          </div>
+        </Stack>
+      </Panel>
+    </Section>
+  );
 }
 
 export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0): string {

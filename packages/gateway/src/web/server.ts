@@ -36,7 +36,8 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
-import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals } from './proposals.js';
+import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
+import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
 import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
 import { randomUUID, createHmac } from 'node:crypto';
@@ -1130,7 +1131,14 @@ export function createWebApp(deps: WebServerDeps): Server {
             }),
           );
         case '/api/proposals':
-          return sendJson(res, 200, await readProposals(deps.pool, now, catalogSkillLookup(deps.catalog)));
+          return sendJson(res, 200, {
+            ...(await readProposals(deps.pool, now, catalogSkillLookup(deps.catalog), registryChangeLookup(deps.registry))),
+            // The weekly digest: the latest one for Home, and when the next runs.
+            digest: {
+              latest: await latestDigest(deps.pool),
+              schedule: await readDigestSchedule(deps.pool, now, deps.timezone),
+            },
+          });
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -2486,6 +2494,19 @@ export function createWebApp(deps: WebServerDeps): Server {
             : {}),
         }),
       );
+    }
+
+    /* The weekly digest's day and hour: a new revision of its mission's schedule. */
+    if (path === '/api/proposals/digest-schedule') {
+      const day = Number(body.day);
+      const hour = Number(body.hour);
+      try {
+        await setDigestSchedule(deps.pool, { day, hour }, deps.timezone);
+      } catch (err) {
+        if (err instanceof RangeError) return sendJson(res, 400, { error: err.message });
+        throw err;
+      }
+      return sendJson(res, 200, { schedule: await readDigestSchedule(deps.pool, deps.now(), deps.timezone) });
     }
 
     /*

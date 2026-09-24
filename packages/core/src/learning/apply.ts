@@ -10,8 +10,10 @@
  *  - `applyKeptPolicy`  — built (step 3): hand the policy to its plugin's own
  *                          `policies.apply`, which writes the rule its gate
  *                          reads. A plugin that registered none is refused.
- *  - `applyKeptChange`  — step 4: Agent Father's update with the diff as the
- *                          approved envelope.
+ *  - `applyKeptChange`  — built (step 4): the owner's kept text goes through
+ *                          the same update Agent Father's approved edit and the
+ *                          dashboard use (`updateAgentFromOwner`), so every
+ *                          refusal it has applies. The gateway supplies it.
  *
  * Each answers honestly. None pretends to have applied anything: a card that
  * said "applied" over a stub would be the exact drift this feature exists to
@@ -42,6 +44,14 @@ export interface ApplyDeps {
   db?: PolicyHandlerContext['db'];
   /** The installed plugin's policy handler, or null when it has none (or is not installed). */
   policyHandlerFor?: (plugin: string) => PolicyHandler | null;
+  /**
+   * Write a kept change to the agent's own file: the persona, or the tool list.
+   * `ok: false` carries the refusal sentence; nothing was written.
+   */
+  applyChange?: (
+    agent: string,
+    change: { part: 'instructions' | 'tools'; text: string },
+  ) => Promise<{ ok: true; note: string } | { ok: false; note: string }>;
 }
 
 export async function applyKeptSkill(proposal: Proposal, deps: ApplyDeps): Promise<ApplyOutcome> {
@@ -108,8 +118,21 @@ export async function revokeDiscardedPolicy(proposal: Proposal, deps: ApplyDeps)
   }
 }
 
-export async function applyKeptChange(_proposal: Proposal, _deps: ApplyDeps): Promise<ApplyOutcome> {
-  return { applied: false, note: keptNote('change') };
+export async function applyKeptChange(proposal: Proposal, deps: ApplyDeps): Promise<ApplyOutcome> {
+  const part = proposal.payload.part;
+  const text = proposal.payload.proposed;
+  if ((part !== 'instructions' && part !== 'tools') || typeof text !== 'string') {
+    return { applied: false, failed: true, note: 'Not applied: the proposal does not say which part of the file it changes.' };
+  }
+  if (!deps.applyChange) {
+    return { applied: false, failed: true, note: 'Not applied: this process cannot write agent files.' };
+  }
+  try {
+    const result = await deps.applyChange(proposal.agent, { part, text });
+    return result.ok ? { applied: true, note: result.note } : { applied: false, failed: true, note: `Not applied: ${result.note}` };
+  } catch (err) {
+    return { applied: false, failed: true, note: `Not applied: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 export const APPLY: Record<ProposalKind, (proposal: Proposal, deps: ApplyDeps) => Promise<ApplyOutcome>> = {
@@ -126,6 +149,6 @@ export function keptNote(kind: ProposalKind): string {
     case 'policy':
       return 'Kept; applied by its plugin as one of its rules.';
     case 'change':
-      return 'Kept; applied through Agent Father when learning step 4 ships.';
+      return 'Kept; written to the agent file, which loads on its next run.';
   }
 }

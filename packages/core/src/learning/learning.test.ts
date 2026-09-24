@@ -2,7 +2,7 @@
  * The pure half of learning: the fingerprint and the untrusted sources.
  */
 import { describe, expect, it } from 'vitest';
-import { applyKeptPolicy, revokeDiscardedPolicy } from './apply.js';
+import { applyKeptChange, applyKeptPolicy, revokeDiscardedPolicy } from './apply.js';
 import { proposalFingerprint } from './fingerprint.js';
 import { deriveUntrustedSources, ownerTurn, type ProvenanceMessage } from './sources.js';
 import type { PolicyHandler, Proposal, UntrustedKind } from './types.js';
@@ -21,6 +21,16 @@ describe('proposalFingerprint', () => {
     expect(proposalFingerprint('skill', 'advisor', skill({ name: 'Pay a card' }))).not.toBe(a);
     expect(proposalFingerprint('change', 'advisor', { part: 'instructions', proposed: 'x' })).not.toBe(
       proposalFingerprint('change', 'advisor', { part: 'tools', proposed: 'x' }),
+    );
+  });
+
+  it('identifies a tool list by the set it grants: order, spacing and case aside', () => {
+    const a = proposalFingerprint('change', 'advisor', { part: 'tools', proposed: 'memory.note, web.read' });
+    expect(proposalFingerprint('change', 'advisor', { part: 'tools', proposed: 'Web.read,memory.note\n' })).toBe(a);
+    expect(proposalFingerprint('change', 'advisor', { part: 'tools', proposed: 'memory.note, web.read, web.search' })).not.toBe(a);
+    // Instructions stay text: reordering sentences is a different proposal.
+    expect(proposalFingerprint('change', 'advisor', { part: 'instructions', proposed: 'b, a' })).not.toBe(
+      proposalFingerprint('change', 'advisor', { part: 'instructions', proposed: 'a, b' }),
     );
   });
 
@@ -129,5 +139,32 @@ describe('ownerTurn', () => {
       { role: 'user', content: [{ type: 'text', text: 'two' }] },
     ])).toBe(2);
     expect(ownerTurn([])).toBe(1);
+  });
+});
+
+describe('applyKeptChange', () => {
+  const change = (payload: Record<string, unknown>) =>
+    ({ id: 'c1', kind: 'change', agent: 'scout', payload, provenance: { sources: [] } }) as unknown as Proposal;
+  const now = new Date('2026-09-23T12:00:00Z');
+
+  it('hands the kept text to the agent-file writer and reports its refusal as a failure', async () => {
+    const seen: unknown[] = [];
+    const ok = await applyKeptChange(change({ part: 'tools', proposed: 'memory.note' }), {
+      now,
+      applyChange: async (agent, c) => { seen.push({ agent, ...c }); return { ok: true, note: 'Written.' }; },
+    });
+    expect(ok).toEqual({ applied: true, note: 'Written.' });
+    expect(seen).toEqual([{ agent: 'scout', part: 'tools', text: 'memory.note' }]);
+
+    const refused = await applyKeptChange(change({ part: 'tools', proposed: 'x' }), {
+      now, applyChange: async () => ({ ok: false, note: 'unknown tool x' }),
+    });
+    expect(refused).toMatchObject({ applied: false, failed: true, note: 'Not applied: unknown tool x' });
+  });
+
+  it('fails without a writer, or without a part it knows', async () => {
+    expect(await applyKeptChange(change({ part: 'tools', proposed: 'x' }), { now })).toMatchObject({ failed: true });
+    expect(await applyKeptChange(change({ part: 'face', proposed: 'x' }), { now, applyChange: async () => ({ ok: true, note: '' }) }))
+      .toMatchObject({ failed: true });
   });
 });
