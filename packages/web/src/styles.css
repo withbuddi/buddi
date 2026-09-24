@@ -1577,8 +1577,12 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  /* The page's quiet wash, as behind every main column that is not dense;
+     the panels on it stay white with the resting shadow. */
+  background: var(--gradient-page);
 }
+/* A table or a diff is dense: the plain surface, no wash behind the data. */
+.wb-canvas-body[data-dense='true'] { background: var(--surface); }
 
 .wb-canvas-tabs {
   display: flex;
