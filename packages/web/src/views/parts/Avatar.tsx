@@ -15,7 +15,11 @@ import { accentAttrs, accentOf } from '../../shell/accent';
 import { tintOf } from '../../shell/AgentRail';
 import { monogram } from '../../shell/roster';
 
-export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'> & { roles?: readonly string[] | undefined };
+export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'> & {
+  roles?: readonly string[] | undefined;
+  /** Its granted tools: their families pick a colour when nothing else does. */
+  tools?: readonly string[] | undefined;
+};
 
 /**
  * The one component that draws a face's mark. `className` is the frame it
@@ -47,7 +51,7 @@ export function FaceMark({
   const picture = face?.picture && face.picture !== broken ? face.picture : undefined;
   const icon = face?.avatar;
   const kind = picture ? 'image' : icon?.kind;
-  const accent = id ? accentAttrs(accentOf({ id, accent: face?.accent, roles: face?.roles })) : undefined;
+  const accent = id ? accentAttrs(accentOf({ id, accent: face?.accent, roles: face?.roles, tools: face?.tools })) : undefined;
   return (
     <span
       className={className}

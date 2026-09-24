@@ -21,3 +21,34 @@ it('gives the default agent Buddi blue, and everyone else a stable palette entry
   expect(first).toEqual(accentOf({ id: 'garage' }));
   expect(AGENT_PALETTE).toContain((first as { key: string }).key);
 });
+
+/** A granted tool name, built from its family so no plugin tool is spelled out here. */
+const grant = (family: string, name = 'run'): string => [family, name].join('.');
+
+it('reads the colour from the granted tool families when no role names one', () => {
+  expect(accentOf({ id: 'm', roles: [], tools: [grant('email', 'search'), grant('browser'), grant('memory')] })).toEqual({ key: 'mail' });
+  expect(accentOf({ id: 'f', tools: [grant('web'), grant('finance', 'balances')] })).toEqual({ key: 'finance' });
+  expect(accentOf({ id: 'd', tools: [grant('developer', 'read'), grant('memory')] })).toEqual({ key: 'coding' });
+  expect(accentOf({ id: 'r', tools: [grant('web', 'search'), grant('host')] })).toEqual({ key: 'research' });
+  expect(accentOf({ id: 'b', tools: [grant('browser', 'act')] })).toEqual({ key: 'research' });
+  expect(accentOf({ id: 'i', tools: [grant('image', 'generate'), grant('memory')] })).toEqual({ key: 'art' });
+  expect(accentOf({ id: 'k', tools: [grant('memory', 'remember'), grant('memory', 'recall')] })).toEqual({ key: 'memory' });
+});
+
+it('ranks the families most specific first', () => {
+  expect(accentOf({ id: 'x', tools: [grant('image'), grant('web'), grant('developer'), grant('finance'), grant('email')] })).toEqual({ key: 'mail' });
+  expect(accentOf({ id: 'x', tools: [grant('image'), grant('web'), grant('developer'), grant('finance')] })).toEqual({ key: 'finance' });
+  expect(accentOf({ id: 'x', tools: [grant('image'), grant('web'), grant('developer')] })).toEqual({ key: 'coding' });
+  expect(accentOf({ id: 'x', tools: [grant('image'), grant('browser')] })).toEqual({ key: 'research' });
+});
+
+it('keeps the order: own accent, then role, then tools, then the default agent, then the hash', () => {
+  rememberDefaultAgent('front');
+  expect(accentOf({ id: 'y', accent: '#112233', roles: ['developer'], tools: [grant('email')] })).toEqual({ key: 'own', hex: '#112233' });
+  expect(accentOf({ id: 'y', roles: ['developer'], tools: [grant('email')] })).toEqual({ key: 'coding' });
+  expect(accentOf({ id: 'front', tools: [grant('web')] })).toEqual({ key: 'research' });
+  expect(accentOf({ id: 'front', tools: [grant('host'), grant('memory'), grant('reminder')] })).toEqual({ key: 'buddi' });
+  // Memory alongside anything else names nothing; the hash decides.
+  const hashed = accentOf({ id: 'garage', tools: [grant('host'), grant('memory')] });
+  expect(hashed).toEqual(accentOf({ id: 'garage' }));
+});
