@@ -29,7 +29,7 @@ export function Button({
   className,
   type = 'button',
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: 'sm' }): JSX.Element {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: 'sm' | 'lg' }): JSX.Element {
   return (
     <button
       type={type}
@@ -47,7 +47,7 @@ export function ButtonLink({
   size,
   className,
   ...rest
-}: AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: ButtonVariant; size?: 'sm' }): JSX.Element {
+}: AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: ButtonVariant; size?: 'sm' | 'lg' }): JSX.Element {
   return (
     <a
       className={cx('ui-btn', className)}
@@ -303,7 +303,7 @@ export function Panel({
   );
 }
 
-/** One record, with a left rule in the tone of its state. */
+/** One record, its border tinted in the tone of its state. */
 export function Card({
   tone,
   title,
@@ -511,6 +511,40 @@ export function Tab({
   );
 }
 
+/**
+ * A segmented control: two or three choices as one pill, the chosen one
+ * raised. A radio group underneath, so the keyboard and a screen reader read
+ * it as one question with one answer.
+ */
+export function Segment<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<{ value: T; label: ReactNode }>;
+  value: T;
+  onChange: (value: T) => void;
+}): JSX.Element {
+  return (
+    <div className="ui-segment" role="radiogroup" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          className="ui-tab"
+          aria-checked={option.value === value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function List({ children }: { children: ReactNode }): JSX.Element {
   return <div className="ui-list">{children}</div>;
 }
@@ -548,4 +582,40 @@ export function ListRow({
     );
   }
   return <div className="ui-list-row">{body}</div>;
+}
+
+/* ------------------------------------------------------------------ *
+ * the field
+ * ------------------------------------------------------------------ */
+
+/**
+ * The soft blue-to-sand field: first run, the Home hero band (`quiet`), a new
+ * chat's opening. Text never sits on it except one short line in `--text`.
+ */
+export function GradientField({
+  quiet,
+  still,
+  className,
+  children,
+}: {
+  quiet?: boolean;
+  still?: boolean;
+  className?: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <div className={cx('ui-fieldbg', className)} data-quiet={quiet ? 'true' : undefined} data-still={still ? 'true' : undefined}>
+      {children}
+    </div>
+  );
+}
+
+/** The one white card that floats on the field; `dock` is its actions under one hairline. */
+export function FloatCard({ dock, className, children }: { dock?: ReactNode; className?: string; children: ReactNode }): JSX.Element {
+  return (
+    <div className={cx('ui-float', className)}>
+      <div className="ui-float-body">{children}</div>
+      {dock ? <div className="ui-float-dock">{dock}</div> : null}
+    </div>
+  );
 }
