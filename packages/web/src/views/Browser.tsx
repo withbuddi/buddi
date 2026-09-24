@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
 import { chatRoute } from '../routes';
-import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 
 export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
@@ -42,7 +42,16 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
     <Stack gap="lg">
       <ErrorBanner message={failure} />
 
-      <Panel title="Status">
+      <Section
+        title="Status"
+        panel
+        actions={
+          <>
+            <Button size="sm" disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
+            {!ready && perms?.supported ? <Button size="sm" variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
+          </>
+        }
+      >
         <Stack>
           {!data.enabled ? (
             <Notice tone="warning">The host is not available. Start buddi serve on a machine with a desktop session.</Notice>
@@ -68,15 +77,17 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
             <p className="muted">Computer control requires macOS 14 or later.</p>
           ) : null}
           {perms?.message ? <p className="muted">{perms.message}</p> : null}
-          <Toolbar>
-            {!ready && perms?.supported ? <Button variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
-            <Button disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
-          </Toolbar>
           {perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
         </Stack>
-      </Panel>
+      </Section>
 
-      <Panel title="Who is driving">
+      <Section
+        title="Who is driving"
+        panel
+        actions={sessions.length > 0 ? (
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{data.mode === 'computer' ? 'Stop computer control' : 'Stop all browsers'}</Button>
+        ) : undefined}
+      >
         {sessions.length === 0 ? (
           <p className="ui-card-meta">Nobody right now. Ask an agent to open a website or one of the allowed apps, and you will see it working on that conversation’s Canvas.</p>
         ) : (
@@ -93,16 +104,11 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
             ))}
           </div>
         )}
-        {sessions.length > 0 ? (
-          <Toolbar>
-            <Button variant="danger" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{data.mode === 'computer' ? 'Stop computer control' : 'Stop all browsers'}</Button>
-          </Toolbar>
-        ) : null}
-      </Panel>
+      </Section>
 
       {settings ? (
         <>
-          <Panel title="How agents get a screen">
+          <Section title="How agents get a screen" panel>
             <div className="mode-choice" role="radiogroup" aria-label="Control mode">
               <ModeOption
                 current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
@@ -125,9 +131,9 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
             </div>
             {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
             {settings.mode === 'extension' ? <ExtensionPairing busy={busy} /> : null}
-          </Panel>
+          </Section>
 
-          <Panel title="Apps agents may use">
+          <Section title="Apps agents may use" panel>
             <Stack>
               <AppList settings={settings} disabled={busy || active || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
               <Details summary="Details">
@@ -138,7 +144,7 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
                 </div>
               </Details>
             </Stack>
-          </Panel>
+          </Section>
           {picking ? (
             <AppPicker
               chosen={settings.allowedApps}

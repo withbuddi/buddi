@@ -2486,16 +2486,16 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
  * Settings: model accounts, list and detail
  * ================================================================== */
 
-.accounts { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+/* One flush panel: the list down the left behind a hairline, the chosen
+   account beside it. */
+.accounts { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: stretch; }
 .accounts-list {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-panel);
-  overflow: hidden;
+  border-right: 1px solid var(--line);
+  min-width: 0;
 }
+.accounts-detail { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4) var(--space-5); min-width: 0; }
 .accounts-row {
   display: flex;
   align-items: center;
@@ -2519,6 +2519,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 
 @media (max-width: 860px) {
   .accounts { grid-template-columns: 1fr; }
+  .accounts-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
 

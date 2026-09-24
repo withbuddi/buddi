@@ -13,7 +13,7 @@ import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
-import { Button, Empty, ErrorBanner, Field, KV, Notice, Panel, Pill, Section, Segment, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Segment, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -88,7 +88,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
 function AppearanceSection(): JSX.Element {
   const [appearance, set] = useAppearance();
   return (
-    <Panel title="Appearance">
+    <Section title="Appearance" aside="Kept in this browser only. Another browser keeps its own." panel>
       <Stack divided gap="lg">
         <PrefRow label="Theme" hint="System follows your Mac.">
           <Segment<ThemeChoice>
@@ -114,9 +114,8 @@ function AppearanceSection(): JSX.Element {
             onChange={(width) => set({ width })}
           />
         </PrefRow>
-        <p className="ui-card-meta">Kept in this browser only. Another browser keeps its own.</p>
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 
@@ -142,21 +141,22 @@ function System({ timezone }: { timezone: string }): JSX.Element {
       <ErrorBanner message={overview.error} />
       <Version />
       {data ? (
-        <Panel title="The queue">
-          <Stack>
-            <p className="ui-card-meta">
-              {data.paused ? 'Paused. Nothing is being claimed until you resume.' : 'Running. Jobs are claimed as they come due.'}{' '}
-              {data.paused ? <Pill tone="warning">paused</Pill> : <Pill tone="good">running</Pill>}
-            </p>
-            <div className="ui-toolbar">
-              <Button variant={data.paused ? 'accent' : undefined} onClick={() => { void api.setPaused(!data.paused).then(() => overview.reload()); }}>
-                {data.paused ? 'Resume the queue' : 'Pause the queue'}
-              </Button>
-            </div>
-          </Stack>
-        </Panel>
+        <Section
+          title="The queue"
+          panel
+          actions={
+            <Button size="sm" variant={data.paused ? 'accent' : undefined} onClick={() => { void api.setPaused(!data.paused).then(() => overview.reload()); }}>
+              {data.paused ? 'Resume the queue' : 'Pause the queue'}
+            </Button>
+          }
+        >
+          <p className="ui-card-meta">
+            {data.paused ? 'Paused. Nothing is being claimed until you resume.' : 'Running. Jobs are claimed as they come due.'}{' '}
+            {data.paused ? <Pill tone="warning">paused</Pill> : <Pill tone="good">running</Pill>}
+          </p>
+        </Section>
       ) : null}
-      <Panel title="This host">
+      <Section title="This host" panel>
         <KV
           items={[
             { label: 'Time zone', value: timezone },
@@ -168,17 +168,17 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         {accounts.data && (accounts.data.vault.locked || accounts.data.vault.kind === 'none') ? (
           <Notice tone="warning">{accounts.data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         ) : null}
-      </Panel>
-      <Panel title="First run">
+      </Section>
+      <Section title="First run" panel>
         <p className="ui-card-meta">
           The setup screens — you, a model account, an agent — are always there.{' '}
           <a href={WELCOME_ROUTE}>Run setup again</a>. Nothing is undone by opening them; each screen saves
           what you change and leaves the rest alone.
         </p>
-      </Panel>
+      </Section>
       <Service />
       <Tailscale />
-      <Panel title="Mail and sources">
+      <Section title="Mail and sources" panel>
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.mail.length === 0 ? (
@@ -196,7 +196,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
             }))}
           />
         )}
-      </Panel>
+      </Section>
     </Stack>
   );
 }
@@ -234,7 +234,15 @@ export function Tailscale(): JSX.Element {
       .finally(() => { setBusy(false); view.reload(); });
   };
   return (
-    <Panel title="Sign in through Tailscale">
+    <Section
+      title="Sign in through Tailscale"
+      panel
+      foot={
+        <Button variant="accent" disabled={busy || !data || locked} onClick={() => save(data?.enabled ?? false)}>
+          Save
+        </Button>
+      }
+    >
       <Stack divided>
         <Section>
           <Stack gap="sm">
@@ -292,15 +300,10 @@ export function Tailscale(): JSX.Element {
               read buddi&rsquo;s files.
             </p>
             {saved ? <Notice tone="good" role="status">Saved.</Notice> : null}
-            <Toolbar align="end">
-              <Button variant="accent" disabled={busy || !data || locked} onClick={() => save(data?.enabled ?? false)}>
-                Save
-              </Button>
-            </Toolbar>
           </Stack>
         </Section>
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 
@@ -341,7 +344,7 @@ export function Service(): JSX.Element | null {
       .finally(() => { setBusy(false); view.reload(); });
   };
   return (
-    <Panel title="Service">
+    <Section title="Service" panel>
       <Stack divided>
         <Section>
           <KV
@@ -388,7 +391,7 @@ export function Service(): JSX.Element | null {
           </Stack>
         </Section>
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 
@@ -627,7 +630,7 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
 
   if (data?.checkout) {
     return (
-      <Panel title="Version">
+      <Section title="Version" panel>
         <Stack divided>
           <Section>
             <KV items={[{ label: 'Running', value: <span className="mono">{data.current}</span> }]} />
@@ -636,12 +639,12 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
             <p className="ui-card-meta">{CHECKOUT_UPGRADE_LINE}</p>
           </Section>
         </Stack>
-      </Panel>
+      </Section>
     );
   }
 
   return (
-    <Panel title="Version">
+    <Section title="Version" panel>
       <Stack divided>
         <Section>
           <Stack gap="sm">
@@ -728,7 +731,7 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
           </Section>
         ) : null}
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 

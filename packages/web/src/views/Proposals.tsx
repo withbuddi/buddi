@@ -48,7 +48,7 @@ import {
   ListRow,
   Notice,
   PageFrame,
-  Panel,
+  Section,
   Pill,
   Stack,
   Toolbar,
@@ -138,16 +138,20 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
           {done}
         </Notice>
       ) : null}
-      {!data ? (
-        <Empty>Loading…</Empty>
-      ) : open.length === 0 ? (
-        <Empty>
-          {plugin
-            ? `No rule from ${plugin} is waiting. It proposes one when you decide the same way several times running.`
-            : 'Nothing proposed. When an agent learns something worth keeping, it waits here.'}
-        </Empty>
+      {!data || open.length === 0 ? (
+        <Section title="Waiting" panel>
+          <Empty>
+            {!data
+              ? 'Loading…'
+              : plugin
+                ? `No rule from ${plugin} is waiting. It proposes one when you decide the same way several times running.`
+                : 'Nothing proposed. When an agent learns something worth keeping, it waits here.'}
+          </Empty>
+        </Section>
       ) : (
-        <Stack>
+        // Each proposal is a record with its own card, so the cards are the
+        // section's rows; a panel around them would be a card in a card.
+        <Section title="Waiting" aside={`${open.length} to decide`}>
           {open.map((proposal) => (
             <ProposalCard
               key={proposal.id}
@@ -172,11 +176,10 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
               }
             />
           ))}
-        </Stack>
+        </Section>
       )}
       {closed.length > 0 ? (
-        <Details summary={`Kept, discarded and expired (${closed.length})`} boxed>
-          <Panel flush>
+        <Section title={`Kept, discarded and expired (${closed.length})`} aside="These stop being shown a week after they were decided." panel flush>
             <List>
               {closed.map((proposal) => (
                 <ListRow
@@ -209,9 +212,7 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
                 />
               ))}
             </List>
-          </Panel>
-          <p className="muted">These stop being shown a week after they were decided.</p>
-        </Details>
+        </Section>
       ) : null}
       {!plugin && data?.digest ? <DigestSettings schedule={data.digest.schedule} onSaved={reload} /> : null}
     </PageFrame>
@@ -260,14 +261,22 @@ function DigestSettings({ schedule, onSaved }: { schedule: DigestSchedule; onSav
     }
   };
   return (
-    <Panel title="Weekly digest">
-      <Stack gap="sm">
+    <Section
+      title="Weekly digest"
+      panel
+      foot={
+        <Button variant="accent" disabled={saving || !changed} onClick={() => void save()}>
+          Save
+        </Button>
+      }
+    >
+      <Stack>
         <p className="muted">
           Once a week, one message on Telegram and a card on Home: what your agents learned, what waits here, and what the
           rules you kept stopped them doing. No message when nothing was learned and nothing waits.
           {schedule.next ? ` Next: ${fmtRelative(schedule.next)}.` : ''}
         </p>
-        <Toolbar align="end">
+        <Toolbar>
           <Field label="Day">
             <select value={day} disabled={saving} onChange={(e) => setDay(Number(e.target.value))}>
               {DAYS.map((name, i) => (
@@ -286,9 +295,6 @@ function DigestSettings({ schedule, onSaved }: { schedule: DigestSchedule; onSav
               ))}
             </select>
           </Field>
-          <Button variant="accent" size="sm" disabled={saving || !changed} onClick={() => void save()}>
-            Save
-          </Button>
         </Toolbar>
         {message ? (
           <Notice tone={message.tone} role="status">
@@ -296,7 +302,7 @@ function DigestSettings({ schedule, onSaved }: { schedule: DigestSchedule; onSav
           </Notice>
         ) : null}
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 

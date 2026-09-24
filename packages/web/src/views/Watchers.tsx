@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { api, ApiError } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { ACTIVITY_ROUTE } from '../routes';
-import { Button, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Panel, Pill, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Pill, Section, useAsync } from '../ui';
 
 export function Watchers({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.sentinels(), [], 30_000);
@@ -38,8 +38,7 @@ export function Watchers({ timezone, embedded }: { timezone: string; embedded?: 
     <PageFrame embedded={embedded} title="Watchers">
       <ErrorBanner message={error ?? failed} />
       <Notice>
-        Watchers are small checks that run on their own, with no model involved. An urgent finding wakes an agent, which verifies it before it tells you. The rest waits for the weekly recap.{' '}
-        <a href={`${ACTIVITY_ROUTE}/alerts`}>See what they found</a>
+        Watchers are small checks that run on their own, with no model involved. An urgent finding wakes an agent, which verifies it before it tells you. The rest waits for the weekly recap.
       </Notice>
       {failing.length > 0 ? (
         <Notice tone="warning">{failing.length === 1 ? 'One watcher failed on its last run.' : `${failing.length} watchers failed on their last run.`}</Notice>
@@ -50,7 +49,12 @@ export function Watchers({ timezone, embedded }: { timezone: string; embedded?: 
           does not run, and what it already found stays as it was.
         </Notice>
       ) : null}
-      <Panel flush>
+      <Section
+        title="Installed"
+        aside={<a href={`${ACTIVITY_ROUTE}/alerts`}>See what they found</a>}
+        panel
+        flush
+      >
         {!data ? (
           <Empty>Loading…</Empty>
         ) : installed.length === 0 ? (
@@ -84,7 +88,7 @@ export function Watchers({ timezone, embedded }: { timezone: string; embedded?: 
             })}
           </List>
         )}
-      </Panel>
+      </Section>
     </PageFrame>
   );
 }

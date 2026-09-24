@@ -27,7 +27,6 @@ import {
   ErrorBanner,
   Field,
   Notice,
-  Panel,
   Pill,
   Section,
   Stack,
@@ -201,20 +200,21 @@ export function Backup(): JSX.Element {
 
       <Schedule onSaved={() => view.reload()} />
 
-      <Panel title="Backups">
+      <Section
+        title="Backups"
+        panel
+        actions={
+          <Button variant="accent" size="sm" disabled={busy} onClick={() => run(api.startBackup(true))}>
+            Back up now
+          </Button>
+        }
+      >
         <Stack divided>
           <Section>
-            <Stack gap="sm">
-              <p className="ui-card-meta">
-                Kept in <span className="mono">{view.data?.dir ?? '…'}</span>. A backup holds your
-                agents, conversations, memory and files. It never holds a key.
-              </p>
-              <Toolbar align="end">
-                <Button variant="accent" disabled={busy} onClick={() => run(api.startBackup(true))}>
-                  Back up now
-                </Button>
-              </Toolbar>
-            </Stack>
+            <p className="ui-card-meta">
+              Kept in <span className="mono">{view.data?.dir ?? '…'}</span>. A backup holds your
+              agents, conversations, memory and files. It never holds a key.
+            </p>
           </Section>
           <Section>
             {view.data && archives.length === 0 ? (
@@ -251,7 +251,7 @@ export function Backup(): JSX.Element {
             )}
           </Section>
         </Stack>
-      </Panel>
+      </Section>
 
       <Passphrase />
 
@@ -295,11 +295,11 @@ function Schedule({ onSaved }: { onSaved: () => void }): JSX.Element {
    */
   if (loaded.data?.supervised === false) {
     return (
-      <Panel title="Every night">
+      <Section title="Every night" panel>
         <Section>
           <Notice tone="warning">{loaded.data.error ?? 'This installation schedules its own backups.'}</Notice>
         </Section>
-      </Panel>
+      </Section>
     );
   }
   const set = (patch: Partial<BackupSchedule>): void => {
@@ -320,7 +320,15 @@ function Schedule({ onSaved }: { onSaved: () => void }): JSX.Element {
       .finally(() => setSaving(false));
   };
   return (
-    <Panel title="Every night">
+    <Section
+      title="Every night"
+      panel
+      foot={
+        <Button variant="accent" disabled={saving} onClick={save}>
+          Save
+        </Button>
+      }
+    >
       <Stack divided>
         <Section>
           <Stack gap="sm">
@@ -364,15 +372,10 @@ function Schedule({ onSaved }: { onSaved: () => void }): JSX.Element {
               />
             </Field>
             {saved ? <Notice tone="good" role="status">Saved.{current.lastRunAt ? ` Last run ${fmtRelative(current.lastRunAt)}.` : ''}</Notice> : null}
-            <Toolbar align="end">
-              <Button variant="accent" disabled={saving} onClick={save}>
-                Save
-              </Button>
-            </Toolbar>
           </Stack>
         </Section>
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 
@@ -541,7 +544,7 @@ function Passphrase(): JSX.Element {
       .finally(() => setBusy(false));
   };
   return (
-    <Panel title="The passphrase">
+    <Section title="The passphrase" panel>
       <Stack divided>
         <Section>
           <Stack gap="sm">
@@ -572,7 +575,7 @@ function Passphrase(): JSX.Element {
           </Stack>
         </Section>
       </Stack>
-    </Panel>
+    </Section>
   );
 }
 
@@ -599,15 +602,15 @@ function FromAFile({
   const [asking, setAsking] = useState(false);
   if (checkout) {
     return (
-      <Panel title="Restore from a file">
+      <Section title="Restore from a file" panel>
         <Section>
           <Notice tone="warning">{checkoutSaid ?? CHECKOUT_LINE}</Notice>
         </Section>
-      </Panel>
+      </Section>
     );
   }
   return (
-    <Panel title="Restore from a file">
+    <Section title="Restore from a file" panel>
       <Stack divided>
         <Section>
           <Stack gap="sm">
@@ -652,6 +655,6 @@ function FromAFile({
           </Section>
         ) : null}
       </Stack>
-    </Panel>
+    </Section>
   );
 }

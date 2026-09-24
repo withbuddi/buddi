@@ -347,8 +347,29 @@ fieldset:disabled { opacity: 0.6; }
   letter-spacing: -0.005em;
   color: var(--text);
 }
-.ui-section-head a { color: var(--text-muted); font-size: var(--text-sm); }
-.ui-section-head a:hover { color: var(--accent); }
+.ui-section-aside a { color: var(--text-muted); font-size: var(--text-sm); }
+.ui-section-aside a:hover { color: var(--accent); }
+/* The head's right: a note, then what can be done to the section. */
+.ui-section-side { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-left: auto; min-width: 0; }
+.ui-section-aside { color: var(--text-muted); font-size: var(--text-sm); }
+.ui-section-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* A section's head sits on the ground, above its panel; with a button in it
+   the head centres, so the title does not float above the control. */
+.ui-section[data-panel='true'] > .ui-section-head { align-items: center; min-height: var(--control-h-sm); }
+/* Inside a panel a group's title is a step down from the section's own. */
+.ui-panel .ui-section-title { font-family: var(--font-sans); font-size: var(--text-md); }
+/* The panel's last row: its primary action, on the right, behind a hairline. */
+.ui-panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.ui-panel[data-flush='true'] > .ui-panel-foot { margin: 0; padding: var(--space-3) var(--space-4); }
 
 /* A raised box with an optional head. `data-flush` lets a table meet the edges. */
 .ui-panel {

@@ -62,39 +62,47 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
 
   const zones = initial.zones.length > 0 ? initial.zones : [initial.detectedTimezone];
   return (
-    <Stack divided>
-      <Section title="Name and place">
-        <Toolbar valign="end">
-          <Field label="What the agents call you" grow>
-            <input value={name} maxLength={80} placeholder={initial.displayName ?? 'Your name'} onChange={(e) => { setSaved(false); setName(e.target.value); }} />
-          </Field>
-          <Field label="Timezone" hint={`This host is in ${initial.detectedTimezone}. Existing schedules keep the zone they were made in.`}>
-            <select value={zone} onChange={(e) => { setSaved(false); setZone(e.target.value); }}>
-              <option value="">Not set (use the host's)</option>
-              {zones.map((z) => <option key={z} value={z}>{z}</option>)}
-            </select>
-          </Field>
-          <Field label="Answer me in" hint="A language, as you would say it. Blank mirrors whatever you write in.">
-            <input value={language} maxLength={40} placeholder="English, français…" onChange={(e) => { setSaved(false); setLanguage(e.target.value); }} />
-          </Field>
-        </Toolbar>
-      </Section>
-      <Section title="About you" aside={<span className="muted">read by every agent, as context</span>}>
-        <Field label="In your own words" hint="Who you are, how you like answers, anything every agent should keep in mind. A few lines is plenty.">
-          <textarea
-            rows={4}
-            maxLength={1000}
-            value={about}
-            placeholder="I run a small studio and prefer short answers with the numbers first. Call me by my first name."
-            onChange={(e) => { setSaved(false); setAbout(e.target.value); }}
-          />
-        </Field>
-        {problem ? <Notice tone="critical">{problem}</Notice> : null}
-        <Toolbar align="end">
+    <Section
+      title="Your profile"
+      aside="read by every agent, as context"
+      panel
+      foot={
+        <>
           {saved && !dirty ? <span className="muted">Saved</span> : null}
           <Button variant="accent" disabled={!dirty || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</Button>
-        </Toolbar>
-      </Section>
-    </Stack>
+        </>
+      }
+    >
+      <Stack divided gap="lg">
+        <Section title="Name and place">
+          <Toolbar valign="end">
+            <Field label="What the agents call you" grow>
+              <input value={name} maxLength={80} placeholder={initial.displayName ?? 'Your name'} onChange={(e) => { setSaved(false); setName(e.target.value); }} />
+            </Field>
+            <Field label="Timezone" hint={`This host is in ${initial.detectedTimezone}. Existing schedules keep the zone they were made in.`}>
+              <select value={zone} onChange={(e) => { setSaved(false); setZone(e.target.value); }}>
+                <option value="">Not set (use the host's)</option>
+                {zones.map((z) => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </Field>
+            <Field label="Answer me in" hint="A language, as you would say it. Blank mirrors whatever you write in.">
+              <input value={language} maxLength={40} placeholder="English, français…" onChange={(e) => { setSaved(false); setLanguage(e.target.value); }} />
+            </Field>
+          </Toolbar>
+        </Section>
+        <Section title="About you">
+          <Field label="In your own words" hint="Who you are, how you like answers, anything every agent should keep in mind. A few lines is plenty.">
+            <textarea
+              rows={4}
+              maxLength={1000}
+              value={about}
+              placeholder="I run a small studio and prefer short answers with the numbers first. Call me by my first name."
+              onChange={(e) => { setSaved(false); setAbout(e.target.value); }}
+            />
+          </Field>
+          {problem ? <Notice tone="critical">{problem}</Notice> : null}
+        </Section>
+      </Stack>
+    </Section>
   );
 }

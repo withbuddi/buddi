@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import {
   Button,
-  Card,
+  Section,
   Details,
   Empty,
   ErrorBanner,
@@ -74,16 +74,6 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
         {(data.vault.locked || data.vault.kind === 'none') && (
           <Notice tone="warning">{data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         )}
-        <Toolbar>
-          <Button variant="accent" disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>
-            Add account
-          </Button>
-          <span className="muted">Secrets live in the {vaultName(data.vault.kind)}; Postgres holds names and assignments only.</span>
-          <span className="ui-toolbar-spacer" />
-          <Button variant="ghost" size="sm" disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>
-            {loading ? 'Refreshing…' : 'Refresh status'}
-          </Button>
-        </Toolbar>
         {adding && (
           <Sheet title="Add an account" onClose={() => setAdding(false)}>
             <div id="new-provider-account">
@@ -98,6 +88,22 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
             </div>
           </Sheet>
         )}
+        <Section
+          title="Accounts"
+          aside={`Secrets live in the ${vaultName(data.vault.kind)}; Postgres holds names and assignments only.`}
+          actions={
+            <>
+              <Button variant="ghost" size="sm" disabled={busy || loading} onClick={() => { setFailure(null); setNotice(''); setRefreshRequested(true); reload(); }}>
+                {loading ? 'Refreshing…' : 'Refresh status'}
+              </Button>
+              <Button variant="accent" size="sm" disabled={busy} aria-expanded={adding} aria-controls="new-provider-account" onClick={() => setAdding(!adding)}>
+                Add account
+              </Button>
+            </>
+          }
+          panel
+          flush
+        >
         {accounts.length === 0 ? (
           <Empty>No accounts yet. Add one to give your agents a model to run on.</Empty>
         ) : (
@@ -125,6 +131,7 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
             ) : null}
           </div>
         )}
+        </Section>
       </>}
     </PageFrame>
   );
@@ -163,12 +170,11 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   return (
-    <Card
-      as="section"
-      tone={!a.enabled ? 'muted' : a.configured ? 'good' : 'warning'}
-      title={a.label}
-      meta={<StatusDot account={a} />}
-    >
+    <section className="accounts-detail" aria-label={a.label}>
+      <div className="ui-card-head">
+        <h3 className="ui-card-title">{a.label}</h3>
+        <StatusDot account={a} />
+      </div>
       <KV
         items={[
           { label: 'Provider', value: providerName(a) },
@@ -235,7 +241,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           <p>Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry.</p>
         </div>
       </Details>
-    </Card>
+    </section>
   );
 }
 

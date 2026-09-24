@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { ApiError, api, type MemoryNote, type MemoryPreference } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
-import { Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
+import { Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
 
 const KINDS = ['fact', 'observation', 'todo'] as const;
 
@@ -58,40 +58,42 @@ export function Memory({ embedded, agents, timezone, agentId }: {
     notes: data.notes.filter((n) => n.scope === 'shared'),
   } : null;
 
+  // What can be done to the preferences: in their head, not above the page.
+  const add = <Button variant="accent" size="sm" onClick={() => setAdding({ key: '', scope: agentId ?? 'shared' })}>Add a preference</Button>;
+
   return (
     <PageFrame
       embedded={embedded}
       title="Memory"
       lede="What your agents have kept about you. Correct anything here; they see the change on their next turn."
-      actions={<Button variant="accent" onClick={() => setAdding({ key: '', scope: agentId ?? 'shared' })}>Add a preference</Button>}
     >
       <ErrorBanner message={error ?? problem} />
       {own && shared ? (
-        <Stack divided>
-          <Section title="Preferences" aside={<span className="muted">what you told {agentName} alone</span>}>
+        <Stack gap="lg">
+          <Section title="Preferences" aside={`what you told ${agentName} alone`} actions={add} panel flush>
             <PreferenceTable preferences={own.preferences} empty={`Nothing stated to ${agentName} alone yet.`} {...rows} />
           </Section>
-          <Section title="Notes" aside={<span className="muted">what {agentName} wrote down for itself</span>}>
+          <Section title="Notes" aside={`what ${agentName} wrote down for itself`} panel flush>
             <NoteTable notes={own.notes} empty={`${agentName} has kept no private notes yet.`} {...rows} />
           </Section>
           <Details summary={`Shared with every agent, which ${agentName} also reads · ${shared.preferences.length} preferences, ${shared.notes.length} notes`}>
-            <Stack divided>
-              <Section title="Shared preferences">
+            <Stack gap="lg">
+              <Section title="Shared preferences" panel flush>
                 <PreferenceTable preferences={shared.preferences} empty="No shared preferences." {...rows} />
               </Section>
-              <Section title="Shared notes">
+              <Section title="Shared notes" panel flush>
                 <NoteTable notes={shared.notes} empty="No shared notes." {...rows} />
               </Section>
             </Stack>
           </Details>
         </Stack>
       ) : (
-        <Stack divided>
-          <Section title="Preferences" aside={<span className="muted">what you said you want, one current value each</span>}>
-            {data ? <PreferenceTable preferences={data.preferences} empty={'Nothing stated yet. Tell any agent "from now on…" or add one here.'} {...rows} /> : null}
+        <Stack gap="lg">
+          <Section title="Preferences" aside="what you said you want, one current value each" actions={add} panel flush>
+            {data ? <PreferenceTable preferences={data.preferences} empty={'Nothing stated yet. Tell any agent "from now on…" or add one here.'} {...rows} /> : <Empty>Loading…</Empty>}
           </Section>
-          <Section title="Notes" aside={<span className="muted">what an agent wrote down, with who wrote it</span>}>
-            {data ? <NoteTable notes={data.notes} empty="No notes yet. An agent writes one when you state something durable about your life." {...rows} /> : null}
+          <Section title="Notes" aside="what an agent wrote down, with who wrote it" panel flush>
+            {data ? <NoteTable notes={data.notes} empty="No notes yet. An agent writes one when you state something durable about your life." {...rows} /> : <Empty>Loading…</Empty>}
           </Section>
         </Stack>
       )}
@@ -139,8 +141,7 @@ function PreferenceTable({ preferences, empty, nameOf, onChangePreference, onFor
 }): JSX.Element {
   if (preferences.length === 0) return <Empty>{empty}</Empty>;
   return (
-    <Panel flush>
-      <Table>
+    <Table>
         <thead><tr><th>Preference</th><th>Value</th><th>Who sees it</th><th className="num">Since</th><th /></tr></thead>
         <tbody>
           {preferences.map((pref) => (
@@ -158,8 +159,7 @@ function PreferenceTable({ preferences, empty, nameOf, onChangePreference, onFor
             </tr>
           ))}
         </tbody>
-      </Table>
-    </Panel>
+    </Table>
   );
 }
 
@@ -169,8 +169,7 @@ function NoteTable({ notes, empty, nameOf, timezone, onEditNote, onForgetNote }:
 }): JSX.Element {
   if (notes.length === 0) return <Empty>{empty}</Empty>;
   return (
-    <Panel flush>
-      <Table>
+    <Table>
         <thead><tr><th>Note</th><th>Kind</th><th>Who sees it</th><th>Written by</th><th className="num">When</th><th /></tr></thead>
         <tbody>
           {notes.map((note) => (
@@ -192,8 +191,7 @@ function NoteTable({ notes, empty, nameOf, timezone, onEditNote, onForgetNote }:
             </tr>
           ))}
         </tbody>
-      </Table>
-    </Panel>
+    </Table>
   );
 }
 

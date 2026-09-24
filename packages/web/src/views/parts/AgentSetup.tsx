@@ -109,7 +109,7 @@ function Agent({
   const available = engine ? engine.available : true;
 
   return (
-    <Stack gap="lg" divided>
+    <Stack gap="lg">
       {!available ? (
         <Notice tone="warning">
           This agent cannot run right now: {engine?.unavailableReason ?? 'no credential'}.
@@ -118,7 +118,7 @@ function Agent({
 
       <Identity agent={agent} onSaved={onSaved} />
 
-      <Section title="Runs on">
+      <Section title="Runs on" panel>
         {accounts ? (
           <AccountChoice agentId={agent.id} accounts={accounts} onRun={onRun} />
         ) : (
@@ -166,7 +166,7 @@ function Agent({
         ) : null}
       </Section>
 
-      <Section title="Behaviour" aside={<span className="muted">saved as you change them</span>}>
+      <Section title="Behaviour" aside="saved as you change them" panel>
         <Toolbar valign="end">
           <Field label="Max turns" hint="Per run. The agent stops when it runs out.">
             <input
@@ -207,40 +207,44 @@ function Agent({
 
       <Delegation agent={agent} all={all} onSaved={onSaved} />
 
-      <Section title="Built-in context">
-        <p className="ui-card-meta">
-          Every agent receives current time, owner timezone and server-host information. system.time and system.info
-          are always available, without grants or approval. Host and browser access still require their own
-          permissions.
-        </p>
-      </Section>
+      <Section title="What it carries" panel>
+        <Stack divided>
+          <Section title="Built-in context">
+            <p className="ui-card-meta">
+              Every agent receives current time, owner timezone and server-host information. system.time and system.info
+              are always available, without grants or approval. Host and browser access still require their own
+              permissions.
+            </p>
+          </Section>
 
-      <Section title={`Granted tools (${agent.tools.length})`}>
-        {agent.tools.length === 0 ? (
-          <span className="muted">none</span>
-        ) : (
-          <Row>
-            {agent.tools.map((tool) => (
-              <Pill mono key={tool}>
-                {tool}
-              </Pill>
-            ))}
-          </Row>
-        )}
-      </Section>
+          <Section title={`Granted tools (${agent.tools.length})`}>
+            {agent.tools.length === 0 ? (
+              <span className="muted">none</span>
+            ) : (
+              <Row>
+                {agent.tools.map((tool) => (
+                  <Pill mono key={tool}>
+                    {tool}
+                  </Pill>
+                ))}
+              </Row>
+            )}
+          </Section>
 
-      <Section title={`Skills (${agent.skills.length})`}>
-        {agent.skills.length === 0 ? (
-          <span className="muted">none</span>
-        ) : (
-          <Row>
-            {agent.skills.map((skill) => (
-              <Pill key={skill.file}>
-                {skill.name} · {skill.provenance}
-              </Pill>
-            ))}
-          </Row>
-        )}
+          <Section title={`Skills (${agent.skills.length})`}>
+            {agent.skills.length === 0 ? (
+              <span className="muted">none</span>
+            ) : (
+              <Row>
+                {agent.skills.map((skill) => (
+                  <Pill key={skill.file}>
+                    {skill.name} · {skill.provenance}
+                  </Pill>
+                ))}
+              </Row>
+            )}
+          </Section>
+        </Stack>
       </Section>
     </Stack>
   );
@@ -310,7 +314,29 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
   };
 
   return (
-    <Section title="Who it is" aside={<span className="muted mono">{agent.id}</span>}>
+    <Section
+      title="Who it is"
+      aside={<span className="mono">{agent.id}</span>}
+      panel
+      foot={
+        agent.isExample ? undefined : (
+          <>
+            {failure ? (
+              <span className="critical save-error" role="alert">{failure}</span>
+            ) : (
+              <span className={dirty ? 'warning' : 'muted'}>
+                {dirty ? 'Not saved yet.' : 'Saved. Applies to new runs.'}
+              </span>
+            )}
+            <span className="ui-toolbar-spacer" />
+            <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>
+              Save who it is
+            </Button>
+          </>
+        )
+      }
+    >
+      <Stack>
       {agent.isExample ? (
         <Notice tone="warning">
           This agent ships with buddi, so its file is read-only here. Ask Agent Father to make it yours,
@@ -350,21 +376,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         Its persona — the body of the file below the front matter — is not edited here. Ask the agent that
         makes agents to rewrite it, or edit <span className="mono">agent.md</span> directly.
       </p>
-      {!agent.isExample ? (
-        <Toolbar>
-          {failure ? (
-            <span className="critical save-error" role="alert">{failure}</span>
-          ) : (
-            <span className={dirty ? 'warning' : 'muted'}>
-              {dirty ? 'Not saved yet.' : 'Saved. Applies to new runs.'}
-            </span>
-          )}
-          <span className="ui-toolbar-spacer" />
-          <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>
-            Save who it is
-          </Button>
-        </Toolbar>
-      ) : null}
+      </Stack>
     </Section>
   );
 }
@@ -568,56 +580,64 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
     finally { setBusy(false); }
   };
   return (
-    <>
-      <Section title="Can ask" aside={<span className="muted">{agent.tools.includes('agent.delegate') ? 'holds agent.delegate' : 'no agent.delegate tool: it cannot ask anyone until granted'}</span>}>
-        {agent.isExample ? (
-          <Notice tone="warning">This agent ships with buddi, so its allowlist is read-only here. Ask Agent Father to make it yours, then it can change.</Notice>
-        ) : null}
-        <ErrorBanner message={failure} />
-        {others.length === 0 ? (
-          <Empty>Nobody else is installed.</Empty>
-        ) : (
-          <ul className="ui-list delegate-list" aria-label="Agents this one may ask">
-            {others.map((a) => {
-              const writer = isWriter(a);
-              return (
-                <li key={a.id} className="ui-list-row">
-                  <input
-                    type="checkbox"
-                    id={`can-ask-${agent.id}-${a.id}`}
-                    checked={chosen.includes(a.id)}
-                    disabled={writer || agent.isExample || busy}
-                    onChange={() => toggle(a.id)}
-                  />
-                  <label htmlFor={`can-ask-${agent.id}-${a.id}`} className="ui-list-main">
-                    <span className="ui-list-title">{a.name} <span className="mono muted">@{a.handle}</span></span>
-                    <span className="ui-list-sub">{writer ? 'Makes and changes agents. Never reachable by delegation.' : a.description}</span>
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {!agent.isExample ? (
-          <Toolbar>
+    <Section
+      title="Delegation"
+      aside={agent.tools.includes('agent.delegate') ? 'holds agent.delegate' : 'no agent.delegate tool: it cannot ask anyone until granted'}
+      panel
+      foot={
+        agent.isExample ? undefined : (
+          <>
             <span className={dirty ? 'warning' : 'muted'}>
               {dirty ? 'Not saved yet.' : saved ? 'Saved. Applies to the next run.' : chosen.length === 0 ? 'Asks nobody.' : `May ask ${chosen.length} agent${chosen.length === 1 ? '' : 's'}.`}
             </span>
             <span className="ui-toolbar-spacer" />
             <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>Save who it can ask</Button>
-          </Toolbar>
-        ) : null}
-      </Section>
+          </>
+        )
+      }
+    >
+      <Stack divided>
+        <Section title="Can ask">
+          {agent.isExample ? (
+            <Notice tone="warning">This agent ships with buddi, so its allowlist is read-only here. Ask Agent Father to make it yours, then it can change.</Notice>
+          ) : null}
+          <ErrorBanner message={failure} />
+          {others.length === 0 ? (
+            <Empty>Nobody else is installed.</Empty>
+          ) : (
+            <ul className="ui-list delegate-list" aria-label="Agents this one may ask">
+              {others.map((a) => {
+                const writer = isWriter(a);
+                return (
+                  <li key={a.id} className="ui-list-row">
+                    <input
+                      type="checkbox"
+                      id={`can-ask-${agent.id}-${a.id}`}
+                      checked={chosen.includes(a.id)}
+                      disabled={writer || agent.isExample || busy}
+                      onChange={() => toggle(a.id)}
+                    />
+                    <label htmlFor={`can-ask-${agent.id}-${a.id}`} className="ui-list-main">
+                      <span className="ui-list-title">{a.name} <span className="mono muted">@{a.handle}</span></span>
+                      <span className="ui-list-sub">{writer ? 'Makes and changes agents. Never reachable by delegation.' : a.description}</span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Section>
 
-      <Section title="Asked by">
-        {askedBy.length === 0 ? (
-          <p className="ui-card-meta">No other agent may hand work to {agent.name}.</p>
-        ) : (
-          <Row>
-            {askedBy.map((a) => <Pill key={a.id}>{a.name}</Pill>)}
-          </Row>
-        )}
-      </Section>
-    </>
+        <Section title="Asked by">
+          {askedBy.length === 0 ? (
+            <p className="ui-card-meta">No other agent may hand work to {agent.name}.</p>
+          ) : (
+            <Row>
+              {askedBy.map((a) => <Pill key={a.id}>{a.name}</Pill>)}
+            </Row>
+          )}
+        </Section>
+      </Stack>
+    </Section>
   );
 }
