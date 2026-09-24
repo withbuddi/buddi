@@ -5,7 +5,7 @@
  * new one, so the tool can tell the model what the value used to be — which is
  * what lets an agent say "you told me EUR before; noting USD now".
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   fromAgentScope,
@@ -53,9 +53,9 @@ export const rememberPreference: ToolDefinition<
   async execute(input, ctx) {
     const scope = resolveScope(input.scope, ctx);
     const agentScope = toAgentScope(scope);
-    const now = ctx.now();
+    const now = ctx.buddi!.clock.now();
 
-    const { rows: currentRows } = await ctx.db.query<{ value: string; revision: number }>(
+    const { rows: currentRows } = await ctx.buddi!.db.query<{ value: string; revision: number }>(
       `select value, revision from memory.preferences
         where key = $1 and agent_scope is not distinct from $2 and superseded_at is null
         order by revision desc
@@ -64,19 +64,19 @@ export const rememberPreference: ToolDefinition<
     );
     const previous = currentRows[0];
 
-    const { rows: maxRows } = await ctx.db.query<{ max: number }>(
+    const { rows: maxRows } = await ctx.buddi!.db.query<{ max: number }>(
       `select coalesce(max(revision), 0)::int as max from memory.preferences
         where key = $1 and agent_scope is not distinct from $2`,
       [input.key, agentScope],
     );
     const revision = (maxRows[0]?.max ?? 0) + 1;
 
-    await ctx.db.query(
+    await ctx.buddi!.db.query(
       `update memory.preferences set superseded_at = $3
         where key = $1 and agent_scope is not distinct from $2 and superseded_at is null`,
       [input.key, agentScope, now],
     );
-    await ctx.db.query(
+    await ctx.buddi!.db.query(
       `insert into memory.preferences (key, value, revision, agent_scope, created_at)
        values ($1, $2, $3, $4, $5)`,
       [input.key, input.value, revision, agentScope, now],
@@ -154,6 +154,6 @@ export const getPreferences: ToolDefinition<
   tier: 'auto',
   input: getInput,
   async execute(_input, ctx) {
-    return { preferences: await currentPreferences(ctx.db, visibleScopes(ctx)) };
+    return { preferences: await currentPreferences(ctx.buddi!.db, visibleScopes(ctx)) };
   },
 };
