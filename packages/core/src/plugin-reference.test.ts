@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { PLUGIN_USES, PLUGIN_USE_WORDS } from './plugin/uses.js';
 import { HOST_API_VERSION } from './plugin/version.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -95,10 +96,66 @@ export function sinceColumn(markdown: string, name: string): Map<string, string>
   return since;
 }
 
+/**
+ * What core runs a plugin's functions on, and the context the plugin is typed
+ * against. The fields the first has and the second does not are the ones a
+ * plugin reaches through `ctx.buddi` instead (docs/specs/plugin-host-api.md
+ * §3): the guide may name them only as the host's.
+ */
+export const CORE_CONTEXTS: ReadonlyArray<{ core: string; plugin: string; file: string }> = [
+  { core: 'CoreToolContext', plugin: 'ToolContext', file: 'tools.ts' },
+  { core: 'CoreSourceContext', plugin: 'SourceContext', file: 'tools.ts' },
+  { core: 'CoreSentinelContext', plugin: 'SentinelContext', file: path.join('sentinels', 'types.ts') },
+];
+
+/** The rows of §1.3's table: each `uses` name and the line the owner reads for it. */
+export function usesTable(markdown: string): Map<string, string> | undefined {
+  const header = /^\| `uses` \| The owner reads \|\s*$/m.exec(markdown);
+  if (header === null) return undefined;
+  const rows = new Map<string, string>();
+  const after = markdown.slice(header.index + header[0].length).split('\n').slice(1);
+  for (const line of after) {
+    if (!line.startsWith('|')) {
+      if (rows.size > 0 || line.trim() !== '') break;
+      continue;
+    }
+    const cells = line.split('|').map((cell) => cell.trim());
+    const name = /^`([^`]+)`$/.exec(cells[1] ?? '');
+    if (name === null) continue;
+    rows.set(name[1] as string, cells[2] ?? '');
+  }
+  return rows;
+}
+
+/**
+ * Every place the guide names a field the plugin's context no longer has as if
+ * it were one: `ctx.<field>` anywhere, or `<field>` declared inside a code
+ * block's `interface ToolContext` (or `SourceContext`, `SentinelContext`).
+ */
+export function removedFieldMentions(markdown: string, removed: ReadonlySet<string>): string[] {
+  const found: string[] = [];
+  const lines = markdown.split('\n');
+  lines.forEach((line, i) => {
+    for (const match of line.matchAll(/\bctx\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
+      if (removed.has(match[1] as string)) found.push(`line ${i + 1}: ctx.${match[1]}`);
+    }
+  });
+  const declaration = /interface (ToolContext|SourceContext|SentinelContext) \{([\s\S]*?)\n\}/g;
+  for (const match of markdown.matchAll(declaration)) {
+    const line = markdown.slice(0, match.index).split('\n').length;
+    for (const member of (match[2] as string).matchAll(/^\s*([A-Za-z_][A-Za-z0-9_]*)\??\s*[:(]/gm)) {
+      if (removed.has(member[1] as string)) found.push(`line ${line}: ${match[1]}.${member[1]}`);
+    }
+  }
+  return found;
+}
+
 /** One member of an interface: its name, and whether the type marks it optional. */
 export interface Member {
   name: string;
   optional: boolean;
+  /** The declared type, as written: `OwnerArea`, `PluginUse[]`. */
+  type?: string;
 }
 
 /** Read the members of the named interfaces out of one source file. */
@@ -120,7 +177,11 @@ export function membersOf(file: string, wanted: ReadonlySet<string>): Map<string
       // `describe?(…)` are as much part of the contract as `name: string`.
       if (!ts.isPropertySignature(member) && !ts.isMethodSignature(member)) continue;
       if (member.name === undefined || !ts.isIdentifier(member.name)) continue;
-      members.push({ name: member.name.text, optional: member.questionToken !== undefined });
+      members.push({
+        name: member.name.text,
+        optional: member.questionToken !== undefined,
+        ...(member.type === undefined ? {} : { type: member.type.getText(source) }),
+      });
     }
     found.set(name, members);
   }
@@ -173,6 +234,52 @@ suite('docs/plugins.md — the plugin contract reference', () => {
 
   it('finds every documented interface in the source', () => {
     expect([...wanted].filter((name) => !byInterface.has(name))).toEqual([]);
+  });
+
+  it('documents every area the host has, and none it does not', () => {
+    // An area is a member of `BuddiHost` whose type is an `…Area`. Each one
+    // needs a table of its own methods, and a table for an area the host no
+    // longer has is a promise the type does not keep.
+    const areas = (byInterface.get('BuddiHost') ?? [])
+      .map((m) => m.type ?? '')
+      .filter((type) => /^[A-Z][A-Za-z]*Area$/.test(type));
+    expect(areas.length).toBeGreaterThan(0);
+    const documentedAreas = HOST_DOCUMENTED.filter((name) => name !== 'BuddiHost');
+    expect({
+      undocumented: areas.filter((area) => !documentedAreas.includes(area)),
+      notAnArea: documentedAreas.filter((area) => !areas.includes(area)),
+    }).toEqual({ undocumented: [], notAnArea: [] });
+    for (const area of areas) expect(tableFields(markdown, area), area).toBeDefined();
+  });
+
+  it("lists exactly the manifest's uses, in the owner's words", () => {
+    const manifest = byInterface.get('PluginManifest') ?? [];
+    // The manifest's field is typed on the list the table is checked against.
+    expect(manifest.find((m) => m.name === 'uses')?.type).toBe('PluginUse[]');
+    const table = usesTable(markdown);
+    if (table === undefined) throw new Error('no `uses` table in the guide');
+    expect([...table.keys()]).toEqual([...PLUGIN_USES]);
+    const wrong = PLUGIN_USES.filter((use) => table.get(use) !== PLUGIN_USE_WORDS[use]).map(
+      (use) => `${use}: "${table.get(use)}" is not "${PLUGIN_USE_WORDS[use]}"`,
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  it('names no field the context no longer has as current', () => {
+    const contexts = new Map<string, Member[]>();
+    for (const file of new Set(CORE_CONTEXTS.map((c) => c.file))) {
+      const names = new Set(CORE_CONTEXTS.flatMap((c) => [c.core, c.plugin]));
+      for (const [name, members] of membersOf(path.join(here, file), names)) contexts.set(name, members);
+    }
+    const removed = new Set<string>();
+    for (const { core, plugin } of CORE_CONTEXTS) {
+      const kept = new Set((contexts.get(plugin) ?? []).map((m) => m.name));
+      for (const member of contexts.get(core) ?? []) if (!kept.has(member.name)) removed.add(member.name);
+    }
+    // The pool, the owner, the clock and the rest moved under `ctx.buddi`; if
+    // this is empty the Core contexts were not found, not the guide clean.
+    expect([...removed]).toEqual(expect.arrayContaining(['db', 'ownerId', 'now', 'timezone', 'agentForRole']));
+    expect(removedFieldMentions(markdown, removed)).toEqual([]);
   });
 
   for (const name of Object.keys(DOCUMENTED)) {

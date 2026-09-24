@@ -1,15 +1,18 @@
 # Writing a plugin
 
-Status: reference, 2026-09-21
+Status: reference, 2026-09-24 (host API 1.0)
 
 Everything an agent can actually *do* is a plugin. This document is the guide to
 writing one: the ten-minute path from nothing to a tool an agent can call, the
 contract, the things a plugin can contribute, the rules that bite, a complete
 worked example you can copy, and a field-by-field reference at the end.
 
-`packages/core/src/tools.ts` is the whole contract, in one file, and it is worth
-reading before or alongside this. This document explains it; it does not replace
-it. §9 is every field of it in a table.
+The contract is what `@buddi/core/plugin` exports: the manifest and tool types
+in `packages/core/src/tools.ts`, and the host a plugin is handed, `ctx.buddi`, in
+`packages/core/src/host/types.ts`. Both are worth reading before or alongside
+this. This document explains them; it does not replace them. §9 is every field
+of the manifest and the call in a table, and §9b every area and method of the
+host.
 
 ---
 
@@ -25,7 +28,7 @@ Ten minutes, seven commands, no editing of buddi's source at any point.
 | **pnpm** | `corepack enable` is enough; any recent npm works too. |
 | **A buddi you can restart** | `buddi doctor` answers, and `buddi plugins list` prints a table. If `buddi` is not on your PATH you are in a checkout: `pnpm build` there first, and read `docs/install.md`. |
 | **Postgres** | Already true if buddi runs: your plugin's schema goes in the same database. |
-| **`@buddi/core`** | The contract package, at the version your installation runs. `buddi plugins init` reads that version and writes it into your `package.json` for you. |
+| **`@buddi/core`** | The contract package, at the version your installation runs. `buddi plugins init` reads that version and writes it into your `package.json` for you. Your code imports `@buddi/core/plugin` and nothing else of it (§1.2). |
 
 You do **not** need a fork of buddi, a branch, or a line added to any file in
 it. A plugin is an ordinary npm-style package that lives wherever you keep your
@@ -43,9 +46,9 @@ What it writes:
 
 ```
 weather/
-  package.json            # "buddi": { "manifest": "manifest" }, the keyword,
-                          #   @buddi/core as a PEER, and a dev link to the core
-                          #   your installation is running
+  package.json            # "buddi": { "manifest", "core", "uses", "hostApi" },
+                          #   the keyword, @buddi/core as a PEER, and a dev
+                          #   link to the core your installation is running
   tsconfig.json
   src/index.ts            # the manifest: one `auto` tool, one `gated` tool with
                           #   describe(), and a commented-out source stub
@@ -162,6 +165,9 @@ buddi plugins install ./buddi-plugin-weather-0.1.0.tgz
 buddi plugins approve <id> --integrity sha512-…
 ```
 
+A tarball install of the scaffold as written does not work yet: see "Known, not
+fixed" in §8 for the three changes it needs.
+
 Then publish, when you want other people to have it:
 
 ```bash
@@ -182,6 +188,7 @@ does.
 
 | If you want to… | Read |
 | --- | --- |
+| reach the database, the clock, files or the web | §1.1, §9b |
 | know what a plugin may contribute | §2 |
 | decide `auto` or `gated` | §2.1 |
 | poll the world with no agent in the loop | §2.2 |
@@ -196,14 +203,28 @@ does.
 
 ## 1. What a plugin is, and is not
 
-A plugin is a package that exports a `PluginManifest` and imports `@buddi/core`.
-Core never imports a plugin. That direction is not a convention:
+A plugin is a package that exports a `PluginManifest`. It reaches buddi through
+two things and nothing else:
+
+- **`ctx.buddi`**, the host: one object core builds for your plugin at
+  `register()` and puts on every context it hands you — a tool's, a page
+  query's, a metric's, a source's, a sentinel's. The database, the owner, the
+  clock, your directory, the Files library, web requests, the owner's secrets:
+  everything you reach beyond your own arguments is an area of it (§1.1).
+- **`@buddi/core/plugin`**, the types of the contract and a handful of pure
+  helpers — `localDateString`, `sha256Of`, `pageFile`, `QueryRefusal`,
+  `checkUrl` — with no state and no I/O (§1.2).
+
+Core never imports a plugin, and a plugin imports nothing of core but that
+entry point. Neither direction is a convention:
 
 - `scripts/check-boundaries.mjs` scans `packages/core` and fails the build if any
   source file or `package.json` dependency there names `@buddi/runtime`,
   `@buddi/gateway` or `@buddi/tool-*`. It runs first in `pnpm test`. The same
   script also fails the build on outbound HTTP that does not go through the
-  shared transport — see "Outbound HTTP" below.
+  shared transport — see "Outbound HTTP" in §4.
+- `packages/gateway/src/plugin-imports.test.ts` walks every plugin's source and
+  fails, naming the file, on any reach past the two (§1.5).
 - `packages/gateway/src/generic-install.test.ts` boots the system with no plugins
   at all. Core with zero plugins installed is a valid, running state — the
   registry is empty, the sentinel tick returns `[]`, the source tick returns
@@ -218,14 +239,18 @@ There is no sandbox, and that is the one thing to be clear-eyed about. A plugin
 *is* dynamically loaded — `packages/gateway/src/plugins/load.ts` imports the
 entry point named in `plugins.json`, once, at start — but loading is not
 isolation: the module runs inside buddi's process with everything buddi can do.
-The security properties come from the registry and the approval machinery, from
-the two approvals that stand between a package and its first import, and from
-the recorded hash that says later when the files changed. Not from a boundary
-around the running code, because there is none. The plugins this repository
-compiles in (`email`, `memory`, `artifacts`, `web`, the browser and host
-families) are registered at the composition root instead, in
+`ctx.buddi` is the supported path, not a wall: a plugin that wants to can import
+a file by absolute path, read `process.env` or open a socket to Postgres. The
+security properties come from the registry and the approval machinery, from the
+two approvals that stand between a package and its first import, from the
+recorded hash that says later when the files changed, and from the owner
+reading the install card. What the host adds is that an honest plugin has no
+reason to reach further, so any reach is visible in review. The plugins this
+repository compiles in (`email`, `memory`, `artifacts`, `web`, the browser and
+host families) are registered at the composition root instead, in
 `createToolRegistry`; that line is for plugins shipped *inside* buddi and you
-never touch it to distribute one.
+never touch it to distribute one. They are held to the same host and the same
+import test as yours.
 
 What a plugin is *not*:
 
@@ -242,6 +267,187 @@ extension), each behind the same `BrowserDriver` seam, and none of them able to
 import the gateway — the extension's WebSocket endpoint is injected into the
 plugin as a bridge interface the plugin declares. `docs/browser.md` describes the
 three modes and what each refuses.
+
+### 1.1 The host: `ctx.buddi`
+
+```ts
+interface BuddiHost {
+  readonly version: string;   // '1.0' — see §1.7
+  readonly plugin: string;    // your manifest's name
+  log(line: string): void;    // an operational line, prefixed with your name
+  owner: OwnerArea;           // id, timezone, agentForRole, protectedPaths
+  clock: ClockArea;           // now(), today()
+  db: DbArea;                 // query(), transaction() — never a raw pool
+  dir: DirArea;               // <data>/plugins-data/<plugin>
+  approvals: ApprovalsArea;   // the owner's decisions about your own tools
+  pages: PagesArea;           // previewPort(), previewUrl()
+  http?: HttpArea;            // declared as `http`
+  accounts?: AccountsArea;    // declared as `accounts`
+  files?: FilesArea;          // declared as `files` or `files:library`
+  memory?: MemoryArea;        // declared as `memory` — a type only, for now
+  proposals?: ProposalsArea;  // declared as `proposals`
+  schedule?: ScheduleArea;    // declared as `schedule`
+  secrets?: SecretsArea;      // declared as `secrets`
+}
+```
+
+A context is two things. The **call** is the facts about this one invocation:
+who called (`agentId`), in which conversation, under which approval
+(`actionId`, `choices`), with what cancellation (`signal`). The **host** is
+`ctx.buddi`: everything the plugin reaches that is not an argument. The
+template's read tool is the whole idea in one line:
+
+```ts
+    const { rows } = await ctx.buddi!.db.query(
+      `select id::text as id, body, created_at from template.note order by created_at desc limit $1`,
+      [input.limit ?? 20],
+    );
+```
+
+`buddi` is optional in the type only so that core's own contexts compile; core
+sets it on every context it hands a plugin, which is why the template writes
+`ctx.buddi!`. Six areas are always there, because they reach nothing beyond
+your plugin: your schema, your directory, your own tools' approvals. The other
+seven exist only when you declare them (§1.3); one you did not declare is
+`undefined`, not a refusal.
+
+Every area is scoped to your plugin. `approvals` answers only about your own
+tools, `files` shows the files you saved and the files handed into the
+conversation your tool runs in, `proposals` counts only yours, `secrets` lists
+only secrets bound to your destinations, and `accounts` resolves only an account
+the owner bound to you. §9b is every area and method, with the version each
+arrived in.
+
+Two things about `db`, because they are what a first plugin trips on.
+`db.query` runs one statement on the shared pool and does not set a
+`search_path`, so name your tables with your schema (`template.note`), as the
+template does; `db.transaction(fn)` takes one connection, begins, puts your
+schema first on `search_path`, and commits, or rolls back when `fn` throws.
+Both answer `{ rows, rowCount }`. In a page query or a metric the same `db` is
+read-only (§2.5b). Scope in `db` is a rule for now, not a grant: the import test
+refuses a `core.` table in your SQL (§1.5), and a Postgres role per plugin is
+deferred until every install path can create one.
+
+### 1.2 What you import
+
+`@buddi/core/plugin`, and nothing else of core:
+
+```ts
+import type { EffectDescription, PluginManifest, ToolDefinition } from '@buddi/core/plugin';
+```
+
+It holds the contract's types (the manifest, tools, sources, sentinels, views,
+pages, metrics, the host and its areas) and the pure helpers a plugin needs
+beside the host: `localDateString` and `sha256Of`; `pageFile` and
+`QueryRefusal` for a page query's answer; `checkUrl`, `BlockedError` and the
+address rules, for a plugin that checks a URL before it hands it to anything;
+`parseViewDescriptors`; the `uses` names and `HOST_API_VERSION`.
+`packages/core/src/plugin/entry.test.ts` walks what the entry point imports
+and fails if anything with state or I/O reaches it.
+
+A test may also import `@buddi/core/testing`: all of core, plus the throwaway
+database helper (§5). Nothing a plugin ships may.
+
+### 1.3 `uses`: what the owner reads at install
+
+```ts
+  // The areas of `ctx.buddi` you reach beyond your own schema, directory and
+  // approvals: `http`, `files`, `accounts`, ... Repeated as `buddi.uses` in
+  // package.json, because the install card is drawn before this file is
+  // imported; the two must match. This plugin reaches nothing else.
+  uses: [],
+```
+
+The manifest's `uses` is what your `ctx.buddi` is built from. The same list
+goes in `package.json` as `buddi.uses`, because the install card is drawn
+from static metadata before anything of yours is imported. When the plugin
+loads the two are compared, and a plugin whose lists differ does not register;
+the load report says so in one sentence. An area name buddi does not know is
+refused at staging.
+
+On the card each declared area is one plain line, beside the tools, the schema,
+the timers and the hosts:
+
+| `uses` | The owner reads |
+| --- | --- |
+| `http` | sends web requests |
+| `accounts` | uses a model account you pick |
+| `files` | keeps files in your Files library |
+| `files:library` | reads every file in your Files library |
+| `memory` | reads and writes memory as the agent that calls it |
+| `proposals` | proposes rules |
+| `schedule` | starts agent runs by itself |
+| `secrets` | fills secrets you bind to it |
+
+`files` sees what you saved and what was handed into your conversation;
+`files:library` is the whole library, and the card says so in those words —
+finance, artifacts, host and image declare it. An upgrade that adds an area marks it
+as added on its card, and says what it drops. `uses: []` is a real answer: the
+template, memory and browser reach nothing beyond themselves.
+
+### 1.4 The register hook
+
+```ts
+  register?(host: RegisterHost): void;   // RegisterHost = { version, plugin, dir }
+```
+
+Called once by `register()`, after every check on the manifest has passed, with
+the parts of the host that need no call: the version, your name and your
+directory. It is for a plugin that has to fix something before any context
+exists — the browser plugin learns where the owner's profile lives here, and
+resolves its controller. Nothing is awaited, and there is no database or clock
+in it: anything that needs those waits for a call.
+
+### 1.5 What the import test forbids
+
+`packages/gateway/src/plugin-imports.test.ts` walks the `src` of every plugin
+under `packages/tools/*` and `examples/plugins/*`; buddi-plugins runs the same
+check from its root `pnpm test` (`scripts/check-plugin-imports.mjs`). It fails,
+naming the file, on:
+
+- an import of `@buddi/core` other than `@buddi/core/plugin`, or
+  `@buddi/core/testing` in a test;
+- an import of `@buddi/runtime`, `@buddi/gateway` or any `@buddi/tool-*` (four
+  tests that drive web and browser over the real transport or the real loop are
+  named in the test as the exceptions);
+- a relative import that leaves the plugin's own package;
+- a `core.` table named in a SQL string, outside tests.
+
+Comments are blanked before the check, so prose may mention `core.events`; code
+may not. Run the same walk over your own plugin before you ship it.
+
+### 1.6 The installed `@buddi/core`, and `plugins dev`
+
+`@buddi/core` is a peer dependency so your plugin shares the running process's
+core rather than a copy of its own (§8). What an installed plugin resolves by
+that name is not the whole package: staging writes
+`node_modules/@buddi/core` as a small package whose only exports are
+`./plugin` and `./package.json`, re-exporting the running core's
+`dist/plugin` by absolute path. Every class and constant is core's own object,
+and an import of `@buddi/core`, `/testing` or an internal fails to resolve, by
+name, the first time your plugin is imported. It is buddi's, not yours, so it is
+left out of the staged hash.
+
+A directory install and `buddi plugins dev <dir>` are your own checkout, and
+keep the `link:` your `package.json` names, whole, so your tests can import
+`@buddi/core/testing`. There nothing stops an import of an internal at
+resolution; the import test is what does. `plugins dev` itself only watches
+`<dir>/dist` and, on a rebuild, restarts the service when there is one, or
+prints the line telling you to restart buddi yourself.
+
+### 1.7 Versioning
+
+`ctx.buddi.version` is `major.minor`, `1.0` today. Say what you were built
+against as `buddi.hostApi` in `package.json` — the scaffold writes `"^1.0"`. A
+plugin asking for more than this buddi has is refused at staging, before
+anything is imported, with both numbers: `^1.2` on a `1.0` host is "built for
+host API ^1.2, and this buddi has 1.0".
+
+A minor adds a method, an optional argument or an optional field on a return,
+and never changes what an existing call does. A major removes or changes
+something, and ships only after one release in which both shapes exist and the
+old one logs its caller. §9b gives every member the minor it arrived in; all of
+them are 1.0 today.
 
 ---
 
@@ -265,16 +471,22 @@ export interface PluginManifest {
   files?: WorkspaceFiles;     // queries that read a per-agent directory: a Files tab
   agents?: SuggestedAgent[];  // agents you PROPOSE; the owner approves each one
   skills?: SuggestedSkill[];  // shared procedures you propose
+  previews?: PreviewProvider; // a loopback process of yours the owner can open
+  policies?: PolicyHandler;   // how a rule the owner kept becomes yours
   description?: string;       // one line, shown before anyone installs you
   network?: NetworkUse[];     // the hosts you intend to reach, and why
+  uses?: PluginUse[];         // the areas of ctx.buddi you declare — §1.3
+  destinations?: SecretDestination[];  // where the owner's secrets go — §6
+  register?(host: RegisterHost): void; // once, at register() — §1.4
 }
 ```
 
 `name`, `version`, `schema`, `migrationsDir` and `tools` are required —
 `migrationsDir` may be `''` for a plugin that owns no tables, and `tools` may be
-empty. Everything after them is optional, and the last four exist for one
-reason: somebody who is not you has to decide whether to run your code. See
-§2.6 and §8. Every field, with its type and one line, is §9.
+empty. Everything after them is optional. `agents`, `skills`, `description`,
+`network` and `uses` exist for one reason: somebody who is not you has to
+decide whether to run your code. See §1.3, §2.6 and §8. Every field, with its
+type and one line, is §9.
 
 ### 2.1 Tools
 
@@ -500,10 +712,7 @@ rather than releasing it.
 
 ```ts
 interface ToolContext {
-  db: Pool;
-  ownerId: string;
-  now: () => Date;          // never read the wall clock
-  timezone: string;         // IANA; render days with localDateString, never UTC
+  buddi?: BuddiHost;        // the host: db, owner, clock, files, … (§1.1)
   conversationId?: string;  // provenance
   agentId?: string;         // provenance
   delegationDepth?: number; // 0 or absent = the owner started this run
@@ -514,10 +723,14 @@ interface ToolContext {
 }
 ```
 
-That is ten of nineteen fields; the rest are for the runtime's own tools
+That is eight of eighteen fields; the rest are for the runtime's own tools
 (`group`, `surface`, `ownerRequest`, `sessionTools`, `nativeSearch`,
-`approvedEffect`, `suspend`, `systemContext`, `toolUseId`) and §9 lists every
-one of them.
+`approvedEffect`, `suspend`, `systemContext`, `toolUseId`, `provenance`) and §9
+lists every one of them. Everything else a tool needs is on the host: the
+database is `ctx.buddi.db`, the owner `ctx.buddi.owner.id`, the time
+`ctx.buddi.clock.now()` — never the wall clock — and a day
+`ctx.buddi.clock.today()`, in the owner's zone (`ctx.buddi.owner.timezone`),
+never UTC.
 
 The optional fields are optional so every caller keeps compiling. A tool that
 *needs* one must fail closed when it is absent rather than guess — see
@@ -535,16 +748,7 @@ export interface Source {
 }
 
 export interface SourceContext {
-  db: Pool;
-  now: () => Date;
-  timezone: string;
-  log: (line: string) => void;   // operational logging; a source notifies nobody
-  enqueueRun(input: {
-    agentId: string;
-    prompt: string;
-    dedupKey: string;
-    conversationHint?: string;
-  }): Promise<void>;
+  buddi?: BuddiHost;   // the host, bound to the plugin this source belongs to
 }
 ```
 
@@ -552,6 +756,13 @@ A source is the half of the contract with no agent in the loop: mail arrives and
 a triage run begins, because mail arrived. Core decides only *when* a source is
 due — the ledger is `core.source_runs`, one row per source id — and hands it a
 context. What it polls and how it advances is entirely yours.
+
+A source's context is the host and nothing else, because there is no call: it
+reaches its schema through `ctx.buddi.db`, the time through
+`ctx.buddi.clock`, logs through `ctx.buddi.log` — operational lines, never the
+owner's channel; a source notifies nobody — and starts a run through
+`ctx.buddi.schedule.enqueueRun({ agentId, prompt, dedupKey,
+conversationHint? })`, which needs `schedule` in `uses`.
 
 The rules, all of them learned from `packages/tools/email/src/sources/inbox-poll.ts`:
 
@@ -569,7 +780,8 @@ The rules, all of them learned from `packages/tools/email/src/sources/inbox-poll
   re-sync, it is an outage.
 - **Cursor advancement is transactional.** Rows and the cursor commit in one
   transaction, so a crash can re-fetch but can never skip.
-- **`enqueueRun` is idempotent on `dedupKey`.** It cannot join your transaction —
+- **`schedule.enqueueRun` is idempotent on `dedupKey`.** It cannot join your
+  `db.transaction` —
   the queue is the gateway's. So commit your rows with the enqueue stamp null,
   enqueue after the commit, and write the stamp last. A crash in between leaves
   the row unstamped, the next poll re-enqueues the same key, and the dedup makes
@@ -612,11 +824,7 @@ export interface Finding {
 }
 
 export interface SentinelContext {
-  db: Pool;
-  ownerId: string;         // whose installation this is
-  now: () => Date;
-  timezone: string;
-  agentForRole(role: string): string | undefined;   // who answers for a role
+  buddi?: BuddiHost;       // db, owner (with agentForRole), clock, …
 }
 ```
 
@@ -649,14 +857,15 @@ Anchor the key to the date or the row the condition rests on.
   of the failed run are ignored entirely — a half-list is not evidence that
   anything resolved.
 
-**Address a finding by role, never by id.** `ctx.agentForRole('credit')` returns
+**Address a finding by role, never by id.** `ctx.buddi.owner.agentForRole('credit')` returns
 the id of the agent that answers for a role — the first *runnable* agent holding
 it in roster order — or `undefined` when nobody does. Held-back and unbound
 agents are skipped: an agent this installation cannot run would take the finding
 and say nothing.
 
 ```ts
-const agentId = ctx.agentForRole('credit') ?? ctx.agentForRole('overview');
+const { owner } = ctx.buddi!;
+const agentId = owner.agentForRole('credit') ?? owner.agentForRole('overview');
 return [{ key, severity: 'urgent', title, detail, ...(agentId ? { agentId } : {}) }];
 ```
 
@@ -701,11 +910,11 @@ export interface MetricDefinition {
 
 Three things to know before you write one:
 
-- **It only reads.** `measure` is always handed a context whose `db` is the
-  read-only pool — the same Postgres read-only transaction a page query runs
+- **It only reads.** `measure` is always handed a context whose `ctx.buddi.db`
+  is read-only — the same Postgres read-only transaction a page query runs
   in (§2.5b) — so it cannot write even through a volatile function of your
-  own. Nothing you do gets you a writable pool here, and nothing needs to: a
-  metric answers a number.
+  own. Nothing you do gets you a writable database here, and nothing needs
+  to: a metric answers a number.
 - **`null` is an answer, not a failure.** "No data yet", "the account has not
   synced", "the thing this counts does not exist here": return `null` and the
   check records *not measurable* — with core's own generic reason, because a
@@ -721,8 +930,8 @@ Three things to know before you write one:
   values coerced — and that is what the goal stores.
 - **The holder is the agent in `ctx`.** `ctx.agentId` is whichever agent holds
   the goal being checked, not the owner, so a metric that scopes to an agent
-  scopes to the right one. `ctx.ownerId` and `ctx.timezone` are the
-  installation's, as everywhere else.
+  scopes to the right one. `ctx.buddi.owner` is the installation's, as
+  everywhere else.
 
 Ids are validated at `register()`: `<your plugin>.<name>`, lowercase, unique
 across the installation, `unit` and `direction` in the enums, and `params` an
@@ -977,7 +1186,7 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   all. There is no third path, so everything the owner can do from your screen
   is something an agent could be granted, audited the same way.
 - **A query cannot write, and Postgres is what says so.** `produce` is handed a
-  `ToolContext` whose `db` runs every statement inside a read-only transaction
+  `ToolContext` whose `ctx.buddi.db` runs every statement inside a read-only transaction
   with a five-second `statement_timeout` and rolls it back. `insert`, `update`,
   `delete`, `create`, `select … into`, `nextval` and a large-object write are
   all refused **including inside a volatile function you wrote yourself** — a
@@ -1193,8 +1402,9 @@ moment that port was taken, and a route built on a guess points at nothing. The
 gateway publishes the port it actually bound in two places, both of which say
 the same number:
 
-- `ctx.previewPort` on every `ToolContext` — a `number`, or absent when
-  previews are not being served;
+- `ctx.buddi.pages.previewPort()` — a `number`, or `undefined` when previews
+  are not being served; `ctx.buddi.pages.previewUrl(name)` is the whole
+  `http://127.0.0.1:<port>/preview/<plugin>/<name>/`;
 - `BUDDI_PREVIEW_PORT` in the process environment, set after the listener
   binds, for a plugin that reads configuration rather than context.
 
@@ -1204,7 +1414,7 @@ to build.
 
 **On the tailnet.** The dashboard's own `tailscale serve` does not publish this
 port. A plugin that wants a preview reachable from the tailnet asks for it
-itself — `tailscale serve --https=<port> http://127.0.0.1:${ctx.previewPort}` —
+itself — `tailscale serve --https=<port> http://127.0.0.1:${ctx.buddi.pages.previewPort()}` —
 and owns turning it off again; buddi does not do it for you, and the sentence
 on the page that offers it should say what it exposes.
 
@@ -1311,7 +1521,11 @@ accept it again, see the new grant, and approve it — or they do not.
 ## 3. Schema and migrations
 
 A plugin owns one Postgres schema, named after the plugin: `finance`, `email`,
-`memory`, `weather`. Core owns `core` and references none of your tables.
+`memory`, `weather`. Core owns `core` and references none of your tables, and
+you reference none of its: what you need of core's rows is an area of
+`ctx.buddi` (the Files library is `files`, a reminder is
+`schedule.remindersFor`, an approval is `approvals`), and the import test
+refuses a `core.` table in your SQL (§1.5).
 
 `migrationsDir` is an **absolute** path to a directory of `*.sql` files applied
 in filename order, resolved from the *built* file so it works from `dist`:
@@ -1339,7 +1553,9 @@ additive:
 - each file runs in its own transaction with
   `set local search_path to <schema>, public` — so write `create table if not
   exists location (...)`, unqualified, and the file cannot touch another
-  plugin's tables by accident;
+  plugin's tables by accident. At runtime it is the other way round:
+  `ctx.buddi.db.query` sets no `search_path`, so a statement names
+  `weather.location` (§1.1);
 - applied files are tracked by `(schema, filename)` and skipped next time. **Files
   are never re-run and never rolled back: add a new file, never edit an applied
   one.** Number them `001_`, `002_`.
@@ -1354,8 +1570,9 @@ why. Core's own migrations and a compiled-in plugin's still throw. Every start
 path goes through the gateway's `migrateAtStart(pool, env)` — the "newer than
 this code" refusal, then `migrateInstalled(pool, env)`, which fills those two
 options in — and so does `buddi migrate`. A manifest with an empty `migrationsDir` is skipped — that is `@buddi/tool-artifacts`
-saying it owns no schema at all, not a missing path. Its tools read `core.artifacts`
-because a dropped plugin must not take the owner's files with it.
+saying it owns no schema at all, not a missing path. Its tools read the Files
+library through `ctx.buddi.files`, declared `files:library`, because a dropped
+plugin must not take the owner's files with it.
 
 **How your schema gets applied.** A start does it for you, and there are two
 entry points besides, both over the manifests the gateway has installed:
@@ -1382,7 +1599,10 @@ your tools.
 
 A complete plugin, in this repository at
 [`examples/plugins/weather`](../examples/plugins/weather). One read tool, one
-sentinel, one suggested mission, one schema holding the owner's location. It
+sentinel, one suggested mission, a view, a proposed agent, one schema holding
+the owner's location, and one declared area, `http`. Each file is quoted below
+as it is, less its opening comment; `views.ts` and `agents.ts` are in the
+directory. It
 builds and its test passes in this workspace; it is deliberately **not**
 registered in the gateway.
 
@@ -1396,10 +1616,15 @@ registered in the gateway.
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --emitDeclarationOnly",
+    "typecheck": "tsc -p tsconfig.json --emitDeclarationOnly && tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -1413,7 +1638,16 @@ registered in the gateway.
     "typescript": "^5.6.3",
     "vitest": "^2.1.8"
   },
-  "files": ["dist", "migrations"]
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "buddi": {
+    "uses": [
+      "http"
+    ],
+    "hostApi": "^1.0"
+  }
 }
 ```
 
@@ -1456,6 +1690,9 @@ create table if not exists location (
 ### `src/ports.ts` — the seam to the network
 
 ```ts
+import type { HttpArea } from '@buddi/core/plugin';
+
+/** One day of forecast, as this plugin understands a day. */
 export interface DailyForecast {
   /** `YYYY-MM-DD` in the owner's timezone. */
   date: string;
@@ -1471,17 +1708,22 @@ export interface ForecastQuery {
   days: number;
 }
 
-export type FetchForecast = (query: ForecastQuery) => Promise<DailyForecast[]>;
+/**
+ * `http` is the plugin's `ctx.buddi.http`: the real adapter goes through it, a
+ * stub ignores it.
+ */
+export type FetchForecast = (query: ForecastQuery, http: HttpArea | undefined) => Promise<DailyForecast[]>;
 ```
 
 The forecast service is a parameter, not an import, so the tool and the sentinel
 are both testable against a stub that opens no socket — the same thing
-`@buddi/tool-email` does with IMAP and SMTP.
+`@buddi/tool-email` does with IMAP and SMTP. The real one is handed
+`ctx.buddi.http`; a stub ignores it.
 
 ### `src/location.ts`
 
 ```ts
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 
 export interface Location {
   label: string;
@@ -1490,14 +1732,12 @@ export interface Location {
 }
 
 /** The owner's location, or null when nobody has set one. */
-export async function loadLocation(db: Pool): Promise<Location | null> {
+export async function loadLocation(db: Pick<DbArea, 'query'>): Promise<Location | null> {
   const { rows } = await db.query<Location>(
     `select label, latitude, longitude from weather.location where id = 1`,
   );
   const row = rows[0];
-  return row
-    ? { label: row.label, latitude: Number(row.latitude), longitude: Number(row.longitude) }
-    : null;
+  return row ? { label: row.label, latitude: Number(row.latitude), longitude: Number(row.longitude) } : null;
 }
 
 /**
@@ -1515,13 +1755,15 @@ left out here to keep the example one tool long.
 ### `src/frost.ts` — the rule, as a pure function
 
 ```ts
-import type { Finding } from '@buddi/core';
+import type { Finding } from '@buddi/core/plugin';
 import type { DailyForecast } from './ports.js';
 
 /** Below this, tomorrow's low is worth saying out loud tonight. */
 export const FREEZING_C = 0;
 
 /**
+ * One finding, or none.
+ *
  * The key is anchored to the date the forecast is *about*, never to "tomorrow":
  * a watch that runs every six hours must produce the same key all four times,
  * and a different day must produce a different one.
@@ -1551,6 +1793,15 @@ export const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 /** How long one forecast call may take before it is a failure, not a wait. */
 export const FETCH_TIMEOUT_MS = 10_000;
 
+interface OpenMeteoDaily {
+  daily?: {
+    time?: string[];
+    temperature_2m_min?: number[];
+    temperature_2m_max?: number[];
+    weather_code?: number[];
+  };
+}
+
 /** WMO codes, collapsed to the handful of words a person actually wants. */
 export function describeCode(code: number | undefined): string {
   if (code === undefined) return 'unknown';
@@ -1564,9 +1815,19 @@ export function describeCode(code: number | undefined): string {
 }
 
 /** Shape the payload into days. Pure, so the parsing is testable on its own. */
-export function toDays(payload: unknown): DailyForecast[] { /* … */ }
+export function toDays(payload: unknown): DailyForecast[] {
+  const daily = (payload as OpenMeteoDaily).daily;
+  const times = daily?.time ?? [];
+  return times.map((date, i) => ({
+    date,
+    lowC: daily?.temperature_2m_min?.[i] ?? Number.NaN,
+    highC: daily?.temperature_2m_max?.[i] ?? Number.NaN,
+    summary: describeCode(daily?.weather_code?.[i]),
+  }));
+}
 
-export const openMeteo: FetchForecast = async (query) => {
+export const openMeteo: FetchForecast = async (query, http) => {
+  if (http === undefined) throw new Error('weather: no http area, so no forecast (declare uses: http)');
   const url = new URL(OPEN_METEO_URL);
   url.searchParams.set('latitude', String(query.latitude));
   url.searchParams.set('longitude', String(query.longitude));
@@ -1574,8 +1835,11 @@ export const openMeteo: FetchForecast = async (query) => {
   url.searchParams.set('forecast_days', String(query.days));
   url.searchParams.set('daily', 'temperature_2m_min,temperature_2m_max,weather_code');
 
-  // Never the global `fetch`. See "Outbound HTTP" below.
-  const response = await defaultHttpTransport(url.toString(), {
+  // Through `ctx.buddi.http`, never the global `fetch`: it is the one
+  // transport every long-lived caller shares, one connection per request,
+  // with the address guard in front (docs/specs/plugin-host-api.md §4).
+  const response = await http.request({
+    url: url.toString(),
     method: 'GET',
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -1590,9 +1854,12 @@ export const openMeteo: FetchForecast = async (query) => {
 
 ### Outbound HTTP
 
-A plugin that talks to the network uses `defaultHttpTransport` (or
-`createHttpTransport`) from `@buddi/runtime` — never the global `fetch`, never
-`undici`, never its own `node:http(s)` client with an agent.
+A plugin that talks to the network declares `http` in `uses` and sends through
+`ctx.buddi.http.request({ url, method, headers, body, signal, idleTimeoutMs,
+maxBytes })` — never the global `fetch`, never `undici`, never its own
+`node:http(s)` client with an agent. The weather plugin hands the area to its
+adapter as the second argument of `FetchForecast`, so a stub in a test takes
+none.
 
 The reason is not style. `fetch` is undici, and undici keeps a connection pool
 per origin. When a pooled connection dies — an idle keep-alive socket the far
@@ -1603,17 +1870,23 @@ one-shot script that is invisible. Inside `buddi serve`, which runs for weeks
 and whose sentinels and sources fire on a timer, it took the whole assistant
 down for hours and killed twelve unattended jobs in one evening.
 
-The shared transport speaks HTTP/1.1 with `keepAlive: false`: one connection
-per request, nothing held between them, so a failed request cannot poison the
-next one. `scripts/check-boundaries.mjs` fails the build on any other outbound
-client (tests and the browser bundle excepted), and names the file. Pass a fake
-transport in tests rather than stubbing a global — and keep the network behind a
-port like `FetchForecast` anyway, so the plugin's own tests open no socket.
+The area is the shared transport: HTTP/1.1 with `keepAlive: false`, one
+connection per request, nothing held between them, so a failed request cannot
+poison the next one. It is also behind the address guard that used to be the
+web plugin's alone: a URL naming this machine, its network, or a port other
+than 80 and 443 is refused with a `BlockedError` before anything is sent, and
+names resolve inside the socket, so a public name that answers with a private
+address is refused where it is dialled. Redirects are not followed. A host your
+`network` does not declare is logged with your plugin's name, and will be
+refused once every plugin declares its hosts. `scripts/check-boundaries.mjs`
+fails the build on any other outbound client (tests and the browser bundle
+excepted), and names the file. Keep the network behind a port like
+`FetchForecast` anyway, so the plugin's own tests open no socket.
 
 ### `src/tools/forecast.ts` — the read tool
 
 ```ts
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { loadLocation, NO_LOCATION } from '../location.js';
 import type { DailyForecast, FetchForecast } from '../ports.js';
@@ -1629,7 +1902,12 @@ const forecastInput = z.object({
 });
 
 export type ForecastInput = z.infer<typeof forecastInput>;
-export interface ForecastOutput { place: string; days: DailyForecast[] }
+
+export interface ForecastOutput {
+  place: string;
+  days: DailyForecast[];
+}
+
 export const DEFAULT_DAYS = 3;
 
 export function createForecastTool(
@@ -1638,11 +1916,11 @@ export function createForecastTool(
   return {
     name: 'weather.forecast',
     description:
-      'The forecast for where the owner lives, day by day: low, high and a one-word sky. Use it when the owner asks about the weather, and before suggesting anything that happens outdoors.',
+      "The forecast for where the owner lives, day by day: low, high and a one-word sky. Use it when the owner asks about the weather, and before suggesting anything that happens outdoors.",
     tier: 'auto',
     input: forecastInput,
     async execute(input, ctx) {
-      const location = await loadLocation(ctx.db);
+      const location = await loadLocation(ctx.buddi!.db);
       // Fail closed and say the line that fixes it; never guess a city.
       if (!location) throw new Error(NO_LOCATION);
       const days = await fetchForecast({
@@ -1650,9 +1928,9 @@ export function createForecastTool(
         longitude: location.longitude,
         // The owner's zone, from the context — a forecast rendered in UTC is a
         // forecast for the wrong day after 8 PM in New York.
-        timezone: ctx.timezone,
+        timezone: ctx.buddi!.owner.timezone,
         days: input.days ?? DEFAULT_DAYS,
-      });
+      }, ctx.buddi!.http);
       return { place: location.label, days };
     },
   };
@@ -1667,7 +1945,7 @@ the whole input into the JSON Schema in the tool spec.
 ### `src/sentinels/frost.ts` — the watcher
 
 ```ts
-import { localDateString, type Finding, type Sentinel, type SentinelContext } from '@buddi/core';
+import { localDateString, type Finding, type Sentinel, type SentinelContext } from '@buddi/core/plugin';
 import { frostFinding } from '../frost.js';
 import { loadLocation } from '../location.js';
 import type { FetchForecast } from '../ports.js';
@@ -1681,19 +1959,20 @@ export function createFrostSentinel(fetchForecast: FetchForecast): Sentinel {
     description: "Warns when tomorrow's forecast low is below freezing.",
     every: EVERY_6H,
     async run(ctx: SentinelContext): Promise<Finding[]> {
-      const location = await loadLocation(ctx.db);
+      const buddi = ctx.buddi!;
+      const location = await loadLocation(buddi.db);
       // No location configured is a valid, quiet state — not a failure.
       if (!location) return [];
 
       const days = await fetchForecast({
         latitude: location.latitude,
         longitude: location.longitude,
-        timezone: ctx.timezone,
+        timezone: buddi.owner.timezone,
         days: 2,
-      });
+      }, buddi.http);
       const tomorrow = localDateString(
-        new Date(ctx.now().getTime() + 86_400_000),
-        ctx.timezone,
+        new Date(buddi.clock.now().getTime() + 86_400_000),
+        buddi.owner.timezone,
       );
       const day = days.find((d) => d.date === tomorrow);
       if (!day) return [];
@@ -1715,7 +1994,7 @@ injected `FetchForecast` keeps it testable, and a throw here is recorded in
 ### `src/missions.ts` — the suggestion
 
 ```ts
-import type { SuggestedMission } from '@buddi/core';
+import type { SuggestedMission } from '@buddi/core/plugin';
 
 export const MORNING_WEATHER_ID = 'morning-weather';
 export const MORNING_WEATHER_CRON = '0 7 * * *';
@@ -1746,12 +2025,14 @@ If none of that holds, call mission.silent with the one-line reason. Otherwise c
 ```ts
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
+import { weatherAgents } from './agents.js';
 import { weatherMissions } from './missions.js';
 import { openMeteo } from './open-meteo.js';
 import type { FetchForecast } from './ports.js';
 import { createFrostSentinel } from './sentinels/frost.js';
 import { createForecastTool } from './tools/forecast.js';
+import { weatherViews } from './views.js';
 
 /** Absolute path to this plugin's migrations, resolved from the *built* file. */
 export const MIGRATIONS_DIR = path.resolve(
@@ -1767,11 +2048,24 @@ export function createWeatherManifest(
   return {
     name: 'weather',
     version: '0.1.0',
+    description: 'The local forecast, a frost watcher, and an agent that reads them.',
     schema: 'weather',
     migrationsDir: MIGRATIONS_DIR,
+    uses: ['http'],
     tools: [createForecastTool(fetchForecast)],
     sentinels: [createFrostSentinel(fetchForecast)],
     missions: weatherMissions,
+    views: weatherViews,
+    agents: weatherAgents,
+    // Declared so the owner reads one line per destination before installing.
+    // Nothing enforces it at runtime, and saying so is the point: an undeclared
+    // host means the author did not write one down.
+    network: [
+      {
+        host: 'api.open-meteo.com',
+        why: 'the forecast itself. It sends a latitude and a longitude and no key; nothing else leaves.',
+      },
+    ],
   };
 }
 
@@ -1823,11 +2117,17 @@ is the pattern: the sentinels are a query plus a call into it, and
 
 **The throwaway database.** Anything that needs SQL gets a real Postgres, never a
 mock, and never the developer's own database. The suite creates a database,
-migrates into it, and drops it at the end; without `DATABASE_URL` it skips. From
+migrates into it, and drops it at the end; without a test database it skips.
+A test imports core from `@buddi/core/testing` — all of core, plus
+`testDatabaseUrl` — and never from `@buddi/core` itself. From
 `packages/tools/memory/src/tools/tools.db.test.ts`:
 
 ```ts
-const databaseUrl = process.env.DATABASE_URL;
+import { ToolRegistry, createPool, migrate } from '@buddi/core/testing';
+import type { CoreToolContext } from '@buddi/core/testing';
+import { testDatabaseUrl } from '@buddi/core/testing';
+
+const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_memory_test_${process.pid}`;
@@ -1836,6 +2136,19 @@ suite('memory tools (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
   const registry = new ToolRegistry();
+
+  let clock = new Date('2026-09-13T12:00:00Z');
+  const now = (): Date => clock;
+
+  /** A context as the runtime builds one: owner, conversation, calling agent. */
+  const contextFor = (agentId?: string): CoreToolContext => ({
+    db: pool,
+    ownerId: 'test',
+    now,
+    timezone: 'UTC',
+    conversationId: CONVERSATION,
+    ...(agentId ? { agentId } : {}),
+  });
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -1865,9 +2178,14 @@ suite('memory tools (postgres)', () => {
 reads a core table — that applies core's migrations first (the finance plugin's
 `src/sentinels/sentinels.db.test.ts` does exactly that).
 
+A test hands the registry a `CoreToolContext`: the call, plus the facts core
+builds a host from — the pool, the owner, the clock and the zone. The registry
+puts your plugin's `ctx.buddi` on it exactly as it does at runtime, bound to your
+manifest's `uses`, so the tool under test sees the host it will see installed.
+
 Drive tools **through the registry**, not by calling `execute` directly. That is
-what proves the tier, the zod schema and the refusal paths, which is most of what
-can go wrong:
+what proves the tier, the zod schema, the refusal paths and the host, which is
+most of what can go wrong:
 
 ```ts
 const result = await registry.invoke(name, args, contextFor(agentId));
@@ -1922,8 +2240,31 @@ third needs a fake transport:
   memory note are all things somebody else wrote. Never let one decide what your
   tool does, and store provenance for anything you persist so it can be traced
   and deleted.
-- **Secrets are resolved at use, from a named source, in the tool** — never at
-  import, never inside an adapter, and never held by an agent.
+- **A plugin uses the owner's secrets and never reads one.** There is no
+  read path: the `secrets` area has no `get`. A plugin that needs a password
+  or a token declares `secrets` in `uses` and registers a **destination** — in
+  the manifest's `destinations`, or through
+  `ctx.buddi.secrets.registerDestination` — as `{ kind, checkTarget, describe,
+  deliver, maxRule }`, its kind in its own namespace (`email.account`). A
+  secret is bound to a kind and a target when the owner stores it — email's
+  `ownerOnly` `add_account` does that through `secrets.put`. A call asks
+  `ctx.buddi.secrets.use(name, kind, target)`; core finds the binding, has the
+  destination check the target, applies the stricter of the binding's rule and
+  the kind's `maxRule` (every time, first time, pre-approved) — raising an
+  ordinary approval card when the owner has to be asked — reads the vault, and
+  calls `deliver`. `deliver` is the only code that ever receives a value, and
+  the call is answered `{ done, use }`, `{ pending }` or `{ refused }`, never
+  the value. `list` gives names, bindings and the last use; `put`, `rename`,
+  `rebind` and `delete` are the owner's own call, from an `ownerOnly` tool,
+  and touch only your kinds. The one stated exception is an **account
+  credential**: a kind named `<plugin>.account` is delivered into a connection
+  the plugin holds for as long as it lives — email's mailbox password, handed
+  to one IMAP or SMTP session — and each such use is recorded as `held`, not
+  delivered, so the owner can see which secrets a plugin's process keeps. The
+  product is `docs/specs/owner-secrets.md`.
+- **Never `process.env` for a secret.** Not to read one the owner configured,
+  and not to write one for later: the environment is readable by every plugin in
+  the process.
 
 **Before shipping a plugin that touches money, mail or the filesystem:**
 
@@ -1960,8 +2301,14 @@ third needs a fake transport:
     rendered from it.
 [ ] Every gated execute() refuses without ctx.actionId and claims atomically on it.
 [ ] timeoutMs set on anything slower than a local query.
-[ ] No wall clock (ctx.now()), no UTC days (localDateString(ctx.now(), ctx.timezone)).
+[ ] No wall clock (ctx.buddi.clock.now()), no UTC days (ctx.buddi.clock.today(),
+    or localDateString(date, ctx.buddi.owner.timezone)).
 [ ] Optional context fields (agentId, conversationId) fail closed, never guessed.
+[ ] Everything beyond the arguments through ctx.buddi; imports of core only from
+    @buddi/core/plugin (and @buddi/core/testing in tests); no core. table in
+    SQL; no process.env for anything the owner configures.
+[ ] uses in the manifest and buddi.uses in package.json name the same areas,
+    and buddi.hostApi says what you were built against ("^1.0").
 [ ] Sources: stable dedupKey, transactional cursor advancement, a deadline on
     every outbound call, a first-contact cursor that starts at now, and a
     documented offline/retention contract.
@@ -1975,7 +2322,7 @@ third needs a fake transport:
     tools driven through registry.invoke; a gated tool proven not to send.
 [ ] `pnpm -r build && pnpm typecheck && pnpm test` green — check-boundaries
     included.
-[ ] package.json: "buddi": { "manifest": "manifest" }, keywords ["buddi-plugin"],
+[ ] package.json: "buddi": { "manifest", "uses", "hostApi" }, keywords ["buddi-plugin"],
     @buddi/core in peerDependencies and NOT in dependencies, and "files" naming
     dist, migrations and buddi.md.
 [ ] buddi.md shipped, with a Schema: line that is the schema the manifest owns
@@ -2036,18 +2383,23 @@ and why, so you can check it or do it by hand.
   "version": "1.0.0",
   "main": "./dist/index.js",
   "keywords": ["buddi-plugin"],
-  "buddi": { "manifest": "manifest", "core": "^0.1.0" },
+  "buddi": { "manifest": "manifest", "core": "^0.1.0", "uses": [], "hostApi": "^1.0" },
   "peerDependencies": { "@buddi/core": "^0.1.0" }
 }
 ```
+
+`buddi.uses` is the list the install card reads, and must equal the manifest's
+`uses` (§1.3); `buddi.hostApi` is the host version you were built against
+(§1.7).
 
 `@buddi/core` is a **peer** dependency and never a normal one. A plugin holding
 its own copy of core would get a second registry, a second pool and a second set
 of module-level singletons: its tools would register into an object nobody reads
 and its approvals would be written by a machine nobody asks. Staging enforces
-this — the staged tree's `node_modules/@buddi/core` is replaced by a symlink to
-the core the gateway is running — but declaring it correctly is what makes
-`npm install` of your package outside buddi behave the same way.
+this — the staged tree's `node_modules/@buddi/core` is replaced by the plugin
+API of the core the gateway is running, and nothing else of it (§1.6) — but
+declaring it correctly is what makes `npm install` of your package outside
+buddi behave the same way.
 
 `npm pack` builds the same tarball npm would publish, and
 `buddi plugins install ./buddi-plugin-weather-1.0.0.tgz` installs it: the same
@@ -2073,14 +2425,35 @@ Anything else in the file is shown verbatim. There is no schema to learn: what
 matters is that an owner can read it and that it agrees with your manifest,
 because those two are compared and any difference costs them a second approval.
 
+### Known, not fixed: a tarball of the scaffold does not install
+
+A directory install of the scaffold works. A real tarball install of it — `npm
+pack`, then `buddi plugins install ./buddi-plugin-<name>-0.1.0.tgz` — does not
+yet, and needs three changes the scaffold and the template do not make:
+
+1. **the `link:` devDependency removed.** It points at a checkout on the
+   author's machine, `link:` is not a specifier npm reads, and the stage's
+   `npm install` does not get past it.
+2. **the peer resolution fixed.** `@buddi/core` is not published, so an `npm
+   install` that tries to satisfy the peer from the registry fails before
+   staging gets to write the narrowed core.
+3. **`buddi.name` in the scaffold's `package.json`.** The package is
+   `buddi-plugin-<name>` and the manifest `<name>`; a directory source is
+   exempt from the name rule, a tarball is not, so without `buddi.name` the
+   install refuses.
+
+Found while the host API was built (2026-09-24), and older than it. Until it is
+fixed, a plugin of your own installs from its directory.
+
 ### Install is two halves, and nothing runs in the first
 
 Importing a module executes it, so an install splits at exactly that line.
 
 **Stage.** `npm view` for the exact version, the integrity hash and the
 publisher; `npm pack` to fetch it; extract; `npm install --ignore-scripts
---omit=dev` for its dependencies; symlink core. Then read *static metadata only*
-— `package.json`, the integrity hash and publisher, your `buddi.md`, and which
+--omit=dev` for its dependencies; write the narrowed `@buddi/core`. Then read
+*static metadata only* — `package.json` (its `buddi.uses` and `buddi.hostApi`
+among it), the integrity hash and publisher, your `buddi.md`, and which
 packages in the installed tree declare `preinstall`/`install`/`postinstall` or
 ship a `binding.gyp` (node-gyp is an install script nobody wrote down).
 Nothing is imported, nothing is registered, no schema exists. The staged package
@@ -2104,11 +2477,14 @@ rather than warns:
 - **the tree is hashed.** `stagedHash` is sha256 over the extracted package
   *and* its `node_modules` — every path, every byte, and the target of every
   link npm wrote among the dependencies — with `node_modules/@buddi/core`
-  excluded, since that is the link to the running installation's core and not
-  part of your package. It is shown beside the integrity hash.
+  excluded, since that is buddi's view of its own core and not part of your
+  package. It is shown beside the integrity hash.
 - **the entry point is inside the package.** `main` (or the `.` export) is
   resolved with its links followed and has to land under the package's own real
   path.
+- **it asks for nothing this buddi lacks.** A `buddi.uses` naming an area buddi
+  does not know, or a `buddi.hostApi` asking for more than this host has, is
+  refused with both numbers (§1.7).
 
 **Approve 1.** The owner is shown all of it and this sentence:
 
@@ -2199,7 +2575,7 @@ turn. Agents are files the gateway reads; plugins are modules it imported.
 directory source with no provenance, which is exactly what it was. A registry
 entry carries `installedHash`: sha256 over the package's files and its
 `node_modules`, path and content both, sorted, with `node_modules/@buddi/core`
-(the link to the running installation) and `.git` excluded. It is the hash that
+(buddi's view of the running core) and `.git` excluded. It is the hash that
 was taken before the plugin was ever imported. `buddi doctor` recomputes it —
 for every plugin in the record, including the ones that did not load — and
 warns, naming the plugin, when it no longer matches.
@@ -2234,6 +2610,9 @@ approval the same contribution summary is printed, and it lists:
 - the hosts it declares in `network`, and — when it declares none — one line
   saying that nothing enforces this, so an undeclared host means the author did
   not write one down, not that the plugin cannot reach the network;
+- the areas of `ctx.buddi` it declares in `uses`, one plain line each (§1.3) —
+  these are on the staged card too, read from `buddi.uses` before anything is
+  imported;
 - the agents it proposes, each with the grant it asks for, and the sentence that
   nothing is created by installing.
 
@@ -2297,6 +2676,10 @@ half-migrated. The comparison is semver's own, prerelease rules included, and a
 version it cannot parse is refused rather than guessed at — "not newer" is the
 answer that stops an update, so guessing is how a downgrade gets through.
 
+An upgrade's card marks each area of `uses` the new version adds and says
+which it drops, so a plugin whose next version starts reading the whole Files
+library says so before it runs.
+
 Installing the same plugin again does the same thing. The record is replaced;
 the migrations run forward; **no agent file is written**. Per proposed agent you get one line
 saying where the owner's copy stands — untouched, edited by them, or superseded
@@ -2345,14 +2728,22 @@ applied — the same shape as an approval.
 
 ## 9. Reference: every field of the contract
 
-Generated by hand from `packages/core/src/tools.ts`, `sentinels/types.ts` and
-`views.ts`, and kept honest by `packages/core/src/plugin-reference.test.ts`: it
+Generated by hand from `packages/core/src/tools.ts`, `sentinels/types.ts`,
+`views.ts`, `pages.ts`, `metrics.ts` and `host/types.ts`, and kept honest by
+`packages/core/src/plugin-reference.test.ts`: it
 reads these tables and the interface declarations and fails, naming the field,
 when one has something the other does not. A field added to the contract without
 a line here is a failing test, on purpose — the type says what it is, and only
-this says what it is *for*.
+this says what it is *for*. The same test checks §1.3's `uses` table against
+the names the manifest's type allows, and that no sentence here still reaches
+for a field the context no longer has.
 
 "Required" is the type's own answer: a `?` in the declaration is `no`.
+
+A context is split in two, and so is the reference: **the call** — the fields
+left on `ToolContext`, facts about this one invocation — is below, under
+"The call"; **the host** — every area and method of `ctx.buddi`, with the
+version each arrived in — is §9b.
 
 ### The manifest
 
@@ -2379,10 +2770,10 @@ this says what it is *for*.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §9b. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/specs/owner-secrets.md §3. |
-| `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. |
-| `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
+| `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
+| `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
 
@@ -2430,15 +2821,17 @@ The tiers, as `packages/core/src/registry.ts` enforces them:
 | `preview` | `string` | yes | The short plain sentence the owner approves. Rendered from the envelope, never from model prose; no markdown. |
 | `choices` | `OwnerChoice[]` | no | Settings on this effect the *owner* decides when they approve it: `{ key, label, options, default }` each. Core refuses anything not on the declared list, and `execute` reads the result from `ctx.choices`. Declare one only when there is something to choose. |
 
+### The call
+
 #### `ToolContext`
 
-What a tool is handed. Optional fields are optional so every caller keeps
-compiling: a tool that *needs* one must fail closed when it is absent rather
-than guess.
+What a tool is handed: the call, and the host as `buddi`. Optional fields are
+optional so every caller keeps compiling: a tool that *needs* one must fail
+closed when it is absent rather than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments. Set by core on every context it hands you. See §9b: the pool, the owner, the clock and zone, the preview port, the protected paths and the model accounts are reached there, and are no longer fields of the context. |
+| `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments — the database, the owner, the clock and zone, the preview port, the protected paths, the model accounts. Set by core on every context it hands you; optional only so core's own contexts compile. See §1.1 and §9b. |
 | `systemContext` | `(run?) => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. The loop passes the run's agent and grant, so a paragraph meant only for agents holding certain tools (the learning one) is decided by the grant. |
 | `ownerRequest` | `{ id; text; expiresAt }` | no | Issued by an authenticated interactive surface, never by a model. What a `session` tool is checked against. |
 | `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate never inherits them. |
@@ -2520,7 +2913,7 @@ than guess.
 | `severity` | `Severity` | yes | `'urgent'` wakes the owner through the `sentinel-wake` mission, then stays quiet 24 h. `'info'` goes to the weekly digest, then stays quiet 7 days. |
 | `title` | `string` | yes | One line. |
 | `detail` | `string` | yes | The evidence, in prose the owner can act on. |
-| `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
+| `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.buddi.owner.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
 | `wake` | `boolean` | no | An `info` finding that wakes its agent **once**, when it is first raised, instead of taking a digest line. For good news with a short shelf life — a milestone crossed, a target reached. Every later fire of that key behaves like any other `info`. Ignored on `urgent`, which already wakes. |
 | `data` | `unknown` | no | Structured evidence, handed to that agent verbatim. |
 
@@ -2595,7 +2988,7 @@ than guess.
 | --- | --- | --- | --- |
 | `name` | `string` | yes | `threads`, `accounts`. Lower_snake_case, unique in your plugin; it is the `<query>` of `GET /api/pages/<plugin>/<query>`. |
 | `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
-| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
+| `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.buddi.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
 | `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
 | `sensitive` | `boolean` | no | Balances, pay, anything not to be read over a shoulder — as a Home block's `sensitive`. The page masks every section that reads it behind Show/Hide and masks it again when the window loses focus; `buddi.page_query` over MCP returns only its name unless called with `includeSensitive: true`. |
 
@@ -2632,42 +3025,22 @@ cannot reach the network. It is compared with the `Hosts:` line of your
 | `GATED_TIERS` | `['gated']` — what it turns into an action. |
 | `DEFAULT_EFFECT_TIMEOUT_MS` | The wait before an effect attempt is recorded `unknown`. |
 
-## 9b. The host: `ctx.buddi`
+## 9b. Reference: the host, `ctx.buddi`
 
 Everything a plugin reaches beyond its own arguments, in one object bound to
 the plugin (docs/specs/plugin-host-api.md). Core builds it at `register()` from
 your manifest's name, schema, tools, `network` and `uses`, and puts it on every
-context it hands you: a tool's, a page query's, a metric's, a source's, a
-sentinel's. The other fields of those contexts are the *call*; this is the
-*host*.
+context it hands you: a tool's, a page query's, a metric's, a home block's, a
+preview's, a source's, a sentinel's. §1.1 is the idea; this is every member.
 
-Six areas are always there, because they reach nothing beyond your plugin.
-The rest exist only when your manifest's `uses` declares them — and the same
-list in `package.json` as `buddi.uses`, which is what the install card shows
-the owner before anything of yours runs. An area you did not declare is absent:
-`ctx.buddi.http` is `undefined`, not a refusal. Import the types and the pure
-helpers from `@buddi/core/plugin`.
+Six areas are always there. The rest exist only when your manifest's `uses`
+declares them, and `package.json`'s `buddi.uses` says the same (§1.3). An area
+you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
+The types are exported from `@buddi/core/plugin`.
 
-`ctx.buddi.version` is `major.minor`, now `1.0`. Say what you were built
-against as `buddi.hostApi` in `package.json` (`"^1.0"`); a buddi with less is
-refused at staging, before anything is imported. "Since" below is the version
-that introduced each member. In 1.0 the old context fields still work beside
-it, unchanged; plugins move onto it one at a time.
-
-On the install card, each declared area is one line:
-
-| `uses` | The owner reads |
-| --- | --- |
-| `http` | sends web requests |
-| `accounts` | uses a model account you pick |
-| `files` | keeps files in your Files library |
-| `files:library` | reads every file in your Files library |
-| `memory` | reads and writes memory as the agent that calls it |
-| `proposals` | proposes rules |
-| `schedule` | starts agent runs by itself |
-| `secrets` | fills secrets you bind to it |
-
-An upgrade that adds an area says so on its card.
+"Since" is the host version that introduced each member (§1.7). The host is
+`1.0`, so every member is too; the next minor's additions are the first rows
+that say otherwise.
 
 #### `BuddiHost`
 
@@ -2685,10 +3058,10 @@ An upgrade that adds an area says so on its card.
 | `http` | `HttpArea` | no | 1.0 | Declared as `http`. |
 | `accounts` | `AccountsArea` | no | 1.0 | Declared as `accounts`. |
 | `files` | `FilesArea` | no | 1.0 | Declared as `files` or `files:library`. |
-| `memory` | `MemoryArea` | no | 1.0 | Declared as `memory`. A type only in 1.0: never present yet. |
+| `memory` | `MemoryArea` | no | 1.0 | Declared as `memory`. A type only in 1.0: never present yet, until a plugin needs it. |
 | `proposals` | `ProposalsArea` | no | 1.0 | Declared as `proposals`. |
 | `schedule` | `ScheduleArea` | no | 1.0 | Declared as `schedule`. |
-| `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. A type only in 1.0: never present yet. |
+| `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. The owner's secrets, used and never read (§6). |
 
 #### `OwnerArea`
 
@@ -2710,7 +3083,7 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `query` | `(sql, params?) => Promise<{rows, rowCount}>` | yes | 1.0 | One statement on the shared pool; `rowCount` is how many rows it touched. Name your tables with your schema, as today. In a page query or a metric it is read-only. |
+| `query` | `(sql, params?) => Promise<{rows, rowCount}>` | yes | 1.0 | One statement on the shared pool; `rowCount` is how many rows it touched. No `search_path` is set, so name your tables with your schema (`template.note`). In a page query or a metric it is read-only. |
 | `transaction` | `(fn) => Promise<T>` | yes | 1.0 | One connection: `begin`, your schema first on `search_path`, `fn(tx)`, then commit — or rollback when `fn` throws. |
 
 #### `DirArea`
@@ -2770,7 +3143,7 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `proposePolicy` | `(ctx, input) => Promise<CreateProposalResult>` | yes | 1.0 | Core's `proposePolicy`, with your name and the clock filled in. `ctx` is the call that noticed (its agent, conversation and run are the provenance), or `null`. |
+| `proposePolicy` | `(ctx, input, within?) => Promise<CreateProposalResult>` | yes | 1.0 | Core's `proposePolicy`, with your name and the clock filled in. `ctx` is the call that noticed (its agent, conversation and run are the provenance), or `null`; `within` is a `db.transaction` handle, for a proposal that must commit with your own rows. |
 | `countOpen` | `() => Promise<number>` | yes | 1.0 | How many of your policy proposals are open. |
 
 #### `ScheduleArea`
