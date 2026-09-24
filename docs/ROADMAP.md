@@ -112,6 +112,10 @@ with a written brief; in order:
 
 Small, whenever a slot opens:
 
+- Sensitive plugin queries — a plugin marks a page query `sensitive` the
+  way a Home block already is; the page masks it like Home does and
+  `buddi mcp` leaves it out unless asked. Today finance balances come back
+  unmarked from `buddi.page_query` (2026-09-23).
 - Agent avatar — an optional uploaded PNG, SVG or GIF on the agent record next to
   the icon, kept in the database blob store (never in the agent file), size-capped and re-encoded on upload, served at
   `/api/agents/:id/avatar`, shown in the roster, chat header, delegation view
