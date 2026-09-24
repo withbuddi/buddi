@@ -242,6 +242,11 @@ suite('the plugin page routes', () => {
     expect(JSON.stringify(body.pages)).not.toContain('produce');
   });
 
+  it('names what each query takes, by name and type', async () => {
+    const body = await new Client(base).json<{ queries: Array<{ plugin: string; name: string; params: Record<string, string> }> }>('/api/pages');
+    expect(body.queries.find((q) => q.plugin === 'demo' && q.name === 'bytes')?.params).toEqual({ as: 'png|html|pdf|text', download: '1?' });
+  });
+
   it('names the plugins whose queries read a per-agent directory', async () => {
     const body = await new Client(base).json<{ files: Array<{ plugin: string; read: string }> }>('/api/pages');
     expect(body.files).toEqual([{ plugin: 'other', workspace: 'root', list: 'root', stat: 'root', read: 'root', archive: 'root' }]);

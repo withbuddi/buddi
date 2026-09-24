@@ -283,6 +283,10 @@ describe('an agent profile', () => {
     expect(keeper.changeVia).toMatchObject({ agentId: 'father', handle: 'father', available: true });
     expect(keeper.changeVia?.prompt).toContain('@keeper');
     expect(keeper.note).toBe(READ_ONLY_NOTE);
+    // Honest about where a change is made since the tool picker, and not the stale "read-only view".
+    expect(keeper.note).toContain('Setup tab');
+    expect(keeper.note).toContain('buddi.agent_update');
+    expect(keeper.note).not.toMatch(/read-only view/);
 
     // The maker is not the route to changing the maker; it says so instead of
     // sending the owner in a circle.

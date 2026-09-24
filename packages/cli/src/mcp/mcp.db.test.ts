@@ -26,6 +26,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createPool, ensureOwner, type PluginManifest, type ToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { demoPagesManifest } from '@buddi/core/testing/pages';
 import {
   bindPlatformTools,
   createToolRegistry,
@@ -90,12 +91,21 @@ const provider = {
 };
 
 const sent: string[] = [];
+/** A figure only the sensitive block carries, to prove it never left. */
+const BALANCE = '12,345.67';
 const demoManifest: PluginManifest = {
+  // The pages fixture's screens and queries, so pages_list has a real tree to summarize.
+  ...demoPagesManifest,
   name: 'demo',
   version: '1.0.0',
   schema: 'demo',
   migrationsDir: '',
+  home: [
+    { id: 'demo.money', title: 'Money', produce: async () => ({ id: 'demo.money', title: 'Money', stats: [{ label: 'Cash', value: BALANCE }], rows: [], sensitive: true }) },
+    { id: 'demo.car', title: 'Car', produce: async () => ({ id: 'demo.car', title: 'Car', stats: [{ label: 'Mileage', value: '42,000' }], rows: [] }) },
+  ],
   tools: [
+    ...(demoPagesManifest.tools ?? []),
     {
       name: 'demo.pay',
       description: 'Pay a bill.',
@@ -365,6 +375,32 @@ suite('buddi mcp', () => {
     expect(text).toContain('are not grantable through this tool at all');
     const { pending } = await owner.get<{ pending: Array<{ tool: string }> }>('/api/approvals');
     expect(pending.filter((a) => a.tool.startsWith('mcp.'))).toEqual([]);
+  });
+
+  it('overview names a sensitive Home block and leaves it out, unless asked', async () => {
+    const plain = await tool('buddi.overview');
+    expect(plain.isError).toBe(false);
+    expect(plain.text).not.toContain(BALANCE);
+    const home = plain.json.overview.home as Array<Record<string, unknown>>;
+    expect(home.find((b) => b.id === 'demo.money')).toEqual({ id: 'demo.money', title: 'Money', sensitive: true, omitted: 'ask with includeSensitive' });
+    expect(home.find((b) => b.id === 'demo.car')).toMatchObject({ title: 'Car', stats: [{ label: 'Mileage', value: '42,000' }] });
+
+    const asked = await tool('buddi.overview', { includeSensitive: true });
+    expect(asked.text).toContain(BALANCE);
+    expect(asked.json.overview.home.find((b: any) => b.id === 'demo.money')).toMatchObject({ sensitive: true, stats: [{ label: 'Cash', value: BALANCE }] });
+  });
+
+  it('pages_list names each page and what it reads, not its layout', async () => {
+    const { json, text } = await tool('buddi.pages_list');
+    expect(Object.keys(json)).toEqual(['pages']);
+    for (const page of json.pages) expect(Object.keys(page)).toEqual(['plugin', 'id', 'title', 'place', 'queries']);
+    const board = json.pages.find((p: any) => p.id === 'board');
+    expect(board).toMatchObject({ plugin: 'demo', place: 'rail' });
+    expect(board.queries).toEqual(expect.arrayContaining([{ name: 'counts', params: {} }, { name: 'items', params: { state: 'string?' } }]));
+    expect(text).not.toContain('list-detail');
+    // The whole descriptor tree is several times this.
+    const full = JSON.stringify(await owner.get('/api/pages'));
+    expect(text.length).toBeLessThan(full.length / 3);
   });
 
   it('no read returns a seeded secret', async () => {

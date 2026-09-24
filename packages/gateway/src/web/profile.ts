@@ -24,10 +24,10 @@
  *
  * Two deliberate properties:
  *
- * **It is a read.** There is no write endpoint beside it and there must never
- * be one. A grant changes through the maker agent, where the change becomes an
- * approval the owner sees with the escalation named in words; a panel that
- * edited a tool list would route around that gate entirely. `changeVia` is the
+ * **It is a read.** There is no write endpoint beside it: a grant changes on
+ * the Setup tab's tool picker (or `buddi.agent_update` over MCP), or through
+ * the maker agent, where the change becomes an approval with the escalation
+ * named in words. `changeVia` is the
  * whole of this module's contribution to changing anything: the maker's handle,
  * resolved by role, and the sentence to open with.
  *
@@ -137,28 +137,25 @@ export interface AgentProfileView {
 }
 
 /**
- * The sentence the panel ends on.
- *
- * It names the gate rather than the file: an owner who edits `agent.md` by hand
- * gets no approval, no escalation summary and no record, which is precisely
- * what the maker exists to provide.
+ * The sentence the panel ends on: where a change is actually made. Since the
+ * tool picker that is the Setup tab (and `buddi.agent_update` over MCP, which
+ * turns the same save into an approval card); only the tools that create or
+ * change agents are still granted by editing the file by hand.
  */
 export const READ_ONLY_NOTE =
-  'This is a read-only view. Tools, skills and delegates change through the maker agent, ' +
-  'where a wider grant becomes an approval that names the escalation before anything is written.';
+  "Tools and delegates change on this agent's Setup tab, or over MCP through buddi.agent_update as an " +
+  'approval card; only the tools that create or change agents are granted by editing its file by hand.';
 
-/** The same sentence for an installation with no maker installed. */
-export const NO_MAKER_NOTE =
-  'This is a read-only view. Nothing here can be changed from the dashboard: no agent in this ' +
-  'installation claims the maker role, so a change means editing the agent file by hand.';
+/** With no maker installed the answer is the same: the Setup tab does not need one. */
+export const NO_MAKER_NOTE = READ_ONLY_NOTE;
 
 /**
- * And for the maker looking at itself. It cannot be the route to its own grant
- * — that is the point of the gate — so the honest answer is the file.
+ * And for the maker looking at itself: its other tools change like anyone's,
+ * but the ones that make it the maker are the hand-only ones.
  */
 export const MAKER_ITSELF_NOTE =
-  'This is a read-only view. This is the agent that changes the others, and it is not the route ' +
-  'to its own grant: widening what it holds means editing its file and restarting.';
+  "Tools and delegates change on this agent's Setup tab, or over MCP through buddi.agent_update as an " +
+  'approval card; the tools that create or change agents, which this one holds, are granted only by editing its file.';
 
 /** The opening message the maker is handed, with the agent already named. */
 export function changePrompt(handle: string, name: string): string {

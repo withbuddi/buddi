@@ -100,3 +100,21 @@ it('answers 503 when the socket is named but nothing is listening', async () => 
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
   expect((await fetch(`${origin}/api/service`, { headers: { Cookie: cookies.join('; ') } })).status).toBe(503);
 });
+
+it('reports a launchd job as supervised, with nothing to control from here', async () => {
+  // What launchd hands the job `buddi service` installs: its label, no socket.
+  const app = await dashboard({ XPC_SERVICE_NAME: 'com.buddi.serve' });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const session = await fetch(`${origin}/api/session`);
+  const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
+  expect(await (await fetch(`${origin}/api/service`, { headers })).json()).toEqual({ supervised: true, supervisor: 'launchd', label: 'com.buddi.serve' });
+  expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(404);
+  // Another launchd job (a terminal opened from one, say) is not this service.
+  const other = await dashboard({ XPC_SERVICE_NAME: 'application.com.apple.Terminal.123' });
+  const o2 = `http://127.0.0.1:${other.port}`;
+  const s2 = await fetch(`${o2}/api/session`);
+  const c2 = s2.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  expect(await (await fetch(`${o2}/api/service`, { headers: { Cookie: c2.join('; '), Origin: o2 } })).json()).toEqual({ supervised: false });
+});

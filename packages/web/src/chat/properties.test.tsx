@@ -121,7 +121,7 @@ function profile(over: Partial<AgentProfile> = {}): AgentProfile {
       prompt: 'I want to change what @keeper (The Keeper) can do.',
       available: true,
     },
-    note: 'This is a read-only view. Tools, skills and delegates change through the maker agent.',
+    note: "Tools and delegates change on this agent's Setup tab, or over MCP through buddi.agent_update as an approval card.",
     ...over,
   };
 }

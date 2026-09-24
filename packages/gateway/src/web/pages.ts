@@ -166,7 +166,79 @@ export function actRateLimited(sessionId: string, now: number): boolean {
  * this process — the browser learns what to *ask for*, not how it is answered.
  */
 export function listPageDescriptors(deps: PagesDeps): PagesReply {
-  return { status: 200, body: { pages: deps.registry.pages(), files: deps.registry.files() } };
+  return {
+    status: 200,
+    body: {
+      pages: deps.registry.pages(),
+      files: deps.registry.files(),
+      // What each query takes, by name and type: the schema itself stays here.
+      queries: deps.registry.queries().map((q) => ({ plugin: q.plugin, name: q.name, params: describeParams(q.params) })),
+    },
+  };
+}
+
+/**
+ * A query's parameters as `{ name: type }`, read off its zod object: `string`,
+ * `number`, `boolean`, `a|b` for an enum, with a trailing `?` when optional.
+ * Anything this does not recognise is `unknown` rather than a guess.
+ */
+export function describeParams(schema: unknown): Record<string, string> {
+  const object = unwrap(schema).inner;
+  const shape = (object as { _def?: { typeName?: string; shape?: () => Record<string, unknown> } })._def;
+  if (shape?.typeName !== 'ZodObject' || typeof shape.shape !== 'function') return {};
+  const out: Record<string, string> = {};
+  for (const [key, field] of Object.entries(shape.shape())) {
+    const { inner, optional } = unwrap(field);
+    out[key] = typeOf(inner) + (optional ? '?' : '');
+  }
+  return out;
+}
+
+type ZodDefLike = { typeName?: string; innerType?: unknown; schema?: unknown; in?: unknown; values?: unknown; value?: unknown; type?: unknown; options?: unknown };
+
+function unwrap(schema: unknown): { inner: unknown; optional: boolean } {
+  let inner = schema;
+  let optional = false;
+  for (let i = 0; i < 10; i++) {
+    const def = (inner as { _def?: ZodDefLike } | undefined)?._def;
+    switch (def?.typeName) {
+      case 'ZodOptional':
+      case 'ZodDefault':
+      case 'ZodCatch':
+        optional = true;
+        inner = def.innerType;
+        break;
+      case 'ZodNullable':
+      case 'ZodReadonly':
+      case 'ZodBranded':
+        inner = def.innerType ?? def.type;
+        break;
+      case 'ZodEffects':
+        inner = def.schema;
+        break;
+      case 'ZodPipeline':
+        inner = def.in;
+        break;
+      default:
+        return { inner, optional };
+    }
+  }
+  return { inner, optional };
+}
+
+function typeOf(schema: unknown): string {
+  const def = (schema as { _def?: ZodDefLike } | undefined)?._def;
+  switch (def?.typeName) {
+    case 'ZodString': return 'string';
+    case 'ZodNumber': return 'number';
+    case 'ZodBoolean': return 'boolean';
+    case 'ZodDate': return 'date';
+    case 'ZodEnum': return Array.isArray(def.values) ? def.values.join('|') : 'enum';
+    case 'ZodLiteral': return JSON.stringify(def.value);
+    case 'ZodUnion': return Array.isArray(def.options) ? def.options.map((o) => typeOf(unwrap(o).inner)).join('|') : 'unknown';
+    case 'ZodArray': return `${typeOf(unwrap(def.type).inner)}[]`;
+    default: return 'unknown';
+  }
 }
 
 /**
