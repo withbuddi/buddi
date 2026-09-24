@@ -422,6 +422,22 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     timezone,
     ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
       protectedPaths: protectedWritePaths(),
+      /*
+       * Stable, and late-bound like the getter below: the account service is
+       * attached after this object is built (and spread), so each call asks
+       * for it then. No service, no accounts — never an ambient key.
+       */
+      providerAccounts: {
+        list: () => accounts?.pluginAccess().list() ?? [],
+        resolve: (id, model, signal) => {
+          if (!accounts) return Promise.reject(new Error('Provider accounts are not available in this process.'));
+          return accounts.pluginAccess().resolve(id, model, signal);
+        },
+        withCodexProfile: (id, use, signal) => {
+          if (!accounts) return Promise.reject(new Error('Provider accounts are not available in this process.'));
+          return accounts.pluginAccess().withCodexProfile(id, use, signal);
+        },
+      },
       systemContext: (run) => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run),
       /*
        * A getter, not a value: this object is built before anything is bound,

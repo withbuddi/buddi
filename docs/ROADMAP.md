@@ -65,6 +65,14 @@ next. Checked against the code and `git log` on 2026-09-21.
 - [MCP server](specs/mcp.md) — configure buddi from Claude Code: reads at
   once, every write an approval card, `buddi.ask` to talk to an agent
   (buddi a329cf6, 31d7128); `claude mcp add -s user buddi -- buddi mcp`.
+- Image plugin (buddi-plugins `image/`) — `image.generate` makes one picture
+  with the provider account and model chosen on Settings → Image (Codex via
+  `codex exec` on the account's staged profile, or the OpenAI Images API for
+  OpenAI and compatible accounts), kept in the Files library and drawn on the
+  canvas; the first image of a conversation is an approval card, 30 a day by
+  default; proposes the Illustrator (`@art`), reached by delegation. Core gained
+  `ToolContext.providerAccounts`. Built 2026-09-23; Gemini waits for an account
+  kind.
 
 ## In progress
 

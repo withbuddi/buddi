@@ -2458,6 +2458,7 @@ than guess.
 | `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 | `provenance` | `() => RunProvenance` | no | Set by the runtime loop on every call: the run's id, the owner turn it answers, the model step, and the untrusted inputs in its context, derived from the messages the model was shown. The learning tools record it; a tool that needs it fails closed when it is absent. |
 | `protectedPaths` | `readonly string[]` | no | Directories no tool may write into, whatever it was granted: the owner's agent files and skills, learned ones included. Set by the gateway. A plugin that writes files refuses a target inside any of them, even one inside a workspace it was given. |
+| `providerAccounts` | `ProviderAccountsAccess` | no | Set by the gateway: the owner's provider accounts (Settings → Model accounts), for a plugin that calls a model with an account the owner chose on its own page. `list()` (no secrets), `resolve(id, model)` for an HTTP account's endpoint and key through the runtime's own resolver, and `withCodexProfile(id, use)`, which stages a Codex account in a private `CODEX_HOME` under its lock with the chat adapter's scrubbed environment, saves a refresh and removes it. Never shown to a model. The image plugin is its reader. |
 
 #### `GroupContext`
 
