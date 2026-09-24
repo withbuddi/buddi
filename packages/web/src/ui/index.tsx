@@ -319,6 +319,27 @@ export function Section({
   foot?: ReactNode;
   children?: ReactNode;
 }): JSX.Element {
+  if (panel) {
+    /* The kit's panel: the title, its note and its actions in the panel's own
+       head behind a hairline, what it holds under them, the foot last. */
+    return (
+      <section className="ui-panel" data-flush={flush ? 'true' : undefined} data-section="true">
+        {title || aside || actions ? (
+          <header className="ui-panel-head">
+            {title ? <h3 className="ui-panel-title">{title}</h3> : <span />}
+            {aside || actions ? (
+              <div className="ui-section-side">
+                {aside ? <span className="ui-section-aside">{aside}</span> : null}
+                {actions ? <div className="ui-section-actions">{actions}</div> : null}
+              </div>
+            ) : null}
+          </header>
+        ) : null}
+        {children}
+        {foot ? <div className="ui-panel-foot">{foot}</div> : null}
+      </section>
+    );
+  }
   const head = title || aside || actions ? (
     <div className="ui-section-head">
       {title ? <h3 className="ui-section-title">{title}</h3> : <span />}
@@ -331,19 +352,10 @@ export function Section({
     </div>
   ) : null;
   return (
-    <section className="ui-section" data-panel={panel ? 'true' : undefined}>
+    <section className="ui-section">
       {head}
-      {panel ? (
-        <div className="ui-panel" data-flush={flush ? 'true' : undefined}>
-          {children}
-          {foot ? <div className="ui-panel-foot">{foot}</div> : null}
-        </div>
-      ) : (
-        <>
-          {children}
-          {foot ? <div className="ui-toolbar" data-align="end">{foot}</div> : null}
-        </>
-      )}
+      {children}
+      {foot ? <div className="ui-toolbar" data-align="end">{foot}</div> : null}
     </section>
   );
 }

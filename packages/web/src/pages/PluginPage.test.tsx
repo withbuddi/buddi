@@ -866,7 +866,7 @@ describe('a settings page', () => {
 
   it('draws a section\'s own action beside its heading', async () => {
     draw('settings');
-    const head = (await screen.findByText('Accounts')).closest('.ui-section-head') as HTMLElement;
+    const head = (await screen.findByText('Accounts')).closest('.ui-panel-head, .ui-section-head') as HTMLElement;
     expect(within(head).getByRole('link', { name: 'The board' })).toHaveAttribute('href', '#/p/demo/board');
   });
 
