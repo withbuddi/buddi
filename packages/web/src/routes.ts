@@ -203,19 +203,41 @@ export const PLACES = [
   { route: SETTINGS_ROUTE, label: 'Settings' },
 ] as const;
 
-/** The settings sections, in tab order. */
-export const SETTINGS_SECTIONS = [
+/**
+ * The settings sections' groups, in the order the Settings list reads them.
+ * The plugins' own pages join the last group, after "All plugins".
+ */
+export const SETTINGS_GROUPS = [
   { id: 'you', label: 'You' },
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'proposals', label: 'Proposals' },
-  { id: 'accounts', label: 'Model accounts' },
-  { id: 'computer', label: 'Computer & browser' },
-  { id: 'watchers', label: 'Watchers' },
-  { id: 'backup', label: 'Backup' },
+  { id: 'access', label: 'Models and access' },
+  { id: 'running', label: 'Running' },
   { id: 'plugins', label: 'Plugins' },
-  { id: 'system', label: 'System' },
 ] as const;
+
+export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]['id'];
+
+/**
+ * The core settings sections, in list order. The id is the hash
+ * (`#/settings/<id>`) and never changes; the label is only what is drawn —
+ * `you` reads "Profile" and still answers on `#/settings/you`.
+ */
+export const SETTINGS_SECTIONS = [
+  { id: 'you', label: 'Profile', group: 'you' },
+  { id: 'appearance', label: 'Appearance', group: 'you' },
+  { id: 'memory', label: 'Memory', group: 'you' },
+  { id: 'proposals', label: 'Proposals', group: 'you' },
+  { id: 'accounts', label: 'Model accounts', group: 'access' },
+  { id: 'computer', label: 'Computer & browser', group: 'access' },
+  { id: 'watchers', label: 'Watchers', group: 'running' },
+  { id: 'backup', label: 'Backup', group: 'running' },
+  { id: 'system', label: 'System', group: 'running' },
+  { id: 'plugins', label: 'All plugins', group: 'plugins' },
+] as const satisfies ReadonlyArray<{ id: string; label: string; group: SettingsGroup }>;
+
+/** The section a settings hash opens: the core id or the plugin tab id, `you` when it names none. */
+export function settingsSectionOf(hash: string): string {
+  return /^#\/settings\/([a-z0-9.-]+)/.exec(hash)?.[1] ?? 'you';
+}
 
 /** Where the recovery banner sends the owner, and where a restore is started. */
 export const BACKUP_ROUTE = settingsRoute('backup');

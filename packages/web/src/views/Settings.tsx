@@ -1,19 +1,25 @@
 /**
  * Settings: the installation, section by section. Model accounts, the computer
  * and browser the agents may drive, the watchers that check, the system itself
- * — and, after them, a tab for each screen an installed plugin contributes. Nothing here is a page an owner visits daily, which is why it is
- * behind the gear and not on the rail's first screen.
+ * — and, under Plugins, an entry for each screen an installed plugin
+ * contributes. Nothing here is a page an owner visits daily, which is why it
+ * is behind the gear and not on the rail's first screen.
+ *
+ * The sections are a grouped list beside the rail (`SettingsNav`), and the
+ * open one is drawn to its right; on a narrow window the list is a menu at the
+ * top of the section instead.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_SECTIONS, WELCOME_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, pluginSettingsRoute, pluginSettingsTab, settingsRoute } from '../routes';
+import { WELCOME_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
+import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
-import { Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Segment, Stack, Tab, Tabs, Toolbar, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -22,61 +28,57 @@ import { You } from './You';
 import { Memory } from './Memory';
 import { Proposals } from './Proposals';
 import { Plugins } from './Plugins';
+import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 
 export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
-  const section = /^#\/settings\/([a-z0-9.-]+)/.exec(hash)?.[1] ?? 'you';
-  const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
+  const section = settingsSectionOf(hash);
   /*
-   * A plugin's settings tab sits *after* the core sections, and is a tab like
-   * any other: one hash, one page, drawn from the descriptor. Nothing here
-   * knows which plugin it is.
+   * A plugin's settings page is an entry like any other under Plugins: one
+   * hash, one page, drawn from the descriptor. Nothing here knows which
+   * plugin it is.
    */
   // Read by the shell and passed down; a Settings page opened on its own (a
-  // test, a story) still reads for itself rather than drawing no tabs.
+  // test, a story) still reads for itself rather than listing no plugins.
   const own = usePluginPages(pluginPages !== undefined);
   const plugins = pluginPages ?? own;
   const located = parsePluginSettingsRoute(hash);
   const pluginPage = located ? plugins.find(located.plugin, located.page) : undefined;
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const entries = settingsEntries(plugins.settings);
+  // The counts the sections already keep: the proposals still open.
+  const proposals = useAsync(() => Promise.resolve().then(() => api.proposals()), [], 30_000);
+  const counts = { proposals: proposals.data?.open?.length ?? 0 };
+  const list = { entries, active: section, counts, navigate: (route: string) => navigate(route) };
   return (
-    <div className="ui-page">
-      <header className="ui-page-head">
-        <h2 className="ui-page-title">Settings</h2>
-        <p className="ui-page-lede">How this installation runs, and where it reaches.</p>
-      </header>
-      <Tabs>
-        {SETTINGS_SECTIONS.map((s) => (
-          <Tab key={s.id} href={settingsRoute(s.id)} active={section === s.id} onClick={go(settingsRoute(s.id))}>
-            {s.label}
-          </Tab>
-        ))}
-        {plugins.settings.map((page) => {
-          const id = pluginSettingsTab(page.plugin, page.id);
-          const route = pluginSettingsRoute(page.plugin, page.id);
-          return (
-            <Tab key={id} href={route} active={section === id} onClick={go(route)}>
-              {page.title}
-            </Tab>
-          );
-        })}
-      </Tabs>
-      {pluginPage ? (
-        <PluginSettingsPage
-          page={pluginPage}
-          navigate={navigate}
-          timezone={timezone}
-          siblings={plugins.all.filter((p) => p.plugin === pluginPage.plugin)}
-        />
-      ) : null}
-      {section === 'you' ? <You embedded /> : null}
-      {section === 'appearance' ? <AppearanceSection /> : null}
-      {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
-      {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
-      {section === 'accounts' ? <Providers embedded /> : null}
-      {section === 'computer' ? <Browser embedded /> : null}
-      {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
-      {section === 'backup' ? <Backup /> : null}
-      {section === 'plugins' ? <Plugins /> : null}
-      {section === 'system' ? <System timezone={timezone} /> : null}
+    <div className="settings">
+      {narrow ? null : <SettingsNav {...list} />}
+      <div className="settings-body">
+        <div className="ui-page">
+          <header className="ui-page-head">
+            <h2 className="ui-page-title">Settings</h2>
+            <p className="ui-page-lede">How this installation runs, and where it reaches.</p>
+          </header>
+          {narrow ? <SettingsMenu {...list} /> : null}
+          {pluginPage ? (
+            <PluginSettingsPage
+              page={pluginPage}
+              navigate={navigate}
+              timezone={timezone}
+              siblings={plugins.all.filter((p) => p.plugin === pluginPage.plugin)}
+            />
+          ) : null}
+          {section === 'you' ? <You embedded /> : null}
+          {section === 'appearance' ? <AppearanceSection /> : null}
+          {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
+          {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
+          {section === 'accounts' ? <Providers embedded /> : null}
+          {section === 'computer' ? <Browser embedded /> : null}
+          {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
+          {section === 'backup' ? <Backup /> : null}
+          {section === 'plugins' ? <Plugins /> : null}
+          {section === 'system' ? <System timezone={timezone} /> : null}
+        </div>
+      </div>
     </div>
   );
 }
