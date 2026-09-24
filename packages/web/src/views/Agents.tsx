@@ -54,7 +54,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
     <div className="ui-page">
       <PageHeader
         title="Agents"
-        lede="The team you built. Each one runs on the account you gave it and asks before anything leaves this Mac."
+        lede="Your team. Each one is a file on this Mac — what it can reach is listed on its page."
         actions={maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
       />
       <Tabs>

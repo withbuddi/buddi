@@ -69,11 +69,11 @@ export function Jobs({ timezone, embedded, initialState }: { timezone: string; e
       embedded={embedded}
       title="Jobs"
       lede={`${data?.paused ? 'Paused: nothing is being claimed. ' : ''}Bounded retries with backoff; past the budget a job waits for you.`}
-      actions={
+      actions={embedded ? undefined : (
         <Button size="sm" variant={data?.paused ? 'accent' : undefined} onClick={() => act(api.setPaused(!(data?.paused ?? false)))}>
           {data?.paused ? 'Resume the queue' : 'Pause the queue'}
         </Button>
-      }
+      )}
     >
 
       <Toolbar>
