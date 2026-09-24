@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, guardedLookup, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { BrowserManager, PlaywrightDriver, PlaywrightHost, commandSchema } from '@buddi/tool-browser';
 import { DEFAULT_POLICY } from '@buddi/tool-web';
 import { startWebServer, type WebServer } from './server.js';
@@ -155,7 +155,7 @@ describe.skipIf(!enabled)('remote hand latency, end to end', () => {
     fixtureUrl = `http://127.0.0.1:${port}/`;
     const policy = { ...DEFAULT_POLICY, ports: [port], blockedHostname: () => false,
       blocked: (address: string) => (address === '127.0.0.1' ? null : 'Fixture only') };
-    host = new PlaywrightHost({ profileDir: path.join(dir, 'profile'), headless: true, policy });
+    host = new PlaywrightHost({ profileDir: path.join(dir, 'profile'), headless: true, policy, lookup: (p) => guardedLookup(undefined, p) });
     manager = new BrowserManager(() => new PlaywrightDriver(host.options, host), { closeHost: () => host.close() });
     await manager.enable();
 

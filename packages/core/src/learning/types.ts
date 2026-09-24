@@ -7,6 +7,7 @@
  * file, a plugin's policy, a line in the agent file — is the kind's own job.
  */
 import type { Pool } from 'pg';
+import type { BuddiHost } from '../host/types.js';
 
 /** The three kinds a proposal can be. Memory, the fourth kind, is the memory plugin's. */
 export type ProposalKind = 'skill' | 'policy' | 'change';
@@ -138,6 +139,12 @@ export const MAX_SOURCES = 25;
 export interface PolicyHandlerContext {
   db: Pool;
   now: Date;
+  /**
+   * The host, bound to the plugin the handler belongs to, when the caller
+   * built one: `adopt` is handed it, so a plugin proposes through
+   * `buddi.proposals` rather than core's internals.
+   */
+  buddi?: BuddiHost;
 }
 
 export type PolicyApplyResult =

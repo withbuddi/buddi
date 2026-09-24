@@ -30,7 +30,8 @@ import { buildPreamble, manifest as memoryManifest,
   SHARED,
 } from '@buddi/tool-memory';
 import { manifest as webManifest } from '@buddi/tool-web';
-import { createBrowserManifest, hostBrowser } from '@buddi/tool-browser';
+import { createBrowserManifest } from '@buddi/tool-browser';
+import { browserHost } from '../browser-host.js';
 import { createHostManifest, hostService } from '@buddi/tool-host';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
@@ -137,7 +138,7 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // like every other plugin: being installed gives no agent the capability —
   // an agent reaches the web only if its own `tools:` line names `web.*`.
   registry.register(webManifest);
-  registry.register(createBrowserManifest(hostBrowser(env)));
+  registry.register(createBrowserManifest(browserHost(env)));
   registry.register(createHostManifest(hostService(env)));
   // Everything the owner installed, from `plugins.json`. Empty in any process
   // that did not await `loadPluginsOnce` — a unit test, a fixture — which is

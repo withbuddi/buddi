@@ -9,7 +9,7 @@ import { PlaywrightHost } from './host.js';
 import { BrowserManager } from './manager.js';
 import { commandSchema } from './types.js';
 import { DEFAULT_POLICY } from '@buddi/core/plugin';
-import { ToolRegistry, createPluginHost, hostBindingOf, type AgentDefinition, type ToolContext } from '@buddi/core';
+import { ToolRegistry, createPluginHost, guardedLookup, hostBindingOf, type AgentDefinition, type ToolContext } from '@buddi/core/testing';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -46,7 +46,8 @@ describe.skipIf(!enabled)('real host browser fixture (opt in with BUDDI_BROWSER_
     url = `http://127.0.0.1:${port}`;
     driver = new PlaywrightDriver({ profileDir: path.join(dir, 'profile'), headless: process.env.BUDDI_BROWSER_HEADED !== '1',
       policy: { ...DEFAULT_POLICY, ports: [port], blockedHostname: () => false,
-        blocked: (address) => address === '127.0.0.1' ? null : 'Fixture only' } });
+        blocked: (address) => address === '127.0.0.1' ? null : 'Fixture only' },
+      lookup: (policy) => guardedLookup(undefined, policy) });
     await driver.start();
   }, 30_000);
   afterAll(async () => {

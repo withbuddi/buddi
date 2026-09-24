@@ -82,7 +82,8 @@ import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
 import { getAction, inRecovery, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
-import { hostBrowser, type BrowserController } from '@buddi/tool-browser';
+import type { BrowserController } from '@buddi/tool-browser';
+import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
@@ -442,7 +443,7 @@ export function createWebApp(deps: WebServerDeps): Server {
    */
   const hand = new RemoteHandEndpoint({
     log,
-    browser: () => deps.browser ?? hostBrowser(deps.env ?? process.env),
+    browser: () => deps.browser ?? browserHost(deps.env ?? process.env),
     authorize: async (req) => {
       const now = deps.now();
       const origin = requestOrigin(req);
@@ -498,7 +499,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   };
   const chat = deps.chat
     ? new WebChat({
-        onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(deps.pool, deps.browser ?? hostBrowser(deps.env ?? process.env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+        onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(deps.pool, deps.browser ?? browserHost(deps.env ?? process.env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
         pool: deps.pool,
         catalog: deps.catalog,
         registry: deps.registry,
@@ -825,7 +826,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   ): Promise<void> {
     const path = url.pathname.replace(/\/+$/, '') || '/api';
     const q = url.searchParams;
-    const browser = deps.browser ?? hostBrowser(deps.env ?? process.env);
+    const browser = deps.browser ?? browserHost(deps.env ?? process.env);
     /** Everything the first-run routes need, resolved per request. */
     const onboardingDeps = (): OnboardingDeps => ({
       pool: deps.pool,

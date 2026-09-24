@@ -1,14 +1,22 @@
 /** SOCKS5 CONNECT only. DNS is checked by the socket's resolver, not before a
  * second browser resolution. No UDP, local services, or filesystem URLs.
  * This is egress confinement for the browser, not an OS sandbox for plugins. */
-import { createConnection, createServer, type Socket, type AddressInfo } from 'node:net';
-// Not yet on ctx.buddi: the proxy dials raw sockets, not HTTP requests, and is
-// started before any context exists; ctx.buddi.http has no resolver to hand out.
-import { guardedLookup, type LookupAll } from '@buddi/core';
+import { createConnection, createServer, type LookupFunction, type Socket, type AddressInfo } from 'node:net';
 import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 
-export async function startProxy(options: { policy?: AddressPolicy; resolve?: LookupAll } = {}) {
+/**
+ * The resolver that refuses what the policy blocks, handed to the socket so the
+ * address approved is the address dialled. Core's `guardedLookup`: the
+ * composition root hands it in (`hostBrowser`'s `lookup`), because the half of
+ * the guard that resolves lives in core, not in `@buddi/core/plugin`.
+ */
+export type GuardedLookup = (policy: AddressPolicy) => LookupFunction;
+
+export async function startProxy(options: { policy?: AddressPolicy; lookup?: GuardedLookup } = {}) {
   const policy = options.policy ?? DEFAULT_POLICY;
+  const lookup = options.lookup;
+  // No resolver, no proxy: an unguarded one would dial whatever a name resolves to.
+  if (lookup === undefined) throw new Error('The browser proxy was started without the address guard, so it is not started.');
   const sockets = new Set<Socket>();
   const track = (socket: Socket): Socket => {
     sockets.add(socket);
@@ -47,7 +55,7 @@ export async function startProxy(options: { policy?: AddressPolicy; resolve?: Lo
         if (!policy.ports.includes(port) || /[\s/@?#\\]/.test(host)) throw new Error('Invalid SOCKS destination');
         const checked = checkUrl(`http://${host}:${port}`, policy);
         const upstream = track(createConnection({ host: checked.hostname, port,
-          lookup: guardedLookup(options.resolve, policy) }));
+          lookup: lookup(policy) }));
         client.removeListener('data', receive);
         client.pause();
         const rest = buffer.subarray(6 + size);

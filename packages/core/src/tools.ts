@@ -14,7 +14,7 @@ import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 import type { ProviderAccountsAccess } from './provider-accounts.js';
-import type { BuddiHost, SecretDestination } from './host/types.js';
+import type { BuddiHost, RegisterHost, SecretDestination } from './host/types.js';
 import type { PluginUse } from './plugin/uses.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -714,4 +714,10 @@ export interface PluginManifest {
    * `ctx.buddi.secrets.registerDestination` for each, before any context exists.
    */
   destinations?: SecretDestination[];
+  /**
+   * Called once by `register()`, after every check has passed, with the parts
+   * of the host that need no call (`RegisterHost`): the place for a plugin to
+   * learn its directory before any context exists. Nothing is awaited.
+   */
+  register?(host: RegisterHost): void;
 }
