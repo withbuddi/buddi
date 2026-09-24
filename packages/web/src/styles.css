@@ -2429,54 +2429,28 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
  * Agents
  * ================================================================== */
 
-.team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-4); }
-.team-card {
-  position: relative;
-  /* Its own stacking context, so the band under the content still paints
-     over the card's ground instead of behind it. */
-  isolation: isolate;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: var(--space-5) var(--space-4) var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-panel);
-  color: inherit;
-  text-decoration: none;
-  min-width: 0;
-  isolation: isolate;
-  transition: border-color var(--dur-fast) ease, transform var(--dur) var(--ease), box-shadow var(--dur) ease;
-}
-/* The card's top edge wears the agent's accent: a soft band the face sits on.
-   Its only colour on the card — the words stay in the text colours. */
-.team-card::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto;
+/* The kit's agent cards: four across on a wide page, a soft wash of the
+   agent's colour at the top and the face sitting half on it. */
+.agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-3); }
+.agent-card { position: relative; }
+.agent-card-top {
   height: 56px;
-  z-index: -1;
-  /* Inside the border, so the band follows the card's own curve. */
-  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
-  /* The kit's soft wash, with a 3px line of the agent's fill along the top:
-     the wash alone is too quiet on a dark card to say whose card it is. */
-  box-shadow: inset 0 3px 0 var(--agent-fill, var(--accent));
+  margin: calc(var(--space-4) * -1) calc(var(--space-5) * -1) 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: linear-gradient(135deg, var(--agent-soft, var(--accent-soft)), color-mix(in oklab, var(--agent-soft, var(--accent-soft)) 40%, var(--surface)));
 }
-.team-card[data-unavailable='true']::before { filter: grayscale(1); opacity: 0.6; }
-.team-card .ui-avatar { box-shadow: 0 0 0 3px var(--surface); }
-.team-card:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow-pop); }
-.team-card:has(.team-card-name:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.team-card[data-unavailable='true'] { color: var(--text-muted); }
-.team-card .ui-avatar { margin-bottom: var(--space-2); }
-.team-card-name { color: inherit; text-decoration: none; outline: none; }
-.team-card-name::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
-.team-card-talk { position: relative; z-index: 1; margin-left: auto; }
-.team-card-name { font-family: var(--font-display); font-size: var(--text-xl); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
-.team-card-handle { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint); }
-.team-card-desc { margin-top: 6px; font-size: var(--text-md); color: var(--text-muted); line-height: var(--leading); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.team-card-foot { margin-top: auto; padding-top: var(--space-3); display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); }
+.agent-card[data-unavailable='true'] .agent-card-top { filter: grayscale(1); opacity: 0.6; }
+.agent-card-face { display: flex; align-items: flex-end; gap: 10px; margin-top: -34px; }
+.agent-card-link { color: inherit; text-decoration: none; outline: none; }
+.agent-card-link:hover { color: inherit; text-decoration: none; }
+/* The name is the card's link, stretched over the card; Talk sits above it. */
+.agent-card-link::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.agent-card:has(.agent-card-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-card .ui-card-title .agent-card-handle { font-size: var(--text-xs); font-weight: var(--weight-normal); }
+.agent-card-desc { margin-top: 4px; }
+.agent-card-talk { position: relative; z-index: 1; margin-left: auto; }
+.default-agent-text { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.default-agent-title { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); letter-spacing: -0.005em; }
 
 .agent-head { display: flex; align-items: flex-start; gap: var(--space-4); flex-wrap: wrap; }
 .agent-head-text { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }

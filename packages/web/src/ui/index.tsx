@@ -135,21 +135,30 @@ export function FormGrid({ children }: { children: ReactNode }): JSX.Element {
 export function Pill({
   tone,
   mono,
+  dot,
   children,
   className,
   title,
 }: {
   tone?: Tone;
   mono?: boolean;
+  /** A small dot of the tone before the word: a live state, like "ready". */
+  dot?: boolean;
   children: ReactNode;
   className?: string;
   title?: string;
 }): JSX.Element {
   return (
     <span className={cx('ui-pill', mono && 'mono', className)} data-tone={tone} title={title}>
+      {dot ? <span className="ui-pill-dot" aria-hidden="true" /> : null}
       {children}
     </span>
   );
+}
+
+/** A very small all-caps word: what kind of thing this is. */
+export function Tag({ children }: { children: ReactNode }): JSX.Element {
+  return <span className="ui-tag">{children}</span>;
 }
 
 /** A job, occurrence, reminder or action state, in the tone it deserves. */

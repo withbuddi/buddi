@@ -8,12 +8,12 @@
  */
 import { useState } from 'react';
 import type { PlaceProps } from '../App';
-import { api, chatApi, type DefaultAgentView } from '../api';
+import { api, chatApi, type AgentsView, type DefaultAgentView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
 import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
-import { cannotRunFix, cannotRunSentence, waitingText } from '../shell/roster';
-import { Avatar, Button, ButtonLink, Empty, ErrorBanner, Field, List, ListRow, Notice, Panel, Pill, Section, Sheet, Tab, Tabs, Toolbar, useAsync } from '../ui';
+import { ROLE_MAKER, cannotRunFix, cannotRunSentence, orderAgents, waitingText } from '../shell/roster';
+import { Avatar, Button, ButtonLink, Empty, ErrorBanner, List, ListRow, Notice, PageHeader, Panel, Pill, Sheet, Tab, Tabs, Tag, Toolbar, useAsync } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Memory } from './Memory';
@@ -43,15 +43,23 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
   const location = parseAgentRoute(hash);
   const tab = /[?&]tab=([a-z]+)/.exec(hash)?.[1] ?? 'team';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
+  const team = useAsync(() => api.agents(), []);
+  const offers = useAsync(() => api.offers(), [], 20_000);
+  const offerCount = offers.data?.offers.length ?? 0;
+  const defaultAgentId = team.data?.default?.defaultAgentId ?? null;
+  // A new agent is a conversation with the maker, found by its role: the same
+  // door the profile's "Ask the maker to change this" opens, nothing made here.
+  const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));
   return (
     <div className="ui-page">
-      <header className="ui-page-head">
-        <h2 className="ui-page-title">Agents</h2>
-        <p className="ui-page-lede">The team you built. Each one runs on the account you gave it and asks before anything leaves this Mac.</p>
-      </header>
+      <PageHeader
+        title="Agents"
+        lede="The team you built. Each one runs on the account you gave it and asks before anything leaves this Mac."
+        actions={maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
+      />
       <Tabs>
         {INDEX_TABS.map((t) => (
-          <Tab key={t.id} href={t.id === 'team' ? AGENTS_ROUTE : `${AGENTS_ROUTE}?tab=${t.id}`} active={tab === t.id} onClick={go(t.id === 'team' ? AGENTS_ROUTE : `${AGENTS_ROUTE}?tab=${t.id}`)}>
+          <Tab key={t.id} href={t.id === 'team' ? AGENTS_ROUTE : `${AGENTS_ROUTE}?tab=${t.id}`} active={tab === t.id} count={t.id === 'offers' ? offerCount : undefined} onClick={go(t.id === 'team' ? AGENTS_ROUTE : `${AGENTS_ROUTE}?tab=${t.id}`)}>
             {t.label}
           </Tab>
         ))}
@@ -59,32 +67,41 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
       {tab === 'missions' ? <Missions timezone={timezone} embedded /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
-      {tab === 'team' ? <DefaultAgentPicker /> : null}
+      {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
           <Empty mascot>No agents yet. Each agent is a file in the installation's agents folder.</Empty>
         ) : (
-          <div className="team-grid">
-            {agents.map((agent) => {
+          <div className="agents-grid">
+            {orderAgents(agents, defaultAgentId).map((agent) => {
               const waiting = waitingText(attention.get(agent.id));
               return (
                 /*
-                 * The name is the card's link, stretched over the whole card,
-                 * so Talk can sit inside it without nesting one link in
-                 * another. A card opens on Conversations; Setup is a tab away.
+                 * The kit's agent card. The name is the card's link, stretched
+                 * over the whole card, so Talk can sit inside it without
+                 * nesting one link in another. A card opens on Conversations;
+                 * Setup is a tab away.
                  */
-                <div key={agent.id} className="team-card" {...accentAttrs(accentOf(agent))} data-unavailable={agent.available ? undefined : 'true'}>
-                  <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} face={agent} />
-                  <a className="team-card-name" href={agentRoute(agent.id, 'conversations')} onClick={go(agentRoute(agent.id, 'conversations'))}>{agent.name}</a>
-                  <span className="team-card-handle">@{agent.handle}</span>
-                  <span className="team-card-desc">{agent.description}</span>
-                  <span className="team-card-foot">
+                <div key={agent.id} className="ui-card agent-card" data-interactive="true" {...accentAttrs(accentOf(agent))} data-unavailable={agent.available ? undefined : 'true'}>
+                  <div className="agent-card-top" />
+                  <div className="agent-card-face">
+                    <Avatar id={agent.id} name={agent.name} size="xl" unavailable={!agent.available} face={agent} />
+                  </div>
+                  <div>
+                    <div className="ui-card-title">
+                      <a className="agent-card-link" href={agentRoute(agent.id, 'conversations')} onClick={go(agentRoute(agent.id, 'conversations'))}>{agent.name}</a>
+                      <span className="agent-card-handle mono faint">@{agent.handle}</span>
+                    </div>
+                    <p className="ui-card-meta agent-card-desc">{agent.description}</p>
+                  </div>
+                  <div className="ui-row">
+                    {agent.id === defaultAgentId ? <Tag>front desk</Tag> : null}
                     {/* The reason, not just the fact: "cannot run" alone sends
                         the owner hunting for what is missing. */}
-                    {waiting ? <Pill tone="critical">waiting for you</Pill> : agent.available ? <Pill tone="good">ready</Pill> : <Pill tone="warning">{truncate(agent.unavailableReason ?? 'cannot run', 60)}</Pill>}
-                    <span className="muted">{agent.model}</span>
-                    <ButtonLink className="team-card-talk" variant="accent" size="sm" href={chatRoute(agent.id)} onClick={go(chatRoute(agent.id))} aria-label={`Talk to ${agent.name}`}>Talk</ButtonLink>
-                  </span>
+                    {waiting ? <Pill tone="critical" dot>waiting for you</Pill> : agent.available ? <Pill tone="good" dot>ready</Pill> : <Pill tone="warning">{truncate(agent.unavailableReason ?? 'cannot run', 60)}</Pill>}
+                    <Pill mono>{agent.model}</Pill>
+                    <ButtonLink className="agent-card-talk" size="sm" href={chatRoute(agent.id)} onClick={go(chatRoute(agent.id))} aria-label={`Talk to ${agent.name}`}>Talk</ButtonLink>
+                  </div>
                 </div>
               );
             })}
@@ -117,8 +134,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
  * say; when the files disagree the notice says so in the owner's words and
  * points at the picker directly below it, which is the fix.
  */
-function DefaultAgentPicker(): JSX.Element | null {
-  const { data, error, reload } = useAsync(() => api.agents(), []);
+function DefaultAgentPicker({ data, error, reload }: { data: AgentsView | null | undefined; error: string | null | undefined; reload: () => void }): JSX.Element | null {
   const view: DefaultAgentView | undefined = data?.default;
   const [chosen, setChosen] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -151,12 +167,10 @@ function DefaultAgentPicker(): JSX.Element | null {
     }
   };
 
+  /* One compact row on the kit's panel: what it is, the choice, Save. */
   return (
     <Panel>
-      <Section
-        title="Default agent"
-        aside={<span className="muted">Where a chat that names nobody lands.</span>}
-      >
+      <div className="ui-stack">
         <ErrorBanner message={failure} />
         {problem?.code === 'multiple-defaults' ? (
           <Notice tone="warning" role="status">
@@ -169,29 +183,31 @@ function DefaultAgentPicker(): JSX.Element | null {
           </Notice>
         ) : null}
         {note ? <Notice tone="good" role="status">{note}</Notice> : null}
-        <Toolbar valign="end">
-          <Field label="Answers when you name nobody">
-            <select
-              aria-label="Default agent"
-              value={value}
-              disabled={busy}
-              onChange={(e) => setChosen(e.target.value)}
-            >
-              {value === '' ? <option value="">Choose an agent</option> : null}
-              {view.choices.map((c) => (
-                <option key={c.id} value={c.id} disabled={!c.available}>
-                  {c.name} @{c.handle}
-                  {c.available ? '' : ' (cannot run)'}
-                </option>
-              ))}
-            </select>
-          </Field>
+        <Toolbar>
+          <div className="default-agent-text">
+            <h3 className="default-agent-title">Default agent</h3>
+            <span className="ui-field-hint">Where a chat that names nobody lands.</span>
+          </div>
           <span className="ui-toolbar-spacer" />
+          <select
+            aria-label="Default agent"
+            value={value}
+            disabled={busy}
+            onChange={(e) => setChosen(e.target.value)}
+          >
+            {value === '' ? <option value="">Choose an agent</option> : null}
+            {view.choices.map((c) => (
+              <option key={c.id} value={c.id} disabled={!c.available}>
+                {c.name} @{c.handle}
+                {c.available ? '' : ' (cannot run)'}
+              </option>
+            ))}
+          </select>
           <Button variant="accent" disabled={busy || !dirty} onClick={() => void save()}>
             Save
           </Button>
         </Toolbar>
-      </Section>
+      </div>
     </Panel>
   );
 }
