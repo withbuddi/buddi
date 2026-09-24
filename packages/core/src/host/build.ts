@@ -178,7 +178,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   const db: DbArea = {
     async query(sql, params) {
       const result = await pool.query(sql, params as unknown[] | undefined);
-      return { rows: result.rows };
+      return { rows: result.rows, rowCount: result.rowCount ?? null };
     },
     async transaction(fn) {
       const client: PoolClient = await pool.connect();
@@ -189,7 +189,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
         const result = await fn({
           async query(sql, params) {
             const answer = await client.query(sql, params as unknown[] | undefined);
-            return { rows: answer.rows };
+            return { rows: answer.rows, rowCount: answer.rowCount ?? null };
           },
         });
         await client.query('commit');

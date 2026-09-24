@@ -76,16 +76,18 @@ export interface ClockArea {
 /** A statement's answer. */
 export interface DbResult<R> {
   rows: R[];
+  /** How many rows the statement touched, as Postgres counts them; null when it counts none. */
+  rowCount: number | null;
 }
 
 /** What a transaction's callback is handed: statements on one connection. */
 export interface DbTransaction {
-  query<R = Record<string, any>>(sql: string, params?: unknown[]): Promise<DbResult<R>>;
+  query<R = any>(sql: string, params?: unknown[]): Promise<DbResult<R>>;
 }
 
 /** The database, never a raw pool: a plugin cannot `connect()` and change role. */
 export interface DbArea {
-  query<R = Record<string, any>>(sql: string, params?: unknown[]): Promise<DbResult<R>>;
+  query<R = any>(sql: string, params?: unknown[]): Promise<DbResult<R>>;
   /** One connection, `begin`, the plugin's schema first on `search_path`, then commit or rollback. */
   transaction<T>(fn: (tx: DbTransaction) => Promise<T>): Promise<T>;
 }
