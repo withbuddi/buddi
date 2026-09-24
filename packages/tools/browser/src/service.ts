@@ -201,13 +201,14 @@ export class BrowserService {
     if (this.#needsObservation && command.action !== 'observe') throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
     if (!this.#session || this.#session.requestId !== request.id) {
       if (!this.#session && command.action !== 'navigate' && !(this.options.allowOpen && command.action === 'open')) throw new Error('Start with navigate, or open an allowed application in computer mode.');
-      this.#rekey(request, ctx);
+      this.#rekey(request, ctx.agentId!, ctx.conversationId!, ctx.buddi!.owner.id);
     }
-    if (Date.parse(this.#session.expiresAt) <= this.#now() || this.#session.steps >= this.#session.maxSteps) {
+    const active = this.#session;
+    if (!active || Date.parse(active.expiresAt) <= this.#now() || active.steps >= active.maxSteps) {
       await this.#release('expired');
       throw new Error('Browser task reached its time or step limit. Ask the owner for a new request.');
     }
-    ++this.#session.steps;
+    ++active.steps;
     this.#busy = true;
     this.#lastAction = command.action; // Never record form values here.
     this.#message = undefined;
@@ -278,12 +279,12 @@ export class BrowserService {
    * expiry runs from now. The session id survives, so the conversation still
    * owns the same screen it always did.
    */
-  #rekey(request: NonNullable<ToolContext['ownerRequest']>, ctx: ToolContext): void {
+  #rekey(request: NonNullable<ToolContext['ownerRequest']>, agentId: string, conversationId: string, ownerId: string): void {
     const expiresAt = Math.min(request.expiresAt, this.#now() + (this.options.lifetimeMs ?? 20 * 60_000));
     if (this.#session) this.#spent.add(this.#session.requestId);
     this.#preconditionFailures = 0;
-    this.#session = { id: this.#session?.id ?? randomUUID(), ownerId: ctx.buddi!.owner.id, agentId: ctx.agentId,
-      conversationId: ctx.conversationId, requestId: request.id, task: request.text.slice(0, 4000),
+    this.#session = { id: this.#session?.id ?? randomUUID(), ownerId, agentId,
+      conversationId, requestId: request.id, task: request.text.slice(0, 4000),
       expiresAt: new Date(expiresAt).toISOString(), steps: 0, maxSteps: this.options.maxSteps ?? 80 };
     clearTimeout(this.#expiry);
     this.#expiry = setTimeout(() => { void this.#release('expired'); }, Math.max(1, expiresAt - this.#now()));
@@ -345,12 +346,13 @@ export class BrowserService {
     if (this.#state === 'paused') throw new Error('Browser is under human control or needs inspection. Wait for the owner to resume in the dashboard, then observe.');
     if (this.#needsObservation) throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
     if (!this.#session) throw new Error('Start with navigate, or open an allowed application, and observe before using a secret here.');
-    if (this.#session.requestId !== request.id) this.#rekey(request, ctx);
-    if (Date.parse(this.#session.expiresAt) <= this.#now() || this.#session.steps >= this.#session.maxSteps) {
+    if (this.#session.requestId !== request.id) this.#rekey(request, ctx.agentId!, ctx.conversationId!, ctx.buddi!.owner.id);
+    const active = this.#session;
+    if (!active || Date.parse(active.expiresAt) <= this.#now() || active.steps >= active.maxSteps) {
       await this.#release('expired');
       throw new Error('Browser task reached its time or step limit. Ask the owner for a new request.');
     }
-    ++this.#session.steps;
+    ++active.steps;
     this.#busy = true;
     this.#lastAction = action;
     this.#message = undefined;
@@ -367,7 +369,7 @@ export class BrowserService {
       this.#state = 'starting';
       await this.driver.start();
       controller.signal.throwIfAborted();
-      ctx.signal.throwIfAborted();
+      ctx.signal?.throwIfAborted();
       this.#state = 'running';
       return await run(controller);
     } catch (error) {
