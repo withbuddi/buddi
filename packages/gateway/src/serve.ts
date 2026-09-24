@@ -67,6 +67,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
+import { scrubText } from '@buddi/core';
 import { adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
@@ -489,6 +490,16 @@ export async function main(): Promise<void> {
   const { pool, now } = wiring;
 
   /*
+   * The gateway's own log sinks, scrubbed (docs/specs/owner-secrets.md §5,
+   * choke point 4): a scheduler, sentinel, source or mission loop line is text
+   * leaving core, and the same automaton reads it. Synchronous by necessity;
+   * the composition root primed it at boot, and a line before the first prime
+   * is one the automaton has nothing to say about.
+   */
+  const logOut = (line: string): void => console.log(scrubText(line));
+  const logErr = (line: string): void => console.error(scrubText(line));
+
+  /*
    * Recovery: this installation was restored from a backup and the owner has
    * not been through the checklist yet.
    *
@@ -684,7 +695,7 @@ export async function main(): Promise<void> {
         pool,
         now,
         deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
-        log: (line) => console.error(line),
+        log: logErr,
       },
     );
 
@@ -754,7 +765,7 @@ export async function main(): Promise<void> {
         now: now(),
         timezone: wiring.timezone,
         enqueueRun,
-        log: (line) => console.log(line),
+        log: logOut,
       });
       for (const outcome of outcomes) {
         if (outcome.error) console.error(`source ${outcome.sourceId}: ${outcome.error}`);
@@ -777,7 +788,7 @@ export async function main(): Promise<void> {
         });
         console.log(`reminder run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);
       },
-      log: (line) => console.log(line),
+      log: logOut,
     });
 
     const sweepStaleClaims = async (): Promise<void> => {
@@ -859,7 +870,7 @@ export async function main(): Promise<void> {
           manifests: () => wiring.registry.manifests(),
           proposalsUrl: dashboardRouteUrl(webConfig(process.env), '#/settings/proposals'),
           deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
-          log: (line) => console.log(line),
+          log: logOut,
         }) }),
         // A source's run. Same lease, same retries, same suspension on an
         // approval — the only difference is that nothing scheduled it.
@@ -895,14 +906,14 @@ export async function main(): Promise<void> {
       everyMs: SENTINEL_TICK_MS,
       abortAfterMs: SENTINEL_TICK_MS * 2,
       run: sentinelTick,
-      log: (line) => console.error(line),
+      log: logErr,
     });
     const sourceLoop = recovering ? idle.loop : startLoop({
       name: 'sources',
       everyMs: SOURCE_TICK_MS,
       abortAfterMs: sourceAbortMs,
       run: sourceTick,
-      log: (line) => console.error(line),
+      log: logErr,
     });
 
     const reminderLoop = recovering ? idle.loop : startLoop({
@@ -912,7 +923,7 @@ export async function main(): Promise<void> {
       run: async () => {
         await reminderTick();
       },
-      log: (line) => console.error(line),
+      log: logErr,
     });
 
     // Work that died and will not be retried must reach the owner. Its own
@@ -923,7 +934,7 @@ export async function main(): Promise<void> {
       now,
       timezone: wiring.timezone,
       deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
-      log: (line) => console.error(line),
+      log: logErr,
     });
     const deadLetterLoop = recovering ? idle.loop : startLoop({
       name: 'dead-letter',
@@ -933,7 +944,7 @@ export async function main(): Promise<void> {
         const outcome = await deadLetterTick();
         if (outcome.reported) console.error('dead-letter: told the owner about a wave of dead jobs');
       },
-      log: (line) => console.error(line),
+      log: logErr,
     });
 
     // Proposals nobody decided in 30 days are expired, each with a line in
@@ -955,7 +966,7 @@ export async function main(): Promise<void> {
       run: async () => {
         await proposalSweep();
       },
-      log: (line) => console.error(line),
+      log: logErr,
     });
 
     const scheduler = recovering ? idle.scheduler : runScheduler({
@@ -1019,7 +1030,7 @@ export async function main(): Promise<void> {
             allowlistFor: (agentId) => delegateAllowlist(agentId, wiring.catalog),
             gate,
           },
-          log: (line) => console.error(line),
+          log: logErr,
         });
         dashboardChat = dashboard.chat;
         console.log(

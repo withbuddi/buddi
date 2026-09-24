@@ -73,15 +73,14 @@ export interface FrameMessage {
 }
 
 export interface CommandResult {
-  /** An observation, or — for `fieldInfo` — the passthrough carrying `field`. */
-  observation?: Observation | { field?: FieldFacts } | null;
-  screenshot?: string | null;
   /**
-   * The field facts `fieldInfo` answers, typed for callers that hold the result
-   * directly; on the wire they ride inside `observation`, which the gateway
-   * relays untouched, and the driver reads them back out of it.
+   * An observation — or, from `fieldInfo`, the passthrough that carries `field`
+   * inside it, because `observation` is the one field of a result frame the
+   * gateway relays untouched. Callers read the facts back out with a narrowing
+   * cast; the cast lives where the answer is built.
    */
-  field?: FieldFacts;
+  observation?: Observation | null;
+  screenshot?: string | null;
 }
 
 /** Refused before anything was dispatched, so the gateway can map it to BrowserPreconditionError. */
