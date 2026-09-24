@@ -32,14 +32,20 @@ export interface Observation {
   screenshotSize?: { width: number; height: number };
 }
 
-export const COMMAND_NAMES = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close'] as const;
+export const COMMAND_NAMES = ['navigate', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close', 'fieldInfo', 'secretFill'] as const;
 /**
  * `screencast.start`/`screencast.stop` and `input` are the owner's own hand on
  * the page rather than anything a model may ask for, which is why they are not
- * in `COMMAND_NAMES`: that list is what an agent's tool can name.
+ * in `COMMAND_NAMES`: that list is what an agent's tool can name. `fieldInfo`
+ * and `secretFill` are on it because the owner's-secret tools reach them
+ * exactly the way `browser.act` reaches the rest — the driver sends them, and
+ * the owner's approval card, not this list, is what stands behind them.
  */
 export const HAND_COMMANDS = ['screencast.start', 'screencast.stop', 'input'] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number] | (typeof HAND_COMMANDS)[number] | 'screenshot';
+
+/** What `fieldInfo` answers about the field a secret is aimed at. Never a value. */
+export interface FieldFacts { origin: string; password: boolean; name: string }
 
 export interface Command {
   id: string;
@@ -67,8 +73,15 @@ export interface FrameMessage {
 }
 
 export interface CommandResult {
-  observation?: Observation | null;
+  /** An observation, or — for `fieldInfo` — the passthrough carrying `field`. */
+  observation?: Observation | { field?: FieldFacts } | null;
   screenshot?: string | null;
+  /**
+   * The field facts `fieldInfo` answers, typed for callers that hold the result
+   * directly; on the wire they ride inside `observation`, which the gateway
+   * relays untouched, and the driver reads them back out of it.
+   */
+  field?: FieldFacts;
 }
 
 /** Refused before anything was dispatched, so the gateway can map it to BrowserPreconditionError. */
