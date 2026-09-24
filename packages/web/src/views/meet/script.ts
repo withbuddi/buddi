@@ -137,7 +137,7 @@ export const SCRIPT = {
     keys: 'A backup never carries keys, so the AI you think with needs its key one more time.',
   },
   /** Over the board, above the card. */
-  tagline: 'Your own assistants, on your own computer.',
+  tagline: 'Setting up, on this Mac.',
   handover: {
     /** The one thing buddi says while the assistant is being woken. */
     waiting: 'One moment.',
