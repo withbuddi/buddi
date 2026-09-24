@@ -42,6 +42,7 @@ import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
 import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
+import { accentAttrs, accentOf } from '../shell/accent';
 
 const MIN_WIDTH = 320;
 const DEFAULT_WIDTH = 440;
@@ -1065,7 +1066,7 @@ export function ChatPage({
             </div>
           </div>
         ) : null}
-        <header className="wb-chat-head" data-testid="chat-head">
+        <header className="wb-chat-head" data-testid="chat-head" {...(!group && agent ? accentAttrs(accentOf(agent)) : {})}>
           <div className="wb-head-row">
             {/* Whose column this is: the same face as in the roster, then the
                 name, then the one fact the transcript hides — how old it is. */}

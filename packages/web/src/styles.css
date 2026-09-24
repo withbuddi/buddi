@@ -197,6 +197,11 @@ main[data-ground='plain'] { background: var(--bg); }
   min-height: 56px;
   justify-content: center;
 }
+/* Whose conversation this is, said once more in colour: a soft wash of the
+   agent's accent at the top of its column, fading into the surface. */
+.wb-chat-head[data-agent] {
+  background: linear-gradient(180deg, color-mix(in oklab, var(--agent-fill) 9%, var(--surface)), var(--surface));
+}
 
 /* ---- the second rail: the team ----
  *
@@ -279,7 +284,7 @@ main[data-ground='plain'] { background: var(--bg); }
   text-align: left;
 }
 .wb-agent-rail:not([data-collapsed='true']) .wb-face:hover:not(:disabled) { transform: none; background: var(--surface-sunken); }
-.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true'] { background: var(--accent-soft); }
+.wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true'] { background: color-mix(in oklab, var(--agent-fill, var(--accent)) 12%, var(--surface)); }
 .wb-agent-rail:not([data-collapsed='true']) .wb-face[data-active='true']::before { left: -8px; top: 8px; bottom: 8px; }
 .wb-face-text { display: none; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 1px; }
 .wb-agent-rail:not([data-collapsed='true']) .wb-face-text { display: flex; }
@@ -327,7 +332,7 @@ main[data-ground='plain'] { background: var(--bg); }
   border-radius: var(--radius);
   cursor: pointer;
   color: var(--text-muted);
-  transition: transform 120ms ease;
+  transition: transform var(--dur) var(--ease-spring), background-color var(--dur-fast) ease;
 }
 .wb-face:hover:not(:disabled) { transform: translateY(-1px); }
 .wb-face:disabled { cursor: default; }
@@ -349,21 +354,15 @@ main[data-ground='plain'] { background: var(--bg); }
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 4%);
 }
 
-.wb-face[data-tint] .wb-face-mark[data-accent='true'], .wb-face-mark[data-accent='true'] { background: color-mix(in srgb, var(--face-accent) 16%, var(--surface)); color: var(--face-accent); }
-.wb-face[data-tint] .wb-face-mark[data-kind='emoji']:not([data-accent]), .wb-face-mark[data-kind='emoji'] { font-family: var(--font-sans); font-size: 15px; background: var(--surface-sunken); }
-.wb-face[data-tint] .wb-face-mark[data-kind='image'], .wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
+.wb-face-mark[data-agent] { background: var(--agent-soft); color: var(--agent-ink); }
+.wb-face-mark[data-kind='emoji'] { font-family: var(--font-sans); font-size: 15px; }
+.wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
 .wb-face-mark[data-kind='image'] img { width: 100%; height: 100%; object-fit: cover; }
-.wb-face[data-tint='1'] .wb-face-mark { background: var(--face-1-bg); color: var(--face-1-ink); }
-.wb-face[data-tint='2'] .wb-face-mark { background: var(--face-2-bg); color: var(--face-2-ink); }
-.wb-face[data-tint='3'] .wb-face-mark { background: var(--face-3-bg); color: var(--face-3-ink); }
-.wb-face[data-tint='4'] .wb-face-mark { background: var(--face-4-bg); color: var(--face-4-ink); }
-.wb-face[data-tint='5'] .wb-face-mark { background: var(--face-5-bg); color: var(--face-5-ink); }
-.wb-face[data-tint='6'] .wb-face-mark { background: var(--face-6-bg); color: var(--face-6-ink); }
 
 /* Which one you are talking to: a ring, plus the rail's own edge marker —
    the same vocabulary the section rail uses for "you are here". */
 .wb-face[data-active='true'] .wb-face-mark {
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--agent-fill, var(--accent));
 }
 .wb-agent-rail .wb-face[data-active='true']::before {
   content: '';
@@ -373,10 +372,10 @@ main[data-ground='plain'] { background: var(--bg); }
   bottom: 5px;
   width: 2.5px;
   border-radius: var(--radius-pill);
-  background: var(--accent);
+  background: var(--agent-fill, var(--accent));
 }
 .wb-agent-strip .wb-face[data-active='true'] .wb-face-mark {
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--agent-fill, var(--accent));
 }
 
 /* Out of service: drained of colour and struck through, so it reads as a
@@ -602,17 +601,10 @@ main[data-ground='plain'] { background: var(--bg); }
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; margin-left: -6px;
   border-radius: 50%; border: 2px solid var(--surface);
-  background: var(--face-accent, var(--face-bg, var(--surface-sunken)));
-  color: var(--face-fg, var(--text-muted)); font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+  background: var(--agent-soft, var(--surface-sunken));
+  color: var(--agent-ink, var(--text-muted)); font-size: var(--text-2xs); font-weight: var(--weight-semibold);
   overflow: hidden; line-height: 1;
 }
-.wb-group-chip[data-tint='1'] { background: var(--face-1-bg); color: var(--face-1-ink); }
-.wb-group-chip[data-tint='2'] { background: var(--face-2-bg); color: var(--face-2-ink); }
-.wb-group-chip[data-tint='3'] { background: var(--face-3-bg); color: var(--face-3-ink); }
-.wb-group-chip[data-tint='4'] { background: var(--face-4-bg); color: var(--face-4-ink); }
-.wb-group-chip[data-tint='5'] { background: var(--face-5-bg); color: var(--face-5-ink); }
-.wb-group-chip[data-tint='6'] { background: var(--face-6-bg); color: var(--face-6-ink); }
-.wb-group-chip[data-accent] { background: var(--face-accent); }
 .wb-group-chip[data-kind='image'] { background: var(--surface-sunken); }
 .wb-group-chip img { width: 100%; height: 100%; object-fit: cover; }
 .wb-group-chip[data-kind='emoji'] { background: var(--surface-sunken); font-size: var(--text-xs); }
@@ -2392,15 +2384,29 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   gap: 4px;
   padding: var(--space-5) var(--space-4) var(--space-4);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-panel);
   color: inherit;
   text-decoration: none;
   min-width: 0;
-  transition: border-color 120ms ease, transform 120ms ease;
+  isolation: isolate;
+  transition: border-color var(--dur-fast) ease, transform var(--dur) var(--ease), box-shadow var(--dur) ease;
 }
-.team-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+/* The card's top edge wears the agent's accent: a soft band the face sits on.
+   Its only colour on the card — the words stay in the text colours. */
+.team-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 56px;
+  z-index: -1;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: linear-gradient(135deg, var(--agent-soft, var(--accent-soft)), color-mix(in oklab, var(--agent-soft, var(--accent-soft)) 40%, var(--surface)));
+}
+.team-card[data-unavailable='true']::before { filter: grayscale(1); opacity: 0.6; }
+.team-card .ui-avatar { box-shadow: 0 0 0 3px var(--surface); }
+.team-card:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow-pop); }
 .team-card:has(.team-card-name:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .team-card[data-unavailable='true'] { color: var(--text-muted); }
 .team-card .ui-avatar { margin-bottom: var(--space-2); }
