@@ -37,6 +37,24 @@ const GLYPHS = {
   key: [20, 1.6, <><circle cx="6.6" cy="10" r="3.2" /><path d="M9.8 10h7.2M14.4 10v2.6M16.6 10v1.8" /></>],
   globe: [20, 1.6, <><circle cx="10" cy="10" r="7.1" /><path d="M2.9 10h14.2M10 2.9c3.4 3.7 3.4 10.5 0 14.2-3.4-3.7-3.4-10.5 0-14.2Z" /></>],
 
+  // ---- the settings list: the core sections, on the rail's 20px grid ----
+  // A head and shoulders: the owner's own profile.
+  person: [20, 1.6, <><circle cx="10" cy="7" r="3.2" /><path d="M4 16.6a6 6 0 0 1 12 0" /></>],
+  // A sun: how the dashboard looks.
+  sun: [20, 1.6, <><circle cx="10" cy="10" r="3.2" /><path d="M10 2.6v1.6M10 15.8v1.6M2.6 10h1.6M15.8 10h1.6M4.8 4.8l1.1 1.1M14.1 14.1l1.1 1.1M4.8 15.2l1.1-1.1M14.1 5.9l1.1-1.1" /></>],
+  // A notebook with its spine: what the agents remember.
+  notebook: [20, 1.6, <><path d="M5.5 3.2h8.3a1 1 0 0 1 1 1v11.6a1 1 0 0 1-1 1H5.5a1 1 0 0 1-1-1V4.2a1 1 0 0 1 1-1Z" /><path d="M7.6 3.2v13.6M10 7h2.6M10 9.8h2.6" /></>],
+  // A bulb: an idea an agent would like to keep.
+  bulb: [20, 1.6, <><path d="M7.2 13.2a5 5 0 1 1 5.6 0v1.6H7.2Z" /><path d="M8 17.2h4" /></>],
+  // A screen on its stand: the computer the agents may drive.
+  monitor: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="10" rx="1.4" /><path d="M7.4 16.8h5.2M10 13.6v3.2" /></>],
+  // An open eye: the watchers that check.
+  eye: [20, 1.6, <><path d="M2.4 10S5.2 4.8 10 4.8 17.6 10 17.6 10 14.8 15.2 10 15.2 2.4 10 2.4 10Z" /><circle cx="10" cy="10" r="2.4" /></>],
+  // An archive box with its lid: the backup.
+  archive: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="3.6" rx="1" /><path d="M4 7.2v8a1.2 1.2 0 0 0 1.2 1.2h9.6a1.2 1.2 0 0 0 1.2-1.2v-8M8.2 10.4h3.6" /></>],
+  // A chip with its pins: the system itself.
+  chip: [20, 1.6, <><rect x="5.4" y="5.4" width="9.2" height="9.2" rx="1.4" /><path d="M8 2.8v2.6M12 2.8v2.6M8 14.6v2.6M12 14.6v2.6M2.8 8h2.6M2.8 12h2.6M14.6 8h2.6M14.6 12h2.6" /></>],
+
   // ---- the composer ----
   clip: [17, 1.5, <path d="M13.2 8 8.4 12.8a3 3 0 0 1-4.2-4.2l5.1-5.1a2 2 0 1 1 2.8 2.8l-5 5" />],
   // Up, not right: the message leaves the box and goes to the thread above.
