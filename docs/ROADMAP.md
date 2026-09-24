@@ -123,7 +123,7 @@ Small, whenever a slot opens:
   way a Home block already is; the page masks it like Home does and
   `buddi mcp` leaves it out unless asked. Today finance balances come back
   unmarked from `buddi.page_query` (2026-09-23).
-- Agent avatar — an optional uploaded PNG, SVG or GIF on the agent record next to
+- Agent avatar — built 2026-09-23 (buddi `f0ed313`); pure-JS re-encode (pngjs, omggif, resvg-wasm) because the release installs without optional native binaries, so a GIF keeps its first frame and an SVG is rasterised; one bot speaks for every agent, so its Telegram profile photo is the default agent's picture. An optional uploaded PNG, SVG or GIF on the agent record next to
   the icon, kept in the database blob store (never in the agent file), size-capped and re-encoded on upload, served at
   `/api/agents/:id/avatar`, shown in the roster, chat header, delegation view
   and the Telegram profile photo; the icon remains the fallback. The mascot
