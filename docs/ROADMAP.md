@@ -76,18 +76,15 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- [Plugin host API](specs/plugin-host-api.md), then
-  [Owner secrets](specs/owner-secrets.md). The host API is built, on the
-  branch `plugin-host-api`, pending merge; of owner secrets, the secrets area
-  is built. The small items were all cleared on 2026-09-23.
+- Nothing in flight. The plugin host API and owner secrets were both merged
+  on 2026-09-24; the small items were all cleared on 2026-09-23.
 
 ## Next, in order
 
 1. [Plugin host API](specs/plugin-host-api.md) — one `ctx.buddi` surface
-   per plugin, then migrate every plugin. Built, on the branch, pending
-   merge (2026-09-24).
+   per plugin, then migrate every plugin. Built and merged 2026-09-24.
 2. [Owner secrets](specs/owner-secrets.md) — secrets the agent can use but
-   never see. Built 2026-09-24 on the branch `owner-secrets`: the scrubber at
+   never see. Built and merged 2026-09-24: the scrubber at
    the five choke points, the six destination kinds (browser field, native
    typing and form data; http.header; developer.env; the account kinds), the
    `secret.fill` and `secret.type` tools, TOTP codes, the provider-account

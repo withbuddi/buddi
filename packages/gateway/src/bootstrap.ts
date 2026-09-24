@@ -17,6 +17,7 @@ import {
   createVault,
   loadScrubEntries,
   setSecretScrubSource,
+  primeSecretScrubber,
   hydrateDatabaseUrl,
   resolveDatabaseUrl,
   resolveProvider,
@@ -284,6 +285,9 @@ export async function createWiringAsync(
     // Reading a preference may never be the thing that stops a start.
   }
   const selected = wiring.catalog.defaultAgent();
+  // The first automaton, before any sync sink (a plugin's buddi.log, the
+  // serve loops' lines) writes a word: the async choke points re-prime later.
+  await primeSecretScrubber();
   return { ...wiring, secrets, providerSettings, providerAccounts, model: selected.model,
     providerKind: selected.provider.kind, credentialKind: selected.provider.credential.kind };
 }

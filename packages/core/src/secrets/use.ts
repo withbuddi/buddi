@@ -30,6 +30,7 @@ import { isAccountKind, secretDestination, stricterRule } from './destinations.j
 import { findSecret, secretBindings, type SecretBindingRow } from './store.js';
 import { describeSecretUse, SECRETS_TOOL, SECRETS_TOOL_VERSION } from './approval.js';
 import { TOTP_STEP_SECONDS, currentTotp, totpCounter } from './totp.js';
+import { scrubText } from './scrub.js';
 
 export interface UseSecretDeps {
   pool: Pool;
@@ -209,7 +210,8 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
     }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    const detail = raw.split(value).join(`‹secret:${req.name}›`);
+    // Both the stored value and what was delivered (a TOTP code differs from its seed), then the automaton for anything else.
+    const detail = scrubText(raw.split(value).join(`‹secret:${req.name}›`).split(delivered).join(`‹secret:${req.name}›`));
     await pool.query(`update core.secret_uses set outcome = 'failed', detail = $2 where id = $1`, [useId, detail]);
     return { refused: `${req.kind} could not take "${req.name}": ${detail}` };
   }

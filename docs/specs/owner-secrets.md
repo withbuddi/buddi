@@ -1,8 +1,8 @@
 # Secrets the agent can use but never see
 
-Status: built 2026-09-24, on the branch `owner-secrets`. The `secrets` area it
+Status: built and merged 2026-09-24. The `secrets` area it
 depends on ([plugin-host-api.md](plugin-host-api.md) §4.2) was built with the
-host API; the rest of this spec is on the branch — the scrubber, the six
+host API; the rest of this spec followed — the scrubber, the six
 destination kinds, the tools, the provider-account migration and the Settings
 page — with what bent written in §12.
 Captured: 2026-09-21, rewritten 2026-09-24, built 2026-09-24
@@ -297,6 +297,16 @@ Where the build bent this document, one line each.
   `accounts.provider` use** on the run path; the `configured` computation on
   reload reads the vault directly, because a delivered use row per account per
   reload is noise, and nothing outside the gateway's own code reaches it.
+- **A page query's answer is scrubbed too** (`packages/gateway/src/web/pages.ts`),
+  the same choke point as a tool result: the developer plugin's `file` query
+  reading a `.env` a value was written into before the rule answers with the
+  marker. The scrubber is primed once at boot (`createWiringAsync`), so the
+  synchronous sinks — a plugin's `buddi.log`, the serve loops — scrub from the
+  first line.
+- **`held` uses are swept after 30 days.** A credential read by its own plugin
+  (a mail poll, a model call) is one row each, thousands a week; the hourly
+  proposal loop deletes `held` rows older than a month. Delivered, pending,
+  refused and failed rows are the owner's audit log and are never swept.
 - **The OAuth adapters (Codex, Claude) keep their secret-name API** and read
   through a translating vault: the names they ask for resolve onto the owner
   secrets the adoption saved, so a refresh lands under the same

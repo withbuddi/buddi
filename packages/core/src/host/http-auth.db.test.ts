@@ -12,8 +12,10 @@ import { createPool, migrateCore } from '../db.js';
 import { urlForDatabase } from '../backup/restore.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from './build.js';
-import type { BuddiHost, CoreToolContext, PluginManifest } from '../tools.js';
-import { createMemoryVault, type Vault } from '../vault/memory.js';
+import type { CoreToolContext, PluginManifest } from '../tools.js';
+import type { BuddiHost } from './types.js';
+import { createMemoryVault } from '../vault/memory.js';
+import type { Vault } from '../vault/types.js';
 import { putOwnerSecret } from '../secrets/store.js';
 import { findSecret } from '../secrets/store.js';
 import { ownerSecretVaultName } from '../vault/types.js';
@@ -38,7 +40,7 @@ suite('ctx.buddi.http auth (postgres)', () => {
     migrationsDir: '',
     tools: [],
     uses: ['http', 'secrets'],
-    network: [{ host: 'api.example.test' }],
+    network: [{ host: 'api.example.test', why: 'the fixture API' }],
   };
 
   const facts = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
