@@ -257,6 +257,19 @@ fieldset:disabled { opacity: 0.6; }
 .ui-notice[data-tone='critical'] { background: var(--critical-soft); border-color: transparent; color: var(--critical); }
 .ui-notice[data-tone='warm'] { background: var(--surface-warm); border-color: color-mix(in oklab, var(--buddi-sand-deep) 60%, transparent); }
 .ui-notice-title { font-weight: var(--weight-semibold); }
+/* Inside a tone band a link wears the tone's own ink, underlined, never the
+   accent: blue on a red or amber ground reads as neither. Every pairing here
+   is 4.5:1 or better in both themes. */
+.ui-notice[data-tone='good'] { --tone-ink: var(--good); }
+.ui-notice[data-tone='warning'] { --tone-ink: var(--warning); }
+.ui-notice[data-tone='critical'] { --tone-ink: var(--critical); }
+.ui-notice:is([data-tone='good'], [data-tone='warning'], [data-tone='critical']) a:not([class]),
+.ui-toast[data-tone='critical'] a:not([class]) {
+  color: var(--tone-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ui-toast[data-tone='critical'] { --tone-ink: var(--critical); }
 .ui-notice-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .ui-notice-row > .ui-notice-body { flex: 1 1 220px; min-width: 0; }
 .ui-notice ul { list-style: disc; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }

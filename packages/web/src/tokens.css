@@ -154,7 +154,7 @@
   --good-soft: #e3f3e9;
   --warning: #8a5a00;
   --warning-soft: #fbf0d9;
-  --critical: #c8392d;
+  --critical: #c0352a;  /* the kit's #c8392d, deepened to 4.5:1 on --critical-soft */
   --critical-soft: #ffe9e6;
   --attention: var(--buddi-coral);     /* a badge's fill */
   --attention-ink: var(--buddi-navy);  /* a badge's number */
