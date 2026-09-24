@@ -1,8 +1,11 @@
 # Secrets the agent can use but never see
 
-Status: spec written 2026-09-24, not started. Depends on the `secrets` area
-of [plugin-host-api.md](plugin-host-api.md) §4.2.
-Captured: 2026-09-21, rewritten 2026-09-24
+Status: built 2026-09-24, on the branch `owner-secrets`. The `secrets` area it
+depends on ([plugin-host-api.md](plugin-host-api.md) §4.2) was built with the
+host API; the rest of this spec is on the branch — the scrubber, the six
+destination kinds, the tools, the provider-account migration and the Settings
+page — with what bent written in §12.
+Captured: 2026-09-21, rewritten 2026-09-24, built 2026-09-24
 
 ## 1. The problem
 
@@ -262,6 +265,43 @@ After the host API's `secrets` area (plugin-host-api.md §9 step 3):
    whole (one day).
 
 About five days.
+
+## 12. As built
+
+Where the build bent this document, one line each.
+
+- **The browser kinds carry the plugin's namespace.** §3's table was written
+  before the host API's `<plugin>.<what>` rule, which the registry enforces:
+  the browser registers `browser.field`, `browser.native.type` and
+  `browser.form.data`, not `native.type` and `form.data`. Same rule, same
+  owners; the names name the plugin that answers for them.
+- **A TOTP code goes into `browser.form.data` fields too.** §4 said "into
+  `browser.field` only", and that stands for the rule the sentence was making:
+  nowhere else. But an authenticator field is rarely marked as a password, and
+  `browser.field` fills only password-marked fields — so the code also goes
+  into `browser.form.data`, which is the stricter path of the two (every use a
+  card, every use logged with the field).
+- **A password secret fills only password-marked fields; anything else a fill
+  targets is `browser.form.data`.** The fill tool routes on what the page
+  marks, so a card number goes through the every-time destination and a
+  password cannot land in a visible field.
+- **Core's save-time look covers events, the transcript and memory** — notes
+  and preferences — and skips a place that is not installed. Learned skills are
+  clean by construction (a proposal's payload is scrubbed when it is created,
+  before it can become a skill); the files under a bound workspace are the
+  developer plugin's to scan, and its `developer.write` and `developer.edit`
+  refuse a stored value from then on.
+- **The scrub is also applied to the transcript rows** (`core.messages`) as
+  they are written, and to `executeApproved`'s recorded result — both are what
+  a surface reads and what a backup takes, and §5's list said so by intent.
+- **The gateway reads a provider account's credential through a recorded
+  `accounts.provider` use** on the run path; the `configured` computation on
+  reload reads the vault directly, because a delivered use row per account per
+  reload is noise, and nothing outside the gateway's own code reaches it.
+- **The OAuth adapters (Codex, Claude) keep their secret-name API** and read
+  through a translating vault: the names they ask for resolve onto the owner
+  secrets the adoption saved, so a refresh lands under the same
+  `owner-secret:<id>` without the adapters learning the storage scheme.
 
 ## Related work
 

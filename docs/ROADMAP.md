@@ -87,8 +87,12 @@ next. Checked against the code and `git log` on 2026-09-21.
    per plugin, then migrate every plugin. Built, on the branch, pending
    merge (2026-09-24).
 2. [Owner secrets](specs/owner-secrets.md) — secrets the agent can use but
-   never see, on the host API's secrets area. Secrets area built (host API
-   step 3); the rest not started.
+   never see. Built 2026-09-24 on the branch `owner-secrets`: the scrubber at
+   the five choke points, the six destination kinds (browser field, native
+   typing and form data; http.header; developer.env; the account kinds), the
+   `secret.fill` and `secret.type` tools, TOTP codes, the provider-account
+   migration, and Settings → Keys and secrets with the save-time look and the
+   one-tap scrub.
 3. macOS app — a packaged desktop app around the existing service.
 4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).

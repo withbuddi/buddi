@@ -137,6 +137,30 @@ async function stagePrivateDir(
   };
 }
 
+/**
+ * The owner secrets among the vault names, as the lines that restore them:
+ * the row (name and bindings) is in the database, the value is not, so the
+ * put-back is the owner typing the value again on the Keys and secrets page —
+ * with the secret's NAME, never the `owner-secret:<id>` the vault files it
+ * under.
+ */
+async function ownerSecretRestoreLines(names: readonly string[], pool: Pool): Promise<string[]> {
+  const ownerSecretNames = names.filter((name) => name.startsWith('owner-secret:'));
+  if (ownerSecretNames.length === 0) return [];
+  const ids = ownerSecretNames.map((name) => name.slice('owner-secret:'.length));
+  const { rows } = await pool
+    .query(`select id, name from core.secrets where id = any($1::uuid[])`, [ids])
+    .catch(() => ({ rows: [] as Array<{ id: string; name: string }> }));
+  const nameOf = new Map(rows.map((row) => [String(row.id), String(row.name)]));
+  return ownerSecretNames.map((name) => {
+    const id = name.slice('owner-secret:'.length);
+    const secret = nameOf.get(id);
+    return secret === undefined
+      ? `replace the value of the secret whose vault entry is ${name} — on the Keys and secrets page`
+      : `replace the value of "${secret}" on the Keys and secrets page`;
+  });
+}
+
 export async function createBackup(opts: CreateOptions): Promise<CreateResult> {
   const now = (opts.now ?? ((): Date => new Date()))();
   const progress = opts.onProgress ?? ((): void => {});
@@ -257,6 +281,11 @@ export async function createBackup(opts: CreateOptions): Promise<CreateResult> {
         redacted: envRedacted,
         note: VAULT_NOTE,
         restoreWith: restoreCommandsFor(envNames),
+        // The owner secrets' values come back from the Keys and secrets page
+        // (their rows — names and bindings — are in the database dump, and the
+        // vault entry an id names is the one to replace): a
+        // `buddi vault set owner-secret:<id>` line is one nobody can follow.
+        ownerSecrets: await ownerSecretRestoreLines([...vaultNames], pool),
       },
       members,
     };

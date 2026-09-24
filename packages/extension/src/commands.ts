@@ -16,7 +16,7 @@
  */
 
 import type { TabInfo, WorkerChrome } from './chrome.js';
-import { Cancellation, PreconditionError, type Command, type CommandResult, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
+import { Cancellation, PreconditionError, type Command, type CommandResult, type FieldFacts, type FrameMessage, type Observation, type ObservedTarget } from './protocol.js';
 import type { CollectedElement } from './tree.js';
 
 interface Session {
@@ -43,6 +43,12 @@ const WATCHED = 'You are looking at this tab. buddi only acts in background tabs
 
 interface FrameObservation {
   url: string; title: string; tree: string; elements: CollectedElement[]; scroll: { x: number; y: number };
+}
+
+/** What the page side answers about the field a secret is aimed at. */
+interface FieldRead {
+  ok: boolean; reason?: string;
+  origin?: string; password?: boolean; name?: string;
 }
 
 const GROUP_TITLE = 'buddi';
@@ -223,6 +229,23 @@ function normalize(url: string): string {
   try { return new URL(url).toString(); } catch { return url; }
 }
 
+/**
+ * Only an http(s) origin is one a binding can name: about:blank, a file and a
+ * sandboxed frame report `null` or their own scheme, and none of those is a
+ * place an owner secret can be bound to.
+ */
+function checkOrigin(origin: unknown): string {
+  if (typeof origin !== 'string' || !(origin.startsWith('http://') || origin.startsWith('https://'))) {
+    throw new PreconditionError('That field sits in a frame with no web origin buddi can bind a secret to. Observe a page on an http or https address first.');
+  }
+  return origin;
+}
+
+/** The one field fact pair a secret's card shows, shaped for the wire. */
+function fieldFacts(read: FieldRead): FieldFacts {
+  return { origin: checkOrigin(read.origin), password: read.password === true, name: read.name ?? '' };
+}
+
 export interface Executor { run(command: Command, cancel?: Cancellation): Promise<CommandResult> }
 
 export class BrowserCommands implements Executor {
@@ -269,6 +292,8 @@ export class BrowserCommands implements Executor {
       case 'scroll': return this.#scroll(command, cancel);
       case 'tab': return this.#tab(command);
       case 'screenshot': return { screenshot: await this.#screenshot(command.session, cancel) };
+      case 'fieldInfo': return this.#fieldInfo(command, cancel);
+      case 'secretFill': return this.#secretFill(command, cancel);
       case 'screencast.start': return this.#startScreencast(command, cancel);
       case 'screencast.stop': { await this.#stopScreencast(command.session); return {}; }
       case 'input': return this.#input(command, cancel);
@@ -546,25 +571,24 @@ export class BrowserCommands implements Executor {
    * ambiguous label is where a model quietly clicks the wrong "Edit", so two
    * matches is a refusal that hands back the refs to choose between.
    */
-  #ref(session: Session, command: Command): Ref {
-    const raw = command.args['target'];
-    const target = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    if (target['x'] !== undefined || target['y'] !== undefined) throw new PreconditionError('Native apps and coordinate targets require Computer mode.');
-    const table = this.#refs.get(command.session);
-    const ref = target['ref'];
+  #ref(sessionId: string, session: Session, target: unknown): Ref {
+    const record = (target && typeof target === 'object' ? target : {}) as Record<string, unknown>;
+    if (record['x'] !== undefined || record['y'] !== undefined) throw new PreconditionError('Native apps and coordinate targets require Computer mode.');
+    const table = this.#refs.get(sessionId);
+    const ref = record['ref'];
     if (typeof ref === 'string' && ref) {
       const found = table?.get(ref);
       if (!found || found.generation !== session.generation) throw new PreconditionError('Stale page observation. Observe again and use a fresh ref.');
       return found;
     }
-    const name = typeof target['name'] === 'string' ? target['name'] : '';
+    const name = typeof record['name'] === 'string' ? record['name'] : '';
     if (!name) throw new PreconditionError('Use a ref from the latest observation.targets, or an exact name.');
     if (!table || table.size === 0) throw new PreconditionError('Stale page observation. Observe again and use a fresh ref.');
-    const by = typeof target['by'] === 'string' ? target['by'] : 'role';
+    const by = typeof record['by'] === 'string' ? record['by'] : 'role';
     // `by:"link"` is the compatibility shorthand the command schema already
     // rewrites to role:"link"; accept it here too rather than depend on that.
-    const role = by === 'link' ? 'link' : typeof target['role'] === 'string' ? target['role'] : undefined;
-    const frame = typeof target['frame'] === 'number' ? target['frame'] : 0;
+    const role = by === 'link' ? 'link' : typeof record['role'] === 'string' ? record['role'] : undefined;
+    const frame = typeof record['frame'] === 'number' ? record['frame'] : 0;
     const wanted = name.trim().toLowerCase();
     const matches = [...table].filter(([, candidate]) => candidate.frame === frame
       && candidate.name.trim().toLowerCase() === wanted
@@ -584,7 +608,7 @@ export class BrowserCommands implements Executor {
    */
   async #aim(command: Command, cancel: Cancellation): Promise<{ ref: Ref; tab: TabInfo }> {
     const session = await this.#session(command.session);
-    const ref = this.#ref(session, command);
+    const ref = this.#ref(command.session, session, command.args['target']);
     const tab = await this.#ownTab(session, ref.tabKey);
     // The main frame's document is the tab's URL, so a redirect since the
     // observation is visible from here. A subframe's is not, and the page side
@@ -822,6 +846,70 @@ export class BrowserCommands implements Executor {
     return {};
   }
 
+  /* ---- the owner's secret: one read to aim it, one write that delivers it ---- */
+
+  /**
+   * The field a secret is aimed at, as the page itself reports it: the frame's
+   * own origin, the page's password mark, the accessible name the form-data
+   * target carries. The agent never supplies any of them (owner-secrets §8) —
+   * this read is what the approval card later shows.
+   *
+   * The read exists only to aim a write, so it runs under the same rule an
+   * acting command does: a field read out of a tab the owner is looking at
+   * would end in a fill that has to be refused, so it is refused here instead.
+   */
+  async #fieldInfo(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const session = await this.#session(command.session);
+    const ref = this.#ref(command.session, session, { ref: str(command.args, 'ref') });
+    const tab = await this.#ownTab(session, ref.tabKey);
+    if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
+    await this.#background(tab, command.owner);
+    cancel.check();
+    const [frame] = await this.#chrome.scripting.executeScript<[string], FieldRead>({
+      target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: readFieldRef, args: [ref.local],
+    });
+    const read = frame?.result;
+    if (!read?.ok) throw new PreconditionError(read?.reason ?? 'The referenced element changed or disappeared.');
+    return { observation: { field: fieldFacts(read) } };
+  }
+
+  /**
+   * The owner's secret into one field — the deliberate exception to `fill`'s
+   * refusal of password fields: the value is the owner's, the card was theirs,
+   * and the origin below was checked twice, once to aim the use and once here,
+   * in the page, before anything is focused or touched. The value travels this
+   * one call, goes through the debugger's insertText exactly as an ordinary
+   * fill's does, and is never logged and never echoed in a result or an error.
+   */
+  async #secretFill(command: Command, cancel: Cancellation): Promise<CommandResult> {
+    const session = await this.#session(command.session);
+    const ref = this.#ref(command.session, session, { ref: str(command.args, 'ref') });
+    const expected = str(command.args, 'expectedOrigin') ?? '';
+    if (expected === '') throw new PreconditionError('The fill arrived without the origin the use was approved for.');
+    const value = str(command.args, 'value') ?? '';
+    if (value === '') throw new PreconditionError('The fill arrived with nothing in it.');
+    const tab = await this.#ownTab(session, ref.tabKey);
+    if (ref.frameId === 0 && this.#liveUrl(tab) !== ref.docUrl) throw new PreconditionError(MOVED);
+    await this.#background(tab, command.owner);
+    cancel.check();
+    // Focusing and clearing the field is already a change to the page.
+    cancel.dispatch();
+    const [frame] = await this.#chrome.scripting.executeScript<[string, string], FieldRead>({
+      target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: prepareSecretRef, args: [ref.local, expected],
+    });
+    const read = frame?.result;
+    if (!read?.ok) throw new PreconditionError(read?.reason ?? 'The referenced element changed or disappeared.');
+    // The page checked the origin before it touched the field; this is the
+    // worker's own check that what answered agrees with what was approved.
+    if (checkOrigin(read.origin) !== expected) throw new PreconditionError('The field no longer sits on the origin this use was approved for. Observe again.');
+    if (ref.frameId !== 0) {
+      await this.#chrome.scripting.executeScript({ target: { tabId: ref.tabId, frameIds: [ref.frameId] }, func: typeRef, args: [ref.local, value] });
+      return {};
+    }
+    await this.#withDebugger(ref.tabId, (send) => send('Input.insertText', { text: value }));
+    return {};
+  }
+
   async #press(command: Command, cancel: Cancellation): Promise<CommandResult> {
     const key = str(command.args, 'key') ?? '';
     const descriptor = KEYS[key];
@@ -932,6 +1020,44 @@ function typeRef(ref: string, value: string): void {
   element.value = value;
   element.dispatchEvent(new Event('input', { bubbles: true }));
   element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/* What the page side answers about the field a secret is aimed at, and the one
+ * page-side step of the owner's secret fill. Both re-resolve the ref the way
+ * `locate` does, so a ref from an older observation refuses here as well. */
+
+function readFieldRef(ref: string): FieldRead {
+  const api = (globalThis as unknown as Record<string, { locate(ref: string, options: unknown): { ok: boolean; reason?: string; password?: boolean; name?: string } } | undefined>)['__buddiBrowser'];
+  const located = api?.locate(ref, {});
+  if (!located?.ok) return { ok: false, reason: located?.reason ?? 'The referenced element changed or disappeared.' };
+  return { ok: true, origin: location.origin, password: located.password === true, name: located.name ?? '' };
+}
+
+/*
+ * The one page-side step of the owner's secret fill: the ref resolved, the
+ * frame's origin read again, and refused unless it is still the one the use was
+ * approved for — all before the field is focused or touched, so a navigation
+ * between the approval and the fill refuses with nothing entered. Then focus
+ * and clear, which is what the debugger's insertText needs and what the
+ * ordinary fill does too. A password field is deliberate here: the value is
+ * the owner's, the card was theirs, and `fill` itself still refuses passwords.
+ */
+function prepareSecretRef(ref: string, expectedOrigin: string): FieldRead {
+  const api = (globalThis as unknown as Record<string, { locate(ref: string, options: unknown): { ok: boolean; reason?: string; password?: boolean } } | undefined>)['__buddiBrowser'];
+  const located = api?.locate(ref, {});
+  if (!located?.ok) return { ok: false, reason: located?.reason ?? 'The referenced element changed or disappeared.' };
+  const origin = location.origin;
+  if (origin !== expectedOrigin) return { ok: false, reason: 'The page moved since the owner approved this fill. Nothing was entered.' };
+  const holder = (globalThis as unknown as Record<string, { refs: Map<string, WeakRef<Element>> } | undefined>)['__buddiBrowserRegistry'];
+  const element = holder?.refs.get(ref)?.deref() as HTMLElement | undefined;
+  if (!element || !element.isConnected) return { ok: false, reason: 'The referenced element changed or disappeared.' };
+  if ('focus' in element) (element as HTMLElement).focus();
+  const input = element as HTMLInputElement;
+  if ('value' in input) {
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return { ok: true, origin, password: located.password === true };
 }
 
 function pressRef(ref: string, key: string, code: string, keyCode: number): void {
