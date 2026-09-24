@@ -95,19 +95,23 @@ func capture(_ s: State) async throws -> (Data, Int, Int) {
     guard let masked = context.makeImage(), let jpeg = NSBitmapImageRep(cgImage: masked).representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { try refuse("Cannot encode screenshot") }
     return (jpeg, image.width, image.height)
 }
-func focusCheck(_ s: State) throws {
-    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == s.app.processIdentifier,
-          let win = element(attr(AXUIElementCreateApplication(s.app.processIdentifier), kAXFocusedWindowAttribute)), CFEqual(win, s.window) else { try refuse("Focus changed. Observe again before sending input.") }
+func focusCheck(_ app: NSRunningApplication, _ window: AXUIElement) throws {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+          let win = element(attr(AXUIElementCreateApplication(app.processIdentifier), kAXFocusedWindowAttribute)), CFEqual(win, window) else { try refuse("Focus changed. Observe again before sending input.") }
 }
+func focusCheck(_ s: State) throws { try focusCheck(s.app, s.window) }
 func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) throws {
     guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true), let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { try refuse("Cannot create keyboard event") }
     down.flags = flags; up.flags = flags
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
 }
-func typeText(_ text: String, _ s: State) throws {
+// The chunked keyboard write act/fill types through: the focused element of the
+// frontmost app receives it, and the frontmost app and its focused window are
+// re-checked per chunk.
+func typeInto(_ text: String, _ app: NSRunningApplication, _ window: AXUIElement) throws {
     let units = Array(text.utf16)
     for offset in stride(from: 0, to: units.count, by: 20) {
-        try focusCheck(s)
+        try focusCheck(app, window)
         let chunk = Array(units[offset..<min(offset + 20, units.count)])
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true), let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { try refuse("Cannot create text input") }
         chunk.withUnsafeBufferPointer { buffer in
@@ -116,6 +120,9 @@ func typeText(_ text: String, _ s: State) throws {
         }
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     }
+}
+func typeText(_ text: String, _ s: State) throws {
+    try typeInto(text, s.app, s.window)
     if let focused = element(attr(AXUIElementCreateApplication(s.app.processIdentifier), kAXFocusedUIElementAttribute)), secure(focused) { try refuse("A password field is focused. Use human takeover.") }
 }
 @discardableResult func checkPoint(_ point: CGPoint, _ s: State) throws -> AXUIElement {
@@ -163,6 +170,11 @@ func click(_ point: CGPoint, _ s: State) throws {
                 var screen = CGPreflightScreenCaptureAccess()
                 if prompt && !screen { screen = CGRequestScreenCaptureAccess() }
                 result = ["accessibility": ax, "screenRecording": screen, "supported": true]
+            } else if operation == "focused" {
+                // The bundle id of the app the owner is using right now, read with
+                // no accessibility and no input: what `secret.type` binds to is what
+                // macOS answers here, never what an agent claimed (owner-secrets §8).
+                result = ["appId": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""]
             } else {
                 guard #available(macOS 14.0, *) else { try refuse("Computer control requires macOS 14 or later") }
                 guard AXIsProcessTrusted(), CGPreflightScreenCaptureAccess() else { try refuse("Computer control needs macOS Accessibility and Screen Recording permission. Use Check permissions in the dashboard. No browser automation fallback was used.") }
@@ -178,6 +190,28 @@ func click(_ point: CGPoint, _ s: State) throws {
                     dispatched = true
                     _ = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
                     result = ["opened": true]
+                } else if operation == "secretType" {
+                    // The owner's secret into the focused field of the app the use named
+                    // (owner-secrets §3). The frontmost app is checked again here — the
+                    // foreground guard every input has — so an app switch between the
+                    // approval and the typing refuses with nothing typed. The write is
+                    // the same chunked keyboard path act/fill uses; unlike that fill,
+                    // a secure field is not refused, because the owner's secret into
+                    // the owner's own focused field is the whole point, and the card
+                    // the use drew is what stands behind it.
+                    guard let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier == appId else {
+                        try refuse("The focused app is no longer the one this use was approved for. Nothing was typed.")
+                    }
+                    guard let value = request["value"] as? String, value.utf16.count <= 10000 else { try refuse("Invalid text") }
+                    let root = AXUIElementCreateApplication(app.processIdentifier)
+                    AXUIElementSetMessagingTimeout(root, 2)
+                    AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+                    guard let window = element(attr(root, kAXFocusedWindowAttribute)) else { try refuse("The focused app has no readable window. Nothing was typed.") }
+                    guard element(attr(root, kAXFocusedUIElementAttribute)) != nil else { try refuse("The focused app has no focused field to type into. Nothing was typed.") }
+                    dispatched = true
+                    try key(0, .maskCommand)
+                    try typeInto(value, app, window)
+                    result = ["completed": true]
                 } else {
                     let s = try state(appId)
                     if operation == "observe" {

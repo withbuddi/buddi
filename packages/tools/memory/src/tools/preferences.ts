@@ -54,6 +54,9 @@ export const rememberPreference: ToolDefinition<
     const scope = resolveScope(input.scope, ctx);
     const agentScope = toAgentScope(scope);
     const now = ctx.buddi!.clock.now();
+    // Choke point 5 of the scrub (owner-secrets §5): a preference the agent
+    // wrote is kept and recalled, so a stored value does not survive into it.
+    const value = ctx.buddi!.scrub(input.value);
 
     const { rows: currentRows } = await ctx.buddi!.db.query<{ value: string; revision: number }>(
       `select value, revision from memory.preferences
@@ -79,12 +82,12 @@ export const rememberPreference: ToolDefinition<
     await ctx.buddi!.db.query(
       `insert into memory.preferences (key, value, revision, agent_scope, created_at)
        values ($1, $2, $3, $4, $5)`,
-      [input.key, input.value, revision, agentScope, now],
+      [input.key, value, revision, agentScope, now],
     );
 
     return {
       key: input.key,
-      value: input.value,
+      value,
       scope,
       revision,
       previousValue: previous?.value ?? null,

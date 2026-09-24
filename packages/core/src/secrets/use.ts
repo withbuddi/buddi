@@ -29,6 +29,8 @@ import { ownerSecretVaultName, type Vault } from '../vault/types.js';
 import { isAccountKind, secretDestination, stricterRule } from './destinations.js';
 import { findSecret, secretBindings, type SecretBindingRow } from './store.js';
 import { describeSecretUse, SECRETS_TOOL, SECRETS_TOOL_VERSION } from './approval.js';
+import { TOTP_STEP_SECONDS, currentTotp, totpCounter } from './totp.js';
+import { scrubText } from './scrub.js';
 
 export interface UseSecretDeps {
   pool: Pool;
@@ -40,6 +42,14 @@ export interface UseSecretDeps {
   agentId?: string | undefined;
   conversationId?: string | undefined;
   now: () => Date;
+  /**
+   * Core's own destinations (the `http` area's `http.header`, the gateway's
+   * `accounts.provider`) take the value into the code that asked for it — the
+   * caller *is* the destination's delivery. Recorded exactly as a delivered
+   * use; the registered destination's own `deliver` never runs. Not on the
+   * host's `secrets` area, so no plugin can ask for this.
+   */
+  deliverInto?: (value: string, target: unknown, useId: string) => void | Promise<void>;
 }
 
 export interface UseSecretRequest {
@@ -107,6 +117,12 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
 
   const secret = await findSecret(pool, req.name);
   if (secret === null) return refuse(null, `There is no secret named "${req.name}".`);
+  // A TOTP secret delivers only its current code, into a browser field only
+  // (owner-secrets §4) — a property of the secret, so it is checked before
+  // any binding or card.
+  if (secret.totp === true && req.kind !== 'browser.field') {
+    return refuse(secret.id, `"${req.name}" is a TOTP secret; its code goes into a browser field only.`);
+  }
 
   // The binding: one of this kind whose target the destination accepts. The
   // destination checks, never the caller.
@@ -165,16 +181,37 @@ export async function useOwnerSecret(deps: UseSecretDeps, req: UseSecretRequest)
     return refuse(secret.id, 'The vault is locked; unlock this machine and try again.');
   }
   if (value === null) return refuse(secret.id, `"${req.name}" has no value stored; replace it in Settings.`);
+  /*
+   * A TOTP secret's value is the seed; what is delivered is the current code,
+   * into a browser field only (owner-secrets §4). The owner turned TOTP on for
+   * this secret explicitly, and every code generated is logged — the use row
+   * carries the window it was minted for, never the code.
+   */
+  let delivered = value;
+  let detail: string | null = null;
+  if (secret.totp === true) {
+    const at = deps.now();
+    delivered = currentTotp(value, at);
+    detail = `code generated for the window ending ${new Date(
+      (totpCounter(at) + 1) * TOTP_STEP_SECONDS * 1000,
+    ).toISOString()}`;
+  }
   const useId = await record({
     secretId: secret.id,
     outcome: isAccountKind(req.kind) ? 'held' : 'delivered',
     actionId: grantedBy,
+    ...(detail !== null ? { detail } : {}),
   });
   try {
-    await destination.deliver(value, target, { use: useId, buddi: deps.buddi });
+    if (deps.deliverInto !== undefined) {
+      await deps.deliverInto(delivered, target, useId);
+    } else {
+      await destination.deliver(delivered, target, { use: useId, buddi: deps.buddi });
+    }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    const detail = raw.split(value).join(`‹secret:${req.name}›`);
+    // Both the stored value and what was delivered (a TOTP code differs from its seed), then the automaton for anything else.
+    const detail = scrubText(raw.split(value).join(`‹secret:${req.name}›`).split(delivered).join(`‹secret:${req.name}›`));
     await pool.query(`update core.secret_uses set outcome = 'failed', detail = $2 where id = $1`, [useId, detail]);
     return { refused: `${req.kind} could not take "${req.name}": ${detail}` };
   }

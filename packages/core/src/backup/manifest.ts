@@ -195,6 +195,8 @@ export interface BackupManifest {
     redacted: string[];
     note: string;
     restoreWith: string[];
+    /** The owner secrets among the vault names, as the lines that restore them. */
+    ownerSecrets: string[];
   };
   members: MemberChecksum[];
 }

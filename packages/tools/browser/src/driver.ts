@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { Page, Locator, ElementHandle, CDPSession } from 'playwright';
 import { PlaywrightHost, type DriverOptions, type TabOwner } from './host.js';
+import { checkSecretOrigin, fieldOrigin } from './secrets.js';
 import { HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation, type ObservedTarget } from './types.js';
 import { BrowserPreconditionError } from './types.js';
 export type { DriverOptions } from './host.js';
@@ -108,6 +109,47 @@ export class PlaywrightDriver implements BrowserDriver, TabOwner {
       case 'role': return frame.getByRole(target.role!, { name: target.name!, exact: true });
       case 'link': return frame.getByRole('link', { name: target.name!, exact: true });
     }
+  }
+  async #savedElement(observation: string, ref: string): Promise<{ element: ElementHandle<Element>; description: ElementDescription }> {
+    const page = this.#active();
+    this.host.check(page.url(), true);
+    // The same evidence a click or a fill resolves against: a ref from an
+    // observation that is no longer the latest one is a ref to nowhere.
+    if (!this.#evidence || observation !== this.#evidence.id || page.url() !== this.#evidence.url) throw new BrowserPreconditionError('Stale page observation. Use the latest observation.id and target ref.');
+    const saved = this.#refs.get(ref);
+    const current = await saved?.element.evaluate(describeElement).catch(() => null);
+    if (!saved || !current || JSON.stringify(current) !== JSON.stringify(saved.description)) throw new BrowserPreconditionError('The referenced element changed or disappeared.');
+    return saved;
+  }
+
+  /**
+   * The field a secret is aimed at, as the live page reports it.
+   *
+   * The origin is the frame that holds the element's — an iframe's login form
+   * is the iframe's origin, not the page the top bar shows — and the password
+   * mark is the page's own type attribute, not the agent's guess about either.
+   */
+  async secretFieldInfo(observation: string, ref: string): Promise<{ origin: string; password: boolean; name: string }> {
+    const { element, description } = await this.#savedElement(observation, ref);
+    const frame = await element.ownerFrame();
+    const origin = fieldOrigin(frame?.url());
+    return { origin, password: description.tag === 'input' && description.type === 'password', name: description.name };
+  }
+
+  /**
+   * One owner secret into one field, through Playwright's own fill.
+   *
+   * The re-check first: between `secretFieldInfo` and this call the owner may
+   * have approved a card, and the page may have used that time to navigate. The
+   * frame's origin is read again, and unless it is still the one the use was
+   * delivered for nothing is entered.
+   */
+  async secretFillField(observation: string, ref: string, value: string, expectedOrigin: string): Promise<void> {
+    const { element } = await this.#savedElement(observation, ref);
+    const frame = await element.ownerFrame();
+    checkSecretOrigin(frame?.url(), expectedOrigin);
+    this.#evidence = undefined; // Only consume when dispatching, not on a precondition refusal.
+    await element.fill(value);
   }
   async perform(command: BrowserCommand): Promise<void> {
     if (command.action === 'open' || command.target?.x !== undefined) throw new BrowserPreconditionError('Native apps and coordinate targets require Computer mode.');

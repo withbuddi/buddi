@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { SurfaceProfile, ToolContext } from '@buddi/core/plugin';
+import { FORM_KIND, NATIVE_KIND, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
 
@@ -52,12 +53,26 @@ export interface BrowserScope { sessionId?: string; agentId?: string; conversati
 export interface BrowserHandOffer { supported: boolean; message?: string; hand?: BrowserHand }
 /** Trusted lifecycle input, never exposed in an agent tool schema. */
 export interface BrowserRollover { ownerId: string; agentId: string; previousConversationId: string; conversationId: string }
+/** What `secret.fill` asks: the secret's name, and the ref and observation the latest evidence carries. */
+export interface SecretFillInput { name: string; ref: string; observation: string }
+/** What `secret.type` asks: the secret's name; the focused app is the backend's answer. */
+export interface SecretTypeInput { name: string }
 export interface BrowserController {
   enable(): Promise<void>;
   shutdown(): Promise<void>;
   status(scope?: BrowserScope): BrowserStatus;
   screenshot(sessionId?: string): Buffer | undefined;
   execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown>;
+  /**
+   * The owner's secret into one field of the page this conversation drives
+   * (docs/specs/owner-secrets.md §3, §4). Same authority as `execute`; the
+   * value crosses only from the vault through the destination's `deliver` to
+   * the driver, and the result says filled, pending or the refusal — never a
+   * value.
+   */
+  secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown>;
+  /** The owner's secret typed into the focused field of the focused app, in Computer mode. */
+  secretType(input: SecretTypeInput, ctx: ToolContext): Promise<unknown>;
   control(action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string): Promise<BrowserStatus>;
   /** The remote hand for one session. Owner UI only; no agent tool reaches it. */
   hand?(scope?: BrowserScope): BrowserHandOffer;
@@ -186,21 +201,14 @@ export class BrowserService {
     if (this.#needsObservation && command.action !== 'observe') throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
     if (!this.#session || this.#session.requestId !== request.id) {
       if (!this.#session && command.action !== 'navigate' && !(this.options.allowOpen && command.action === 'open')) throw new Error('Start with navigate, or open an allowed application in computer mode.');
-      const expiresAt = Math.min(request.expiresAt, this.#now() + (this.options.lifetimeMs ?? 20 * 60_000));
-      if (this.#session) this.#spent.add(this.#session.requestId);
-      this.#preconditionFailures = 0;
-      this.#session = { id: this.#session?.id ?? randomUUID(), ownerId: ctx.buddi!.owner.id, agentId: ctx.agentId,
-        conversationId: ctx.conversationId, requestId: request.id, task: request.text.slice(0, 4000),
-        expiresAt: new Date(expiresAt).toISOString(), steps: 0, maxSteps: this.options.maxSteps ?? 80 };
-      clearTimeout(this.#expiry);
-      this.#expiry = setTimeout(() => { void this.#release('expired'); }, Math.max(1, expiresAt - this.#now()));
-      this.#expiry.unref?.();
+      this.#rekey(request, ctx.agentId!, ctx.conversationId!, ctx.buddi!.owner.id);
     }
-    if (Date.parse(this.#session.expiresAt) <= this.#now() || this.#session.steps >= this.#session.maxSteps) {
+    const active = this.#session;
+    if (!active || Date.parse(active.expiresAt) <= this.#now() || active.steps >= active.maxSteps) {
       await this.#release('expired');
       throw new Error('Browser task reached its time or step limit. Ask the owner for a new request.');
     }
-    ++this.#session.steps;
+    ++active.steps;
     this.#busy = true;
     this.#lastAction = command.action; // Never record form values here.
     this.#message = undefined;
@@ -250,28 +258,7 @@ export class BrowserService {
     } catch (error) {
       if (error instanceof ObservationFailure) throw error;
       if (!controller.signal.aborted && error instanceof BrowserPreconditionError) {
-        this.#message = error.message;
-        this.#state = ++this.#preconditionFailures >= 3 ? 'paused' : 'running';
-        if (this.#state === 'paused') this.#message += ' Repeated targeting failures: ask the owner to inspect and resume. No input was dispatched.';
-        // Recover evidence, never replay input. Keep this a failed tool result
-        // so the runtime skips any remaining sequential calls in this batch.
-        try {
-          const observation = await this.driver.observe();
-          const picture = await this.driver.screenshot();
-          controller.signal.throwIfAborted();
-          this.#observation = observation;
-          this.#picture = picture;
-        } catch (observationError) {
-          controller.signal.throwIfAborted();
-          this.#observation = undefined;
-          this.#picture = undefined;
-          this.#needsObservation = true;
-          this.#state = 'paused';
-          this.#message += ` Recovery observation failed: ${observationError instanceof Error ? observationError.message : String(observationError)}. Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.`;
-        }
-        throw new BrowserPreconditionError(JSON.stringify({ error: this.#message, dispatched: false,
-          recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
-          observation: this.#observation }));
+        await this.#precondition(controller, error);
       }
       if (!controller.signal.aborted) {
         this.#state = error instanceof BrowserPreconditionError ? 'running'
@@ -284,6 +271,200 @@ export class BrowserService {
       if (this.#controller === controller) this.#controller = undefined;
       this.#busy = false;
     }
+  }
+
+  /**
+   * A new owner message continues the session under that message's request:
+   * the old one is spent, the step budget and the failure count reset, and the
+   * expiry runs from now. The session id survives, so the conversation still
+   * owns the same screen it always did.
+   */
+  #rekey(request: NonNullable<ToolContext['ownerRequest']>, agentId: string, conversationId: string, ownerId: string): void {
+    const expiresAt = Math.min(request.expiresAt, this.#now() + (this.options.lifetimeMs ?? 20 * 60_000));
+    if (this.#session) this.#spent.add(this.#session.requestId);
+    this.#preconditionFailures = 0;
+    this.#session = { id: this.#session?.id ?? randomUUID(), ownerId, agentId,
+      conversationId, requestId: request.id, task: request.text.slice(0, 4000),
+      expiresAt: new Date(expiresAt).toISOString(), steps: 0, maxSteps: this.options.maxSteps ?? 80 };
+    clearTimeout(this.#expiry);
+    this.#expiry = setTimeout(() => { void this.#release('expired'); }, Math.max(1, expiresAt - this.#now()));
+    this.#expiry.unref?.();
+  }
+
+  /**
+   * The precondition path every refused action takes, `browser.act`'s and the
+   * secret tools' alike: count the failure, pause on the third, and recover
+   * fresh evidence so the next call acts on what the page now shows rather
+   * than on the stale arguments. Nothing was dispatched for any of these.
+   */
+  async #precondition(controller: AbortController, error: BrowserPreconditionError): Promise<never> {
+    this.#message = error.message;
+    this.#state = ++this.#preconditionFailures >= 3 ? 'paused' : 'running';
+    if (this.#state === 'paused') this.#message += ' Repeated targeting failures: ask the owner to inspect and resume. No input was dispatched.';
+    // Recover evidence, never replay input. Keep this a failed tool result
+    // so the runtime skips any remaining sequential calls in this batch.
+    try {
+      const observation = await this.driver.observe();
+      const picture = await this.driver.screenshot();
+      controller.signal.throwIfAborted();
+      this.#observation = observation;
+      this.#picture = picture;
+    } catch (observationError) {
+      controller.signal.throwIfAborted();
+      this.#observation = undefined;
+      this.#picture = undefined;
+      this.#needsObservation = true;
+      this.#state = 'paused';
+      this.#message += ` Recovery observation failed: ${observationError instanceof Error ? observationError.message : String(observationError)}. Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.`;
+    }
+    throw new BrowserPreconditionError(JSON.stringify({ error: this.#message, dispatched: false,
+      recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
+      observation: this.#observation }));
+  }
+
+  /**
+   * The authority shell the secret tools run under: exactly `execute`'s gates —
+   * the same authenticated owner request, the same single-owner lock, the same
+   * stopped/busy/paused/fresh-evidence refusals, the same step and expiry
+   * budget — and its start sequence and precondition path. A secret fill is a
+   * browser action like any other; only the value's route differs.
+   */
+  async #under(ctx: ToolContext, action: string, run: (controller: AbortController) => Promise<unknown>): Promise<unknown> {
+    ctx.signal?.throwIfAborted();
+    const request = ctx.ownerRequest;
+    if (!request || !request.id || !request.text.trim() || request.expiresAt <= this.#now() ||
+      !ctx.agentId || !ctx.conversationId || (ctx.delegationDepth ?? 0) > 0) {
+      throw new Error('A current authenticated owner request is required.');
+    }
+    if (!this.#enabled) throw new Error('Browser driving is available through buddi serve (dashboard or Telegram), not a separate CLI process.');
+    if (this.#state === 'stopped') throw new Error(browserStoppedMessage(ctx.surface));
+    if (this.#busy) throw new Error('Browser is busy; overlapping actions are refused.');
+    if (this.#session && (this.#session.ownerId !== ctx.buddi!.owner.id || this.#session.agentId !== ctx.agentId || this.#session.conversationId !== ctx.conversationId)) {
+      throw new Error('Another agent/conversation owns the browser. Ask the owner to release it from the dashboard.');
+    }
+    if (this.#spent.has(request.id)) throw new Error('This browser request has ended. A new owner message is required.');
+    if (this.#state === 'paused') throw new Error('Browser is under human control or needs inspection. Wait for the owner to resume in the dashboard, then observe.');
+    if (this.#needsObservation) throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
+    if (!this.#session) throw new Error('Start with navigate, or open an allowed application, and observe before using a secret here.');
+    if (this.#session.requestId !== request.id) this.#rekey(request, ctx.agentId!, ctx.conversationId!, ctx.buddi!.owner.id);
+    const active = this.#session;
+    if (!active || Date.parse(active.expiresAt) <= this.#now() || active.steps >= active.maxSteps) {
+      await this.#release('expired');
+      throw new Error('Browser task reached its time or step limit. Ask the owner for a new request.');
+    }
+    ++active.steps;
+    this.#busy = true;
+    this.#lastAction = action;
+    this.#message = undefined;
+    const controller = new AbortController();
+    this.#controller = controller;
+    const cancel = () => {
+      controller.abort(ctx.signal?.reason ?? new Error('Browser action stopped.'));
+      this.#spent.add(request.id);
+      void this.#release('stopped');
+      void this.#persistStop(true).catch(() => {});
+    };
+    ctx.signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      this.#state = 'starting';
+      await this.driver.start();
+      controller.signal.throwIfAborted();
+      ctx.signal?.throwIfAborted();
+      this.#state = 'running';
+      return await run(controller);
+    } catch (error) {
+      if (!controller.signal.aborted && error instanceof BrowserPreconditionError) {
+        await this.#precondition(controller, error);
+      }
+      if (!controller.signal.aborted) {
+        // A failed fill or a failed typing is an uncertain input: the value may
+        // be part-way into the field, so the session pauses rather than invites
+        // a repeat, exactly as a fill or a click does.
+        this.#state = 'paused';
+        this.#message = `${error instanceof Error ? error.message : String(error)} The action may have partially completed. Inspect it before resuming; do not repeat a submission.`;
+      }
+      throw error;
+    } finally {
+      ctx.signal?.removeEventListener('abort', cancel);
+      if (this.#controller === controller) this.#controller = undefined;
+      this.#busy = false;
+    }
+  }
+
+  /**
+   * One owner secret into one field of the page this conversation drives
+   * (docs/specs/owner-secrets.md §3, §4).
+   *
+   * The order is the security argument. The driver reads the field's frame
+   * origin, its password mark and its accessible name from the live page — the
+   * backend reports, the agent never claims (§8) — then core finds the binding,
+   * the destination checks that target against it, the rule is applied and the
+   * vault read, and the destination's `deliver` parks the value against the use
+   * id. Only then does the driver fill, re-checking the origin once more
+   * against what the use was delivered for. The result is `{ filled: true }`
+   * or a pending card; a refusal is the refusal's own sentence, and a value
+   * appears in none of them.
+   */
+  async secretFill(input: SecretFillInput, ctx: ToolContext): Promise<unknown> {
+    return this.#under(ctx, 'secret.fill', async () => {
+      if (typeof this.driver.secretFieldInfo !== 'function' || typeof this.driver.secretFillField !== 'function') {
+        throw new BrowserPreconditionError('secret.fill works in Playwright browser automation or in the buddi extension mode; this mode has no page fields to fill. Switch modes on the dashboard Settings page.');
+      }
+      const facts = await this.driver.secretFieldInfo(input.observation, input.ref);
+      const secrets = ctx.buddi?.secrets;
+      if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
+      const secret = (await secrets.list()).find((entry) => entry.name === input.name);
+      if (secret === undefined) {
+        throw new BrowserPreconditionError(`There is no secret named "${input.name}" bound to this browser's destinations. The owner keeps one in Settings, under Keys and secrets.`);
+      }
+      const kind = secretKindFor(secret.totp, facts.password);
+      if (kind === FORM_KIND && facts.name.trim() === '') {
+        throw new BrowserPreconditionError('That field has no name the page gives it, so it cannot be a form-field destination. Observe again, or ask the owner to bind the secret to the page instead.');
+      }
+      const outcome = await secrets.use(input.name, kind, kind === FORM_KIND ? { origin: facts.origin, field: facts.name } : facts.origin);
+      if ('pending' in outcome) {
+        return { pending: true, actionId: outcome.pending, message: 'The owner has a decision card for this use. Nothing was filled; ask again once it is decided.' };
+      }
+      if ('refused' in outcome) throw new BrowserPreconditionError(outcome.refused);
+      const value = takeDelivered(outcome.use);
+      if (value === undefined) throw new Error('The use delivered nothing to fill with. Ask for the secret again.');
+      await this.driver.secretFillField(input.observation, input.ref, value, facts.origin);
+      this.#needsObservation = true; // The field just changed; the next action observes first.
+      return { filled: true };
+    });
+  }
+
+  /**
+   * One owner secret typed into the focused field of the focused app
+   * (owner-secrets.md §3, native typing).
+   *
+   * The bundle id is the backend's answer about whatever app is in front right
+   * now, and the helper re-checks it before the first keystroke, so an app
+   * switch between the owner's approval and the typing refuses with nothing
+   * typed. There is no observed target here — the field is whatever the owner
+   * left focused — which is why the destination's loosest rule is a card every
+   * time.
+   */
+  async secretType(input: SecretTypeInput, ctx: ToolContext): Promise<unknown> {
+    return this.#under(ctx, 'secret.type', async () => {
+      if (typeof this.driver.focusedBundleId !== 'function' || typeof this.driver.nativeType !== 'function') {
+        throw new BrowserPreconditionError('secret.type works in Computer mode, which types into the focused app on this machine through macOS accessibility; this mode has no native typing. Switch modes on the dashboard Settings page.');
+      }
+      const bundleId = await this.driver.focusedBundleId();
+      if (!bundleId) throw new BrowserPreconditionError('There is no focused application the backend can name. Bring the app forward and ask again; nothing was typed.');
+      const secrets = ctx.buddi?.secrets;
+      if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
+      const outcome = await secrets.use(input.name, NATIVE_KIND, bundleId);
+      if ('pending' in outcome) {
+        return { pending: true, actionId: outcome.pending, message: 'The owner has a decision card for this use. Nothing was typed; ask again once it is decided.' };
+      }
+      if ('refused' in outcome) throw new BrowserPreconditionError(outcome.refused);
+      const value = takeDelivered(outcome.use);
+      if (value === undefined) throw new Error('The use delivered nothing to type. Ask for the secret again.');
+      await this.driver.nativeType(value);
+      this.#needsObservation = true; // The screen just changed; the next action observes first.
+      return { typed: true };
+    });
   }
 
   async #persistStop(stopped: boolean): Promise<void> {

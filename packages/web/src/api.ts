@@ -1180,6 +1180,59 @@ export interface EngineChange {
 }
 
 /* ------------------------------------------------------------------ *
+ * Secrets: the owner vault (docs/specs/owner-secrets.md §6), from
+ * `packages/gateway/src/web/secrets.ts`. There is no read path for a value:
+ * a secret is a name, its bindings and its use record, and the writes are the
+ * ownerOnly tools the act route invokes as the owner.
+ * ------------------------------------------------------------------ */
+
+/** How a binding runs: strictest first. A binding is never looser than its kind's maxRule. */
+export type SecretRule = 'every-time' | 'first-time' | 'pre-approved';
+
+export interface SecretBindingView {
+  kind: string;
+  /** Plain JSON: an origin, a bundle id or an account id as a string, `{ host, header }`, `{ workspace, variable }` or `{ origin, field }` for the rest. */
+  target: unknown;
+  rule: SecretRule;
+  /** When the owner approved the first use under a `first-time` rule. */
+  firstApprovedAt: string | null;
+  /** True for an account kind (`<plugin>.account`): the plugin's process holds the value while its connection lives. */
+  heldByPlugin: boolean;
+}
+
+/** What became of one use, as `core.secret_uses` records it. */
+export type SecretUseOutcome = 'delivered' | 'held' | 'pending' | 'refused' | 'failed';
+
+export interface SecretUseRow {
+  at: string;
+  secret: string;
+  kind: string;
+  target: unknown;
+  plugin: string | null;
+  agent: string | null;
+  outcome: SecretUseOutcome;
+  detail: string | null;
+}
+
+/** One secret on the page, display-ready; never a value. */
+export interface SecretListingView {
+  name: string;
+  totp: boolean;
+  bindings: SecretBindingView[];
+  lastUse: { at: string; kind: string; target: unknown; agentId: string | null; outcome: SecretUseOutcome } | null;
+}
+
+export interface SecretsView {
+  secrets: SecretListingView[];
+  /** The destination kinds the installed plugins register, with the loosest rule each allows. */
+  destinations: Array<{ kind: string; plugin: string; maxRule: SecretRule }>;
+  /** buddi's own keys, by name: read-only here, scrubbed like everything else. */
+  ownKeys: string[];
+}
+
+export type SecretWriteTool = 'secrets.put' | 'secrets.rename' | 'secrets.rebind' | 'secrets.delete' | 'secrets.scrub_history';
+
+/* ------------------------------------------------------------------ *
  * The chat surface, from `packages/gateway/src/web/chat.ts`.
  * ------------------------------------------------------------------ */
 
@@ -1430,6 +1483,17 @@ export const api = {
     ),
 
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
+  /* ---- secrets: the owner vault (docs/specs/owner-secrets.md §6) ---- */
+  /** The page's one read: the secrets, the destinations the plugins register, buddi's own keys. */
+  secrets: () => get<SecretsView>('/secrets'),
+  /** The use log, newest first — one secret's when a name is given. */
+  secretUses: (name?: string, limit?: number) => get<{ uses: SecretUseRow[] }>('/secrets/uses', { name, limit }),
+  /**
+   * One owner write: the ownerOnly tool `tool` invoked as the owner with
+   * `args`. The answer is the tool's own output; a refusal is a 4xx whose body
+   * carries the error, which `post` turns into an ApiError.
+   */
+  secretsAct: (tool: SecretWriteTool, args: Record<string, unknown>) => post<{ result: unknown }>('/secrets/act', { tool, args }),
   stopHost: (agentId: string, conversationId: string) => post<{ stopped: number }>('/host/stop', { agentId, conversationId }),
   revokeHost: (id: string) => post<{ revoked: boolean }>('/host/revoke', { id }),
   decide: (

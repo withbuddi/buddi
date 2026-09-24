@@ -223,6 +223,7 @@ describe('the manifest', () => {
       redacted: [],
       note: 'n',
       restoreWith: ['buddi vault set ANTHROPIC_API_KEY'],
+      ownerSecrets: [],
     },
     members: [{ path: 'db/core.events.copy', bytes: 10, sha256: 'b'.repeat(64) }],
   };

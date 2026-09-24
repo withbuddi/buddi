@@ -33,8 +33,9 @@ import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { localDateString } from '../time.js';
-import { createHttpArea, type HttpTransportFactory } from './http.js';
+import { createHttpArea, registerHttpHeaderDestination, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
+import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
 import {
   assertBindings,
   deleteOwnerSecret,
@@ -118,11 +119,42 @@ let services: PluginHostServices = {};
 /** Hand the host its process-wide services. Merges: each caller sets what it owns. */
 export function configurePluginHost(more: PluginHostServices): void {
   services = { ...services, ...more };
+  // Core's own destination (owner-secrets §3): `http.header`, under core's
+  // `http` area. Re-registering from the same name replaces, so every process
+  // that configures the host carries it; a plugin cannot name it — `use`
+  // refuses another plugin's kind — and the Settings page lists it as one of
+  // the kinds a binding may take.
+  registerHttpHeaderDestination();
 }
 
 /** Forget them. Tests only. */
 export function resetPluginHost(): void {
   services = {};
+}
+
+/**
+ * The vault owner secrets are kept in, for core's own settings tools (the Keys
+ * and secrets page, owner-secrets §6). `undefined` in a process that was never
+ * given one; never handed to a plugin.
+ */
+export function pluginHostVault(): Vault | undefined {
+  return services.vault;
+}
+
+/**
+ * Hand the output scrubber (owner-secrets §5) its source — every owner secret
+ * by name, buddi's own keys under theirs — and build the first automaton. The
+ * composition root calls this once per process, at boot, before the first tool
+ * result, event or log line goes anywhere. A later save, rename or delete
+ * invalidates; the next async choke point rebuilds.
+ */
+export async function configureSecretScrubbing(
+  pool: Pool,
+  vault: Vault | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  setSecretScrubSource(() => loadScrubEntries(pool, vault, env));
+  await primeSecretScrubber();
 }
 
 /**
@@ -170,7 +202,10 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   const env = (): EnvLike => services.env ?? process.env;
   const log = (line: string): void => {
     const sink = facts.log ?? services.log ?? ((text: string) => console.error(text));
-    sink(`[${plugin}] ${line}`);
+    // Choke point 4 of the scrub (owner-secrets §5): a log line is text
+    // leaving core. Synchronous by necessity — it uses whatever automaton is
+    // loaded, and the composition root primes it at boot.
+    sink(`[${plugin}] ${scrubText(line)}`);
   };
   const ownTool = (tool: string): void => {
     if (!binding.tools.has(tool)) {
@@ -214,6 +249,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     version: HOST_API_VERSION,
     plugin,
     log,
+    scrub: (text: string): string => scrubText(text),
     owner: {
       id: facts.ownerId ?? OWNER_ID,
       timezone: facts.timezone,
@@ -277,6 +313,43 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       network: binding.network,
       log,
       transport: services.httpTransport,
+      // A secret reaches one header of one request (owner-secrets §3,
+      // `http.header`): the area asks for the value itself, through
+      // `useOwnerSecret`'s core-internal delivery, and inserts the header
+      // after the address checks. Recorded as an ordinary use; the value
+      // crosses only this boundary, in this closure, and is gone with the
+      // request.
+      secrets:
+        services.vault === undefined
+          ? undefined
+          : {
+              async deliverFor(name, requestHost, header) {
+                let value: string | undefined;
+                const result = await useOwnerSecret(
+                  {
+                    pool: facts.db,
+                    vault: services.vault,
+                    plugin: 'http',
+                    buddi: host,
+                    agentId: facts.agentId,
+                    conversationId: facts.conversationId,
+                    now: () => facts.now(),
+                    deliverInto: (delivered) => {
+                      value = delivered;
+                    },
+                  },
+                  { name, kind: 'http.header', target: { host: requestHost, header } },
+                );
+                if ('done' in result) {
+                  if (value === undefined) {
+                    return { refused: `The destination did not take "${name}".` };
+                  }
+                  return { ok: true, value };
+                }
+                if ('pending' in result) return { pending: result.pending };
+                return { refused: result.refused };
+              },
+            },
     });
   }
   if (declared.has('accounts')) host.accounts = accountsArea(binding, facts);

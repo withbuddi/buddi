@@ -23,6 +23,7 @@ import { Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Segment, 
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
+import { Secrets } from './Secrets';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
@@ -73,6 +74,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
+          {section === 'secrets' ? <Secrets embedded timezone={timezone} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
           {section === 'plugins' ? <Plugins /> : null}
