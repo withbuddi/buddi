@@ -2022,6 +2022,8 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
   line-height: 1.55;
 }
 
+.wb-fail a:not([class]) { color: var(--critical); text-decoration: underline; text-underline-offset: 2px; }
+
 .wb-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; font-size: var(--text-md); }
 
 .wb-cell-text { max-width: 320px; min-width: 160px; }
