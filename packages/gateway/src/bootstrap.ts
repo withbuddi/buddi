@@ -12,6 +12,7 @@ import { systemContext } from './system-context.js';
 import {
   DATABASE_URL_VAR,
   KNOWN_SECRETS,
+  configurePluginHost,
   createPool,
   createVault,
   hydrateDatabaseUrl,
@@ -29,7 +30,7 @@ import {
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
-import { createProvider, type RuntimeProvider } from '@buddi/runtime';
+import { createProvider, defaultHttpTransport, type RuntimeProvider } from '@buddi/runtime';
 import { ProviderSettings } from './providers.js';
 import { ProviderAccounts } from './provider-accounts.js';
 import { config as loadDotenv } from 'dotenv';
@@ -306,6 +307,17 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   let accounts: ProviderAccounts | undefined;
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry, providerSelection: accounts?.selection }));
   adoptProcessCatalog(env, catalog);
+  /*
+   * What `ctx.buddi` needs and no context carries (docs/specs/plugin-host-api.md):
+   * the one transport every long-lived caller shares, which core may not
+   * import, and the live roster for `owner.agentForRole` — read on each call,
+   * so an agent given a role at lunchtime answers for it this afternoon.
+   */
+  configurePluginHost({
+    http: defaultHttpTransport,
+    agentForRole: (role) => catalog.agentsWithRole(role).find((agent) => agent.availability.ok)?.id,
+    env,
+  });
 
   const now = (): Date => new Date();
   const timezone = timezoneFromEnv(env);

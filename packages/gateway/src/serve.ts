@@ -23,6 +23,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  configurePluginHost,
   collectSources,
   countJobsByState,
   enqueue,
@@ -691,6 +692,8 @@ export async function main(): Promise<void> {
       });
       console.log(`source run queued: @${input.agentId} job ${job.id} (${input.dedupKey})`);
     };
+    // The same road for a plugin that declared `schedule`, from any context.
+    configurePluginHost({ enqueueRun });
     // A source's own per-call deadline bounds one poll; the loop's hard abort is
     // twice that, so the loop only ever intervenes when a source failed to.
     const sourcePollTimeoutMs = (() => {
