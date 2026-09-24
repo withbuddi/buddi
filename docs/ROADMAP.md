@@ -1,6 +1,6 @@
 # Roadmap
 
-Status: reference, 2026-09-21
+Status: reference, 2026-09-23
 
 One page: what is built, what is in progress, and the order of what comes
 next. Checked against the code and `git log` on 2026-09-21.
@@ -54,18 +54,18 @@ next. Checked against the code and `git log` on 2026-09-21.
   threads and Sent, six watchers with a switch each, the draft lifecycle with
   owner choices on the approval card, a Mail page with search, attachments
   on request.
+- [Learning](specs/learning.md) — buddi proposes, the owner keeps. Built
+  2026-09-23 in four steps (buddi 44792d6, 55210a4, 37a4fff, e33a18f): the
+  proposals table and the three `learning.*` tools with provenance and the
+  untrusted mark; kept skills as versioned files under the agent; plugin rules
+  proposed through core and applied by their plugin (email first); changes to
+  an agent's own file kept through the platform update, and a weekly digest on
+  Telegram and Home.
 
 ## In progress
 
-- [Learning](specs/learning.md) — buddi proposes, the owner keeps. Steps 1–3
-  built 2026-09-23 (buddi 44792d6, 55210a4, 37a4fff): the proposals table, the
-  three `learning.*` tools, Settings → Proposals with a count on Home,
-  provenance with the untrusted mark and its echoed sentences highlighted; a
-  kept skill is a versioned file under the agent (a later one is a diff),
-  removable from the inbox or the agent's Skills tab, and no file tool writes
-  an agent's own skills; a plugin proposes rules through core and applies the
-  kept ones itself, and the email plugin's learned rules wait in the same
-  inbox. Next: persona changes through Agent Father and the digest (step 4).
+- [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+  Next in the main list; not started.
 
 ## Next, in order
 
