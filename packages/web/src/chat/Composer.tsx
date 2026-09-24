@@ -467,7 +467,7 @@ export const Composer = forwardRef<ComposerHandle, {
           id="wb-composer-input"
           ref={area}
           value={text}
-          rows={1}
+          rows={2}
           placeholder={running ? `${agentName} is working…` : `Message ${agentName}`}
           onChange={(event) => {
             setText(event.target.value);

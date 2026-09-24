@@ -186,7 +186,7 @@ function DockCard({
   return (
     <section id={APPROVAL_DOCK_ID} tabIndex={-1} className="wb-question" data-kind="approval" aria-label="Approval needed" data-testid="approval-dock">
       <div className="wb-question-head">
-        <span className="wb-question-kicker">Needs your approval</span>
+        <span className="wb-question-kicker">Needs your OK</span>
         {count > 1 ? <span className="wb-dock-count" data-testid="approval-dock-count">1 of {count}</span> : null}
         <strong>{action ? labelFor(action.tool) : 'Loading the request…'}</strong>
         {item.askedBy ? <span className="wb-dock-asker" data-testid="approval-dock-asker">{item.askedBy}</span> : null}
@@ -223,16 +223,18 @@ function DockCard({
           {action ? <>Expires {fmtTime(action.expiresAt, timezone)} · </> : null}
           <button type="button" className="wb-link" onClick={onOpenFull}>See the full request on the Canvas</button>
         </span>
+        {/* The kit's row: Reject quiet, the standing permissions plain, and
+            the one-time yes in green, all at the small size. */}
+        <Button variant="ghost" size="sm" disabled={disabled} onClick={() => decide('reject')}>
+          {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+        </Button>
         {reusable ? (
           <>
             <Button variant="ghost" size="sm" disabled={disabled} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</Button>
-            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => decide('approve', 'always')}>Always: this agent</Button>
+            <Button size="sm" disabled={disabled} onClick={() => decide('approve', 'always')}>Always: this agent</Button>
           </>
         ) : null}
-        <Button variant="danger" disabled={disabled} onClick={() => decide('reject')}>
-          {busy === 'reject' ? 'Rejecting…' : 'Reject'}
-        </Button>
-        <Button variant="good" disabled={disabled} onClick={() => decide('approve')}>
+        <Button variant="good" size="sm" disabled={disabled} onClick={() => decide('approve')}>
           {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
         </Button>
       </div>

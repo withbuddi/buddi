@@ -66,8 +66,10 @@ describe('chat links and history', () => {
   it('supports a fresh conversation link without loading or creating an old thread', async () => {
     window.history.replaceState(null, '', chatRoute('keeper', 'new'));
     render(<App />);
-    // The header link is "Keeper @keeper": the name, and the word you type.
-    await screen.findByRole('link', { name: /^Keeper @keeper$/ });
+    // The kit's head: "New conversation" on top, then the name and the word you type.
+    await screen.findByRole('link', { name: 'Keeper' });
+    expect(screen.getByTestId('chat-head')).toHaveTextContent('New conversation');
+    expect(screen.getByTestId('chat-head')).toHaveTextContent('@keeper');
     expect(chatApi.conversation).not.toHaveBeenCalled();
     expect(chatApi.conversations).not.toHaveBeenCalled();
     expect(screen.queryByText(/Transcript/)).not.toBeInTheDocument();
