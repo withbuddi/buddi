@@ -20,6 +20,7 @@ import {
   ErrorBanner,
   List,
   ListRow,
+  PageHeader,
   Panel,
   Pill,
   Section,
@@ -57,10 +58,12 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   return (
     <div className="ui-page">
-      <header className="ui-page-head">
-        <h2 className="ui-page-title">Activity</h2>
-        <p className="ui-page-lede">Every run, newest first: what was said, what was queued, what was decided, and the log underneath it all.</p>
-      </header>
+      <PageHeader
+        title="Activity"
+        lede="Everything your agents ran, newest first."
+        actions={<PauseAll />}
+      />
+      <QueueStats />
       <Tabs>
         {TABS.map((t) => {
           const href = t.id === 'conversations' ? ACTIVITY_ROUTE : `${ACTIVITY_ROUTE}/${t.id}`;
@@ -315,5 +318,37 @@ function Block({ block }: { block: TranscriptBlock }): JSX.Element {
       <div className="transcript-tool-name mono">{block.type}</div>
       <Code>{json(block.ref)}</Code>
     </div>
+  );
+}
+
+/** The kit's header action: the whole queue paused or resumed at once. */
+function PauseAll(): JSX.Element | null {
+  const { data, reload } = useAsync(() => api.overview(), [], 10_000);
+  const [busy, setBusy] = useState(false);
+  if (!data) return null;
+  const flip = (): void => {
+    setBusy(true);
+    api.setPaused(!data.paused).then(reload, reload).finally(() => setBusy(false));
+  };
+  return (
+    <Button size="sm" variant={data.paused ? 'accent' : undefined} disabled={busy} onClick={flip}>
+      {data.paused ? 'Resume all' : 'Pause all'}
+    </Button>
+  );
+}
+
+/** The kit's figures over the tabs, from the queue's own counts. */
+function QueueStats(): JSX.Element | null {
+  const { data } = useAsync(() => api.overview(), [], 10_000);
+  if (!data) return null;
+  const count = (state: string): number => data.jobs[state] ?? 0;
+  const running = count('leased');
+  return (
+    <Stats>
+      <Stat label="Jobs done" value={fmtNumber(count('succeeded'))} />
+      <Stat label="Failed" value={fmtNumber(count('failed'))} {...(count('failed') > 0 ? { tone: 'critical' as const } : {})} />
+      <Stat label="Queued" value={fmtNumber(count('pending'))} note={`${running} running`} />
+      <Stat label="Approvals" value={fmtNumber(data.approvals.pending)} note="waiting for you" />
+    </Stats>
   );
 }
