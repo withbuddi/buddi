@@ -111,6 +111,14 @@ export function ChatPage({
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
+  /*
+   * Whose thread is known to be new: the agent (or room) whose most recent
+   * conversation was looked for and not found, or that the owner started
+   * afresh. Only then does the empty thread wear the agent's opening; while a
+   * conversation is still on its way the thread stays blank, so an existing
+   * one never flashes "Hi, I'm …" before its messages.
+   */
+  const [freshFor, setFreshFor] = useState<string | null>(null);
   /** The owner's accepted send, shown before the run has persisted it. */
   const [optimistic, setOptimistic] = useState<ChatMessage[]>([]);
   const [live, setLive] = useState<LiveCall[]>([]);
@@ -187,6 +195,8 @@ export function ChatPage({
     if (left) setDraft({ text: left, at: Date.now() });
   }, [agentId]);
 
+  /** Whose thread this is: a room, or one agent. */
+  const threadOwner = group ? `group:${group.id}` : (agentId ?? null);
   const everyone = [...agents.top, ...agents.middle, ...agents.bottom];
   const agent = everyone.find((c) => c.id === agentId) ?? null;
   const members = group ? group.members.map((id) => everyone.find((a) => a.id === id)).filter((a): a is ChatAgent => Boolean(a)) : [];
@@ -222,6 +232,7 @@ export function ChatPage({
     let cancelled = false;
     setConversationId(null);
     setConversation(null);
+    setFreshFor(null);
     setOptimistic([]);
     setError(null);
     setRunning(false);
@@ -231,6 +242,7 @@ export function ChatPage({
     setProfile(null);
     if (requestedConversationId) {
       if (requestedConversationId !== 'new') setConversationId(requestedConversationId);
+      else setFreshFor(threadOwner);
       return () => { cancelled = true; };
     }
     (group ? chatApi.groupConversations(group.id) : chatApi.conversations(agentId))
@@ -240,15 +252,16 @@ export function ChatPage({
         if (latest) {
           setConversationId(latest.id);
           onConversationOpened?.(agentId, latest.id);
-        }
+        } else setFreshFor(threadOwner);
       })
       .catch(() => {
         /* A fresh install has no conversations. That is not an error. */
+        if (!cancelled) setFreshFor(threadOwner);
       });
     return () => {
       cancelled = true;
     };
-  }, [agentId, group?.id, requestedConversationId, onConversationOpened]);
+  }, [agentId, group?.id, threadOwner, requestedConversationId, onConversationOpened]);
 
   const refresh = useCallback((id: string) => {
     return chatApi
@@ -888,8 +901,9 @@ export function ChatPage({
       }).catch((err: unknown) => setError(message(err)));
       return;
     }
+    setFreshFor(threadOwner);
     if (agentId) onConversationOpened?.(agentId, 'new');
-  }, [agentId, group, onConversationOpened]);
+  }, [agentId, group, threadOwner, onConversationOpened]);
 
   useEffect(() => {
     if (newConversationSignal && newConversationSignal !== previousNewSignal.current) {
@@ -942,7 +956,14 @@ export function ChatPage({
    */
   const defaultAgentName = everyone.find((a) => a.id === defaultAgentId)?.name ?? null;
   const starters = group ? [] : startersOf(agent, defaultAgentName);
-  const opening = !group && agent ? (
+  /*
+   * Where the thread stands: *new* (nothing to fetch, or known to hold
+   * nothing), *loading* (a conversation is chosen, or being looked for, and has
+   * not arrived) or *loaded*. Only a thread that is not loading may say hello.
+   */
+  const threadLoading = !(conversation && conversation.conversationId === conversationId)
+    && !(!conversationId && freshFor !== null && freshFor === threadOwner);
+  const opening = threadLoading ? <div className="wb-chat-loading" data-testid="chat-loading" aria-busy="true" /> : !group && agent ? (
     <GradientField quiet still className="wb-chat-field">
     <div className="wb-chat-opening" data-testid="chat-opening">
       <AgentAvatar agents={everyone} id={agent.id} size="xl" />
@@ -1001,6 +1022,7 @@ export function ChatPage({
       descriptors={descriptors}
       grantedTools={group ? members.flatMap((member) => member.tools ?? []) : agent?.tools ?? []}
       {...(agent ? { agentName: agent.name } : {})}
+      loading={threadLoading}
       {...(!group && agent ? { face: <AgentAvatar agents={everyone} id={agent.id} size="xl" /> } : {})}
     />
   );
