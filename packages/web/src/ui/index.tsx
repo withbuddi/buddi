@@ -593,6 +593,11 @@ export function ListRow({
  * The soft blue-to-sand field: first run, the Home hero band (`quiet`), a new
  * chat's opening. Text never sits on it except one short line in `--text`.
  */
+/** The buddi mark: the rail's "b" tile. Decoration — the link or heading around it says buddi. */
+export function Mark({ size }: { size?: 'sm' | 'lg' | 'xl' }): JSX.Element {
+  return <span className="ui-mark" data-size={size} aria-hidden="true">b</span>;
+}
+
 export function GradientField({
   quiet,
   still,

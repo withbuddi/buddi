@@ -785,6 +785,29 @@ a.ui-list-row:hover .ui-list-title { color: var(--accent); }
 .ui-float-dock { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); padding: var(--space-4) var(--space-8); border-top: 1px solid var(--line); }
 
 /* Brand blue as a surface: large type only, or the strong one for small text. */
+/* The mark: a lower-case "b" in the display face on a brand tile. Small
+   tiles carry white type, so they take the strong brand blue; the largest is
+   large type and wears Buddi blue itself. */
+.ui-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--surface-brand-strong);
+  color: var(--on-brand);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  user-select: none;
+}
+.ui-mark[data-size='sm'] { width: 20px; height: 20px; border-radius: 6px; font-size: 13px; }
+.ui-mark[data-size='lg'] { width: 44px; height: 44px; border-radius: 14px; font-size: 26px; }
+.ui-mark[data-size='xl'] { width: 72px; height: 72px; border-radius: 22px; font-size: 42px; background: var(--surface-brand); }
+
 .ui-brand { background: var(--surface-brand); color: var(--on-brand); border-radius: var(--radius-2xl); padding: var(--space-6); }
 .ui-brand[data-strong='true'] { background: var(--surface-brand-strong); }
 

@@ -41,7 +41,7 @@ import { Composer } from '../chat/Composer';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Button, ButtonLink, Field } from '../ui';
+import { Button, ButtonLink, Field, Mark } from '../ui';
 import {
   FACES,
   OPENING_INSTRUCTION,
@@ -216,9 +216,7 @@ function Buddi({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="meet-turn">
       <div className="wb-msg-who">
-        <span className="meet-mark" aria-hidden="true">
-          b
-        </span>
+        <Mark size="sm" />
         <span>buddi</span>
       </div>
       {children}
@@ -487,9 +485,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       */}
         <header className="meet-head">
           <span className="meet-head-who">
-            <span className="meet-head-mark" aria-hidden="true">
-              b
-            </span>
+            <Mark size="lg" />
             <span className="meet-head-name">buddi</span>
           </span>
           <p className="meet-head-line">{SCRIPT.tagline}</p>
