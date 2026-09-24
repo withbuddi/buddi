@@ -18,8 +18,8 @@
  * rather than a blind spot.
  *
  * Two things are still outside it: `node_modules/@buddi/core`, which is the
- * symlink staging writes to the *running installation's* core and therefore
- * not part of the package at all, and `.git`. Everything else is hashed, and a
+ * plugin-only package staging writes over the *running installation's* core
+ * and therefore not part of the package at all, and `.git`. Everything else is hashed, and a
  * symlink among the package's own files is refused rather than skipped: a hash
  * that silently ignores what it cannot read proves nothing.
  */

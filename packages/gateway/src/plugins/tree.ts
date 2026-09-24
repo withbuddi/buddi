@@ -38,10 +38,10 @@ export class TreeRefusal extends Error {
 const NEVER = new Set(['.git']);
 
 /**
- * The peer link staging writes itself.
- *
- * It points at the core this gateway is running, which is deliberately outside
- * the staged tree, so it is the one link that is neither refused nor hashed.
+ * The peer staging writes itself: the plugin-only `@buddi/core`, which
+ * re-exports the core this gateway is running from outside the staged tree
+ * (`linkCore`). Buddi's, not the package's, so it is neither refused nor
+ * hashed.
  */
 export const CORE_PEER_LINK = 'node_modules/@buddi/core';
 

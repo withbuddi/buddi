@@ -34,12 +34,12 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
   type Stats,
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { hostApiProblem, parsePluginUses, type PluginSource, type PluginUse } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
@@ -412,12 +412,19 @@ export function scanDependencies(packageDir: string): StagedDependencies {
 }
 
 /**
- * Point the staged package's `@buddi/core` at the one this process is running.
+ * Give the staged package a `@buddi/core` that is the plugin API and nothing
+ * else (docs/specs/plugin-host-api.md §6).
  *
- * Without this the plugin gets its own copy from the registry: a second
- * registry, a second pool, a second set of module-level singletons, and tools
- * that register into nothing. Core is a peer dependency for exactly this
- * reason and the symlink is what makes the peer real.
+ * Core is a peer dependency so the plugin shares this process's core rather
+ * than getting its own copy from the registry — a second registry, a second
+ * pool, tools that register into nothing. What the plugin resolves by that
+ * name is a small package written here: its only export is
+ * `@buddi/core/plugin`, which re-exports the running core's own
+ * `dist/plugin` by absolute path, so every class and constant is the same
+ * object core holds. An import of `@buddi/core` itself, of `/testing` or of
+ * any internal fails to resolve, by name, in an installed plugin. A
+ * developer's own checkout (`plugins install <dir>`, `plugins dev`) keeps the
+ * `link:` its package.json names, whole, for its tests.
  */
 export function linkCore(packageDir: string, coreDir?: string): string | undefined {
   const resolved = coreDir ?? resolveCoreDir();
@@ -426,8 +433,40 @@ export function linkCore(packageDir: string, coreDir?: string): string | undefin
   mkdirSync(modules, { recursive: true });
   const link = path.join(modules, 'core');
   rmSync(link, { recursive: true, force: true });
-  symlinkSync(resolved, link, 'junction');
+  writePluginOnlyCore(link, resolved);
   return resolved;
+}
+
+/** The narrowed `@buddi/core`: `./plugin` and `./package.json`, re-exporting `coreDir`'s. */
+export function writePluginOnlyCore(dir: string, coreDir: string): void {
+  let version = '0.0.0';
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(coreDir, 'package.json'), 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string') version = pkg.version;
+  } catch {
+    // A core without a readable package.json still has a plugin entry to point at.
+  }
+  const entry = path.join(coreDir, 'dist', 'plugin', 'index.js');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: '@buddi/core',
+        version,
+        description: 'The buddi plugin API, as an installed plugin sees it: @buddi/core/plugin and nothing else.',
+        type: 'module',
+        exports: {
+          './plugin': { types: './plugin.d.ts', default: './plugin.js' },
+          './package.json': './package.json',
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(path.join(dir, 'plugin.js'), `export * from ${JSON.stringify(pathToFileURL(entry).href)};\n`);
+  writeFileSync(path.join(dir, 'plugin.d.ts'), `export * from ${JSON.stringify(entry)};\n`);
 }
 
 /** `lstat`, or nothing. Never follows what it is asked about. */

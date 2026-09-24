@@ -8,13 +8,14 @@
  * module runs it, so the marker's existence is exactly "this plugin's code has
  * run in this process".
  *
- * It imports `@buddi/core` for the same reason a real plugin does, which also
- * makes it the thing that fails loudly if the staged tree's peer link is wrong.
+ * It imports `@buddi/core/plugin` for the same reason a real plugin does,
+ * which also makes it the thing that fails loudly if the staged tree's peer
+ * link is wrong — and the only thing that link exports.
  */
 import { appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { contributionOf } from '@buddi/core';
+import { HOST_API_VERSION } from '@buddi/core/plugin';
 
 const marker = process.env.BUDDI_FIXTURE_MARKER;
 if (marker !== undefined && marker !== '') {
@@ -46,5 +47,5 @@ export const manifest = {
 };
 
 // Proves the peer link resolves to a real core rather than a second copy.
-export const summary = contributionOf(manifest);
+export const hostApi = HOST_API_VERSION;
 export default manifest;
