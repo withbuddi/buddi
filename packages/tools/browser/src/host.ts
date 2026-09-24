@@ -1,6 +1,6 @@
 import { mkdir, chmod } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from 'playwright';
-import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/tool-web';
+import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 import { startProxy } from './proxy.js';
 
 export interface DriverOptions {

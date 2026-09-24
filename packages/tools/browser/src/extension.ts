@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { checkUrl } from '@buddi/tool-web';
+import { checkUrl } from '@buddi/core/plugin';
 import { BrowserPreconditionError, HAND_QUALITY, type BrowserCommand, type BrowserDriver, type BrowserHand, type HandFrame, type HandInput, type HandQuality, type Observation } from './types.js';
 
 /** Every frame name the owner's Chrome understands. */

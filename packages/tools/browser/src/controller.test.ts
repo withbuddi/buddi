@@ -2,13 +2,17 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ToolContext } from '@buddi/core';
+import { createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core';
+
+/** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
+const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
+const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { HostController } from './controller.js';
 import { BrowserManager } from './manager.js';
 import { commandSchema, type BrowserDriver } from './types.js';
 
 const resources: Array<{ dir: string; controller: HostController }> = [];
-const ctx = (id = 'a'): ToolContext => ({ ownerId: 'owner', db: {} as never, now: () => new Date(), timezone: 'UTC', agentId: id, conversationId: id,
+const ctx = (id = 'a'): ToolContext => hosted({ ownerId: 'owner', db: {} as never, now: () => new Date(), timezone: 'UTC', agentId: id, conversationId: id,
   ownerRequest: { id: `request-${id}`, text: 'Open the app', expiresAt: Date.now() + 60_000 } });
 const open = commandSchema.parse({ action: 'open', appId: 'com.apple.Safari' });
 async function setup() {

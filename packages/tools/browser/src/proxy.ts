@@ -2,8 +2,10 @@
  * second browser resolution. No UDP, local services, or filesystem URLs.
  * This is egress confinement for the browser, not an OS sandbox for plugins. */
 import { createConnection, createServer, type Socket, type AddressInfo } from 'node:net';
+// Not yet on ctx.buddi: the proxy dials raw sockets, not HTTP requests, and is
+// started before any context exists; ctx.buddi.http has no resolver to hand out.
 import { guardedLookup, type LookupAll } from '@buddi/core';
-import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/tool-web';
+import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 
 export async function startProxy(options: { policy?: AddressPolicy; resolve?: LookupAll } = {}) {
   const policy = options.policy ?? DEFAULT_POLICY;

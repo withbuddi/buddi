@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, type ToolContext } from '@buddi/core';
+import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { manifest as memory } from '@buddi/tool-memory';
 import { BrowserManager, BrowserService, createBrowserManifest, type BrowserDriver } from '@buddi/tool-browser';
@@ -58,7 +58,8 @@ suite('browser authority across interactive surfaces', () => {
       if (result?.type === 'tool_result') expect(result.is_error, result.content).not.toBe(true);
       return { content: [{ type: 'text', text: 'Fixture browser opened.' }], stopReason: 'end_turn', usage: { input: 1, output: 1 }, model: 'fixture' };
     } };
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const facts: ToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const ctx: ToolContext = { ...facts, buddi: createPluginHost(hostBindingOf(createBrowserManifest(browser)), facts) };
     return { driver, browser, registry, catalog, provider, ctx, env };
   };
 

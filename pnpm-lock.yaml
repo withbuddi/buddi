@@ -307,9 +307,6 @@ importers:
       '@buddi/core':
         specifier: workspace:*
         version: link:../../core
-      '@buddi/tool-web':
-        specifier: workspace:*
-        version: link:../web
       playwright:
         specifier: ^1.58.0
         version: 1.63.0

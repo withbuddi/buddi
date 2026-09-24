@@ -1,7 +1,7 @@
 import { createServer, createConnection, type AddressInfo, type Socket } from 'node:net';
 import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_POLICY } from '@buddi/tool-web';
+import { DEFAULT_POLICY } from '@buddi/core/plugin';
 import { startProxy } from './proxy.js';
 
 async function connect(proxyUrl: string, host: string, port: number): Promise<Socket> {

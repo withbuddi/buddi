@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type ToolContext } from '@buddi/core';
 import { BrowserService, BrowserManager, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
+
+/** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
+const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
+const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 
 const TOKEN = 'fixture-browser-dashboard-token';
 const instances: WebServer[] = [];
@@ -79,9 +83,9 @@ describe('browser dashboard endpoints', () => {
         observe: async () => ({ id, title: `Page ${id}`, url: 'https://example.com/', tree: 'Fixture', tabs: [], capturedAt: new Date().toISOString() }) };
     });
     const { origin } = await setup(true, manager); const headers = await session(origin);
-    for (const id of ['a', 'b']) await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/' }), {
+    for (const id of ['a', 'b']) await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/' }), hosted({
       ownerId: 'owner', agentId: id, conversationId: id, ownerRequest: { id, text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext);
+    } as ToolContext));
     const a = await (await fetch(`${origin}/api/browser?agentId=a&conversationId=a`, { headers })).json() as { session: { id: string }; page: { id: string }; sessions?: unknown };
     expect(a.sessions).toBeUndefined(); expect(a.page.id).toBe('1');
     const image = await fetch(`${origin}/api/browser/screenshot?sessionId=${a.session.id}&v=1`, { headers });
@@ -105,10 +109,10 @@ describe('browser dashboard endpoints', () => {
     }));
     const { origin } = await setup(true, manager);
     const headers = await session(origin);
-    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), {
+    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), hosted({
       ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
       ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext);
+    } as ToolContext));
     const status = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as {
       session: { agentId: string; conversationId: string; steps: number; maxSteps: number };
       page: { url: string; title: string; id: string };
@@ -123,10 +127,10 @@ describe('browser dashboard endpoints', () => {
     expect(status.page.id).toBe('o1');
     expect(status.hasScreenshot).toBe(true);
     // A second action moves the count the canvas prints.
-    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), {
+    await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), hosted({
       ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
       ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext);
+    } as ToolContext));
     const again = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as { session: { steps: number } };
     expect(again.session.steps).toBe(2);
     // Another conversation asking gets nothing of this one's.

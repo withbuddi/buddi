@@ -2,15 +2,19 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, type ToolContext } from '@buddi/core';
+import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core';
 import { browserStoppedMessage, BrowserService } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';
 
+/** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
+const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
+const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
+
 const observation: Observation = { id: 'o1', url: 'https://example.com/', title: 'Fixture', tree: '- button "Book"', tabs: [], capturedAt: new Date().toISOString() };
 const navigate = commandSchema.parse({ action: 'navigate', url: 'https://example.com/' });
 const observe = commandSchema.parse({ action: 'observe' });
-const contexts = (): ToolContext => ({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
+const contexts = (): ToolContext => hosted({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
   agentId: 'concierge', conversationId: 'c1', sessionTools: ['browser.act'],
   ownerRequest: { id: 'request1', text: 'Book the appointment', expiresAt: Date.now() + 60_000 } });
 function fake(): BrowserDriver {
@@ -97,7 +101,7 @@ describe('host browser authority and lifecycle', () => {
     const { service, driver, ctx } = await setup();
     await service.execute(navigate, ctx);
     for (const other of [{ agentId: 'other' }, { conversationId: 'other' }, { ownerId: 'other' }]) {
-      await expect(service.execute(observe, { ...ctx, ...other })).rejects.toThrow('Another agent');
+      await expect(service.execute(observe, hosted({ ...ctx, ...other }))).rejects.toThrow('Another agent');
     }
     expect(driver.perform).toHaveBeenCalledTimes(1);
   });

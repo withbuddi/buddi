@@ -1,6 +1,6 @@
 import { BrowserService, type BrowserController, type BrowserHandOffer, type BrowserScope, type BrowserStatus, type BrowserRollover } from './service.js';
 import type { BrowserCommand, BrowserDriver } from './types.js';
-import type { ToolContext } from '@buddi/core';
+import type { ToolContext } from '@buddi/core/plugin';
 
 /** Routes trusted identities to independent controllers, never model arguments.
  * The gate persists global Stop. Children share a host but only own their tabs. */
@@ -79,7 +79,7 @@ export class BrowserManager implements BrowserController {
     if (this.#stopped) throw new Error('The owner stopped all browser sessions. Only the owner can resume access.');
     if (this.#controlling) throw new Error('Browser owner controls are changing. Wait for them to settle.');
     this.#sweep();
-    const key = JSON.stringify([ctx.ownerId, ctx.agentId, ctx.conversationId]);
+    const key = JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId]);
     if (this.#opening.has(key)) throw new Error('This conversation is opening its browser tab. Wait for that action.');
     const prior = this.#requests.get(request.id);
     if (prior && (prior.ended || prior.key !== key)) throw new Error('This browser request has ended or belongs to another conversation. A new owner message is required.');
