@@ -2,10 +2,6 @@ import path from 'node:path';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { sha256Of, type ToolContext } from '@buddi/core/plugin';
-// Not yet on ctx.buddi: workspaces live in <data>/host/workspaces, where the
-// owner's running and finished work already is; ctx.buddi.dir is
-// <data>/plugins-data/host. Moving them moves every workspace.
-import { resolveDataDir } from '@buddi/core';
 import { runCommand } from './process.js';
 
 export const execInput = z.object({
@@ -27,7 +23,9 @@ export class HostService {
   workspace(ctx: Pick<ToolContext, 'buddi' | 'agentId' | 'conversationId'>): string {
     if (!ctx.agentId || !ctx.conversationId) throw new Error('Host tools require an agent and conversation.');
     const key = sha256Of(Buffer.from(JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId])));
-    return path.join(resolveDataDir(this.env), 'host', 'workspaces', key);
+    // <data>/host/workspaces, where the owner's running and finished work
+    // already is: dir.legacyPath, not dir.path (<data>/plugins-data/host).
+    return path.join(ctx.buddi!.dir.legacyPath!, 'workspaces', key);
   }
   runs(ownerId: string, agentId?: string, conversationId?: string): HostRun[] {
     return [...this.#runs.values()].map(({ view }) => view).filter(v => v.ownerId === ownerId &&
