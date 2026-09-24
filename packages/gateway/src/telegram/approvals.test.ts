@@ -17,7 +17,7 @@ import {
   migrate,
   pairSurfaceIdentity,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -256,7 +256,7 @@ suite('TelegramApprovals (postgres)', () => {
     return r;
   }
 
-  const ctx = (): ToolContext => ({
+  const ctx = (): CoreToolContext => ({
     db: pool,
     ownerId: 'owner',
     now: () => new Date(),
@@ -320,7 +320,7 @@ suite('TelegramApprovals (postgres)', () => {
               },
             ],
           }),
-          execute: (async (_input: unknown, toolCtx: ToolContext) => {
+          execute: (async (_input: unknown, toolCtx: CoreToolContext) => {
             ran.push(toolCtx.choices ? { ...toolCtx.choices } : undefined);
             return { messageId: 'mid-1' };
           }) as never,

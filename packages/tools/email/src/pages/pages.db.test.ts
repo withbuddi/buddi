@@ -14,6 +14,7 @@
  *  - and none of them exists for anybody but the owner: an `ownerOnly` tool
  *    invoked as an agent is not "forbidden", it is *unknown*.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -40,15 +41,15 @@ import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { emailPageDescriptors } from './descriptors.js';
 import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
 import type { ImapClientFactory } from '../ports.js';
-import type { ToolContext } from '../types.js';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
   return ctx;
 }
@@ -91,7 +92,7 @@ suite('the mail pages, over postgres', () => {
   let pool: Pool;
   let dataDir: string;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let vault: Vault;
   let env: Record<string, string | undefined>;
   let imap: FakeImapServer;
@@ -491,7 +492,7 @@ suite('the mail pages, over postgres', () => {
   it('degrades when the plugin is not installed, and refuses when the database is not answering', async () => {
     const manifest = createEmailManifest();
     const query = (name: string) => (manifest.queries ?? []).find((q) => q.name === name)!;
-    const failing = (code: string): ToolContext => hosted({
+    const failing = (code: string): CoreToolContext => hosted({
       ...ctx,
       db: {
         query: async () => {

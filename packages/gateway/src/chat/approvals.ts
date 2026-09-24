@@ -25,7 +25,7 @@ import {
   type ApprovalState,
   type Decision,
   type Queryable,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
   type PermissionScope,
 } from '@buddi/core';
@@ -41,7 +41,7 @@ export const CLI_WORKER = 'cli-approval';
 export interface CliApprovalsOptions {
   pool: Queryable;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   timezone: string;
   /** The owner identity a decision is recorded against. */
   ownerId: string;

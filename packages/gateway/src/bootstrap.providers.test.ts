@@ -28,7 +28,7 @@ it('can boot the management UI without a default provider credential', async () 
 });
 
 /**
- * `ToolContext.previewPort` is the number a plugin with `previews` builds its
+ * `CoreToolContext.previewPort` is the number a plugin with `previews` builds its
  * own URLs from — a `tailscale serve` target, a line in a result. It is read
  * from the environment the preview listener publishes into, so it is a getter
  * rather than a value: the context object is built long before anything binds.

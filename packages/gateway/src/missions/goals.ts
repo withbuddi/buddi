@@ -69,8 +69,8 @@ import {
   type MetricUnit,
   type PluginManifest,
   type Sentinel,
-  type SentinelContext,
-  type ToolContext,
+  type CoreSentinelContext,
+  type CoreToolContext,
   type ToolDefinition,
 } from '@buddi/core';
 import { z } from 'zod';
@@ -524,7 +524,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
    * ago and "a delegate may not" is a fact about the run that is executing. It
    * only reads the arguments and the context, so both readings agree.
    */
-  function refuseSet(input: z.infer<typeof setInput>, ctx: ToolContext): Refusal | null {
+  function refuseSet(input: z.infer<typeof setInput>, ctx: CoreToolContext): Refusal | null {
     if (!ctx.agentId) {
       return refusal(
         'no-agent',
@@ -571,7 +571,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   /** The envelope, from the arguments and one measurement. */
   function envelopeOf(
     input: z.infer<typeof setInput>,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
     baseline: GoalSetEnvelope['baseline'],
   ): GoalSetEnvelope {
     const when = parseReminderWhen(input.deadline, ctx.timezone);
@@ -594,7 +594,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   }
 
   /** The baseline an approval already carries, when it carries one. */
-  function approvedBaseline(ctx: ToolContext): GoalSetEnvelope['baseline'] | null {
+  function approvedBaseline(ctx: CoreToolContext): GoalSetEnvelope['baseline'] | null {
     const envelope = (ctx.approvedEffect?.envelope ?? null) as GoalSetEnvelope | null;
     const baseline = envelope?.baseline;
     if (!baseline || typeof baseline.value !== 'number' || typeof baseline.asOf !== 'string') return null;
@@ -649,7 +649,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
      * in one line and hands it straight to the model. Nothing is recorded and
      * the owner is never shown a card for a goal that could not exist.
      */
-    async describe(input, ctx) {
+    async describe(input, ctx: CoreToolContext) {
       const no = refuseSet(input, ctx);
       if (no !== null) throw new Error(no.message);
       /*
@@ -699,7 +699,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
         preview: renderGoalSet(envelope, unitOf(input.metric), direction, ctx.timezone),
       };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       // Only `executeApproved` reaches this. The checks run again anyway: the
       // approval was recorded minutes or hours ago, and "a delegate may not"
       // is a fact about the run that is executing, not about the one that asked.
@@ -754,7 +754,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   /** Everything `goal.update` and `goal.close` refuse: the goal, or the holder. */
   async function holderOf(
     id: string,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
   ): Promise<{ ok: true; goal: Goal } | Refusal> {
     const goal = await getGoal(ctx.db, id).catch(() => null);
     if (goal === null) return refusal('not-found', `no goal ${id}`);
@@ -769,7 +769,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   function afterOf(
     input: z.infer<typeof updateInput>,
     goal: Goal,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
   ): GoalUpdateEnvelope['after'] {
     const when = input.deadline === undefined ? null : parseReminderWhen(input.deadline, ctx.timezone);
     return {
@@ -788,7 +788,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   function updateEnvelopeOf(
     input: z.infer<typeof updateInput>,
     goal: Goal,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
   ): GoalUpdateEnvelope {
     return {
       tool: 'goal.update',
@@ -810,7 +810,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
   function refuseUpdate(
     input: z.infer<typeof updateInput>,
     goal: Goal,
-    ctx: ToolContext,
+    ctx: CoreToolContext,
   ): Refusal | null {
     if (goal.state !== 'open') {
       return refusal('not-open', `goal ${goal.id} is ${goal.state}; only an open goal can be changed`);
@@ -849,7 +849,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     // Same rule as `goal.set`: a refusal is a throw out of `describe`, before
     // any action exists, and the owner is never asked about a change nobody
     // is allowed to make.
-    async describe(input, ctx) {
+    async describe(input, ctx: CoreToolContext) {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
@@ -867,7 +867,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
         ),
       };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
@@ -911,7 +911,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       'how "met" becomes final.',
     tier: 'auto',
     input: closeInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) return mine;
       /*
@@ -1020,7 +1020,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       'about a goal — the numbers here are measured, not remembered.',
     tier: 'auto',
     input: statusInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const goals =
         input.id === undefined
           ? await listGoals(ctx.db, { agentId: ctx.agentId ?? '', limit: 50 })
@@ -1086,7 +1086,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       'goal belongs in. Use goal.status for the numbers behind a line.',
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       const out = [];
       for (const goal of goals) {
@@ -1152,7 +1152,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
     description:
       'Measures every open goal on its cadence and says when one is off track, past a milestone, out of time or done.',
     every: GOALS_SENTINEL_EVERY_S,
-    async run(ctx: SentinelContext): Promise<Finding[]> {
+    async run(ctx: CoreSentinelContext): Promise<Finding[]> {
       const now = ctx.now();
       const findings: Finding[] = [];
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
@@ -1401,7 +1401,7 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
  * asking — the goal's holder, so a metric that scopes to an agent scopes to
  * the right one — and the owner and zone the tick was given.
  */
-function goalToolContext(goal: Goal, ctx: SentinelContext): ToolContext {
+function goalToolContext(goal: Goal, ctx: CoreSentinelContext): CoreToolContext {
   return {
     db: ctx.db,
     ownerId: ctx.ownerId,

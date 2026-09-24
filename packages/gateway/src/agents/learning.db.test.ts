@@ -14,7 +14,7 @@ import {
   runMigrations,
   ToolRegistry,
   type AgentDefinition,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createConversation, runAgent, type CompletionResponse, type RuntimeProvider } from '@buddi/runtime';
@@ -80,7 +80,7 @@ function provider(calls: Array<{ name: string; input: unknown }>): RuntimeProvid
 suite('learning tools (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);

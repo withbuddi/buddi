@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createPool, ensureOwner, type PluginManifest, type ToolContext } from '@buddi/core';
+import { createPool, ensureOwner, type PluginManifest, type CoreToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { demoPagesManifest } from '@buddi/core/testing/pages';
 import {
@@ -237,7 +237,7 @@ suite('buddi mcp', () => {
       assign: async () => ({ changed: ['account', 'model'] }),
     } as unknown as ProviderAccounts;
 
-    const ctx = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' } as unknown as ToolContext;
+    const ctx = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' } as unknown as CoreToolContext;
     server = createWebApp({
       pool,
       registry,

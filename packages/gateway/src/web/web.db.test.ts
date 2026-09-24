@@ -33,7 +33,7 @@ import {
   roleProblemMessage,
   type AgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { z } from 'zod';
@@ -98,7 +98,7 @@ const demoManifest: PluginManifest = {
         envelope: { to: input.to, body: input.body },
         preview: `Send "${input.body}" to ${input.to}`,
       }),
-      async execute(input: { to: string; body: string }, ctx: ToolContext) {
+      async execute(input: { to: string; body: string }, ctx: CoreToolContext) {
         sent.push({ to: input.to, ...(ctx.actionId ? { actionId: ctx.actionId } : {}) });
         return { delivered: true };
       },
@@ -234,7 +234,7 @@ suite('the dashboard API', () => {
   let web: WebServer;
   let closed: WebServer;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let base: string;
   let closedBase: string;
 

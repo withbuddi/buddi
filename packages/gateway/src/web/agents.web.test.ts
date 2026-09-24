@@ -19,7 +19,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { setRecordedDefaultAgent } from '../agents/default-agent.js';
@@ -76,7 +76,7 @@ describe('the engine endpoint', () => {
       pool: {} as Pool,
       registry: new ToolRegistry(),
       catalog,
-      ctx: { ownerId: 'owner' } as unknown as ToolContext,
+      ctx: { ownerId: 'owner' } as unknown as CoreToolContext,
       timezone: 'Europe/Paris',
       now: () => new Date('2026-09-14T09:00:00Z'),
       config: { enabled: true, host: '127.0.0.1', port: 0 },
@@ -281,7 +281,7 @@ describe('the default agent and the front-matter editor', () => {
       pool: pool as unknown as Pool,
       registry,
       catalog,
-      ctx: { ownerId: 'owner' } as unknown as ToolContext,
+      ctx: { ownerId: 'owner' } as unknown as CoreToolContext,
       timezone: 'Europe/Paris',
       now: () => new Date('2026-09-14T09:00:00Z'),
       config: { enabled: true, host: '127.0.0.1', port: 0 },

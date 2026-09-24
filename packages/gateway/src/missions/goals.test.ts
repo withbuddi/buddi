@@ -7,7 +7,7 @@
  * database half — the set travelling through describe → approve → execute, the
  * thirteenth goal, the sentinel over six weeks — is `goals.db.test.ts`.
  */
-import { ToolRegistry, type MetricDefinition, type MetricSource, type RegisteredMetric, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type MetricDefinition, type MetricSource, type RegisteredMetric, type CoreToolContext } from '@buddi/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -48,8 +48,8 @@ const unmeasurable: MetricDefinition = {
   measure: async () => null,
 };
 
-const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
-  db: { query: async () => ({ rows: [] }) } as unknown as ToolContext['db'],
+const ctx = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
+  db: { query: async () => ({ rows: [] }) } as unknown as CoreToolContext['db'],
   ownerId: 'owner',
   now: () => NOW,
   timezone: TZ,
@@ -117,7 +117,7 @@ describe('goal.metrics', () => {
 });
 
 describe('goal.set refuses before it ever becomes a card', () => {
-  const cases: [string, Partial<z.infer<typeof setShape>>, Partial<ToolContext>, string, RegExp][] = [
+  const cases: [string, Partial<z.infer<typeof setShape>>, Partial<CoreToolContext>, string, RegExp][] = [
     [
       'a run with no agent id',
       {},

@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { ToolRegistry } from './registry.js';
 import { checkMetricParams, measureMetric, measureMetricResult, metricParamsSchema } from './metrics.js';
 import type { MetricDefinition } from './metrics.js';
-import type { PluginManifest, ToolContext } from './tools.js';
+import type { PluginManifest, CoreToolContext } from './tools.js';
 
 const reading = { value: 42, asOf: new Date('2026-09-22T09:00:00Z') };
 
@@ -49,8 +49,8 @@ function fakePool(): { pool: any; statements: string[] } {
   return { statements, pool: { connect: async () => client, query: async () => ({ rows: [] }) } };
 }
 
-const ctx = (db: unknown): ToolContext => ({
-  db: db as ToolContext['db'],
+const ctx = (db: unknown): CoreToolContext => ({
+  db: db as CoreToolContext['db'],
   ownerId: 'owner',
   now: () => new Date('2026-09-22T09:00:00Z'),
   timezone: 'America/New_York',
@@ -133,7 +133,7 @@ describe('measureMetric', () => {
     registry.register(
       manifest([
         metric({
-          async measure(_params, inner) {
+          async measure(_params, inner: CoreToolContext) {
             await inner.db.query('select 1');
             return reading;
           },
@@ -152,7 +152,7 @@ describe('measureMetric', () => {
     registry.register(
       manifest([
         metric({
-          async measure(_params, inner) {
+          async measure(_params, inner: CoreToolContext) {
             await inner.db.query('delete from core.goals').catch((err: Error) => {
               refused = err.message;
             });
@@ -171,7 +171,7 @@ describe('measureMetric', () => {
     registry.register(
       manifest([
         metric({
-          async measure(_params, inner) {
+          async measure(_params, inner: CoreToolContext) {
             seen.push(inner.agentId ?? 'none');
             return reading;
           },

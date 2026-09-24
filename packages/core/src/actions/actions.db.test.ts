@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { z } from 'zod';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import { ToolRegistry } from '../registry.js';
-import type { PluginManifest, Tier, ToolContext } from '../tools.js';
+import type { PluginManifest, Tier, CoreToolContext } from '../tools.js';
 import { decideApproval } from './approvals.js';
 import { executeApproved } from './execute.js';
 import { createAction, expireDueApprovals, getAction, listEffectAttempts, listPendingActions } from './store.js';
@@ -49,7 +49,7 @@ suite('actions and approvals (postgres)', () => {
     await pool.query('truncate core.events cascade');
   });
 
-  const ctx = (): ToolContext => ({
+  const ctx = (): CoreToolContext => ({
     db: pool,
     ownerId: 'owner',
     now: () => new Date(),
@@ -196,7 +196,7 @@ suite('actions and approvals (postgres)', () => {
           description: 'Send an email.',
           tier: 'gated',
           input: z.object({ to: z.string(), subject: z.string() }),
-          execute: async (_input: any, toolCtx: ToolContext) => {
+          execute: async (_input: any, toolCtx: CoreToolContext) => {
             ran.push(toolCtx.choices ? { ...toolCtx.choices } : undefined);
             return { messageId: 'mid-1' };
           },
@@ -669,7 +669,7 @@ suite('actions and approvals (postgres)', () => {
       registry.register(manifest);
       const id = await approved();
       // Aged with *this* clock, not the database's: `executeApproved` compares
-      // `expires_at` against the `now` in the ToolContext, and the container's
+      // `expires_at` against the `now` in the CoreToolContext, and the container's
       // clock is not the host's.
       await pool.query(`update core.actions set expires_at = $2 where id = $1`, [
         id,

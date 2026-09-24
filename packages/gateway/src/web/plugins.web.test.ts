@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import type { PluginsEngine } from './plugins.js';
@@ -87,7 +87,7 @@ async function dashboard(engine: PluginsEngine, env: NodeJS.ProcessEnv = {}) {
     pool: fakePool() as never,
     registry: new ToolRegistry(),
     catalog: { list: () => [], get: () => undefined, reload: () => {} } as unknown as AgentCatalog,
-    ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
+    ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture',
     env, plugins: engine,
   });

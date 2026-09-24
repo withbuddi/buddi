@@ -30,7 +30,7 @@ import {
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
@@ -55,7 +55,7 @@ const drawn: string[] = [];
  * one in this conversation, where a delegated colleague's conversation counts
  * as the one that delegated to it — and its siblings with it.
  */
-async function approvedInFamily(db: ToolContext['db'], conversationId: string): Promise<boolean> {
+async function approvedInFamily(db: CoreToolContext['db'], conversationId: string): Promise<boolean> {
   const { rows } = await db.query(
     `with root as (
        select coalesce(
@@ -89,7 +89,7 @@ const picManifest: PluginManifest = {
       name: 'pic.draw',
       description: 'Draw a picture.',
       tier: 'auto',
-      async tierFor(_input: unknown, ctx: ToolContext) {
+      async tierFor(_input: unknown, ctx: CoreToolContext) {
         return { tier: ctx.conversationId && (await approvedInFamily(ctx.db, ctx.conversationId)) ? 'auto' : 'gated' };
       },
       input: z.object({ prompt: z.string() }),
@@ -209,7 +209,7 @@ suite('an approval inside a delegation', () => {
     registry.register(createDelegationManifest(registry, { agentsDir }));
     const cat = catalog();
     bindDelegation(registry, { catalog: cat as never, provider: providers.playground!, providerFor: (agent) => providers[agent.id]! });
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
     web = await startWebServer({
       pool, registry, catalog: cat, ctx, timezone: 'UTC', now: () => new Date(),
       config: { enabled: true, host: '127.0.0.1', port: 0 }, token: TOKEN, jobs: undefined, log: () => {},

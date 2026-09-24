@@ -34,14 +34,14 @@ import {
   type PageFile,
   ReadOnlyRefusal,
   pageQueryContext,
-  type ToolContext,
+  type CoreToolContext,
   type ToolRegistry,
 } from '@buddi/core';
 
 /** What these routes need. Nothing that is not already in the server's deps. */
 export interface PagesDeps {
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   now: () => Date;
   /** Where the detail of a failure goes. The browser gets a sentence. */
   log?: (line: string) => void;

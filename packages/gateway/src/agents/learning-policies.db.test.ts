@@ -17,7 +17,7 @@ import {
   ToolRegistry,
   type PluginManifest,
   type Proposal,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME, loadPolicies, manifest as emailManifest } from '@buddi/tool-email';
@@ -59,7 +59,7 @@ const silentPlugin: PluginManifest = { name: 'silent', version: '0.1.0', schema:
 suite('learned policies through core (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let calls: string[];
   let registry: ToolRegistry;
 

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, createPluginHost, hostBindingOf, type ToolContext } from '@buddi/core';
+import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { manifest as memory } from '@buddi/tool-memory';
 import { BrowserManager, BrowserService, createBrowserManifest, type BrowserDriver } from '@buddi/tool-browser';
@@ -58,8 +58,8 @@ suite('browser authority across interactive surfaces', () => {
       if (result?.type === 'tool_result') expect(result.is_error, result.content).not.toBe(true);
       return { content: [{ type: 'text', text: 'Fixture browser opened.' }], stopReason: 'end_turn', usage: { input: 1, output: 1 }, model: 'fixture' };
     } };
-    const facts: ToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-    const ctx: ToolContext = { ...facts, buddi: createPluginHost(hostBindingOf(createBrowserManifest(browser)), facts) };
+    const facts: CoreToolContext = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+    const ctx: CoreToolContext = { ...facts, buddi: createPluginHost(hostBindingOf(createBrowserManifest(browser)), facts) };
     return { driver, browser, registry, catalog, provider, ctx, env };
   };
 
@@ -83,7 +83,7 @@ suite('browser authority across interactive surfaces', () => {
     try {
       const opts = { now: new Date(), onConversationRollover: (agentId: string, previousConversationId: string, conversationId: string, reason: 'size' | 'idle') => continueBrowserTask(pool, browser, { ownerId: 'owner', agentId, previousConversationId, conversationId }, reason) };
       const original = await conversationForChatTurn(pool, 'rollover-fixture', 'fixture', opts);
-      const context = (conversationId: string): ToolContext => ({ ...fixture.ctx, agentId: 'fixture', conversationId, ownerRequest: { id: `request:${conversationId}`, text: 'Read the account then open its transactions', expiresAt: Date.now() + 60_000 } });
+      const context = (conversationId: string): CoreToolContext => ({ ...fixture.ctx, agentId: 'fixture', conversationId, ownerRequest: { id: `request:${conversationId}`, text: 'Read the account then open its transactions', expiresAt: Date.now() + 60_000 } });
       await browser.execute({ action: 'navigate', url: 'https://example.com/' }, context(original.conversationId));
       const session = browser.status().session!;
       await pool.query('insert into core.messages (conversation_id,role,content) values ($1,$2,$3)', [original.conversationId, 'user', JSON.stringify([{ type: 'text', text: 'Find my account transactions.' }, { type: 'tool_result', tool_use_id: 'large', content: 'accessibility-tree'.repeat(5000) }])]);

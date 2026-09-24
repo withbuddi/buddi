@@ -79,7 +79,7 @@ import {
 } from './pages.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { AgentCatalog, JobControl, JobState, ToolContext, ToolRegistry } from '@buddi/core';
+import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
 import { getAction, inRecovery, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
@@ -239,7 +239,7 @@ export interface WebServerDeps {
   pool: Pool;
   registry: ToolRegistry;
   catalog: AgentCatalog;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   timezone: string;
   now: () => Date;
   config: WebConfig;
@@ -2766,7 +2766,7 @@ export async function startWebServer(
    * plugin's `tailscale serve` target is the case in hand, and it used to
    * guess "the dashboard plus one", which is wrong the moment that port was
    * taken. The environment is the gateway's own (`serve` passes `process.env`),
-   * and `ToolContext.previewPort` reads the same value.
+   * and `CoreToolContext.previewPort` reads the same value.
    */
   if (previewPort !== null) publishPreviewPort(deps.env ?? process.env, previewPort);
   /*

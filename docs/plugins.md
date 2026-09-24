@@ -2381,6 +2381,7 @@ this says what it is *for*.
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
 | `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §9b. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/specs/owner-secrets.md §3. |
+| `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
@@ -2437,11 +2438,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments. Set by core on every context it hands you. See §9b; `db`, `ownerId`, `now`, `timezone`, `previewPort`, `protectedPaths` and `providerAccounts` are what it wraps, and are deprecated in its favour. |
-| `db` | `Pool` | yes | The installation's pool. Your schema is yours; nothing stops you reading another's, and nothing excuses it. |
-| `ownerId` | `string` | yes | Whose installation this is. |
-| `now` | `() => Date` | yes | The clock. Never read the wall clock directly. |
-| `timezone` | `string` | yes | The owner's IANA zone. Render a *day* with `localDateString`, never in UTC. |
+| `buddi` | `BuddiHost` | no | The host, bound to your plugin: everything you reach beyond your arguments. Set by core on every context it hands you. See §9b: the pool, the owner, the clock and zone, the preview port, the protected paths and the model accounts are reached there, and are no longer fields of the context. |
 | `systemContext` | `(run?) => Promise<SystemContext>` | no | Fresh owner timezone and host facts, from the composition root. The loop passes the run's agent and grant, so a paragraph meant only for agents holding certain tools (the learning one) is decided by the grant. |
 | `ownerRequest` | `{ id; text; expiresAt }` | no | Issued by an authenticated interactive surface, never by a model. What a `session` tool is checked against. |
 | `sessionTools` | `readonly string[]` | no | Session grants resolved for this run. A delegate never inherits them. |
@@ -2456,12 +2453,9 @@ than guess.
 | `surface` | `SurfaceProfile` | no | The surface this run is answering on. Delegation's one reader. |
 | `nativeSearch` | `{ provider; maxUses }` | no | Set when the provider is searching the web itself, server-side, instead of a tool being dispatched. |
 | `jobId` | `string` | no | The durable job this run belongs to, when a job started it. |
-| `previewPort` | `number` | no | The port this gateway serves previews on, or absent when it is not serving them. For a plugin with `previews` that has to build a URL of its own — a `tailscale serve` target, a line in a result. Never compute it from the dashboard's port. See §2.5c. |
 | `actionId` | `string` | no | Set **only** by `executeApproved`. Your idempotency key on a gated tool: absent, refuse. |
 | `choices` | `Readonly<Record<string, string>>` | no | Set **only** by `executeApproved`: what the owner picked among the `choices` your `describe` declared, already validated against them, with every unanswered key filled in from its default. Cope with it being absent. |
 | `provenance` | `() => RunProvenance` | no | Set by the runtime loop on every call: the run's id, the owner turn it answers, the model step, and the untrusted inputs in its context, derived from the messages the model was shown. The learning tools record it; a tool that needs it fails closed when it is absent. |
-| `protectedPaths` | `readonly string[]` | no | Directories no tool may write into, whatever it was granted: the owner's agent files and skills, learned ones included. Set by the gateway. A plugin that writes files refuses a target inside any of them, even one inside a workspace it was given. |
-| `providerAccounts` | `ProviderAccountsAccess` | no | Set by the gateway: the owner's provider accounts (Settings → Model accounts), for a plugin that calls a model with an account the owner chose on its own page. `list()` (no secrets), `resolve(id, model)` for an HTTP account's endpoint and key through the runtime's own resolver, and `withCodexProfile(id, use)`, which stages a Codex account in a private `CODEX_HOME` under its lock with the chat adapter's scrubbed environment, saves a refresh and removes it. Never shown to a model. The image plugin is its reader. |
 
 #### `GroupContext`
 
@@ -2488,12 +2482,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this source. See §9b; the fields below are what it wraps, and are deprecated in its favour. |
-| `db` | `Pool` | yes | The pool. Commit your rows and your cursor in one transaction. |
-| `now` | `() => Date` | yes | The clock. |
-| `timezone` | `string` | yes | The owner's IANA zone, for a source that needs a *day*. |
-| `log` | `(line: string) => void` | yes | Operational logging. Never the owner's channel: a source notifies nobody. |
-| `enqueueRun` | `(input) => Promise<void>` | yes | Start a run: `{ agentId, prompt, dedupKey, conversationHint? }`. Idempotent on `dedupKey`, and it cannot join your transaction — enqueue after the commit. |
+| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this source. See §9b: the pool, the clock and zone, the log and `schedule.enqueueRun` are reached there. Commit your rows and your cursor in one `db.transaction`; enqueue after the commit. |
 
 ### Sentinels
 
@@ -2510,12 +2499,7 @@ than guess.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this sentinel. See §9b; the fields below are what it wraps, and are deprecated in its favour. |
-| `db` | `Pool` | yes | The pool. |
-| `ownerId` | `string` | yes | The owner this installation belongs to. A sentinel that only reads its own rows never needs it; one that calls something written for a *tool* does — `measureMetric` takes a `ToolContext`, and a `ToolContext` has an owner. |
-| `now` | `() => Date` | yes | The clock. |
-| `timezone` | `string` | yes | The owner's IANA zone, for a sentinel that needs a *day*. |
-| `agentForRole` | `(role: string) => string \| undefined` | yes | The id of the agent that answers for a role — the first *runnable* agent holding it in roster order, held-back and unbound agents skipped — or `undefined` when nobody does. The only supported way to address a finding. |
+| `buddi` | `BuddiHost` | no | The host, bound to the plugin that ships this sentinel. See §9b: the pool, the owner, the clock and zone, and `owner.agentForRole` — the only supported way to address a finding — are reached there. |
 
 #### `MetricDefinition`
 

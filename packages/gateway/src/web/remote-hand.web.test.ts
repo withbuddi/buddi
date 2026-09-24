@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import type { BrowserController, BrowserHand, BrowserStatus, HandFrame, HandInput } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { packFrame } from './remote-hand.js';
@@ -55,7 +55,7 @@ function controller() {
 
 async function setup(browser: BrowserController, log?: (line: string) => void) {
   const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
-    registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as ToolContext,
+    registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC', now: () => new Date(), config: { enabled: true, host: '127.0.0.1', port: 0 },
     openAccess: true, token: TOKEN, browser, ...(log ? { log } : {}) });
   servers.push(app);

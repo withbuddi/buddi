@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash, createHmac } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserService, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import WebSocket from 'ws';
 import { ExtensionEndpoint } from './extension.js';
@@ -37,7 +37,7 @@ async function setup(options: { pingMs?: number; commandTimeoutMs?: number; canc
   const driver: BrowserDriver = { start: vi.fn(), perform: vi.fn(), observe: vi.fn(), screenshot: vi.fn(), close: vi.fn() };
   const browser = new BrowserService(driver); browsers.push(browser); await browser.enable();
   const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
-    registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as ToolContext,
+    registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC', now: () => new Date(), config: { enabled: true, host: '127.0.0.1', port: 0 },
     openAccess: true, token: TOKEN, env, extension, browser });
   servers.push(app);

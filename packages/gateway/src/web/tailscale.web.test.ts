@@ -8,7 +8,7 @@
  * allowed. And then, because a session is not a bearer token: that the daemon
  * keeps saying so for as long as the session is used.
  */
-import { ToolRegistry, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { SessionStore, TAILSCALE_SESSION_MAX_MS } from './sessions.js';
@@ -200,7 +200,7 @@ async function dashboard(
     pool: pool(row) as never,
     registry: new ToolRegistry(),
     catalog: {} as AgentCatalog,
-    ctx: { ownerId: 'owner' } as ToolContext,
+    ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC',
     now: () => knobs.now,
     config: { enabled: true, host: '127.0.0.1', port: 0, publicOrigin: 'https://buddi.tail1234.ts.net:9443' },

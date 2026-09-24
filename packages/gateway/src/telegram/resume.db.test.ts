@@ -24,7 +24,7 @@ import {
   roleProblemMessage,
   runMigrations,
   ToolRegistry,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
@@ -44,7 +44,7 @@ const AGENT_ID = 'ledger-agent';
 const OWNER_CHAT = '4242';
 
 /** Every call the `session`-tier tool actually reached, with the context it saw. */
-const sessionCalls: Array<{ what: string; ctx: ToolContext }> = [];
+const sessionCalls: Array<{ what: string; ctx: CoreToolContext }> = [];
 
 const PROVIDER = {
   kind: 'anthropic' as const,
@@ -158,7 +158,7 @@ suite('a Telegram approval wakes the run as an owner request', () => {
   let pool: Pool;
   let dir: string;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let provider: ScriptedProvider;
   let handle: TelegramHandle;
   let sent: string[];
@@ -223,7 +223,7 @@ suite('a Telegram approval wakes the run as an owner request', () => {
           description: 'Only reachable while the owner is asking.',
           tier: 'session',
           input: z.object({ what: z.string() }),
-          async execute(input: { what: string }, toolCtx: ToolContext) {
+          async execute(input: { what: string }, toolCtx: CoreToolContext) {
             sessionCalls.push({ what: input.what, ctx: toolCtx });
             return { did: input.what };
           },
@@ -288,7 +288,7 @@ suite('a Telegram approval wakes the run as an owner request', () => {
     await tapApprove(actionId);
 
     expect(sessionCalls).toHaveLength(1);
-    const seen = sessionCalls[0] as { what: string; ctx: ToolContext };
+    const seen = sessionCalls[0] as { what: string; ctx: CoreToolContext };
     expect(seen.what).toBe('narrow');
     // Nothing holds the words of the turn the action came from, so the request
     // is named after the decision itself.
@@ -301,7 +301,7 @@ suite('a Telegram approval wakes the run as an owner request', () => {
     const actionId = await propose();
     provider.script = [call('t2', 'demo.session', { what: 'narrow' })];
     await tapApprove(actionId);
-    const seen = (sessionCalls[0] as { ctx: ToolContext }).ctx;
+    const seen = (sessionCalls[0] as { ctx: CoreToolContext }).ctx;
 
     sessionCalls.length = 0;
     // Same context, one step down: the owner's standing is the owner's.

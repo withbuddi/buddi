@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserService, BrowserManager, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
-const hosted = (facts: ToolContext): ToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
+const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 
 const TOKEN = 'fixture-browser-dashboard-token';
 const instances: WebServer[] = [];
@@ -19,7 +19,7 @@ async function setup(openAccess = true, supplied?: BrowserController, publicOrig
   // `/api/session` asks the database whether this installation is in
   // recovery, so the fixture pool answers a query, as version.web.test.ts's does.
   const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
-    ctx: { ownerId: 'owner' } as ToolContext, timezone: 'UTC', now: () => new Date(),
+    ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0, publicOrigin }, openAccess, token: TOKEN, browser });
   instances.push(app);
   const origin = `http://127.0.0.1:${app.port}`;
@@ -85,7 +85,7 @@ describe('browser dashboard endpoints', () => {
     const { origin } = await setup(true, manager); const headers = await session(origin);
     for (const id of ['a', 'b']) await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/' }), hosted({
       ownerId: 'owner', agentId: id, conversationId: id, ownerRequest: { id, text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext));
+    } as CoreToolContext));
     const a = await (await fetch(`${origin}/api/browser?agentId=a&conversationId=a`, { headers })).json() as { session: { id: string }; page: { id: string }; sessions?: unknown };
     expect(a.sessions).toBeUndefined(); expect(a.page.id).toBe('1');
     const image = await fetch(`${origin}/api/browser/screenshot?sessionId=${a.session.id}&v=1`, { headers });
@@ -112,7 +112,7 @@ describe('browser dashboard endpoints', () => {
     await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), hosted({
       ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
       ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext));
+    } as CoreToolContext));
     const status = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as {
       session: { agentId: string; conversationId: string; steps: number; maxSteps: number };
       page: { url: string; title: string; id: string };
@@ -130,7 +130,7 @@ describe('browser dashboard endpoints', () => {
     await manager.execute(commandSchema.parse({ action: 'navigate', url: 'https://example.com/statements' }), hosted({
       ownerId: 'owner', agentId: 'keeper', conversationId: 'c1',
       ownerRequest: { id: 'r1', text: 'Fixture', expiresAt: Date.now() + 60_000 },
-    } as ToolContext));
+    } as CoreToolContext));
     const again = await (await fetch(`${origin}/api/browser?agentId=keeper&conversationId=c1`, { headers })).json() as { session: { steps: number } };
     expect(again.session.steps).toBe(2);
     // Another conversation asking gets nothing of this one's.

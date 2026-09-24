@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry } from '@buddi/core';
-import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
+import type { AgentDefinition, PluginManifest, CoreToolContext } from '@buddi/core';
 import { ATTACHMENT_UNAVAILABLE, type CompletionRequest, type CompletionResponse, type RuntimeProvider } from './anthropic.js';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -56,8 +56,8 @@ class FakeDb implements Queryable {
 
 /* ---------------- fixtures ---------------- */
 
-const ctx: ToolContext = {
-  db: {} as ToolContext['db'],
+const ctx: CoreToolContext = {
+  db: {} as CoreToolContext['db'],
   ownerId: 'owner-1',
   now: () => new Date('2026-09-13T00:00:00Z'),
   timezone: 'UTC',

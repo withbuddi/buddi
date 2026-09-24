@@ -23,7 +23,7 @@ import {
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import type { CompletionRequest, CompletionResponse, RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
@@ -46,7 +46,7 @@ const TOKEN = 'a-test-dashboard-token-long-enough';
 
 const sent: Array<{ to: string; actionId?: string }> = [];
 /** Every call the `session`-tier tool actually reached, with the context it saw. */
-const sessionCalls: Array<{ what: string; ctx: ToolContext }> = [];
+const sessionCalls: Array<{ what: string; ctx: CoreToolContext }> = [];
 
 const demoManifest: PluginManifest = {
   name: 'demo',
@@ -72,7 +72,7 @@ const demoManifest: PluginManifest = {
         envelope: { to: input.to, body: input.body },
         preview: `Send "${input.body}" to ${input.to}`,
       }),
-      async execute(input: { to: string; body: string }, ctx: ToolContext) {
+      async execute(input: { to: string; body: string }, ctx: CoreToolContext) {
         sent.push({ to: input.to, ...(ctx.actionId ? { actionId: ctx.actionId } : {}) });
         return { delivered: true };
       },
@@ -84,7 +84,7 @@ const demoManifest: PluginManifest = {
       description: 'Only reachable while the owner is asking.',
       tier: 'session',
       input: z.object({ what: z.string() }),
-      async execute(input: { what: string }, ctx: ToolContext) {
+      async execute(input: { what: string }, ctx: CoreToolContext) {
         sessionCalls.push({ what: input.what, ctx });
         return { did: input.what };
       },
@@ -356,7 +356,7 @@ suite('the dashboard chat API', () => {
   let pool: Pool;
   let web: WebServer;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   let base: string;
 
   /**
@@ -919,7 +919,7 @@ suite('the dashboard chat API', () => {
     await settled(conversationId, 2);
 
     expect(sessionCalls).toHaveLength(1);
-    const seen = sessionCalls[0] as { what: string; ctx: ToolContext };
+    const seen = sessionCalls[0] as { what: string; ctx: CoreToolContext };
     expect(seen.what).toBe('narrow');
     // No record holds the words of the turn the action came from, so the
     // request is named after the decision itself.
@@ -947,7 +947,7 @@ suite('the dashboard chat API', () => {
     provider.script = [call('t2', 'demo.session', { what: 'narrow' }), say('looked.')];
     expect((await client.post(`/api/approvals/${rows[0].id}/approve`)).status).toBe(200);
     await settled(conversationId, 2);
-    const seen = (sessionCalls[0] as { ctx: ToolContext }).ctx;
+    const seen = (sessionCalls[0] as { ctx: CoreToolContext }).ctx;
 
     sessionCalls.length = 0;
     const delegated = await registry.invoke('demo.session', { what: 'narrow' }, { ...seen, delegationDepth: 1 });

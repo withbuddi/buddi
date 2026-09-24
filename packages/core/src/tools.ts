@@ -36,7 +36,7 @@ export interface ToolContext {
    * The host: everything a plugin reaches beyond its arguments, bound to this
    * plugin (docs/specs/plugin-host-api.md). Set by core every time it hands a
    * plugin a context; absent only on a context no plugin has been handed yet.
-   * The fields marked deprecated below are what it wraps.
+   * `CoreToolContext` carries the facts it is built from.
    */
   buddi?: BuddiHost;
   /** Fresh owner timezone and host facts, supplied by the composition root. */
@@ -49,21 +49,6 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** Set only by the executor; the exact effect the owner approved. */
   approvedEffect?: { envelope: unknown };
-  /** @deprecated Use `ctx.buddi.db` (docs/specs/plugin-host-api.md). Kept, unchanged, until every plugin has moved. */
-  db: Pool;
-  /** @deprecated Use `ctx.buddi.owner.id`. Kept, unchanged, until every plugin has moved. */
-  ownerId: string;
-  /** @deprecated Use `ctx.buddi.clock.now`. Kept, unchanged, until every plugin has moved. */
-  now: () => Date;
-  /**
-   * The owner's timezone (an IANA name). `now()` is an instant; a tool that
-   * needs a *day* — a default date, the start of a projection — must render it
-   * in this zone with `localDateString`, never in UTC, or "today" flips at 8 PM
-   * in New York.
-   *
-   * @deprecated Use `ctx.buddi.owner.timezone` and `ctx.buddi.clock.today()`.
-   */
-  timezone: string;
   /**
    * Provenance for tools that record something. Optional so every existing
    * caller keeps compiling; the runtime loop fills both in for every tool call
@@ -132,23 +117,6 @@ export interface ToolContext {
    */
   jobId?: string;
   /**
-   * The port this gateway serves previews on, when it is serving them.
-   *
-   * A plugin with `previews` needs it for one thing: building a URL that is
-   * not this process's to build — a `tailscale serve` target, a line in a log,
-   * a link in a tool result. It is *not* how a preview is reached from the
-   * dashboard; that is the link route, which mints a credential. This is only
-   * the number, and it is here rather than guessed as "the dashboard plus one"
-   * because that guess is wrong the moment the port next door was taken.
-   *
-   * Absent when previews could not be bound, and outside a gateway process.
-   * `BUDDI_PREVIEW_PORT` in the environment carries the same number, for a
-   * plugin that reads its configuration rather than its context.
-   *
-   * @deprecated Use `ctx.buddi.pages.previewPort()`.
-   */
-  previewPort?: number;
-  /**
    * The approved action a **gated** `execute` is running under, and therefore
    * its idempotency key. Only `executeApproved` sets it — it is the single
    * caller of a gated tool — so a tool that must not send the same thing twice
@@ -176,14 +144,51 @@ export interface ToolContext {
    * fails closed when it is absent.
    */
   provenance?: () => RunProvenance;
+}
+
+/**
+ * What core runs a call on: the call (`ToolContext`) and the facts a plugin's
+ * host is built from — the pool, the owner, the clock and zone, the preview
+ * port, the protected paths, the provider accounts. Core's own; a plugin is
+ * typed against `ToolContext` and reaches these through `ctx.buddi`
+ * (docs/specs/plugin-host-api.md §3), and `@buddi/core/plugin` does not
+ * export this.
+ */
+export interface CoreToolContext extends ToolContext {
+  /** The pool. A plugin's host wraps it as `buddi.db`. */
+  db: Pool;
+  /** The owner's id: `buddi.owner.id`. */
+  ownerId: string;
+  /** The clock: `buddi.clock.now`. */
+  now: () => Date;
+  /**
+   * The owner's timezone (an IANA name). `now()` is an instant; a tool that
+   * needs a *day* — a default date, the start of a projection — must render it
+   * in this zone with `localDateString`, never in UTC, or "today" flips at 8 PM
+   * in New York.
+   */
+  timezone: string;
+  /**
+   * The port this gateway serves previews on, when it is serving them.
+   *
+   * A plugin with `previews` needs it for one thing: building a URL that is
+   * not this process's to build — a `tailscale serve` target, a line in a log,
+   * a link in a tool result. It is *not* how a preview is reached from the
+   * dashboard; that is the link route, which mints a credential. This is only
+   * the number, and it is here rather than guessed as "the dashboard plus one"
+   * because that guess is wrong the moment the port next door was taken.
+   *
+   * Absent when previews could not be bound, and outside a gateway process.
+   * `BUDDI_PREVIEW_PORT` in the environment carries the same number, for a
+   * plugin that reads its configuration rather than its context.
+   */
+  previewPort?: number;
   /**
    * Directories no tool may write into, whatever it was granted: the owner's
    * agent files and skills, learned ones included (docs/specs/learning.md §6).
    * An agent learns by proposing; a file tool pointed at its own skills
    * directory refuses rather than letting it rewrite itself. Absolute paths,
    * set by the composition root; a tool that writes files checks them.
-   *
-   * @deprecated Use `ctx.buddi.owner.protectedPaths`.
    */
   protectedPaths?: readonly string[];
   /**
@@ -191,8 +196,6 @@ export interface ToolContext {
    * that calls a model with an account the owner chose on its own settings
    * page. Set by the gateway's composition root; absent elsewhere, and a tool
    * that needs it refuses. See `ProviderAccountsAccess`.
-   *
-   * @deprecated Use `ctx.buddi.accounts`, declared as `uses: ['accounts']`.
    */
   providerAccounts?: ProviderAccountsAccess;
 }
@@ -407,23 +410,23 @@ export interface ToolDefinition<I = unknown, O = unknown> {
 export interface SourceContext {
   /** The host, bound to the plugin this source belongs to. See `ToolContext.buddi`. */
   buddi?: BuddiHost;
-  /** @deprecated Use `ctx.buddi.db`. */
+}
+
+/** What core polls a source with: the host's facts beside it. Core's own, like `CoreToolContext`. */
+export interface CoreSourceContext extends SourceContext {
+  /** The pool: `buddi.db`. */
   db: Pool;
-  /** @deprecated Use `ctx.buddi.clock.now`. */
+  /** The clock: `buddi.clock.now`. */
   now: () => Date;
   /**
    * The owner's timezone (an IANA name), for a source that needs a *day*.
-   *
-   * @deprecated Use `ctx.buddi.owner.timezone`.
    */
   timezone: string;
   /**
    * Operational logging. Never the owner's channel — a source notifies nobody.
-   *
-   * @deprecated Use `ctx.buddi.log`.
    */
   log: (line: string) => void;
-  /** @deprecated Use `ctx.buddi.schedule.enqueueRun`, declared as `uses: ['schedule']`. */
+  /** How a run is started: `buddi.schedule.enqueueRun`. */
   enqueueRun(input: {
     agentId: string;
     prompt: string;

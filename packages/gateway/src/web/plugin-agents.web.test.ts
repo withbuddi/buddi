@@ -16,7 +16,7 @@ import { z } from 'zod';
 import {
   loadAgentCatalog,
   type PluginManifest,
-  type ToolContext,
+  type CoreToolContext,
   type ToolDefinition,
 } from '@buddi/core';
 import { expect, it } from 'vitest';
@@ -123,7 +123,7 @@ function deps(recorded: Array<Record<string, unknown>>): PagesDeps {
     ownerId: 'owner',
     now: () => new Date('2026-09-15T12:00:00Z'),
     timezone: 'Europe/Paris',
-  } as ToolContext;
+  } as CoreToolContext;
   return { registry, ctx, now: () => new Date('2026-09-15T12:00:00Z') };
 }
 

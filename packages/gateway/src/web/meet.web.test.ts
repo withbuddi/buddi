@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
 import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
@@ -64,7 +64,7 @@ async function boot(over: { env?: Record<string, string> } = {}) {
     pool: fakePool() as never,
     registry: new ToolRegistry(),
     catalog,
-    ctx: { ownerId: 'owner' } as ToolContext,
+    ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC',
     now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 },

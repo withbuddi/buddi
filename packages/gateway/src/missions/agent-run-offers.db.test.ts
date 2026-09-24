@@ -21,7 +21,7 @@ import {
   type AgentCatalog,
   type Job,
   type JobContext,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { createConversation, type CompletionResponse, type RuntimeProvider } from '@buddi/runtime';
 import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
@@ -88,7 +88,7 @@ function reportingProvider(text: string): RuntimeProvider {
 suite('an offer taken away from its thread (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);

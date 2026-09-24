@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ToolContext } from '../tools.js';
+import type { CoreToolContext } from '../tools.js';
 import { executeApproved, type ExecutableTool } from './execute.js';
 import { hashAction, POLICY_VERSION } from './types.js';
 
@@ -19,8 +19,8 @@ function fixture() {
     if (sql.includes('returning state')) return { rows: [{ state: params[1] }] };
     return { rows: [] };
   });
-  const ctx: ToolContext = { db: { query } as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
-  const execute = vi.fn(async (_input: unknown, _ctx: ToolContext): Promise<unknown> => 'sent');
+  const ctx: CoreToolContext = { db: { query } as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' };
+  const execute = vi.fn(async (_input: unknown, _ctx: CoreToolContext): Promise<unknown> => 'sent');
   const tool: ExecutableTool = {
     name: 'mail.send', version: '1', input: { safeParse: (data) => ({ success: true, data }) },
     describe: () => ({ envelope, preview: 'send' }), execute,
@@ -64,7 +64,7 @@ describe('effect binding and cancellation', () => {
 
   it('re-describes with the original agent and preview clock', async () => {
     const f = fixture();
-    const describeEffect = vi.fn((_args, ctx: ToolContext) => {
+    const describeEffect = vi.fn((_args, ctx: CoreToolContext) => {
       expect(ctx.agentId).toBe('mailer');
       expect(ctx.now()).toEqual(f.row.created_at);
       return { envelope: f.row.envelope, preview: 'send' };

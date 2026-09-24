@@ -19,6 +19,7 @@
  *  - "has the owner written back" is answered from his own mail;
  *  - the two thread tools, and the thread in the triage prompt.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
@@ -36,14 +37,14 @@ import {
 } from './threads.js';
 import { policiesView } from './tools/policies.js';
 import { listThreads, muteThread, readThread } from './tools/threads.js';
-import type { SourceContext, ToolContext } from './types.js';
+import type { CoreSourceContext, CoreToolContext } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
   return ctx;
 }
@@ -87,7 +88,7 @@ suite('email threads (postgres + fake imap)', () => {
     accountId = account!.id;
   });
 
-  function sourceContext(): SourceContext & {
+  function sourceContext(): CoreSourceContext & {
     runs: Array<{ agentId: string; prompt: string; dedupKey: string }>;
   } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
@@ -103,14 +104,14 @@ suite('email threads (postgres + fake imap)', () => {
     });
   }
 
-  function toolContext(): ToolContext {
+  function toolContext(): CoreToolContext {
     return hosted({
       db: pool,
       ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentId: 'mail-triage',
-    } as unknown as ToolContext);
+    } as unknown as CoreToolContext);
   }
 
   /** A server with an inbox and a Sent folder the server itself labels. */

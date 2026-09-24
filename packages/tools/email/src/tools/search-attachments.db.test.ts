@@ -5,6 +5,7 @@
  * data dir, so a fetched attachment never lands in the developer's own store,
  * and the IMAP is the in-process fake — nothing here opens a socket.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -17,17 +18,17 @@ import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { purgeBodies } from '../retention.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
-import type { ToolContext } from '../types.js';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { buildSearch } from '../search.js';
 import { MAX_ATTACHMENT_BYTES } from './attachments.js';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from '../index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
   return ctx;
 }
@@ -72,7 +73,7 @@ suite('email search and attachments (postgres)', () => {
   let pool: Pool;
   let dataDir: string;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   /**
    * One server for the whole file, reset between tests rather than replaced:
    * the manifest's client factory is bound to this instance, so a fresh
@@ -80,7 +81,7 @@ suite('email search and attachments (postgres)', () => {
    */
   const server = new FakeImapServer();
 
-  const call = async (name: string, args: unknown, over: Partial<ToolContext> = {}): Promise<any> => {
+  const call = async (name: string, args: unknown, over: Partial<CoreToolContext> = {}): Promise<any> => {
     const result = await registry.invoke(name, args, { ...ctx, ...over });
     if (!result.ok) throw new Error(`${name} refused (${result.reason}): ${result.message}`);
     return result.output;

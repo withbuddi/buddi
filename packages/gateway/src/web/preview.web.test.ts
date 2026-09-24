@@ -9,7 +9,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { ToolRegistry, type AgentCatalog, type PluginManifest, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type AgentCatalog, type PluginManifest, type CoreToolContext } from '@buddi/core';
 import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
 import { afterEach, expect, it } from 'vitest';
@@ -110,7 +110,7 @@ async function dashboard(
     pool: { query: async () => ({ rows: [] }) } as never,
     registry,
     catalog: { list: () => [] } as unknown as AgentCatalog,
-    ctx: { ownerId: 'owner' } as ToolContext,
+    ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC',
     now: () => knobs.now,
     config: { enabled: true, host: '127.0.0.1', port },

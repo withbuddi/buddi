@@ -5,13 +5,14 @@
  * the suite creates its own database, migrates core plus this plugin into it,
  * and drops it at the end. No socket is opened to any mailbox.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
-import type { SourceContext } from '../types.js';
+import type { CoreSourceContext } from '@buddi/core/testing';
 import { inboxUnread } from '../metrics.js';
 import {
   createInboxPollSource,
@@ -25,10 +26,10 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
   return ctx;
 }
@@ -83,7 +84,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
   });
 
   /** A source context whose enqueued runs are collected rather than queued. */
-  function contextFor(): SourceContext & { runs: Array<{ agentId: string; prompt: string; dedupKey: string }> } {
+  function contextFor(): CoreSourceContext & { runs: Array<{ agentId: string; prompt: string; dedupKey: string }> } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
     return hosted({
       db: pool,

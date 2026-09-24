@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, surfaceSection } from '@buddi/core';
-import type { AgentDefinition, PluginManifest, ToolContext } from '@buddi/core';
+import type { AgentDefinition, PluginManifest, CoreToolContext } from '@buddi/core';
 import type { CompletionResponse, RuntimeProvider } from './anthropic.js';
 import type { Queryable, RunAgentOptions } from './loop.js';
 import {
@@ -109,7 +109,7 @@ function fakeCatalog(maxTurns = 12): DelegateCatalog {
 interface Harness {
   db: FakeDb;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   captured: RunAgentOptions[];
 }
 
@@ -118,7 +118,7 @@ function harness(
     allow?: Record<string, string[]>;
     catalog?: DelegateCatalog;
     depth?: number;
-    surface?: ToolContext['surface'];
+    surface?: CoreToolContext['surface'];
   } = {},
 ): Harness {
   const db = new FakeDb();
@@ -146,8 +146,8 @@ function harness(
   };
   registry.register(manifest);
 
-  const ctx: ToolContext = {
-    db: db as unknown as ToolContext['db'],
+  const ctx: CoreToolContext = {
+    db: db as unknown as CoreToolContext['db'],
     ownerId: 'owner',
     now: () => new Date('2026-09-13T00:00:00Z'),
     timezone: 'UTC',
@@ -324,8 +324,8 @@ describe('agent.delegate', () => {
       migrationsDir: '',
       tools: [tool],
     });
-    const ctx: ToolContext = {
-      db: db as unknown as ToolContext['db'],
+    const ctx: CoreToolContext = {
+      db: db as unknown as CoreToolContext['db'],
       ownerId: 'owner',
       now: () => new Date('2026-09-13T00:00:00Z'),
       timezone: 'UTC',
@@ -400,7 +400,7 @@ describe('a delegation whose colleague ended without an answer', () => {
   function scripted(
     write: (db: FakeDb, conversationId: string) => void,
     result: { text: string; stopped: 'end_turn' | 'max_turns' | 'awaiting-approval'; pendingActionId?: string },
-  ): { db: FakeDb; registry: ToolRegistry; ctx: ToolContext; suspended: string[] } {
+  ): { db: FakeDb; registry: ToolRegistry; ctx: CoreToolContext; suspended: string[] } {
     const db = new FakeDb();
     const registry = new ToolRegistry();
     const suspended: string[] = [];
@@ -418,8 +418,8 @@ describe('a delegation whose colleague ended without an answer', () => {
         },
       })],
     });
-    const ctx: ToolContext = {
-      db: db as unknown as ToolContext['db'],
+    const ctx: CoreToolContext = {
+      db: db as unknown as CoreToolContext['db'],
       ownerId: 'owner',
       now: () => new Date('2026-09-13T00:00:00Z'),
       timezone: 'UTC',

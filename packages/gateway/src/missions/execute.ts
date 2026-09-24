@@ -30,7 +30,7 @@ import {
   type Mission,
   type Occurrence,
   type Offer,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import {
   createConversation,
@@ -137,7 +137,7 @@ export interface MissionExecutorDeps {
   registry: ToolRegistry;
   provider: RuntimeProvider;
   providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   env: NodeJS.ProcessEnv;
   /** Defaults to the catalog loaded from `agents/` for this environment. */
   catalog?: AgentCatalog;
@@ -286,7 +286,7 @@ export function createMissionExecutor(
 
     // The job rides on the tool context: a gated call records it on the action,
     // and that is the only way the owner's decision later finds this run.
-    const ctx: ToolContext = {
+    const ctx: CoreToolContext = {
       ...deps.ctx,
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),

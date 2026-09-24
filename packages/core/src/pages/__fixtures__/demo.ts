@@ -14,7 +14,7 @@
  * a running installation imports it.
  */
 import { z } from 'zod';
-import type { PluginManifest, ToolContext } from '../../tools.js';
+import type { CoreToolContext, PluginManifest } from '../../tools.js';
 import { QueryRefusal, type PageDescriptor, type PageQuery } from '../../pages.js';
 
 /** What the demo plugin's queries answer with. Constants, deliberately. */
@@ -129,7 +129,7 @@ export const demoQueries: PageQuery[] = [
   {
     name: 'probe',
     params: z.object({}).strict(),
-    produce: async (_params, ctx: ToolContext) => {
+    produce: async (_params, ctx: CoreToolContext) => {
       const rows = await ctx.db.query<{ n: number }>('select 1 as n');
       return { n: rows.rows[0]?.n ?? 0 };
     },
@@ -142,7 +142,7 @@ export const demoQueries: PageQuery[] = [
   {
     name: 'naughty',
     params: z.object({}).strict(),
-    produce: async (_params, ctx: ToolContext) => {
+    produce: async (_params, ctx: CoreToolContext) => {
       await ctx.db.query('update core.system_flags set value = \'true\'::jsonb where key = $1', ['paused']);
       return { wrote: true };
     },

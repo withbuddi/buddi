@@ -18,7 +18,7 @@ import {
   ToolRegistry,
   type AgentCatalog,
   type AgentDefinition,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createConversation, runAgent, type CompletionResponse, type RuntimeProvider } from '@buddi/runtime';
@@ -98,7 +98,7 @@ function privateCatalog(): { catalog: AgentCatalog & { reload: () => void }; ski
 suite('learned skills (postgres)', () => {
   let admin: Pool;
   let pool: Pool;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);

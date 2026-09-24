@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type ToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type CoreToolContext, type ToolRegistry } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -47,7 +47,7 @@ export interface RunAgentOptions {
   agent: AgentDefinition;
   provider: RuntimeProvider;
   registry: ToolRegistry;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   pool: Queryable;
   conversationId: string;
   /** The owner's turn. Omitted only when `resume` carries the turn instead. */
@@ -839,7 +839,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // run that asked for it, so the delegate must be told about that screen.
   /** An action a tool reported the run must wait on, without gating itself. */
   let suspendedBy: string | undefined;
-  const toolCtx: ToolContext = {
+  const toolCtx: CoreToolContext = {
     ...ctx,
     suspend: (actionId: string) => { suspendedBy = actionId; },
     ...(platformContext ? { timezone: platformContext.timezone } : {}),

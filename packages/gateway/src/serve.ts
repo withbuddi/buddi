@@ -53,7 +53,7 @@ import {
   type ActionRecord,
   type Occurrence,
   type PluginManifest,
-  type SourceContext,
+  type CoreSourceContext,
   type Suspension,
 } from '@buddi/core';
 import type { Pool } from 'pg';
@@ -128,7 +128,7 @@ export interface RoleRoster {
 }
 
 /**
- * `SentinelContext.agentForRole`, over the installation's live roster.
+ * `CoreSentinelContext.agentForRole`, over the installation's live roster.
  *
  * A sentinel addresses a finding by role — "whoever does credit" — and this is
  * where that becomes an id. Two rules:
@@ -690,7 +690,7 @@ export async function main(): Promise<void> {
         // afternoon, with no restart.
         sentinelAgentForRole(wiring.catalog),
         // The same owner every other part of this process runs as: core's
-        // goal watcher builds a ToolContext from it to measure a metric.
+        // goal watcher builds a CoreToolContext from it to measure a metric.
         wiring.ctx.ownerId,
       );
       for (const outcome of outcomes) {
@@ -713,7 +713,7 @@ export async function main(): Promise<void> {
     // before enqueueing re-enqueues the same key next time and creates nothing
     // new. Core decides only *when* a source is due (core.source_runs).
     const sources = collectSources(wiring.registry.manifests());
-    const enqueueRun: SourceContext['enqueueRun'] = async (input) => {
+    const enqueueRun: CoreSourceContext['enqueueRun'] = async (input) => {
       const job = await enqueue(pool, {
         kind: AGENT_RUN_JOB_KIND,
         payload: {

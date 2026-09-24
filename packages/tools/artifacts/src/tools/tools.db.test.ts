@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ToolRegistry, createPool, migrateCore, saveArtifact } from '@buddi/core/testing';
-import type { ToolContext } from '@buddi/core/testing';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { manifest } from '../index.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
@@ -24,7 +24,7 @@ suite('artifacts tools (postgres)', () => {
   let previousDataDir: string | undefined;
   const registry = new ToolRegistry();
 
-  const ctx = (): ToolContext => ({
+  const ctx = (): CoreToolContext => ({
     db: pool,
     ownerId: 'test',
     now: () => new Date('2026-09-13T12:00:00Z'),

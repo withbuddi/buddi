@@ -26,7 +26,7 @@ import {
   type JobControl,
   type Offer,
   type SurfaceIdentity,
-  type ToolContext,
+  type CoreToolContext,
   listToolPermissions,
   revokeToolPermission,
   conversationGroup,
@@ -233,7 +233,7 @@ export interface TelegramDeps {
   catalog: AgentCatalog;
   provider: RuntimeProvider;
   providerFor?: (agent: ReturnType<AgentCatalog['resolve']>) => RuntimeProvider;
-  ctx: ToolContext;
+  ctx: CoreToolContext;
   env: NodeJS.ProcessEnv;
   now: () => Date;
   /** Injected in tests; built from `TELEGRAM_BOT_TOKEN` otherwise. */

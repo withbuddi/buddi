@@ -15,6 +15,7 @@
  * Every silence rule §7 names has a test of its own below, because a silence
  * rule that is only in a query is a rule nobody will notice breaking.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -27,7 +28,7 @@ import {
   stillTrueKeys,
   type Finding,
   type Sentinel,
-  type SentinelContext,
+  type CoreSentinelContext,
 } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
@@ -45,10 +46,10 @@ import {
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
   return ctx;
 }
@@ -179,11 +180,11 @@ suite('email watchers, step 6 (postgres)', () => {
     return { messageId, threadId: thread.id };
   }
 
-  async function raise(sentinel: Sentinel, context: SentinelContext): Promise<Finding[]> {
+  async function raise(sentinel: Sentinel, context: CoreSentinelContext): Promise<Finding[]> {
     return findingsOf(await sentinel.run(context));
   }
 
-  function ctx(over: Partial<SentinelContext> = {}): SentinelContext {
+  function ctx(over: Partial<CoreSentinelContext> = {}): CoreSentinelContext {
     return hosted({
       db: pool,
       ownerId: 'owner',
@@ -191,7 +192,7 @@ suite('email watchers, step 6 (postgres)', () => {
       timezone: 'UTC',
       agentForRole: () => undefined,
       ...over,
-    } as SentinelContext);
+    } as CoreSentinelContext);
   }
 
   async function ignorePolicy(matcher: string, scope: 'sender' | 'domain' = 'sender'): Promise<void> {

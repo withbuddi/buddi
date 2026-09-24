@@ -47,7 +47,7 @@ import {
 } from '../secrets/store.js';
 import { useOwnerSecret } from '../secrets/use.js';
 import type { Vault } from '../vault/types.js';
-import type { PluginManifest, SourceContext, ToolContext } from '../tools.js';
+import type { CoreSourceContext, CoreToolContext, PluginManifest, ToolContext } from '../tools.js';
 import type {
   AccountsArea,
   BuddiHost,
@@ -129,9 +129,9 @@ export function resetPluginHost(): void {
  * The fields of whichever context a plugin is being handed: a `ToolContext`,
  * a `SourceContext`, a `SentinelContext`. The host reads what is there.
  */
-export type HostFacts = Pick<ToolContext, 'db' | 'now' | 'timezone'> &
-  Partial<Omit<ToolContext, 'db' | 'now' | 'timezone' | 'buddi'>> &
-  Partial<Pick<SourceContext, 'log' | 'enqueueRun'>> & {
+export type HostFacts = Pick<CoreToolContext, 'db' | 'now' | 'timezone'> &
+  Partial<Omit<CoreToolContext, 'db' | 'now' | 'timezone' | 'buddi'>> &
+  Partial<Pick<CoreSourceContext, 'log' | 'enqueueRun'>> & {
     agentForRole?: (role: string) => string | undefined;
   };
 
@@ -230,7 +230,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       assert: (ctx, envelope) => assertApprovedEffect(ctx, envelope),
       async standing(tool) {
         ownTool(tool);
-        const ctx = { ...facts, ownerId: facts.ownerId ?? OWNER_ID } as ToolContext;
+        const ctx = { ...facts, ownerId: facts.ownerId ?? OWNER_ID } as CoreToolContext;
         return (await findToolPermission(pool(), ctx, tool, binding.version)) ?? null;
       },
       async approvedInConversation(tool, conversationId) {
@@ -396,7 +396,7 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
 }
 
 function accountsArea(binding: HostBinding, facts: HostFacts): AccountsArea {
-  const access = (): NonNullable<ToolContext['providerAccounts']> => {
+  const access = (): NonNullable<CoreToolContext['providerAccounts']> => {
     if (facts.providerAccounts === undefined) {
       throw new Error('Model accounts are not available in this process.');
     }

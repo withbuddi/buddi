@@ -33,7 +33,7 @@
  */
 import type { Pool, PoolClient } from 'pg';
 import { z, type ZodTypeAny } from 'zod';
-import type { ToolContext } from './tools.js';
+import type { CoreToolContext, ToolContext } from './tools.js';
 import type { PageFile as PluginPageFile } from './plugin/page-file.js';
 import {
   columnMapSchema,
@@ -1430,6 +1430,6 @@ export function readOnlyPool(pool: Pool, opts: { acquireMs?: number } = {}): Poo
  * The context a query runs in: the caller's, with the read-only pool in place
  * of the real one and the owner's agent id stamped on it.
  */
-export function pageQueryContext(ctx: ToolContext): ToolContext {
+export function pageQueryContext(ctx: CoreToolContext): CoreToolContext {
   return { ...ctx, db: readOnlyPool(ctx.db), agentId: OWNER_AGENT_ID };
 }

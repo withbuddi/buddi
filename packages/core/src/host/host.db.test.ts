@@ -18,7 +18,7 @@ import { urlForDatabase } from '../backup/restore.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { ToolRegistry } from '../registry.js';
 import { runSources } from '../sources/run.js';
-import type { PluginManifest, ToolContext } from '../tools.js';
+import type { PluginManifest, CoreToolContext } from '../tools.js';
 import type { ProviderAccountsAccess } from '../provider-accounts.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from './build.js';
 import type { BuddiHost } from './types.js';
@@ -42,7 +42,7 @@ function plugin(name: string, extra: Partial<PluginManifest> = {}): PluginManife
         description: 'hand back ctx.buddi',
         tier: 'auto',
         input: z.object({}),
-        execute: async (_input: unknown, ctx: ToolContext) => ctx.buddi,
+        execute: async (_input: unknown, ctx: CoreToolContext) => ctx.buddi,
       },
     ],
     ...extra,
@@ -55,7 +55,7 @@ suite('ctx.buddi', () => {
   let dataDir: string;
   const now = new Date('2026-09-24T03:30:00Z');
 
-  const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({
+  const ctx = (over: Partial<CoreToolContext> = {}): CoreToolContext => ({
     db: pool,
     ownerId: 'owner',
     now: () => now,
@@ -64,7 +64,7 @@ suite('ctx.buddi', () => {
     ...over,
   });
 
-  async function hostOf(registry: ToolRegistry, tool: string, over: Partial<ToolContext> = {}): Promise<BuddiHost> {
+  async function hostOf(registry: ToolRegistry, tool: string, over: Partial<CoreToolContext> = {}): Promise<BuddiHost> {
     const result = await registry.invoke(tool, {}, ctx(over));
     if (!result.ok) throw new Error(result.message);
     return result.output as BuddiHost;

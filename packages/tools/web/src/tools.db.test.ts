@@ -8,7 +8,7 @@
 import type { Pool } from 'pg';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createHttpArea, createPool, runMigrations, ToolRegistry, type ToolContext } from '@buddi/core/testing';
+import { createHttpArea, createPool, runMigrations, ToolRegistry, type CoreToolContext } from '@buddi/core/testing';
 import { createHttpTransport } from '@buddi/runtime';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';
@@ -30,7 +30,7 @@ suite('web tools (postgres)', () => {
   let server: Server;
   let port = 0;
   let registry: ToolRegistry;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   /** What the fake search backend will answer next. */
   let searchAnswer: (query: string) => ReturnType<SearchProvider['search']>;
 
@@ -227,7 +227,7 @@ suite('web tools (postgres)', () => {
 
   describe('with no key configured at all', () => {
     let bare: ToolRegistry;
-    let bareCtx: ToolContext;
+    let bareCtx: CoreToolContext;
 
     beforeAll(async () => {
       const manifest = createWebManifest({

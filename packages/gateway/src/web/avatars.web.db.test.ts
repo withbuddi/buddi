@@ -12,7 +12,7 @@ import {
   readWebSetting,
   ToolRegistry,
   type AgentCatalog,
-  type ToolContext,
+  type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import pngjs from 'pngjs';
@@ -107,7 +107,7 @@ suite('agent pictures', () => {
     pool = createPool(url.toString());
     await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
     await ensureOwner(pool, 'owner');
-    const ctx: ToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
+    const ctx: CoreToolContext = { db: pool, ownerId: 'owner', now, timezone: 'UTC' };
     const common = { pool, registry: new ToolRegistry(), catalog, ctx, timezone: 'UTC', now, token: TOKEN, log: () => {} };
     web = await startWebServer({
       ...common,

@@ -16,7 +16,7 @@
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ToolRegistry, createPool, measureMetricResult, runMigrations } from '@buddi/core/testing';
-import type { ToolContext } from '@buddi/core/testing';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { ensureGmailAccount, GMAIL_SECRET_NAME, markAccountSynced } from './config.js';
 import { manifest } from './index.js';
@@ -40,7 +40,7 @@ suite('the email metrics (postgres, read-only)', () => {
   let accountId: string;
   let folderId: string;
   let sentFolderId: string;
-  let ctx: ToolContext;
+  let ctx: CoreToolContext;
   const registry = new ToolRegistry();
 
   /** Exactly what the goal machinery does: the registry as the metric source. */

@@ -7,7 +7,7 @@
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ToolRegistry, createPool, migrate } from '@buddi/core/testing';
-import type { ToolContext } from '@buddi/core/testing';
+import type { CoreToolContext } from '@buddi/core/testing';
 import { manifest } from '../index.js';
 import { buildPreamble } from '../preamble.js';
 import { listMemory } from '../admin.js';
@@ -29,7 +29,7 @@ suite('memory tools (postgres)', () => {
   const now = (): Date => clock;
 
   /** A context as the runtime builds one: owner, conversation, calling agent. */
-  const contextFor = (agentId?: string): ToolContext => ({
+  const contextFor = (agentId?: string): CoreToolContext => ({
     db: pool,
     ownerId: 'test',
     now,

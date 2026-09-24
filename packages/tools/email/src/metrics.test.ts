@@ -7,6 +7,7 @@
  * stamped with the *stalest* completed poll rather than with now or with the
  * freshest, and the silences that must be `null` instead of a confident zero.
  */
+import type { BuddiHost } from '@buddi/core/testing';
 import { describe, expect, it } from 'vitest';
 import { emailMetrics, inboxUnread, stalestSync, waitingOnMe } from './metrics.js';
 import { createEmailManifest } from './index.js';
@@ -14,10 +15,10 @@ import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 import { manifest as emailManifestForHost } from './index.js';
 
 /** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
-function hosted<C>(facts: C): C {
+function hosted<C>(facts: C): C & { buddi: BuddiHost } {
   // Built over the context it returns, so a test that changes a field on it
   // afterwards changes what the host reads, as core's per-call host would.
-  const ctx = { ...facts } as C & { buddi?: unknown };
+  const ctx = { ...facts } as C & { buddi: BuddiHost };
   ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
   return ctx;
 }

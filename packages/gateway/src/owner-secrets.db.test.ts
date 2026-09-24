@@ -24,7 +24,7 @@ import {
   resetSecretDestinations,
   runMigrations,
   ToolRegistry,
-  type SourceContext,
+  type CoreSourceContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import {
@@ -145,8 +145,8 @@ suite('mailbox passwords as owner secrets (postgres)', () => {
       timezone: 'UTC',
       log: (line: string) => lines.push(line),
       enqueueRun: async () => {},
-    } as SourceContext;
-    const ctx = { ...facts, buddi: createPluginHost(hostBindingOf(manifest), facts as never) } as SourceContext;
+    } as CoreSourceContext;
+    const ctx = { ...facts, buddi: createPluginHost(hostBindingOf(manifest), facts as never) } as CoreSourceContext;
     // The installed source, with no environment, but every message backfilled.
     await createInboxPollSource({ connect: connect!, backfill: 1_000 }).poll(ctx);
 

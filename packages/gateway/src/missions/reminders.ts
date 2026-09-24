@@ -26,6 +26,7 @@
  * only inside an unattended run. A reminder set in a Telegram conversation and
  * a reminder set by the daily check are the same object.
  */
+import type { CoreToolContext } from '@buddi/core';
 import {
   DEFAULT_REMINDER_LIMITS,
   MAX_REMINDER_TEXT,
@@ -171,7 +172,7 @@ export function createReminderManifest(
       NOT_FOR_WATCHERS,
     tier: 'auto',
     input: setInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const when = parseReminderWhen(input.when, ctx.timezone);
       if (!when.ok) return { ok: false, reason: 'invalid-when', message: when.message };
 
@@ -197,7 +198,7 @@ export function createReminderManifest(
       'Use it before setting one so you do not promise the same nudge twice, and to find the id to cancel.',
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const rows = await listReminders(ctx.db, {
         agentId: ctx.agentId ?? '',
         state: 'pending',
@@ -214,7 +215,7 @@ export function createReminderManifest(
       'Cancelling is always allowed and nothing is delivered afterwards.',
     tier: 'auto',
     input: cancelInput,
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const existing = await getReminder(ctx.db, input.id).catch(() => null);
       if (!existing) return { ok: false, reason: 'not-found', message: `no reminder ${input.id}` };
       if (existing.agentId !== (ctx.agentId ?? '')) {
@@ -541,7 +542,7 @@ export function createScheduleManifest(): PluginManifest {
       NOT_FOR_WATCHERS,
     tier: 'gated',
     input: proposeInput,
-    describe(input, ctx) {
+    describe(input, ctx: CoreToolContext) {
       const agentId = ctx.agentId ?? 'unknown';
       const timezone = (input.timezone ?? '').trim() || ctx.timezone;
       parseCron(input.cron); // an unparseable cron refuses here, before any approval exists
@@ -563,7 +564,7 @@ export function createScheduleManifest(): PluginManifest {
       }
       return { envelope, preview: renderSchedulePreview(envelope) };
     },
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       // Only `executeApproved` reaches this, and it rebuilds the context from
       // the action — so `agentId` is the agent that proposed it, never one the
       // model named.
@@ -605,7 +606,7 @@ export function createScheduleManifest(): PluginManifest {
       'Check here before proposing another one so you do not ask for the same thing twice.',
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute(_input, ctx) {
+    async execute(_input, ctx: CoreToolContext) {
       const agentId = ctx.agentId ?? '';
       const mine = (await listMissions(ctx.db)).filter(
         (m) => missionOwnerAgent(m.id) === agentId,
@@ -640,7 +641,7 @@ export function createScheduleManifest(): PluginManifest {
     input: z
       .object({ missionId: z.string().min(1).describe('The id schedule.list_mine reports.') })
       .strict(),
-    async execute(input, ctx) {
+    async execute(input, ctx: CoreToolContext) {
       const agentId = ctx.agentId ?? '';
       // The ownership check is on the id, which core built — an agent cannot
       // disable the owner's Friday recap by naming it.

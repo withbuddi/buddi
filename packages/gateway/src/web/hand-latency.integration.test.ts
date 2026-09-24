@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { ToolRegistry, guardedLookup, type AgentCatalog, type ToolContext } from '@buddi/core';
+import { ToolRegistry, guardedLookup, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { BrowserManager, PlaywrightDriver, PlaywrightHost, commandSchema } from '@buddi/tool-browser';
 import { DEFAULT_POLICY } from '@buddi/tool-web';
 import { startWebServer, type WebServer } from './server.js';
@@ -125,7 +125,7 @@ function dashboard(url: string, headers: Record<string, string>) {
   return { socket, text, pictures, open, send, next, waitPictures, pending: () => pending };
 }
 
-const ctx = (): ToolContext => ({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
+const ctx = (): CoreToolContext => ({ db: {} as never, ownerId: 'owner', now: () => new Date(), timezone: 'UTC',
   agentId: 'concierge', conversationId: 'c1', sessionTools: ['browser.act'],
   ownerRequest: { id: 'request-1', text: 'Sign in for me', expiresAt: Date.now() + 10 * 60_000 } });
 
@@ -160,7 +160,7 @@ describe.skipIf(!enabled)('remote hand latency, end to end', () => {
     await manager.enable();
 
     app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never,
-      registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as ToolContext,
+      registry: new ToolRegistry(), catalog: {} as AgentCatalog, ctx: { ownerId: 'owner' } as CoreToolContext,
       timezone: 'UTC', now: () => new Date(), config: { enabled: true, host: '127.0.0.1', port: 0 },
       openAccess: true, token: TOKEN, browser: manager, log: () => {} });
     origin = `http://127.0.0.1:${app.port}`;

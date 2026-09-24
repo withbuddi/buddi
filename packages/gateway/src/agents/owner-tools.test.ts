@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ToolRegistry, type Queryable, type ToolContext } from '@buddi/core';
+import { ToolRegistry, type Queryable, type CoreToolContext } from '@buddi/core';
 import { EXAMPLES_AGENTS_DIR } from './catalog.js';
 import {
   EXAMPLES_TREE_REFUSAL,
@@ -129,8 +129,8 @@ function catalogOf(agents: CatalogAgent[]): AgentCatalog {
 }
 
 interface Harness {
-  tool(name: string): { execute(input: any, ctx: ToolContext): Promise<any> };
-  ctx: ToolContext;
+  tool(name: string): { execute(input: any, ctx: CoreToolContext): Promise<any> };
+  ctx: CoreToolContext;
   db: StubDb;
   file: string;
 }
@@ -144,12 +144,12 @@ function harness(opts: { file?: string; others?: CatalogAgent[]; agentId?: strin
   bindOwnerTools(registry, { catalog: catalogOf([self, ...(opts.others ?? [])]), surface: 'cli' });
   const db = new StubDb();
   const ctx = {
-    db: db as unknown as ToolContext['db'],
+    db: db as unknown as CoreToolContext['db'],
     ownerId: 'owner',
     now: () => new Date('2026-09-14T12:00:00Z'),
     timezone: 'America/New_York',
     agentId: opts.agentId ?? 'scribe',
-  } as ToolContext;
+  } as CoreToolContext;
   return {
     tool: (name) => manifest.tools.find((t) => t.name === name) as never,
     ctx,
