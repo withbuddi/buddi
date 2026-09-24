@@ -159,6 +159,7 @@ export function Canvas({
             value={item.id}
             className="wb-canvas-body"
             data-renderer={item.source === 'descriptor' && item.renderer === 'preview' ? 'preview' : undefined}
+            data-dense={DENSE.has(item.renderer) ? 'true' : undefined}
           >
             <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
               {item.source !== 'browser' && item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
@@ -456,3 +457,9 @@ function shapeIcon(renderer: RendererName): IconName {
   const name = `shape-${renderer}`;
   return (ICON_NAMES as string[]).includes(name) ? (name as IconName) : 'shape-structured';
 }
+
+/**
+ * Panels read as data rather than as a result: they keep the plain surface
+ * behind them instead of the page's wash, as dense pages do.
+ */
+const DENSE: ReadonlySet<string> = new Set(['table', 'diff', 'files']);
