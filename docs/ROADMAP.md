@@ -68,8 +68,9 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- The small items below ("Small, whenever a slot opens"), cleared before
-  the main list resumes with owner secrets (2026-09-23).
+- [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
+  but never see. Next in the main list; not started. The small items were
+  all cleared on 2026-09-23.
 
 ## Next, in order
 
