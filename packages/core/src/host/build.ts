@@ -133,6 +133,15 @@ export function resetPluginHost(): void {
 }
 
 /**
+ * The vault owner secrets are kept in, for core's own settings tools (the Keys
+ * and secrets page, owner-secrets §6). `undefined` in a process that was never
+ * given one; never handed to a plugin.
+ */
+export function pluginHostVault(): Vault | undefined {
+  return services.vault;
+}
+
+/**
  * Hand the output scrubber (owner-secrets §5) its source — every owner secret
  * by name, buddi's own keys under theirs — and build the first automaton. The
  * composition root calls this once per process, at boot, before the first tool

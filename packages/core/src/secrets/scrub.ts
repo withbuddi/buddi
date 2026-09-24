@@ -326,6 +326,35 @@ export function findSecretMatches(text: string): Array<{ name: string; count: nu
 }
 
 /**
+ * How many times one value sits in a set of texts — the save-time look of the
+ * Keys and secrets page (owner-secrets §6): the value is not a stored secret
+ * yet, so the process automaton does not know it. A one-off automaton over
+ * just that value; the texts are read here, the value never leaves.
+ */
+export function scanTextsForValue(value: string, texts: readonly string[]): number {
+  if (value === '') return 0;
+  const one = new SecretAutomaton(encodingsOf(value).map((pattern) => ({ pattern, name: 'value' })));
+  let count = 0;
+  for (const text of texts) {
+    if (text === '') continue;
+    count += one.matches(text).length;
+  }
+  return count;
+}
+
+/**
+ * Replace every form of `value` in a text with `‹secret:NAME›` — the one-tap
+ * scrub of the history search (owner-secrets §6). The value comes from the
+ * vault, held only in this call.
+ */
+export function scrubValueFrom(value: string, name: string, text: string): { text: string; count: number } {
+  if (value === '' || text === '') return { text, count: 0 };
+  const one = new SecretAutomaton(encodingsOf(value).map((pattern) => ({ pattern, name })));
+  const matches = one.matches(text);
+  return { text: replaceMatches(text, matches), count: matches.length };
+}
+
+/**
  * Scrub every string in a JSON-ish value: objects, arrays, and the strings
  * inside them. Keys are scrubbed too — a key may be built from user text as
  * easily as a value. Non-plain objects pass through untouched, and cycles are
