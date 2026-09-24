@@ -118,6 +118,11 @@ export type {
   ProposalsArea,
   ScheduleArea,
   SecretBinding,
+  SecretDeliveryContext,
+  SecretDestination,
   SecretListing,
+  SecretRule,
+  SecretUseOutcome,
+  SecretUseResult,
   SecretsArea,
 } from '../host/types.js';

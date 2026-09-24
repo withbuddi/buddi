@@ -47,7 +47,7 @@ export interface BuddiHost {
   proposals?: ProposalsArea;
   /** Declared as `schedule`. */
   schedule?: ScheduleArea;
-  /** Declared as `secrets`. A type only in 1.0: never present yet. */
+  /** Declared as `secrets`. */
   secrets?: SecretsArea;
 }
 
@@ -96,6 +96,12 @@ export interface DbArea {
 export interface DirArea {
   /** Absolute, created on first read. Never the data directory itself. */
   readonly path: string;
+  /**
+   * `<data>/<plugin>`, where the built-in browser and host plugins kept the
+   * owner's profile and workspaces before `plugins-data` existed; undefined
+   * for every other plugin. Not created.
+   */
+  readonly legacyPath: string | undefined;
 }
 
 /** The owner's decisions about this plugin's own tools. */
@@ -228,25 +234,116 @@ export interface ScheduleArea {
   ): Promise<Array<{ value: string; day: string }>>;
 }
 
-/** Where one of the owner's secrets is bound: a destination of this plugin's, and its target. */
+/* ------------------------------------------------------------------ *
+ * Secrets (docs/specs/owner-secrets.md §2, §3)
+ * ------------------------------------------------------------------ */
+
+/**
+ * How often the owner is asked before a bound secret goes to its target,
+ * strictest first. A destination states the loosest it allows (`maxRule`); a
+ * use runs under the stricter of that and the binding's own.
+ */
+export type SecretRule = 'every-time' | 'first-time' | 'pre-approved';
+
+/** Where one of the owner's secrets may go: a destination kind, a target in it, and the rule. */
 export interface SecretBinding {
-  destination: string;
+  /** A destination kind, e.g. `email.account`. */
+  kind: string;
+  /** The exact place within that kind, as the destination checks it. Plain JSON. */
   target: unknown;
+  rule: SecretRule;
 }
 
-/** A secret's name and bindings. Never its value. */
+/** A secret's name and bindings, and when it was last used. Never its value. */
 export interface SecretListing {
   name: string;
-  bindings: SecretBinding[];
+  totp: boolean;
+  bindings: Array<SecretBinding & {
+    /** When the owner approved the first use under a `first-time` rule. */
+    firstApprovedAt: string | null;
+    /**
+     * True for an account kind (`<plugin>.account`): the plugin's process holds
+     * the value for as long as its connection lives — the one stated exception
+     * to "never held" (owner-secrets §4).
+     */
+    heldByPlugin: boolean;
+  }>;
+  /** The last use, whatever came of it; null when it was never used. */
+  lastUse: {
+    at: string;
+    kind: string;
+    target: unknown;
+    agentId: string | null;
+    outcome: SecretUseOutcome;
+  } | null;
 }
 
-/** The owner's secrets, used and never read. A type only in 1.0; built in step 3. */
+/** What became of one use, as `core.secret_uses` records it. */
+export type SecretUseOutcome = 'delivered' | 'held' | 'pending' | 'refused' | 'failed';
+
+/** What a destination's own code is handed besides the value. */
+export interface SecretDeliveryContext {
+  /** This use's id: `SecretsArea.use` answers with the same one. */
+  use: string;
+  /** The host of the plugin that registered the destination. */
+  buddi: BuddiHost;
+}
+
+/**
+ * A place a secret can be delivered, registered by the plugin that owns it
+ * (owner-secrets §3). `deliver` is the only code that ever receives a value,
+ * and only for a binding that names its own kind.
+ */
+export interface SecretDestination {
+  /** `<plugin>.<what>`, in the registering plugin's own namespace. */
+  kind: string;
+  /**
+   * Whether the target a use asks for is the one the binding names, checked
+   * against the live world where that means something (the account exists,
+   * the frame's origin is the bound one). Never the caller's claim.
+   */
+  checkTarget(target: unknown, bound: unknown, buddi: BuddiHost): boolean | Promise<boolean>;
+  /** One line for the approval card and the Settings row: where this target is. */
+  describe(target: unknown): string;
+  /** Put the value where it goes. Keep it no longer than the use needs. */
+  deliver(value: string, target: unknown, ctx: SecretDeliveryContext): void | Promise<void>;
+  /** The loosest rule this kind allows. */
+  maxRule: SecretRule;
+}
+
+/** What asking for a use came to. Never a value. */
+export type SecretUseResult =
+  | { done: true; use: string }
+  | { pending: string }
+  | { refused: string };
+
+/**
+ * The owner's secrets, used and never read (docs/specs/owner-secrets.md).
+ * There is no `get`: a value reaches a plugin only through one of its own
+ * destinations' `deliver`.
+ */
 export interface SecretsArea {
-  use(
-    ctx: ToolContext,
-    req: { name: string; destination: string; target: unknown },
-  ): Promise<{ done: true } | { pending: string } | { refused: string }>;
+  /** Register one of this plugin's destinations. The kind must start with `<plugin>.`. */
+  registerDestination(destination: SecretDestination): void;
+  /**
+   * Deliver the secret `name` into `target` of this plugin's destination
+   * `kind`. Core finds the binding, has the destination check the target,
+   * applies the rule, reads the vault and calls `deliver`. `pending` is the
+   * approval the owner was asked; ask again once it is decided.
+   */
+  use(name: string, kind: string, target: unknown): Promise<SecretUseResult>;
+  /** Secrets with a binding to one of this plugin's kinds: names, bindings, last use. */
   list(): Promise<SecretListing[]>;
-  store(name: string, value: string, binding: SecretBinding): Promise<void>;
-  remove(name: string): Promise<boolean>;
+  /**
+   * Store a secret the owner typed, with its bindings, which must name this
+   * plugin's own kinds; replaces the value of one this plugin already holds.
+   * Only from the owner's own call (an `ownerOnly` tool).
+   */
+  put(name: string, value: string, bindings: SecretBinding[]): Promise<void>;
+  /** Owner only. Rename a secret bound only to this plugin's kinds. */
+  rename(name: string, to: string): Promise<boolean>;
+  /** Owner only. Replace a secret's bindings (this plugin's kinds only). */
+  rebind(name: string, bindings: SecretBinding[]): Promise<boolean>;
+  /** Owner only. Delete a secret bound only to this plugin's kinds, value and all. */
+  delete(name: string): Promise<boolean>;
 }

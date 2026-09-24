@@ -34,6 +34,19 @@ import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { localDateString } from '../time.js';
 import { createHttpArea, type HttpTransportFactory } from './http.js';
+import { registerSecretDestination } from '../secrets/destinations.js';
+import {
+  assertBindings,
+  deleteOwnerSecret,
+  findSecret,
+  listOwnerSecrets,
+  putOwnerSecret,
+  rebindOwnerSecret,
+  renameOwnerSecret,
+  secretBindings,
+} from '../secrets/store.js';
+import { useOwnerSecret } from '../secrets/use.js';
+import type { Vault } from '../vault/types.js';
 import type { PluginManifest, SourceContext, ToolContext } from '../tools.js';
 import type {
   AccountsArea,
@@ -44,6 +57,7 @@ import type {
   FilesArea,
   ProposalsArea,
   ScheduleArea,
+  SecretsArea,
 } from './types.js';
 
 /** What `register()` fixes about a plugin, once. */
@@ -91,6 +105,11 @@ export interface PluginHostServices {
   log?: (line: string) => void;
   /** The environment the data directory is read from. `process.env` when absent. */
   env?: EnvLike;
+  /**
+   * The vault owner secrets are kept in (`owner-secret:<id>`), opened once by
+   * the composition root. The `secrets` area reads it; no plugin is handed it.
+   */
+  vault?: Vault;
 }
 
 let services: PluginHostServices = {};
@@ -215,6 +234,9 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
         }
         return dirMade;
       },
+      get legacyPath(): string | undefined {
+        return LEGACY_DIRS.has(plugin) ? path.join(resolveDataDir(env()), plugin) : undefined;
+      },
     },
     approvals: {
       assert: (ctx, envelope) => assertApprovedEffect(ctx, envelope),
@@ -275,9 +297,90 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   }
   if (declared.has('proposals')) host.proposals = proposalsArea(binding, facts);
   if (declared.has('schedule')) host.schedule = scheduleArea(facts);
-  // `memory` and `secrets` are types only in 1.0 (§11; secrets is step 3): a
-  // plugin that declares them gets nothing yet, and a call is `undefined`.
+  if (declared.has('secrets')) host.secrets = secretsArea(binding, facts, host);
+  // `memory` is a type only in 1.0 (§11): a plugin that declares it gets
+  // nothing yet, and a call is `undefined`.
   return host;
+}
+
+/**
+ * The built-ins whose owner data was under `<data>/<plugin>` before
+ * `plugins-data` existed: the host plugin's workspaces and the browser's
+ * profile. Moving them would move the owner's work, so `dir.legacyPath` names
+ * the old place for these and for no other plugin — a plugin named after one
+ * of the data directory's own folders must not be handed it.
+ */
+const LEGACY_DIRS: ReadonlySet<string> = new Set(['browser', 'host']);
+
+function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): SecretsArea {
+  const { plugin } = binding;
+  const own = (kind: string): boolean => kind.startsWith(`${plugin}.`);
+  const vault = (): Vault => {
+    if (services.vault === undefined) throw new Error('This installation has nowhere safe to keep secrets.');
+    return services.vault;
+  };
+  const asOwner = (what: string): void => {
+    // The owner's own call: the act route invokes an `ownerOnly` tool as the
+    // owner, and nothing else is the owner.
+    if (facts.agentId !== OWNER_AGENT_ID) throw new Error(`Only the owner ${what}, from ${plugin}'s own page.`);
+  };
+  const ownKinds = (bindings: readonly { kind: string }[]): void => {
+    const foreign = bindings.find((b) => !own(b.kind));
+    if (foreign !== undefined) throw new Error(`${plugin} may bind a secret only to its own destinations, not ${foreign.kind}.`);
+  };
+  /*
+   * A secret this plugin may change: one bound to its kinds and nothing else.
+   * One the owner also bound elsewhere, or bound nowhere, is theirs to change
+   * in Settings, not a plugin's.
+   */
+  const ownedSecret = async (name: string): Promise<boolean> => {
+    const secret = await findSecret(facts.db, name);
+    if (secret === null) return false;
+    const bindings = await secretBindings(facts.db, secret.id);
+    if (bindings.length === 0 || bindings.some((b) => !own(b.kind))) {
+      throw new Error(`"${name}" is not ${plugin}'s alone to change; the owner changes it in Settings.`);
+    }
+    return true;
+  };
+  return {
+    registerDestination: (destination) => registerSecretDestination(plugin, destination),
+    use: (name, kind, target) =>
+      useOwnerSecret(
+        {
+          pool: facts.db,
+          vault: services.vault,
+          plugin,
+          buddi: host,
+          agentId: facts.agentId,
+          conversationId: facts.conversationId,
+          now: () => facts.now(),
+        },
+        { name, kind, target },
+      ),
+    list: () => listOwnerSecrets(facts.db, { kindPrefix: `${plugin}.` }),
+    async put(name, value, bindings) {
+      asOwner('stores a secret');
+      ownKinds(assertBindings(bindings));
+      await ownedSecret(name);
+      await putOwnerSecret(facts.db, vault(), { name, value, bindings });
+    },
+    async rename(name, to) {
+      asOwner('renames a secret');
+      if (!(await ownedSecret(name))) return false;
+      return renameOwnerSecret(facts.db, name, to);
+    },
+    async rebind(name, bindings) {
+      asOwner('rebinds a secret');
+      ownKinds(assertBindings(bindings));
+      if (!(await ownedSecret(name))) return false;
+      return rebindOwnerSecret(facts.db, name, bindings);
+    },
+    async delete(name) {
+      asOwner('deletes a secret');
+      if (!(await ownedSecret(name))) return false;
+      return deleteOwnerSecret(facts.db, vault(), name);
+    },
+  };
 }
 
 function accountsArea(binding: HostBinding, facts: HostFacts): AccountsArea {

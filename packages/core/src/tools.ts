@@ -14,7 +14,7 @@ import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 import type { ProviderAccountsAccess } from './provider-accounts.js';
-import type { BuddiHost } from './host/types.js';
+import type { BuddiHost, SecretDestination } from './host/types.js';
 import type { PluginUse } from './plugin/uses.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -706,4 +706,12 @@ export interface PluginManifest {
    * absent from `ctx.buddi`.
    */
   uses?: PluginUse[];
+  /**
+   * Where the owner's secrets can be delivered into this plugin
+   * (docs/specs/owner-secrets.md §3): each kind in the plugin's own namespace,
+   * `<plugin>.<what>`. Registered at `register()`; only a plugin that declares
+   * `secrets` in `uses` may have any. The same as calling
+   * `ctx.buddi.secrets.registerDestination` for each, before any context exists.
+   */
+  destinations?: SecretDestination[];
 }
