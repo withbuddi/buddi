@@ -10,6 +10,7 @@
  * throws before any provider call is made.
  */
 import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type CoreToolContext, type ToolRegistry } from '@buddi/core';
+import { primeSecretScrubber, scrubDeep, scrubText } from '@buddi/core';
 import type {
   ContentBlock,
   NativeSearchRecord,
@@ -546,10 +547,19 @@ async function persistMessage(
   pool: Queryable,
   conversationId: string,
   role: 'user' | 'assistant',
-  content: ContentBlock[],
+  contentBlocks: ContentBlock[],
   speaker?: string,
   uses: readonly ArtifactUse[] = [],
 ): Promise<string | undefined> {
+  /*
+   * Scrubbed here (owner-secrets §5, choke point 3's neighbourhood): an owner
+   * message may carry a pasted secret, and these rows are what the dashboard
+   * serves and what a backup takes. The model never saw the value — the
+   * request below was scrubbed before it left — so the assistant's rows are
+   * clean in practice; the scrub is the same automaton either way.
+   */
+  await primeSecretScrubber();
+  const content = scrubDeep(contentBlocks) as ContentBlock[];
   if (uses.length === 0) {
     // The column is written only when a room needs it, so a single-agent
     // conversation's rows keep the shape they always had.
@@ -979,9 +989,20 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   while (turns < agent.maxTurns) {
     ctx.signal?.throwIfAborted();
     turns++;
+    /*
+     * Choke point 3 of the scrub (owner-secrets §5): the request assembled for
+     * the provider, the last step before a model. An owner message with a
+     * pasted secret, a tool result a scrub elsewhere missed, a system line
+     * quoting one — none of it crosses to the provider.
+     */
+    await primeSecretScrubber();
     const res = await provider.complete({
-      system: waitingForOwner ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.` : system,
-      messages: opts.transcript?.bound ? opts.transcript.bound(messages) : messages,
+      system: scrubText(
+        waitingForOwner
+          ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.`
+          : system,
+      ),
+      messages: scrubDeep(opts.transcript?.bound ? opts.transcript.bound(messages) : messages),
       tools: waitingForOwner ? [] : tools,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),

@@ -35,6 +35,7 @@ import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { localDateString } from '../time.js';
 import { createHttpArea, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
+import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
 import {
   assertBindings,
   deleteOwnerSecret,
@@ -126,6 +127,22 @@ export function resetPluginHost(): void {
 }
 
 /**
+ * Hand the output scrubber (owner-secrets §5) its source — every owner secret
+ * by name, buddi's own keys under theirs — and build the first automaton. The
+ * composition root calls this once per process, at boot, before the first tool
+ * result, event or log line goes anywhere. A later save, rename or delete
+ * invalidates; the next async choke point rebuilds.
+ */
+export async function configureSecretScrubbing(
+  pool: Pool,
+  vault: Vault | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  setSecretScrubSource(() => loadScrubEntries(pool, vault, env));
+  await primeSecretScrubber();
+}
+
+/**
  * The fields of whichever context a plugin is being handed: a `ToolContext`,
  * a `SourceContext`, a `SentinelContext`. The host reads what is there.
  */
@@ -170,7 +187,10 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   const env = (): EnvLike => services.env ?? process.env;
   const log = (line: string): void => {
     const sink = facts.log ?? services.log ?? ((text: string) => console.error(text));
-    sink(`[${plugin}] ${line}`);
+    // Choke point 4 of the scrub (owner-secrets §5): a log line is text
+    // leaving core. Synchronous by necessity — it uses whatever automaton is
+    // loaded, and the composition root primes it at boot.
+    sink(`[${plugin}] ${scrubText(line)}`);
   };
   const ownTool = (tool: string): void => {
     if (!binding.tools.has(tool)) {
@@ -214,6 +234,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     version: HOST_API_VERSION,
     plugin,
     log,
+    scrub: (text: string): string => scrubText(text),
     owner: {
       id: facts.ownerId ?? OWNER_ID,
       timezone: facts.timezone,

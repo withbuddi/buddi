@@ -275,6 +275,7 @@ interface BuddiHost {
   readonly version: string;   // '1.0' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
+  scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
   owner: OwnerArea;           // id, timezone, agentForRole, protectedPaths
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
@@ -3049,6 +3050,7 @@ that say otherwise.
 | `version` | `string` | yes | 1.0 | `major.minor`, `HOST_API_VERSION`. |
 | `plugin` | `string` | yes | 1.0 | Your manifest's `name`. |
 | `log` | `(line) => void` | yes | 1.0 | An operational line, prefixed with your name. Never the owner's channel. |
+| `scrub` | `(text) => string` | yes | 1.0 | Every stored value a text contains becomes `‹secret:NAME›` — buddi's own keys under their own names (§6). Never the reverse, and never a read. |
 | `owner` | `OwnerArea` | yes | 1.0 | Who this installation belongs to. |
 | `clock` | `ClockArea` | yes | 1.0 | The clock. |
 | `db` | `DbArea` | yes | 1.0 | The database, never a raw pool. |

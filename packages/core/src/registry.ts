@@ -29,6 +29,7 @@ import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
 import { hostBindingOf, pluginDir, withPluginHost, type HostBinding } from './host/build.js';
 import { HOST_API_VERSION } from './plugin/version.js';
 import { registerSecretDestination } from './secrets/destinations.js';
+import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -710,14 +711,22 @@ export class ToolRegistry {
       };
     }
 
+    /*
+     * Choke point 1 of the scrub (owner-secrets §5): the tool result and the
+     * error, before either is returned or recorded. This covers process output
+     * (`developer.output`), page text (`browser.act`, `web.read`), every tool
+     * result and every thrown message — a process that printed its own
+     * environment, a page that echoed a field, an error that quoted a header.
+     */
+    await primeSecretScrubber();
     try {
       const output = await tool.execute(parsed.data, ctx);
-      return { ok: true, output };
+      return { ok: true, output: scrubDeep(output) };
     } catch (err) {
       return {
         ok: false,
         reason: 'tool-error',
-        message: err instanceof Error ? err.message : String(err),
+        message: scrubText(err instanceof Error ? err.message : String(err)),
       };
     }
   }
