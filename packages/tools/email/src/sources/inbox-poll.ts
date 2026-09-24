@@ -507,7 +507,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
     every: POLL_EVERY_SECONDS,
 
     async poll(ctx: SourceContext): Promise<void> {
-      const log = ctx.log ?? ((line: string) => console.error(line));
+      const log = ctx.buddi?.log ?? ctx.log ?? ((line: string) => console.error(line));
       const env = opts.env ?? process.env;
 
       // Accounts are plural (docs/specs/email.md §2). Every enabled one is polled in
@@ -938,7 +938,7 @@ async function drain(
       // rolled back would leave the message unread for dates forever, even
       // after the owner revoked the policy.
     } catch (err) {
-      (ctx.log ?? (() => {}))(
+      (ctx.buddi?.log ?? ctx.log ?? (() => {}))(
         `email.inbox-poll: could not read dates in message ${message.id}: ` +
           `${err instanceof Error ? err.message : String(err)}; the watcher will try again`,
       );
@@ -969,7 +969,7 @@ async function drain(
         );
         await stampOn(tx, message.id, ctx.buddi!.clock.now());
       });
-      (ctx.log ?? (() => {}))(
+      (ctx.buddi?.log ?? ctx.log ?? (() => {}))(
         `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
           `${decision.policy.matcher} (ignore); no run started`,
       );

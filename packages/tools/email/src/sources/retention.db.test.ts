@@ -223,14 +223,14 @@ suite('email.retention (postgres)', () => {
     expect(enqueued).toBe(0);
     // Two lines now: the purge, and the draft lapse that rides the same beat.
     expect(lines).toEqual([
-      'email.retention: purged 2 bodies older than 90 days',
-      'email.retention: no drafts lapsed',
+      '[email] email.retention: purged 2 bodies older than 90 days',
+      '[email] email.retention: no drafts lapsed',
     ]);
     expect(await purgedCount()).toBe(2);
 
     // A second daily pass says so honestly rather than re-purging.
     await source.poll(ctx);
-    expect(lines[2]).toBe('email.retention: purged 0 bodies older than 90 days');
+    expect(lines[2]).toBe('[email] email.retention: purged 0 bodies older than 90 days');
   });
 
   it('renders the log line from the outcome', () => {
