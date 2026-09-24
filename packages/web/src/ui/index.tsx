@@ -90,16 +90,24 @@ export function Field({
   hint,
   inline,
   grow,
+  wide,
   children,
 }: {
   label: ReactNode;
   hint?: ReactNode;
   inline?: boolean;
   grow?: boolean;
+  /** In a FormGrid, take the whole row: a long input, a textarea, a checkbox. */
+  wide?: boolean;
   children: ReactNode;
 }): JSX.Element {
   return (
-    <div className="ui-field" data-inline={inline ? 'true' : undefined} data-grow={grow ? 'true' : undefined}>
+    <div
+      className="ui-field"
+      data-inline={inline ? 'true' : undefined}
+      data-grow={grow ? 'true' : undefined}
+      data-wide={wide ? 'true' : undefined}
+    >
       <label className="ui-field-control">
         <span className="ui-field-label">{label}</span>
         {children}
@@ -107,6 +115,17 @@ export function Field({
       {hint ? <span className="ui-field-hint">{hint}</span> : null}
     </div>
   );
+}
+
+/**
+ * The one layout for a form's fields: equal columns, two on a panel's normal
+ * width and one when it is narrow, every label starting on the same line. A
+ * hint under one field never pushes its neighbour down, and a lone field on
+ * its row keeps one column, so the grid reads as a grid and not as a wrap.
+ * A field spans the row with `wide`.
+ */
+export function FormGrid({ children }: { children: ReactNode }): JSX.Element {
+  return <div className="ui-formgrid">{children}</div>;
 }
 
 /* ------------------------------------------------------------------ *

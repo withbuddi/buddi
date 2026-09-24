@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { ApiError, api, type MemoryNote, type MemoryPreference } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
-import { Button, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
+import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
 
 const KINDS = ['fact', 'observation', 'todo'] as const;
 
@@ -267,7 +267,7 @@ function NoteSheet({ note, agents, onClose, onSave }: {
         <Field label="What it says" hint="One sentence that makes sense months from now, on its own.">
           <textarea rows={4} value={content} maxLength={2000} autoFocus onChange={(e) => setContent(e.target.value)} />
         </Field>
-        <Toolbar valign="end">
+        <FormGrid>
           <Field label="Kind">
             <select value={kind} onChange={(e) => setKind(e.target.value)}>
               {KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
@@ -276,7 +276,7 @@ function NoteSheet({ note, agents, onClose, onSave }: {
           <Field label="Who sees it">
             <ScopeSelect value={scope} agents={agents} onChange={setScope} />
           </Field>
-        </Toolbar>
+        </FormGrid>
         {note.createdByAgent ? <p className="muted">Written by {agents.find((a) => a.id === note.createdByAgent)?.name ?? note.createdByAgent}{note.createdAt ? `, ${fmtRelative(note.createdAt, Date.now())}` : ''}. Editing keeps that record.</p> : null}
         <Toolbar align="end">
           <Button onClick={onClose}>Cancel</Button>
