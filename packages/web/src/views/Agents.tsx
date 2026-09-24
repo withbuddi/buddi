@@ -47,7 +47,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
     <div className="ui-page">
       <header className="ui-page-head">
         <h2 className="ui-page-title">Agents</h2>
-        <p className="ui-page-lede">The team you built. Each one runs on the account you gave it and asks before it does anything that leaves this machine.</p>
+        <p className="ui-page-lede">The team you built. Each one runs on the account you gave it and asks before anything leaves this Mac.</p>
       </header>
       <Tabs>
         {INDEX_TABS.map((t) => (
@@ -62,7 +62,7 @@ export function Agents({ hash, timezone, navigate, agents, attention }: PlacePro
       {tab === 'team' ? <DefaultAgentPicker /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
-          <Empty mascot>No agents are installed. Agent files live under the installation's agents directory.</Empty>
+          <Empty mascot>No agents yet. Each agent is a file in the installation's agents folder.</Empty>
         ) : (
           <div className="team-grid">
             {agents.map((agent) => {

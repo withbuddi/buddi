@@ -82,7 +82,7 @@ describe('home', () => {
   it('says what needs a human, in one sentence', () => {
     expect(needsSentence(0, 0, 0, 0, false)).toBe('Nothing needs you. Your agents are on it.');
     expect(needsSentence(2, 2, 0, 0, false)).toBe('2 approvals waiting.');
-    expect(needsSentence(3, 1, 3, 1, false)).toBe('1 approval waiting, 3 failed jobs and 1 urgent finding.');
+    expect(needsSentence(3, 1, 3, 1, false)).toBe('1 approval waiting, 3 failed jobs and 1 urgent alert.');
     expect(needsSentence(1, 0, 0, 0, true)).toBe('The installation is paused.');
   });
 
@@ -114,7 +114,7 @@ describe('home', () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={agents} attention={new Map()} />);
     });
     await waitFor(() => expect(screen.getByText('Needs you')).toBeDefined());
-    expect(screen.getByText(/1 approval waiting, 3 failed jobs and 1 urgent finding/)).toBeDefined();
+    expect(screen.getByText(/1 approval waiting, 3 failed jobs and 1 urgent alert/)).toBeDefined();
     expect(screen.getByText('Send the invoice')).toBeDefined();
     // Sensitive: masked until asked, then shown.
     expect(screen.queryByText('$4,210')).toBeNull();

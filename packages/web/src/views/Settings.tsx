@@ -114,6 +114,7 @@ function AppearanceSection(): JSX.Element {
             onChange={(width) => set({ width })}
           />
         </PrefRow>
+        <p className="ui-card-meta">Kept in this browser only. Another browser keeps its own.</p>
       </Stack>
     </Panel>
   );
