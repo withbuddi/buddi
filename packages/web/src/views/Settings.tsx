@@ -72,7 +72,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded /> : null}
-          {section === 'computer' ? <Browser embedded /> : null}
+          {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
           {section === 'plugins' ? <Plugins /> : null}

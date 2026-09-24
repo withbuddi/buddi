@@ -8,21 +8,22 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
+import { fmtTime } from '../format';
 import { chatRoute } from '../routes';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 
-export function Browser({ embedded }: { embedded?: boolean } = {}): JSX.Element {
+export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
   return (
     <PageFrame embedded={embedded} title="Computer & browser">
       <ErrorBanner message={error} />
-      {!data ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} reload={reload} />}
+      {!data ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} reload={reload} timezone={timezone} />}
     </PageFrame>
   );
 }
 
-function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: () => void }): JSX.Element {
+function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; reload: () => void; timezone?: string }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -109,6 +110,7 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
       {settings ? (
         <>
           <Section title="How agents get a screen" panel>
+            <Stack divided>
             <div className="mode-choice" role="radiogroup" aria-label="Control mode">
               <ModeOption
                 current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
@@ -130,11 +132,15 @@ function ControlSettingsView({ data, reload }: { data: BrowserStatus; reload: ()
               />
             </div>
             {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
-            {settings.mode === 'extension' ? <ExtensionPairing busy={busy} /> : null}
+            {settings.mode === 'extension' ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
+            </Stack>
           </Section>
 
           <Section title="Apps agents may use" panel>
             <Stack>
+              {settings.mode !== 'computer' ? (
+                <p className="muted">Only used by “Use my apps”. The list is kept for when you switch back.</p>
+              ) : null}
               <AppList settings={settings} disabled={busy || active || !data.enabled} onChange={save} onAdd={() => setPicking(true)} />
               <Details summary="Details">
                 <div className="ui-prose muted">
@@ -211,7 +217,7 @@ function sameGateway(gateway: string): boolean {
  * owner is told which half is missing instead of being left to guess: a page
  * that waits for a code no extension is showing looks broken.
  */
-function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
+function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.extension(), [], 3_000);
   const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const [code, setCode] = useState('');
@@ -226,13 +232,20 @@ function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
     finally { setWorking(false); reload(); }
   };
   const disabled = busy || working;
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const install = (
+    <div className="ui-prose muted">
+      <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder.</p>
+      <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
+    </div>
+  );
   return (
     <Stack divided>
       <ErrorBanner message={error ?? failure} />
       <Toolbar>
         <Pill tone={data?.connected ? 'good' : 'warning'}>{data?.connected ? 'Connected' : 'Not connected'}</Pill>
         <span className="muted">
-          {data?.connected && data.pairedAt ? `Connected since ${new Date(data.pairedAt).toLocaleString()}`
+          {data?.connected && data.pairedAt ? `Paired with Chrome on this Mac since ${fmtTime(data.pairedAt, zone)}`
             : data?.pairedAt ? 'Paired, but Chrome is not running the extension right now.'
             : 'No browser is paired with this buddi yet.'}
           {data?.extension ? ` · extension ${data.extension}` : ''}
@@ -240,7 +253,9 @@ function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
       </Toolbar>
       <Stack>
         <p className="muted">
-          {probe ? `Extension found, version ${probe.version}.` : 'The buddi extension is not installed in this browser.'}
+          {probe ? `The browser you are reading this in has the extension, version ${probe.version}.`
+            : data?.connected ? 'The browser you are reading this in has no buddi extension. You only need it here to pair this browser instead.'
+            : 'The browser you are reading this in has no buddi extension yet.'}
           {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
           {probe?.state === 'disconnected' ? ' It is not connected yet: press Connect in its popup.' : ''}
         </p>
@@ -257,10 +272,7 @@ function ExtensionPairing({ busy }: { busy: boolean }): JSX.Element {
           <Button variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void run(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
         </Toolbar>
       ) : null}
-      <div className="ui-prose muted">
-        <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick that folder.</p>
-        <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
-      </div>
+      {data?.connected ? <Details summary="Pair a different browser">{install}</Details> : install}
       <Toolbar align="end">
         <Button variant="danger" disabled={disabled || !data?.pairedAt} onClick={() => void run(() => api.forgetExtension())}>Forget this browser</Button>
       </Toolbar>
@@ -297,7 +309,9 @@ function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSet
               </span>
               <Toolbar>
                 {id !== settings.browserApp && isBrowser(id) ? <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange({ ...settings, browserApp: id })}>Use as browser</Button> : null}
-                <Button size="sm" variant="ghost" disabled={disabled || id === settings.browserApp} title={id === settings.browserApp ? 'Pick another browser first' : undefined} onClick={() => onChange({ ...settings, allowedApps: settings.allowedApps.filter((a) => a !== id) })}>Remove</Button>
+                {id === settings.browserApp
+                  ? <span className="muted">In use as the browser</span>
+                  : <Button size="sm" variant="ghost" disabled={disabled} onClick={() => onChange({ ...settings, allowedApps: settings.allowedApps.filter((a) => a !== id) })}>Remove</Button>}
               </Toolbar>
             </li>
           ))}
@@ -307,7 +321,7 @@ function AppList({ settings, disabled, onChange, onAdd }: { settings: ControlSet
         <Button variant="accent" disabled={disabled} onClick={onAdd}>Add an app</Button>
         <span className="muted">The app marked as browser is the one agents open websites in.</span>
       </Toolbar>
-      {CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
+      {settings.mode === 'computer' && CHROMIUM.includes(settings.browserApp) ? <ProfileChoice settings={settings} disabled={disabled} onChange={onChange} /> : null}
     </>
   );
 }
