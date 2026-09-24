@@ -30,7 +30,7 @@
  * answers the privacy question: who saw the owner's words. The hosts that came
  * *back* go in `detail`, where they answer the other one: what did it read.
  */
-import type { NativeSearchEvent } from '@buddi/runtime';
+import type { NativeSearchEvent } from '@buddi/core/plugin';
 import { recordFetch, type Queryable } from './log.js';
 
 /** Where a provider's server-side search sends the query. */

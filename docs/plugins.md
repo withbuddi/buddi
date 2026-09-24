@@ -2753,7 +2753,7 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. |
+| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. |
 
 #### `AccountsArea`
 

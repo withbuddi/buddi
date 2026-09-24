@@ -9,8 +9,8 @@
  * owner, the accounts. Nothing new is wired into the calls; the host is a view
  * over them, and the old fields stay beside it until every plugin has moved.
  *
- * The few things no context carries — the HTTP transport, which lives in
- * `@buddi/runtime` and which core may not import, and the roster and queue a
+ * The few things no context carries — how the HTTP transport is made, which
+ * lives in `@buddi/runtime` and which core may not import, and the roster and queue a
  * tool never sees — are handed in once per process by the composition root
  * through `configurePluginHost`. A process that never does (a unit test) gets
  * areas that say so when called, not areas that are missing.
@@ -33,6 +33,7 @@ import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { localDateString } from '../time.js';
+import { createHttpArea, type HttpTransportFactory } from './http.js';
 import type { PluginManifest, SourceContext, ToolContext } from '../tools.js';
 import type {
   AccountsArea,
@@ -41,8 +42,6 @@ import type {
   EnqueueRunInput,
   FileRow,
   FilesArea,
-  HttpArea,
-  HttpResponse,
   ProposalsArea,
   ScheduleArea,
 } from './types.js';
@@ -77,23 +76,13 @@ export function hostBindingOf(manifest: PluginManifest): HostBinding {
   };
 }
 
-/** What `@buddi/runtime`'s `HttpTransport` is, structurally. */
-export type PluginHostTransport = (
-  url: string,
-  init: {
-    method: string;
-    headers: Record<string, string>;
-    body?: string | Buffer | undefined;
-    signal?: AbortSignal | undefined;
-    idleTimeoutMs?: number | undefined;
-    maxBytes?: number | undefined;
-  },
-) => Promise<HttpResponse>;
-
 /** What the composition root hands the host once per process. */
 export interface PluginHostServices {
-  /** The shared transport (`defaultHttpTransport`). */
-  http?: PluginHostTransport;
+  /**
+   * How the shared transport is made (`createHttpTransport`): the `http` area
+   * makes one with the address guard as its resolver (`host/http.ts`).
+   */
+  httpTransport?: HttpTransportFactory;
   /** The live roster's answer for a role, for contexts that carry none. */
   agentForRole?: (role: string) => string | undefined;
   /** How a run is started, for contexts that carry none (a tool's). */
@@ -125,15 +114,6 @@ export type HostFacts = Pick<ToolContext, 'db' | 'now' | 'timezone'> &
   Partial<Pick<SourceContext, 'log' | 'enqueueRun'>> & {
     agentForRole?: (role: string) => string | undefined;
   };
-
-/** Hosts already said to be undeclared, per plugin, so a loop logs once. */
-const undeclaredSeen = new Set<string>();
-
-function hostMatches(declared: string, host: string): boolean {
-  const pattern = declared.trim().toLowerCase();
-  if (pattern.startsWith('*.')) return host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1;
-  return pattern === host;
-}
 
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
@@ -278,7 +258,14 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     },
   };
 
-  if (declared.has('http')) host.http = httpArea(binding, log);
+  if (declared.has('http')) {
+    host.http = createHttpArea({
+      plugin,
+      network: binding.network,
+      log,
+      transport: services.httpTransport,
+    });
+  }
   if (declared.has('accounts')) host.accounts = accountsArea(binding, facts);
   if (declared.has('files') || declared.has('files:library')) {
     host.files = filesArea(binding, facts, declared.has('files:library'), env);
@@ -288,44 +275,6 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   // `memory` and `secrets` are types only in 1.0 (§11; secrets is step 3): a
   // plugin that declares them gets nothing yet, and a call is `undefined`.
   return host;
-}
-
-function httpArea(binding: HostBinding, log: (line: string) => void): HttpArea {
-  return {
-    async request(req) {
-      let host: string;
-      try {
-        host = new URL(req.url).hostname.replace(/^\[|\]$/g, '').toLowerCase();
-      } catch {
-        throw new Error(`that is not a URL: ${JSON.stringify(String(req.url).slice(0, 120))}`);
-      }
-      /*
-       * Logged, not refused, in 1.0: the hosts a manifest lists were
-       * documentation until now, and refusing an undeclared one before every
-       * plugin has written its down would break plugins that did nothing
-       * wrong (§4.2).
-       */
-      if (!binding.network.some((declared) => hostMatches(declared, host))) {
-        const key = `${binding.plugin}\u0000${host}`;
-        if (!undeclaredSeen.has(key)) {
-          undeclaredSeen.add(key);
-          log(`a request to ${host}, which its manifest does not declare under network`);
-        }
-      }
-      const transport = services.http;
-      if (transport === undefined) {
-        throw new Error('This process has no HTTP transport for plugins.');
-      }
-      return transport(req.url, {
-        method: req.method ?? 'GET',
-        headers: req.headers ?? {},
-        ...(req.body === undefined ? {} : { body: req.body }),
-        ...(req.signal === undefined ? {} : { signal: req.signal }),
-        ...(req.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: req.idleTimeoutMs }),
-        ...(req.maxBytes === undefined ? {} : { maxBytes: req.maxBytes }),
-      });
-    },
-  };
 }
 
 function accountsArea(binding: HostBinding, facts: HostFacts): AccountsArea {

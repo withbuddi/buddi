@@ -194,27 +194,8 @@ export interface Usage {
   webSearches?: number;
 }
 
-/**
- * One server-side search, as the audit trail needs it.
- *
- * The claim that native search costs us the audit trail turned out to be
- * wrong on inspection: the adapter sees the query in the `server_tool_use`
- * block and the result URLs in the `web_search_tool_result` block that follows
- * it. That is every column `web.fetches` has — who asked, when, what for,
- * where it went, how it ended — so a native search leaves the same trace a
- * `web.search` call does. What is *not* here is the page text, which is the
- * same thing the plugin's own log refuses to store.
- */
-export interface NativeSearchRecord {
-  /** What the model asked for, in its own words. */
-  query: string;
-  /** Result hosts, de-duplicated, in the order they ranked. */
-  hosts: string[];
-  resultCount: number;
-  outcome: 'ok' | 'error';
-  /** The provider's error code, when it failed. */
-  detail?: string;
-}
+import type { NativeSearchRecord } from '@buddi/core/plugin';
+export type { NativeSearchRecord };
 
 export interface CompletionResponse {
   content: ContentBlock[];

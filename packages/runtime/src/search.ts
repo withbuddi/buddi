@@ -29,13 +29,11 @@
  * plugin imports `parseSearchBackend` from here rather than parsing the same
  * variable a second time. One parser, one meaning of `BUDDI_SEARCH_PROVIDER`.
  */
+import { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from '@buddi/core/plugin';
 import type { ProviderCapabilities } from './capabilities.js';
 
-/** The owner's existing override. Named here because this is where it is parsed. */
-export const SEARCH_BACKEND_VAR = 'BUDDI_SEARCH_PROVIDER';
-
-/** The value that *forces* the provider's own search rather than merely allowing it. */
-export const NATIVE_BACKEND_ID = 'native';
+export { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from '@buddi/core/plugin';
+export type { SearchBackendChoice } from '@buddi/core/plugin';
 
 /** Bounds the searches one turn may run. See `planNativeSearch`. */
 export const NATIVE_SEARCH_MAX_USES_VAR = 'BUDDI_WEB_SEARCH_MAX_USES';
@@ -72,24 +70,6 @@ export const MAX_NATIVE_MAX_USES = 10;
  * replaces it.
  */
 export const NATIVE_SEARCH_REPLACES: readonly string[] = ['web.search'];
-
-/** What `BUDDI_SEARCH_PROVIDER` says, normalised. */
-export type SearchBackendChoice =
-  /** Unset: the platform picks — native where the provider has it. */
-  | { mode: 'auto' }
-  /** `native`: the provider's own search, and nothing else. */
-  | { mode: 'native' }
-  /** A backend the plugin owns (`tavily`, `brave`, or a typo it will report). */
-  | { mode: 'named'; id: string };
-
-export function parseSearchBackend(
-  env: Record<string, string | undefined> = process.env,
-): SearchBackendChoice {
-  const named = (env[SEARCH_BACKEND_VAR] ?? '').trim().toLowerCase();
-  if (named === '') return { mode: 'auto' };
-  if (named === NATIVE_BACKEND_ID) return { mode: 'native' };
-  return { mode: 'named', id: named };
-}
 
 /** What one run may do about searching, decided before the first request. */
 export interface NativeSearchPlan {

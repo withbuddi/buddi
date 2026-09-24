@@ -15,7 +15,7 @@
  *
  * It never returns a key, a key prefix, or anything derived from one.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { MAX_BYTES, MAX_REDIRECTS, TIMEOUT_MS } from '../http.js';
 import { resolveKey, selectProvider, type EnvLike } from '../providers/index.js';

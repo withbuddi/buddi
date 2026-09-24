@@ -30,7 +30,7 @@ import {
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
-import { createProvider, defaultHttpTransport, type RuntimeProvider } from '@buddi/runtime';
+import { createHttpTransport, createProvider, type RuntimeProvider } from '@buddi/runtime';
 import { ProviderSettings } from './providers.js';
 import { ProviderAccounts } from './provider-accounts.js';
 import { config as loadDotenv } from 'dotenv';
@@ -309,12 +309,13 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   adoptProcessCatalog(env, catalog);
   /*
    * What `ctx.buddi` needs and no context carries (docs/specs/plugin-host-api.md):
-   * the one transport every long-lived caller shares, which core may not
-   * import, and the live roster for `owner.agentForRole` — read on each call,
-   * so an agent given a role at lunchtime answers for it this afternoon.
+   * how the shared transport is made, which core may not import (the `http`
+   * area makes one with its address guard as the socket's resolver), and the
+   * live roster for `owner.agentForRole` — read on each call, so an agent
+   * given a role at lunchtime answers for it this afternoon.
    */
   configurePluginHost({
-    http: defaultHttpTransport,
+    httpTransport: createHttpTransport,
     agentForRole: (role) => catalog.agentsWithRole(role).find((agent) => agent.availability.ok)?.id,
     env,
   });

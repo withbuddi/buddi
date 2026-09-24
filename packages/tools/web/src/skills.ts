@@ -11,7 +11,7 @@
  * procedure, and a rule that lives inside one persona protects only that
  * persona.
  */
-import type { SuggestedSkill } from '@buddi/core';
+import type { SuggestedSkill } from '@buddi/core/plugin';
 
 export const webSkills: SuggestedSkill[] = [
   {

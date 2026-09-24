@@ -13,7 +13,7 @@
  * nothing in this package holds a key between calls: it is read at the moment
  * of the search and dropped.
  */
-import { parseSearchBackend, NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR } from '@buddi/runtime';
+import { parseSearchBackend, NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR } from '@buddi/core/plugin';
 import { brave, BRAVE_KEY_NAME } from './brave.js';
 import { tavily, TAVILY_KEY_NAME } from './tavily.js';
 import type { SearchProvider } from '../ports.js';
@@ -26,12 +26,11 @@ export type EnvLike = Record<string, string | undefined>;
 /**
  * The env var that names the backend.
  *
- * Re-exported from `@buddi/runtime` rather than spelled again, because the
- * runtime is the one that has to read it *before* a request is built — it
- * decides whether the provider will search server-side, which the plugin
- * cannot know (it never sees the agent, and therefore never sees the provider).
- * One parser, one meaning. `@buddi/tool-web` already depends on the runtime for
- * its transport, so this costs nothing new.
+ * Re-exported from `@buddi/core/plugin` rather than spelled again, because the
+ * runtime reads the same variable *before* a request is built — it decides
+ * whether the provider will search server-side, which the plugin cannot know
+ * (it never sees the agent, and therefore never sees the provider). One
+ * parser, one meaning, in the one place both import.
  */
 export const PROVIDER_VAR = SEARCH_BACKEND_VAR;
 

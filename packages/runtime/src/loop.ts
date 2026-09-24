@@ -322,13 +322,8 @@ export function interjectionText(texts: readonly string[]): string {
   return texts.map((text) => `the owner adds: ${text.trim()}`).join('\n\n');
 }
 
-/** One server-side search, stamped with the run that caused it. */
-export interface NativeSearchEvent extends NativeSearchRecord {
-  agentId: string;
-  conversationId: string;
-  /** The provider that ran it — which is also where the query text went. */
-  provider: string;
-}
+import type { NativeSearchEvent } from '@buddi/core/plugin';
+export type { NativeSearchEvent };
 
 /** How a decided action comes back into the run that proposed it. */
 export interface ApprovalResume {

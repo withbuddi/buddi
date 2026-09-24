@@ -2,7 +2,8 @@
  * second browser resolution. No UDP, local services, or filesystem URLs.
  * This is egress confinement for the browser, not an OS sandbox for plugins. */
 import { createConnection, createServer, type Socket, type AddressInfo } from 'node:net';
-import { checkUrl, guardedLookup, DEFAULT_POLICY, type AddressPolicy, type LookupAll } from '@buddi/tool-web';
+import { guardedLookup, type LookupAll } from '@buddi/core';
+import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/tool-web';
 
 export async function startProxy(options: { policy?: AddressPolicy; resolve?: LookupAll } = {}) {
   const policy = options.policy ?? DEFAULT_POLICY;

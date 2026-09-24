@@ -209,7 +209,10 @@ transport from `@buddi/runtime`, so web's import goes. A request to a host
 not in the manifest's `network` is logged with the plugin's name in the
 first version and refused once every plugin declares its hosts. It is also
 where an owner secret bound to a header is inserted (owner-secrets §3), so a
-plugin that wants a token never holds it.
+plugin that wants a token never holds it. The address guard that was the
+web plugin's (`checkUrl` in front, `guardedLookup` as the socket's resolver)
+is part of the area, so every plugin's requests are refused on this machine
+and its network, not only web's.
 
 **accounts.** `list(): ProviderAccountListing[]`, `resolve(id, model,
 signal?): Promise<ResolvedProvider>`, `withCodexProfile(id, use, signal?)`.

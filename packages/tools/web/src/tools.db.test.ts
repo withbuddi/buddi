@@ -8,7 +8,8 @@
 import type { Pool } from 'pg';
 import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPool, runMigrations, ToolRegistry, type ToolContext } from '@buddi/core';
+import { createHttpArea, createPool, runMigrations, ToolRegistry, type ToolContext } from '@buddi/core';
+import { createHttpTransport } from '@buddi/runtime';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { blockedAddress, isBlockedHostname, type AddressPolicy } from './guard.js';
 import { createFetcher } from './http.js';
@@ -81,7 +82,10 @@ suite('web tools (postgres)', () => {
     };
 
     const manifest = createWebManifest({
-      fetcher: createFetcher({ policy }),
+      fetcher: createFetcher({
+        policy,
+        http: createHttpArea({ plugin: 'web', network: [], log: () => {}, transport: createHttpTransport, policy }),
+      }),
       env: { [TAVILY_KEY_NAME]: 'test-key' },
       provider: fakeProvider,
     });
