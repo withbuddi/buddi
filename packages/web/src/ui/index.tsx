@@ -209,7 +209,29 @@ export function ErrorBanner({ message }: { message: string | null | undefined })
  * uploaded face beside the words; without one the state reads exactly as
  * before. Reserve it for a page's own empty state, not a row inside a list.
  */
-export function Empty({ mascot, children }: { mascot?: boolean; children: ReactNode }): JSX.Element {
+export function Empty({
+  mascot,
+  warm,
+  title,
+  action,
+  children,
+}: {
+  mascot?: boolean;
+  /** The kit's warm empty state: a sand ground, a title, a way forward. */
+  warm?: boolean;
+  title?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+}): JSX.Element {
+  if (warm || title) {
+    return (
+      <div className="ui-empty" data-warm={warm ? 'true' : undefined}>
+        {title ? <div className="ui-empty-title">{title}</div> : null}
+        <div>{children}</div>
+        {action}
+      </div>
+    );
+  }
   if (!mascot) return <p className="ui-empty">{children}</p>;
   return (
     <div className="ui-empty" data-mascot="true">
