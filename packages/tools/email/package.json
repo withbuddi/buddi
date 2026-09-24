@@ -15,7 +15,8 @@
     "uses": [
       "files",
       "proposals",
-      "schedule"
+      "schedule",
+      "secrets"
     ],
     "hostApi": "^1.0"
   },

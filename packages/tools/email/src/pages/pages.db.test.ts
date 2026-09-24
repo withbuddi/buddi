@@ -20,9 +20,13 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  configurePluginHost,
   createPool,
   createVault,
+  findSecret,
+  ownerSecretVaultName,
   pageQueryContext,
+  resetPluginHost,
   runMigrations,
   QueryRefusal,
   ToolRegistry,
@@ -132,7 +136,8 @@ suite('the mail pages, over postgres', () => {
     imap = new FakeImapServer();
     const connect: ImapClientFactory = async () => imap.client();
 
-    const manifest = createEmailManifest({ connect, env, vault });
+    configurePluginHost({ vault });
+    const manifest = createEmailManifest({ connect, env });
     await runMigrations(pool, [manifest]);
     registry = new ToolRegistry();
     registry.register(manifest);
@@ -154,6 +159,7 @@ suite('the mail pages, over postgres', () => {
     }
     if (dataDir) await rm(dataDir, { recursive: true, force: true });
     delete process.env.BUDDI_DATA_DIR;
+    resetPluginHost();
   });
 
   /** One mailbox, one conversation of two messages, one draft waiting on it. */
@@ -626,10 +632,18 @@ suite('the mail pages, over postgres', () => {
     const accounts = await listAccounts(pool, { enabledOnly: false });
     const account = accounts.find((a) => a.address === ADDED)!;
     expect(account).toMatchObject({ imapHost: 'imap.work.test', imapPort: 993, smtpHost: 'smtp.work.test' });
-    // The password is in the vault under the name the row carries, and the row
-    // carries a name rather than a secret.
+    // The password is an owner secret named as the row names it, bound to
+    // this mailbox's login and kept in the vault under its id; the row
+    // carries a name rather than a secret, and nothing is under the old name.
     expect(account.secretName).toBe(secretNameFor(ADDED));
-    expect(await vault.get(account.secretName)).toBe('letmein');
+    const secret = (await findSecret(pool, account.secretName))!;
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('letmein');
+    expect(await vault.get(account.secretName)).toBeNull();
+    const { rows: bindings } = await pool.query(
+      `select kind, target, rule from core.secret_bindings where secret_id = $1`,
+      [secret.id],
+    );
+    expect(bindings).toEqual([{ kind: 'email.account', target: account.id, rule: 'pre-approved' }]);
 
     expect(await refusal('email.add_account', { address: ADDED, password: 'again' })).toMatch(
       /is already here\. Remove it first/,
@@ -637,7 +651,8 @@ suite('the mail pages, over postgres', () => {
 
     await act('email.remove_account', { id: account.id });
     expect((await listAccounts(pool, { enabledOnly: false })).some((a) => a.address === ADDED)).toBe(false);
-    expect(await vault.get(account.secretName)).toBeNull();
+    expect(await findSecret(pool, account.secretName)).toBeNull();
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBeNull();
   });
 
   it('does not exist for an agent: an ownerOnly tool is unknown, not forbidden', async () => {

@@ -52,7 +52,8 @@ import {
   safeFilename,
   sniffMime,
 } from '../attachments/safety.js';
-import { resolveAuth, type EnvLike } from '../config.js';
+import type { EnvLike } from '../config.js';
+import { mailboxAuth } from '../credentials.js';
 import { EmailProblemError, type AttachmentInfo, type ImapClientFactory } from '../ports.js';
 import { FOLDER_COLUMNS, toFolder, type MessageRecord } from '../rows.js';
 import { accountOf, requireAgentId, requireMessage, UUID } from './shared.js';
@@ -272,7 +273,7 @@ export function createFetchAttachmentTool(
       }
       const folder = toFolder(folderRow);
 
-      const auth = resolveAuth(account, opts.env ?? process.env);
+      const auth = await mailboxAuth(ctx, account, opts.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 
       const client = await opts.connect(account, auth.value);

@@ -48,7 +48,8 @@
  * no double triage.
  */
 import type { DbArea, DbTransaction } from '@buddi/core/plugin';
-import { INBOX, listAccounts, markAccountSynced, resolveAuth, type EnvLike } from '../config.js';
+import { INBOX, listAccounts, markAccountSynced, type EnvLike } from '../config.js';
+import { mailboxAuth } from '../credentials.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
 import { scanMessageDates, skipDates } from '../dates-store.js';
@@ -520,7 +521,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       // `core.source_runs.last_error` and the rest of the mail still lands.
       const failures: unknown[] = [];
       for (const account of await listAccounts(ctx.buddi!.db)) {
-        const auth = resolveAuth(account, env);
+        const auth = await mailboxAuth(ctx, account, opts.env);
         if (!auth.ok) {
           // A typed configuration problem: say it once per poll and stop. An
           // unattended run that needs a secret fails with a problem; it never

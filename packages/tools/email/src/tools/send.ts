@@ -24,7 +24,8 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { resolveAuth, type EnvLike } from '../config.js';
+import type { EnvLike } from '../config.js';
+import { mailboxAuth } from '../credentials.js';
 import { EmailProblemError, type SmtpClientFactory, type SmtpEnvelope } from '../ports.js';
 import { mailboxKey } from '../mail.js';
 import { DRAFT_COLUMNS, toDraft, type DraftRecord } from '../rows.js';
@@ -448,7 +449,7 @@ export function createSendTool(
       // missing secret or an effect that no longer matches never leaves a draft
       // locked to an action that will not run.
       const account = await sendingAccount(ctx, draft);
-      const auth = resolveAuth(account, opts.env ?? process.env);
+      const auth = await mailboxAuth(ctx, account, opts.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
       const envelope = await buildEnvelope(ctx, input.draftId);
       // The tool's own sentence first — "this draft has been edited since you
@@ -485,7 +486,7 @@ export function createSendTool(
       // Configuration is resolved *before* the claim, so a missing secret or an
       // unimplemented auth mode never leaves a draft locked to a dead action.
       const account = await sendingAccount(ctx, found);
-      const auth = resolveAuth(account, opts.env ?? process.env);
+      const auth = await mailboxAuth(ctx, account, opts.env);
       if (!auth.ok) throw new EmailProblemError(auth.problem);
 
       const envelope = await buildEnvelope(ctx, input.draftId);

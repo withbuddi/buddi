@@ -14,8 +14,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest, Source } from '@buddi/core/plugin';
-// step 3: the vault a mailbox password is kept in, until the `secrets` area.
-import type { Vault } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailMetrics } from './metrics.js';
@@ -36,6 +34,7 @@ import { triageRecord } from './tools/triage.js';
 import { emailPolicyHandler } from './policies/learned.js';
 import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
 import type { EnvLike } from './config.js';
+import { accountDestination } from './credentials.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
@@ -51,16 +50,13 @@ export interface EmailPluginOptions {
   /** How SMTP clients are made. Defaults to the real `nodemailer` adapter. */
   send?: SmtpClientFactory;
   /**
-   * Where named secrets are read from. Defaults to `process.env`, read lazily
-   * at poll/send time — never at import, and never by the adapters themselves.
+   * An environment to read mailbox passwords from by name, instead of the
+   * owner's secrets. Injected by tests and one-shot callers only; the
+   * installed plugin has none, and its passwords come from
+   * `ctx.buddi.secrets` (`credentials.ts`). The poll's tuning knobs are read
+   * from it too, and from `process.env` when absent.
    */
   env?: EnvLike;
-  /**
-   * Where a mailbox's password is kept. Defaults to this machine's vault,
-   * resolved lazily inside `email.add_account` — never at import. Injected by
-   * a test, so adding an account never touches the owner's keychain.
-   */
-  vault?: Vault;
 }
 
 /**
@@ -124,11 +120,7 @@ export function createEmailManifest(
        * Every one of them is `ownerOnly`: the registry never lists them to a
        * model, and `invoke` refuses them for anyone but the owner's own path.
        */
-      ...emailPageTools({
-        connect: opts.connect ?? imapflowFactory,
-        ...(opts.vault ? { vault: opts.vault } : {}),
-        ...(opts.env ? { env: opts.env } : {}),
-      }),
+      ...emailPageTools({ connect: opts.connect ?? imapflowFactory }),
     ],
     // The Mail place and the Email settings tab, and the reads they make.
     pages: emailPages(),
@@ -148,11 +140,14 @@ export function createEmailManifest(
     // Beyond its own schema: the draft bodies and attachments it keeps in the
     // Files library, the rules it proposes, and the triage runs its poll starts
     // (with the reminders it checks a stated date against).
-    uses: ['files', 'proposals', 'schedule'],
+    // And each mailbox's password, an owner secret bound to its login: the
+    // one destination this plugin registers (`credentials.ts`).
+    uses: ['files', 'proposals', 'schedule', 'secrets'],
+    destinations: [accountDestination],
   };
 }
 
-/** The installed manifest: real transports, secrets read from `process.env`. */
+/** The installed manifest: real transports, passwords from the owner's secrets. */
 export const manifest: PluginManifest = createEmailManifest();
 
 /** The installed sources, for a gateway that wires `poll()` itself. */
@@ -397,6 +392,7 @@ export {
   INBOX,
   type EnvLike,
 } from './config.js';
+export { ACCOUNT_KIND, accountDestination, mailboxAuth } from './credentials.js';
 export {
   createDateStatedSentinel,
   createWaitingOnMeSentinel,

@@ -24,6 +24,8 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   configurePluginHost,
+  createVault,
+  type Vault,
   collectSources,
   countJobsByState,
   enqueue,
@@ -61,9 +63,11 @@ import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
   ensureGmailAccount,
+  listAccounts,
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
+import { adoptMailboxSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
@@ -523,6 +527,35 @@ export async function main(): Promise<void> {
     // environment variable. Idempotent, and a no-op when none is configured —
     // an installation with no mailbox is a valid, running one.
     const account = await ensureGmailAccount(pool, process.env);
+    /*
+     * Owner secrets: the vault behind ctx.buddi.secrets, opened once and
+     * handed to the host, never to a plugin. Then every mailbox password moves
+     * into one (idempotent; the old entry goes only once the new one reads
+     * back), before the first poll asks for it, and the copies in
+     * process.env go: nothing reads a mailbox password from the environment
+     * any more. What else stays in the environment, and why, is said on
+     * `mailboxSecretNames`.
+     */
+    {
+      let vault: Vault | undefined;
+      try {
+        vault = createVault({ env: process.env });
+      } catch (error) {
+        console.error(`owner secrets unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (vault !== undefined) configurePluginHost({ vault });
+      try {
+        const adopted = await adoptMailboxSecrets(pool, vault, process.env);
+        const moved = Object.entries(adopted.outcomes).filter(([, outcome]) => outcome === 'adopted');
+        if (moved.length > 0) console.error(`moved ${moved.length} mailbox password(s) into owner secrets`);
+        for (const problem of adopted.problems) console.error(`owner secrets: ${problem}`);
+        const names = (await listAccounts(pool, { enabledOnly: false })).map((a) => a.secretName);
+        clearFromEnvironment(process.env, mailboxSecretNames(process.env, names));
+      } catch (error) {
+        // Moving a credential may never be the thing that stops a start.
+        console.error(`owner secrets: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
 
     const missionDeps = {
       pool,
