@@ -19,6 +19,8 @@ import type {
 
 export const CSRF_COOKIE = 'buddi_csrf';
 export const CSRF_HEADER = 'x-buddi-csrf';
+/** A window event: the roster changed (a picture, say); re-read it now rather than in 15 s. */
+export const AGENTS_CHANGED = 'buddi:agents-changed';
 
 export class ApiError extends Error {
   constructor(
@@ -575,6 +577,8 @@ export interface AgentRow {
   avatar?: string;
   /** Its own colour, `#rrggbb`. */
   accent?: string;
+  /** The uploaded picture's URL, when there is one; `avatar` stays the fallback. */
+  picture?: string;
   skills: Array<{ name: string; provenance: string; file: string }>;
   /** Who it may hand work to. */
   delegates: string[];
@@ -1543,6 +1547,13 @@ export const api = {
   setDefaultAgent: (agentId: string) =>
     post<DefaultAgentView & { note: string }>('/agents/default', { agentId }),
   agentTools: (id: string) => get<ToolPickerView>(`/agents/${encodeURIComponent(id)}/tools`),
+  /** The owner's picture for an agent: a PNG, GIF or SVG of at most 1 MB, re-encoded server side. */
+  uploadAgentPicture: (id: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return upload<{ picture: string; side: number; source: 'png' | 'gif' | 'svg'; note?: string }>(`/agents/${encodeURIComponent(id)}/avatar`, form);
+  },
+  removeAgentPicture: (id: string) => del<void>(`/agents/${encodeURIComponent(id)}/avatar`),
   updateAgentFile: (id: string, change: AgentFileEdit) =>
     post<{ id: string; handle: string; file: string; tools: string[]; changed: string[]; personaChanged: boolean; live: boolean; message: string }>(
       `/agents/${encodeURIComponent(id)}/file`,

@@ -60,6 +60,7 @@ import { ROLE_MAKER } from '../agents/roles.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
 import { createWiringAsync, loadEnvironment } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
+import { syncProfilePhoto } from './profile-photo.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createEngagementHooks } from '../missions/engagement.js';
 import { recapMissionId } from '../missions/recap.js';
@@ -290,6 +291,8 @@ export interface TelegramHandle {
   cursor: string | undefined;
   /** Resolves when polling has stopped and every queued run has drained. */
   done: Promise<void>;
+  /** Bring the bot's profile photo in line with the default agent's picture. Fire and forget. */
+  syncProfilePhoto(): void;
   stop(): Promise<void>;
 }
 
@@ -586,11 +589,23 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
   };
   await publishMenus();
 
+  // The bot's profile photo is the default agent's uploaded picture, when it
+  // has one. Cosmetic like the menus: a Bot API refusal is logged, no more.
+  const photo = (): void => {
+    syncProfilePhoto({ api, pool, catalog: deps.catalog })
+      .then((outcome) => {
+        if (outcome !== 'unchanged') log(`telegram: profile photo ${outcome}`);
+      })
+      .catch((err) => log(`telegram: profile photo not updated: ${errorText(err)}`));
+  };
+  photo();
+
   // The catalog is a façade that can be rebuilt without a restart, and the menu
   // is derived from it: an owner who makes their own maker in session — or
   // deletes the one they had — gets the matching menu on the same turn, not on
   // the next boot. Cosmetic, so a failure is logged and never propagated.
   const unwatchCatalog = watchCatalogReloads(deps.catalog, () => {
+    photo();
     publishMenus().catch((err) => {
       log(`telegram: republishing the command menus after a catalog reload failed: ${errorText(err)}`);
     });
@@ -607,6 +622,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     paired,
     cursor,
     done,
+    syncProfilePhoto: photo,
     async stop(): Promise<void> {
       hostService(env).stop(deps.ctx.ownerId);
       unwatchCatalog();

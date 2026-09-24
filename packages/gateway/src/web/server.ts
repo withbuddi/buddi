@@ -100,6 +100,8 @@ import { ownerEditableInput, updateAgentFromOwner, PlatformRefusal } from '../ag
 import { readAgentProfile } from './profile.js';
 import { readToolPicker } from './tool-picker.js';
 import { AVATAR_IMAGE } from './chat.js';
+import { AvatarRefusal, MAX_AVATAR_INPUT_BYTES, normaliseAvatar, type NormalisedAvatar } from '../agents/avatar-image.js';
+import { avatarVersions, pictureUrl, readAvatar, removeAvatar, writeAvatar } from '../agents/avatars.js';
 import path_ from 'node:path';
 import { readFileSync } from 'node:fs';
 import {
@@ -1150,7 +1152,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             await readSentinels(deps.pool, deps.registry, boundedLimit(q.get('limit'), 50)),
           );
         case '/api/chat/agents':
-          return sendJson(res, 200, readChatAgents(deps.catalog));
+          return sendJson(res, 200, readChatAgents(deps.catalog, await avatarVersions(deps.pool)));
         // Which agents are waiting on the owner. One small query, and the only
         // definition of "waiting" in the installation — see attention.ts.
         case '/api/chat/attention':
@@ -1170,7 +1172,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, { views: deps.registry.views() });
         case '/api/agents':
           return sendJson(res, 200, {
-            agents: readAgents(deps.catalog),
+            agents: readAgents(deps.catalog, await avatarVersions(deps.pool)),
             // The engine half is read from the files, so a change made a
             // second ago shows even though this process still runs the
             // catalog it booted with — which `restartRequired` reports.
@@ -1315,8 +1317,34 @@ export function createWebApp(deps: WebServerDeps): Server {
       const avatar = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);
       if (avatar) {
         const agent = deps.catalog.get(decodeURIComponent(avatar[1]!));
-        const name = agent?.avatar;
-        if (!agent || !name || !AVATAR_IMAGE.test(name)) return sendEmpty(res, 404);
+        if (!agent) return sendEmpty(res, 404);
+        /*
+         * The uploaded picture first: a PNG this server encoded, with a strong
+         * ETag of its bytes. The URL carries the version, so the browser may
+         * keep it; a revalidation costs one 304.
+         */
+        const picture = await readAvatar(deps.pool, agent.id).catch(() => null);
+        if (picture) {
+          const etag = `"${picture.sha256}"`;
+          res.setHeader('Content-Type', 'image/png');
+          res.setHeader('ETag', etag);
+          res.setHeader('Cache-Control', 'private, no-cache');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+          res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+          const presented = first(req.headers['if-none-match']);
+          if (presented !== undefined && presented.split(',').some((tag) => tag.trim() === etag)) {
+            res.statusCode = 304;
+            res.end();
+            return;
+          }
+          res.setHeader('Content-Length', String(picture.png.length));
+          res.statusCode = 200;
+          res.end(method === 'HEAD' ? undefined : picture.png);
+          return;
+        }
+        const name = agent.avatar;
+        if (!name || !AVATAR_IMAGE.test(name)) return sendEmpty(res, 404);
         const file = path_.join(path_.dirname(agent.file), name);
         let bytes: Buffer;
         try { bytes = readFileSync(file); } catch { return sendEmpty(res, 404); }
@@ -1544,6 +1572,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
       }
+      // The agent's uploaded picture goes; its icon is drawn again.
+      const avatarGone = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);
+      if (avatarGone) {
+        const agent = deps.catalog.get(decodeURIComponent(avatarGone[1]!));
+        if (!agent) return sendJson(res, 404, { error: 'no such agent' });
+        if (await removeAvatar(deps.pool, agent.id)) deps.telegram?.pictureChanged?.(agent.id);
+        return sendEmpty(res, 204);
+      }
       const discard = /^\/api\/artifacts\/([0-9a-f-]{36})$/.exec(path);
       if (!discard) return sendEmpty(res, 405);
       const outcome = await discardUnreferencedUpload(deps.pool, discard[1]!, WEB_CHAT_SURFACE, deps.now());
@@ -1723,6 +1759,38 @@ export function createWebApp(deps: WebServerDeps): Server {
      * `readJsonBody` caps at 64 KB for exactly that reason. A 20 MB statement
      * would be refused by that cap before the multipart parser ever saw it.
      */
+    /*
+     * The owner's picture for an agent: one PNG, GIF or SVG of at most 1 MB,
+     * re-encoded to a square PNG before a byte is kept (`avatar-image.ts`).
+     * The only write path there is — no agent tool and no MCP write reaches
+     * it — and it never touches the agent file, so a shipped example can have
+     * a picture too.
+     */
+    const avatarUpload = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);
+    if (avatarUpload) {
+      const agent = deps.catalog.get(decodeURIComponent(avatarUpload[1]!));
+      if (!agent) return sendJson(res, 404, { error: 'no such agent' });
+      const upload = await readUpload(req, MAX_AVATAR_INPUT_BYTES);
+      if (!upload.ok) {
+        return sendJson(res, upload.status, { error: upload.status === 413 ? 'A picture can be at most 1 MB.' : upload.error });
+      }
+      let picture: NormalisedAvatar;
+      try {
+        picture = await normaliseAvatar(upload.file.bytes, upload.file.mime);
+      } catch (err) {
+        if (err instanceof AvatarRefusal) return sendJson(res, err.status, { error: err.message });
+        throw err;
+      }
+      await writeAvatar(deps.pool, agent.id, picture);
+      deps.telegram?.pictureChanged?.(agent.id);
+      return sendJson(res, 200, {
+        picture: pictureUrl(agent.id, picture.sha256),
+        side: picture.side,
+        source: picture.source,
+        ...(picture.source === 'gif' ? { note: 'A GIF keeps its first frame only.' } : {}),
+      });
+    }
+
     if (path === '/api/chat/attachments') {
       if (!chat) return sendJson(res, 503, { error: CHAT_UNAVAILABLE });
       if (!deps.chat?.artifacts) return sendJson(res, 503, { error: ATTACHMENTS_UNAVAILABLE });

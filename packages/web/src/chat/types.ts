@@ -51,6 +51,8 @@ export interface ChatAgent {
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
   accent?: string;
+  /** The picture the owner uploaded, drawn instead of `avatar` when present. */
+  picture?: string;
 }
 
 export interface AgentsResponse {

@@ -124,6 +124,7 @@ import {
 import { QUESTION_ASKED, QUESTION_CLEARED, holdsQuestion } from './attention.js';
 import { type ArtifactStore } from '../telegram/attachments.js';
 import { LiveTurns } from './live.js';
+import { pictureUrl } from '../agents/avatars.js';
 
 /** The surface id every web run is attributed to in the event log. */
 export const WEB_CHAT_SURFACE = WEB_SURFACE.id;
@@ -188,6 +189,11 @@ export interface ChatAgentView {
   avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; url: string };
   /** `#rrggbb`, the agent's own colour. */
   accent?: string;
+  /**
+   * The picture the owner uploaded, when there is one: drawn instead of
+   * `avatar`, which stays the fallback. A URL on this origin, versioned.
+   */
+  picture?: string;
 }
 
 /** An image name is a plain file name with a raster extension; anything else is drawn as text. */
@@ -246,7 +252,10 @@ export function unavailableMessage(agent: { name: string; availability: AgentAva
  * is something the owner can fix, and an agent that silently vanished from a
  * picker is something they cannot.
  */
-export function readChatAgents(catalog: AgentCatalog): {
+export function readChatAgents(
+  catalog: AgentCatalog,
+  pictures: ReadonlyMap<string, string> = new Map(),
+): {
   agents: ChatAgentView[];
   defaultAgentId: string;
 } {
@@ -273,6 +282,7 @@ export function readChatAgents(catalog: AgentCatalog): {
         : { starters: [...summary.starters] }),
       ...(summary.avatar === undefined ? {} : { avatar: avatarOf(summary.id, summary.avatar) }),
       ...(summary.accent === undefined ? {} : { accent: summary.accent }),
+      ...(pictures.has(summary.id) ? { picture: pictureUrl(summary.id, pictures.get(summary.id)!) } : {}),
     };
   });
   return { agents, defaultAgentId: catalog.defaultAgent().id };

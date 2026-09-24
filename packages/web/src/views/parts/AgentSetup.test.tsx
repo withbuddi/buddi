@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type AgentsView } from '../../api';
 import { AgentSetup } from './AgentSetup';
-vi.mock('../../api', () => ({ api: { agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), updateAgentFile: vi.fn() } }));
+vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), updateAgentFile: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
@@ -56,4 +56,31 @@ it('sends no tools when only the name changed', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Save who it is' }));
   await waitFor(() => expect(api.updateAgentFile).toHaveBeenCalled());
   expect(vi.mocked(api.updateAgentFile).mock.calls[0]![1]).not.toHaveProperty('tools');
+});
+
+it('uploads a picture beside the Face, previews it, and removes it', async () => {
+  const changed = vi.fn();
+  window.addEventListener('buddi:agents-changed', changed);
+  const createObjectURL = vi.fn(() => 'blob:preview');
+  Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+  vi.mocked(api.uploadAgentPicture).mockResolvedValue({ picture: '/api/agents/demo/avatar?v=1', side: 512, source: 'gif', note: 'A GIF keeps its first frame only.' });
+  render(<AgentSetup agentId="demo" />);
+  const input = await screen.findByLabelText('Choose a picture');
+  expect(screen.getByRole('button', { name: 'Save picture' })).toBeDisabled();
+  const file = new File(['GIF89a'], 'me.gif', { type: 'image/gif' });
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(document.querySelector('img[src="blob:preview"]')).not.toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Save picture' }));
+  await waitFor(() => expect(api.uploadAgentPicture).toHaveBeenCalledWith('demo', file));
+  expect(await screen.findByText('A GIF keeps its first frame only.')).toBeInTheDocument();
+  expect(changed).toHaveBeenCalled();
+  window.removeEventListener('buddi:agents-changed', changed);
+});
+
+it('offers Remove only when there is a picture', async () => {
+  vi.mocked(api.agents).mockResolvedValue({ ...view, agents: [{ ...view.agents[0]!, picture: '/api/agents/demo/avatar?v=2' }] } as AgentsView);
+  vi.mocked(api.removeAgentPicture).mockResolvedValue(undefined);
+  render(<AgentSetup agentId="demo" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Remove picture' }));
+  await waitFor(() => expect(api.removeAgentPicture).toHaveBeenCalledWith('demo'));
 });

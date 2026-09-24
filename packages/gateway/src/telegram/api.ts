@@ -522,6 +522,42 @@ export class TelegramApi {
   async deleteMyCommands(scope?: TelegramCommandScope): Promise<void> {
     await this.call('deleteMyCommands', { ...(scope ? { scope } : {}) });
   }
+
+  /**
+   * The bot's own profile photo. Telegram takes a JPEG, uploaded fresh every
+   * time (a profile photo cannot reuse a `file_id`), as an attachment named by
+   * an `InputProfilePhotoStatic`.
+   */
+  async setMyProfilePhoto(jpeg: Buffer): Promise<void> {
+    const boundary = `buddi${randomUUID().replace(/-/g, '')}`;
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="photo"\r\n\r\n` +
+          `${JSON.stringify({ type: 'static', photo: 'attach://avatar' })}\r\n` +
+          `--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="avatar.jpg"\r\n` +
+          `Content-Type: image/jpeg\r\n\r\n`,
+      ),
+      jpeg,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/setMyProfilePhoto`, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    const raw = await res.text();
+    let parsed: any;
+    try { parsed = raw === '' ? {} : JSON.parse(raw); }
+    catch { throw new TelegramApiError('setMyProfilePhoto', res.status, `unparseable response: ${raw.slice(0, 200)}`); }
+    if (!res.ok || parsed?.ok !== true) {
+      throw new TelegramApiError('setMyProfilePhoto', res.status, String(parsed?.description ?? 'unknown error'));
+    }
+  }
+
+  /** Take the bot's profile photo down. */
+  async removeMyProfilePhoto(): Promise<void> {
+    await this.call('removeMyProfilePhoto', {});
+  }
 }
 
 /**

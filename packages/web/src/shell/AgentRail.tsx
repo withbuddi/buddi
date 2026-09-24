@@ -33,8 +33,9 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import React, { useState } from 'react';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative } from '../format';
-import { badgeOf, canGroup, monogram, waitingText, type AgentAttention, type AgentGroups } from './roster';
+import { badgeOf, canGroup, waitingText, type AgentAttention, type AgentGroups } from './roster';
 import type { GroupView } from '../chat/types';
+import { FaceMark } from '../views/parts/Avatar';
 
 export interface AgentRailProps {
   /** Already grouped and ordered — `groupAgents` decides, in one place. */
@@ -151,11 +152,7 @@ export function AgentRail({
                 <span className="wb-face-mark wb-group-stack" aria-hidden="true">
                   {group.members.slice(0, 3).map((id) => {
                     const agent = everyone.find((a) => a.id === id);
-                    return (
-                      <span key={id} className="wb-group-chip" data-tint={tintOf(id)} data-kind={agent?.avatar?.kind} data-accent={agent?.accent ? 'true' : undefined} style={agent?.accent ? ({ '--face-accent': agent.accent } as React.CSSProperties) : undefined}>
-                        {agent?.avatar?.kind === 'image' ? <img src={agent.avatar.url} alt="" /> : agent?.avatar?.kind === 'emoji' ? agent.avatar.value : agent ? monogram(agent.name).slice(0, 1) : '?'}
-                      </span>
-                    );
+                    return <FaceMark key={id} className="wb-group-chip" tint={tintOf(id)} name={agent?.name ?? '?'} face={agent} initials={1} />;
                   })}
                   {group.members.length > 3 ? <span className="wb-group-chip wb-group-more">+{group.members.length - 3}</span> : null}
                 </span>
@@ -246,9 +243,7 @@ export function AgentFace({
           disabled={!agent.available}
           onClick={() => agent.available && onSelect(agent.id)}
         >
-          <span className="wb-face-mark" aria-hidden="true" data-kind={agent.avatar?.kind} data-accent={agent.accent ? 'true' : undefined} style={agent.accent ? ({ '--face-accent': agent.accent } as React.CSSProperties) : undefined}>
-            {agent.avatar?.kind === 'image' ? <img src={agent.avatar.url} alt="" /> : agent.avatar?.kind === 'emoji' ? agent.avatar.value : monogram(agent.name)}
-          </span>
+          <FaceMark className="wb-face-mark" name={agent.name} face={agent} />
           <span className="wb-face-text" aria-hidden="true">
             {/* The handle rides the title line, muted, because it is the other
                 half of the name: it is what the owner types. The second line
