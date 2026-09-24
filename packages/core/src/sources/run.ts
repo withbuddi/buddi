@@ -20,6 +20,7 @@
 import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
 import type { PluginManifest, Source, SourceContext } from '../tools.js';
+import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
 
 /** Every source the installed plugins ship, in manifest order. */
 export function collectSources(manifests: PluginManifest[]): Source[] {
@@ -63,6 +64,13 @@ export async function runSources(
 ): Promise<SourceOutcome[]> {
   const sources = collectSources(manifests);
   if (sources.length === 0) return [];
+  // Which plugin each source belongs to, for its `ctx.buddi`.
+  const bindings = new Map<string, HostBinding>();
+  for (const manifest of manifests) {
+    if ((manifest.sources ?? []).length === 0) continue;
+    const binding = hostBindingOf(manifest);
+    for (const source of manifest.sources ?? []) bindings.set(source.id, binding);
+  }
   const log = input.log ?? ((line: string) => console.error(line));
 
   const { rows: ledger } = await pool.query<RunLedgerRow>(
@@ -78,7 +86,7 @@ export async function runSources(
       outcomes.push({ sourceId: source.id, ran: false });
       continue;
     }
-    outcomes.push(await pollOne(pool, source, input, log));
+    outcomes.push(await pollOne(pool, source, input, log, bindings.get(source.id)));
   }
   return outcomes;
 }
@@ -88,6 +96,7 @@ async function pollOne(
   source: Source,
   input: RunSourcesInput,
   log: (line: string) => void,
+  binding: HostBinding | undefined,
 ): Promise<SourceOutcome> {
   const ctx: SourceContext = {
     db: pool,
@@ -96,6 +105,7 @@ async function pollOne(
     log,
     enqueueRun: input.enqueueRun,
   };
+  if (binding !== undefined) ctx.buddi = createPluginHost(binding, ctx);
   try {
     await source.poll(ctx);
   } catch (err) {

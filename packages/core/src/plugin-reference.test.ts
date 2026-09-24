@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { HOST_API_VERSION } from './plugin/version.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DOC = path.resolve(here, '..', '..', '..', 'docs', 'plugins.md');
@@ -49,7 +50,50 @@ export const DOCUMENTED: Record<string, string> = {
   ViewDescriptor: 'views.ts',
   PageDescriptor: 'pages.ts',
   PageQuery: 'pages.ts',
+  ...Object.fromEntries(
+    [
+      'BuddiHost',
+      'OwnerArea',
+      'ClockArea',
+      'DbArea',
+      'DirArea',
+      'ApprovalsArea',
+      'PagesArea',
+      'HttpArea',
+      'AccountsArea',
+      'FilesArea',
+      'MemoryArea',
+      'ProposalsArea',
+      'ScheduleArea',
+      'SecretsArea',
+    ].map((name) => [name, path.join('host', 'types.ts')]),
+  ),
 };
+
+/**
+ * The host's tables (§9b) carry one more column: the `ctx.buddi` version that
+ * introduced each member (docs/specs/plugin-host-api.md §7). Every row must
+ * name one, and none may be newer than the host this build is.
+ */
+export const HOST_DOCUMENTED = Object.keys(DOCUMENTED).filter((name) => DOCUMENTED[name] === path.join('host', 'types.ts'));
+
+/** The "Since" cell of every row in one host table, by field. */
+export function sinceColumn(markdown: string, name: string): Map<string, string> {
+  const heading = new RegExp(`^#{2,4} \`${name}\`\\s*$`, 'm');
+  const start = heading.exec(markdown);
+  const since = new Map<string, string>();
+  if (start === null) return since;
+  const after = markdown.slice(start.index + start[0].length);
+  const end = /^#{1,4} /m.exec(after);
+  const section = end === null ? after : after.slice(0, end.index);
+  for (const line of section.split('\n')) {
+    const cells = line.replace(/\\\|/g, '\u0001').split('|').map((cell) => cell.trim());
+    const field = /^`([A-Za-z_][A-Za-z0-9_]*)`/.exec(cells[1] ?? '');
+    if (field === null || cells.length < 7) continue;
+    since.set(field[1] as string, cells[4] ?? '');
+  }
+  return since;
+}
 
 /** One member of an interface: its name, and whether the type marks it optional. */
 export interface Member {
@@ -158,6 +202,24 @@ suite('docs/plugins.md — the plugin contract reference', () => {
           .map((m) => `${m.name} is ${m.optional ? 'optional' : 'required'} in the type`);
         expect(wrong).toEqual([]);
       });
+
+      if (HOST_DOCUMENTED.includes(name)) {
+        it('says since which host version each member exists', () => {
+          const since = sinceColumn(markdown, name);
+          const [haveMajor, haveMinor] = HOST_API_VERSION.split('.').map(Number) as [number, number];
+          const wrong = (byInterface.get(name) ?? [])
+            .map((m) => [m.name, since.get(m.name) ?? ''] as const)
+            .filter(([, version]) => {
+              const match = /^(\d+)\.(\d+)$/.exec(version);
+              if (match === null) return true;
+              const major = Number(match[1]);
+              const minor = Number(match[2]);
+              return major > haveMajor || (major === haveMajor && minor > haveMinor);
+            })
+            .map(([field, version]) => `${field}: "${version}"`);
+          expect(wrong).toEqual([]);
+        });
+      }
     });
   }
 });

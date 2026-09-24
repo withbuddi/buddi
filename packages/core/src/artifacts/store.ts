@@ -15,11 +15,11 @@
  * or a run, and those references must stay explicable after the owner forgets
  * the file. The bytes are left in place in v1; only the row is tombstoned.
  */
-import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
+import { sha256Of } from '../plugin/hash.js';
 
 /** The four kinds `core.artifacts.kind` allows. */
 export type ArtifactKind = 'document' | 'image' | 'audio' | 'other';
@@ -153,9 +153,8 @@ export function extensionFor(mime: string, filename?: string | null): string {
   return SAFE_EXT.test(subtype) ? subtype : 'bin';
 }
 
-export function sha256Of(bytes: Buffer): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
+// Pure, so it lives in the plugin entry point (`@buddi/core/plugin`).
+export { sha256Of };
 
 /** `artifacts/<yyyy>/<mm>/<sha256>.<ext>` — relative, always POSIX-separated. */
 export function storagePathFor(

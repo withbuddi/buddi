@@ -26,6 +26,7 @@ import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQ
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
+import { hostBindingOf, withPluginHost, type HostBinding } from './host/build.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -260,13 +261,28 @@ export class ToolRegistry {
   readonly #pageTools = new Map<string, Set<string>>();
   /** Per plugin, the metrics `parseMetrics` checked and made strict. */
   readonly #metrics = new Map<string, RegisteredMetric[]>();
+  /** Per plugin, what its `ctx.buddi` is bound to (docs/specs/plugin-host-api.md §3). */
+  readonly #bindings = new Map<string, HostBinding>();
+
+  /**
+   * The context handed to one of `plugin`'s functions: the caller's, with that
+   * plugin's `ctx.buddi` on it. Every road from here into plugin code goes
+   * through this, so a plugin always sees its own host and never another's.
+   */
+  #host<C extends ToolContext>(plugin: string, ctx: C): C {
+    const binding = this.#bindings.get(plugin);
+    return binding === undefined ? ctx : withPluginHost(binding, ctx);
+  }
 
   register(manifest: PluginManifest): void {
     if (this.#manifests.has(manifest.name)) {
       throw new Error(`plugin already registered: ${manifest.name}`);
     }
     // Derived before anything is stored, so a plugin that fails either check
-    // leaves the registry exactly as it was.
+    // leaves the registry exactly as it was. The host binding first: a `uses`
+    // naming an area this build does not have is a startup error naming the
+    // plugin, like every other check here.
+    const binding = hostBindingOf(manifest);
     const schemas = new Map<string, Record<string, unknown>>();
     for (const tool of manifest.tools) {
       const existing = this.#tools.get(tool.name);
@@ -340,10 +356,25 @@ export class ToolRegistry {
       }
     }
     this.#manifests.set(manifest.name, manifest);
-    if (metrics) this.#metrics.set(manifest.name, metrics);
+    this.#bindings.set(manifest.name, binding);
+    if (metrics) {
+      this.#metrics.set(
+        manifest.name,
+        metrics.map((metric) => ({
+          ...metric,
+          measure: (params: unknown, ctx: ToolContext) => metric.measure(params, this.#host(manifest.name, ctx)),
+        })),
+      );
+    }
     if (contributions) {
       this.#pages.set(manifest.name, contributions.pages);
-      this.#queries.set(manifest.name, contributions.queries);
+      this.#queries.set(
+        manifest.name,
+        contributions.queries.map((query) => ({
+          ...query,
+          produce: (params: unknown, ctx: ToolContext) => query.produce(params, this.#host(manifest.name, ctx)),
+        })),
+      );
       this.#pageTools.set(manifest.name, new Set(contributions.tools));
     }
     for (const tool of manifest.tools) {
@@ -423,12 +454,19 @@ export class ToolRegistry {
    * and for the same reason.
    */
   previews(plugin: string): PreviewProvider | undefined {
-    return this.#manifests.get(plugin)?.previews;
+    const previews = this.#manifests.get(plugin)?.previews;
+    if (previews === undefined) return undefined;
+    return { resolve: (name, ctx) => previews.resolve(name, this.#host(plugin, ctx)) };
   }
 
   /** Every Home block the installed plugins contribute, in registration order. */
   home(): HomeContribution[] {
-    return [...this.#manifests.values()].flatMap((m) => m.home ?? []);
+    return [...this.#manifests.values()].flatMap((m) =>
+      (m.home ?? []).map((block) => ({
+        ...block,
+        produce: (ctx: ToolContext) => block.produce(this.#host(m.name, ctx)),
+      })),
+    );
   }
 
   /**
@@ -468,7 +506,8 @@ export class ToolRegistry {
   }
 
   async image(name: string, output: unknown, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined> {
-    return this.#tools.get(name)?.tool.image?.(output, ctx);
+    const entry = this.#tools.get(name);
+    return entry?.tool.image?.(output, this.#host(entry.plugin, ctx));
   }
 
   /**
@@ -498,7 +537,8 @@ export class ToolRegistry {
   lookup(name: string): ExecutableTool | undefined {
     const entry = this.#tools.get(name);
     if (!entry) return undefined;
-    const { tool, version } = entry;
+    const { tool, version, plugin } = entry;
+    const host = (ctx: ToolContext): ToolContext => this.#host(plugin, ctx);
     return {
       name: tool.name,
       version,
@@ -506,28 +546,29 @@ export class ToolRegistry {
       ...(tool.producesArtifacts ? { producesArtifacts: true } : {}),
       input: tool.input,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
-      ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, ctx) } : {}),
+      ...(tool.describe ? { describe: (input: unknown, ctx: ToolContext) => tool.describe!(input, host(ctx)) } : {}),
       // `claim` travels with the rest. A tool declares it so that a lost race
       // settles `refused` with nothing in the effect ledger; a lookup that
       // dropped it would leave the hook silently never called, and the
       // executor would go on to record an attempt for something that was
       // never attempted.
-      ...(tool.claim ? { claim: (input: unknown, ctx: ToolContext) => tool.claim!(input, ctx) } : {}),
-      execute: (input: unknown, ctx: ToolContext) => tool.execute(input, ctx),
+      ...(tool.claim ? { claim: (input: unknown, ctx: ToolContext) => tool.claim!(input, host(ctx)) } : {}),
+      execute: (input: unknown, ctx: ToolContext) => tool.execute(input, host(ctx)),
     };
   }
 
   async invoke(
     name: string,
     rawArgs: unknown,
-    ctx: ToolContext,
+    caller: ToolContext,
   ): Promise<InvokeResult> {
-    ctx.signal?.throwIfAborted();
+    caller.signal?.throwIfAborted();
     const entry = this.#tools.get(name);
     if (!entry) {
       return { ok: false, reason: 'unknown-tool', message: `unknown tool: ${name}` };
     }
     const { tool, version } = entry;
+    const ctx = this.#host(entry.plugin, caller);
 
     /*
      * An `ownerOnly` tool is not listed to a model, and this is the other half
