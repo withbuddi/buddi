@@ -128,7 +128,6 @@ Small, whenever a slot opens:
   `/api/agents/:id/avatar`, shown in the roster, chat header, delegation view
   and the Telegram profile photo; the icon remains the fallback. The mascot
   artwork itself lives in the `buddi-design` repository, never here.
-- Artefacts page — the list of `core.artifacts` with preview and download.
 - Agent tool picker — built 2026-09-23 (buddi `c8c2e1c`); every installed tool
   from `GET /api/agents/:id/tools`, grouped by plugin with its description, a
   search, and all/none per plugin that saves as the family glob when the server
