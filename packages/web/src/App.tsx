@@ -43,7 +43,8 @@ import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
 import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
-import { applyTheme, readTheme, storeTheme, type ThemeChoice } from './theme';
+import { applyAppearance, useAppearance } from './appearance';
+import type { ThemeChoice } from './theme';
 import { Activity } from './views/Activity';
 import { Agents } from './views/Agents';
 import { Home } from './views/Home';
@@ -103,16 +104,17 @@ export function useMediaQuery(query: string): boolean {
   return matches;
 }
 
+/**
+ * The owner's theme, through the shared appearance store: the rail's menu and
+ * Settings → Appearance change the same value.
+ */
 export function useThemeChoice(): [ThemeChoice, (choice: ThemeChoice) => void] {
-  const [theme, setTheme] = useState<ThemeChoice>(() => readTheme());
+  const [appearance, setAppearance] = useAppearance();
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-  const choose = useCallback((choice: ThemeChoice) => {
-    setTheme(choice);
-    storeTheme(choice);
-  }, []);
-  return [theme, choose];
+    applyAppearance(appearance);
+  }, [appearance]);
+  const choose = useCallback((theme: ThemeChoice) => setAppearance({ theme }), [setAppearance]);
+  return [appearance.theme, choose];
 }
 
 export function App(): JSX.Element {

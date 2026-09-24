@@ -12,6 +12,7 @@ import { render, screen } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import {
   PLACES,
+  SETTINGS_ROUTE,
   SETTINGS_SECTIONS,
   parsePluginPageRoute,
   parsePluginSettingsRoute,
@@ -78,14 +79,16 @@ describe('the order of the extra entries', () => {
 });
 
 describe('the rail', () => {
-  it('draws a plugin entry after the core places, with the icon the descriptor asked for', () => {
+  it('draws a plugin entry after the core places and before Settings, with the icon the descriptor asked for', () => {
     render(
       <Tooltip.Provider>
         <Rail attention={0} place="#/p/demo/board" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} plugins={[board]} />
       </Tooltip.Provider>,
     );
     const links = screen.getAllByRole('link').map((el) => el.getAttribute('href'));
-    expect(links[links.length - 1]).toBe('#/p/demo/board');
+    // Settings is the last place on the rail, whatever the plugins add.
+    expect(links[links.length - 1]).toBe(SETTINGS_ROUTE);
+    expect(links[links.length - 2]).toBe('#/p/demo/board');
     const entry = screen.getByRole('link', { name: 'Demo board' });
     expect(entry).toHaveAttribute('aria-current', 'page');
     expect(entry.querySelector('svg')).not.toBeNull();

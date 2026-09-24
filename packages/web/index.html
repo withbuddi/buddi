@@ -9,6 +9,19 @@
     <link rel="icon" type="image/png" sizes="64x64" href="./favicon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <meta name="theme-color" content="#2b6fe6" />
+    <script>
+      /* Appearance before the first paint: the same three keys src/appearance.ts
+         writes, each read in a try, each attribute absent at its default. */
+      (function () {
+        var root = document.documentElement;
+        function read(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
+        var theme = read('buddi.theme');
+        if (theme === 'light' || theme === 'dark') root.setAttribute('data-theme', theme);
+        if (read('buddi.ground') === 'sand') root.setAttribute('data-ground', 'sand');
+        var width = read('buddi.pageWidth');
+        if (width === 'narrow' || width === 'full') root.setAttribute('data-width', width);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

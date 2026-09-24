@@ -51,7 +51,8 @@ describe('the shell', () => {
     });
     expect(PLACES).toHaveLength(6);
     for (const place of PLACES) expect(screen.getByRole('link', { name: new RegExp(`^${place.label}`) })).toBeDefined();
-    expect(screen.getByLabelText(/theme/i)).toBeDefined();
+    // The theme lives in the owner's menu at the rail's foot now.
+    expect(screen.getByRole('button', { name: /^You/ })).toBeDefined();
     for (const old of ['#/overview', '#/events', '#/jobs', '#/conversations', '#/missions', '#/approvals', '#/offers', '#/reminders', '#/providers', '#/browser', '#/sentinels']) {
       const target = legacyRedirect(old);
       expect(target, old).not.toBeNull();
