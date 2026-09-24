@@ -67,7 +67,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
-import { adoptMailboxSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
+import { adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
@@ -553,6 +553,20 @@ export async function main(): Promise<void> {
         clearFromEnvironment(process.env, mailboxSecretNames(process.env, names));
       } catch (error) {
         // Moving a credential may never be the thing that stops a start.
+        console.error(`owner secrets: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        // Provider account credentials too (owner-secrets §7): each becomes an
+        // owner secret bound to its account row, pre-approved, the old vault
+        // entry gone once the new one reads back. The legacy accounts keep
+        // their named environment variables — buddi's own keys are not
+        // bindable, and the OAuth adapters read the adopted names through the
+        // translating vault (`ProviderAccounts.accountVault`).
+        const adopted = await adoptProviderAccountSecrets(pool, vault);
+        const moved = Object.entries(adopted.outcomes).filter(([, outcome]) => outcome === 'adopted');
+        if (moved.length > 0) console.error(`moved ${moved.length} provider account credential(s) into owner secrets`);
+        for (const problem of adopted.problems) console.error(`owner secrets: ${problem}`);
+      } catch (error) {
         console.error(`owner secrets: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
