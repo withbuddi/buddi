@@ -24,6 +24,16 @@ import {
 import type { SourceContext } from '../types.js';
 import { createRetentionSource, RETENTION_EVERY_SECONDS, RETENTION_SOURCE_ID } from './retention.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -199,7 +209,7 @@ suite('email.retention (postgres)', () => {
 
     const lines: string[] = [];
     let enqueued = 0;
-    const ctx: SourceContext = {
+    const ctx: SourceContext = hosted({
       db: pool,
       now: () => NOW,
       timezone: 'UTC',
@@ -207,7 +217,7 @@ suite('email.retention (postgres)', () => {
       enqueueRun: async () => {
         enqueued += 1;
       },
-    };
+    });
     await source.poll(ctx);
 
     expect(enqueued).toBe(0);

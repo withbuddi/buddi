@@ -37,6 +37,17 @@ import { emailPageDescriptors } from './descriptors.js';
 import { MAX_BODY_BYTES, TRUNCATED_NOTE } from './queries.js';
 import type { ImapClientFactory } from '../ports.js';
 import type { ToolContext } from '../types.js';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { manifest as emailManifestForHost } from '../index.js';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -126,13 +137,13 @@ suite('the mail pages, over postgres', () => {
     registry = new ToolRegistry();
     registry.register(manifest);
 
-    ctx = {
+    ctx = hosted({
       db: pool,
       ownerId: 'test',
       now: () => clock,
       timezone: 'UTC',
       agentId: 'owner',
-    };
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -168,7 +179,7 @@ suite('the mail pages, over postgres', () => {
       env,
       backfill: 1_000,
     });
-    await source.poll({ db: pool, now: ctx.now, timezone: 'UTC', log: () => {}, enqueueRun: async () => {} });
+    await source.poll(hosted({ db: pool, now: ctx.now, timezone: 'UTC', log: () => {}, enqueueRun: async () => {} }));
 
     const { rows } = await pool.query(`select id, thread_id from email.messages`);
     const messageId = String(rows[0]!.id);
@@ -474,7 +485,7 @@ suite('the mail pages, over postgres', () => {
   it('degrades when the plugin is not installed, and refuses when the database is not answering', async () => {
     const manifest = createEmailManifest();
     const query = (name: string) => (manifest.queries ?? []).find((q) => q.name === name)!;
-    const failing = (code: string): ToolContext => ({
+    const failing = (code: string): ToolContext => hosted({
       ...ctx,
       db: {
         query: async () => {

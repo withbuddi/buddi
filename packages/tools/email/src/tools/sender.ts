@@ -23,7 +23,7 @@
  * instructions, and a message from the best-known address in the mailbox is
  * exactly as much evidence as a message from a stranger.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { normalizeAddress } from '../mail.js';
 import { ACCOUNT_ARG, accountScope } from './shared.js';
@@ -46,7 +46,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
   tier: 'auto',
   input: senderProfileInput,
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
     const address = normalizeAddress(input.address).toLowerCase();
     if (address === '') throw new Error('email.sender_profile: that is not an address');
 
@@ -54,7 +54,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
     // the address substring rather than on equality.
     const like = `%${address}%`;
 
-    const { rows: counts } = await ctx.db.query(
+    const { rows: counts } = await ctx.buddi!.db.query(
       `select count(*)::int as received,
               min(coalesce(date, fetched_at)) as first_seen,
               max(coalesce(date, fetched_at)) as last_seen
@@ -69,7 +69,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
     // mailbox — `direction = 'out'` — whatever client he typed it in, instead
     // of from drafts buddi itself sent. A correspondent of ten years answered
     // from a phone used to read here as one who was never answered.
-    const { rows: replies } = await ctx.db.query(
+    const { rows: replies } = await ctx.buddi!.db.query(
       `select count(*)::int as sent,
               max(coalesce(date, fetched_at)) as last_sent_at
          from email.messages
@@ -88,7 +88,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
     // What buddi itself drafted and has not sent. A different question, kept
     // separate on purpose: it is a record of this machine's actions, not of
     // the owner's correspondence.
-    const { rows: waiting } = await ctx.db.query(
+    const { rows: waiting } = await ctx.buddi!.db.query(
       `select count(*)::int as drafted from email.drafts
         where (account_id is null or account_id = any($2::uuid[]))
           and sent_at is null
@@ -99,7 +99,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
       [like, scope.ids],
     );
 
-    const { rows: verdicts } = await ctx.db.query(
+    const { rows: verdicts } = await ctx.buddi!.db.query(
       `select t.category, t.urgency, t.decided_at, m.subject
          from email.triage t
          join email.messages m on m.id = t.message_id
@@ -113,7 +113,7 @@ export const senderProfile: ToolDefinition<z.infer<typeof senderProfileInput>, u
     // the difference between "a stranger" and "a stranger who found the
     // address the owner only gives to clients", and neither the count nor the
     // dates can say it.
-    const { rows: reached } = await ctx.db.query(
+    const { rows: reached } = await ctx.buddi!.db.query(
       `select distinct account_id from email.messages
         where account_id = any($1::uuid[]) and lower(from_addr) like $2`,
       [scope.ids, like],

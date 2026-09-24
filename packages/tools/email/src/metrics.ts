@@ -22,7 +22,7 @@
  * stalest part. And a mailbox that has never completed a poll makes the whole
  * answer `null`: we do not know what is in it, so we do not know the count.
  */
-import type { MetricDefinition, ToolContext } from '@buddi/core';
+import type { MetricDefinition, ToolContext } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { findAccount, lastSyncedByAccount, listAccounts } from './config.js';
 import { UNREAD_SQL } from './mail.js';
@@ -38,7 +38,7 @@ export async function stalestSync(
   accountIds: readonly string[],
 ): Promise<Date | null> {
   if (accountIds.length === 0) return null;
-  const synced = await lastSyncedByAccount(ctx.db);
+  const synced = await lastSyncedByAccount(ctx.buddi!.db);
   let stalest: Date | null = null;
   for (const id of accountIds) {
     const at = synced.get(id) ?? null;
@@ -69,7 +69,7 @@ export const waitingOnMe: MetricDefinition = {
   direction: 'down',
   params: z.object({}),
   async measure(_params, ctx) {
-    const accounts = await listAccounts(ctx.db);
+    const accounts = await listAccounts(ctx.buddi!.db);
     // No mailbox is not an inbox at peace; there is nothing to count.
     if (accounts.length === 0) return null;
     const asOf = await stalestSync(
@@ -78,7 +78,7 @@ export const waitingOnMe: MetricDefinition = {
     );
     if (asOf === null) return null;
     return {
-      value: await countWaitingOnMe(ctx.db, ctx.now()),
+      value: await countWaitingOnMe(ctx.buddi!.db, ctx.buddi!.clock.now()),
       asOf,
       note:
         accounts.length === 1
@@ -101,7 +101,7 @@ export async function countInboxUnread(
   ctx: ToolContext,
   accountIds: readonly string[],
 ): Promise<number> {
-  const { rows } = await ctx.db.query(
+  const { rows } = await ctx.buddi!.db.query(
     `select coalesce(sum(w.n), 0)::int as n
        from email.folders f
        cross join lateral (
@@ -137,8 +137,8 @@ export const inboxUnread: MetricDefinition = {
   async measure(params, ctx) {
     const { account } = (params ?? {}) as { account?: string };
     const accounts = account
-      ? await findAccount(ctx.db, account).then((a) => (a ? [a] : []))
-      : await listAccounts(ctx.db);
+      ? await findAccount(ctx.buddi!.db, account).then((a) => (a ? [a] : []))
+      : await listAccounts(ctx.buddi!.db);
     // No mailbox — or one named that is not here — is nothing to count.
     if (accounts.length === 0) return null;
     const ids = accounts.map((a) => a.id);

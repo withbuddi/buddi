@@ -32,7 +32,7 @@
  * the agent holding the role, and that agent re-reads the conversation before
  * the owner hears a word of it.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { quoted } from './mail.js';
 import {
   DEFAULT_DATE_CONFIDENCE,
@@ -42,7 +42,8 @@ import {
 } from './dates.js';
 import { RECEIPT_CONFIDENCE_CEILING } from './phrases.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** Settings keys. `email.settings` is one row per key, jsonb values. */
 export const WAITING_DAYS_KEY = 'watcher_waiting_days';

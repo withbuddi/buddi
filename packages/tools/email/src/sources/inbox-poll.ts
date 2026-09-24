@@ -47,7 +47,7 @@
  * makes that a no-op if the run already exists. Durable intent, no lost mail,
  * no double triage.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea, DbTransaction } from '@buddi/core/plugin';
 import { INBOX, listAccounts, markAccountSynced, resolveAuth, type EnvLike } from '../config.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
@@ -60,6 +60,9 @@ import { FOLDER_COLUMNS, toFolder, type FolderRecord, type MessageDirection } fr
 import { findThread, joinThread, threadMessages } from '../threads.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { Source, SourceContext } from '../types.js';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** The agent every new message is triaged by. */
 export const TRIAGE_AGENT_ID = 'mail-triage';
@@ -210,7 +213,7 @@ interface PendingTriage {
  * use.
  */
 async function ensureFolder(
-  db: Pool,
+  db: Db,
   account: AccountRecord,
   name: string,
   kind: 'inbox' | 'sent' | 'other' = 'other',
@@ -242,7 +245,7 @@ async function ensureFolder(
 }
 
 /** The folders of one account, as they stand. */
-async function foldersOf(db: Pool, accountId: string): Promise<FolderRecord[]> {
+async function foldersOf(db: Db, accountId: string): Promise<FolderRecord[]> {
   const { rows } = await db.query(
     `select ${FOLDER_COLUMNS} from email.folders where account_id = $1 order by kind, name`,
     [accountId],
@@ -277,7 +280,7 @@ async function foldersOf(db: Pool, accountId: string): Promise<FolderRecord[]> {
  * synced, INBOX and Sent (`folders.ts` decides which one that is).
  */
 async function discoverFolders(
-  db: Pool,
+  db: Db,
   account: AccountRecord,
   client: ImapClient,
   timeoutMs: number,
@@ -363,7 +366,7 @@ async function discoverFolders(
  *    drain that must never pick it up.
  */
 async function commitBatch(
-  db: Pool,
+  db: DbArea,
   account: AccountRecord,
   folder: FolderRecord,
   uidValidity: number,
@@ -371,10 +374,8 @@ async function commitBatch(
   direction: MessageDirection,
   now: Date,
 ): Promise<PendingTriage[]> {
-  const client: PoolClient = await db.connect();
-  const pending: PendingTriage[] = [];
-  try {
-    await client.query('begin');
+  return db.transaction(async (client) => {
+    const pending: PendingTriage[] = [];
     for (const message of fetched) {
       const { rows } = await client.query(
         `insert into email.messages
@@ -450,14 +451,8 @@ async function commitBatch(
       `update email.folders set uidvalidity = $2, last_uid = $3 where id = $1`,
       [folder.id, uidValidity, highest],
     );
-    await client.query('commit');
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-  return pending;
+    return pending;
+  });
 }
 
 /**
@@ -467,7 +462,7 @@ async function commitBatch(
  * recover, and a `direction` filter here says that in the query rather than
  * relying on the stamp having been written.
  */
-async function unstamped(db: Pool, accountId: string, limit: number): Promise<PendingTriage[]> {
+async function unstamped(db: Db, accountId: string, limit: number): Promise<PendingTriage[]> {
   const { rows } = await db.query(
     `select id, thread_id, from_addr, to_addrs, cc, subject, date, has_attachments, attachments,
             body_text, thread_key, list_id, coalesce(internal_date, fetched_at) as at
@@ -524,7 +519,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       // other account has had its turn, so `runSources` still records it in
       // `core.source_runs.last_error` and the rest of the mail still lands.
       const failures: unknown[] = [];
-      for (const account of await listAccounts(ctx.db)) {
+      for (const account of await listAccounts(ctx.buddi!.db)) {
         const auth = resolveAuth(account, env);
         if (!auth.ok) {
           // A typed configuration problem: say it once per poll and stop. An
@@ -565,8 +560,8 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
           // A caller that named one folder gets that folder and no listing:
           // the CLI and the tests both drive a single mailbox on purpose.
           const folders = onlyFolder
-            ? [await ensureFolder(ctx.db, account, onlyFolder, 'inbox', true)]
-            : (await discoverFolders(ctx.db, account, client, timeoutMs, log)).filter((f) => f.synced);
+            ? [await ensureFolder(ctx.buddi!.db, account, onlyFolder, 'inbox', true)]
+            : (await discoverFolders(ctx.buddi!.db, account, client, timeoutMs, log)).filter((f) => f.synced);
 
           // New discovery persists Sent's LIST/STATUS boundary above. This
           // loop is for an older or partially initialised row that still has
@@ -605,7 +600,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
                 // only this pass stops counting as a sync — the unread count
                 // it would have corrected is not stamped as current.
                 try {
-                  await syncFlags(ctx.db, account, client, polled.folder, polled.status, timeoutMs, log);
+                  await syncFlags(ctx.buddi!.db, account, client, polled.folder, polled.status, timeoutMs, log);
                 } catch (err) {
                   log(
                     `email.inbox-poll: could not re-sync flags on ${account.address}/${folder.name}: ` +
@@ -631,7 +626,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
            * this mailbox and there was nothing" is an answer, and without a
            * mark of its own it is indistinguishable from never having looked.
            */
-          if (complete) await markAccountSynced(ctx.db, account.id, ctx.now());
+          if (complete) await markAccountSynced(ctx.buddi!.db, account.id, ctx.buddi!.clock.now());
         } catch (err) {
           complete = false;
           if (err instanceof ImapTimeoutError) {
@@ -712,7 +707,7 @@ async function pollFolder(
     // it, regardless of what the inbox's backfill is set to.
     const effectiveBackfill = folder.kind === 'sent' ? 0 : backfill;
     const startUid = Math.max(0, status.uidNext - 1 - effectiveBackfill);
-    current = await plantCursor(ctx.db, current.id, status.uidValidity, startUid);
+    current = await plantCursor(ctx.buddi!.db, current.id, status.uidValidity, startUid);
     log(
       `email.inbox-poll: initial sync on ${account.address}/${name} — ` +
         `uidvalidity ${status.uidValidity}, uidnext ${status.uidNext}, ` +
@@ -726,13 +721,13 @@ async function pollFolder(
 
   const fetched = await withDeadline('fetch', timeoutMs, client.fetchSince(name, current.lastUid, limit));
   const pending = await commitBatch(
-    ctx.db,
+    ctx.buddi!.db,
     account,
     current,
     status.uidValidity,
-    fetched.map((m) => prepareForIngest(m, ctx.now())),
+    fetched.map((m) => prepareForIngest(m, ctx.buddi!.clock.now())),
     direction,
-    ctx.now(),
+    ctx.buddi!.clock.now(),
   );
   if (direction === 'out' && fetched.length > 0) {
     log(
@@ -771,7 +766,7 @@ async function pollFolder(
  * The full fetch could tell it apart; CONDSTORE without QRESYNC cannot.
  */
 async function syncFlags(
-  db: Pool,
+  db: Db,
   account: AccountRecord,
   client: ImapClient,
   folder: FolderRecord,
@@ -838,7 +833,7 @@ async function syncFlags(
 
 /** Persist the generation and the cursor together, and return the fresh row. */
 async function plantCursor(
-  db: Pool,
+  db: Db,
   folderId: string,
   uidValidity: number,
   lastUid: number,
@@ -894,13 +889,13 @@ async function drain(
   limit: number,
   pending: PendingTriage[],
 ): Promise<void> {
-  const recovered = await unstamped(ctx.db, account.id, limit);
+  const recovered = await unstamped(ctx.buddi!.db, account.id, limit);
   const byId = new Map(recovered.map((p) => [p.id, p]));
   for (const p of pending) byId.set(p.id, p);
   if (byId.size === 0) return;
 
   // One read of the policy table per poll, not per message.
-  const policies = await loadPolicies(ctx.db, account.id);
+  const policies = await loadPolicies(ctx.buddi!.db, account.id);
 
   for (const message of byId.values()) {
     const decision = applyPolicies(
@@ -931,10 +926,10 @@ async function drain(
     try {
       if (!ignoring) {
         await scanMessageDates(
-          ctx.db,
+          ctx.buddi!.db,
           { id: message.id, bodyText: message.bodyText, subject: message.subject },
-          { at: new Date(message.at), timezone: ctx.timezone },
-          ctx.now(),
+          { at: new Date(message.at), timezone: ctx.buddi!.owner.timezone },
+          ctx.buddi!.clock.now(),
         );
       }
       // An ignored sender's message is stamped inside the transaction that
@@ -954,12 +949,12 @@ async function drain(
       // stops the next poll picking it up. A committed "ignored" beside a
       // missing triage row would be the audit log lying about the one action
       // that produces silence.
-      await inOneTransaction(ctx.db, async (tx) => {
-        await ignoreByPolicy(tx, message, decision.policy as PolicyRecord, ctx.now());
+      await inOneTransaction(ctx.buddi!.db, async (tx) => {
+        await ignoreByPolicy(tx, message, decision.policy as PolicyRecord, ctx.buddi!.clock.now());
         // Stamped without being read: the watchers are not a way round the
         // owner's own gate (see `dates-store.ts`). In here with the rest of
         // it, so a rolled-back ignore leaves nothing stamped behind.
-        await skipDates(tx, message.id, ctx.now());
+        await skipDates(tx, message.id, ctx.buddi!.clock.now());
         await recordEvent(
           tx,
           {
@@ -969,9 +964,9 @@ async function drain(
             detail: decision.detail,
             status: 'done',
           },
-          ctx.now(),
+          ctx.buddi!.clock.now(),
         );
-        await stampOn(tx, message.id, ctx.now());
+        await stampOn(tx, message.id, ctx.buddi!.clock.now());
       });
       (ctx.log ?? (() => {}))(
         `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
@@ -985,7 +980,7 @@ async function drain(
     // exists. A throw leaves `failed` and an unstamped message: the next poll
     // tries again and updates this same row rather than adding another.
     await recordEvent(
-      ctx.db,
+      ctx.buddi!.db,
       {
         messageId: message.id,
         policyId: decision.policy?.id ?? null,
@@ -993,17 +988,17 @@ async function drain(
         detail: decision.detail,
         status: 'pending',
       },
-      ctx.now(),
+      ctx.buddi!.clock.now(),
     );
     try {
-      await ctx.enqueueRun({
+      await ctx.buddi!.schedule!.enqueueRun({
         agentId: runAgentFor(decision, agentId),
         prompt: await promptFor(ctx, account, message, decision, policies),
         dedupKey: triageDedupKey(message.id),
       });
     } catch (err) {
       await settleEvent(
-        ctx.db,
+        ctx.buddi!.db,
         message.id,
         'failed',
         `${decision.detail} The run could not be queued: ${
@@ -1012,7 +1007,7 @@ async function drain(
       );
       throw err;
     }
-    await settleEvent(ctx.db, message.id, 'done');
+    await settleEvent(ctx.buddi!.db, message.id, 'done');
     await stamp(ctx, message.id);
   }
 }
@@ -1025,20 +1020,10 @@ async function drain(
  * length of a drain is a connection the rest of the installation cannot use.
  */
 async function inOneTransaction(
-  pool: Pool,
-  work: (tx: PoolClient) => Promise<void>,
+  pool: DbArea,
+  work: (tx: DbTransaction) => Promise<void>,
 ): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query('begin');
-    await work(client);
-    await client.query('commit');
-  } catch (err) {
-    await client.query('rollback').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
+  await pool.transaction(work);
 }
 
 /** Who runs: the named agent for `hand-to-agent`, the triage agent otherwise. */
@@ -1067,8 +1052,8 @@ async function promptFor(
   // This account's history and nobody else's: what a sender did in another
   // mailbox is not evidence about this one, and a run told otherwise would
   // carry verdicts about mail that never arrived here.
-  const verdicts = await senderVerdicts(ctx.db, account.id, message.from, 5);
-  const replies = await ownerReplies(ctx.db, account.id, message.from);
+  const verdicts = await senderVerdicts(ctx.buddi!.db, account.id, message.from, 5);
+  const replies = await ownerReplies(ctx.buddi!.db, account.id, message.from);
   const senderPolicy =
     decision.policy ??
     policies.find(
@@ -1121,8 +1106,8 @@ export const THREAD_TURNS_LISTED = 10;
  */
 async function threadFor(ctx: SourceContext, message: PendingTriage): Promise<ThreadForPrompt> {
   const threadId = message.threadId as string;
-  const thread = await findThread(ctx.db, threadId);
-  const turns = (await threadMessages(ctx.db, threadId, THREAD_TURNS_QUOTED + THREAD_TURNS_LISTED))
+  const thread = await findThread(ctx.buddi!.db, threadId);
+  const turns = (await threadMessages(ctx.buddi!.db, threadId, THREAD_TURNS_QUOTED + THREAD_TURNS_LISTED))
     .filter((m) => m.id !== message.id);
   const quoted = turns.slice(-THREAD_TURNS_QUOTED);
   const listed = turns.slice(0, Math.max(0, turns.length - quoted.length));
@@ -1177,7 +1162,7 @@ function instructionFor(decision: GateDecision): string | undefined {
  * the triage table, and a hole in it would look like a bug.
  */
 async function ignoreByPolicy(
-  db: Pool | PoolClient,
+  db: Db,
   message: PendingTriage,
   policy: PolicyRecord,
   now: Date,
@@ -1200,11 +1185,11 @@ async function ignoreByPolicy(
 
 /** The enqueue stamp, written last. See the module comment. */
 async function stamp(ctx: SourceContext, messageId: string): Promise<void> {
-  await stampOn(ctx.db, messageId, ctx.now());
+  await stampOn(ctx.buddi!.db, messageId, ctx.buddi!.clock.now());
 }
 
 /** The same stamp, on a handle the caller chose — a transaction, usually. */
-async function stampOn(db: Pool | PoolClient, messageId: string, now: Date): Promise<void> {
+async function stampOn(db: Db, messageId: string, now: Date): Promise<void> {
   await db.query(
     `update email.messages set triage_enqueued_at = $2
       where id = $1 and triage_enqueued_at is null`,

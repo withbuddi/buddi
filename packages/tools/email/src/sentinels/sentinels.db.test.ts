@@ -41,6 +41,16 @@ import { quoted } from '../mail.js';
 import { joinThread, setThreadState } from '../threads.js';
 import { setWatcherSettings } from '../watchers.js';
 import { MAX_DATE_FINDINGS, MAX_WAITING_FINDINGS, dateStated, waitingOnMe } from './index.js';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -197,14 +207,14 @@ suite('email watchers (postgres)', () => {
   }
 
   function ctx(over: Partial<SentinelContext> = {}): SentinelContext {
-    return {
+    return hosted({
       db: pool,
       ownerId: 'owner',
       now: () => NOW,
       timezone: 'UTC',
       agentForRole: () => undefined,
       ...over,
-    } as SentinelContext;
+    } as SentinelContext);
   }
 
   async function ignorePolicy(matcher: string, scope: 'sender' | 'domain' = 'sender'): Promise<void> {

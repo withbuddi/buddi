@@ -41,8 +41,8 @@
  *    recreated, or the mail was deleted upstream. Said plainly, because the
  *    alternative is an agent inventing a reason.
  */
-import { saveArtifact, sha256Of, type ArtifactRow, type ToolDefinition } from '@buddi/core';
-import type { Pool } from 'pg';
+import { sha256Of, type FileRow, type ToolDefinition } from '@buddi/core/plugin';
+import type { DbArea } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   bytesRefusal,
@@ -56,6 +56,9 @@ import { resolveAuth, type EnvLike } from '../config.js';
 import { EmailProblemError, type AttachmentInfo, type ImapClientFactory } from '../ports.js';
 import { FOLDER_COLUMNS, toFolder, type MessageRecord } from '../rows.js';
 import { accountOf, requireAgentId, requireMessage, UUID } from './shared.js';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** The ceiling on one attachment. Past it this tool refuses rather than saves. */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -174,7 +177,7 @@ export function resolveAgainstFresh(
  * attachment on the same message does not lose its own mark.
  */
 export async function markFetched(
-  db: Pool,
+  db: Db,
   messageId: string,
   index: number,
   artifactId: string,
@@ -255,9 +258,9 @@ export function createFetchAttachmentTool(
     input,
     async execute(args, ctx): Promise<FetchAttachmentResult> {
       const agentId = requireAgentId(ctx.agentId, 'email.fetch_attachment');
-      const message = await requireMessage(ctx.db, args.message);
-      const account = await accountOf(ctx.db, message.accountId);
-      const { rows } = await ctx.db.query(
+      const message = await requireMessage(ctx.buddi!.db, args.message);
+      const account = await accountOf(ctx.buddi!.db, message.accountId);
+      const { rows } = await ctx.buddi!.db.query(
         `select ${FOLDER_COLUMNS} from email.folders where id = $1::uuid`,
         [message.folderId],
       );
@@ -380,23 +383,15 @@ export function createFetchAttachmentTool(
          * sentences for an agent to report.
          */
         const digest = sha256Of(bytes);
-        const held = await ctx.db.query(
-          `select 1 from core.artifacts
-            where sha256 = $1 and source_surface = 'email'
-              and source_chat_id is null and deleted_at is null
-            limit 1`,
-          [digest],
-        );
-        const alreadyHeld = (held.rowCount ?? 0) > 0;
+        const held = await ctx.buddi!.files!.list({ sha256: digest, surface: 'email', limit: 1 });
+        const alreadyHeld = held.length > 0;
 
-        const saved: ArtifactRow = await saveArtifact(ctx.db, {
+        const saved: FileRow = await ctx.buddi!.files!.save({
           bytes,
           // What the bytes are, unless the sender said something more precise
           // about the same thing (a .docx really is a zip). See `mimeToStore`.
           mime,
-          filename,
-          // The owner's file now, recorded to whoever asked for it.
-          createdBy: agentId,
+          ...(filename === null ? {} : { filename }),
           /*
            * Where it came from. `chatId` is deliberately left null: dedup in
            * the store is `(sha256, surface, chatId)`, so mail with no chat
@@ -408,7 +403,7 @@ export function createFetchAttachmentTool(
            */
           source: { surface: 'email', messageId: message.id },
         });
-        await markFetched(ctx.db, message.id, index, saved.id, part, stored);
+        await markFetched(ctx.buddi!.db, message.id, index, saved.id, part, stored);
 
         return {
           artifacts: [{ id: saved.id }],

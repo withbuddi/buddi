@@ -29,7 +29,7 @@
  * as a key, capped by nothing, so core does not mistake one it did not hear
  * about for one that was answered.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
 import {
   STALE_WAITING_DAYS,
   firstLineOf,
@@ -47,7 +47,7 @@ export const MAX_WAITING_FINDINGS = 20;
 
 /** Who speaks about mail: whoever holds `mail`, else `triage`, else nobody. */
 export function mailAgent(ctx: SentinelContext): string | undefined {
-  return ctx.agentForRole('mail') ?? ctx.agentForRole('triage');
+  return ctx.buddi!.owner.agentForRole('mail') ?? ctx.buddi!.owner.agentForRole('triage');
 }
 
 /**
@@ -151,14 +151,14 @@ export function createWaitingOnMeSentinel(): Sentinel {
       'from people you have written to before.',
     every: EVERY_12H,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const settings = await loadWatcherSettings(ctx.db);
-      const bounds = [ctx.now(), settings.waitingDays, STALE_WAITING_DAYS];
+      const settings = await loadWatcherSettings(ctx.buddi!.db);
+      const bounds = [ctx.buddi!.clock.now(), settings.waitingDays, STALE_WAITING_DAYS];
       // Everything that is still true, and then the few worth saying out loud.
-      const all = await ctx.db.query(WAITING_KEYS_SQL, bounds);
+      const all = await ctx.buddi!.db.query(WAITING_KEYS_SQL, bounds);
       const keys = all.rows.map((row: Record<string, any>) =>
         waitingKey(String(row.thread_id), String(row.message_id)),
       );
-      const { rows } = await ctx.db.query(WAITING_ROWS_SQL, [...bounds, MAX_WAITING_FINDINGS]);
+      const { rows } = await ctx.buddi!.db.query(WAITING_ROWS_SQL, [...bounds, MAX_WAITING_FINDINGS]);
       const agentId = mailAgent(ctx);
       const findings: Finding[] = rows
         .map((row: Record<string, any>) => {

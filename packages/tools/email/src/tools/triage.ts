@@ -6,7 +6,7 @@
  * re-triage under a new policy lands beside the old decision instead of erasing
  * it. Nothing about it reaches the world, so the tier is `auto`.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { learnFromVerdict, type LearnedPolicy } from '../policies/learn.js';
 import { toTriage } from '../rows.js';
@@ -59,8 +59,8 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
   async execute(input, ctx) {
     // Fail closed on an id that names nothing: a triage row for a message that
     // does not exist would be a decision about nothing.
-    const message = await requireMessage(ctx.db, input.messageId);
-    const { rows } = await ctx.db.query(
+    const message = await requireMessage(ctx.buddi!.db, input.messageId);
+    const { rows } = await ctx.buddi!.db.query(
       `insert into email.triage
          (message_id, processing_version, category, urgency, summary, action_needed, decided_at)
        values ($1, $2, $3, $4, $5, $6, $7)
@@ -78,7 +78,7 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
         input.urgency,
         input.summary,
         input.actionNeeded ?? null,
-        ctx.now(),
+        ctx.buddi!.clock.now(),
       ],
     );
     const row = rows[0];
@@ -98,9 +98,10 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
     let learned: LearnedPolicy | null = null;
     try {
       learned = await learnFromVerdict(
-        ctx.db,
+        ctx.buddi!.db,
+        ctx.buddi!.proposals!,
         { from: message.from, accountId: message.accountId },
-        ctx.now(),
+        ctx.buddi!.clock.now(),
         ctx,
       );
     } catch (err) {

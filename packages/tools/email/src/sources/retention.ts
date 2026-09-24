@@ -41,7 +41,7 @@ export function createRetentionSource(opts: RetentionSourceOptions = {}): Source
 
     async poll(ctx: SourceContext): Promise<void> {
       const log = ctx.log ?? ((line: string) => console.error(line));
-      const outcome = await purgeBodies(ctx.db, ctx.now(), {
+      const outcome = await purgeBodies(ctx.buddi!.db, ctx.buddi!.clock.now(), {
         batchSize: opts.batchSize ?? PURGE_BATCH,
         ...(opts.retentionDays !== undefined ? { retentionDays: opts.retentionDays } : {}),
       });
@@ -50,7 +50,7 @@ export function createRetentionSource(opts: RetentionSourceOptions = {}): Source
       // daily beat. It is housekeeping of exactly the same shape: it originates
       // no run, wakes nobody, and is not a finding — a draft nobody touched for
       // a fortnight is work to tidy, not news to report.
-      const lapsed = await lapseDueDrafts(ctx.db, ctx.now(), {
+      const lapsed = await lapseDueDrafts(ctx.buddi!.db, ctx.buddi!.clock.now(), {
         ...(opts.lapseDays !== undefined ? { days: opts.lapseDays } : {}),
       });
       log(lapseLogLine(lapsed));

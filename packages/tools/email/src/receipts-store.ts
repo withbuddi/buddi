@@ -19,10 +19,11 @@
  * and the next tick reads it. A policy that arrives *after* a scan still
  * silences what is already stored, in `receiptsSince`.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { classifyReceipt, firstLines, type ReceiptReading } from './phrases.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** How many unscanned messages one sentinel tick reads. */
 export const RECEIPT_SCAN_BATCH = 200;

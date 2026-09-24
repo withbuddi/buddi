@@ -27,7 +27,7 @@
  * either — the agent reads the thread first and may well decide there is
  * nothing to chase.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core';
+import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
 import { looksUnreplyable } from '../mail.js';
 import { findQuestion } from '../phrases.js';
 import {
@@ -154,11 +154,11 @@ export function createUnansweredByThemSentinel(): Sentinel {
       'It never sends one.',
     every: EVERY_DAY,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
-      const settings = await loadWatcherSettings(ctx.db);
+      const settings = await loadWatcherSettings(ctx.buddi!.db);
       // The window contains the setting: a `nudgeDays` of 45 against a fixed
       // thirty-day ceiling reported nothing at all. See `historyWindowDays`.
-      const { rows } = await ctx.db.query(UNANSWERED_SQL, [
-        ctx.now(),
+      const { rows } = await ctx.buddi!.db.query(UNANSWERED_SQL, [
+        ctx.buddi!.clock.now(),
         settings.nudgeDays,
         historyWindowDays(settings.nudgeDays, NUDGE_WINDOW_DAYS),
       ]);

@@ -13,7 +13,7 @@
  * thread is a string of messages strangers wrote; reading it never turns any
  * of it into an instruction.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   findThread,
@@ -108,7 +108,7 @@ export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
     // The same day check `email.search` makes: `2026-02-31` matches the
     // pattern and is not a day, and `$n::date` would raise inside the pool.
     const wrong = validateFilters({
@@ -116,17 +116,17 @@ export const listThreads: ToolDefinition<z.infer<typeof listInput>, unknown> = {
       ...(input.until ? { until: input.until } : {}),
     });
     if (wrong) throw new Error(`email.list_threads: ${wrong}`);
-    const threads = await listThreadRows(ctx.db, {
+    const threads = await listThreadRows(ctx.buddi!.db, {
       accountIds: scope.ids,
       ...(input.state ? { state: input.state } : {}),
       ...(input.participant ? { participant: normalizeAddress(input.participant) } : {}),
       ...(input.since ? { since: input.since } : {}),
       ...(input.until ? { until: input.until } : {}),
       // Those two days are the owner's days, not the server's.
-      timezone: ctx.timezone,
+      timezone: ctx.buddi!.owner.timezone,
       limit: boundedLimit(input.limit),
     });
-    const totals = await participantsTotals(ctx.db, threads);
+    const totals = await participantsTotals(ctx.buddi!.db, threads);
     return {
       account: scope.only?.address ?? null,
       accounts: scope.accounts.map((a) => a.address),
@@ -158,8 +158,8 @@ export const readThread: ToolDefinition<z.infer<typeof readInput>, unknown> = {
     'Read one conversation: its last messages in the order they were written, each saying who wrote it and whether it came in or went out from the owner. Use it before answering anything, so a reply is written to the conversation rather than to the newest message in it.',
   tier: 'auto',
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
-    const thread = await findThread(ctx.db, input.thread);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
+    const thread = await findThread(ctx.buddi!.db, input.thread);
     if (!thread) throw new Error(`unknown conversation: ${input.thread}`);
     const account = scope.byId.get(thread.accountId);
     // A thread names its own account, so `account` here is a check rather than
@@ -171,8 +171,8 @@ export const readThread: ToolDefinition<z.infer<typeof readInput>, unknown> = {
       );
     }
     const limit = Math.min(Math.max(1, Math.trunc(input.limit ?? DEFAULT_THREAD_MESSAGES)), MAX_LIMIT);
-    const messages = await threadMessages(ctx.db, thread.id, limit);
-    const total = await participantsTotalOf(ctx.db, thread);
+    const messages = await threadMessages(ctx.buddi!.db, thread.id, limit);
+    const total = await participantsTotalOf(ctx.buddi!.db, thread);
     return {
       ...threadView(thread, account.address, total),
       returned: messages.length,
@@ -223,7 +223,7 @@ export const muteThread: GatedToolDefinition<z.infer<typeof muteInput>, unknown,
   input: muteInput,
 
   async describe(input, ctx: ToolContext): Promise<EffectDescription & { envelope: MuteEnvelope }> {
-    const thread = await findThread(ctx.db, input.thread);
+    const thread = await findThread(ctx.buddi!.db, input.thread);
     if (!thread) throw new Error(`unknown conversation: ${input.thread}`);
     return {
       envelope: {
@@ -237,7 +237,7 @@ export const muteThread: GatedToolDefinition<z.infer<typeof muteInput>, unknown,
   },
 
   async execute(input, ctx) {
-    const thread = await setThreadState(ctx.db, input.thread, 'muted');
+    const thread = await setThreadState(ctx.buddi!.db, input.thread, 'muted');
     if (!thread) throw new Error(`unknown conversation: ${input.thread}`);
     return { thread: threadView(thread, null), muted: true };
   },

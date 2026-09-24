@@ -10,7 +10,7 @@
  * attacker-controlled text; the persona is what holds that line, and these
  * tools simply never dress it up as anything else.
  */
-import type { ToolDefinition } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { isUnread, quoted, UNREAD_SQL, UNTRUSTED_NOTICE } from '../mail.js';
 import {
@@ -80,7 +80,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
   tier: 'auto',
   input: listRecentInput,
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
     const limit = boundedLimit(input.limit);
     const params: unknown[] = [scope.ids];
     const where = ['account_id = any($1::uuid[])'];
@@ -92,7 +92,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
       where.push(UNREAD_SQL);
     }
     params.push(limit);
-    const { rows } = await ctx.db.query(
+    const { rows } = await ctx.buddi!.db.query(
       `select ${MESSAGE_COLUMNS} from email.messages
         where ${where.join(' and ')}
         order by date desc nulls last, uid desc
@@ -113,7 +113,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
         snippet: message.snippet,
         unread: isUnread(message.flags),
         hasAttachments: message.hasAttachments,
-        triage: await latestTriage(ctx.db, message.id),
+        triage: await latestTriage(ctx.buddi!.db, message.id),
       });
     }
     return { ...scopeSummary(scope), count: messages.length, messages };
@@ -133,8 +133,8 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
   tier: 'auto',
   input: readInput,
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
-    const message = await requireMessage(ctx.db, input.id);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
+    const message = await requireMessage(ctx.buddi!.db, input.id);
     // A message already names its own account, so `account` here is a check
     // rather than a filter: naming a mailbox and being handed a message from
     // another one is the one answer this tool must never give.
@@ -147,7 +147,7 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
     // A purged body is a fact to state, not a gap to paper over: the tool says
     // the text is gone and why, and hands back everything that is kept.
     const purged = message.bodyPurgedAt !== null;
-    const retention = purged ? await loadSettings(ctx.db) : null;
+    const retention = purged ? await loadSettings(ctx.buddi!.db) : null;
     return {
       id: message.id,
       account: account.address,
@@ -179,7 +179,7 @@ export const readMessage: ToolDefinition<z.infer<typeof readInput>, unknown> = {
             note: purgedBodyNote(retention.retentionDays, message.bodyPurgedAt),
           }
         : {}),
-      triage: await latestTriage(ctx.db, message.id),
+      triage: await latestTriage(ctx.buddi!.db, message.id),
     };
   },
 };
@@ -239,7 +239,7 @@ export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
   tier: 'auto',
   input: searchInput,
   async execute(input, ctx) {
-    const scope = await accountScope(ctx.db, input.account);
+    const scope = await accountScope(ctx.buddi!.db, input.account);
     const limit = boundedLimit(input.limit);
     const filters = {
       ...(input.query !== undefined ? { query: input.query } : {}),
@@ -264,11 +264,11 @@ export const search: ToolDefinition<z.infer<typeof searchInput>, unknown> = {
     if (wrong) throw new Error(`email.search: ${wrong}`);
 
     const built = buildSearch(scope.ids, filters, {
-      now: ctx.now(),
-      timezone: ctx.timezone,
+      now: ctx.buddi!.clock.now(),
+      timezone: ctx.buddi!.owner.timezone,
       limit,
     });
-    const { rows } = await ctx.db.query(built.text, built.params);
+    const { rows } = await ctx.buddi!.db.query(built.text, built.params);
     const messages = rows.map(toSearchRow).map((m) => ({
       id: m.id,
       account: scope.byId.get(m.accountId)?.address ?? null,

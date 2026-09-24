@@ -22,6 +22,16 @@ import {
   triageDedupKey,
 } from './inbox-poll.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx as never);
+  return ctx;
+}
 
 /**
  * A backfill large enough to reach UID 1, i.e. "sync the whole mailbox".
@@ -75,7 +85,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
   /** A source context whose enqueued runs are collected rather than queued. */
   function contextFor(): SourceContext & { runs: Array<{ agentId: string; prompt: string; dedupKey: string }> } {
     const runs: Array<{ agentId: string; prompt: string; dedupKey: string }> = [];
-    return {
+    return hosted({
       db: pool,
       now: () => new Date('2026-09-13T12:00:00Z'),
       timezone: 'UTC',
@@ -84,7 +94,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
       async enqueueRun(input) {
         runs.push({ agentId: input.agentId, prompt: input.prompt, dedupKey: input.dedupKey });
       },
-    };
+    });
   }
 
   async function mailbox(): Promise<{ uidvalidity: number | null; last_uid: number }> {
@@ -505,7 +515,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     }
 
     function metricContext() {
-      return { db: pool, ownerId: 'owner', now: () => new Date('2026-09-13T12:00:00Z'), timezone: 'UTC' } as never;
+      return hosted({ db: pool, ownerId: 'owner', now: () => new Date('2026-09-13T12:00:00Z'), timezone: 'UTC' } as never);
     }
 
     it('without CONDSTORE, re-reads every held message\'s FLAGS and sees one read elsewhere', async () => {

@@ -20,6 +20,17 @@ import type { GatedToolDefinition, ToolContext } from '../types.js';
 import { sha256, type SendEnvelope, type SendInput, type SendResult } from './send.js';
 import { CATEGORIES, PROCESSING_VERSION } from './shared.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { manifest as emailManifestForHost } from '../index.js';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -61,13 +72,13 @@ suite('email tools (postgres)', () => {
     registry.register(manifest);
     sendTool = manifest.tools.find((t) => t.name === 'email.send') as typeof sendTool;
 
-    ctx = {
+    ctx = hosted({
       db: pool,
       ownerId: 'test',
       now: () => new Date('2026-09-13T12:00:00Z'),
       timezone: 'UTC',
       agentId: 'mail-triage',
-    };
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -131,13 +142,13 @@ suite('email tools (postgres)', () => {
     // fetches no history, so a fixture that seeds through a real poll has to
     // ask for the history it just wrote.
     const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 });
-    await source.poll({
+    await source.poll(hosted({
       db: pool,
       now: ctx.now,
       timezone: 'UTC',
       log: () => {},
       enqueueRun: async () => {},
-    });
+    }));
     const { rows } = await pool.query(`select id from email.messages order by uid`);
     return rows.map((r: any) => String(r.id));
   }

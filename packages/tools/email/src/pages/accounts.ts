@@ -27,7 +27,10 @@
  * hosts are *optional* here and `hostsFor` fills them in when they are left
  * empty — the convention the form used, in the one place that can still apply it.
  */
-import { createVault, type ToolDefinition, type Vault } from '@buddi/core';
+import type { ToolDefinition } from '@buddi/core/plugin';
+// step 3: mailbox passwords stay on core's vault until the `secrets` area
+// (docs/specs/plugin-host-api.md §9, step 3; owner-secrets.md).
+import { createVault, type Vault } from '@buddi/core';
 import { z } from 'zod';
 import { INBOX, secretNameFor } from '../config.js';
 import { ACCOUNT_COLUMNS, toAccount } from '../rows.js';
@@ -229,7 +232,7 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
     async execute(input, ctx) {
       const account = readNewAccount(input);
 
-      const { rows: existing } = await ctx.db.query(`select 1 from email.accounts where address = $1`, [
+      const { rows: existing } = await ctx.buddi!.db.query(`select 1 from email.accounts where address = $1`, [
         account.address,
       ]);
       if (existing.length > 0) {
@@ -251,7 +254,7 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
        * accident — but "cannot by accident" is not "cannot", and what is at
        * stake is another account's password.
        */
-      const { rows: owner } = await ctx.db.query<{ address: string }>(
+      const { rows: owner } = await ctx.buddi!.db.query<{ address: string }>(
         `select address from email.accounts where secret_name = $1`,
         [secretName],
       );
@@ -271,7 +274,7 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
       (env as Record<string, string | undefined>)[secretName] = account.password;
 
       try {
-        const { rows } = await ctx.db.query(
+        const { rows } = await ctx.buddi!.db.query(
           `insert into email.accounts
              (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name,
               aliases, display_name, enabled, added_via)
@@ -330,7 +333,7 @@ export function createRemoveAccountTool(
     ownerOnly: true,
     input: removeInput,
     async execute(input, ctx) {
-      const { rows } = await ctx.db.query(
+      const { rows } = await ctx.buddi!.db.query(
         `delete from email.accounts where id = $1::uuid returning ${ACCOUNT_COLUMNS}`,
         [input.id],
       );

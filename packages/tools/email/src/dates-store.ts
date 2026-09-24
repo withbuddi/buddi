@@ -17,10 +17,11 @@
  * the owner silenced does not get to put a date in front of them through a
  * different door.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea, ScheduleArea } from '@buddi/core/plugin';
 import { findDates, type DateHit, type FindDatesOptions } from './dates.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** How many unscanned messages one sentinel tick reads. */
 export const DATE_SCAN_BATCH = 200;
@@ -207,9 +208,9 @@ export async function statedDatesBetween(
 /**
  * Which of these (thread, day) pairs already have a reminder.
  *
- * `core.reminders` is core's table and this is a read of it: a reminder is the
- * thing §7 says makes a stated date not worth mentioning, and the plugin has
- * to be able to see one. A pending reminder whose `context` names this thread,
+ * Asked of the host (`ctx.buddi.schedule.remindersFor`), never read from core's
+ * table: a reminder is the thing §7 says makes a stated date not worth
+ * mentioning, and the plugin has to be able to see one. A pending reminder whose `context` names this thread,
  * due on that day in the owner's zone, is the owner already knowing.
  *
  * Returns a set of `${threadId}|${date}` keys. A reminder that names no thread
@@ -218,22 +219,17 @@ export async function statedDatesBetween(
  * knowing about the other.
  */
 export async function remindersFor(
-  db: Db,
+  schedule: ScheduleArea,
   threadIds: readonly string[],
   days: readonly string[],
-  timezone: string,
 ): Promise<Set<string>> {
   const covered = new Set<string>();
   if (threadIds.length === 0 || days.length === 0) return covered;
-  const { rows } = await db.query(
-    `select coalesce(r.context->>'threadId', r.context->>'thread_id') as thread_id,
-            to_char((r.due_at at time zone $3)::date, 'YYYY-MM-DD') as due_day
-       from core.reminders r
-      where r.state = 'pending'
-        and coalesce(r.context->>'threadId', r.context->>'thread_id') = any($1::text[])
-        and (r.due_at at time zone $3)::date = any($2::date[])`,
-    [threadIds, days, timezone],
-  );
-  for (const row of rows) covered.add(`${String(row.thread_id)}|${String(row.due_day)}`);
+  // A reminder names its thread as `threadId`, or as `thread_id` in older
+  // rows; either one counts.
+  for (const contextKey of ['threadId', 'thread_id']) {
+    const due = await schedule.remindersFor({ contextKey, values: [...threadIds] }, [...days]);
+    for (const row of due) covered.add(`${row.value}|${row.day}`);
+  }
   return covered;
 }

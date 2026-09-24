@@ -19,7 +19,7 @@
  *    arrives from `message`, when the owner opens one.
  */
 import { z } from 'zod';
-import { QueryRefusal, type PageQuery, type ToolContext } from '@buddi/core';
+import { QueryRefusal, type PageQuery, type ProposalsArea, type ToolContext } from '@buddi/core/plugin';
 import {
   booleanFilter,
   buildSearch,
@@ -209,8 +209,8 @@ export function threadsQuery(): PageQuery {
     params: searchParams,
     async produce(params, ctx: ToolContext) {
       const input = params as z.infer<typeof searchParams>;
-      const now = ctx.now();
-      const accounts = await listAccounts(ctx.db, { enabledOnly: false });
+      const now = ctx.buddi!.clock.now();
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
       const ids = accounts.map((a) => a.id);
       /*
        * The search is read *first*, refusals and all. An installation with no
@@ -222,8 +222,8 @@ export function threadsQuery(): PageQuery {
       const hits = await searchHits(ctx, input, ids);
       if (ids.length === 0) return { threads: [], ...hits };
 
-      const threads = await listThreadRows(ctx.db, { accountIds: ids, limit: THREAD_LIST_LIMIT });
-      const { rows } = await ctx.db.query(
+      const threads = await listThreadRows(ctx.buddi!.db, { accountIds: ids, limit: THREAD_LIST_LIMIT });
+      const { rows } = await ctx.buddi!.db.query(
         `select distinct thread_id from email.drafts
           where thread_id = any($1::uuid[]) and status = any($2::text[])`,
         [threads.map((t) => t.id), [...LIVE_DRAFT_STATUSES]],
@@ -298,13 +298,13 @@ async function searchHits(
   // Every refusal is behind us; with no mailbox there is simply nothing here.
   if (ids.length === 0) return { items: [], count: 0 };
 
-  const now = ctx.now();
+  const now = ctx.buddi!.clock.now();
   const built = buildSearch(ids, filters, {
     now,
-    timezone: ctx.timezone,
+    timezone: ctx.buddi!.owner.timezone,
     limit: SEARCH_LIMIT,
   });
-  const { rows } = await ctx.db.query(built.text, built.params);
+  const { rows } = await ctx.buddi!.db.query(built.text, built.params);
   const items = rows.map(toSearchRow).map((m: SearchRow) => ({
     id: m.id,
     threadId: m.threadId,
@@ -337,13 +337,13 @@ export function threadQuery(): PageQuery {
     params: byId,
     async produce(params, ctx: ToolContext) {
       const { id } = params as { id: string };
-      const now = ctx.now();
-      const thread = await findThread(ctx.db, id);
+      const now = ctx.buddi!.clock.now();
+      const thread = await findThread(ctx.buddi!.db, id);
       if (!thread) throw new QueryRefusal('No conversation here has that id.');
       // Headers and snippets only: twenty bodies is a page weight nobody
       // reads, and one arrives from `message` when the owner opens it.
-      const messages = await threadMessages(ctx.db, thread.id, THREAD_MESSAGE_LIMIT);
-      const drafts = await listDraftsForThread(ctx.db, thread.id);
+      const messages = await threadMessages(ctx.buddi!.db, thread.id, THREAD_MESSAGE_LIMIT);
+      const drafts = await listDraftsForThread(ctx.buddi!.db, thread.id);
       const live = drafts.filter((d) =>
         (LIVE_DRAFT_STATUSES as readonly string[]).includes(d.status),
       );
@@ -406,12 +406,12 @@ export function draftQuery(): PageQuery {
     params: byId,
     async produce(params, ctx: ToolContext) {
       const { id } = params as { id: string };
-      const { rows } = await ctx.db.query(
+      const { rows } = await ctx.buddi!.db.query(
         `select ${DRAFT_COLUMNS} from email.drafts where id = $1::uuid`,
         [id],
       );
       if (!rows[0]) throw new QueryRefusal('No draft here has that id.');
-      return draftRow(toDraft(rows[0]), ctx.now());
+      return draftRow(toDraft(rows[0]), ctx.buddi!.clock.now());
     },
   };
 }
@@ -423,7 +423,7 @@ export function messageQuery(): PageQuery {
     params: byId,
     async produce(params, ctx: ToolContext) {
       const { id } = params as { id: string };
-      const { rows } = await ctx.db.query(
+      const { rows } = await ctx.buddi!.db.query(
         `select m.id, m.from_addr, m.to_addrs, m.cc, m.subject, m.date, m.direction,
                 m.body_text, m.body_purged_at, m.attachments
            from email.messages m
@@ -462,9 +462,9 @@ export function accountsQuery(): PageQuery {
     name: 'accounts',
     params: noParams,
     async produce(_params, ctx: ToolContext) {
-      const now = ctx.now();
-      const accounts = await listAccounts(ctx.db, { enabledOnly: false });
-      const synced = await lastSyncByAccount(ctx.db);
+      const now = ctx.buddi!.clock.now();
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
+      const synced = await lastSyncByAccount(ctx.buddi!.db);
       return {
         accounts: accounts.map((account) => ({
           id: account.id,
@@ -502,13 +502,9 @@ export function accountsQuery(): PageQuery {
  * How many of this plugin's rules wait on Settings → Proposals. Zero on an
  * installation whose core has no proposals table yet.
  */
-async function openEmailRuleProposals(db: ToolContext['db']): Promise<number> {
+async function openEmailRuleProposals(proposals: ProposalsArea): Promise<number> {
   try {
-    const { rows } = await db.query(
-      `select count(*)::int as n from core.proposals
-        where kind = 'policy' and state = 'open' and payload->>'plugin' = 'email'`,
-    );
-    return Number(rows[0]?.n ?? 0);
+    return await proposals.countOpen();
   } catch (error) {
     if (undefinedTable(error)) return 0;
     throw error;
@@ -521,7 +517,7 @@ export function policiesQuery(): PageQuery {
     name: 'policies',
     params: noParams,
     async produce(_params, ctx: ToolContext) {
-      const now = ctx.now();
+      const now = ctx.buddi!.clock.now();
       /*
        * A schema that is not there is not a failure of this page.
        *
@@ -534,7 +530,7 @@ export function policiesQuery(): PageQuery {
        */
       let view: Awaited<ReturnType<typeof policyLists>>;
       try {
-        view = await policyLists(ctx.db);
+        view = await policyLists(ctx.buddi!.db);
       } catch (error) {
         if (undefinedTable(error)) {
           return {
@@ -561,7 +557,7 @@ export function policiesQuery(): PageQuery {
         applied: view.applied.map(line),
         appliedCount: view.applied.length,
         // Learned rules wait on the owner's Proposals inbox, not here.
-        proposedCount: await openEmailRuleProposals(ctx.db),
+        proposedCount: await openEmailRuleProposals(ctx.buddi!.proposals!),
         savedRuns,
         unavailable: false,
       };
@@ -586,14 +582,14 @@ export function ruleThreadsQuery(): PageQuery {
     params: z.object({ mailbox: UUID.optional() }).strict(),
     async produce(params, ctx: ToolContext) {
       const { mailbox } = params as { mailbox?: string };
-      const accounts = await listAccounts(ctx.db, { enabledOnly: false });
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
       const named = new Map(
         accounts.map((account) => [
           account.id,
           account.displayName ? account.displayName : account.address,
         ]),
       );
-      const threads = await threadChoices(ctx.db, mailbox);
+      const threads = await threadChoices(ctx.buddi!.db, mailbox);
       return {
         threads: threads.map((thread) => {
           const subject = thread.subject.trim() === '' ? '(no subject)' : thread.subject.trim();
@@ -616,7 +612,7 @@ export function watcherSettingsQuery(): PageQuery {
     params: noParams,
     async produce(_params, ctx: ToolContext) {
       try {
-        return await loadWatcherSettings(ctx.db);
+        return await loadWatcherSettings(ctx.buddi!.db);
       } catch (error) {
         /*
          * The same two branches the route had, and the reason for the second

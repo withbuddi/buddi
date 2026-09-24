@@ -16,7 +16,10 @@
  * message inside the window — the purge is bounded by one cutoff and one batch
  * size, and it is the only thing in the plugin that writes over ingested text.
  */
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 /** The settings key. Lives in `email.settings`, value is a json number. */
 export const RETENTION_DAYS_KEY = 'retention_days';
@@ -43,7 +46,7 @@ function clampDays(value: number): number {
 }
 
 /** The owner's settings, with the defaults filled in. Never throws on a bad row. */
-export async function loadSettings(db: Pool): Promise<EmailSettings> {
+export async function loadSettings(db: Db): Promise<EmailSettings> {
   const { rows } = await db.query<{ key: string; value: unknown }>(
     `select key, value from email.settings where key = $1`,
     [RETENTION_DAYS_KEY],
@@ -57,7 +60,7 @@ export async function loadSettings(db: Pool): Promise<EmailSettings> {
 
 /** Write the retention window. Returns the settings as they now stand. */
 export async function setRetentionDays(
-  db: Pool,
+  db: Db,
   days: number,
   now: Date,
 ): Promise<EmailSettings> {
@@ -115,7 +118,7 @@ export function purgeLogLine(outcome: PurgeOutcome): string {
  * the file stays, and the row still says which file it was.
  */
 export async function purgeBodies(
-  db: Pool,
+  db: Db,
   now: Date,
   opts: PurgeOptions = {},
 ): Promise<PurgeOutcome> {

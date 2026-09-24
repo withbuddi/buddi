@@ -41,7 +41,7 @@
  * meaning changes under the agent is worse than a slow one. Full-text search
  * over archives is §11's later work, on purpose.
  */
-import { localDateString } from '@buddi/core';
+import { localDateString } from '@buddi/core/plugin';
 import { normalizeAddress } from './mail.js';
 
 /** The clock every date filter and every ordering here is written against. */

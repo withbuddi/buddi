@@ -27,6 +27,17 @@ import type { ImapClientFactory } from '../ports.js';
 import type { GatedToolDefinition, ToolContext } from '../types.js';
 import type { SendEnvelope, SendInput, SendResult } from './send.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { createPluginHost, hostBindingOf } from '@buddi/core';
+import { manifest as emailManifestForHost } from '../index.js';
+
+/** The context core hands the email plugin: these facts, with its `ctx.buddi` built over them. */
+function hosted<C>(facts: C): C {
+  // Built over the context it returns, so a test that changes a field on it
+  // afterwards changes what the host reads, as core's per-call host would.
+  const ctx = { ...facts } as C & { buddi?: unknown };
+  ctx.buddi = createPluginHost(hostBindingOf(emailManifestForHost), ctx as never);
+  return ctx;
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -79,13 +90,13 @@ suite('email accounts, plural (postgres)', () => {
     registry.register(manifest);
     sendTool = manifest.tools.find((t) => t.name === 'email.send') as typeof sendTool;
 
-    ctx = {
+    ctx = hosted({
       db: pool,
       ownerId: 'test',
       now: () => new Date('2026-09-21T12:00:00Z'),
       timezone: 'UTC',
       agentId: 'mail-triage',
-    };
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -153,13 +164,13 @@ suite('email accounts, plural (postgres)', () => {
 
     const { connect } = twoServers();
     const source = createInboxPollSource({ connect, env: ENV, backfill: 1_000 });
-    await source.poll({
+    await source.poll(hosted({
       db: pool,
       now: ctx.now,
       timezone: 'UTC',
       log: () => {},
       enqueueRun: async () => {},
-    });
+    }));
 
     const { rows } = await pool.query(
       `select m.id, a.address from email.messages m join email.accounts a on a.id = m.account_id`,
@@ -391,13 +402,13 @@ suite('email accounts, plural (postgres)', () => {
           date: new Date('2026-09-20T08:00:00Z'),
         }),
       );
-      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 }).poll({
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: 1_000 }).poll(hosted({
         db: pool,
         now: ctx.now,
         timezone: 'UTC',
         log: () => {},
         enqueueRun: async () => {},
-      });
+      }));
 
       const listed = await call('email.list_recent', {});
       expect(listed.account).toBe(PERSONAL);
@@ -424,13 +435,13 @@ suite('email accounts, plural (postgres)', () => {
       await createInboxPollSource({
         connect: server.factory(),
         env: { GMAIL_USER: PERSONAL, [GMAIL_SECRET_NAME]: 'personal-app-password' },
-      }).poll({
+      }).poll(hosted({
         db: pool,
         now: ctx.now,
         timezone: 'UTC',
         log: (line) => lines.push(line),
         enqueueRun: async () => {},
-      });
+      }));
       expect(lines.join('\n')).toContain(`no secret named ${WORK_SECRET}`);
       const { rows } = await pool.query(
         `select a.address from email.folders m join email.accounts a on a.id = m.account_id`,

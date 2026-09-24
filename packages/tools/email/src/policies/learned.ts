@@ -20,20 +20,24 @@
  * `verdicts` the triage rows it was learned from. The sources are the
  * messages, by subject and sender; mail is untrusted, so the card is marked.
  */
-import type { Pool, PoolClient } from 'pg';
-import {
-  proposePolicy,
-  type PolicyApplyResult,
-  type PolicyHandler,
-  type PolicyHandlerContext,
-  type Proposal,
-  type ProposePolicyInput,
-  type UntrustedSource,
-} from '@buddi/core';
+import type {
+  DbArea,
+  PolicyApplyResult,
+  PolicyHandler,
+  PolicyHandlerContext,
+  Proposal,
+  ProposePolicyInput,
+  UntrustedSource,
+} from '@buddi/core/plugin';
+// Not yet on ctx.buddi: core hands a policy handler a PolicyHandlerContext
+// ({ db, now }), which carries no host, and the adoption below proposes inside
+// its own transaction, which ctx.buddi.proposals cannot join.
+import { proposePolicy } from '@buddi/core';
 import { POLICY_ACTIONS, POLICY_SCOPES, type PolicyAction, type PolicyParams, type PolicyScope } from './gate.js';
 import { createPolicy, normalizeMatcher, refusalFor, PolicyRefusal } from './store.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 export const EMAIL_PLUGIN = 'email';
 

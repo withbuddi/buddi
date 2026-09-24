@@ -21,13 +21,16 @@
  * caller hands it; the vault is what fills that environment at startup.
  */
 import { createHash } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import {
   type AccountRecord,
   type EmailAuth,
   type Resolved,
 } from './ports.js';
 import { ACCOUNT_COLUMNS, toAccount } from './rows.js';
+
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 export type EnvLike = Record<string, string | undefined>;
 
@@ -85,7 +88,7 @@ export function secretNameFor(address: string): string {
  * hosts and auth mode are refreshed from these constants.
  */
 export async function ensureGmailAccount(
-  pool: Pool,
+  pool: Db,
   env: EnvLike = process.env,
 ): Promise<AccountRecord | null> {
   const address = env[GMAIL_USER_VAR]?.trim().toLowerCase();
@@ -133,7 +136,7 @@ export async function ensureGmailAccount(
  * cannot see is a row you cannot turn back on.
  */
 export async function listAccounts(
-  pool: Pool,
+  pool: Db,
   opts: { enabledOnly?: boolean } = {},
 ): Promise<AccountRecord[]> {
   const enabledOnly = opts.enabledOnly ?? true;
@@ -155,7 +158,7 @@ export async function listAccounts(
  * the caller's, and `requireOneAccount` is where the sentence lives.
  */
 export async function findAccount(
-  pool: Pool,
+  pool: Db,
   ref: string,
   opts: { enabledOnly?: boolean } = {},
 ): Promise<AccountRecord | null> {
@@ -177,7 +180,7 @@ export async function findAccount(
 }
 
 /** Write down that a poll of this account finished. The one writer of the column. */
-export async function markAccountSynced(pool: Pool, accountId: string, at: Date): Promise<void> {
+export async function markAccountSynced(pool: Db, accountId: string, at: Date): Promise<void> {
   await pool.query(`update email.accounts set last_synced_at = $2 where id = $1`, [accountId, at]);
 }
 
@@ -191,7 +194,7 @@ export async function markAccountSynced(pool: Pool, accountId: string, at: Date)
  * has never completed a poll, which is not the same as one that synced and
  * found nothing.
  */
-export async function lastSyncedByAccount(pool: Pool): Promise<Map<string, Date | null>> {
+export async function lastSyncedByAccount(pool: Db): Promise<Map<string, Date | null>> {
   const { rows } = await pool.query(`select id, last_synced_at from email.accounts`);
   const out = new Map<string, Date | null>();
   for (const row of rows) {
@@ -213,7 +216,7 @@ export async function lastSyncedByAccount(pool: Pool): Promise<Map<string, Date 
  * is this mailbox": a quiet mailbox polled a minute ago reads the same as one
  * nothing has polled since Tuesday. `lastSyncedByAccount` above is that one.
  */
-export async function lastSyncByAccount(pool: Pool): Promise<Map<string, string | null>> {
+export async function lastSyncByAccount(pool: Db): Promise<Map<string, string | null>> {
   const { rows } = await pool.query(
     `select account_id, max(fetched_at) as last_sync from email.messages group by account_id`,
   );

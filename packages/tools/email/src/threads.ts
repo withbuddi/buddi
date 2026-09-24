@@ -22,11 +22,12 @@
  * wrote last, and deriving it from anything a sender wrote would put the
  * sender in charge of whether the owner is waiting.
  */
-import type { Pool, PoolClient } from 'pg';
+import type { DbArea } from '@buddi/core/plugin';
 import { normalizeAddresses } from './mail.js';
 import type { MessageDirection } from './rows.js';
 
-type Db = Pool | PoolClient;
+/** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
+type Db = Pick<DbArea, 'query'>;
 
 export const THREAD_STATES = ['waiting-on-me', 'waiting-on-them', 'closed', 'muted'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];

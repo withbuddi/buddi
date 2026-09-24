@@ -10,7 +10,7 @@
  * This module is the seam: the manifest asks it for the queries, the tools and
  * the pages, and everything the browser draws comes from here.
  */
-import type { PageDescriptor, PageQuery, ToolDefinition } from '@buddi/core';
+import type { PageDescriptor, PageQuery, ToolDefinition } from '@buddi/core/plugin';
 import { createAddAccountTool, createRemoveAccountTool, type AccountToolOptions } from './accounts.js';
 import {
   createAddRuleTool,

@@ -9,9 +9,9 @@
  * `gated` tool definition narrowed to *require* the `describe` that the owner's
  * preview is rendered from.
  */
-import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core';
+import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core/plugin';
 
-export type { EffectDescription, OwnerChoice, Source, SourceContext, ToolContext } from '@buddi/core';
+export type { EffectDescription, OwnerChoice, Source, SourceContext, ToolContext } from '@buddi/core/plugin';
 
 /**
  * An effect tool: tier `gated`, with the `describe` the Executor renders from.

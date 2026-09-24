@@ -13,7 +13,9 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest, Source, Vault } from '@buddi/core';
+import type { PluginManifest, Source } from '@buddi/core/plugin';
+// step 3: the vault a mailbox password is kept in, until the `secrets` area.
+import type { Vault } from '@buddi/core';
 import { imapflowFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailMetrics } from './metrics.js';
@@ -143,6 +145,10 @@ export function createEmailManifest(
     // keeping one comes back here, and this plugin writes the rule its gate
     // reads (docs/specs/learning.md §2 item 3).
     policies: emailPolicyHandler,
+    // Beyond its own schema: the draft bodies and attachments it keeps in the
+    // Files library, the rules it proposes, and the triage runs its poll starts
+    // (with the reminders it checks a stated date against).
+    uses: ['files', 'proposals', 'schedule'],
   };
 }
 
