@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ToolContext } from '@buddi/core';
+import type { ToolContext } from '@buddi/core/plugin';
 import { BrowserManager } from './manager.js';
 import { PlaywrightHost } from './host.js';
 import { PlaywrightDriver } from './driver.js';

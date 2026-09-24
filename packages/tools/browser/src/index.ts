@@ -1,5 +1,9 @@
 import path from 'node:path';
-import { resolveDataDir, type PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
+// Not yet on ctx.buddi: the browser's directory is <data>/browser and is fixed
+// when the manifest is built, before any context exists; ctx.buddi.dir is
+// <data>/plugins-data/browser. Moving it moves the owner's profile.
+import { resolveDataDir } from '@buddi/core';
 import { z } from 'zod';
 import type { BrowserController } from './service.js';
 import { HostController } from './controller.js';
@@ -32,7 +36,7 @@ export function hostBrowser(env: NodeJS.ProcessEnv = process.env, options: { ext
 
 export function createBrowserManifest(service: BrowserController = hostBrowser()): PluginManifest {
   return {
-    name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '',
+    name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', uses: [],
     description: 'Owner-directed computer control: macOS screenshots, accessibility and native input by default; optional Playwright browser automation.',
     tools: [
       { name: 'browser.status', tier: 'auto', description: 'Read computer/browser mode, owner-allowed apps, permissions and this conversation’s controlling task. Does not open an app.',

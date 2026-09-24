@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import type { SurfaceProfile, ToolContext } from '@buddi/core';
+import type { SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
 
@@ -173,7 +173,7 @@ export class BrowserService {
     if (!this.#enabled) throw new Error('Browser driving is available through buddi serve (dashboard or Telegram), not a separate CLI process.');
     if (this.#state === 'stopped') throw new Error(browserStoppedMessage(ctx.surface));
     if (this.#busy) throw new Error('Browser is busy; overlapping actions are refused.');
-    if (this.#session && (this.#session.ownerId !== ctx.ownerId || this.#session.agentId !== ctx.agentId || this.#session.conversationId !== ctx.conversationId)) {
+    if (this.#session && (this.#session.ownerId !== ctx.buddi!.owner.id || this.#session.agentId !== ctx.agentId || this.#session.conversationId !== ctx.conversationId)) {
       throw new Error('Another agent/conversation owns the browser. Ask the owner to release it from the dashboard.');
     }
     if (this.#spent.has(request.id)) throw new Error('This browser request has ended. A new owner message is required.');
@@ -189,7 +189,7 @@ export class BrowserService {
       const expiresAt = Math.min(request.expiresAt, this.#now() + (this.options.lifetimeMs ?? 20 * 60_000));
       if (this.#session) this.#spent.add(this.#session.requestId);
       this.#preconditionFailures = 0;
-      this.#session = { id: this.#session?.id ?? randomUUID(), ownerId: ctx.ownerId, agentId: ctx.agentId,
+      this.#session = { id: this.#session?.id ?? randomUUID(), ownerId: ctx.buddi!.owner.id, agentId: ctx.agentId,
         conversationId: ctx.conversationId, requestId: request.id, task: request.text.slice(0, 4000),
         expiresAt: new Date(expiresAt).toISOString(), steps: 0, maxSteps: this.options.maxSteps ?? 80 };
       clearTimeout(this.#expiry);
