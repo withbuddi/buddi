@@ -21,8 +21,8 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
 .transcript-who { padding: 6px 12px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: var(--text-sm); }
 .transcript-body { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-2); }
 .transcript-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-md); line-height: var(--leading-loose); }
-.transcript-tool { border-left: 3px solid var(--accent); padding-left: 10px; display: flex; flex-direction: column; gap: 6px; }
-.transcript-tool[data-tone='critical'] { border-left-color: var(--critical); }
+.transcript-tool { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); padding: var(--space-2) var(--space-3); display: flex; flex-direction: column; gap: 6px; }
+.transcript-tool[data-tone='critical'] { border-color: color-mix(in oklab, var(--critical) 40%, var(--line)); }
 .transcript-tool-name { font-weight: var(--weight-semibold); }
 
 @media (max-width: 720px) {
@@ -67,11 +67,11 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   width: 32px;
   height: 32px;
   border-radius: 10px;
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--surface-brand-strong);
+  color: var(--on-brand);
   font-family: var(--font-display);
   font-size: 19px;
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   line-height: 1;
   margin-bottom: 14px;
   text-decoration: none;
@@ -115,10 +115,10 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   height: 16px;
   padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: var(--critical);
-  color: #fff;
+  background: var(--attention);
+  color: var(--attention-ink);
   font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -403,10 +403,10 @@ main { flex: 1 1 auto; padding: var(--space-5) var(--space-6) 60px; min-width: 0
   justify-content: center;
   padding: 0 4px;
   border-radius: var(--radius-pill);
-  background: var(--critical);
-  color: var(--accent-contrast);
+  background: var(--attention);
+  color: var(--attention-ink);
   font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-bold);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px var(--surface);
@@ -1226,15 +1226,15 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
    when it has focus, the way the thing you are about to speak into should. */
 .wb-composer-box {
   border: 1px solid var(--line);
-  border-radius: 18px;
+  border-radius: var(--radius-composer);
   background: var(--surface-raised);
   box-shadow: var(--shadow-panel);
-  transition: border-color 120ms ease, box-shadow 160ms ease;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur) ease;
   overflow: hidden;
 }
 .wb-composer-box[data-focused='true'] {
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px var(--accent-soft), 0 6px 20px rgb(16 15 14 / 8%);
+  box-shadow: var(--shadow-focus), 0 6px 20px rgb(21 38 66 / 8%);
 }
 .wb-composer-box[data-disabled='true'] { opacity: 0.6; }
 
@@ -1252,7 +1252,7 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   line-height: 1.55;
   font-size: var(--text-base);
 }
-.wb-composer-box textarea:focus { outline: none; }
+.wb-composer-box textarea:focus, .wb-composer-box textarea:focus-visible { outline: none; box-shadow: none; }
 .wb-composer-box textarea::placeholder { color: var(--text-faint); }
 
 .wb-composer-row {
@@ -1293,9 +1293,10 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   background: var(--accent);
   color: var(--accent-contrast);
   cursor: pointer;
-  transition: transform 120ms ease, opacity 120ms ease, filter 120ms ease;
+  transition: transform var(--dur-fast) var(--ease), opacity var(--dur-fast) ease, background-color var(--dur-fast) ease;
 }
-.wb-send:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.wb-send:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+.wb-send:active:not(:disabled) { transform: translateY(0); }
 .wb-send:disabled { opacity: 0.35; cursor: default; }
 
 /* ---- files: in the composer before sending, in the thread after ---- */
@@ -1961,10 +1962,9 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-fail {
   margin: 0;
   padding: 12px 14px;
-  border: 1px solid var(--critical);
-  border-left-width: 3px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
+  border: 1px solid color-mix(in oklab, var(--critical) 40%, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--critical-soft);
   color: var(--text);
   font-size: var(--text-md);
   line-height: 1.55;
@@ -2167,13 +2167,11 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   justify-content: space-between;
   gap: 16px;
   padding: 7px 0 7px 10px;
-  border-left: 2px solid transparent;
   border-bottom: 1px solid var(--line);
 }
 .wb-prof-row:last-child { border-bottom: 0; }
 /* The privilege boundary, drawn. */
 .wb-prof-row[data-gated='true'] {
-  border-left-color: var(--warning);
   background: var(--warning-soft);
 }
 

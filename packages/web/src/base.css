@@ -74,3 +74,10 @@ a:not([class]):hover { text-decoration: underline; }
   border-width: 0;
 }
 .contents { display: contents; }
+
+/* Quick and quiet, and still for anyone who asked for stillness: every
+   transition and animation collapses under reduced motion, the field's drift
+   included. */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
