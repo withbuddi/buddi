@@ -12,7 +12,8 @@ import { urlForDatabase } from '../backup/restore.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { configurePluginHost, resetPluginHost } from '../host/build.js';
 import type { CoreToolContext, PluginManifest } from '../tools.js';
-import { createMemoryVault, type Vault } from '../vault/memory.js';
+import { createMemoryVault } from '../vault/memory.js';
+import type { Vault } from '../vault/types.js';
 import { createSecretsManifest } from './approval.js';
 import { resetSecretDestinations } from './destinations.js';
 

@@ -319,7 +319,9 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         );
         if ('pending' in delivered) throw new SecretPendingError(delivered.pending);
         if ('refused' in delivered) throw new Error(delivered.refused);
-        headers = { ...req.headers, [headerName]: delivered.value };
+        // The caller's own spelling of the same header goes, whatever its case: one header, the bound value.
+        headers = Object.fromEntries(Object.entries(req.headers ?? {}).filter(([name]) => name.toLowerCase() !== headerName.toLowerCase()));
+        headers[headerName] = delivered.value;
       }
       /*
        * Logged, not refused, in 1.0: the hosts a manifest lists were

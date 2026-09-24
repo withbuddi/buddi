@@ -965,6 +965,10 @@ export async function main(): Promise<void> {
       abortAfterMs: PROPOSAL_SWEEP_MS,
       run: async () => {
         await proposalSweep();
+        // `held` uses are a credential read by its own plugin — one per mail
+        // poll, one per model call — and say nothing after a month; delivered,
+        // pending and refused rows are the owner's audit log and stay.
+        await pool.query(`delete from core.secret_uses where outcome = 'held' and at < $1`, [new Date(now().getTime() - 30 * 86_400_000)]);
       },
       log: logErr,
     });

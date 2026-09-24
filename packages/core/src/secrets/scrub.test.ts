@@ -18,7 +18,7 @@ import {
   setSecretScrubSource,
 } from './scrub.js';
 
-function scrubWith(entries: Array<{ name: string; value: string }>, text: string): string {
+function scrubWith(entries: Array<{ name: string; value: string }>, text: string): Promise<string> {
   setSecretScrubSource(async () => entries);
   // primeSecretScrubber never throws, even on a source that does; this one answers.
   return (async () => {

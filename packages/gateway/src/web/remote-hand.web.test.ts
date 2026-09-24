@@ -47,6 +47,7 @@ function controller() {
   const browser: BrowserController = {
     enable: async () => {}, shutdown: async () => {}, status,
     screenshot: () => undefined, execute: async () => ({}),
+    secretFill: async () => ({}), secretType: async () => ({}),
     control: async (action) => { state = action === 'takeover' ? 'paused' : 'running'; return status(); },
     hand: (scope) => (scope?.sessionId === SESSION ? { supported: true, hand } : { supported: true, message: 'gone' }),
   };
