@@ -9,7 +9,7 @@
  * `shell/accent.ts`) travels as `data-agent`, plus one custom property when
  * the agent chose its own colour; nothing else is styled inline.
  */
-import { useState } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import type { ChatAgent } from '../../chat/types';
 import { accentAttrs, accentOf } from '../../shell/accent';
 import { tintOf } from '../../shell/AgentRail';
@@ -103,4 +103,30 @@ export function AgentAvatar({
 }): JSX.Element {
   const agent = agents.find((a) => a.id === id);
   return <Avatar id={id} name={agent?.name ?? id} size={size} unavailable={agent ? !agent.available : false} face={agent} />;
+}
+
+/**
+ * The mascot slot.
+ *
+ * Empty states and the Home greeting leave room for the default agent's face —
+ * but only the picture the owner uploaded for it (`/api/agents/:id/avatar`).
+ * The art lives with the design, not in this package: it reaches the product
+ * only as an upload. With no picture, or one that fails to load, the slot
+ * draws nothing — never a monogram, an emoji or a placeholder blob.
+ */
+const MascotContext = createContext<string | null>(null);
+
+export function MascotProvider({ picture, children }: { picture: string | null | undefined; children: ReactNode }): JSX.Element {
+  return <MascotContext.Provider value={picture ?? null}>{children}</MascotContext.Provider>;
+}
+
+export function Mascot({ size }: { size?: 'sm' | 'lg' | undefined }): JSX.Element | null {
+  const picture = useContext(MascotContext);
+  const [broken, setBroken] = useState<string | null>(null);
+  if (!picture || picture === broken) return null;
+  return (
+    <span className="ui-mascot" data-size={size} data-testid="mascot" aria-hidden="true">
+      <img src={picture} alt="" onError={() => setBroken(picture)} />
+    </span>
+  );
 }

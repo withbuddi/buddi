@@ -89,7 +89,7 @@ function Conversations({ timezone, navigate, nameOf, agents }: { timezone: strin
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.conversations.length === 0 ? (
-          <Empty>Nothing has run yet.</Empty>
+          <Empty mascot>Nothing has run yet.</Empty>
         ) : (
           <List>
             {data.conversations.map((c: ConversationSummary) => (
@@ -120,7 +120,7 @@ function ApprovalHistory({ timezone, nameOf }: { timezone: string; nameOf: (id: 
         {!data ? (
           <Empty>Loading…</Empty>
         ) : rows.length === 0 ? (
-          <Empty>No approvals have been asked for yet.</Empty>
+          <Empty mascot>No approvals have been asked for yet.</Empty>
         ) : (
           <Table>
             <thead>

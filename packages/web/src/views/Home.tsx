@@ -23,6 +23,7 @@ import {
   GradientField,
   List,
   ListRow,
+  Mascot,
   Notice,
   Panel,
   Pill,
@@ -79,9 +80,12 @@ export function Home({
           where the first-run colours come back, behind three short lines. */}
       <GradientField quiet className="home-band">
         <header className="home-hero">
-          <p className="home-date">{fmtDay(data?.now, timezone)}</p>
-          <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
-          <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
+          <div className="home-hero-text">
+            <p className="home-date">{fmtDay(data?.now, timezone)}</p>
+            <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
+            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
+          </div>
+          <Mascot size="lg" />
         </header>
       </GradientField>
     <div className="home">
@@ -137,7 +141,7 @@ export function Home({
         aside={<a href={AGENTS_ROUTE} onClick={go(AGENTS_ROUTE)}>All agents</a>}
       >
         {agents.length === 0 ? (
-          <Empty>No agents yet. Add one under Agents.</Empty>
+          <Empty mascot>No agents yet. Add one under Agents.</Empty>
         ) : (
           <div className="home-team">
             {agents.map((agent) => {
@@ -198,7 +202,7 @@ export function Home({
         <Section title="Coming up" aside={<a href={`${AGENTS_ROUTE}?tab=missions`} onClick={go(`${AGENTS_ROUTE}?tab=missions`)}>All missions</a>}>
           <Panel flush>
             {upcoming.length === 0 ? (
-              <Empty>Nothing scheduled. Missions and reminders will show here.</Empty>
+              <Empty mascot>Nothing scheduled. Missions and reminders will show here.</Empty>
             ) : (
               <List>
                 {upcoming.map((item) => (
@@ -220,7 +224,7 @@ export function Home({
         <Section title="Lately" aside={<a href={ACTIVITY_ROUTE} onClick={go(ACTIVITY_ROUTE)}>All activity</a>}>
           <Panel flush>
             {lately.length === 0 ? (
-              <Empty>Nothing has run yet. Say hello to someone on your team.</Empty>
+              <Empty mascot>Nothing has run yet. Say hello to someone on your team.</Empty>
             ) : (
               <List>
                 {lately.map((c) => (

@@ -50,6 +50,7 @@ import { Agents } from './views/Agents';
 import { Home } from './views/Home';
 import { Settings } from './views/Settings';
 import { Meet } from './views/Meet';
+import { MascotProvider } from './views/parts/Avatar';
 import { RecoveryBanner, useRecovery } from './views/Recovery';
 
 export { PLACES };
@@ -340,6 +341,7 @@ export function App(): JSX.Element {
   }
 
   return (
+    <MascotProvider picture={agents.find((agent) => agent.id === defaultAgentId)?.picture}>
     <Tooltip.Provider delayDuration={400}>
       <Toast.Provider swipeDirection="right">
         {groupSheet}
@@ -406,6 +408,7 @@ export function App(): JSX.Element {
         <Toast.Viewport className="ui-toasts" />
       </Toast.Provider>
     </Tooltip.Provider>
+    </MascotProvider>
   );
 }
 
