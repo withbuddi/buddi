@@ -147,7 +147,7 @@ model is handed the sentence.
 that changed (`effect-changed`); a `describe` that measured again would put a
 live number into a hashed envelope, so one mail arriving between the card and
 the tap would void a perfectly good approval — fine for a debt, hopeless for
-`email.inbox_unread` (§8: not shipped, and for this kind of reason). At
+`email.inbox_unread` (a count that moves with every poll). At
 re-description the approved envelope is on the context and `describe` reuses
 its baseline. Everything else still re-derives, so an approval whose target,
 deadline or holder changed is still refused.
@@ -353,11 +353,10 @@ recommendation, or proposes `goal.update`. At −10k the advisor says so, once.
 The email plugin declares `email.waiting_on_me`; the developer plugin
 `developer.failing_tests` for a workspace; none of them knows about goals.
 
-`email.inbox_unread` is **not** shipped and is named here as the shape of one
-that could be: a message's `flags` are written once at ingest and never
-re-synced, so a count over them only ever climbs whatever the owner reads, and
-a goal on it would be settled `missed` for an inbox somebody had actually
-emptied. It needs an IMAP flag re-sync first.
+`email.inbox_unread` shipped once the inbox poll re-synced flags: before that a
+message's `flags` were written once at ingest, so a count over them only ever
+climbed whatever the owner read, and a goal on it would have been settled
+`missed` for an inbox somebody had actually emptied.
 
 ## 9. What it is not
 
@@ -395,6 +394,6 @@ stated as such).
    is a change to core's `runSentinels`, not to where a goal shows, and it
    stands as written.
 3. Metrics in finance (`total_debt`, `card_balance`, `cash_available`) and
-   email (`waiting_on_me`; `inbox_unread` waits on an IMAP flag re-sync, §8);
+   email (`waiting_on_me`, and `inbox_unread` once flags re-sync, §8);
    the developer plugin's `failing_tests`. (half a day, in buddi-plugins for
    finance and developer)

@@ -453,11 +453,15 @@ a goal watch a number a plugin owns (`docs/plugins.md` §2.3a,
   that mailbox". A mailbox that synced and found nothing waiting answers **0**,
   which is the fact `max(fetched_at)` over the messages could never state.
 
-**`email.inbox_unread` is deliberately not shipped.** `flags` is written once
-at ingest and never re-synced — the fetch is a peek and the insert is `on
-conflict … do nothing` — so a count over it only ever climbs, whatever the
-owner reads. A goal on it would be settled `missed` for an inbox somebody had
-actually emptied. It needs an IMAP flag re-sync first (ROADMAP, small items).
+**`email.inbox_unread`** (built 2026-09-23, migration `015_flag_sync.sql`):
+messages in the inbox with `\Seen` unset, for all enabled mailboxes or one
+named by `{ account }`, `asOf` the stalest completed poll as above. It needs
+flags that move, so each inbox poll re-reads FLAGS (never a body) for the
+newest 2,000 rows it holds and updates them in place: `CHANGEDSINCE` the stored
+HIGHESTMODSEQ on a CONDSTORE server (Gmail), a capped full FLAGS fetch
+otherwise. The count is taken over the same 2,000. The schema has no "still in
+the inbox" field, so a message archived unread elsewhere keeps its last flags
+and counts until it leaves the window.
 
 ## 8. Drafts and sending
 

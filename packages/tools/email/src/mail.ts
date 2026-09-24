@@ -301,10 +301,10 @@ export function replyRecipients(input: ReplyRecipientsInput): ReplyRecipients {
  *
  * One definition of "unread" for the whole plugin, so nothing that asks the
  * question can drift from `email.list_recent`'s answer to it. Note what the
- * column *is*, before counting anything with it: `flags` is written once at
- * ingest and never re-synced (`sources/inbox-poll.ts`), so it says what the
- * mailbox reported when the message arrived, not what the owner has read
- * since.
+ * column *is*, before counting anything with it: `flags` is written at ingest
+ * and re-read by each inbox poll for the newest `FLAG_SYNC_WINDOW` rows only
+ * (`sources/inbox-poll.ts`), so an older row says what the mailbox reported
+ * when it was last in that window, and a Sent row what it said at ingest.
  */
 export const UNREAD_SQL = `not (flags @> '["\\\\Seen"]'::jsonb)`;
 

@@ -517,6 +517,8 @@ suite('email threads (postgres + fake imap)', () => {
           listAttachments: (name: string, uid: number) => base.listAttachments(name, uid),
           downloadAttachment: (name: string, uid: number, part: string, max: number) =>
             base.downloadAttachment(name, uid, part, max),
+          fetchFlags: (name: string, uids: readonly number[], since?: string | null) =>
+            base.fetchFlags(name, uids, since),
           close: () => base.close(),
           async open(name: string) {
             if (name === 'INBOX' && server.mailbox('[Gmail]/Sent Mail').messages.length === 0) {
@@ -546,6 +548,8 @@ suite('email threads (postgres + fake imap)', () => {
           listAttachments: (name: string, uid: number) => base.listAttachments(name, uid),
           downloadAttachment: (name: string, uid: number, part: string, max: number) =>
             base.downloadAttachment(name, uid, part, max),
+          fetchFlags: (name: string, uids: readonly number[], since?: string | null) =>
+            base.fetchFlags(name, uids, since),
           close: () => base.close(),
           async open(name: string) {
             if (name === '[Gmail]/Sent Mail' && failSent) {

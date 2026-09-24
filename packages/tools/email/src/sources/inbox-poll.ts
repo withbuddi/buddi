@@ -34,6 +34,11 @@
  *    and says so is a source.
  *  - **Flags are never mutated.** The fetch is a peek; `\Seen` stays whatever
  *    the owner's own mail client made it.
+ *  - **Flags are re-read, though.** A row's flags are written at ingest and the
+ *    insert never touches an existing row, so every inbox poll also refreshes
+ *    them in place for the newest `FLAG_SYNC_WINDOW` rows it holds (FLAGS
+ *    only, never a body; `syncFlags` below). Without it a message read on the
+ *    phone would stay unread here for good.
  *
  * The one seam: `enqueueRun` is the gateway's, and it cannot join this module's
  * transaction. So rows land with `triage_enqueued_at` null, the runs are
@@ -50,7 +55,7 @@ import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
 import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
-import type { AccountRecord, ImapClient, ImapClientFactory } from '../ports.js';
+import type { AccountRecord, ImapClient, ImapClientFactory, MailboxStatus } from '../ports.js';
 import { FOLDER_COLUMNS, toFolder, type FolderRecord, type MessageDirection } from '../rows.js';
 import { findThread, joinThread, threadMessages } from '../threads.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
@@ -64,6 +69,20 @@ export const POLL_EVERY_SECONDS = 300;
 
 /** Hard cap per poll. A backlog drains over several polls rather than in one gulp. */
 export const MAX_PER_POLL = 50;
+
+/**
+ * How many of the inbox's rows each poll re-reads flags for: the newest 2,000
+ * buddi holds for the folder's current generation. On a CONDSTORE server
+ * (Gmail) the question is "which of these changed since HIGHESTMODSEQ", and
+ * the answer is usually nothing; without CONDSTORE it is a FLAGS fetch of all
+ * 2,000 — a few bytes each, four round trips — which is the price of a server
+ * that cannot say what changed. Older rows keep the flags they last had, and
+ * `email.inbox_unread` counts over this same window so the two agree.
+ */
+export const FLAG_SYNC_WINDOW = 2_000;
+
+/** Uids per `UID FETCH … FLAGS`, so one command line stays a sane length. */
+export const FLAG_SYNC_BATCH = 500;
 
 /** Deadline for every single IMAP call. Env: `EMAIL_POLL_TIMEOUT_MS`. */
 export const DEFAULT_POLL_TIMEOUT_MS = 45_000;
@@ -572,14 +591,30 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
           // folder that times out must not cost the new mail its run.
           for (const folder of [...folders].filter((f) => !attemptedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
             try {
-              pending.push(
-                ...(await pollFolder(ctx, account, client, folder, {
-                  timeoutMs,
-                  backfill,
-                  limit,
-                  log,
-                })),
-              );
+              const polled = await pollFolder(ctx, account, client, folder, {
+                timeoutMs,
+                backfill,
+                limit,
+                log,
+              });
+              pending.push(...polled.pending);
+              if (folder.kind === 'inbox') {
+                // After ingest, so the new rows are in the window with the
+                // flags they arrived with. A re-sync that fails costs nobody
+                // their mail: the rows landed, the runs are queued below, and
+                // only this pass stops counting as a sync — the unread count
+                // it would have corrected is not stamped as current.
+                try {
+                  await syncFlags(ctx.db, account, client, polled.folder, polled.status, timeoutMs, log);
+                } catch (err) {
+                  log(
+                    `email.inbox-poll: could not re-sync flags on ${account.address}/${folder.name}: ` +
+                      `${err instanceof Error ? err.message : String(err)}; new mail still landed`,
+                  );
+                  complete = false;
+                  failures.push(err);
+                }
+              }
             } catch (err) {
               if (folder.kind !== 'sent') throw err;
               log(
@@ -644,7 +679,7 @@ async function pollFolder(
   client: ImapClient,
   folder: FolderRecord,
   opts: { timeoutMs: number; backfill: number; limit: number; log: (line: string) => void },
-): Promise<PendingTriage[]> {
+): Promise<{ pending: PendingTriage[]; status: MailboxStatus; folder: FolderRecord }> {
   const { timeoutMs, backfill, limit, log } = opts;
   const name = folder.name;
   const direction: MessageDirection = folder.kind === 'sent' ? 'out' : 'in';
@@ -686,7 +721,7 @@ async function pollFolder(
     );
     // Nothing to backfill: skip the fetch entirely. The next poll picks up
     // whatever arrives after UIDNEXT-1, which is exactly "new mail".
-    if (effectiveBackfill === 0) return [];
+    if (effectiveBackfill === 0) return { pending: [], status, folder: current };
   }
 
   const fetched = await withDeadline('fetch', timeoutMs, client.fetchSince(name, current.lastUid, limit));
@@ -707,7 +742,98 @@ async function pollFolder(
   } else if (pending.length > 0) {
     log(`email.inbox-poll: ${pending.length} new message(s) on ${account.address}/${name}`);
   }
-  return pending;
+  return { pending, status, folder: current };
+}
+
+/**
+ * Bring the stored flags of this folder's newest rows up to date, in place.
+ *
+ * Only messages buddi already holds, and only their FLAGS: `UID FETCH … FLAGS`
+ * in batches of `FLAG_SYNC_BATCH`, never a header or a body, so it cannot set
+ * `\Seen` and it cannot re-ingest anything — a row is updated where its flags
+ * differ, and a uid the server does not answer for is left alone.
+ *
+ *  - **CONDSTORE** (the server reports HIGHESTMODSEQ, and the folder has one
+ *    stored from an earlier pass of the same generation): an unchanged
+ *    HIGHESTMODSEQ means nothing changed and no command is sent at all;
+ *    otherwise the fetch carries `CHANGEDSINCE <stored>` and the server
+ *    answers only for the messages that changed.
+ *  - **Otherwise** (no CONDSTORE, or the first pass): every uid in the window,
+ *    capped at `FLAG_SYNC_WINDOW`.
+ *
+ * The stored HIGHESTMODSEQ is the one SELECT reported, before ingest, so a
+ * change that lands during this poll is asked about again next time rather
+ * than skipped.
+ *
+ * **A message gone from INBOX** (archived or deleted in another client) is
+ * simply not in the answer. `email.messages` has no "still in the inbox"
+ * field, and this does not invent one: such a row keeps the flags it last had.
+ * The full fetch could tell it apart; CONDSTORE without QRESYNC cannot.
+ */
+async function syncFlags(
+  db: Pool,
+  account: AccountRecord,
+  client: ImapClient,
+  folder: FolderRecord,
+  status: MailboxStatus,
+  timeoutMs: number,
+  log: (line: string) => void,
+): Promise<void> {
+  const started = Date.now();
+  const serverModseq = status.highestModseq ?? null;
+  const { rows } = await db.query(
+    `select uid from email.messages
+      where folder_id = $1 and uidvalidity = $2
+      order by uid desc
+      limit $3`,
+    [folder.id, status.uidValidity, FLAG_SYNC_WINDOW],
+  );
+  const uids = rows.map((r) => Number(r.uid)).sort((a, b) => a - b);
+  // Incremental only within one generation: `plantCursor` clears the stored
+  // value on a UIDVALIDITY change, and the stored value must be the server's.
+  const since = serverModseq !== null && folder.uidValidity === status.uidValidity
+    ? folder.highestModseq
+    : null;
+  const mode = since !== null ? 'condstore' : 'full';
+
+  let reported = 0;
+  let updated = 0;
+  if (uids.length > 0 && !(since !== null && since === serverModseq)) {
+    for (let i = 0; i < uids.length; i += FLAG_SYNC_BATCH) {
+      const batch = uids.slice(i, i + FLAG_SYNC_BATCH);
+      const states = await withDeadline(
+        'flags',
+        timeoutMs,
+        client.fetchFlags(folder.name, batch, since),
+      );
+      reported += states.length;
+      if (states.length === 0) continue;
+      const result = await db.query(
+        `update email.messages m
+            set flags = v.flags
+           from (select unnest($3::bigint[]) as uid, unnest($4::text[])::jsonb as flags) v
+          where m.folder_id = $1 and m.uidvalidity = $2 and m.uid = v.uid
+            and not (m.flags @> v.flags and v.flags @> m.flags)`,
+        [
+          folder.id,
+          status.uidValidity,
+          states.map((s) => s.uid),
+          states.map((s) => JSON.stringify(s.flags)),
+        ],
+      );
+      updated += result.rowCount ?? 0;
+    }
+  }
+  if (serverModseq !== folder.highestModseq) {
+    await db.query(
+      `update email.folders set highest_modseq = $2 where id = $1 and uidvalidity = $3`,
+      [folder.id, serverModseq, status.uidValidity],
+    );
+  }
+  log(
+    `email.inbox-poll: flags on ${account.address}/${folder.name} re-synced via ${mode} in ` +
+      `${Date.now() - started}ms — ${uids.length} held, ${reported} reported, ${updated} changed`,
+  );
 }
 
 /** Persist the generation and the cursor together, and return the fresh row. */
@@ -718,7 +844,9 @@ async function plantCursor(
   lastUid: number,
 ): Promise<FolderRecord> {
   const { rows } = await db.query(
-    `update email.folders set uidvalidity = $2, last_uid = $3
+    `update email.folders set uidvalidity = $2, last_uid = $3,
+            -- A modseq belongs to its generation; the next re-sync starts over.
+            highest_modseq = case when uidvalidity is distinct from $2 then null else highest_modseq end
       where id = $1 returning ${FOLDER_COLUMNS}`,
     [folderId, uidValidity, lastUid],
   );

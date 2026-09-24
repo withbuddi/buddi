@@ -8,13 +8,12 @@
  * mailboxes — because an owner working the pile down must be counting what the
  * watcher wakes him about. Two definitions would be two different weeks.
  *
- * **Why there is no `email.inbox_unread` here.** A message's `flags` are
- * written once, at ingest, and never re-synced (`sources/inbox-poll.ts`: the
- * fetch is a peek, and the insert is `on conflict … do nothing`). A count over
- * them therefore only ever climbs, whatever the owner reads, so a goal on it
- * would be settled `missed` for an inbox somebody had actually emptied. The
- * metric is worth having and needs an IMAP flag re-sync first; until then it
- * does not exist, which is the honest version of not having it.
+ * And how many messages in the inbox are unread (`email.inbox_unread`). That
+ * one could not exist while a message's `flags` were written once at ingest
+ * and never again — the count would only climb, whatever the owner read. The
+ * inbox poll now re-reads FLAGS for the newest `FLAG_SYNC_WINDOW` rows each
+ * pass (`sources/inbox-poll.ts`), and the count is taken over exactly those
+ * rows, so it says what the server said at the last sync.
  *
  * **`asOf` is the last sync, and the stalest one.** Not `now`: mail is as
  * current as the last poll, and a count stamped with the present would paper
@@ -25,7 +24,9 @@
  */
 import type { MetricDefinition, ToolContext } from '@buddi/core';
 import { z } from 'zod';
-import { lastSyncedByAccount, listAccounts } from './config.js';
+import { findAccount, lastSyncedByAccount, listAccounts } from './config.js';
+import { UNREAD_SQL } from './mail.js';
+import { FLAG_SYNC_WINDOW } from './sources/inbox-poll.js';
 import { countWaitingOnMe } from './sentinels/waiting-on-me.js';
 
 /**
@@ -87,4 +88,71 @@ export const waitingOnMe: MetricDefinition = {
   },
 };
 
-export const emailMetrics: MetricDefinition[] = [waitingOnMe];
+/**
+ * Unread messages in the inbox of these accounts, over the rows the flag
+ * re-sync keeps current: per account, the newest `FLAG_SYNC_WINDOW` messages
+ * of the inbox folder's current generation, with `\Seen` unset.
+ *
+ * A message archived or deleted elsewhere keeps the flags it last had (the
+ * schema has no "still in the inbox" field), so one archived unread still
+ * counts until it falls out of the window.
+ */
+export async function countInboxUnread(
+  ctx: ToolContext,
+  accountIds: readonly string[],
+): Promise<number> {
+  const { rows } = await ctx.db.query(
+    `select coalesce(sum(w.n), 0)::int as n
+       from email.folders f
+       cross join lateral (
+         select count(*) filter (where ${UNREAD_SQL}) as n
+           from (select flags from email.messages
+                  where folder_id = f.id and uidvalidity = f.uidvalidity
+                  order by uid desc
+                  limit $2) m
+       ) w
+      where f.kind = 'inbox' and f.synced and f.account_id = any ($1::uuid[])`,
+    [accountIds, FLAG_SYNC_WINDOW],
+  );
+  return Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0);
+}
+
+/**
+ * How many messages in the inbox are unread: all enabled mailboxes, or one.
+ *
+ * `\Seen` as the server had it at the last poll — read on the phone at nine,
+ * counted as read by the poll after. `asOf` is that poll, the stalest one
+ * when several mailboxes are counted together.
+ */
+export const inboxUnread: MetricDefinition = {
+  id: 'email.inbox_unread',
+  description:
+    'How many messages in your inbox are unread — all your mailboxes together, or one if you name it ' +
+    '(its address). Read or unread as your mail server had it at the last sync, so a message you read ' +
+    'on your phone stops counting within a poll. Counts the newest ' +
+    `${FLAG_SYNC_WINDOW.toLocaleString('en-US')} messages of each inbox.`,
+  unit: 'count',
+  direction: 'down',
+  params: z.object({ account: z.string().trim().min(1).optional() }),
+  async measure(params, ctx) {
+    const { account } = (params ?? {}) as { account?: string };
+    const accounts = account
+      ? await findAccount(ctx.db, account).then((a) => (a ? [a] : []))
+      : await listAccounts(ctx.db);
+    // No mailbox — or one named that is not here — is nothing to count.
+    if (accounts.length === 0) return null;
+    const ids = accounts.map((a) => a.id);
+    const asOf = await stalestSync(ctx, ids);
+    if (asOf === null) return null;
+    return {
+      value: await countInboxUnread(ctx, ids),
+      asOf,
+      note:
+        accounts.length === 1
+          ? `unread in ${accounts[0]?.address}`
+          : `unread across ${accounts.length} inboxes`,
+    };
+  },
+};
+
+export const emailMetrics: MetricDefinition[] = [waitingOnMe, inboxUnread];

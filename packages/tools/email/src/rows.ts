@@ -48,9 +48,15 @@ export interface FolderRecord {
   synced: boolean;
   uidValidity: number | null;
   lastUid: number;
+  /**
+   * The HIGHESTMODSEQ the last flag re-sync of this folder saw, as a decimal
+   * string, or null when there is none to ask CHANGEDSINCE with (migration 015).
+   */
+  highestModseq: string | null;
 }
 
-export const FOLDER_COLUMNS = 'id, account_id, name, kind, synced, uidvalidity, last_uid';
+export const FOLDER_COLUMNS =
+  'id, account_id, name, kind, synced, uidvalidity, last_uid, highest_modseq';
 
 export function toFolder(row: Record<string, any>): FolderRecord {
   return {
@@ -61,6 +67,8 @@ export function toFolder(row: Record<string, any>): FolderRecord {
     synced: row.synced === true,
     uidValidity: row.uidvalidity === null ? null : Number(row.uidvalidity),
     lastUid: Number(row.last_uid),
+    highestModseq:
+      row.highest_modseq === null || row.highest_modseq === undefined ? null : String(row.highest_modseq),
   };
 }
 

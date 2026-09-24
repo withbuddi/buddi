@@ -10,6 +10,7 @@
 import type {
   AttachmentInfo,
   FetchedMessage,
+  FlagState,
   ImapClient,
   ImapClientFactory,
   MailboxInfo,
@@ -21,6 +22,15 @@ export interface FakeMailbox {
   messages: FetchedMessage[];
   /** The SPECIAL-USE attribute this folder is listed with, e.g. `\\Sent`. */
   specialUse?: string | null;
+  /**
+   * Whether this mailbox does CONDSTORE (RFC 7162), the way Gmail does. When
+   * it does, every add and every flag change bumps a mod-sequence, `open`
+   * reports HIGHESTMODSEQ and `fetchFlags` honours `changedSince`; when it
+   * does not, `open` reports none and the client has to fall back.
+   */
+  condstore?: boolean;
+  /** The mailbox's current HIGHESTMODSEQ. Maintained by the server. */
+  highestModseq?: number;
 }
 
 /**
@@ -47,6 +57,15 @@ export class FakeImapServer {
   readonly parts: FakeParts = new Map();
   /** Every part download served, for assertions about the cap and the peek. */
   readonly downloads: Array<{ mailbox: string; uid: number; part: string; maxBytes: number }> = [];
+  /** Every FLAGS-only fetch served: which uids were asked for, since when, how many answered. */
+  readonly flagFetches: Array<{
+    mailbox: string;
+    uids: number[];
+    changedSince: string | null;
+    returned: number;
+  }> = [];
+  /** Each message's mod-sequence, keyed `<mailbox>/<uid>`, for a CONDSTORE mailbox. */
+  readonly modseqs = new Map<string, number>();
 
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
@@ -66,7 +85,34 @@ export class FakeImapServer {
     const box = this.mailbox(name);
     const uid = message.uid ?? Math.max(0, ...box.messages.map((m) => m.uid)) + 1;
     box.messages.push({ ...message, uid });
+    this.#touch(name, uid);
     return uid;
+  }
+
+  /**
+   * What another mail client does: set this message's flags on the server.
+   * Marking a message read on the phone is `setFlags(INBOX, uid, ['\\Seen'])`.
+   */
+  setFlags(name: string, uid: number, flags: string[]): void {
+    const message = this.mailbox(name).messages.find((m) => m.uid === uid);
+    if (!message) throw new Error(`fake imap: no uid ${uid} in ${name}`);
+    message.flags = [...flags];
+    this.#touch(name, uid);
+  }
+
+  /** Archive or delete elsewhere: the message is simply not in this mailbox any more. */
+  remove(name: string, uid: number): void {
+    const box = this.mailbox(name);
+    box.messages = box.messages.filter((m) => m.uid !== uid);
+    this.modseqs.delete(`${name}/${uid}`);
+  }
+
+  /** Bump the mailbox's mod-sequence and give it to this message, when the mailbox has one. */
+  #touch(name: string, uid: number): void {
+    const box = this.mailbox(name);
+    if (!box.condstore) return;
+    box.highestModseq = (box.highestModseq ?? 1) + 1;
+    this.modseqs.set(`${name}/${uid}`, box.highestModseq);
   }
 
   /** Give one body part of one message its bytes. */
@@ -124,7 +170,36 @@ class FakeImapClient implements ImapClient {
       uidValidity: box.uidValidity,
       uidNext: Math.max(0, ...box.messages.map((m) => m.uid)) + 1,
       exists: box.messages.length,
+      highestModseq: box.condstore ? String(box.highestModseq ?? 1) : null,
     };
+  }
+
+  async fetchFlags(
+    mailbox: string,
+    uids: readonly number[],
+    changedSince?: string | null,
+  ): Promise<FlagState[]> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    const box = this.server.mailbox(mailbox);
+    const wanted = new Set(uids);
+    // A server without CONDSTORE would refuse CHANGEDSINCE; the client must
+    // never send it one, so the fake says so loudly rather than ignoring it.
+    if (changedSince && !box.condstore) {
+      throw new Error('fake imap: CHANGEDSINCE on a mailbox without CONDSTORE');
+    }
+    const since = changedSince ? Number(changedSince) : null;
+    const out = box.messages
+      .filter((m) => wanted.has(m.uid))
+      .filter((m) => since === null || (this.server.modseqs.get(`${mailbox}/${m.uid}`) ?? 0) > since)
+      .sort((a, b) => a.uid - b.uid)
+      .map((m) => ({ uid: m.uid, flags: [...m.flags] }));
+    this.server.flagFetches.push({
+      mailbox,
+      uids: [...uids],
+      changedSince: changedSince ?? null,
+      returned: out.length,
+    });
+    return out;
   }
 
   async fetchSince(mailbox: string, sinceUid: number, limit: number): Promise<FetchedMessage[]> {

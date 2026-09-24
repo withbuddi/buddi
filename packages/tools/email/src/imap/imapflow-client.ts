@@ -19,6 +19,7 @@ import type {
   AttachmentInfo,
   EmailAuth,
   FetchedMessage,
+  FlagState,
   ImapClient,
   ImapClientFactory,
   MailboxInfo,
@@ -189,7 +190,41 @@ class ImapFlowClient implements ImapClient {
       uidValidity: Number(box.uidValidity as number | bigint),
       uidNext: Number(box.uidNext ?? 0),
       exists: Number(box.exists ?? 0),
+      // imapflow ENABLEs CONDSTORE on connect when the server advertises it
+      // and parses HIGHESTMODSEQ as a BigInt; absent (or NOMODSEQ) otherwise.
+      highestModseq:
+        box.highestModseq !== undefined && box.highestModseq !== null && !box.noModseq
+          ? String(box.highestModseq)
+          : null,
     };
+  }
+
+  /**
+   * `UID FETCH <set> (UID FLAGS)`, optionally `(CHANGEDSINCE <modseq>)`.
+   *
+   * Nothing but flags is asked for — no envelope, no body structure, no
+   * `BODY.PEEK` — so this is a few bytes per message and cannot mark one
+   * seen. The uid list is sent as a compact set (`3:9,12,40:41`).
+   */
+  async fetchFlags(
+    mailbox: string,
+    uids: readonly number[],
+    changedSince?: string | null,
+  ): Promise<FlagState[]> {
+    if (uids.length === 0) return [];
+    if (this.#open !== mailbox) await this.open(mailbox);
+    const out: FlagState[] = [];
+    for await (const msg of this.client.fetch(
+      uidSet(uids),
+      { uid: true, flags: true },
+      changedSince ? { uid: true, changedSince: BigInt(changedSince) } : { uid: true },
+    )) {
+      out.push({
+        uid: Number(msg.uid),
+        flags: [...(msg.flags instanceof Set ? msg.flags : new Set<string>())].map(String),
+      });
+    }
+    return out;
   }
 
   async fetchSince(mailbox: string, sinceUid: number, limit: number): Promise<FetchedMessage[]> {
@@ -315,6 +350,25 @@ class ImapFlowClient implements ImapClient {
   async close(): Promise<void> {
     await this.client.logout().catch(() => {});
   }
+}
+
+/** Uids as an IMAP sequence set, runs collapsed: `[1,2,3,7]` → `1:3,7`. */
+export function uidSet(uids: readonly number[]): string {
+  const sorted = [...new Set(uids)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  let start = sorted[0] as number;
+  let prev = start;
+  for (const uid of sorted.slice(1)) {
+    if (uid === prev + 1) {
+      prev = uid;
+      continue;
+    }
+    parts.push(start === prev ? String(start) : `${start}:${prev}`);
+    start = uid;
+    prev = uid;
+  }
+  if (sorted.length > 0) parts.push(start === prev ? String(start) : `${start}:${prev}`);
+  return parts.join(',');
 }
 
 /** `message-id: <x>\r\nreferences: …` as a lowercase-keyed map. */
