@@ -119,7 +119,7 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-const FILE_COLUMNS = `a.id, a.kind, a.mime, a.filename, a.size_bytes, a.sha256, a.caption, a.created_at`;
+const FILE_COLUMNS = `a.id, a.kind, a.mime, a.filename, a.size_bytes, a.sha256, a.caption, a.created_at, a.conversation_id`;
 
 function toFileRow(row: Record<string, any>): FileRow {
   return {
@@ -130,6 +130,7 @@ function toFileRow(row: Record<string, any>): FileRow {
     sizeBytes: Number(row.size_bytes),
     sha256: row.sha256,
     caption: row.caption ?? null,
+    conversationId: row.conversation_id === null || row.conversation_id === undefined ? null : String(row.conversation_id),
     createdAt:
       row.created_at === null || row.created_at === undefined
         ? null
@@ -358,6 +359,14 @@ function filesArea(
   };
   return {
     async save(input) {
+      // The file belongs to the conversation the call runs in only when that
+      // conversation exists: a mission's or a test's id is not a row, and the
+      // library's reference to it would not hold.
+      let conversationId: string | null = null;
+      if (facts.conversationId !== undefined && /^[0-9a-f-]{36}$/i.test(facts.conversationId)) {
+        const { rows } = await pool.query(`select 1 from core.conversations where id = $1`, [facts.conversationId]);
+        if (rows.length > 0) conversationId = facts.conversationId;
+      }
       const saved = await saveArtifact(
         pool,
         {
@@ -365,8 +374,9 @@ function filesArea(
           mime: input.mime,
           ...(input.filename === undefined ? {} : { filename: input.filename }),
           ...(input.source === undefined ? {} : { source: input.source }),
+          ...(input.caption === undefined ? {} : { caption: input.caption }),
           createdBy: facts.agentId ?? binding.plugin,
-          conversationId: facts.conversationId ?? null,
+          conversationId,
         },
         env(),
       );
@@ -375,7 +385,7 @@ function filesArea(
         [binding.plugin, saved.id],
       );
       const { storagePath: _hidden, ...row } = saved;
-      return row;
+      return { ...row, conversationId };
     },
     async get(id) {
       const row = await get(id);
