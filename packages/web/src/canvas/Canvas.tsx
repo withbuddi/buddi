@@ -72,6 +72,7 @@ export function Canvas({
   browserPanel,
   agents,
   onClose,
+  loading = false,
 }: {
   renderables: Renderable[];
   activeId: string | null;
@@ -102,6 +103,11 @@ export function Canvas({
    */
   agents?: readonly ChatAgent[];
   onClose?: (id: string) => void;
+  /**
+   * The conversation is still on its way. The empty canvas stays blank rather
+   * than introducing an agent whose tabs may be a moment from arriving.
+   */
+  loading?: boolean;
 }): JSX.Element {
   const [strip, fits] = useTabsThatFit(maxTabs);
   if (renderables.length === 0) {
@@ -113,10 +119,10 @@ export function Canvas({
         <div className="wb-canvas-body wb-canvas-body-empty">
           {/* The kit's empty canvas: the agent's face, and one line that
               names what its own tools can put here — nothing it cannot. */}
-          <div className="wb-empty">
+          {loading ? null : <div className="wb-empty">
             {face ? <span className="wb-empty-face">{face}</span> : null}
             <p className="ui-empty wb-empty-line">{emptyLine(agentName, examplesFor(descriptors ?? [], grantedTools ?? []))}</p>
-          </div>
+          </div>}
         </div>
       </div>
     );
