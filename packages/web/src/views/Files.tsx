@@ -20,7 +20,7 @@ import { FAMILY_LABEL, downloadUrl, formatBytes, previewUrl } from '../chat/atta
 import { FamilyMark } from '../chat/FileTile';
 import { fmtRelative, fmtTime } from '../format';
 import { chatRoute, fileRoute, groupChatRoute, parseFileRoute } from '../routes';
-import { AgentAvatar, Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Toolbar } from '../ui';
+import { AgentAvatar, Button, Chip, Empty, ErrorBanner, Field, FormGrid, KV, List, Notice, PickRow, SearchBar, Split, Toolbar } from '../ui';
 
 const ORIGINS = [
   { id: '', label: 'All files' },
@@ -51,6 +51,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const nameOf = (id: string | null): string => (id ? agents.find((a) => a.id === id)?.name ?? id : '');
 
   // A change of search or filters restarts the listing; a page that arrives
@@ -85,74 +86,100 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
       .finally(() => { if (generation.current === mine) setLoadingMore(false); });
   };
 
+  const on = (origin ? 1 : 0) + (family ? 1 : 0);
+  const originName = ORIGINS.find((o) => o.id === origin)?.label ?? origin;
+  const list = (
+    <>
+      {entries === null ? (
+        <Empty>Loading…</Empty>
+      ) : entries.length === 0 ? (
+        <Empty>No file matches that.</Empty>
+      ) : (
+        <List>
+          {entries.map((entry) => (
+            <PickRow
+              key={entry.id}
+              href={fileRoute(entry.id, { q, origin, family })}
+              current={entry.id === selectedId}
+              onClick={() => navigate(fileRoute(entry.id, { q, origin, family }))}
+              lead={
+                <span className="files-row-visual" data-family={entry.family}>
+                  {entry.family === 'image' && !entry.deleted ? <img src={previewUrl(entry.id)} alt="" loading="lazy" /> : <FamilyMark family={entry.family} />}
+                </span>
+              }
+              title={entry.filename ?? 'Untitled file'}
+              meta={<span title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}</span>}
+              sub={`${FAMILY_LABEL[entry.family]} · ${formatBytes(entry.sizeBytes)} · ${originLabel(entry, nameOf)}${contextLabel(entry, nameOf)}`}
+            />
+          ))}
+        </List>
+      )}
+      {next ? (
+        <div className="files-more">
+          <Button size="sm" onClick={more} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Show more'}</Button>
+        </div>
+      ) : null}
+    </>
+  );
+
+  // Nothing in the library at all, and nothing asked: the kit's warm empty
+  // state, on its own, rather than an empty list beside an empty pane.
+  const bare = entries !== null && entries.length === 0 && !q && !origin && !family && !typed;
+
   return (
     <div className="ui-page files" data-selected={selectedId ? 'true' : undefined}>
       <header className="ui-page-head">
         <h2 className="ui-page-title">Files</h2>
         <p className="ui-page-lede">What your agents made or were given.</p>
       </header>
-      <div className="files-body">
-        <section className="files-list" aria-label="Files">
-          <Toolbar valign="end">
-            <Field label="Search" grow>
-              <input type="search" value={typed} placeholder="Filename" aria-label="Search files by name" onChange={(e) => setTyped(e.target.value)} />
-            </Field>
-            <Field label="Origin">
-              <select value={origin} aria-label="Origin" onChange={(e) => setFilters({ origin: e.target.value })}>
-                {ORIGINS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            </Field>
-            <Field label="Kind">
-              <select value={family} aria-label="Kind" onChange={(e) => setFilters({ family: e.target.value })}>
-                {FAMILIES.map((f) => <option key={f} value={f}>{f === '' ? 'Any kind' : FAMILY_LABEL[f]}</option>)}
-              </select>
-            </Field>
-          </Toolbar>
+      {bare ? (
+        <Empty warm title="Nothing here yet">Drop a file into any conversation and it shows up here too.</Empty>
+      ) : (
+        <>
+          <SearchBar
+            label="Files"
+            onSubmit={() => setFilters({ q: typed }, true)}
+            main={<input type="search" value={typed} placeholder="Search by filename" aria-label="Search files by name" onChange={(e) => setTyped(e.target.value)} />}
+            filters={
+              <FormGrid dense>
+                <Field label="Origin">
+                  <select value={origin} aria-label="Origin" onChange={(e) => setFilters({ origin: e.target.value })}>
+                    {ORIGINS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Kind">
+                  <select value={family} aria-label="Kind" onChange={(e) => setFilters({ family: e.target.value })}>
+                    {FAMILIES.map((f) => <option key={f} value={f}>{f === '' ? 'Any kind' : FAMILY_LABEL[f]}</option>)}
+                  </select>
+                </Field>
+              </FormGrid>
+            }
+            filtersOpen={filtersOpen}
+            onToggleFilters={() => setFiltersOpen((v) => !v)}
+            active={on}
+            chips={
+              on > 0 ? (
+                <>
+                  {origin ? <Chip label="Origin" onRemove={() => setFilters({ origin: '' })}>{originName}</Chip> : null}
+                  {family ? <Chip label="Kind" onRemove={() => setFilters({ family: '' })}>{FAMILY_LABEL[family as LibraryEntry['family']]}</Chip> : null}
+                </>
+              ) : undefined
+            }
+          />
           <ErrorBanner message={error} />
-          {entries === null ? (
-            <Empty>Loading…</Empty>
-          ) : entries.length === 0 ? (
-            q || origin || family ? <Empty>No file matches that.</Empty> : <Empty warm title="Nothing here yet">Drop a file into any conversation and it shows up here too.</Empty>
-          ) : (
-            <ul className="files-rows" role="list">
-              {entries.map((entry) => (
-                <li key={entry.id}>
-                  <a
-                    className="files-row"
-                    href={fileRoute(entry.id, { q, origin, family })}
-                    aria-current={entry.id === selectedId ? 'true' : undefined}
-                    onClick={(e) => { e.preventDefault(); navigate(fileRoute(entry.id, { q, origin, family })); }}
-                  >
-                    <span className="files-row-visual" data-family={entry.family}>
-                      {entry.family === 'image' && !entry.deleted ? <img src={previewUrl(entry.id)} alt="" loading="lazy" /> : <FamilyMark family={entry.family} />}
-                    </span>
-                    <span className="files-row-text">
-                      <span className="files-row-name">{entry.filename ?? 'Untitled file'}</span>
-                      <span className="files-row-meta">
-                        {FAMILY_LABEL[entry.family]} · {formatBytes(entry.sizeBytes)} · {originLabel(entry, nameOf)}
-                        {contextLabel(entry, nameOf)}
-                      </span>
-                    </span>
-                    <span className="files-row-when" title={fmtTime(entry.createdAt, timezone)}>{fmtRelative(entry.createdAt)}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          {next ? (
-            <Toolbar align="end">
-              <Button onClick={more} disabled={loadingMore}>{loadingMore ? 'Loading…' : 'Show more'}</Button>
-            </Toolbar>
-          ) : null}
-        </section>
-        <section className="files-detail" aria-label="File">
-          {selectedId ? (
-            <FileDetail key={selectedId} id={selectedId} timezone={timezone} agents={agents} navigate={navigate} onBack={() => navigate(fileRoute(null, { q, origin, family }))} />
-          ) : (
-            <div className="files-detail-empty"><Empty>Select a file to see it here.</Empty></div>
-          )}
-        </section>
-      </div>
+          <Split
+            className="files-split"
+            label="Files"
+            list={list}
+            detail={
+              selectedId ? (
+                <FileDetail key={selectedId} id={selectedId} timezone={timezone} agents={agents} navigate={navigate} onBack={() => navigate(fileRoute(null, { q, origin, family }))} />
+              ) : undefined
+            }
+            empty="Choose a file to see it here."
+          />
+        </>
+      )}
     </div>
   );
 }

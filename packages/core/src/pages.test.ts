@@ -147,6 +147,35 @@ describe('page descriptors', () => {
     expect(() => parse([withPending('x'.repeat(401))], { tools: ['demo.write'] })).toThrow(/body\.0\.action\.pending/);
   });
 
+  it('takes the words and tones a pill gives its values, and refuses a tone it does not have', () => {
+    const withPill = (pill: Record<string, unknown>): unknown =>
+      page({
+        body: [
+          {
+            kind: 'list',
+            query: { query: 'rows' },
+            rows: 'rows',
+            key: 'id',
+            item: { title: { path: 'title' }, pills: [{ value: { path: 'state' }, ...pill }] },
+          },
+          {
+            kind: 'table',
+            query: { query: 'rows' },
+            rows: 'rows',
+            columns: [{ key: 'state', label: 'State', pill: { labels: { 'on-track': 'On track' } } }],
+          },
+        ],
+      });
+    const [parsed] = parse([withPill({ labels: { 'waiting-on-me': 'Waiting on you', page: 'A page' }, tones: { 'waiting-on-me': 'warning' } })], {
+      queries: ['rows'],
+    });
+    const list = parsed!.body[0] as { item: { pills: Array<{ labels?: Record<string, string>; tones?: Record<string, string> }> } };
+    expect(list.item.pills[0]!.labels).toEqual({ 'waiting-on-me': 'Waiting on you', page: 'A page' });
+    expect(list.item.pills[0]!.tones).toEqual({ 'waiting-on-me': 'warning' });
+    expect(() => parse([withPill({ tones: { open: 'loud' } })], { queries: ['rows'] })).toThrow(/tones/);
+    expect(() => parse([withPill({ labels: { open: '' } })], { queries: ['rows'] })).toThrow(/labels/);
+  });
+
   it('refuses a link to a page that is not this plugin\'s', () => {
     expect(() => parse([page({ body: [{ kind: 'link', label: 'Away', to: { page: 'elsewhere' } }] })])).toThrow(
       'plugin demo: page board, body[0].to.page: links to elsewhere, which is not a page of this plugin',

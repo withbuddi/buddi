@@ -60,9 +60,10 @@ export interface ColumnMap {
   bar?: { max: ValueRef; thresholds?: Array<{ atLeast: number; tone: Tone }> };
   /**
    * Draw the cell as a pill; `tone` may be a path within the row, and an
-   * array value becomes one pill per `{ value, tone }` item.
+   * array value becomes one pill per `{ value, tone }` item. `labels` gives a
+   * slug its words.
    */
-  pill?: { tone?: Tone | ValueRef };
+  pill?: { tone?: Tone | ValueRef; labels?: Record<string, string> };
 }
 
 export interface TableMap {

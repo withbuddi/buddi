@@ -780,13 +780,124 @@ a.ui-list-row:hover .ui-list-title { color: var(--accent); }
 .ui-list-side { flex: 0 0 auto; font-size: var(--text-sm); color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ui-panel[data-flush='true'] .ui-list-row { padding: 10px var(--space-4); }
 
-/* A list and the one thing it is showing. Side by side when there is room;
-   on a phone the list is above the detail, which is the order they are read. */
-.ui-split { display: grid; grid-template-columns: 1fr; gap: var(--space-5); min-width: 0; }
-.ui-split-list, .ui-split-detail { min-width: 0; }
-@media (min-width: 901px) {
-  .ui-split { grid-template-columns: minmax(240px, 22rem) 1fr; align-items: start; }
+/* A list and the one thing it is showing: the list a white panel of its own
+   width that scrolls by itself, the reading pane a white panel filling the
+   rest. On a phone the list is above the detail, the order they are read. */
+.ui-split { display: grid; grid-template-columns: 1fr; gap: var(--space-4); min-width: 0; }
+.ui-split-list,
+.ui-split-detail {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-panel);
 }
+.ui-split-list { overflow: hidden auto; }
+.ui-split-detail { padding: var(--space-5) var(--space-6); }
+.ui-split-detail[data-empty='true'] { display: grid; place-items: center; min-height: var(--split-min-h); }
+.ui-split-empty { text-align: center; }
+/* Inside the list pane the rows meet its edges; the pane is the panel. */
+.ui-split-list > .ui-section { gap: 0; }
+.ui-split-list > .ui-section > .ui-section-head { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.ui-split-list .ui-list-row { padding: var(--space-3) var(--space-4); }
+.ui-split-list .ui-list-group { padding: var(--space-3) var(--space-4) var(--space-1); }
+.ui-split-list > .ui-section > .ui-notice,
+.ui-split-list > .ui-section > .ui-toolbar { margin: var(--space-3) var(--space-4); }
+.ui-split-list .ui-empty { padding: var(--space-6) var(--space-5); }
+@media (min-width: 901px) {
+  .ui-split { grid-template-columns: var(--split-list-w) minmax(0, 1fr); align-items: stretch; }
+  .ui-split-list { position: sticky; top: var(--space-4); max-height: max(var(--split-h), var(--split-min-h)); }
+  .ui-split-detail { min-height: min(max(var(--split-h), var(--split-min-h)), 100%); }
+}
+
+/* A row that picks what the pane beside it shows: the roster's row. */
+.ui-pick {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color var(--dur-fast) ease;
+}
+.ui-pick:last-child { border-bottom: 0; }
+.ui-pick:hover { background: var(--surface-sunken); color: var(--text); text-decoration: none; }
+.ui-pick[aria-current='true'] { background: color-mix(in oklab, var(--accent) 12%, var(--surface)); }
+.ui-pick[aria-current='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.ui-pick-lead { flex: 0 0 auto; display: inline-flex; }
+.ui-pick-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--space-0); }
+.ui-pick-top { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.ui-pick-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-pick-meta { flex: 0 0 auto; font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ui-pick-line { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.ui-pick-sub { flex: 0 1 auto; min-width: 0; font-size: var(--text-sm); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ui-pick-side { flex: 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-1); }
+.ui-pick-snippet { font-size: var(--text-sm); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* A search as one compact bar: the field grows, Filters, the actions right. */
+.ui-searchbar { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); }
+.ui-searchbar-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.ui-searchbar-main { flex: 1 1 16rem; min-width: 0; display: flex; }
+.ui-searchbar-main > input { flex: 1 1 auto; width: 100%; }
+.ui-searchbar-inline { flex: 1 1 auto; display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.ui-searchbar-actions { display: flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.ui-searchbar .ui-btn .ui-count { margin-left: var(--space-1); color: var(--accent); background: var(--accent-soft); }
+.ui-searchbar-filters { padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.ui-searchbar-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ui-formgrid[data-dense='true'] { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: var(--space-3); align-items: end; }
+.ui-formgrid[data-dense='true'] > [data-wide='true'] { grid-column: auto; }
+.ui-formgrid[data-dense='true'] .ui-field[data-inline='true'] { min-height: var(--control-h); justify-content: center; }
+
+/* A filter that is on. */
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line));
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+.ui-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+}
+.ui-chip-x:hover { background: color-mix(in oklab, var(--accent) 16%, transparent); }
 
 /* The heading over one group of a grouped list. */
 .ui-list-group {

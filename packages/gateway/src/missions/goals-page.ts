@@ -551,14 +551,12 @@ export const goalsPage: PageDescriptor = {
   body: [
     {
       kind: 'notice',
-      text:
-        'Everything buddi is keeping to a number and a date. Each goal is held by one agent, which is who ' +
-        'buddi wakes when it drifts; the numbers below are the checks as they were taken, never a fresh ' +
-        'measurement made because you opened this page.',
+      // The page's intro, one line under the title. The numbers are the checks
+      // as they were taken, never a fresh measurement made because the page opened.
+      text: 'Everything buddi is keeping to a number and a date, as its last checks found it.',
     },
     {
       kind: 'section',
-      title: 'Goals',
       body: [
         {
           kind: 'list-detail',
@@ -573,7 +571,11 @@ export const goalsPage: PageDescriptor = {
               title: { path: 'title' },
               sub: { path: 'sub' },
               meta: [{ path: 'value' }, { path: 'holder' }],
-              pill: { value: { path: 'state' }, tone: { path: 'tone' } },
+              pill: {
+                value: { path: 'state' },
+                tone: { path: 'tone' },
+                labels: { open: 'Open', met: 'Met', missed: 'Missed', closed: 'Closed' },
+              },
               to: { page: 'goals', item: { path: 'id' } },
             },
             empty: 'No goals yet. An agent proposes one and you approve it; buddi keeps it from there.',
@@ -626,7 +628,14 @@ export const goalsPage: PageDescriptor = {
               columns: [
                 { key: 'at', label: 'Checked', type: 'date' },
                 { key: 'value', label: 'Value' },
-                { key: 'onTrack', label: 'Verdict', pill: { tone: { path: 'onTrackTone' } } },
+                {
+                  key: 'onTrack',
+                  label: 'Verdict',
+                  pill: {
+                    tone: { path: 'onTrackTone' },
+                    labels: { 'on track': 'On track', 'off track': 'Off track', 'no projection': 'No projection' },
+                  },
+                },
                 { key: 'asOf', label: 'Reading as of' },
                 { key: 'note', label: 'Note' },
               ],
@@ -657,8 +666,8 @@ export const goalsPage: PageDescriptor = {
                 sub: { path: 'detail' },
                 meta: [{ path: 'when' }],
                 pills: [
-                  { value: { path: 'severity' }, tone: { path: 'tone' } },
-                  { value: { path: 'state' }, tone: 'neutral' },
+                  { value: { path: 'severity' }, tone: { path: 'tone' }, labels: { urgent: 'Urgent', info: 'Info' } },
+                  { value: { path: 'state' }, tone: 'neutral', labels: { open: 'Open', resolved: 'Resolved' } },
                 ],
               },
               empty: 'The watcher has had nothing to say about this one.',

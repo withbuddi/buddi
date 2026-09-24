@@ -124,8 +124,8 @@ export function Field({
  * its row keeps one column, so the grid reads as a grid and not as a wrap.
  * A field spans the row with `wide`.
  */
-export function FormGrid({ children }: { children: ReactNode }): JSX.Element {
-  return <div className="ui-formgrid">{children}</div>;
+export function FormGrid({ children, dense }: { children: ReactNode; dense?: boolean }): JSX.Element {
+  return <div className="ui-formgrid" data-dense={dense ? 'true' : undefined}>{children}</div>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -685,6 +685,156 @@ export function ListRow({
     );
   }
   return <div className="ui-list-row">{body}</div>;
+}
+
+/**
+ * One row of a list that picks what the pane beside it shows — the roster's
+ * row: the title in its weight with a fact (a time) on the right of the same
+ * line, a second line under it, and the chosen one in the soft accent with
+ * the active marker. The whole row is the link.
+ */
+export function PickRow({
+  href,
+  onClick,
+  current,
+  lead,
+  title,
+  meta,
+  sub,
+  snippet,
+  side,
+}: {
+  href: string;
+  onClick?: () => void;
+  current?: boolean;
+  lead?: ReactNode;
+  title: ReactNode;
+  /** A fact on the title's line, right-aligned: when. */
+  meta?: ReactNode;
+  sub?: ReactNode;
+  /** One muted line under the rest. */
+  snippet?: ReactNode;
+  /** Pills, after the second line. */
+  side?: ReactNode;
+}): JSX.Element {
+  return (
+    <a
+      className="ui-pick"
+      href={href}
+      aria-current={current ? 'true' : undefined}
+      onClick={onClick ? (e) => { e.preventDefault(); onClick(); } : undefined}
+    >
+      {lead ? <span className="ui-pick-lead">{lead}</span> : null}
+      <span className="ui-pick-main">
+        <span className="ui-pick-top">
+          <span className="ui-pick-title">{title}</span>
+          {meta ? <span className="ui-pick-meta">{meta}</span> : null}
+        </span>
+        {sub || side ? (
+          <span className="ui-pick-line">
+            {sub ? <span className="ui-pick-sub">{sub}</span> : null}
+            {side ? <span className="ui-pick-side">{side}</span> : null}
+          </span>
+        ) : null}
+        {snippet ? <span className="ui-pick-snippet">{snippet}</span> : null}
+      </span>
+    </a>
+  );
+}
+
+/**
+ * A list and the one thing it is showing: the list in a white panel of its
+ * own width that scrolls by itself, the reading pane a white panel filling
+ * the rest. Below the narrow breakpoint they stack. `detail` absent draws the
+ * pane's empty state, centred.
+ */
+export function Split({
+  list,
+  detail,
+  empty,
+  label,
+  className,
+}: {
+  list: ReactNode;
+  detail?: ReactNode;
+  empty?: ReactNode;
+  /** Names the list pane for a screen reader. */
+  label?: string;
+  className?: string;
+}): JSX.Element {
+  return (
+    <div className={cx('ui-split', className)} data-open={detail ? 'true' : undefined}>
+      <section className="ui-split-list" aria-label={label}>{list}</section>
+      <section className="ui-split-detail" data-empty={detail ? undefined : 'true'}>
+        {detail ?? <p className="ui-empty ui-split-empty">{empty}</p>}
+      </section>
+    </div>
+  );
+}
+
+/** A filter that is on, said as a word with a way to take it off. */
+export function Chip({ children, onRemove, label }: { children: ReactNode; onRemove: () => void; label: string }): JSX.Element {
+  return (
+    <span className="ui-chip">
+      {children}
+      <button type="button" className="ui-chip-x" aria-label={`Remove ${label}`} onClick={onRemove}>
+        ×
+      </button>
+    </span>
+  );
+}
+
+/**
+ * A search as one compact bar in a white panel: the main field grows, then
+ * Filters, then the actions on the right. Enter searches. The filters open
+ * in a row underneath; the ones that are on show as chips.
+ */
+export function SearchBar({
+  main,
+  filters,
+  filtersOpen,
+  onToggleFilters,
+  active,
+  chips,
+  actions,
+  onSubmit,
+  label,
+}: {
+  main?: ReactNode;
+  filters?: ReactNode;
+  filtersOpen?: boolean;
+  onToggleFilters?: () => void;
+  /** How many filters are on: counted on the Filters button. */
+  active?: number;
+  chips?: ReactNode;
+  actions?: ReactNode;
+  onSubmit: () => void;
+  label?: string;
+}): JSX.Element {
+  return (
+    <form
+      className="ui-panel ui-searchbar"
+      role="search"
+      aria-label={label}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+    >
+      <div className="ui-searchbar-row">
+        {main ? <div className="ui-searchbar-main">{main}</div> : null}
+        {filters && onToggleFilters ? (
+          <Button aria-expanded={filtersOpen === true} aria-pressed={filtersOpen === true} onClick={onToggleFilters}>
+            Filters{active ? <span className="ui-count">{active}</span> : null}
+          </Button>
+        ) : null}
+        {!onToggleFilters && filters ? <div className="ui-searchbar-inline">{filters}</div> : null}
+        {actions ? <div className="ui-searchbar-actions">{actions}</div> : null}
+      </div>
+      {filters && onToggleFilters && filtersOpen ? <div className="ui-searchbar-filters">{filters}</div> : null}
+      {chips ? <div className="ui-searchbar-chips">{chips}</div> : null}
+    </form>
+  );
 }
 
 /* ------------------------------------------------------------------ *
