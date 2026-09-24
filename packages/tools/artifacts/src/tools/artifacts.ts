@@ -10,13 +10,7 @@
  * what looking cannot do: enumerate what is in the store, and pull text out of a
  * long document so it can be searched and quoted rather than eyeballed.
  */
-import type { ToolContext, ToolDefinition } from '@buddi/core';
-import {
-  getArtifact,
-  listArtifacts,
-  readArtifactBytes,
-  type ArtifactRow,
-} from '@buddi/core';
+import type { FileRow, ToolContext, ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
   DESCRIBE_TEXT_CHARS,
@@ -52,7 +46,7 @@ export interface ArtifactSummary {
   createdAt: string | null;
 }
 
-function summarize(row: ArtifactRow): ArtifactSummary {
+function summarize(row: FileRow): ArtifactSummary {
   return {
     id: row.id,
     kind: row.kind,
@@ -74,7 +68,7 @@ export const list: ToolDefinition<
   tier: 'auto',
   input: listInput,
   async execute(input, ctx) {
-    const rows = await listArtifacts(ctx.db, {
+    const rows = await ctx.buddi!.files!.list({
       ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.kind === undefined ? {} : { kind: input.kind }),
     });
@@ -99,8 +93,8 @@ export interface ArtifactDescription extends ArtifactSummary {
 }
 
 /** Shared by describe and text: the row, or a refusal the model can read. */
-async function requireArtifact(id: string, ctx: ToolContext): Promise<ArtifactRow> {
-  const row = await getArtifact(ctx.db, id);
+async function requireArtifact(id: string, ctx: ToolContext): Promise<FileRow> {
+  const row = await ctx.buddi!.files!.get(id);
   if (!row) {
     throw new Error(`no artifact ${id} (it may have been deleted); try artifacts.list`);
   }
@@ -119,7 +113,7 @@ export const describe: ToolDefinition<z.infer<typeof idInput>, ArtifactDescripti
     const out: ArtifactDescription = summarize(row);
 
     if (isExtractable(row.mime)) {
-      const bytes = await readArtifactBytes(process.env, row);
+      const bytes = await ctx.buddi!.files!.read(row.id);
       const extracted = await extractText(bytes, row.mime, DESCRIBE_TEXT_CHARS);
       out.text = extracted.text;
       out.truncated = extracted.truncated;
@@ -135,7 +129,7 @@ export const describe: ToolDefinition<z.infer<typeof idInput>, ArtifactDescripti
     }
 
     if (row.kind === 'image') {
-      const bytes = await readArtifactBytes(process.env, row);
+      const bytes = await ctx.buddi!.files!.read(row.id);
       const size = imageDimensions(bytes);
       if (size) {
         out.width = size.width;
@@ -180,7 +174,7 @@ export const text: ToolDefinition<
         `artifact ${row.id} is ${row.mime}; text can only be extracted from PDFs and text files`,
       );
     }
-    const bytes = await readArtifactBytes(process.env, row);
+    const bytes = await ctx.buddi!.files!.read(row.id);
     const extracted = await extractText(bytes, row.mime, input.maxChars ?? MAX_TEXT_CHARS);
     return {
       id: row.id,

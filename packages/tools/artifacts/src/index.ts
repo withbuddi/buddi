@@ -10,7 +10,7 @@
  *
  * Every tool is a read or a pure extraction, so the family is tier `auto`.
  */
-import type { PluginManifest } from '@buddi/core';
+import type { PluginManifest } from '@buddi/core/plugin';
 import { describe, list, text } from './tools/artifacts.js';
 
 /** This plugin ships no migrations: it reads `core.artifacts`. */
@@ -24,6 +24,7 @@ export const manifest: PluginManifest = {
   schema: 'core',
   migrationsDir: MIGRATIONS_DIR,
   tools: [list, describe, text],
+  uses: ['files:library'],
 };
 
 export default manifest;
