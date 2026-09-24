@@ -59,3 +59,17 @@ describe('the service section', () => {
     expect(api.serviceAction).not.toHaveBeenCalled();
   });
 });
+
+describe('a settings section', () => {
+  it('keeps its title on the ground above its panel, never inside it', async () => {
+    vi.mocked(api.service).mockResolvedValue({ supervised: true, status: STATUS });
+    render(<Service />);
+    const heading = await screen.findByRole('heading', { name: 'Service' });
+    const section = heading.closest('section') as HTMLElement;
+    const panel = section.querySelector(':scope > .ui-panel') as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(panel).not.toContainElement(heading);
+    expect(heading.closest('.ui-panel')).toBeNull();
+    expect(panel).toContainElement(screen.getByText('pid 22'));
+  });
+});
