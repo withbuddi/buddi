@@ -2725,7 +2725,7 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `query` | `(sql, params?) => Promise<{rows}>` | yes | 1.0 | One statement on the shared pool. Name your tables with your schema, as today. In a page query or a metric it is read-only. |
+| `query` | `(sql, params?) => Promise<{rows, rowCount}>` | yes | 1.0 | One statement on the shared pool; `rowCount` is how many rows it touched. Name your tables with your schema, as today. In a page query or a metric it is read-only. |
 | `transaction` | `(fn) => Promise<T>` | yes | 1.0 | One connection: `begin`, your schema first on `search_path`, `fn(tx)`, then commit — or rollback when `fn` throws. |
 
 #### `DirArea`

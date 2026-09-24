@@ -145,6 +145,14 @@ suite('ctx.buddi', () => {
     expect((await host.db.query('select at from weather.readings')).rows).toEqual([{ at: 'dawn' }]);
   });
 
+  it('says how many rows a statement touched, outside a transaction and in one', async () => {
+    const host = createPluginHost(hostBindingOf(plugin('weather')), ctx());
+    await host.db.query(`insert into weather.readings (at) values ('first'), ('second')`);
+    const inside = await host.db.transaction((tx) => tx.query(`update readings set at = at || '!' where at in ('first', 'second')`));
+    expect(inside.rowCount).toBe(2);
+    expect((await host.db.query(`delete from weather.readings where at = 'dusk'`)).rowCount).toBe(0);
+  });
+
   it('keeps a directory of the plugin its own', () => {
     configurePluginHost({ env: { BUDDI_DATA_DIR: dataDir } });
     const host = createPluginHost(hostBindingOf(plugin('weather')), ctx());
