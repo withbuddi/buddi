@@ -6,6 +6,11 @@
  * computed style. That is what makes the theme a single decision instead of a
  * hunt.
  *
+ * The values are the buddi design system's (buddi-design/design-system,
+ * tokens/*.css): navy-tinted ink, Buddi blue deepened for the accent, a pale
+ * blue ground that `data-ground="sand"` turns back to warm sand, the field
+ * behind first run, and one mascot-kit accent per agent.
+ *
  * Three states, in the order the cascade needs them:
  *
  *   :root                                   → light, always defined
@@ -20,7 +25,8 @@
  *
  * Fonts are the system's own. There is no font file, no CDN, no `@import` —
  * the page makes no external request, and that is a tested property of the
- * build, not a promise.
+ * build, not a promise. (The design system's web fallback for the rounded
+ * face is a design-tool substitution; the product does not carry it.)
  */
 
 :root {
@@ -34,9 +40,8 @@
     'Segoe UI', Roboto, sans-serif;
 
   /* ---- type scale ----
-   * Six sizes and nothing between them. Half-pixel sizes were how the two
-   * halves of the dashboard drifted apart; a component picks a step here or
-   * it inherits.
+   * Six product sizes and nothing between them, the greeting, and two display
+   * steps that only the field surfaces use (first run, the hero, an opening).
    */
   --text-2xs: 10px;   /* the smallest word: a tag, a kicker */
   --text-xs: 11px;    /* tags, table headers, footnotes */
@@ -47,14 +52,22 @@
   --text-xl: 18px;    /* page titles */
   --text-2xl: 22px;   /* stat values */
   --text-3xl: 30px;   /* the greeting */
+  --text-4xl: 40px;   /* a field surface's title */
+  --text-5xl: 56px;   /* reserved: the largest display step */
 
   --leading-tight: 1.3;
   --leading: 1.5;
   --leading-loose: 1.6;
+  --leading-read: 1.75;  /* first-read prose on the field */
 
   --weight-normal: 450;
   --weight-medium: 550;
   --weight-semibold: 650;
+  --weight-bold: 750;
+
+  --tracking-display: -0.02em;
+  --tracking-title: -0.01em;
+  --tracking-kicker: 0.08em;
 
   /* ---- spacing scale ---- */
   /* A hairline gap: two lines that belong to one label, where even 4px reads
@@ -67,36 +80,73 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
 
   /* ---- control sizes ---- */
   --control-h: 32px;
   --control-h-sm: 26px;
+  --control-h-lg: 40px;  /* a field surface's primary action */
+
+  /* ---- layout ---- */
+  --rail-w: 72px;
+  --roster-w: 224px;
+  /* Dense pages centre in the main column; Settings → Appearance moves it. */
+  --page-max: 1320px;
+  --page-gutter: clamp(24px, 3vw, 48px);
+  --read-max: 68ch;
 
   /* ---- shape ---- */
   --radius-sm: 4px;
   --radius: 7px;
   --radius-lg: 12px;
+  --radius-xl: 20px;      /* the floating card */
+  --radius-2xl: 28px;     /* brand surfaces, hero tiles */
+  --radius-composer: 18px;
   --radius-pill: 999px;
-  --shadow-panel: 0 1px 2px rgb(16 15 14 / 6%);
-  --shadow-pop: 0 8px 28px rgb(16 15 14 / 14%);
+  --shadow-panel: 0 1px 2px rgb(21 38 66 / 6%);
+  --shadow-pop: 0 8px 28px rgb(21 38 66 / 14%);
+  --shadow-float: 0 30px 70px -24px rgb(21 38 66 / 32%), 0 2px 8px rgb(21 38 66 / 6%);
+  --shadow-focus: 0 0 0 4px var(--accent-soft);
+
+  /* ---- motion ---- */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);  /* hover lift on faces and starters only */
+  --dur-fast: 120ms;
+  --dur: 160ms;
+  --dur-slow: 320ms;
+  --drift: 90s;  /* the field's slow drift */
+
+  /* ---- the mascot palette: fixed in both themes ---- */
+  --buddi-blue: #3f8ef7;
+  --buddi-navy: #152642;
+  --buddi-cream: #fff7e8;
+  --buddi-coral: #ff786a;  /* the mascot's bump, and attention marks only */
+  --buddi-sand: #f7f4ef;
+  --buddi-sand-deep: #f1ddbd;
 
   /* ---- surfaces ---- */
-  --bg: #f7f6f4;
+  --bg: #eef4fd;            /* the blue ground (default) */
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --surface-sunken: #f1efec;
-  --line: #e3e1dd;
-  --line-strong: #cdc9c2;
-  --overlay: rgb(24 23 21 / 38%);
+  --surface-sunken: #e6eef9;
+  --surface-warm: #fff7e8;  /* friendly asides, warm empty states */
+  --surface-brand: #3f8ef7;         /* brand blue as a surface: large type only */
+  --surface-brand-strong: #2b6fe6;  /* a brand surface carrying small white text */
+  --on-brand: #ffffff;
+  --line: #dbe4f1;
+  --line-strong: #c3d0e3;
+  --overlay: rgb(21 38 66 / 36%);
 
-  /* ---- text ---- */
-  --text: #1b1a18;
-  --text-muted: #6b6862;
-  --text-faint: #96928a;
+  /* ---- text: navy-tinted ink, never black ---- */
+  --text: #152642;
+  --text-muted: #5a6477;
+  --text-faint: #8b92a0;
 
-  /* ---- the one accent hue, used sparingly ---- */
-  --accent: #3d5bd6;
-  --accent-soft: #e8ecfb;
+  /* ---- the accent: Buddi blue, deepened until white text passes AA ---- */
+  --accent: #2b6fe6;
+  --accent-hover: #245fc7;
+  --accent-soft: #e7f0fe;
   --accent-contrast: #ffffff;
 
   /* ---- semantic states, deliberately not the accent ---- */
@@ -104,94 +154,154 @@
   --good-soft: #e3f3e9;
   --warning: #8a5a00;
   --warning-soft: #fbf0d9;
-  --critical: #a52a2a;
-  --critical-soft: #fae7e5;
+  --critical: #c8392d;
+  --critical-soft: #ffe9e6;
+  --attention: var(--buddi-coral);     /* a badge's fill */
+  --attention-ink: var(--buddi-navy);  /* a badge's number */
 
   /* ---- chart ink ---- */
   --chart-line: var(--accent);
-  --chart-grid: #e8e6e2;
-  --chart-axis: #b6b1a8;
+  --chart-grid: #e3e9f2;
+  --chart-axis: #a8b2c2;
   --chart-floor: var(--critical);
-  --chart-breach: rgb(165 42 42 / 12%);
+  --chart-breach: rgb(200 57 45 / 12%);
   --chart-point: var(--accent);
-  --chart-bar: #7a94bd;
-  --chart-bar-negative: #c98a86;
+  --chart-bar: #7aa6ea;
+  --chart-bar-negative: #e39a91;
 
   /* ---- focus ---- */
-  --focus-ring: #3d5bd6;
+  --focus-ring: #2b6fe6;
 
   /* ---- code ---- */
-  /* ---- the agent faces ----
-   * Six quiet tints, so a rail of colleagues reads as six people rather than
-   * six copies of the accent. They are backgrounds for two letters and nothing
-   * else: saturated enough to tell apart at 30px, never loud enough to compete
-   * with the one thing on the screen that is allowed to be red.
-   */
-  --face-1-bg: #e6ebf9;  --face-1-ink: #3552c4;
-  --face-2-bg: #e4f0e9;  --face-2-ink: #1f6f45;
-  --face-3-bg: #f6e9dd;  --face-3-ink: #96562a;
-  --face-4-bg: #ece7f6;  --face-4-ink: #5b46a0;
-  --face-5-bg: #dfeef1;  --face-5-ink: #226b7a;
-  --face-6-bg: #f7e7ee;  --face-6-ink: #9c3d68;
-
-  --code-bg: #f3f2ef;
+  --code-bg: #f1f5fb;
   /* A terminal is dark in either theme: it is what the owner's own terminal
      looks like, and output reads as output rather than as page. */
-  --terminal-bg: #1d1f23;
-  --terminal-ink: #e4e2dd;
-  --terminal-muted: #9a968e;
+  --terminal-bg: #111a2b;
+  --terminal-ink: #e8edf4;
+  --terminal-muted: #8f99aa;
+
+  /* ---- the field: soft blue-to-sand shapes behind one floating card ---- */
+  --field-a: #8fbcfb;  /* blue, high */
+  --field-b: #f3d6a9;  /* sand, low right */
+  --field-c: #b9d4fb;  /* blue, low left */
+  --field-base: #eef4fd;
+  --field-opacity: 0.95;
+  --gradient-field:
+    radial-gradient(60% 70% at 62% 18%, var(--field-a), transparent 70%),
+    radial-gradient(50% 60% at 92% 82%, var(--field-b), transparent 70%),
+    radial-gradient(45% 55% at 8% 96%, var(--field-c), transparent 72%),
+    var(--field-base);
+  /* The ground under every main column that is not dense: a quiet blue→sand wash. */
+  --gradient-page:
+    radial-gradient(75% 60% at 85% -15%, color-mix(in oklab, var(--field-a) 55%, transparent), transparent 70%),
+    radial-gradient(55% 50% at 100% 105%, color-mix(in oklab, var(--field-b) 55%, transparent), transparent 70%),
+    radial-gradient(50% 45% at -5% 60%, color-mix(in oklab, var(--field-c) 45%, transparent), transparent 70%),
+    linear-gradient(180deg, #e9f1fd 0%, #f3f5f8 100%);
+
+  /* ---- the agents: one mascot-kit accent each ----
+   * fill = the Blob's body colour · soft = a tile's ground · ink = AA text on
+   * soft. An agent wears its accent on its face, as a wash in its chat header,
+   * on the active roster marker and on its card's top edge — never as body
+   * text and never as a left border.
+   */
+  --agent-coding: #6c63ff;   --agent-coding-soft: #ecebff;   --agent-coding-ink: #4a3fd4;
+  --agent-mail: #ff9a3c;     --agent-mail-soft: #fff0e0;     --agent-mail-ink: #a1500a;
+  --agent-research: #a259f0; --agent-research-soft: #f4eafe; --agent-research-ink: #7631c2;
+  --agent-finance: #2eb872;  --agent-finance-soft: #e2f6eb;  --agent-finance-ink: #19774a;
+  --agent-calendar: #1fb5b0; --agent-calendar-soft: #ddf5f4; --agent-calendar-ink: #0e716e;
+  --agent-files: #f5c23e;    --agent-files-soft: #fff5d6;    --agent-files-ink: #876000;
+  --agent-memory: #4c5bd4;   --agent-memory-soft: #e8eafb;   --agent-memory-ink: #3440b0;
+  /* The front desk wears Buddi blue. */
+  --agent-buddi: var(--buddi-blue); --agent-buddi-soft: var(--accent-soft); --agent-buddi-ink: var(--accent);
+
+  /* A face that is not an agent's (a provider's letter) takes a tint from the
+     same palette, so there is one set of colours rather than two. */
+  --face-1-bg: var(--agent-coding-soft);   --face-1-ink: var(--agent-coding-ink);
+  --face-2-bg: var(--agent-finance-soft);  --face-2-ink: var(--agent-finance-ink);
+  --face-3-bg: var(--agent-mail-soft);     --face-3-ink: var(--agent-mail-ink);
+  --face-4-bg: var(--agent-research-soft); --face-4-ink: var(--agent-research-ink);
+  --face-5-bg: var(--agent-calendar-soft); --face-5-ink: var(--agent-calendar-ink);
+  --face-6-bg: var(--agent-memory-soft);   --face-6-ink: var(--agent-memory-ink);
 
   color-scheme: light;
+}
+
+/* The sand ground, opt-in from Settings → Appearance: the warmer, quieter
+   ground the product shipped with. Cards and ink are unchanged. */
+:root[data-ground='sand'] {
+  --bg: #f7f4ef;
+  --surface-sunken: #f2eee7;
+  --line: #e7e1d7;
+  --line-strong: #d2c9ba;
+  --code-bg: #f5f2ec;
+  --field-base: #f7f4ef;
+  --gradient-page:
+    radial-gradient(70% 55% at 80% -10%, color-mix(in oklab, var(--field-a) 30%, transparent), transparent 70%),
+    radial-gradient(60% 50% at 0% 110%, color-mix(in oklab, var(--field-b) 35%, transparent), transparent 70%),
+    var(--bg);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%);
     --shadow-pop: 0 10px 30px rgb(0 0 0 / 52%);
+    --shadow-float: 0 30px 70px -20px rgb(0 0 0 / 70%), 0 2px 8px rgb(0 0 0 / 30%);
+    --shadow-focus: 0 0 0 4px rgb(125 179 255 / 22%);
 
-    --bg: #131416;
-    --surface: #1b1d20;
-    --surface-raised: #212429;
-    --surface-sunken: #101113;
-    --line: #2f3238;
-    --line-strong: #464b53;
-    --overlay: rgb(0 0 0 / 58%);
+    --bg: #0c1627;
+    --surface: #131e31;
+    --surface-raised: #1a2740;
+    --surface-sunken: #0a1322;
+    --surface-warm: #211d18;
+    --surface-brand: #2a64c9;
+    --surface-brand-strong: #1f4fa3;
+    --line: #22324c;
+    --line-strong: #37465f;
+    --overlay: rgb(3 7 14 / 62%);
 
-    --text: #e8e6e3;
-    --text-muted: #9c988f;
-    --text-faint: #75716a;
+    --text: #ecf1f8;
+    --text-muted: #a3adbe;
+    --text-faint: #717c8f;
 
-    --accent: #93a8f5;
-    --accent-soft: #212a4a;
-    --accent-contrast: #0e1013;
+    --accent: #7db3ff;
+    --accent-hover: #9ac4ff;
+    --accent-soft: #16294a;
+    --accent-contrast: #0b1426;
 
     --good: #5fc98a;
-    --good-soft: #17301f;
-    --warning: #e0ad4b;
+    --good-soft: #13301f;
+    --warning: #e8b454;
     --warning-soft: #33280f;
-    --critical: #f0827c;
-    --critical-soft: #3a1c1b;
+    --critical: #ff8e82;
+    --critical-soft: #3a1d1c;
 
-    --chart-grid: #2a2d32;
-    --chart-axis: #5d6067;
-    --chart-breach: rgb(240 130 124 / 14%);
-    --chart-bar: #6d8cc0;
-    --chart-bar-negative: #b9706c;
+    --chart-grid: #22304a;
+    --chart-axis: #56627a;
+    --chart-breach: rgb(255 142 130 / 14%);
+    --chart-bar: #5c8fdc;
+    --chart-bar-negative: #c77b74;
 
-    --focus-ring: #9cc0f4;
+    --focus-ring: #9ac4ff;
 
-    --face-1-bg: #1d2a3d;  --face-1-ink: #8fb6ee;
-    --face-2-bg: #17301f;  --face-2-ink: #74cb97;
-    --face-3-bg: #32241a;  --face-3-ink: #dba173;
-    --face-4-bg: #262138;  --face-4-ink: #a99ae4;
-    --face-5-bg: #142b30;  --face-5-ink: #78c0cd;
-    --face-6-bg: #331c26;  --face-6-ink: #dd94b3;
+    --code-bg: #0f1828;
+    --terminal-bg: #070b12;
+    --terminal-ink: #e8edf4;
+    --terminal-muted: #8792a4;
 
-    --code-bg: #23262b;
+    --field-a: #1d4f9c;
+    --field-b: #6b4a2a;
+    --field-c: #173a70;
+    --field-base: #0c1627;
+    --field-opacity: 0.75;
+    --gradient-page: radial-gradient(75% 60% at 85% -15%, color-mix(in oklab, var(--field-a) 45%, transparent), transparent 70%), radial-gradient(55% 50% at 100% 105%, color-mix(in oklab, var(--field-b) 35%, transparent), transparent 70%), var(--bg);
 
-    --terminal-bg: #0b0c0e;
-    --terminal-ink: #e8e6e3;
-    --terminal-muted: #8f8b84;
+    --agent-coding-soft: #232046;   --agent-coding-ink: #aaa5ff;
+    --agent-mail-soft: #3a2614;     --agent-mail-ink: #ffb877;
+    --agent-research-soft: #2c1b44; --agent-research-ink: #cda2fa;
+    --agent-finance-soft: #12301f;  --agent-finance-ink: #6fd6a0;
+    --agent-calendar-soft: #0f2f30; --agent-calendar-ink: #6fd8d3;
+    --agent-files-soft: #33290f;    --agent-files-ink: #f2cf6c;
+    --agent-memory-soft: #1d2148;   --agent-memory-ink: #9ea8f5;
 
     color-scheme: dark;
   }
@@ -200,52 +310,102 @@
 :root[data-theme='dark'] {
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-pop: 0 10px 30px rgb(0 0 0 / 52%);
+  --shadow-float: 0 30px 70px -20px rgb(0 0 0 / 70%), 0 2px 8px rgb(0 0 0 / 30%);
+  --shadow-focus: 0 0 0 4px rgb(125 179 255 / 22%);
 
-  --bg: #131416;
-  --surface: #1b1d20;
-  --surface-raised: #212429;
-  --surface-sunken: #101113;
-  --line: #2f3238;
-  --line-strong: #464b53;
-  --overlay: rgb(0 0 0 / 58%);
+  --bg: #0c1627;
+  --surface: #131e31;
+  --surface-raised: #1a2740;
+  --surface-sunken: #0a1322;
+  --surface-warm: #211d18;
+  --surface-brand: #2a64c9;
+  --surface-brand-strong: #1f4fa3;
+  --line: #22324c;
+  --line-strong: #37465f;
+  --overlay: rgb(3 7 14 / 62%);
 
-  --text: #e8e6e3;
-  --text-muted: #9c988f;
-  --text-faint: #75716a;
+  --text: #ecf1f8;
+  --text-muted: #a3adbe;
+  --text-faint: #717c8f;
 
-  --accent: #93a8f5;
-  --accent-soft: #212a4a;
-  --accent-contrast: #0e1013;
+  --accent: #7db3ff;
+  --accent-hover: #9ac4ff;
+  --accent-soft: #16294a;
+  --accent-contrast: #0b1426;
 
   --good: #5fc98a;
-  --good-soft: #17301f;
-  --warning: #e0ad4b;
+  --good-soft: #13301f;
+  --warning: #e8b454;
   --warning-soft: #33280f;
-  --critical: #f0827c;
-  --critical-soft: #3a1c1b;
+  --critical: #ff8e82;
+  --critical-soft: #3a1d1c;
 
-  --chart-grid: #2a2d32;
-  --chart-axis: #5d6067;
-  --chart-breach: rgb(240 130 124 / 14%);
-  --chart-bar: #6d8cc0;
-  --chart-bar-negative: #b9706c;
+  --chart-grid: #22304a;
+  --chart-axis: #56627a;
+  --chart-breach: rgb(255 142 130 / 14%);
+  --chart-bar: #5c8fdc;
+  --chart-bar-negative: #c77b74;
 
-  --focus-ring: #9cc0f4;
+  --focus-ring: #9ac4ff;
 
-  --face-1-bg: #1d2a3d;  --face-1-ink: #8fb6ee;
-  --face-2-bg: #17301f;  --face-2-ink: #74cb97;
-  --face-3-bg: #32241a;  --face-3-ink: #dba173;
-  --face-4-bg: #262138;  --face-4-ink: #a99ae4;
-  --face-5-bg: #142b30;  --face-5-ink: #78c0cd;
-  --face-6-bg: #331c26;  --face-6-ink: #dd94b3;
+  --code-bg: #0f1828;
+  --terminal-bg: #070b12;
+  --terminal-ink: #e8edf4;
+  --terminal-muted: #8792a4;
 
-  --code-bg: #23262b;
+  --field-a: #1d4f9c;
+  --field-b: #6b4a2a;
+  --field-c: #173a70;
+  --field-base: #0c1627;
+  --field-opacity: 0.75;
+  --gradient-page: radial-gradient(75% 60% at 85% -15%, color-mix(in oklab, var(--field-a) 45%, transparent), transparent 70%), radial-gradient(55% 50% at 100% 105%, color-mix(in oklab, var(--field-b) 35%, transparent), transparent 70%), var(--bg);
 
-  --terminal-bg: #0b0c0e;
-  --terminal-ink: #e8e6e3;
-  --terminal-muted: #8f8b84;
+  --agent-coding-soft: #232046;   --agent-coding-ink: #aaa5ff;
+  --agent-mail-soft: #3a2614;     --agent-mail-ink: #ffb877;
+  --agent-research-soft: #2c1b44; --agent-research-ink: #cda2fa;
+  --agent-finance-soft: #12301f;  --agent-finance-ink: #6fd6a0;
+  --agent-calendar-soft: #0f2f30; --agent-calendar-ink: #6fd8d3;
+  --agent-files-soft: #33290f;    --agent-files-ink: #f2cf6c;
+  --agent-memory-soft: #1d2148;   --agent-memory-ink: #9ea8f5;
 
   color-scheme: dark;
+}
+
+/* The sand ground in the dark: a deeper navy, the ember glow turned down. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light'])[data-ground='sand'] {
+    --bg: #0d1524;
+    --surface-sunken: #0a111d;
+    --line: #25324a;
+    --field-base: #0d1524;
+    --gradient-page: radial-gradient(70% 55% at 80% -10%, color-mix(in oklab, var(--field-a) 30%, transparent), transparent 70%), var(--bg);
+  }
+}
+:root[data-theme='dark'][data-ground='sand'] {
+  --bg: #0d1524;
+  --surface-sunken: #0a111d;
+  --line: #25324a;
+  --field-base: #0d1524;
+  --gradient-page: radial-gradient(70% 55% at 80% -10%, color-mix(in oklab, var(--field-a) 30%, transparent), transparent 70%), var(--bg);
+}
+
+/*
+ * One agent's accent, carried by whatever wears it: the face, the roster row,
+ * the chat header, the agent card. `data-agent` names a palette entry; an
+ * agent whose file names its own `accent` gets `data-agent="own"` and its hex
+ * as `--agent-fill`, and the soft and ink are mixed from it here.
+ */
+[data-agent='coding'] { --agent-fill: var(--agent-coding); --agent-soft: var(--agent-coding-soft); --agent-ink: var(--agent-coding-ink); }
+[data-agent='mail'] { --agent-fill: var(--agent-mail); --agent-soft: var(--agent-mail-soft); --agent-ink: var(--agent-mail-ink); }
+[data-agent='research'] { --agent-fill: var(--agent-research); --agent-soft: var(--agent-research-soft); --agent-ink: var(--agent-research-ink); }
+[data-agent='finance'] { --agent-fill: var(--agent-finance); --agent-soft: var(--agent-finance-soft); --agent-ink: var(--agent-finance-ink); }
+[data-agent='calendar'] { --agent-fill: var(--agent-calendar); --agent-soft: var(--agent-calendar-soft); --agent-ink: var(--agent-calendar-ink); }
+[data-agent='files'] { --agent-fill: var(--agent-files); --agent-soft: var(--agent-files-soft); --agent-ink: var(--agent-files-ink); }
+[data-agent='memory'] { --agent-fill: var(--agent-memory); --agent-soft: var(--agent-memory-soft); --agent-ink: var(--agent-memory-ink); }
+[data-agent='buddi'] { --agent-fill: var(--agent-buddi); --agent-soft: var(--agent-buddi-soft); --agent-ink: var(--agent-buddi-ink); }
+[data-agent='own'] {
+  --agent-soft: color-mix(in oklab, var(--agent-fill) 16%, var(--surface));
+  --agent-ink: color-mix(in oklab, var(--agent-fill) 72%, var(--text));
 }
 
 /*
