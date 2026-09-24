@@ -839,9 +839,9 @@ means, the page knows how to draw a line, and this says which is which.
   array, each `{ value, tone }` item is its own pill, so "off" and "from .env"
   are two facts in one column rather than a sentence. A `section` may carry `actions` — a
   link or a button — beside its heading.
-- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+- **A link to a settings page is a Settings entry.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
-  a place of its own: the owner lands on Settings with that tab open.
+  a place of its own: the owner lands on Settings with that entry open.
 - **One link leaves the plugin: an agent's chat.** `{ chat: ValueRef }` in
   place of `{ page }` names an **agent id read out of your data**, and the
   dashboard opens that agent's conversation. It is the exception to "never
@@ -921,7 +921,7 @@ plugin by name, and a plugin ships no page code.
 | Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
 | Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
 | **The rail** | **A place of your own, with its own URL and a pinned icon** | **`pages` with `place: 'rail'` (§2.5b)** |
-| **Settings** | **A tab of your own, after the core sections** | **`pages` with `place: 'settings'` (§2.5b)** |
+| **Settings** | **An entry of your own in the Settings list, after All plugins, alphabetical by `title`, with your pinned icon** | **`pages` with `place: 'settings'` (§2.5b)** |
 | Approval card, everywhere | The envelope your gated tool described, and any `choices` it declared | a gated tool's `describe` (§2.1) |
 | Watchers | One row per sentinel: description, cadence, last run, on/off switch | `sentinels` (§2.3); the switch is core's |
 | Agents, "Proposed" | An agent or skill you suggest, awaiting the owner's approval | `agents`, `skills` (§2.6) |
@@ -1035,9 +1035,9 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   may itself be a path, `ListItem.pills` draws several, and a table column with
   `pill: { tone }` draws its cell as one. A `section` may carry `actions` — a
   link or a button — beside its heading.
-- **A link to a settings page is a tab.** A `RouteRef` naming a page whose
+- **A link to a settings page is a Settings entry.** A `RouteRef` naming a page whose
   `place` is `settings` resolves to `#/settings/p.<plugin>[.<page>]`, never to
-  a place of its own: the owner lands on Settings with that tab open.
+  a place of its own: the owner lands on Settings with that entry open.
 - **One link leaves the plugin: an agent's chat.** `{ chat: ValueRef }` in
   place of `{ page }` names an **agent id read out of your data**, and the
   dashboard opens that agent's conversation. It is the exception to "never
@@ -1100,7 +1100,7 @@ and every agent grant is built from, and `invoke` refuses it for anyone but the
 owner's own path. A tool that stores a secret is the case it exists for.
 
 **The worked example is the mail plugin.** Its two screens — the Mail place and
-the Email settings tab — are descriptors like the ones above and nothing else:
+the Email settings page — are descriptors like the ones above and nothing else:
 `packages/tools/email/src/pages/descriptors.ts` is the whole of what the owner
 sees, `queries.ts` is every read behind it, and `accounts.ts`,
 `policies-tools.ts` and `drafts-tools.ts` are the `ownerOnly` tools it writes
