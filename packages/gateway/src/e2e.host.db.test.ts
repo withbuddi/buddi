@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createPool, runMigrations, ToolRegistry, decideApproval, executeApproved,
   listToolPermissions, revokeToolPermission, saveArtifact, getAction, readArtifactBytes, getArtifact,
   type ToolContext } from '@buddi/core';
-import { ensureOwner, completeOnboarding, pairSurfaceIdentity } from '@buddi/core';
+import { ensureOwner, completeOnboarding, pairSurfaceIdentity, configurePluginHost, createPluginHost, hostBindingOf } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createHostManifest, hostService, type HostService, execInput } from '@buddi/tool-host';
 import { startWebServer } from './web/server.js';
@@ -38,7 +38,10 @@ suite('host execution permissions and file workflow', () => {
     service = hostService({ ...process.env, BUDDI_DATA_DIR: dir });
     registry = new ToolRegistry(); registry.register(createHostManifest(service));
     const { rows } = await pool.query("insert into core.conversations (agent_id) values ('ledger') returning id");
-    ctx = { db: pool, ownerId: 'owner', agentId: 'ledger', conversationId: rows[0].id, now: () => new Date(), timezone: 'UTC' };
+    const facts: ToolContext = { db: pool, ownerId: 'owner', agentId: 'ledger', conversationId: rows[0].id, now: () => new Date(), timezone: 'UTC' };
+    // The host core hands the plugin: the Files library read from this data dir.
+    configurePluginHost({ env: service.env });
+    ctx = { ...facts, buddi: createPluginHost(hostBindingOf(createHostManifest(service)), facts) };
   });
   async function propose(command = 'printf worked', extra = {}) {
     const result = await registry.invoke('host.exec', { command, ...extra }, ctx);
