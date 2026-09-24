@@ -76,21 +76,26 @@ next. Checked against the code and `git log` on 2026-09-21.
 
 ## In progress
 
-- [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
-  but never see. Next in the main list; not started. The small items were
-  all cleared on 2026-09-23.
+- [Plugin host API](specs/plugin-host-api.md), then
+  [Owner secrets](specs/owner-secrets.md). Next in the main list; specs
+  written 2026-09-24, not started. The small items were all cleared on
+  2026-09-23.
 
 ## Next, in order
 
-1. [Owner secrets](specs/owner-secrets.md) — site passwords the agent can fill
-   but never see.
-2. macOS app — a packaged desktop app around the existing service.
-3. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+1. [Plugin host API](specs/plugin-host-api.md) — one `ctx.buddi` surface
+   per plugin, then migrate every plugin. Spec written 2026-09-24, not
+   started.
+2. [Owner secrets](specs/owner-secrets.md) — secrets the agent can use but
+   never see, on the host API's secrets area. Spec written 2026-09-24, not
+   started.
+3. macOS app — a packaged desktop app around the existing service.
+4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
-4. Drive and Dropbox — the provider APIs for backup, after the folder target
+5. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.
-5. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
-6. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
+6. [Voice](ideas/voice.md) — notes on Telegram, audio mode on the dashboard.
+7. [Messengers](specs/messengers.md) — buddi speaks as you, Telegram first.
    Moved to last on 2026-09-23: taken once everything else here and the small
    items below are cleared.
 
