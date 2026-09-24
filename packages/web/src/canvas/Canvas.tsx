@@ -32,6 +32,7 @@ import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
 import { FilesView, type FilesViewProps } from './views/FilesView';
 import type { ChatAgent } from '../chat/types';
+import { Icon, ICON_NAMES, type IconName } from '../ui/Icon';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -111,7 +112,7 @@ export function Canvas({
         <div className="wb-canvas-body wb-canvas-body-empty">
           <div className="wb-empty">
             <span className="wb-empty-mark" aria-hidden="true">
-              <FrameIcon />
+              <Icon name="frame" />
             </span>
             <h2 className="wb-empty-title">
               {agentName ? `What ${agentName} finds is drawn here` : 'What the run finds is drawn here'}
@@ -323,7 +324,7 @@ function MoreTabs({
         >
           {worst ? <span className="wb-tab-dot" data-tone={worst} aria-hidden="true" /> : null}
           <span className="wb-tab-text">{items.length} more</span>
-          <ChevronIcon />
+          <Icon name="chevron-down" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -365,13 +366,6 @@ function clock(at: string | null, timezone: string): string | null {
   }).format(date);
 }
 
-function ChevronIcon(): JSX.Element {
-  return (
-    <svg width="12" height="12" viewBox="0 0 14 14" aria-hidden="true" {...stroke}>
-      <path d="M4 5.5 7 8.5l3-3" />
-    </svg>
-  );
-}
 
 /**
  * Two or three things this agent can actually draw, each shown as the shape
@@ -398,7 +392,7 @@ export function Examples({
         {examples.map((descriptor) => (
           <li key={descriptor.tool} className="wb-empty-item">
             <span className="wb-empty-icon" aria-hidden="true">
-              <ShapeIcon renderer={descriptor.renderer} />
+              <Icon name={shapeIcon(descriptor.renderer)} />
             </span>
             <span className="wb-empty-item-text">
               <span className="wb-empty-item-title">{titleOf(descriptor)}</span>
@@ -457,48 +451,8 @@ const SHAPE: Record<RendererName, string> = {
   structured: 'the result, laid out',
 };
 
-const stroke = {
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.4,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-};
-
-/** Each renderer drawn as the mark it makes. */
-function ShapeIcon({ renderer }: { renderer: RendererName }): JSX.Element {
-  const path = SHAPE_PATHS[renderer] ?? SHAPE_PATHS.structured;
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" {...stroke}>
-      {path}
-    </svg>
-  );
-}
-
-const SHAPE_PATHS: Record<RendererName, JSX.Element> = {
-  timeseries: <path d="M2 11.5 5.4 7.2l2.6 2.2L14 3.5" />,
-  table: <path d="M2.2 3.5h11.6v9H2.2zM2.2 6.6h11.6M6.6 6.6v5.9" />,
-  bars: <path d="M3 13V8.2M7 13V3.6M11 13V6.4M2 13.6h12" />,
-  keyvalue: <path d="M2.6 4.6h4M9.4 4.6h4M2.6 8h4M9.4 8h4M2.6 11.4h4M9.4 11.4h4" />,
-  document: <path d="M4 2.4h5l3 3v8.2H4zM9 2.4v3h3M6 9h4M6 11.2h3" />,
-  // A plus over a minus: lines in, lines out.
-  diff: <path d="M8 2.6v5M5.5 5.1h5M5.5 11.6h5M3 14h10" />,
-  // A prompt and a cursor.
-  terminal: <path d="M2.2 3.4h11.6v9.2H2.2zM4.6 6.4l2 1.6-2 1.6M8 10h3" />,
-  // A frame with a hill and a sun.
-  image: <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 11l3.6-3.4 2.6 2.4 2-1.8 3.4 3M10.6 6.2h.01" />,
-  // A window with a title bar: the app itself, framed.
-  preview: <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 6h11.6M4.1 4.7h.01M6 4.7h.01" />,
-  envelope: <path d="M2.2 4h11.6v8H2.2zM2.2 4.4 8 8.8l5.8-4.4" />,
-  structured: <path d="M4 2.6h8v10.8H4zM6.2 5.6h3.6M6.2 8h3.6M6.2 10.4h2.2" />,
-};
-
-function FrameIcon(): JSX.Element {
-  return (
-    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" {...stroke} strokeWidth={1.3}>
-      <rect x="2.6" y="3.6" width="16.8" height="14.8" rx="2" />
-      <path d="M2.6 14.2 7.4 9.6l3.4 3 3-2.6 3.6 3.2" />
-      <circle cx="7.4" cy="7.6" r="1.2" />
-    </svg>
-  );
+/** Each renderer drawn as the mark it makes; an unknown one as a structured result. */
+function shapeIcon(renderer: RendererName): IconName {
+  const name = `shape-${renderer}`;
+  return (ICON_NAMES as string[]).includes(name) ? (name as IconName) : 'shape-structured';
 }

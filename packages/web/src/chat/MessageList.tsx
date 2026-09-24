@@ -23,7 +23,7 @@ import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
 import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
-import { AgentAvatar } from '../ui';
+import { AgentAvatar, Icon } from '../ui';
 
 /**
  * The answer as it is being written: what has arrived of this turn's thinking
@@ -411,7 +411,7 @@ function RefusedDelegations({ refusals }: { refusals: Refusal[] }): JSX.Element 
       <button type="button" className="wb-tool" data-ok={false} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <span className="wb-tool-mark" data-ok="false" aria-hidden="true" />
         <span className="wb-tool-label">{summary}</span>
-        <ArrowIcon />
+        <Icon name="arrow" className="wb-tool-arrow" />
       </button>
       {open ? (
         <div className="wb-refusals-list">
@@ -451,22 +451,15 @@ export function Thought({ text, live = false, seconds = null }: { text: string; 
   return (
     <div className="wb-thought" data-live={live || undefined} data-open={open || undefined}>
       <button type="button" className="wb-thought-toggle" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        {live ? <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span> : <ThoughtIcon />}
+        {live ? <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span> : <Icon name="thought" />}
         <span>{label}</span>
-        <ArrowIcon />
+        <Icon name="arrow" className="wb-tool-arrow" />
       </button>
       {open ? <div className="wb-thought-text"><Markdown text={text} /></div> : null}
     </div>
   );
 }
 
-function ThoughtIcon(): JSX.Element {
-  return (
-    <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" />
-    </svg>
-  );
-}
 
 /**
  * The coordinator's request to a member, as the runtime words it: the member's
@@ -572,7 +565,7 @@ function ApprovalResult({ block }: { block: Extract<ChatBlock, { type: 'approval
         <span className="wb-tool-mark" data-ok={ok ? 'true' : 'false'} aria-hidden="true" />
         <span className="wb-tool-label">{block.name === '' ? 'Approved action' : labelFor(block.name)}</span>
         <span className="wb-tool-elapsed">{block.state}</span>
-        <ArrowIcon />
+        <Icon name="arrow" className="wb-tool-arrow" />
       </button>
       {open ? <pre className="wb-approval-output mono">{stringify(block.output)}</pre> : null}
     </div>
@@ -680,14 +673,14 @@ export function ToolRow({
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
           >
-            <ChevronIcon />
+            <Icon name="chevron" className="wb-tool-chevron" />
             {marks}
           </button>
           {opens ? (
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
                 <button type="button" className="wb-tool-open" aria-label="Open on the canvas" onClick={onOpen}>
-                  <ArrowIcon />
+                  <Icon name="arrow" className="wb-tool-arrow" />
                 </button>
               </Tooltip.Trigger>
               <Tooltip.Portal>
@@ -717,7 +710,7 @@ export function ToolRow({
       <Tooltip.Trigger asChild>
         <button className="wb-tool" {...flags} onClick={onOpen}>
           {marks}
-          <ArrowIcon />
+          <Icon name="arrow" className="wb-tool-arrow" />
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
@@ -767,43 +760,7 @@ function seconds(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
-function ChevronIcon(): JSX.Element {
-  return (
-    <svg
-      className="wb-tool-chevron"
-      width="11"
-      height="11"
-      viewBox="0 0 11 11"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />
-    </svg>
-  );
-}
 
-function ArrowIcon(): JSX.Element {
-  return (
-    <svg
-      className="wb-tool-arrow"
-      width="13"
-      height="13"
-      viewBox="0 0 13 13"
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M4.8 2.6 9 6.5l-4.2 3.9" />
-    </svg>
-  );
-}
 
 function findResult(
   messages: ChatMessage[],
