@@ -67,6 +67,8 @@ describe('the agent an empty thread opens on', () => {
     render(<App />);
     const opening = await screen.findByTestId('chat-opening');
     expect(opening).toHaveTextContent(INTRO);
+    // The opening says hello in the agent's own name, over its intro.
+    expect(opening).toHaveTextContent("Hi, I'm Keeper.");
     expect(opening.querySelector('.ui-avatar')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'What is on today?' })).toBeInTheDocument();
     // The name comes from the roster's default agent, not from the file.
