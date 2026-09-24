@@ -2380,6 +2380,7 @@ this says what it is *for*.
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
 | `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §9b. |
+| `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/specs/owner-secrets.md §3. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
@@ -2733,6 +2734,7 @@ An upgrade that adds an area says so on its card.
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
 | `path` | `string` | yes | 1.0 | `<data>/plugins-data/<plugin>`, absolute, created on first read. Never the data directory itself. |
+| `legacyPath` | `string \| undefined` | yes | 1.0 | `<data>/<plugin>`, where the built-in browser and host plugins kept the owner's profile and workspaces before `plugins-data`; undefined for every other plugin. Not created. |
 
 #### `ApprovalsArea`
 
@@ -2798,7 +2800,10 @@ An upgrade that adds an area says so on its card.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `use` | `(ctx, {name, destination, target}) => Promise<…>` | yes | 1.0 | Ask for a bound secret to be delivered into one of your destinations. A type only in 1.0. |
-| `list` | `() => Promise<SecretListing[]>` | yes | 1.0 | Names and bindings that point at your destinations. No values. A type only in 1.0. |
-| `store` | `(name, value, binding) => Promise<void>` | yes | 1.0 | For an `ownerOnly` tool storing an account credential the owner typed. A type only in 1.0. |
-| `remove` | `(name) => Promise<boolean>` | yes | 1.0 | Remove one. A type only in 1.0. |
+| `registerDestination` | `(destination) => void` | yes | 1.0 | Register one of your destinations (`{ kind, checkTarget, describe, deliver, maxRule }`, kind `<plugin>.<what>`). The manifest's `destinations` does the same at `register()`. |
+| `use` | `(name, kind, target) => Promise<SecretUseResult>` | yes | 1.0 | Deliver a bound secret into `target` of your destination `kind`: `{ done, use }`, `{ pending: actionId }` when the owner is asked, or `{ refused }`. Never the value. |
+| `list` | `() => Promise<SecretListing[]>` | yes | 1.0 | Secrets bound to your kinds: names, bindings, last use. No values. |
+| `put` | `(name, value, bindings) => Promise<void>` | yes | 1.0 | Owner only (an `ownerOnly` tool): store a secret the owner typed, bound to your kinds. |
+| `rename` | `(name, to) => Promise<boolean>` | yes | 1.0 | Owner only. A secret bound only to your kinds. |
+| `rebind` | `(name, bindings) => Promise<boolean>` | yes | 1.0 | Owner only. Replace its bindings, your kinds only. |
+| `delete` | `(name) => Promise<boolean>` | yes | 1.0 | Owner only. The rows and the value. |

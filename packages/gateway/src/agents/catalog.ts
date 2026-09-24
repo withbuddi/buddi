@@ -9,6 +9,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  createSecretsManifest,
   loadAgentCatalog,
   migrationNotice,
   pluginsFilePath,
@@ -121,6 +122,9 @@ export function builtInManifests(env: NodeJS.ProcessEnv = process.env): PluginMa
 function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest[]): ToolRegistry {
   const registry = new ToolRegistry();
   registry.register(createSystemManifest());
+  // The approval behind an owner secret's use: an ownerOnly tool no model
+  // sees, run only from an approved action (docs/specs/owner-secrets.md §2).
+  registry.register(createSecretsManifest());
   // Nothing domain-specific is compiled in any more. Finance was the last one,
   // and it is now installed like any other plugin (`buddi plugins install
   // packages/tools/finance` in a checkout), which is why an agent that grants

@@ -72,8 +72,23 @@ export const VAULT_SERVICE = 'buddi';
  */
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
+/**
+ * Where an owner secret's value is filed (docs/specs/owner-secrets.md §7): by
+ * the row's id, never its name, so a rename never touches the vault. The one
+ * shape of name that is not environment-variable shaped, and it cannot be one
+ * by accident.
+ */
+const OWNER_SECRET_RE = /^owner-secret:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The vault name an owner secret's value is kept under. */
+export function ownerSecretVaultName(id: string): string {
+  const name = `owner-secret:${id.toLowerCase()}`;
+  if (!OWNER_SECRET_RE.test(name)) throw new Error(`invalid owner secret id: ${JSON.stringify(id)}`);
+  return name;
+}
+
 export function assertSecretName(name: string): string {
-  if (!NAME_RE.test(name)) {
+  if (!NAME_RE.test(name) && !OWNER_SECRET_RE.test(name)) {
     throw new Error(
       `invalid secret name: ${JSON.stringify(name)} (letters, digits and underscore; must not start with a digit)`,
     );

@@ -27,6 +27,7 @@ import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
 import { hostBindingOf, withPluginHost, type HostBinding } from './host/build.js';
+import { registerSecretDestination } from './secrets/destinations.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -354,6 +355,12 @@ export class ToolRegistry {
           throw new Error(`plugin ${manifest.name}: files.${role} names ${String(name)}, which is not a query of this plugin`);
         }
       }
+    }
+    if (manifest.destinations !== undefined && manifest.destinations.length > 0) {
+      if (!binding.uses.includes('secrets')) {
+        throw new Error(`plugin ${manifest.name} declares secret destinations but not uses: secrets`);
+      }
+      for (const destination of manifest.destinations) registerSecretDestination(manifest.name, destination);
     }
     this.#manifests.set(manifest.name, manifest);
     this.#bindings.set(manifest.name, binding);
