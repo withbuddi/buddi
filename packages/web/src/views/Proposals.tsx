@@ -22,9 +22,15 @@
  * knows no plugin. A plugin page links here filtered to its own rules
  * (`#/settings/proposals?plugin=<name>`); keeping one calls that plugin's
  * apply on the server.
+ *
+ * A change to an agent's own file is drawn as a diff against the file as it
+ * is now, with the untrusted sentences marked, and a tool list that widens the
+ * grant says what it adds before the owner keeps it. A keep the server refuses
+ * (an unknown tool, a hand-only one) leaves the card open with the sentence
+ * beside the button. The weekly digest's day and hour are set at the foot.
  */
 import { useState } from 'react';
-import { api, type ProposalRow } from '../api';
+import { api, type DigestSchedule, type ProposalRow } from '../api';
 import { DiffLines } from '../canvas/views/DiffLines';
 import { lineDiff } from '../canvas/line-diff';
 import { fmtRelative } from '../format';
@@ -64,6 +70,24 @@ export function matcherLine(matcher: unknown): string {
     .join(' · ');
 }
 
+/** A tool list as the names it declares: comma- or line-separated. */
+export function toolNames(text: string): string[] {
+  return [...new Set(text.split(/[,\n]/).map((t) => t.trim().replace(/^[-*]\s+/, '')).filter((t) => t !== ''))];
+}
+
+/**
+ * What a change's tool list adds to the grant. The server's answer, resolved
+ * against the registry, for the text as proposed; for the owner's own edit,
+ * the names it declares that the current list does not.
+ */
+export function addedTools(proposal: ProposalRow, text: string): string[] {
+  const change = proposal.change;
+  if (!change || change.part !== 'tools') return [];
+  if (text === proposal.editable) return change.added;
+  const before = new Set(toolNames(change.current ?? ''));
+  return toolNames(text).filter((name) => !before.has(name));
+}
+
 /** True when the proposal belongs under a plugin filter (none: everything does). */
 export function inFilter(proposal: ProposalRow, plugin: string | null | undefined): boolean {
   return !plugin || (proposal.kind === 'policy' && proposal.payload.plugin === plugin);
@@ -74,16 +98,21 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
   const [failure, setFailure] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // A refused keep, by card: the sentence stays beside that card's button.
+  const [refused, setRefused] = useState<Record<string, string>>({});
 
-  const act = async (id: string, run: () => Promise<string>): Promise<void> => {
+  const act = async (id: string, run: () => Promise<string>, onCard = false): Promise<void> => {
     setFailure(null);
     setDone(null);
     setBusy(id);
+    setRefused(({ [id]: _, ...rest }) => rest);
     try {
       setDone(await run());
       reload();
     } catch (err) {
-      setFailure(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (onCard) setRefused((all) => ({ ...all, [id]: message }));
+      else setFailure(message);
     } finally {
       setBusy(null);
     }
@@ -124,11 +153,16 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
               key={proposal.id}
               proposal={proposal}
               busy={busy === proposal.id}
+              refusal={refused[proposal.id] ?? null}
               onKeep={(text) =>
-                void act(proposal.id, async () => {
-                  const result = await api.keepProposal(proposal.id, text);
-                  return `${proposal.title}: ${result.note}`;
-                })
+                void act(
+                  proposal.id,
+                  async () => {
+                    const result = await api.keepProposal(proposal.id, text);
+                    return `${proposal.title}: ${result.note}`;
+                  },
+                  true,
+                )
               }
               onDiscard={(reason) =>
                 void act(proposal.id, async () => {
@@ -179,6 +213,7 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
           <p className="muted">These stop being shown a week after they were decided.</p>
         </Details>
       ) : null}
+      {!plugin && data?.digest ? <DigestSettings schedule={data.digest.schedule} onSaved={reload} /> : null}
     </PageFrame>
   );
 }
@@ -201,14 +236,85 @@ export function closedSentence(proposal: ProposalRow): string {
   }
 }
 
+const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** The weekly digest: which day and hour it runs, in the installation's zone. */
+function DigestSettings({ schedule, onSaved }: { schedule: DigestSchedule; onSaved: () => void }): JSX.Element {
+  const [day, setDay] = useState(schedule.day);
+  const [hour, setHour] = useState(schedule.hour);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'good' | 'critical'; text: string } | null>(null);
+  const changed = day !== schedule.day || hour !== schedule.hour;
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await api.setDigestSchedule(day, hour);
+      setMessage({ tone: 'good', text: `The digest now runs on ${DAYS[day]} at ${String(hour).padStart(2, '0')}:00.` });
+      onSaved();
+    } catch (err) {
+      setMessage({ tone: 'critical', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Panel title="Weekly digest">
+      <Stack gap="sm">
+        <p className="muted">
+          Once a week, one message on Telegram and a card on Home: what your agents learned, what waits here, and what the
+          rules you kept stopped them doing. No message when nothing was learned and nothing waits.
+          {schedule.next ? ` Next: ${fmtRelative(schedule.next)}.` : ''}
+        </p>
+        <Toolbar align="end">
+          <Field label="Day">
+            <select value={day} disabled={saving} onChange={(e) => setDay(Number(e.target.value))}>
+              {DAYS.map((name, i) => (
+                <option key={name} value={i}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={`Hour (${schedule.timezone})`}>
+            <select value={hour} disabled={saving} onChange={(e) => setHour(Number(e.target.value))}>
+              {HOURS.map((h) => (
+                <option key={h} value={h}>
+                  {String(h).padStart(2, '0')}:00
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Button variant="accent" size="sm" disabled={saving || !changed} onClick={() => void save()}>
+            Save
+          </Button>
+        </Toolbar>
+        {message ? (
+          <Notice tone={message.tone} role="status">
+            {message.text}
+          </Notice>
+        ) : null}
+      </Stack>
+    </Panel>
+  );
+}
+
+/** A tool list drawn one name per line, so a diff shows each tool added or removed. */
+function asLines(part: 'instructions' | 'tools', text: string): string {
+  return part === 'tools' ? toolNames(text).join('\n') : text;
+}
+
 function ProposalCard({
   proposal,
   busy,
+  refusal,
   onKeep,
   onDiscard,
 }: {
   proposal: ProposalRow;
   busy: boolean;
+  refusal: string | null;
   onKeep: (text?: string) => void;
   onDiscard: (reason?: string) => void;
 }): JSX.Element {
@@ -217,6 +323,8 @@ function ProposalCard({
   const edited = proposal.editable !== null && text !== proposal.editable;
   const payload = proposal.payload;
   const echoes = proposal.echoes ?? [];
+  const change = proposal.kind === 'change' ? proposal.change ?? null : null;
+  const adds = addedTools(proposal, text);
   return (
     <Card
       tone={proposal.untrusted ? 'warning' : 'accent'}
@@ -226,10 +334,16 @@ function ProposalCard({
           <Pill>{KIND_LABEL[proposal.kind]}</Pill>
           <Pill mono>{proposal.agent}</Pill>
           {proposal.untrusted ? <Pill tone="warning">untrusted text in view</Pill> : null}
+          {adds.length > 0 ? <Pill tone="warning">widens its tools</Pill> : null}
         </>
       }
       foot={
         <Toolbar align="end">
+          {refusal ? (
+            <span className="proposal-refusal" role="alert">
+              {refusal}
+            </span>
+          ) : null}
           <input
             aria-label="Reason for discarding (optional)"
             placeholder="Reason for discarding (optional)"
@@ -315,8 +429,24 @@ function ProposalCard({
         ) : null}
         {proposal.kind === 'change' ? (
           <>
-            {typeof payload.before === 'string' ? (
-              <Details summary={`What its ${payload.part === 'tools' ? 'tool list' : 'instructions'} say now`}>
+            {adds.length > 0 ? (
+              <Notice tone="warning" title={`Adds: ${adds.join(', ')}`}>
+                Keeping this lets {proposal.agent} call tools it cannot call now.
+              </Notice>
+            ) : null}
+            {change?.refusal && !edited ? (
+              <Notice tone="warning" title="Keeping this as proposed will be refused.">
+                {change.refusal}
+              </Notice>
+            ) : null}
+            {change && change.current !== null ? (
+              <DiffLines
+                text={lineDiff(asLines(change.part, change.current), asLines(change.part, text))}
+                marks={echoes}
+                label={`${proposal.agent}'s ${change.part === 'tools' ? 'tool list' : 'instructions'} now, against this proposal`}
+              />
+            ) : typeof payload.before === 'string' ? (
+              <Details summary={`What its ${payload.part === 'tools' ? 'tool list' : 'instructions'} said when proposed`}>
                 <Code>{payload.before}</Code>
               </Details>
             ) : null}

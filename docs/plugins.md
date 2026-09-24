@@ -2376,7 +2376,7 @@ this says what it is *for*.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
+| `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with core's `proposePolicy(db, ctx, { plugin, matcher, action, params, verdicts, why, sources }, now)`; keeping one for a plugin with no `apply` is refused and the card stays open. |
 
 #### `PreviewProvider`
 

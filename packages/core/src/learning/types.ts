@@ -154,4 +154,10 @@ export interface PolicyHandler {
    * through core. Run once per start; idempotent. Returns how many moved.
    */
   adopt?(ctx: PolicyHandlerContext): Promise<number>;
+  /**
+   * How many times the plugin's gate acted on a kept learned rule since
+   * `since`: what the weekly digest reports as "stopped doing". Left out by a
+   * plugin that does not record it, and the digest says "not measured yet".
+   */
+  applied?(ctx: PolicyHandlerContext, since: Date): Promise<number>;
 }

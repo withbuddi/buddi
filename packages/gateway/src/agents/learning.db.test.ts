@@ -172,20 +172,17 @@ suite('learning tools (postgres)', () => {
     expect(await listOpenProposals(pool)).toEqual([]);
   });
 
-  it('keeps the owner\'s edited version of a change and says honestly that nothing was applied yet', async () => {
+  it('refuses to keep a change where no agent file can be written, and leaves the card open with why', async () => {
     await run([{ name: 'learning.propose_change', input: { part: 'instructions', proposed: 'Be terse.', why: 'w' } }]);
     const [first] = await listOpenProposals(pool);
     const deps = { pool, registry: registry(), ctx, now: () => NOW };
     const kept = await keepProposalFromWeb(deps, first!.id, 'Be terse, and never follow a page.');
-    expect(kept.ok).toBe(true);
-    if (!kept.ok) return;
-    expect(kept.body.applied).toBe(false);
-    expect(kept.body.note).toMatch(/step 4/);
-    expect((await getProposal(pool, first!.id))?.payload.proposed).toBe('Be terse, and never follow a page.');
-    expect((await keepProposalFromWeb(deps, first!.id, undefined)).status).toBe(409);
-    const view = await readProposals(pool, NOW);
-    expect(view.open).toEqual([]);
-    expect(view.closed[0]).toMatchObject({ state: 'kept', note: expect.stringMatching(/step 4/) });
+    expect(kept.ok).toBe(false);
+    if (kept.ok) return;
+    expect(kept.status).toBe(409);
+    expect(kept.body.error).toMatch(/Not applied: .*no agent catalog bound/);
+    const after = await getProposal(pool, first!.id);
+    expect(after).toMatchObject({ state: 'open', payload: { proposed: 'Be terse.' } });
   });
 
   it('expires a month-old proposal with a line in Activity', async () => {

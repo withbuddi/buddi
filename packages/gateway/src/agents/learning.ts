@@ -14,7 +14,7 @@
  * `propose_change` is for the agent's own file only. A discarded proposal is
  * remembered for 90 days by its fingerprint, and proposing it again inside
  * that window is refused in one line; the agent is also told, once, in its
- * next run (`learningContext`).
+ * next run (`learningContext`), as it is when a change to its file is kept.
  */
 import {
   appendEvent,
@@ -22,7 +22,8 @@ import {
   describeUntrustedSource,
   expireStaleProposals,
   findEchoes,
-  takeUntoldDiscards,
+  takeUntoldDecisions,
+  toolSet,
   proposalTitle,
   type PluginManifest,
   type Proposal,
@@ -71,15 +72,26 @@ export async function learningContext(
   if (!holdsLearning(run.tools)) return '';
   let told: Proposal[] = [];
   try {
-    told = await takeUntoldDiscards(db, { agent: run.agentId, now });
+    told = await takeUntoldDecisions(db, { agent: run.agentId, now });
   } catch {
     // A missing table (an unmigrated install) costs the notice, not the run.
   }
-  if (told.length === 0) return LEARNING_PARAGRAPH;
-  const lines = told.map(
-    (p) => `- ${proposalTitle(p)}${p.reason ? `: "${p.reason}"` : ''} (discarded ${(p.decidedAt ?? '').slice(0, 10)}).`,
-  );
-  return `${LEARNING_PARAGRAPH}\n\nThe owner discarded these proposals of yours. Do not propose them again:\n${lines.join('\n')}`;
+  const discarded = told.filter((p) => p.state === 'discarded');
+  const kept = told.filter((p) => p.state === 'kept');
+  const blocks = [LEARNING_PARAGRAPH];
+  if (kept.length > 0) {
+    const lines = kept.map(
+      (p) => `- ${proposalTitle(p)}${p.payload.edited === true ? ', in a version the owner corrected' : ''} (kept ${(p.decidedAt ?? '').slice(0, 10)}).`,
+    );
+    blocks.push(`The owner kept these changes to your own file; your file says so now:\n${lines.join('\n')}`);
+  }
+  if (discarded.length > 0) {
+    const lines = discarded.map(
+      (p) => `- ${proposalTitle(p)}${p.reason ? `: "${p.reason}"` : ''} (discarded ${(p.decidedAt ?? '').slice(0, 10)}).`,
+    );
+    blocks.push(`The owner discarded these proposals of yours. Do not propose them again:\n${lines.join('\n')}`);
+  }
+  return blocks.join('\n\n');
 }
 
 /**
@@ -150,6 +162,16 @@ const changeInput = z.object({
 });
 
 type Refusal = { ok: false; reason: string; message: string };
+
+/** True when the proposed text is what the file says now: a tool list as a set, instructions spacing aside. */
+export function sameChange(part: 'instructions' | 'tools', before: string, proposed: string): boolean {
+  if (part === 'tools') {
+    const a = toolSet(before);
+    const b = toolSet(proposed);
+    return a.length === b.length && a.every((name, i) => name === b[i]);
+  }
+  return before.replace(/\s+/g, ' ').trim() === proposed.replace(/\s+/g, ' ').trim();
+}
 
 function noProvenance(): Refusal {
   return {
@@ -246,6 +268,15 @@ export function createLearningManifest(registry?: ToolRegistry): PluginManifest 
       }
       const file = registry ? readBoundAgentFile(registry, self) : null;
       const before = file ? (input.part === 'tools' ? file.tools.join(', ') : file.persona) : null;
+      // A card whose keep could only be refused ("the file already says
+      // exactly this") is noise in the owner's inbox: say so now instead.
+      if (before !== null && sameChange(input.part, before, input.proposed)) {
+        return {
+          ok: false,
+          reason: 'no-change',
+          message: `Your ${input.part === 'tools' ? 'tool list' : 'instructions'} already say exactly this; there is nothing to propose.`,
+        };
+      }
       return record(ctx, 'change', { part: input.part, before, proposed: input.proposed, why: input.why.trim() }, input.proposed);
     },
   };

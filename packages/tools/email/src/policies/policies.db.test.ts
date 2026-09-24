@@ -572,6 +572,10 @@ suite('email policies (postgres + fake imap)', () => {
       const poll = sourceContext();
       await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(poll);
       expect(poll.runs).toHaveLength(0);
+      // And the digest can say so: the gate acted once this week on a rule the owner kept.
+      const week = new Date(NOW.getTime() - 7 * 24 * 60 * 60 * 1000);
+      expect(await manifest.policies!.applied!({ db: pool, now: NOW }, week)).toBe(1);
+      expect(await manifest.policies!.applied!({ db: pool, now: new Date(NOW.getTime() + 60_000) }, new Date(NOW.getTime() + 1))).toBe(0);
 
       // The plugin's revoke takes back exactly the rule this card became.
       expect(await revokeLearnedPolicy(kept, { db: pool, now: NOW })).toEqual({ note: 'Revoked the email rule about news@shop.test.' });

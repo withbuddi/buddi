@@ -16,6 +16,15 @@ function norm(value: unknown): string {
   return String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim().replace(/^[\s.,;:!?"'`-]+|[\s.,;:!?"'`-]+$/g, '');
 }
 
+/** A proposed tool list, as the set of names it declares. */
+export function toolSet(value: unknown): string[] {
+  const names = String(value ?? '')
+    .split(/[,\n]/)
+    .map((name) => name.trim().replace(/^[-*]\s+/, '').toLowerCase())
+    .filter((name) => name !== '');
+  return [...new Set(names)].sort();
+}
+
 /** JSON with object keys sorted, so `{a,b}` and `{b,a}` hash the same. */
 function fingerprintJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(fingerprintJson).join(',')}]`;
@@ -36,7 +45,11 @@ export function identifyingFields(kind: ProposalKind, payload: Record<string, un
     case 'policy':
       return { plugin: norm(payload.plugin), matcher: payload.matcher ?? null, action: norm(payload.action) };
     case 'change':
-      return { part: norm(payload.part), proposed: norm(payload.proposed) };
+      // A tool list is a set: the same grant in another order, or spaced
+      // differently, is the same proposal, and a discard must hold for it.
+      return payload.part === 'tools'
+        ? { part: 'tools', proposed: toolSet(payload.proposed) }
+        : { part: norm(payload.part), proposed: norm(payload.proposed) };
   }
 }
 

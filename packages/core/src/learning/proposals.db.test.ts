@@ -14,7 +14,8 @@ import {
   keepProposal,
   listClosedProposals,
   listOpenProposals,
-  takeUntoldDiscards,
+  readLearningWeek,
+  takeUntoldDecisions,
 } from './store.js';
 import type { ProposalProvenance } from './types.js';
 
@@ -112,8 +113,36 @@ suite('proposals (postgres)', () => {
     const first = await propose();
     if (!first.ok) throw new Error('not created');
     await discardProposal(pool, { id: first.proposal.id, now: NOW });
-    expect((await takeUntoldDiscards(pool, { agent: 'advisor', now: NOW })).map((p) => p.id)).toEqual([first.proposal.id]);
-    expect(await takeUntoldDiscards(pool, { agent: 'advisor', now: NOW })).toEqual([]);
-    expect(await takeUntoldDiscards(pool, { agent: 'scout', now: NOW })).toEqual([]);
+    expect((await takeUntoldDecisions(pool, { agent: 'advisor', now: NOW })).map((p) => p.id)).toEqual([first.proposal.id]);
+    expect(await takeUntoldDecisions(pool, { agent: 'advisor', now: NOW })).toEqual([]);
+    expect(await takeUntoldDecisions(pool, { agent: 'scout', now: NOW })).toEqual([]);
+  });
+
+  it('tells the agent once that a change to its file was kept, and not about a kept skill', async () => {
+    const kept = await propose();
+    const change = await createProposal(pool, {
+      kind: 'change', agent: 'advisor', payload: { part: 'instructions', before: null, proposed: 'Be terse.', why: 'w' },
+      provenance: provenance(), now: NOW,
+    });
+    if (!kept.ok || !change.ok) throw new Error('not created');
+    await keepProposal(pool, { id: kept.proposal.id, now: NOW });
+    await keepProposal(pool, { id: change.proposal.id, now: NOW });
+    expect((await takeUntoldDecisions(pool, { agent: 'advisor', now: NOW })).map((p) => p.id)).toEqual([change.proposal.id]);
+    expect(await takeUntoldDecisions(pool, { agent: 'advisor', now: NOW })).toEqual([]);
+  });
+
+  it('reads the week: kept per kind with up to three names, and the open count', async () => {
+    for (const name of ['A', 'B', 'C', 'D']) {
+      const made = await propose(at(-2), name);
+      if (made.ok) await keepProposal(pool, { id: made.proposal.id, now: at(-1) });
+    }
+    const old = await propose(at(-20), 'Old');
+    if (old.ok) await keepProposal(pool, { id: old.proposal.id, now: at(-10) });
+    await propose(NOW, 'Open');
+    const week = await readLearningWeek(pool, { since: at(-7) });
+    expect(week.kept.skill.count).toBe(4);
+    expect(week.kept.skill.names).toHaveLength(3);
+    expect(week.kept.policy).toEqual({ count: 0, names: [] });
+    expect(week.open).toBe(1);
   });
 });

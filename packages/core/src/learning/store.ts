@@ -235,11 +235,12 @@ export async function expireStaleProposals(db: Queryable, now: Date): Promise<Pr
 }
 
 /**
- * The agent's discarded proposals it has not been told about, and the mark
- * that it now has. One statement: the rows it returns are the rows it marked,
- * so two runs starting together tell the agent once between them.
+ * What the agent is told once in its next run: the proposals the owner
+ * discarded, and the changes to its own file the owner kept (learning §4, step
+ * 4). A kept skill or rule is not news to the agent in the same way: the skill
+ * loads, the rule is the plugin's. Marked told in the same statement, as above.
  */
-export async function takeUntoldDiscards(
+export async function takeUntoldDecisions(
   db: Queryable,
   input: { agent: string; now: Date; limit?: number },
 ): Promise<Proposal[]> {
@@ -247,13 +248,64 @@ export async function takeUntoldDiscards(
     `update core.proposals set told_at = $2
       where id in (
         select id from core.proposals
-         where agent = $1 and state = 'discarded' and told_at is null and decided_at >= $3
+         where agent = $1 and told_at is null and decided_at >= $3
+           and (state = 'discarded' or (state = 'kept' and kind = 'change'))
          order by decided_at desc limit $4
       )
       returning ${COLUMNS}`,
     [input.agent, input.now, new Date(input.now.getTime() - DISCARD_MEMORY_MS), input.limit ?? 5],
   );
-  return rows.map(toProposal);
+  return rows.map(toProposal).sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? ''));
+}
+
+/** One kind's kept proposals over a window: how many, and up to three titles. */
+export interface KeptTally {
+  count: number;
+  names: string[];
+}
+
+/** What the weekly digest reads from the proposals table. */
+export interface LearningWeek {
+  kept: Record<ProposalKind, KeptTally>;
+  open: number;
+}
+
+/** A proposal's name without the kind's prefix, for a list of three. */
+function shortName(p: Pick<Proposal, 'kind' | 'payload' | 'agent'>): string {
+  switch (p.kind) {
+    case 'skill':
+      return String(p.payload.name ?? 'unnamed');
+    case 'policy':
+      return proposalTitle(p).replace(/^Rule for /, '');
+    case 'change':
+      return `${p.agent}'s ${p.payload.part === 'tools' ? 'tools' : 'instructions'}`;
+  }
+}
+
+/**
+ * Kept per kind since `since`, newest first, and how many are open now. A
+ * skill the owner has since removed is not counted: the digest says what was
+ * learned, and that was taken back.
+ */
+export async function readLearningWeek(db: Queryable, input: { since: Date }): Promise<LearningWeek> {
+  const { rows } = await db.query(
+    `select ${COLUMNS} from core.proposals
+      where state = 'kept' and decided_at >= $1
+      order by decided_at desc`,
+    [input.since],
+  );
+  const kept: Record<ProposalKind, KeptTally> = {
+    skill: { count: 0, names: [] },
+    policy: { count: 0, names: [] },
+    change: { count: 0, names: [] },
+  };
+  for (const row of rows) {
+    const p = toProposal(row);
+    const tally = kept[p.kind];
+    tally.count += 1;
+    if (tally.names.length < 3) tally.names.push(shortName(p));
+  }
+  return { kept, open: await countOpenProposals(db) };
 }
 
 /** What a proposal is about, in a few words: a skill's name, a policy's action, a change's part. */
