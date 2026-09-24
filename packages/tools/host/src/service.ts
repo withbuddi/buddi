@@ -1,8 +1,11 @@
 import path from 'node:path';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
-import { assertApprovedEffect, getArtifact, readArtifactBytes, resolveDataDir,
-  saveArtifact, sha256Of, type ToolContext } from '@buddi/core';
+import { sha256Of, type ToolContext } from '@buddi/core/plugin';
+// Not yet on ctx.buddi: workspaces live in <data>/host/workspaces, where the
+// owner's running and finished work already is; ctx.buddi.dir is
+// <data>/plugins-data/host. Moving them moves every workspace.
+import { resolveDataDir } from '@buddi/core';
 import { runCommand } from './process.js';
 
 export const execInput = z.object({
@@ -21,9 +24,9 @@ const LIMIT = 20 * 1024 * 1024;
 export class HostService {
   readonly #runs = new Map<string, { view: HostRun; controller: AbortController }>();
   constructor(readonly env: NodeJS.ProcessEnv = process.env) {}
-  workspace(ctx: Pick<ToolContext, 'ownerId' | 'agentId' | 'conversationId'>): string {
+  workspace(ctx: Pick<ToolContext, 'buddi' | 'agentId' | 'conversationId'>): string {
     if (!ctx.agentId || !ctx.conversationId) throw new Error('Host tools require an agent and conversation.');
-    const key = sha256Of(Buffer.from(JSON.stringify([ctx.ownerId, ctx.agentId, ctx.conversationId])));
+    const key = sha256Of(Buffer.from(JSON.stringify([ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId])));
     return path.join(resolveDataDir(this.env), 'host', 'workspaces', key);
   }
   runs(ownerId: string, agentId?: string, conversationId?: string): HostRun[] {
@@ -43,11 +46,11 @@ export class HostService {
     const attachments = [];
     let total = 0;
     for (const id of input.attachments) {
-      const row = await getArtifact(ctx.db, id);
+      const row = await ctx.buddi!.files!.get(id);
       if (!row) throw new Error(`Attachment ${id} is missing.`);
       total += row.sizeBytes;
       if (total > LIMIT) throw new Error('Attachments exceed the 20 MiB command limit.');
-      const bytes = await readArtifactBytes(this.env, row);
+      const bytes = await ctx.buddi!.files!.read(row.id);
       if (sha256Of(bytes) !== row.sha256) throw new Error(`Attachment ${id} changed.`);
       const filename = path.basename(row.filename ?? `file.${row.mime === 'text/csv' ? 'csv' : 'bin'}`).replace(/[^a-zA-Z0-9._-]/g, '_');
       attachments.push({ id, sha256: row.sha256, path: path.join(workspace, 'inputs', id, filename === '.' || filename === '..' ? 'file' : filename) });
@@ -62,12 +65,12 @@ export class HostService {
   async execute(input: Input, ctx: ToolContext) {
     if (!ctx.actionId || (ctx.delegationDepth ?? 0) > 0) throw new Error('Host execution requires an approved action, not delegated authority.');
     const { envelope } = await this.describe(input, ctx);
-    assertApprovedEffect(ctx, envelope);
+    ctx.buddi!.approvals.assert(ctx, envelope);
     if (this.#runs.size >= 4) throw new Error('Four host commands are already running. Wait before starting another.');
-    if (this.runs(ctx.ownerId, ctx.agentId, ctx.conversationId).length) throw new Error('This conversation already has a running command. Wait or stop it first.');
+    if (this.runs(ctx.buddi!.owner.id, ctx.agentId, ctx.conversationId).length) throw new Error('This conversation already has a running command. Wait or stop it first.');
     const controller = new AbortController();
     const signal = ctx.signal ? AbortSignal.any([controller.signal, ctx.signal]) : controller.signal;
-    const view: HostRun = { actionId: ctx.actionId, ownerId: ctx.ownerId, agentId: ctx.agentId!,
+    const view: HostRun = { actionId: ctx.actionId, ownerId: ctx.buddi!.owner.id, agentId: ctx.agentId!,
       conversationId: ctx.conversationId!, command: input.command, cwd: envelope.cwd,
       startedAt: new Date().toISOString(), stdout: '', stderr: '' };
     this.#runs.set(ctx.actionId, { view, controller });
@@ -76,9 +79,9 @@ export class HostService {
       await mkdir(envelope.workspace, { recursive: true, mode: 0o700 });
       for (const attachment of envelope.attachments) {
         signal.throwIfAborted();
-        const row = await getArtifact(ctx.db, attachment.id);
+        const row = await ctx.buddi!.files!.get(attachment.id);
         if (!row) throw new Error('Attachment was removed after approval.');
-        const bytes = await readArtifactBytes(this.env, row);
+        const bytes = await ctx.buddi!.files!.read(row.id);
         if (sha256Of(bytes) !== attachment.sha256) throw new Error('Attachment changed after approval.');
         await mkdir(path.dirname(attachment.path), { recursive: true, mode: 0o700 });
         try { await writeFile(attachment.path, bytes, { flag: 'wx', mode: 0o600 }); }
@@ -103,9 +106,8 @@ export class HostService {
             const meta = await stat(file);
             total += meta.size;
             if (!meta.isFile() || meta.size === 0 || total > LIMIT) throw new Error('Outputs must be nonempty files, at most 20 MiB total.');
-            const row = await saveArtifact(ctx.db, { bytes: await readFile(file), mime: mimeFor(file),
-              filename: path.basename(output), createdBy: ctx.agentId!, conversationId: ctx.conversationId,
-              source: { surface: 'host', chatId: ctx.conversationId } }, this.env);
+            const row = await ctx.buddi!.files!.save({ bytes: await readFile(file), mime: mimeFor(file),
+              filename: path.basename(output), source: { surface: 'host', chatId: ctx.conversationId } });
             artifacts.push({ id: row.id, filename: row.filename, mime: row.mime, sizeBytes: row.sizeBytes,
               downloadUrl: `${this.env.BUDDI_WEB_PUBLIC_ORIGIN ?? `http://127.0.0.1:${this.env.BUDDI_WEB_PORT ?? '4317'}`}/api/artifacts/${row.id}/download` });
           } catch (error) { outputErrors.push(`${output}: ${error instanceof Error ? error.message : String(error)}`); }
