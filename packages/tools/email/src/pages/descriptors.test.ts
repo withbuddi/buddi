@@ -42,6 +42,24 @@ describe('the mail pages, as contributions', () => {
     ]);
   });
 
+  it('says above the send card that nothing has been sent, and no query of mail is sensitive', () => {
+    const registry = new ToolRegistry();
+    registry.register(manifest);
+    const found: Array<{ tool?: string; pending?: string }> = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) node.forEach(walk);
+      else if (node && typeof node === 'object') {
+        const o = node as { tool?: unknown; pending?: string };
+        if (o.tool === 'email.send') found.push(o as { tool: string; pending?: string });
+        Object.values(node).forEach(walk);
+      }
+    };
+    walk(registry.pages());
+    expect(found.length).toBeGreaterThan(0);
+    for (const send of found) expect(send.pending).toMatch(/^Nothing has been sent\. /);
+    expect(registry.queries().filter((q) => q.sensitive)).toEqual([]);
+  });
+
   it('writes only through tools of its own, and none a model is shown', () => {
     const registry = new ToolRegistry();
     registry.register(manifest);

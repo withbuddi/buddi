@@ -137,6 +137,16 @@ describe('page descriptors', () => {
     ).toThrow('plugin demo: page board, body[0].submit.tool: names other.write, which this plugin does not contribute');
   });
 
+  it('takes a gated action\'s pending sentence, and refuses one that is not a sentence', () => {
+    const withPending = (pending: unknown): unknown =>
+      page({ body: [{ kind: 'button', action: { tool: 'demo.write', label: 'Send', pending } }] });
+    const [parsed] = parse([withPending('Nothing has been sent.')], { tools: ['demo.write'] });
+    expect((parsed!.body[0] as { action: { pending?: string } }).action.pending).toBe('Nothing has been sent.');
+    expect(() => parse([withPending('')], { tools: ['demo.write'] })).toThrow(/body\.0\.action\.pending/);
+    expect(() => parse([withPending(42)], { tools: ['demo.write'] })).toThrow(/body\.0\.action\.pending/);
+    expect(() => parse([withPending('x'.repeat(401))], { tools: ['demo.write'] })).toThrow(/body\.0\.action\.pending/);
+  });
+
   it('refuses a link to a page that is not this plugin\'s', () => {
     expect(() => parse([page({ body: [{ kind: 'link', label: 'Away', to: { page: 'elsewhere' } }] })])).toThrow(
       'plugin demo: page board, body[0].to.page: links to elsewhere, which is not a page of this plugin',
@@ -531,6 +541,22 @@ describe('what a query must be', () => {
     );
     expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ result: {} }) as never] })).toThrow(
       /page query q declares a `result` that is not a zod schema/,
+    );
+  });
+});
+
+describe('a sensitive query', () => {
+  const query = (over: Record<string, unknown>): unknown =>
+    ({ name: 'q', params: z.object({}), produce: async () => ({}), ...over });
+
+  it('keeps the flag, and leaves it off when unsaid', () => {
+    const { queries } = parsePageContributions({ plugin: 'demo', queries: [query({ sensitive: true }) as never, query({ name: 'r' }) as never] });
+    expect(queries.map((q) => [q.name, q.sensitive])).toEqual([['q', true], ['r', undefined]]);
+  });
+
+  it('refuses a flag that is not true or false', () => {
+    expect(() => parsePageContributions({ plugin: 'demo', queries: [query({ sensitive: 'yes' }) as never] })).toThrow(
+      /page query q declares `sensitive` that is not true or false/,
     );
   });
 });

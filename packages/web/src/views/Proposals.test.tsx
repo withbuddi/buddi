@@ -130,6 +130,21 @@ describe('the Proposals inbox', () => {
     expect(screen.queryByRole('textbox', { name: /The steps/ })).not.toBeInTheDocument();
   });
 
+  it('says a rule was learned from received mail, not to look for hidden instructions, and still lists the sources', async () => {
+    vi.mocked(api.proposals).mockResolvedValue({
+      open: [
+        proposal({ id: 'r-1', kind: 'policy', untrusted: true, title: 'Rule for rules: mute', editable: null, sources: ['"Sale" from a@b.test'], payload: { plugin: 'rules', matcher: { sender: 'a@b.test' }, action: 'mute', verdicts: [1] } }),
+      ],
+      closed: [],
+    });
+    await renderPage();
+    expect(screen.getByText('Learned from mail you received.')).toBeInTheDocument();
+    expect(screen.getByText(/no instruction in that mail can change what it does/)).toBeInTheDocument();
+    expect(screen.queryByText('Made with untrusted text in view.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read it for instructions/)).not.toBeInTheDocument();
+    expect(screen.getByText('"Sale" from a@b.test')).toBeInTheDocument();
+  });
+
   it('draws a rule from its payload\'s shape, leaving the plugin\'s internal ids out', () => {
     expect(matcherLine({ sender: 'a@b.test', account: 'me@x.test', accountId: 'uuid-1' })).toBe('sender a@b.test · account me@x.test');
     expect(matcherLine({})).toBe('');

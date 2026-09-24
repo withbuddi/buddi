@@ -100,6 +100,8 @@ const demoManifest: PluginManifest = {
   version: '1.0.0',
   schema: 'demo',
   migrationsDir: '',
+  // `settings` stands in for a balance: marked sensitive, as finance marks its reads.
+  queries: (demoPagesManifest.queries ?? []).map((q) => (q.name === 'settings' ? { ...q, sensitive: true } : q)),
   home: [
     { id: 'demo.money', title: 'Money', produce: async () => ({ id: 'demo.money', title: 'Money', stats: [{ label: 'Cash', value: BALANCE }], rows: [], sensitive: true }) },
     { id: 'demo.car', title: 'Car', produce: async () => ({ id: 'demo.car', title: 'Car', stats: [{ label: 'Mileage', value: '42,000' }], rows: [] }) },
@@ -401,6 +403,20 @@ suite('buddi mcp', () => {
     // The whole descriptor tree is several times this.
     const full = JSON.stringify(await owner.get('/api/pages'));
     expect(text.length).toBeLessThan(full.length / 3);
+  });
+
+  it('page_query names a sensitive query and leaves its data out, unless asked', async () => {
+    const plain = await tool('buddi.page_query', { plugin: 'demo', query: 'settings' });
+    expect(plain.isError).toBe(false);
+    expect(plain.json).toEqual({ plugin: 'demo', query: 'settings', sensitive: true, omitted: 'ask with includeSensitive' });
+    const asked = await tool('buddi.page_query', { plugin: 'demo', query: 'settings', includeSensitive: true });
+    expect(asked.json).toEqual({ data: { everyMinutes: 15, keepDays: 30 } });
+    // A query nobody marked comes back as it always did.
+    expect((await tool('buddi.page_query', { plugin: 'demo', query: 'counts' })).json.data).toBeDefined();
+    // And pages_list says which are sensitive.
+    const listed = (await tool('buddi.pages_list')).json.pages.flatMap((p: any) => p.queries);
+    expect(listed.find((q: any) => q.name === 'settings')).toMatchObject({ sensitive: true });
+    expect(listed.find((q: any) => q.name === 'counts').sensitive).toBeUndefined();
   });
 
   it('no read returns a seeded secret', async () => {

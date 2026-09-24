@@ -110,6 +110,8 @@ export interface PolicyRecord {
   createdFrom: Array<{ messageId: string; processingVersion: number }>;
   createdAt: string | null;
   revokedAt: string | null;
+  /** When the owner kept it from Settings → Proposals; null for any other rule. */
+  keptAt?: string | null;
 }
 
 /** Everything the gate is allowed to look at. Deliberately not the body. */

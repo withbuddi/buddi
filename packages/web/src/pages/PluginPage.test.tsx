@@ -214,7 +214,13 @@ const board: Component[] = [
                 args: { id: { param: 'draft' } },
                 then: { route: { page: 'board' } },
               },
-              { tool: 'demo.send', label: 'Send', done: { path: 'message' }, args: { id: { param: 'draft' } } },
+              {
+                tool: 'demo.send',
+                label: 'Send',
+                done: { path: 'message' },
+                pending: 'Nothing has been sent yet.',
+                args: { id: { param: 'draft' } },
+              },
             ],
           },
         ],
@@ -658,6 +664,33 @@ describe('the pieces a descriptor is made of', () => {
     expect(await screen.findByText('Sent, and the thread has it.')).toBeInTheDocument();
   });
 
+  it('draws a gated action\'s pending sentence above its card while it waits, and drops it once decided', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    vi.mocked(api.decide).mockResolvedValue({
+      action: approvalRow('act-2', 'Send it now'),
+      execution: { state: 'succeeded', result: { message: 'Sent.' } },
+    } as never);
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Send' }));
+    const sentence = await screen.findByText('Nothing has been sent yet.');
+    const card = (await screen.findByText('Send it now')).closest('.ui-card') as HTMLElement;
+    // Above the card, in reading order.
+    expect(sentence.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }));
+    expect(await screen.findByText('Sent.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing has been sent yet.')).not.toBeInTheDocument();
+  });
+
+  it('draws no pending sentence for a gated action that names none', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ approvalId: 'act-2', preview: 'Send it now' });
+    draw('board', 'a1');
+    await openDraft();
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    expect(await screen.findByText('Send it now')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing has been sent yet.')).not.toBeInTheDocument();
+  });
+
   it('draws a draft\'s pill in the accent: it is the thing on this screen', async () => {
     draw('board', 'a1');
     const pill = (await screen.findByText('draft')) as HTMLElement;
@@ -985,5 +1018,64 @@ describe('what a descriptor may hide', () => {
     draw('settings');
     // Once per component that asked, and each says so where it stands.
     expect((await screen.findAllByText(/the plugin could not answer/)).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a sensitive query', () => {
+  const money: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'money',
+    title: 'Money',
+    place: 'rail',
+    sensitive: ['settings'],
+    body: [
+      { kind: 'notice', text: 'Balances below.' },
+      {
+        kind: 'section',
+        title: 'Balances',
+        body: [{ kind: 'stats', query: { query: 'settings' }, items: [{ label: 'Every', value: { path: 'everyMinutes' } }] }],
+      },
+      { kind: 'stats', title: 'Loose', query: { query: 'settings' }, items: [{ label: 'Keep', value: { path: 'keepDays' } }] },
+      {
+        kind: 'section',
+        title: 'Plain',
+        body: [{ kind: 'stats', query: { query: 'counts' }, items: [{ label: 'Things', value: { path: 'items' } }] }],
+      },
+    ],
+  };
+  const drawMoney = (): ReturnType<typeof render> =>
+    render(<PluginPage page={money} navigate={navigate} timezone="UTC" siblings={[money]} />);
+  const asked = (): string[] => vi.mocked(api.pageQuery).mock.calls.map((call) => call[1] as string);
+
+  it('masks every section that reads it, and asks for nothing until shown', async () => {
+    drawMoney();
+    expect(await screen.findByText('Things')).toBeInTheDocument();
+    expect(screen.getAllByText('Hidden until you show it.')).toHaveLength(2);
+    expect(screen.queryByText('Every')).not.toBeInTheDocument();
+    expect(asked()).not.toContain('settings');
+
+    const section = screen.getByRole('heading', { name: 'Balances' }).closest('section') as HTMLElement;
+    fireEvent.click(within(section).getByRole('button', { name: 'Show' }));
+    expect(await screen.findByText('Every')).toBeInTheDocument();
+    expect(within(section).getByRole('button', { name: 'Hide' })).toHaveAttribute('aria-pressed', 'true');
+    // The loose one has its own Show, and stays masked.
+    expect(screen.queryByText('Keep')).not.toBeInTheDocument();
+  });
+
+  it('masks it again when the window is left', async () => {
+    drawMoney();
+    const section = (await screen.findByRole('heading', { name: 'Balances' })).closest('section') as HTMLElement;
+    fireEvent.click(within(section).getByRole('button', { name: 'Show' }));
+    expect(await screen.findByText('Every')).toBeInTheDocument();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    fireEvent(window, new Event('blur'));
+    await waitFor(() => expect(screen.queryByText('Every')).not.toBeInTheDocument());
+    visibility.mockRestore();
+  });
+
+  it('leaves a page with no sensitive query exactly as it was', async () => {
+    draw('board');
+    expect(await screen.findByText('Things in all')).toBeInTheDocument();
+    expect(screen.queryByText('Hidden until you show it.')).not.toBeInTheDocument();
   });
 });

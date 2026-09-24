@@ -166,13 +166,28 @@ export function actRateLimited(sessionId: string, now: number): boolean {
  * this process — the browser learns what to *ask for*, not how it is answered.
  */
 export function listPageDescriptors(deps: PagesDeps): PagesReply {
+  const queries = deps.registry.queries();
+  /*
+   * Which of a plugin's queries are sensitive, on each of its pages: the page
+   * masks what reads them (as Home masks a sensitive block), and a descriptor
+   * cannot say it itself — the flag is the query's, not the screen's.
+   */
+  const sensitive = new Map<string, string[]>();
+  for (const q of queries) {
+    if (q.sensitive === true) sensitive.set(q.plugin, [...(sensitive.get(q.plugin) ?? []), q.name]);
+  }
   return {
     status: 200,
     body: {
-      pages: deps.registry.pages(),
+      pages: deps.registry.pages().map((p) => (sensitive.has(p.plugin) ? { ...p, sensitive: sensitive.get(p.plugin) } : p)),
       files: deps.registry.files(),
       // What each query takes, by name and type: the schema itself stays here.
-      queries: deps.registry.queries().map((q) => ({ plugin: q.plugin, name: q.name, params: describeParams(q.params) })),
+      queries: queries.map((q) => ({
+        plugin: q.plugin,
+        name: q.name,
+        params: describeParams(q.params),
+        ...(q.sensitive === true ? { sensitive: true } : {}),
+      })),
     },
   };
 }

@@ -56,6 +56,8 @@ export interface PolicyView {
   decisions: number;
   createdAt: string | null;
   revokedAt: string | null;
+  /** When the owner kept it from Settings → Proposals, or null. */
+  keptAt: string | null;
 }
 
 export function viewOf(
@@ -76,6 +78,7 @@ export function viewOf(
     decisions: stats?.decisions ?? 0,
     createdAt: policy.createdAt,
     revokedAt: policy.revokedAt,
+    keptAt: policy.keptAt ?? null,
   };
 }
 
@@ -359,8 +362,10 @@ export async function policyLists(db: Parameters<typeof policyStats>[0]): Promis
   proposed: PolicyView[];
 }> {
   const { rows } = await db.query(
+    // Most recently kept or added first: a rule kept a minute ago is the one
+    // the owner is looking for, not one more line under the day it was learned.
     `select ${POLICY_COLUMNS} from email.policies where revoked_at is null
-      order by created_at desc, id desc`,
+      order by coalesce(kept_at, created_at) desc, id desc`,
   );
   const stats = await policyStats(db);
   const all = rows.map(toPolicy);

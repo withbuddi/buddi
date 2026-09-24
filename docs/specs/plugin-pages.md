@@ -54,6 +54,8 @@ export interface PageQuery {
   produce(params: unknown, ctx: ToolContext): Promise<unknown>;  // read-only
   /** Optional result shape; when given, the result is validated before it leaves. */
   result?: z.ZodTypeAny;
+  /** Masked on the page until the owner asks (as a sensitive Home block); left out over MCP unless asked. Added 2026-09-23. */
+  sensitive?: boolean;
 }
 
 export interface PageDescriptor {
@@ -142,7 +144,7 @@ interface PillRef { value: ValueRef; tone?: Tone | ValueRef }
 interface OptionsFrom { query: QueryRef; rows: string; value: string; label: string; dependsOn?: string[] }
 
 interface QueryRef { query: string; params?: Record<string, ValueRef | { param: string } | { route: string }> }
-interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; done?: string | ValueRef; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
+interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }>; tone?: 'accent' | 'danger'; confirm?: string; busy?: string; done?: string | ValueRef; pending?: string; placement?: 'leading'; then?: 'refresh' | 'close' | { route: RouteRef } }
 /** Within the same plugin — or, the one exception, one agent's chat. */
 type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef }
 interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef }

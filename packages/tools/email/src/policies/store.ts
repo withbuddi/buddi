@@ -22,7 +22,7 @@ import {
 type Db = Pool | PoolClient;
 
 export const POLICY_COLUMNS =
-  'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at';
+  'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at, kept_at';
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -42,6 +42,7 @@ export function toPolicy(row: Record<string, any>): PolicyRecord {
     createdFrom: Array.isArray(row.created_from) ? row.created_from : [],
     createdAt: iso(row.created_at),
     revokedAt: iso(row.revoked_at),
+    keptAt: iso(row.kept_at),
   };
 }
 
@@ -112,6 +113,8 @@ export interface CreatePolicyInput {
   origin: PolicyOrigin;
   proposed?: boolean;
   createdFrom?: Array<{ messageId: string; processingVersion: number }>;
+  /** The owner kept this from Settings → Proposals: it is stamped kept at `now`. */
+  kept?: boolean;
 }
 
 /**
@@ -142,8 +145,8 @@ export async function createPolicy(
 
   const { rows } = await db.query(
     `insert into email.policies
-       (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at)
-     values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9)
+       (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, kept_at)
+     values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10)
      returning ${POLICY_COLUMNS}`,
     [
       accountId,
@@ -155,6 +158,7 @@ export async function createPolicy(
       input.proposed ?? false,
       JSON.stringify(input.createdFrom ?? []),
       now,
+      input.kept === true ? now : null,
     ],
   );
   const row = rows[0];

@@ -19,7 +19,7 @@
  *    search's fields are page parameters, and a reload lands where the owner
  *    was — on a phone as much as on a desk.
  */
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
@@ -86,14 +86,92 @@ interface PageScope {
   /** Bumped by any successful write; every query depends on it. */
   version: number;
   refresh: () => void;
+  /** This plugin's sensitive queries: what reads one is masked until asked. */
+  sensitive: ReadonlySet<string>;
 }
 
 const Scope = createContext<PageScope | null>(null);
+
+/** True under a sensitive section or gate that the owner has already opened. */
+const Unmasked = createContext(false);
 
 function useScope(): PageScope {
   const scope = useContext(Scope);
   if (!scope) throw new Error('a plugin page component outside a plugin page');
   return scope;
+}
+
+/* ------------------------------------------------------------------ *
+ * Sensitive reads: masked as Home masks a sensitive block
+ * ------------------------------------------------------------------ */
+
+/** Every query a descriptor subtree reads, by name. */
+function queriesOf(node: unknown, out: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(node)) {
+    for (const item of node) queriesOf(item, out);
+  } else if (node && typeof node === 'object') {
+    const query = (node as { query?: unknown }).query;
+    if (typeof query === 'string') out.add(query);
+    for (const value of Object.values(node)) queriesOf(value, out);
+  }
+  return out;
+}
+
+function readsSensitive(node: unknown, sensitive: ReadonlySet<string>): boolean {
+  if (sensitive.size === 0) return false;
+  for (const name of queriesOf(node)) if (sensitive.has(name)) return true;
+  return false;
+}
+
+/**
+ * Shown for this tab only. Leaving the window masks it again, so a screen
+ * left unattended shows the shape of the page and none of its figures —
+ * the rule Home's sensitive blocks follow.
+ */
+function useReveal(): [boolean, () => void] {
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    if (!revealed) return undefined;
+    const hide = (): void => {
+      if (document.visibilityState === 'hidden') setRevealed(false);
+    };
+    document.addEventListener('visibilitychange', hide);
+    window.addEventListener('blur', hide);
+    return () => {
+      document.removeEventListener('visibilitychange', hide);
+      window.removeEventListener('blur', hide);
+    };
+  }, [revealed]);
+  return [revealed, () => setRevealed((v) => !v)];
+}
+
+function RevealButton({ revealed, onToggle }: { revealed: boolean; onToggle: () => void }): JSX.Element {
+  return (
+    <Button size="sm" variant="ghost" aria-pressed={revealed} onClick={onToggle}>
+      {revealed ? 'Hide' : 'Show'}
+    </Button>
+  );
+}
+
+/** What stands where a masked read would be. Nothing is asked for until shown. */
+function MaskedNote(): JSX.Element {
+  return <p className="muted">Hidden until you show it.</p>;
+}
+
+/**
+ * A piece outside any section that reads a sensitive query: its own Show,
+ * right-aligned, above it.
+ */
+function SensitiveGate({ children }: { children: ReactNode }): JSX.Element {
+  const [revealed, toggle] = useReveal();
+  return (
+    <Stack gap="sm">
+      <Toolbar align="end">
+        <RevealButton revealed={revealed} onToggle={toggle} />
+      </Toolbar>
+      {revealed ? <Unmasked.Provider value>{children}</Unmasked.Provider> : <MaskedNote />}
+    </Stack>
+  );
 }
 
 /** A tone the descriptor asked for, as a tone the primitives know. */
@@ -261,6 +339,8 @@ interface ActState {
   /** What the descriptor said to say once it worked. */
   done: string | null;
   approvalId: string | null;
+  /** The descriptor's sentence for the action now waiting on that approval. */
+  waiting: string | null;
   /** Decided: apply what the pending action's `then` asked for, or let it go. */
   settle: (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }) => void;
   run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<void>;
@@ -367,7 +447,7 @@ function useAct(): ActState {
     scope.refresh();
   };
 
-  return { running, busy: running !== null, error, done, approvalId, settle, run };
+  return { running, busy: running !== null, error, done, approvalId, waiting: pending?.ref.pending ?? null, settle, run };
 }
 
 /**
@@ -472,7 +552,16 @@ function ApprovalById({
 /** The bit every write shows: what went wrong, or what is now waiting. */
 function ActOutcome({ act }: { act: ActState }): JSX.Element | null {
   if (act.error) return <ErrorBanner message={act.error} />;
-  if (act.approvalId) return <ApprovalById id={act.approvalId} onDecided={act.settle} />;
+  if (act.approvalId) {
+    // What the button has *not* done yet, above the card that will do it.
+    if (!act.waiting) return <ApprovalById id={act.approvalId} onDecided={act.settle} />;
+    return (
+      <Stack>
+        <Notice role="status">{act.waiting}</Notice>
+        <ApprovalById id={act.approvalId} onDecided={act.settle} />
+      </Stack>
+    );
+  }
   if (act.done) {
     return (
       <Notice tone="good" role="status">
@@ -713,40 +802,22 @@ function Piece({
   choose?: (key: string) => void;
   chosen?: string | null;
 }): JSX.Element | null {
+  const scope = useScope();
+  const unmasked = useContext(Unmasked);
   // `when` is the only logic a descriptor may carry.
   if (!holds(data, component.when)) return null;
+  // A section masks itself; anything else that reads a sensitive query, and
+  // is not inside a section that has already been shown, gets a gate of its own.
+  if (component.kind !== 'section' && !unmasked && readsSensitive(component, scope.sensitive)) {
+    return (
+      <SensitiveGate>
+        <Piece component={component} data={data} {...(choose ? { choose } : {})} {...(chosen === undefined ? {} : { chosen })} />
+      </SensitiveGate>
+    );
+  }
   switch (component.kind) {
     case 'section':
-      return (
-        <Section
-          title={component.title}
-          aside={
-            /*
-             * The right of the heading: where this section's own way out
-             * goes — "Mailboxes and rules" — rather than a button lost at
-             * the bottom of a list.
-             */
-            component.actions && component.actions.length > 0 ? (
-              <Toolbar align="end">
-                {component.actions.map((action, index) => (
-                  <Piece key={index} component={action} data={data} />
-                ))}
-              </Toolbar>
-            ) : component.note ? (
-              <span className="muted">{component.note}</span>
-            ) : undefined
-          }
-        >
-          <Stack gap="lg">
-            {component.note && component.actions && component.actions.length > 0 ? (
-              <p className="ui-card-meta">{component.note}</p>
-            ) : null}
-            {component.body.map((child, index) => (
-              <Piece key={index} component={child} data={data} />
-            ))}
-          </Stack>
-        </Section>
-      );
+      return <SectionPiece component={component} data={data} />;
     case 'notice':
       return (
         <Notice tone={noticeTone(component.tone)} title={component.title}>
@@ -794,6 +865,56 @@ function Piece({
 }
 
 type Of<K extends Component['kind']> = Extract<Component, { kind: K }>;
+
+/**
+ * A section, masked while it reads a sensitive query: the Show sits at the
+ * right of its heading, after the section's own actions, and nothing inside
+ * is asked for until it is pressed.
+ */
+function SectionPiece({ component, data }: { component: Of<'section'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const unmasked = useContext(Unmasked);
+  const [revealed, toggle] = useReveal();
+  const gated = !unmasked && readsSensitive(component.body, scope.sensitive);
+  const masked = gated && !revealed;
+  const actions = component.actions ?? [];
+  return (
+    <Section
+      title={component.title}
+      aside={
+        /*
+         * The right of the heading: where this section's own way out
+         * goes — "Mailboxes and rules" — rather than a button lost at
+         * the bottom of a list.
+         */
+        actions.length > 0 || gated ? (
+          <Toolbar align="end">
+            {!actions.length && component.note ? <span className="muted">{component.note}</span> : null}
+            {actions.map((action, index) => (
+              <Piece key={index} component={action} data={data} />
+            ))}
+            {gated ? <RevealButton revealed={revealed} onToggle={toggle} /> : null}
+          </Toolbar>
+        ) : component.note ? (
+          <span className="muted">{component.note}</span>
+        ) : undefined
+      }
+    >
+      <Stack gap="lg">
+        {component.note && actions.length > 0 ? <p className="ui-card-meta">{component.note}</p> : null}
+        {masked ? (
+          <MaskedNote />
+        ) : (
+          <Unmasked.Provider value={unmasked || gated}>
+            {component.body.map((child, index) => (
+              <Piece key={index} component={child} data={data} />
+            ))}
+          </Unmasked.Provider>
+        )}
+      </Stack>
+    </Section>
+  );
+}
 
 function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }): JSX.Element | null {
   const scope = useScope();
@@ -1723,6 +1844,7 @@ export function PluginPage({
     timezone,
     version,
     refresh: () => setVersion((n) => n + 1),
+    sensitive: new Set(page.sensitive ?? []),
   };
   return (
     <Scope.Provider value={scope}>
@@ -1743,6 +1865,20 @@ export function PluginPage({
  * declares one.
  */
 function PageBody({ page }: { page: PluginPageDescriptor }): JSX.Element {
+  const scope = useScope();
+  // A page whose own read is sensitive is masked whole: every `when` and
+  // every notice on it is drawn against that read.
+  if (page.data && scope.sensitive.has(page.data.query)) {
+    return (
+      <SensitiveGate>
+        <PageBodyShown page={page} />
+      </SensitiveGate>
+    );
+  }
+  return <PageBodyShown page={page} />;
+}
+
+function PageBodyShown({ page }: { page: PluginPageDescriptor }): JSX.Element {
   const root = usePageQuery(page.data, null);
   return (
     <Stack gap="lg" divided>

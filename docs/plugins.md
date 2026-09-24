@@ -862,8 +862,9 @@ means, the page knows how to draw a line, and this says which is which.
   (both paths), `auto: true` for a picker with no button and `reset: true`
   for a Clear beside it. `editor` takes
   `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
-  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
-  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs),
+  `pending` (a gated action's sentence, drawn above its approval card while it
+  waits: "Nothing has been sent…") and `placement: 'leading'` (left of the toolbar, with a spacer after it). A
   `list` must say what keys a row — `key`, or a `select.key`; a row without
   one, or with one another row already used, is not drawn.
 - **Write a shared piece once.** Two rows may carry the same action object and
@@ -961,6 +962,7 @@ export interface PageQuery {
   params: z.ZodTypeAny;        // validated; unknown keys refused
   produce(params: unknown, ctx: ToolContext): Promise<unknown>;
   result?: z.ZodTypeAny;       // validated before it leaves, when given
+  sensitive?: boolean;         // masked on the page, left out over MCP unless asked
 }
 ```
 
@@ -1051,8 +1053,9 @@ full contract is `docs/specs/plugin-pages.md`; the shape of it is:
   the URL already owns. `search` takes `rows`, and optionally `count`, `note`
   (both paths) and `auto: true` for a picker with no button. `editor` takes
   `footnote`, `readOnlyWhen` and a `version` path; `Field` takes
-  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs) and
-  `placement: 'leading'` (left of the toolbar, with a spacer after it). A
+  `disabledWhen`. A `ToolRef` takes `busy` (its label while it runs),
+  `pending` (a gated action's sentence, drawn above its approval card while it
+  waits: "Nothing has been sent…") and `placement: 'leading'` (left of the toolbar, with a spacer after it). A
   `list` must say what keys a row — `key`, or a `select.key`; a row without
   one, or with one another row already used, is not drawn.
 - **Write a shared piece once.** Two rows may carry the same action object and
@@ -2604,6 +2607,7 @@ than guess.
 | `params` | `z.ZodTypeAny` | yes | The parameters, checked before `produce` sees them. They arrive as strings: use `z.coerce.number()`. An undeclared key is refused. |
 | `produce` | `(params, ctx) => Promise<unknown>` | yes | The read. `ctx.db` runs every statement in a read-only transaction with a five-second timeout, so a query that tries to write fails loudly — in Postgres's own words — rather than writing something nobody approved. Throw `QueryRefusal` for what the owner can act on ("No conversation here has that id."): its message is their 400. |
 | `result` | `z.ZodTypeAny` | no | The result shape. When given, the answer is validated before it leaves the process — the page draws what it is handed and cannot check it. |
+| `sensitive` | `boolean` | no | Balances, pay, anything not to be read over a shoulder — as a Home block's `sensitive`. The page masks every section that reads it behind Show/Hide and masks it again when the window loses focus; `buddi.page_query` over MCP returns only its name unless called with `includeSensitive: true`. |
 
 #### `OptionsFrom`
 

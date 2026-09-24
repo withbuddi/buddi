@@ -6,7 +6,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { PAGE_ACT_RATE, PAGE_ACT_SESSIONS, actRateLimited, describeParams } from './pages.js';
+import { ToolRegistry } from '@buddi/core';
+import { PAGE_ACT_RATE, PAGE_ACT_SESSIONS, actRateLimited, describeParams, listPageDescriptors } from './pages.js';
 
 describe('the act rate limit', () => {
   it('gives a session a minute\'s worth and then refuses', () => {
@@ -63,5 +64,26 @@ describe('a query\'s parameters, as names and types', () => {
     expect(describeParams(schema)).toEqual({ id: 'string', limit: 'number?', as: 'png|pdf', all: 'true|false?', since: 'string' });
     expect(describeParams(z.object({}).strict())).toEqual({});
     expect(describeParams(z.string())).toEqual({});
+  });
+});
+
+describe('sensitive queries, as the page list names them', () => {
+  it('flags each sensitive query, and tells each of its plugin\'s pages which to mask', () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'money',
+      tools: [],
+      queries: [
+        { name: 'balances', params: z.object({}), sensitive: true, produce: async () => ({}) },
+        { name: 'labels', params: z.object({}), produce: async () => ({}) },
+      ],
+      pages: [{ id: 'home', title: 'Money', place: 'rail', body: [{ kind: 'notice', text: 'Hi.' }] }],
+    } as never);
+    const body = listPageDescriptors({ registry, ctx: {} as never, now: () => new Date() }).body as {
+      pages: Array<{ id: string; sensitive?: string[] }>;
+      queries: Array<{ name: string; sensitive?: boolean }>;
+    };
+    expect(body.pages[0]!.sensitive).toEqual(['balances']);
+    expect(body.queries.map((q) => [q.name, q.sensitive])).toEqual([['balances', true], ['labels', undefined]]);
   });
 });

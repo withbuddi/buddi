@@ -87,6 +87,14 @@ export interface PageQuery {
   produce(params: unknown, ctx: ToolContext): Promise<unknown>;
   /** Optional result shape; when given, the result is validated before it leaves. */
   result?: ZodTypeAny;
+  /**
+   * Balances, pay, anything the owner would not want read over a shoulder —
+   * as a Home block's `sensitive`. The dashboard masks every section that
+   * reads it until the owner asks, and masks it again when the window loses
+   * focus; `buddi mcp` leaves its data out unless asked with
+   * `includeSensitive`.
+   */
+  sensitive?: boolean;
 }
 
 /** The icons the dashboard draws. A pinned set, never an arbitrary image. */
@@ -194,6 +202,12 @@ export interface ToolRef {
    * the approval executed, because that is when it is true.
    */
   done?: string | ValueRef;
+  /**
+   * For a **gated** tool: one sentence drawn above its approval card while the
+   * card waits — "Nothing has been sent. …". It says what the button did not
+   * do yet; it is gone once the owner has decided.
+   */
+  pending?: string;
   /**
    * `leading` puts this action at the *left* of its toolbar, with a spacer
    * after it — Discard on the left, then Save, then Send on the right. The
@@ -526,6 +540,7 @@ const toolRefCommon = {
   confirm: sentence.optional(),
   busy: label.optional(),
   done: z.union([sentence, valueRefSchema]).optional(),
+  pending: sentence.optional(),
   placement: z.literal('leading').optional(),
   then: z.union([z.enum(['refresh', 'close']), z.object({ route: routeRefSchema }).strict()]).optional(),
 };
@@ -1047,6 +1062,9 @@ export function parsePageContributions(opts: {
     }
     if (typeof query.produce !== 'function') {
       throw new Error(`plugin ${plugin}: page query ${query.name} has no \`produce\` function`);
+    }
+    if (query.sensitive !== undefined && typeof query.sensitive !== 'boolean') {
+      throw new Error(`plugin ${plugin}: page query ${query.name} declares \`sensitive\` that is not true or false`);
     }
     if (query.result !== undefined && !isZodSchema(query.result)) {
       throw new Error(`plugin ${plugin}: page query ${query.name} declares a \`result\` that is not a zod schema`);

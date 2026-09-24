@@ -64,6 +64,7 @@ export function policyLine(
     proposed: boolean;
     runsSaved: number;
     createdAt: string | null;
+    keptAt?: string | null;
   },
   now: Date,
 ): string {
@@ -76,7 +77,9 @@ export function policyLine(
         ? 'no runs saved yet'
         : `${policy.runsSaved} run${policy.runsSaved === 1 ? '' : 's'} saved`,
   );
-  if (policy.createdAt) parts.push(relative(policy.createdAt, now));
+  // A rule kept from Proposals says when it was kept, not when it was learned.
+  if (policy.keptAt) parts.push(`kept ${relative(policy.keptAt, now)}`);
+  else if (policy.createdAt) parts.push(relative(policy.createdAt, now));
   return parts.join(' · ');
 }
 
