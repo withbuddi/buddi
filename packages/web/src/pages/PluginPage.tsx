@@ -38,10 +38,14 @@ import {
   ListRow,
   Notice,
   PageFrame,
+  PickRow,
   Pill,
   Section,
   Sheet,
   Spacer,
+  Split,
+  Chip,
+  SearchBar,
   Stack,
   Stat,
   Stats,
@@ -637,9 +641,12 @@ function FieldControl({
   values,
   data,
   disabled,
+  compact,
   onChange,
 }: {
   field: Field;
+  /** In a search bar: the hint is a placeholder and a tooltip, not a line under the field. */
+  compact?: boolean;
   value: unknown;
   /** Every value on this form, for `optionsFrom.dependsOn`. */
   values: Values;
@@ -649,10 +656,17 @@ function FieldControl({
   onChange: (value: unknown) => void;
 }): JSX.Element {
   const choices = useFieldOptions(field, values, data);
-  const shared = { id: `f-${field.name}`, required: field.required, name: field.name, disabled };
+  const shared = {
+    id: `f-${field.name}`,
+    required: field.required,
+    name: field.name,
+    disabled,
+    ...(compact && field.hint ? { title: field.hint } : {}),
+  };
+  const hint = compact ? undefined : field.hint;
   if (field.type === 'select') {
     return (
-      <FieldBox label={field.label} hint={field.hint}>
+      <FieldBox label={field.label} hint={hint}>
         <select {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
           <option value="">{choices.loading ? 'Loading…' : '—'}</option>
           {choices.options.map((option) => (
@@ -666,21 +680,21 @@ function FieldControl({
   }
   if (field.type === 'textarea') {
     return (
-      <FieldBox label={field.label} hint={field.hint} wide>
+      <FieldBox label={field.label} hint={hint} wide>
         <textarea {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} rows={6} />
       </FieldBox>
     );
   }
   if (field.type === 'checkbox') {
     return (
-      <FieldBox label={field.label} hint={field.hint} inline wide>
+      <FieldBox label={field.label} hint={hint} inline wide={!compact}>
         <input {...shared} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
       </FieldBox>
     );
   }
   const type = field.type === 'secret' ? 'password' : field.type === 'number' ? 'number' : field.type;
   return (
-    <FieldBox label={field.label} hint={field.hint}>
+    <FieldBox label={field.label} hint={hint}>
       <input
         {...shared}
         type={type}
@@ -688,6 +702,7 @@ function FieldControl({
         min={field.min}
         max={field.max}
         step={field.step}
+        {...(compact && field.hint ? { placeholder: field.hint } : {})}
         onChange={(e) => onChange(field.type === 'number' ? numberOrText(e.target.value) : e.target.value)}
       />
     </FieldBox>
@@ -740,9 +755,12 @@ function Fields({
   values,
   data,
   disabled,
+  compact,
   onChange,
 }: {
   fields: Field[];
+  /** The search bar's filters: a dense grid, hints as tooltips. */
+  compact?: boolean;
   values: Values;
   /** What `when` and `disabledWhen` are asked of, under the form's own values. */
   data?: unknown;
@@ -758,13 +776,14 @@ function Fields({
    */
   const asked = askedOf(values, data);
   return (
-    <FormGrid>
+    <FormGrid dense={compact}>
       {fields
         .filter((field) => field.when === undefined || holds(asked, field.when))
         .map((field) => (
           <FieldControl
             key={field.name}
             field={field}
+            compact={compact}
             value={values[field.name]}
             values={values}
             data={data}
@@ -789,6 +808,9 @@ const Boxed = createContext(false);
 
 /** True directly inside a boxed piece's panel: a form's Save is that panel's foot. */
 const PanelTop = createContext(false);
+
+/** True for the list of a list-detail: its rows pick what the pane beside it shows. */
+const InSplit = createContext(false);
 
 /** A piece's titled group: a panel under its head when it is boxed. */
 function PieceSection({
@@ -1005,14 +1027,26 @@ function itemRow(
   row: unknown,
   /** When the list chooses in the page rather than in the URL, there is no link. */
   local?: (key: string) => void,
-): { title: ReactNode; sub: ReactNode; side: ReactNode; href: string | null; text: string } {
+): { title: ReactNode; sub: ReactNode; side: ReactNode; pills: ReactNode; meta: string; href: string | null; text: string } {
   const meta = (item.meta ?? []).map((ref) => String(readRef(row, ref) ?? '')).filter((text) => text !== '');
   const text = String(readRef(row, item.title) ?? '');
   const href = item.to && !local ? routeOf(scope, item.to, row) : null;
   const pills: PillRef[] = [...(item.pill ? [item.pill] : []), ...(item.pills ?? [])];
+  const drawnPills = pills.map((pill, index) => {
+    const value = readRef(row, pill.value);
+    if (value === undefined || value === null || value === '') return null;
+    const said = pillWords(pill, value, row);
+    return (
+      <Pill key={index} tone={pillTone(said.tone)}>
+        {said.text}
+      </Pill>
+    );
+  });
   return {
     text,
     href,
+    pills: <>{drawnPills}</>,
+    meta: meta.join(' · '),
     title: href ? (
       <a
         href={href}
@@ -1029,18 +1063,30 @@ function itemRow(
     sub: item.sub ? String(readRef(row, item.sub) ?? '') : null,
     side: (
       <>
-        {pills.map((pill, index) => {
-          const value = readRef(row, pill.value);
-          if (value === undefined || value === null || value === '') return null;
-          return (
-            <Pill key={index} tone={pillTone(toneFrom(pill.tone, row))}>
-              {String(value)}
-            </Pill>
-          );
-        })}
+        {drawnPills}
         {meta.length > 0 ? <span className="muted"> {meta.join(' · ')}</span> : null}
       </>
     ),
+  };
+}
+
+/**
+ * A pill's words and tone for one value: the descriptor's `labels` turn a
+ * slug into what the owner reads, and its `tones` say which values catch the
+ * eye — over the `tone` it names for every value. A value it does not list
+ * is drawn as it came.
+ */
+export function pillWords(
+  pill: { tone?: Tone | ValueRef; labels?: Record<string, string>; tones?: Record<string, Tone> },
+  value: unknown,
+  row: unknown,
+): { text: string; tone: Tone | undefined } {
+  const key = String(value);
+  const labels = pill.labels ?? {};
+  const tones = pill.tones ?? {};
+  return {
+    text: Object.prototype.hasOwnProperty.call(labels, key) ? (labels[key] as string) : key,
+    tone: Object.prototype.hasOwnProperty.call(tones, key) ? tones[key] : toneFrom(pill.tone, row),
   };
 }
 
@@ -1100,9 +1146,17 @@ function ListPiece({
   chosen?: string | null;
 }): JSX.Element {
   const scope = useScope();
+  const inSplit = useContext(InSplit);
   const query = usePageQuery(component.query, data);
   const act = useAct();
   const [selected, setSelected] = useState<string[]>([]);
+  /*
+   * The list beside a reading pane is the roster's: a whole row is the link,
+   * the chosen one marked. A list that also ticks rows or carries buttons
+   * keeps the plain rows — a checkbox cannot live inside a link.
+   */
+  const pick =
+    inSplit && !component.select && (component.actions ?? []).length === 0 && (component.bulk ?? []).length === 0;
   const rows = rowsOf(query.data, component.rows);
   const folded = component.collapsed ? rowsOf(query.data, component.collapsed.rows) : [];
 
@@ -1138,6 +1192,20 @@ function ListPiece({
     group.map((row) => {
       const drawn = itemRow(scope, component.item, row, onChoose);
       const key = keyByRow.get(row) as string;
+      if (pick && (onChoose || drawn.href)) {
+        return (
+          <PickRow
+            key={key}
+            href={drawn.href ?? '#'}
+            current={chosen === key}
+            onClick={() => (onChoose ? onChoose(key) : scope.navigate(drawn.href as string))}
+            title={drawn.text}
+            meta={drawn.meta}
+            sub={drawn.sub}
+            side={drawn.pills}
+          />
+        );
+      }
       const disabled = component.select?.disabledWhen !== undefined && holds(row, component.select.disabledWhen);
       const actions = (component.actions ?? []).filter((action) => holds(row, action.when));
       return (
@@ -1346,18 +1414,25 @@ function PillCell({ column, row }: { column: ColumnMap; row: unknown }): JSX.Ele
           const text = typeof one === 'object' && one !== null ? one.value : item;
           if (text === undefined || text === null || text === '') return null;
           const tone = typeof one === 'object' && one !== null ? one.tone : undefined;
+          const labels = column.pill?.labels;
+          const words =
+            labels && Object.prototype.hasOwnProperty.call(labels, String(text))
+              ? labels[String(text)]
+              : fmtValue(text, column.type ?? 'text', null);
           return (
             <Pill key={index} tone={pillTone(toneFrom(typeof tone === 'string' ? (tone as Tone) : undefined, row))}>
-              {fmtValue(text, column.type ?? 'text', null)}
+              {words}
             </Pill>
           );
         })}
       </>
     );
   }
-  return (
-    <Pill tone={pillTone(toneFrom(column.pill?.tone, row))}>{fmtValue(value, column.type ?? 'text', null)}</Pill>
-  );
+  const labels = column.pill?.labels;
+  const key = String(value);
+  const text =
+    labels && Object.prototype.hasOwnProperty.call(labels, key) ? labels[key] : fmtValue(value, column.type ?? 'text', null);
+  return <Pill tone={pillTone(toneFrom(column.pill?.tone, row))}>{text}</Pill>;
 }
 
 function DetailPiece({ component, data }: { component: Of<'detail'>; data: unknown }): JSX.Element {
@@ -1493,15 +1568,39 @@ function FormBody({
   );
 }
 
+/** What a filter that is on says about itself, as a chip. */
+function chipWords(field: Field, value: string): string {
+  if (field.type === 'checkbox') return field.label;
+  const option = field.options?.find((o) => o.value === value);
+  return `${field.label}: ${option ? option.label : value}`;
+}
+
+/** A value that means "this filter is on". */
+function isOn(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== '' && value !== false && value !== 'false';
+}
+
+/**
+ * A search, as one compact bar.
+ *
+ * The first text field is the bar's own and grows; the rest are filters,
+ * behind Filters in a dense row underneath, and the ones the answer was
+ * asked with show as chips that take themselves off. Clear and Search sit on
+ * the right, and Enter searches. A search with no text field — a picker —
+ * keeps its fields in the bar itself.
+ */
 function SearchPiece({ component, data }: { component: Of<'search'>; data: unknown }): JSX.Element {
   const scope = useScope();
   const [values, setValues] = useState<Values>(() => initialValues(component.fields, data));
   const [asked, setAsked] = useState(component.auto === true);
+  const [open, setOpen] = useState(false);
   const ready = component.fields.every((field) => !field.required || String(values[field.name] ?? '') !== '');
   const query = usePageQuery(asked && ready ? component.query : undefined, data);
   const rows = rowsOf(query.data, component.rows);
   const count = component.count === undefined ? undefined : readPath(query.data, component.count);
   const note = component.note === undefined ? undefined : readPath(query.data, component.note);
+  const main = component.fields.find((field) => field.type === 'text' || field.type === 'email') ?? null;
+  const filters = component.fields.filter((field) => field !== main);
 
   /** Put the fields into the page's parameters, which is what the query reads. */
   const ask = (next: Values): void => {
@@ -1510,51 +1609,104 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
     );
     setAsked(true);
   };
+  const change = (name: string, value: unknown): void => {
+    const next = { ...values, [name]: value };
+    setValues(next);
+    // A picker asks again on every change; a search box waits to be told.
+    if (component.auto) ask(next);
+  };
+  const clear = (): void => {
+    /*
+     * Clear means *cleared*: the fields, the parameters the query reads them
+     * from, and the results underneath. A picker that asks on every change
+     * asks again with nothing; a search box goes back to having been asked
+     * nothing.
+     */
+    const empty = initialValues(component.fields, null);
+    setValues(empty);
+    if (component.auto) ask(empty);
+    else {
+      scope.setParams(Object.fromEntries(component.fields.map((field) => [field.name, null])));
+      setAsked(false);
+    }
+  };
+
+  // What the answer was asked with, not what is being typed: a chip is a
+  // filter that is *on*.
+  const applied = asked ? filters.filter((field) => isOn(scope.params[field.name])) : [];
+  const chips = main
+    ? applied.map((field) => (
+        <Chip
+          key={field.name}
+          label={field.label}
+          onRemove={() => {
+            const next = { ...values, [field.name]: field.type === 'checkbox' ? false : '' };
+            setValues(next);
+            ask(next);
+          }}
+        >
+          {chipWords(field, String(scope.params[field.name]))}
+        </Chip>
+      ))
+    : [];
+  const on = filters.filter((field) => isOn(values[field.name])).length;
+
+  const actions =
+    component.auto && !component.reset ? null : (
+      <>
+        {component.reset ? (
+          <Button variant="ghost" onClick={clear}>
+            Clear
+          </Button>
+        ) : null}
+        {component.auto ? null : (
+          <Button type="submit" variant="accent" disabled={!ready}>
+            Search
+          </Button>
+        )}
+      </>
+    );
+
+  const item = component.results.to
+    ? component.results
+    : component.to
+      ? { ...component.results, to: component.to }
+      : component.results;
 
   return (
     <PieceSection title={component.title}>
       <Stack>
-        <Fields
-          fields={component.fields}
-          values={values}
-          data={data}
-          onChange={(name, value) => {
-            const next = { ...values, [name]: value };
-            setValues(next);
-            // A picker asks again on every change; a search box waits to be told.
-            if (component.auto) ask(next);
+        <SearchBar
+          label={component.title ?? 'Search'}
+          onSubmit={() => {
+            if (!component.auto && ready) ask(values);
           }}
+          main={
+            main ? (
+              <input
+                id={`f-${main.name}`}
+                name={main.name}
+                type={main.type === 'email' ? 'email' : 'search'}
+                aria-label={main.label}
+                placeholder={main.hint ?? main.label}
+                title={main.hint}
+                required={main.required}
+                value={String(values[main.name] ?? '')}
+                onChange={(e) => change(main.name, e.target.value)}
+              />
+            ) : undefined
+          }
+          filters={
+            filters.length > 0 ? (
+              <Fields fields={filters} values={values} data={data} compact onChange={change} />
+            ) : undefined
+          }
+          {...(main && filters.length > 0
+            ? { filtersOpen: open, onToggleFilters: () => setOpen((v) => !v), active: on }
+            : {})}
+          chips={chips.length > 0 ? chips : undefined}
+          actions={actions}
         />
-        {component.auto && !component.reset ? null : (
-          <Toolbar align="end">
-            {component.reset ? (
-              <Button
-                onClick={() => {
-                  /*
-                   * Clear means *cleared*: the fields, the parameters the
-                   * query reads them from, and the results underneath. A
-                   * picker that asks on every change asks again with nothing;
-                   * a search box goes back to having been asked nothing.
-                   */
-                  const empty = initialValues(component.fields, null);
-                  setValues(empty);
-                  if (component.auto) ask(empty);
-                  else {
-                    scope.setParams(Object.fromEntries(component.fields.map((field) => [field.name, null])));
-                    setAsked(false);
-                  }
-                }}
-              >
-                Clear
-              </Button>
-            ) : null}
-            {component.auto ? null : (
-              <Button variant="accent" disabled={!ready} onClick={() => ask(values)}>
-                Search
-              </Button>
-            )}
-          </Toolbar>
-        )}
         <ErrorBanner message={query.error} />
         {/*
           What the answer says about itself — "the newest 500" — is as true of
@@ -1571,22 +1723,16 @@ function SearchPiece({ component, data }: { component: Of<'search'>; data: unkno
           rows.length === 0 ? (
             <Empty>{query.loading ? 'Searching…' : (component.empty ?? 'Nothing matches.')}</Empty>
           ) : (
-            <>
+            <div className="ui-panel" data-flush="true">
               <List>
                 {rows.map((row, index) => {
                   // `results.to` when the row says where it goes, else the
-                  // search's own `to` — which is the common case: one page,
-                  // one item id.
-                  const item = component.results.to
-                    ? component.results
-                    : component.to
-                      ? { ...component.results, to: component.to }
-                      : component.results;
+                  // search's own `to` — the common case: one page, one item id.
                   const drawn = itemRow(scope, item, row);
                   return <ListRow key={index} title={drawn.title} sub={drawn.sub} side={drawn.side} />;
                 })}
               </List>
-            </>
+            </div>
           )
         ) : null}
       </Stack>
@@ -1614,33 +1760,24 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
   const chosen = local ? here : (scope.params[component.param] ?? scope.item);
   const inner = local && here !== null ? { ...scope, params: { ...scope.params, [component.param]: here } } : null;
   const detail = (
-    <Stack gap="lg">
+    <Stack gap="lg" divided>
       {component.detail.map((child, index) => (
         <Piece key={index} component={child} data={data} />
       ))}
     </Stack>
   );
   return (
-    <div className="ui-split">
-      <div className="ui-split-list">
-        <Piece
-          component={component.list}
-          data={data}
-          {...(local ? { choose: setHere, chosen: here } : {})}
-        />
-      </div>
-      <div className="ui-split-detail">
-        {chosen ? (
-          inner ? (
-            <Scope.Provider value={inner}>{detail}</Scope.Provider>
-          ) : (
-            detail
-          )
-        ) : (
-          <Empty>{component.empty ?? 'Choose one to see it here.'}</Empty>
-        )}
-      </div>
-    </div>
+    <Boxed.Provider value={false}>
+    <Split
+      list={
+        <InSplit.Provider value>
+          <Piece component={component.list} data={data} chosen={chosen ?? null} {...(local ? { choose: setHere } : {})} />
+        </InSplit.Provider>
+      }
+      detail={chosen ? inner ? <Scope.Provider value={inner}>{detail}</Scope.Provider> : detail : undefined}
+      empty={component.empty ?? 'Choose one to see it here.'}
+    />
+    </Boxed.Provider>
   );
 }
 
@@ -1882,10 +2019,27 @@ export function PluginPage({
     refresh: () => setVersion((n) => n + 1),
     sensitive: new Set(page.sensitive ?? []),
   };
+  /*
+   * A notice that opens a page of its own is the page's intro: one muted
+   * line under the title, as every core page has, rather than a grey box
+   * before anything else. Anywhere else — later on, conditional, toned, or
+   * inside a Settings tab — a notice stays a Notice.
+   */
+  const first = page.body[0];
+  const lede =
+    !embedded &&
+    first?.kind === 'notice' &&
+    typeof first.text === 'string' &&
+    first.when === undefined &&
+    first.title === undefined &&
+    (first.tone === undefined || first.tone === 'neutral')
+      ? first.text
+      : undefined;
+  const shown = lede === undefined ? page : { ...page, body: page.body.slice(1) };
   return (
     <Scope.Provider value={scope}>
-      <PageFrame embedded={embedded} title={page.title}>
-        <PageBody page={page} boxed={embedded === true} />
+      <PageFrame embedded={embedded} title={page.title} lede={lede}>
+        <PageBody page={shown} boxed={embedded === true} />
       </PageFrame>
     </Scope.Provider>
   );

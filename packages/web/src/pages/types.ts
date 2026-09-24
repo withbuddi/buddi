@@ -85,6 +85,10 @@ export interface BulkAction extends ToolRef {
 export interface PillRef {
   value: ValueRef;
   tone?: Tone | ValueRef;
+  /** The words for a value: a slug as the owner reads it. */
+  labels?: Record<string, string>;
+  /** A tone per value, over `tone`. */
+  tones?: Record<string, Tone>;
 }
 
 export interface ListItem {

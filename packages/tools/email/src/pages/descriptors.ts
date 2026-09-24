@@ -35,6 +35,7 @@ import {
   DEFAULT_RECEIPT_CONFIDENCE,
   DEFAULT_WAITING_DAYS,
 } from '../watchers.js';
+import { THREAD_STATE_LABELS } from '../threads.js';
 
 /** The conversation this page is showing, as a page parameter. */
 const THREAD = 'thread';
@@ -256,8 +257,9 @@ const mail: PageDescriptor = {
   body: [
     {
       kind: 'notice',
-      text:
-        'What buddi has read, newest first. A conversation with a reply waiting on it carries a "draft" pill — open it to read, edit, discard or send what was written. Accounts, rules and watcher settings are under Settings → Email.',
+      // The page's intro: one line under the title. A conversation with a
+      // reply waiting carries a Draft pill, which says the rest.
+      text: 'What buddi has read, newest first. Open a conversation to read it, or the reply written for it.',
     },
     /*
      * Four filters and a phrase, and not one more (docs/specs/email.md §9):
@@ -268,15 +270,15 @@ const mail: PageDescriptor = {
      */
     {
       kind: 'search',
-      title: 'Search',
       fields: [
         {
           name: 'q',
-          label: 'Text',
+          label: 'Search mail',
           type: 'text',
-          hint: 'A word in the subject, the sender or the body. On its own, or with the filters.',
+          // A placeholder in the bar, so a few words.
+          hint: 'Search the subject, the sender or the body',
         },
-        { name: 'from', label: 'From', type: 'text', hint: 'An address, or a domain like acme.com.' },
+        { name: 'from', label: 'From', type: 'text', hint: 'An address or a domain' },
         { name: 'since', label: 'Since', type: 'date' },
         { name: 'until', label: 'Until', type: 'date' },
         { name: 'hasAttachments', label: 'With attachments', type: 'checkbox' },
@@ -333,17 +335,20 @@ const mail: PageDescriptor = {
             rows: 'threads',
             key: 'id',
             item: {
-              title: { path: 'subject' },
-              sub: { path: 'participants' },
+              // Who it is with, then what it is about: the way a mailbox reads.
+              title: { path: 'sender' },
+              sub: { path: 'subject' },
               meta: [{ path: 'when' }],
               // Both facts: where the conversation stands, and whether a reply is
               // waiting on the owner. One in place of the other hid the state of
               // every conversation an agent had drafted for.
               pills: [
-            { value: { path: 'state' } },
-            // The reply waiting on the owner is the one to catch an eye.
-            { value: { path: 'draftPill' }, tone: 'accent' },
-          ],
+                // A state is a quiet word: nearly every row is waiting on the owner,
+                // and forty amber pills say nothing the Draft pill does not.
+                { value: { path: 'state' }, labels: { ...THREAD_STATE_LABELS }, tones: { 'waiting-on-me': 'neutral' } },
+                // The reply waiting on the owner is the one to catch an eye.
+                { value: { path: 'draftPill' }, labels: { draft: 'Draft' }, tone: 'accent' },
+              ],
               to: { page: 'mail', item: { path: 'id' } },
             },
             empty: 'No conversations yet. buddi builds them as mail arrives.',
@@ -360,7 +365,7 @@ const mail: PageDescriptor = {
               query: thread(),
               fields: [
                 { label: 'Subject', value: { path: 'subject' } },
-                { label: 'State', value: { path: 'state' } },
+                { label: 'State', value: { path: 'stateLabel' } },
                 { label: 'With', value: { path: 'participants' } },
                 { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
                 { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
@@ -389,7 +394,10 @@ const mail: PageDescriptor = {
                   item: {
                     title: { path: 'subject' },
                     sub: { path: 'statusLine' },
-                    pill: { value: { path: 'status' } },
+                    pill: {
+                      value: { path: 'status' },
+                      labels: { draft: 'Draft', edited: 'Edited', sent: 'Sent', discarded: 'Discarded', lapsed: 'Lapsed' },
+                    },
                   },
                   empty: 'Nothing has ended on this conversation yet.',
                 },

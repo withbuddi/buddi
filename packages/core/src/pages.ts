@@ -256,6 +256,10 @@ export interface BulkAction extends ToolRef {
 export interface PillRef {
   value: ValueRef;
   tone?: Tone | ValueRef;
+  /** The words for a value: a state's slug as the owner reads it ("waiting-on-me" → "Waiting on you"). */
+  labels?: Record<string, string>;
+  /** A tone per value, over `tone`: the descriptor says which states catch the eye. */
+  tones?: Record<string, Tone>;
 }
 
 /** One line of a list: what it says, and where it goes. */
@@ -563,7 +567,12 @@ const bulkActionSchema = z
   .strict();
 
 const pillSchema = z
-  .object({ value: valueRefSchema, tone: z.union([toneSchema, valueRefSchema]).optional() })
+  .object({
+    value: valueRefSchema,
+    tone: z.union([toneSchema, valueRefSchema]).optional(),
+    labels: z.record(label).optional(),
+    tones: z.record(toneSchema).optional(),
+  })
   .strict();
 
 const listItemSchema = z
@@ -832,7 +841,7 @@ const COMPONENT_POSITIONS = new Set(['body', 'detail', 'list', 'action', 'action
  * …and where one may not: everything under these keys is values, however much
  * it looks like a tree.
  */
-const NOT_COMPONENTS = new Set(['equals', 'in', 'args', 'params', 'labels', 'options']);
+const NOT_COMPONENTS = new Set(['equals', 'in', 'args', 'params', 'labels', 'tones', 'options']);
 
 /** Refuse a descriptor that is too deep, too big, or not a tree at all. */
 function checkShape(raw: unknown, plugin: string, named: string): void {
@@ -904,7 +913,7 @@ function checkShape(raw: unknown, plugin: string, named: string): void {
  * value is "page" must not fail to load with "links to Page, which is not a
  * page of this plugin".
  */
-const DATA_KEYED = new Set(['labels', 'options', 'args', 'params']);
+const DATA_KEYED = new Set(['labels', 'tones', 'options', 'args', 'params']);
 
 /** The shapes a reference string is allowed to sit in. */
 const REF_PARENT: Record<'query' | 'tool' | 'page', (parent: Record<string, unknown>) => boolean> = {

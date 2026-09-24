@@ -31,7 +31,7 @@ import {
   type SearchRow,
 } from '../search.js';
 import { lastSyncByAccount, listAccounts } from '../config.js';
-import { findThread, listThreadRows, threadMessages } from '../threads.js';
+import { THREAD_STATE_LABELS, findThread, listThreadRows, threadMessages, type ThreadState } from '../threads.js';
 import { listDraftsForThread } from '../drafts.js';
 import {
   toDraft,
@@ -230,10 +230,22 @@ export function threadsQuery(): PageQuery {
       );
       const withDraft = new Set(rows.map((r: { thread_id: unknown }) => String(r.thread_id)));
 
+      /*
+       * Who the conversation is *with*: the first participant who is not one
+       * of the owner's own addresses. The owner is on every thread, so the
+       * list naming them first says nothing.
+       */
+      const own = new Set(
+        accounts.flatMap((account) => [account.address, ...account.aliases]).map((address) => address.toLowerCase()),
+      );
       return {
         threads: threads.map((thread) => ({
           id: thread.id,
           subject: thread.subject === '' ? '(no subject)' : thread.subject,
+          sender:
+            thread.participants.find((address) => !own.has(address.toLowerCase())) ??
+            thread.participants[0] ??
+            '(nobody)',
           participants: thread.participants.join(', '),
           state: thread.state,
           // The "draft" pill sits *beside* the state, never in place of it: a
@@ -343,6 +355,7 @@ export function threadQuery(): PageQuery {
         id: thread.id,
         subject: thread.subject === '' ? '(no subject)' : thread.subject,
         state: thread.state,
+        stateLabel: THREAD_STATE_LABELS[thread.state as ThreadState] ?? thread.state,
         participants: thread.participants.join(', '),
         lastAt: thread.lastAt,
         messageCount: thread.messageCount,

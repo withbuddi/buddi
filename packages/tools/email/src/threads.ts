@@ -31,6 +31,14 @@ type Db = Pool | PoolClient;
 export const THREAD_STATES = ['waiting-on-me', 'waiting-on-them', 'closed', 'muted'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];
 
+/** Each state as the owner reads it: the page's pills and its detail say these words. */
+export const THREAD_STATE_LABELS: Record<ThreadState, string> = {
+  'waiting-on-me': 'Waiting on you',
+  'waiting-on-them': 'Waiting on them',
+  closed: 'Closed',
+  muted: 'Muted',
+};
+
 export interface ThreadRecord {
   id: string;
   accountId: string;

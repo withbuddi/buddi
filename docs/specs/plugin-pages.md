@@ -139,7 +139,7 @@ type Component =
 
 interface Visibility { path: string; equals?: unknown; in?: unknown[]; not?: true }
 /** A word about state; `tone` may itself be a path within the row. */
-interface PillRef { value: ValueRef; tone?: Tone | ValueRef }
+interface PillRef { value: ValueRef; tone?: Tone | ValueRef; labels?: Record<string, string>; tones?: Record<string, Tone> }  // labels: a slug's words; tones: per value (2026-09-24)
 /** A select's options, read rather than written. */
 interface OptionsFrom { query: QueryRef; rows: string; value: string; label: string; dependsOn?: string[] }
 

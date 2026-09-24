@@ -558,7 +558,7 @@ describe('the pieces a descriptor is made of', () => {
 
   /** Open the local list-detail on the one draft, which is where the editor is. */
   const openDraft = async (): Promise<void> => {
-    fireEvent.click(await screen.findByRole('link', { name: 'A reply' }));
+    fireEvent.click(await screen.findByRole('link', { name: /^A reply/ }));
   };
 
   it('chooses inside a routed detail without touching the URL', async () => {
@@ -1078,5 +1078,117 @@ describe('a sensitive query', () => {
     draw('board');
     expect(await screen.findByText('Things in all')).toBeInTheDocument();
     expect(screen.queryByText('Hidden until you show it.')).not.toBeInTheDocument();
+  });
+});
+
+describe('the page as the design system draws it', () => {
+  const mailish: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'inbox',
+    title: 'Inbox',
+    place: 'rail',
+    body: [
+      { kind: 'notice', text: 'What the demo has read.' },
+      {
+        kind: 'search',
+        fields: [
+          { name: 'q', label: 'Text', type: 'text', hint: 'A word in it' },
+          { name: 'from', label: 'From', type: 'text', hint: 'An address' },
+          { name: 'files', label: 'With files', type: 'checkbox' },
+        ],
+        query: { query: 'search', params: { q: { param: 'q' }, from: { param: 'from' }, files: { param: 'files' } } },
+        rows: 'items',
+        reset: true,
+        results: { title: { path: 'title' } },
+      },
+      {
+        kind: 'list-detail',
+        param: 'item',
+        empty: 'Choose a thing to read it here.',
+        list: {
+          kind: 'list',
+          query: { query: 'items' },
+          rows: 'items',
+          key: 'id',
+          item: {
+            title: { path: 'sub' },
+            sub: { path: 'title' },
+            meta: [{ path: 'id' }],
+            pills: [
+              {
+                value: { path: 'state' },
+                labels: { open: 'Waiting on you', done: 'Finished' },
+                tones: { open: 'warning' },
+              },
+            ],
+            to: { page: 'inbox', item: { path: 'id' } },
+          },
+        },
+        detail: [{ kind: 'notice', text: 'The detail.' }],
+      },
+    ],
+  };
+  const drawInbox = (item?: string): ReturnType<typeof render> =>
+    render(<PluginPage page={mailish} item={item ?? null} navigate={navigate} timezone="UTC" siblings={[mailish]} />);
+
+  it('makes a leading notice the page intro, one line under the title', async () => {
+    const { container } = drawInbox();
+    expect((await screen.findByText('What the demo has read.')).className).toBe('ui-page-lede');
+    expect(container.querySelector('.ui-notice')).toBeNull();
+  });
+
+  it('keeps the filters behind Filters, and searches on Enter', async () => {
+    drawInbox();
+    const text = (await screen.findByLabelText('Text')) as HTMLInputElement;
+    // The hint is the placeholder, not a line under the field.
+    expect(text).toHaveAttribute('placeholder', 'A word in it');
+    expect(screen.queryByText('A word in it')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('From')).not.toBeInTheDocument();
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    fireEvent.click(filters);
+    expect(filters).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'acme.com' } });
+    fireEvent.change(text, { target: { value: 'invoice' } });
+    fireEvent.submit(text.closest('form') as HTMLFormElement);
+    await waitFor(() =>
+      expect(api.pageQuery).toHaveBeenCalledWith('demo', 'search', { q: 'invoice', from: 'acme.com', files: 'false' }),
+    );
+  });
+
+  it('shows a filter that is on as a chip that takes itself off', async () => {
+    drawInbox();
+    fireEvent.click(await screen.findByRole('button', { name: 'Filters' }));
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByLabelText('With files'));
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(await screen.findByText('From: acme.com')).toBeInTheDocument();
+    expect([...document.querySelectorAll('.ui-chip')].map((chip) => chip.firstChild?.textContent)).toEqual([
+      'From: acme.com',
+      'With files',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove From' }));
+    await waitFor(() => expect(screen.queryByText('From: acme.com')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(api.pageQuery).toHaveBeenLastCalledWith('demo', 'search', { files: 'true' }),
+    );
+  });
+
+  it('draws the list beside its reading pane as the roster draws rows, in the words the descriptor gives', async () => {
+    drawInbox('a1');
+    const row = (await screen.findByText('one@example.com')).closest('a') as HTMLElement;
+    expect(row).toHaveClass('ui-pick');
+    expect(row).toHaveAttribute('aria-current', 'true');
+    expect(row).toHaveAttribute('href', '#/p/demo/inbox/a1');
+    const pill = within(row).getByText('Waiting on you');
+    expect(pill).toHaveAttribute('data-tone', 'warning');
+    expect(screen.getByText('Finished')).not.toHaveAttribute('data-tone');
+    expect(screen.queryByText('open')).not.toBeInTheDocument();
+    expect(await screen.findByText('The detail.')).toBeInTheDocument();
+  });
+
+  it('says what to do in the reading pane while nothing is chosen', async () => {
+    drawInbox();
+    const empty = await screen.findByText('Choose a thing to read it here.');
+    expect(empty.closest('.ui-split-detail')).toHaveAttribute('data-empty', 'true');
   });
 });

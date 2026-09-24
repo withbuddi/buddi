@@ -95,6 +95,10 @@
   --page-max: 1320px;
   --page-gutter: clamp(24px, 3vw, 48px);
   --read-max: 68ch;
+  /* A list beside its reading pane: the list's width, and how tall both stand. */
+  --split-list-w: 380px;
+  --split-h: calc(100vh - 260px);
+  --split-min-h: 360px;
 
   /* ---- shape ---- */
   --radius-sm: 4px;

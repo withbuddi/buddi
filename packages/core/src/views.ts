@@ -112,7 +112,7 @@ export interface ColumnMap {
    * switched off *and* configured from the environment is two facts about it,
    * not one sentence to be parsed.
    */
-  pill?: { tone?: Tone | ValueRef };
+  pill?: { tone?: Tone | ValueRef; labels?: Record<string, string> };
 }
 
 export interface TableMap {
@@ -357,7 +357,14 @@ export const columnMapSchema = z
       })
       .strict()
       .optional(),
-    pill: z.object({ tone: z.union([toneSchema, valueRefSchema]).optional() }).strict().optional(),
+    pill: z
+      .object({
+        tone: z.union([toneSchema, valueRefSchema]).optional(),
+        // The words for a value, when the value is a slug: "on-track" → "On track".
+        labels: z.record(z.string().min(1).max(80)).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
