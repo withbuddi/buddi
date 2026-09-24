@@ -950,6 +950,7 @@ export async function main(): Promise<void> {
             running: () => telegram !== undefined,
             start: startTelegramNow,
             botUsername: () => telegram?.botUsername ?? null,
+            pictureChanged: () => telegram?.syncProfilePhoto(),
           },
           jobs: { resumeJob },
           // A write asked for through `buddi mcp` raises its card on Telegram

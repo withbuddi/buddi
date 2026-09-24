@@ -31,6 +31,11 @@ export interface TelegramControl {
   start?: (() => Promise<{ botUsername: string | null; refused?: string | undefined }>) | undefined;
   /** The @username of the running bot, when one is running. */
   botUsername?: (() => string | null) | undefined;
+  /**
+   * An agent's uploaded picture changed. The bot's profile photo follows the
+   * default agent's; fire and forget, a Bot API failure is only logged.
+   */
+  pictureChanged?: ((agentId: string) => void) | undefined;
 }
 
 export interface TelegramWebDeps {

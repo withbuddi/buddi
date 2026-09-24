@@ -13,7 +13,7 @@
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useState } from 'react';
-import { api, chatApi } from './api';
+import { AGENTS_CHANGED, api, chatApi } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
 import {
@@ -233,10 +233,12 @@ export function App(): JSX.Element {
     load();
     const timer = window.setInterval(load, 15_000);
     window.addEventListener('focus', load);
+    window.addEventListener(AGENTS_CHANGED, load);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener('focus', load);
+      window.removeEventListener(AGENTS_CHANGED, load);
     };
   }, [hash]);
 

@@ -10,11 +10,12 @@
  *  - the service reloads its catalog for new runs; existing runs keep their
  *    adapter.
  */
-import { useState } from 'react';
-import { api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
+import { useEffect, useState } from 'react';
+import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
 import { Button, Empty, ErrorBanner, Field, Notice, Pill, Row, Section, Stack, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
+import { Avatar, type Face } from './Avatar';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
 
@@ -331,6 +332,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
           <input value={roles} disabled={busy || agent.isExample} onChange={(e) => setRoles(e.target.value)} />
         </Field>
       </Toolbar>
+      <Picture agent={agent} onChanged={onSaved} />
       <Field label="Description" hint="One or two sentences. Its colleagues read this.">
         <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />
       </Field>
@@ -364,6 +366,107 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         </Toolbar>
       ) : null}
     </Section>
+  );
+}
+
+/** The icon the file names, as the roster draws it: an image in its folder, or an emoji. */
+function iconOf(agent: AgentRow): Face['avatar'] {
+  if (!agent.avatar) return undefined;
+  return /^[A-Za-z0-9_-]+\.(png|jpe?g|gif|webp)$/i.test(agent.avatar)
+    ? { kind: 'image', url: `/api/agents/${encodeURIComponent(agent.id)}/avatar` }
+    : { kind: 'emoji', value: agent.avatar.slice(0, 8) };
+}
+
+/**
+ * The uploaded picture, beside the Face. It lives in the database, not in
+ * `agent.md`, so it is saved on its own and a shipped example can have one.
+ */
+export function Picture({ agent, onChanged }: { agent: AgentRow; onChanged: () => void }): JSX.Element {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [input, setInput] = useState(0);
+
+  useEffect(() => {
+    if (!file) return setPreview(null);
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const changed = (message: string | null): void => {
+    setFile(null);
+    setInput((n) => n + 1);
+    setNote(message);
+    onChanged();
+    window.dispatchEvent(new Event(AGENTS_CHANGED));
+  };
+  const act = async (work: () => Promise<string | null>): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    setNote(null);
+    try {
+      changed(await work());
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = (): Promise<void> =>
+    act(async () => {
+      const saved = await api.uploadAgentPicture(agent.id, file!);
+      return saved.note ?? null;
+    });
+  const remove = (): Promise<void> =>
+    act(async () => {
+      await api.removeAgentPicture(agent.id);
+      return null;
+    });
+
+  const face: Face = {
+    avatar: iconOf(agent),
+    ...(agent.accent ? { accent: agent.accent } : {}),
+    ...(preview ?? agent.picture ? { picture: (preview ?? agent.picture)! } : {}),
+  };
+  return (
+    <div className="ui-field">
+      <span className="ui-field-label">Picture</span>
+      <Toolbar>
+        <Avatar id={agent.id} name={agent.name} size="xl" face={face} />
+        <input
+          key={input}
+          type="file"
+          aria-label="Choose a picture"
+          accept="image/png,image/gif,image/svg+xml,.png,.gif,.svg"
+          disabled={busy}
+          onChange={(e) => {
+            setFailure(null);
+            setNote(null);
+            setFile(e.target.files?.[0] ?? null);
+          }}
+        />
+        <span className="ui-toolbar-spacer" />
+        {agent.picture && !file ? (
+          <Button variant="ghost" disabled={busy} onClick={() => void remove()}>
+            Remove picture
+          </Button>
+        ) : null}
+        <Button variant="accent" disabled={!file || busy} onClick={() => void save()}>
+          Save picture
+        </Button>
+      </Toolbar>
+      {failure ? (
+        <span className="critical save-error" role="alert">{failure}</span>
+      ) : (
+        <span className="ui-field-hint">
+          {note ??
+            'A PNG, GIF or SVG up to 1 MB, kept as a square PNG of at most 512 px; a GIF keeps its first frame. Without one, the Face above is drawn.'}
+        </span>
+      )}
+    </div>
   );
 }
 

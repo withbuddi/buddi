@@ -44,6 +44,7 @@ import type { OwnerChoice } from '@buddi/core';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
+import { pictureUrl } from '../agents/avatars.js';
 
 /** How many rows a listing returns when the caller names no limit. */
 export const DEFAULT_LIMIT = 100;
@@ -831,6 +832,8 @@ export interface AgentView {
   avatar?: string;
   /** Its own colour, `#rrggbb`. */
   accent?: string;
+  /** The uploaded picture's URL, when there is one; `avatar` is the fallback. */
+  picture?: string;
   skills: Array<{ name: string; provenance: string; file: string }>;
   /** Who it may hand work to: its allowlist, restricted to agents that exist. */
   delegates: string[];
@@ -854,7 +857,7 @@ function safeDelegates(agentId: string, agentsDir: string): string[] {
   try { return readDelegates(agentId, agentsDir); } catch { return []; }
 }
 
-export function readAgents(catalog: AgentCatalog): AgentView[] {
+export function readAgents(catalog: AgentCatalog, pictures: ReadonlyMap<string, string> = new Map()): AgentView[] {
   /*
    * The agents, and then the files that were read and refused — an agent
    * claiming a reserved id. They are in no roster and answer to no handle, so
@@ -864,13 +867,13 @@ export function readAgents(catalog: AgentCatalog): AgentView[] {
   return [
     ...catalog.list().flatMap((summary) => {
       const agent = catalog.get(summary.id);
-      return agent ? [agentView(catalog, agent)] : [];
+      return agent ? [agentView(catalog, agent, pictures)] : [];
     }),
-    ...(catalog.refused?.() ?? []).map((agent) => agentView(catalog, agent)),
+    ...(catalog.refused?.() ?? []).map((agent) => agentView(catalog, agent, pictures)),
   ];
 }
 
-function agentView(catalog: AgentCatalog, agent: CatalogAgent): AgentView {
+function agentView(catalog: AgentCatalog, agent: CatalogAgent, pictures: ReadonlyMap<string, string>): AgentView {
   const credential = agent.provider.credential as { kind?: string; env?: string };
   return {
         id: agent.id,
@@ -885,6 +888,7 @@ function agentView(catalog: AgentCatalog, agent: CatalogAgent): AgentView {
         roles: [...agent.roles],
         ...(agent.avatar === undefined ? {} : { avatar: agent.avatar }),
         ...(agent.accent === undefined ? {} : { accent: agent.accent }),
+        ...(pictures.has(agent.id) ? { picture: pictureUrl(agent.id, pictures.get(agent.id)!) } : {}),
         skills: agent.skills.map((s) => ({
           name: s.name,
           provenance: s.provenance,
