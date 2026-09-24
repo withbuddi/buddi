@@ -112,6 +112,11 @@ with a written brief; in order:
 
 Small, whenever a slot opens:
 
+- Kept email rules first — a rule kept from Proposals shows at the top of
+  the email page's rules with "kept <when>", not under the date it was
+  learned; and a rule card's untrusted notice reads "learned from mail you
+  received" rather than the skill/change wording about hidden instructions
+  (2026-09-23).
 - Sensitive plugin queries — a plugin marks a page query `sensitive` the
   way a Home block already is; the page masks it like Home does and
   `buddi mcp` leaves it out unless asked. Today finance balances come back
