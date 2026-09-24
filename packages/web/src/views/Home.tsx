@@ -20,7 +20,6 @@ import {
   Button,
   Empty,
   ErrorBanner,
-  GradientField,
   List,
   ListRow,
   Mascot,
@@ -76,9 +75,8 @@ export function Home({
 
   return (
     <>
-      {/* The hero band on the quiet field: the one place on a working page
-          where the first-run colours come back, behind three short lines. */}
-      <GradientField quiet className="home-band">
+      {/* The kit's hero: three short lines on the page's own field. */}
+      <div className="home-band">
         <header className="home-hero">
           <div className="home-hero-text">
             <p className="home-date">{fmtDay(data?.now, timezone)}</p>
@@ -87,7 +85,7 @@ export function Home({
           </div>
           <Mascot size="lg" />
         </header>
-      </GradientField>
+      </div>
     <div className="home">
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
@@ -371,7 +369,10 @@ export function greeting(iso: string | undefined, timezone: string): string {
 
 function fmtDay(iso: string | undefined, timezone: string): string {
   try {
-    return new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: timezone }).format(iso ? new Date(iso) : new Date());
+    const at = iso ? new Date(iso) : new Date();
+    const weekday = new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: timezone }).format(at);
+    const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', timeZone: timezone }).format(at);
+    return `${weekday}, ${day}`;
   } catch {
     return fmtTime(iso ?? null, timezone);
   }
