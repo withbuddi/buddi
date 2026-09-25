@@ -357,7 +357,14 @@ async function run(): Promise<void> {
     process.exitCode = await followUpgrade(ctx, job.id);
     return;
   }
+  if (args[0] === 'browser') {
+    // Needs no database and no supervisor: it looks on disk, or runs Playwright's installer.
+    const cli = await import('@buddi/cli');
+    process.exitCode = await cli.main(args);
+    return;
+  }
   if (args.length === 0 || args.every(a => ['--no-service', '--no-open'].includes(a))) {
+    const firstRun = ctx.state === undefined;
     let running = false;
     let relaunched = false;
     /*
@@ -412,6 +419,18 @@ async function run(): Promise<void> {
     }
     console.log(`Dashboard: ${terminalLink(url)}`);
     console.log('The link is good for five minutes. Run buddi again for a fresh one.');
+    /*
+     * The agents' own browser, said once on a first run and again on every run
+     * while there is none: a packaged install ships no browser binary, and
+     * downloading 150 MB unasked is not this command's to do.
+     */
+    const found = gateway.detectBrowser();
+    if (firstRun && found.engine === 'none' && process.env.BUDDI_BROWSER_INSTALL === '1') {
+      // Asked for on this command line, so the download is the owner's choice.
+      console.log('Installing Chromium for the agents\' own browser (about 150 MB).');
+      const outcome = await gateway.installBrowser({ inherit: true });
+      console.log(outcome.ok ? gateway.browserLine(gateway.detectBrowser()) : `The browser install failed: ${outcome.detail}. Run buddi browser install to try again.`);
+    } else if (firstRun || found.engine === 'none') console.log(gateway.browserLine(found));
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }

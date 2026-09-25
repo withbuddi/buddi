@@ -66,6 +66,19 @@ describe('browser dashboard endpoints', () => {
     expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
     expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers, body: '{}' })).status).toBe(200);
   });
+  it('starts a browser install for the owner only, behind CSRF and origin', async () => {
+    const { origin, browser } = await setup(); const headers = await session(origin);
+    const installBrowser = vi.fn(() => ({ ...browser.status(), browser: { engine: 'none' as const, headless: false, install: { state: 'running' as const } } }));
+    browser.installBrowser = installBrowser;
+    expect((await fetch(`${origin}/api/browser/install`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/install`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/install`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBeGreaterThanOrEqual(400);
+    expect(installBrowser).not.toHaveBeenCalled();
+    const started = await fetch(`${origin}/api/browser/install`, { method: 'POST', headers, body: '{}' });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toMatchObject({ browser: { install: { state: 'running' } } });
+    expect(installBrowser).toHaveBeenCalledOnce();
+  });
   it('protects mode settings and permission prompts with owner authentication, CSRF and origin', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
     const configure = vi.fn(async () => browser.status()); const checkPermissions = vi.fn(async () => browser.status());

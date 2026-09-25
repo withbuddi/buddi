@@ -32,21 +32,7 @@ import {
 } from '../api';
 import { fmtRelative } from '../format';
 import { AGENTS_ROUTE } from '../routes';
-import {
-  Button,
-  Card,
-  Empty,
-  ErrorBanner,
-  Field,
-  KV,
-  Notice,
-  Pill,
-  Section,
-  Spacer,
-  Stack,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 
 /** How often a running stage is asked where it has got to. */
@@ -238,7 +224,7 @@ export function Plugins(): JSX.Element {
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.installed.length === 0 ? (
-          <Empty>Nothing is installed beyond what buddi ships with.</Empty>
+          <EmptyState icon="plug" title="Nothing installed yet">Only what buddi ships with is here.</EmptyState>
         ) : (
           <Stack divided>
             {data.installed.map((plugin) => (

@@ -108,8 +108,12 @@ it. Primary: "Introduce us".
 The persona is sent as `instructions` and written, verbatim, as the body of the
 agent file, between the name line ("You are Ada. There is exactly one owner…")
 and the "How you work" section. The file's `description`, the one line on the
-Home and Agents cards, is the persona's first sentence unless the owner sent
-one of their own. Changing the assistant later through
+Home and Agents cards, is "Your first assistant. Ask it anything; it
+remembers." unless the owner sent one of their own — not the persona's first
+sentence, which read as "You're not a chatbot." under the name. A card line an
+earlier wizard derived that way is replaced the next time the persona changes.
+The persona stays editable afterwards in the Persona field on the agent's
+Setup tab. Changing the assistant later through
 `/api/onboarding/agent/update` rewrites the body only while it is still the
 generated one; an untouched field sends no new persona.
 
@@ -118,6 +122,20 @@ account just tested, and records it as the installation's default agent. A
 mascot face is then uploaded through `/api/agents/:id/avatar` (the bundled
 copy in `packages/web/public/mascot/`), so it is the agent's real picture
 everywhere; an emoji face is written into the agent file as before.
+
+The assistant is the concierge, so it is granted nearly everything built in
+(`FIRST_AGENT_TOOLS` in `packages/gateway/src/web/onboarding.ts`): `system.*`,
+`email.*`, `memory.*`, `artifacts.*`, `web.*`, `browser.*`, `host.*`,
+`reminder.*`, `schedule.*`, `goal.*`, `learning.*`, `canvas.*`,
+`agent.delegate`, the read-only platform tools and `owner.get_profile` /
+`owner.set_profile`. Asked for a screenshot of a site, it opens its own browser
+rather than saying it has none. Gated and session-tier tools (`host.exec`,
+`email.send`, `browser.act`) still ask the owner first. Left out on purpose:
+the platform tools that write agents and grants (Agent Father's), and
+`owner.rename_me` / `owner.finish_onboarding`, which belong to the interview.
+Every family listed is compiled in, so none can hold the assistant back as
+"needs a plugin"; optional plugins (finance, developer, image) are the owner's
+to add.
 
 Being the default is an installation record (`core.web_settings`, key
 `agents`), not a flag in the agent file: the owner changes it from the picker

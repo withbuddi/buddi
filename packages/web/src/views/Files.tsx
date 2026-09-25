@@ -20,7 +20,7 @@ import { FAMILY_LABEL, downloadUrl, formatBytes, previewUrl } from '../chat/atta
 import { FamilyMark } from '../chat/FileTile';
 import { fmtRelative, fmtTime } from '../format';
 import { chatRoute, fileRoute, groupChatRoute, parseFileRoute } from '../routes';
-import { AgentAvatar, Button, Chip, Empty, ErrorBanner, Field, FormGrid, KV, List, Notice, PickRow, SearchBar, Split, Toolbar } from '../ui';
+import { AgentAvatar, Button, Chip, Empty, ErrorBanner, Field, FormGrid, KV, List, Notice, PickRow, SearchBar, Split, Toolbar, EmptyState } from '../ui';
 
 const ORIGINS = [
   { id: '', label: 'All files' },
@@ -133,7 +133,7 @@ export function Files({ hash, timezone, navigate, agents }: PlaceProps): JSX.Ele
         <p className="ui-page-lede">What your agents made or were given.</p>
       </header>
       {bare ? (
-        <Empty warm title="Nothing here yet">Drop a file into any conversation and it shows up here too.</Empty>
+        <EmptyState icon="files" title="Nothing here yet">Drop a file into any conversation and it shows up here too.</EmptyState>
       ) : (
         <>
           <SearchBar

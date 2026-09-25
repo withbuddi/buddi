@@ -213,16 +213,40 @@ then follow this setup. The previous implementation is retained.
 
 Buddi can drive a **real, visible Chromium window on the machine running
 `buddi serve`**. Dashboard and paired-owner Telegram requests use the same
-controller. The host must be awake and have an available desktop session.
+controller. The host must be awake.
 
 ## Setup
 
-After installing dependencies and building the workspace:
+The agents' browser is Playwright's bundled Chromium when it is installed,
+else Google Chrome where it is installed (`/Applications/Google Chrome.app`
+on macOS, `/opt/google/chrome` or `google-chrome`/`google-chrome-stable` on
+PATH on Linux). With neither, `browser.status` and Settings → Computer &
+browser say "No browser installed for the agents yet", and `browser.act`
+fails with one sentence the agent relays instead of a Playwright stack trace.
+
+Install Chromium from that page's **Install Chromium** button
+(`POST /api/browser/install`), or from a terminal — a checkout and a packaged
+install alike:
 
 ```sh
-pnpm --filter @buddi/tool-browser exec playwright install chromium
-buddi service restart
+buddi browser install     # Playwright's installer for chromium, about 150 MB
+buddi browser             # which browser the agents will use
 ```
+
+No restart is needed: the browser is looked for at each launch. A packaged
+install prints one line about it on its first run, and downloads it then only
+when asked (`BUDDI_BROWSER_INSTALL=1 buddi`).
+
+On Linux, a launch that fails for missing shared libraries says so in the
+status with the command to run once with sudo
+(`playwright install-deps chromium`, from the Playwright buddi ships). buddi
+never runs sudo itself.
+
+On Linux with neither `DISPLAY` nor `WAYLAND_DISPLAY` set — a headless server —
+the browser launches headless and the status says so. Watching and taking over
+from the Canvas go through CDP (screencast and Playwright's mouse and
+keyboard), so both work headless; only a window on the server's own screen is
+missing.
 
 Grant `browser.*` to the agent you want to use, in its private `agent.md` tools
 list, or ask the agent-maker to update that grant and approve the configuration

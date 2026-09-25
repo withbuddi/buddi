@@ -433,6 +433,16 @@ mode, as [operations.md](operations.md) describes.
 
 ## 9. Platforms
 
+The agents' own browser (the default mode) needs a browser binary, and the
+tarball ships none: Playwright's Chromium arrives only through its installer.
+The first run prints one line saying which browser was found — Google Chrome,
+or Chromium already installed — or "not installed yet — buddi browser install
+(about 150 MB)", and repeats that line on later runs until one is.
+`buddi browser install`, or **Install Chromium** in Settings → Computer &
+browser, runs Playwright's installer from the copy buddi ships;
+`BUDDI_BROWSER_INSTALL=1 buddi` does it on the first run. On a Linux server
+with no display the browser runs headless (see docs/browser.md).
+
 The third browser mode, **Your browser**, is Chrome on every platform: the
 tarball carries the unpacked extension at `<root>/extension`, the owner loads it
 through `chrome://extensions` → Developer mode → Load unpacked, and pairs it

@@ -13,7 +13,7 @@ import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
 import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
 import { ROLE_MAKER, cannotRunFix, cannotRunSentence, orderAgents, waitingText } from '../shell/roster';
-import { Avatar, Button, ButtonLink, Empty, ErrorBanner, List, ListRow, Notice, PageHeader, Panel, Pill, Sheet, Tab, Tabs, Tag, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, ButtonLink, Empty, ErrorBanner, List, ListRow, Notice, PageHeader, Panel, Pill, Sheet, Tab, Tabs, Tag, Toolbar, useAsync, EmptyState } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { Memory } from './Memory';
@@ -70,7 +70,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
       {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
-          <Empty mascot>No agents yet. Each agent is a file in the installation's agents folder.</Empty>
+          <EmptyState icon="agents" title="No agents yet">Each agent is a file in the installation's agents folder.</EmptyState>
         ) : (
           <div className="agents-grid">
             {orderAgents(agents, defaultAgentId).map((agent) => {
@@ -280,7 +280,7 @@ function AgentConversations({ agentId, navigate }: { agentId: string; navigate: 
       {!data ? (
         <Empty>Loading…</Empty>
       ) : rows.length === 0 ? (
-        <Empty mascot>No conversations yet.</Empty>
+        <EmptyState icon="chat" title="No conversations yet">Say hello, and the conversation shows up here.</EmptyState>
       ) : (
         <List>
           {rows.map((c) => (

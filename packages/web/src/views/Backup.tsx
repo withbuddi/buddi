@@ -21,20 +21,7 @@ import {
 } from '../api';
 import { formatBytes } from '../chat/attachments';
 import { fmtRelative } from '../format';
-import {
-  Button,
-  Empty,
-  ErrorBanner,
-  Field,
-  FormGrid,
-  Notice,
-  Pill,
-  Section,
-  Stack,
-  Table,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Section, Stack, Table, Toolbar, useAsync, EmptyState } from '../ui';
 import { RecoveryChecklist, useRecovery } from './Recovery';
 
 /** How often a running job is asked where it has got to. */
@@ -219,7 +206,7 @@ export function Backup(): JSX.Element {
           </Section>
           <Section>
             {view.data && archives.length === 0 ? (
-              <Empty>No backups yet.</Empty>
+              <EmptyState icon="archive" title="No backups yet">Make one now, or turn on the nightly backup.</EmptyState>
             ) : !view.data ? (
               <Empty>Loading…</Empty>
             ) : (

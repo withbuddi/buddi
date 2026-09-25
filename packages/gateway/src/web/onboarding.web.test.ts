@@ -12,8 +12,9 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { createFirstAgent, firstSentence } from './onboarding.js';
-import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
+import { createFirstAgent, firstSentence, FIRST_AGENT_TOOLS } from './onboarding.js';
+import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
+import { resolveToolNames } from '@buddi/core';
 import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 import { FIRST_AGENT_OPENING } from '../agents/opening.js';
@@ -465,7 +466,7 @@ it('rewrites the shipped Concierge into the owner’s assistant instead of stand
   expect(service.assign).toHaveBeenCalledWith('concierge', { accountId: 'two', model: 'claude-sonnet-4-5' });
 });
 
-it('writes the persona as the body and its first sentence as the card line', async () => {
+it('writes the persona as the body, and a plain card line rather than its first sentence', async () => {
   const dir = agentsDir();
   const shipped = { id: 'concierge', handle: 'buddi', name: 'Concierge', description: 'The agent buddi ships with.', source: 'example' as const };
   const persona = [
@@ -491,7 +492,8 @@ it('writes the persona as the body and its first sentence as the card line', asy
     { name: 'Ada', handle: 'ada', description: '', instructions: persona, accountId: 'one' },
   );
   const file = readFileSync(path.join(dir, 'concierge', 'agent.md'), 'utf8');
-  expect(file).toMatch(/description: .?You're not a chatbot\..?\n/);
+  expect(file).toMatch(/description: .?Your first assistant\. Ask it anything; it remembers\..?\n/);
+  expect(file).not.toMatch(/description: .?You're not a chatbot/);
   expect(file).toContain(`You are Ada. There is exactly one owner`);
   expect(file).toContain(persona);
   expect(file).not.toContain("What you are for, in the owner's own words");
@@ -630,6 +632,37 @@ it('grants the first agent no tool for running a first run', async () => {
   expect(file).toMatch(/owner\.set_profile/);
   expect(file).not.toMatch(/owner\.\*/);
   expect(file).not.toMatch(/rename_me|finish_onboarding/);
+});
+
+/*
+ * The first assistant is the concierge: it reaches the web, its own browser and
+ * nearly everything else built in — but never the tools that write agents.
+ */
+it('grants the first agent the built-in families, web and browser included', async () => {
+  // Every entry resolves against what this build compiles in, so no family can
+  // hold the first agent back as "needs a plugin".
+  const tools = resolveToolNames(FIRST_AGENT_TOOLS, createToolRegistry({}), 'concierge');
+  for (const name of ['web.search', 'web.read', 'browser.status', 'browser.act', 'host.exec', 'email.send', 'agent.delegate', 'system.time']) {
+    expect(tools).toContain(name);
+  }
+  expect(tools.filter((name) => name.startsWith('platform.')).sort()).toEqual(
+    ['platform.installed_tools', 'platform.list_agents', 'platform.list_skills', 'platform.read_agent'],
+  );
+  expect(tools).not.toContain('owner.rename_me');
+  expect(tools).not.toContain('owner.finish_onboarding');
+
+  const pool = fakePool();
+  const dir = agentsDir();
+  const { origin, headers } = await boot({ pool, agentsDir: dir, providerAccounts: accounts([{ id: 'one', enabled: true, configured: true }]) });
+  const created = await fetch(`${origin}/api/onboarding/agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: 'Ada', handle: 'ada', description: 'Whatever I ask.' }),
+  });
+  expect(created.status).toBe(200);
+  const file = readFileSync((await json(created)).file, 'utf8');
+  expect(file).toMatch(/web\.\*/);
+  expect(file).toMatch(/browser\.\*/);
 });
 
 /*

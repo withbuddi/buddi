@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
-import { Button, Card, Code, Empty, ErrorBanner, Field, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync } from '../ui';
+import { Button, Card, Code, Empty, ErrorBanner, Field, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync, EmptyState } from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
@@ -32,7 +32,7 @@ export function Missions({ timezone, embedded, agentId }: { timezone: string; em
     <PageFrame embedded={embedded} title="Missions" lede="Standing schedules. A disabled mission materializes nothing.">
       <ErrorBanner message={error ?? failure} />
       {!data || rows.length === 0 ? (
-        <Empty>No missions are registered (`buddi missions add-defaults`).</Empty>
+        <EmptyState icon="calendar" title="No missions yet">Run <code>buddi missions add-defaults</code> for the standard set.</EmptyState>
       ) : (
         <Stack>
           {rows.map((mission) => (

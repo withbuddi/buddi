@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { api, ApiError } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { ACTIVITY_ROUTE } from '../routes';
-import { Button, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Pill, Section, useAsync } from '../ui';
+import { Button, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Pill, Section, useAsync, EmptyState } from '../ui';
 
 export function Watchers({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.sentinels(), [], 30_000);
@@ -58,7 +58,7 @@ export function Watchers({ timezone, embedded }: { timezone: string; embedded?: 
         {!data ? (
           <Empty>Loading…</Empty>
         ) : installed.length === 0 ? (
-          <Empty>No watchers are installed. Plugins bring their own.</Empty>
+          <EmptyState icon="eye" title="No watchers are installed">Plugins bring their own.</EmptyState>
         ) : (
           <List>
             {installed.map((w) => {

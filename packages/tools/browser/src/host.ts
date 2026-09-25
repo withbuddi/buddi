@@ -2,12 +2,18 @@ import { mkdir, chmod } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 import { startProxy, type GuardedLookup } from './proxy.js';
+import { detectBrowser, isMissingLibraries, missingLibrariesMessage, NO_BROWSER_ACT, type BrowserAvailability } from './availability.js';
 
 export interface DriverOptions {
   profileDir: string;
-  /** Test-only. Production is headed. */
+  /** Headed unless set: the controller sets it on Linux with no display. */
   headless?: boolean;
+  /** `chrome` pins the owner's Google Chrome; otherwise whatever `detect` finds. */
   channel?: 'chrome' | 'chromium';
+  /** Which browser exists here. Defaults to looking on disk. */
+  detect?: () => BrowserAvailability;
+  /** Told why the last launch failed for a reason the owner must fix, or undefined once one works. */
+  report?: (problem: 'missing-libraries' | undefined) => void;
   policy?: AddressPolicy;
   allowedHosts?: readonly string[];
   /** Core's `guardedLookup`, for the SOCKS guard. Without it Playwright mode does not launch. */
@@ -40,11 +46,18 @@ export class PlaywrightHost {
     await this.#proxy?.close();
     await mkdir(this.options.profileDir, { recursive: true, mode: 0o700 });
     await chmod(this.options.profileDir, 0o700);
+    // Nothing to launch is a sentence for the owner, not Playwright's stack trace.
+    const found = (this.options.detect ?? detectBrowser)();
+    if (found.engine === 'none') throw new Error(NO_BROWSER_ACT);
+    // An owner who pinned Chrome gets Chrome; otherwise bundled Chromium, else the Chrome that is here.
+    const engine = this.options.channel === 'chrome' || found.engine === 'chrome'
+      ? (found.engine === 'chrome' && !found.channel && found.executable ? { executablePath: found.executable } : { channel: 'chrome' })
+      : {};
     const proxy = await startProxy({ policy: this.options.policy, lookup: this.options.lookup }); this.#proxy = proxy;
     try {
       const context = await chromium.launchPersistentContext(this.options.profileDir, {
         headless: this.options.headless ?? false,
-        ...(this.options.channel === 'chrome' ? { channel: 'chrome' } : {}),
+        ...engine,
         viewport: { width: 1280, height: 800 }, acceptDownloads: false, serviceWorkers: 'block', chromiumSandbox: true,
         proxy: { server: proxy.url, bypass: '<-loopback>' },
         args: ['--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'], timeout: 20_000,
@@ -74,10 +87,16 @@ export class PlaywrightHost {
       const restored = context.pages();
       await context.newPage(); // Keep the context alive while removing restored task tabs.
       for (const old of restored) await old.close();
+      this.options.report?.(undefined);
       return context;
     } catch (error) {
       await this.#close();
-      throw new Error(`Could not open the host browser. Install Chromium, ensure a desktop session is available, and close any other Buddi process using this profile. ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      if (process.platform === 'linux' && isMissingLibraries(message)) {
+        this.options.report?.('missing-libraries');
+        throw new Error(missingLibrariesMessage());
+      }
+      throw new Error(`Could not open the agents' browser. Close any other buddi process using this profile, then try again. ${message}`);
     }
   }
   #adopt(owner: TabOwner, page: Page): void {

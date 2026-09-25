@@ -43,13 +43,11 @@ import { HOME_ROUTE, chatRoute } from '../routes';
 import { Button, ButtonLink, Field, Icon, Mark } from '../ui';
 import {
   DEFAULT_ASSISTANT_NAME,
-  FACES,
-  MASCOTS,
   OPENING_INSTRUCTION,
   SCRIPT,
   mascotUrl,
-  type MascotRole,
 } from './meet/script';
+import { FacePicker, mascotFile, type FaceChoice } from './parts/FacePicker';
 import {
   STEP_OF,
   afterRestore,
@@ -1704,30 +1702,6 @@ function ClaudeCode({ value, onChange }: { value: string; onChange: (next: strin
  * 4. The assistant
  * ------------------------------------------------------------------ */
 
-/** A face for the assistant: one of the mascots, an emoji, or the picture it already wears. */
-type AssistantFace =
-  | { kind: 'mascot'; role: MascotRole }
-  | { kind: 'emoji'; value: string }
-  | { kind: 'kept'; url: string };
-
-const sameFace = (a: AssistantFace, b: AssistantFace): boolean =>
-  a.kind === b.kind &&
-  (a.kind === 'mascot' ? a.role === (b as typeof a).role : a.kind === 'emoji' ? a.value === (b as typeof a).value : true);
-
-/**
- * The bundled mascot, as a file the avatar upload takes.
- *
- * Through the same route an owner's own picture goes, so the gateway keeps
- * one way a picture is checked, re-encoded and stored — and the roster, the
- * chat header and the canvas draw it like any other.
- */
-async function mascotFile(role: MascotRole): Promise<File> {
-  const response = await fetch(mascotUrl(role));
-  if (!response.ok) throw new Error(`The picture could not be read (${response.status}).`);
-  const blob = await response.blob();
-  return new File([blob], `buddi-blob-${role}.png`, { type: 'image/png' });
-}
-
 function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: QuestionProps): JSX.Element {
   const [name, setName] = useState(() => existing?.name ?? DEFAULT_ASSISTANT_NAME);
   /*
@@ -1735,7 +1709,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
    * another face: which mascot it was is not something the roster says, and
    * guessing would overwrite it.
    */
-  const [face, setFace] = useState<AssistantFace>(() =>
+  const [face, setFace] = useState<FaceChoice>(() =>
     existing?.picture
       ? { kind: 'kept', url: existing.picture }
       : existing?.avatar
@@ -1765,8 +1739,8 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
     if (name.trim() === '' || saving) return;
     setSaving(true);
     const emoji = face.kind === 'emoji' ? { avatar: face.value } : {};
-    // The persona is the agent's instructions; the server takes its first
-    // sentence as the card line.
+    // The persona is the agent's instructions; the card line is the server's
+    // plain one unless the owner wrote their own.
     const persona = !existing || (purpose.trim() !== '' && purpose !== initialPurpose) ? { instructions: purpose.trim() } : {};
     const written = existing
       ? api.updateFirstAgent({ name: name.trim(), ...persona, ...emoji })
@@ -1820,46 +1794,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
       <Field label={SCRIPT.assistant.name}>
         <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
       </Field>
-      <div className="meet-faces" role="group" aria-label={SCRIPT.assistant.face}>
-        {/* The mascots first, then the emoji: two rows, one choice. */}
-        <div className="meet-face-row">
-          {MASCOTS.map((role) => {
-            const option: AssistantFace = { kind: 'mascot', role };
-            const chosen = sameFace(face, option);
-            return (
-              <button
-                key={role}
-                type="button"
-                className="meet-face"
-                data-kind="image"
-                data-chosen={chosen ? 'true' : undefined}
-                aria-pressed={chosen}
-                aria-label={SCRIPT.assistant.mascot(role)}
-                onClick={() => setFace(option)}
-              >
-                <img src={mascotUrl(role)} alt="" />
-              </button>
-            );
-          })}
-        </div>
-        <div className="meet-face-row">
-          {FACES.map((emoji) => {
-            const chosen = face.kind === 'emoji' && face.value === emoji;
-            return (
-              <button
-                key={emoji}
-                type="button"
-                className="meet-face"
-                data-chosen={chosen ? 'true' : undefined}
-                aria-pressed={chosen}
-                onClick={() => setFace({ kind: 'emoji', value: emoji })}
-              >
-                {emoji}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <FacePicker face={face} onPick={setFace} />
       <Field label={SCRIPT.assistant.purpose} wide>
         <textarea
           className="meet-purpose"

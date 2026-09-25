@@ -9,7 +9,7 @@ import { api, type SentinelFinding } from '../api';
 import { fmtRelative, fmtTime, json, withoutFence } from '../format';
 import { chatRoute } from '../routes';
 import { leaveDraft } from '../chat/ChatPage';
-import { Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, PageFrame, Panel, Pill, Table, Toolbar, useAsync } from '../ui';
+import { Button, ButtonLink, Code, Details, Empty, ErrorBanner, Notice, PageFrame, Panel, Pill, Table, Toolbar, useAsync, EmptyState } from '../ui';
 
 export function Alerts({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.sentinels(), [], 30_000);
@@ -41,7 +41,7 @@ export function Alerts({ timezone, embedded }: { timezone: string; embedded?: bo
 
       <Panel title="Waiting for the weekly recap" flush>
         {!data || data.digest.length === 0 ? (
-          <Empty>Nothing is waiting for the recap.</Empty>
+          <EmptyState icon="bell" title="Nothing waiting for the recap" />
         ) : (
           <Table>
             <thead>

@@ -9,22 +9,7 @@
  */
 import { useEffect, useState } from 'react';
 import { api, type ProviderAccount, type SaveProviderAccount } from '../api';
-import {
-  Button,
-  Section,
-  Details,
-  Empty,
-  ErrorBanner,
-  Field,
-  KV,
-  Notice,
-  PageFrame,
-  Pill,
-  Sheet,
-  Stack,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 
@@ -105,7 +90,7 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
           flush
         >
         {accounts.length === 0 ? (
-          <Empty>No accounts yet. Add one to give your agents a model to run on.</Empty>
+          <EmptyState icon="chip" title="No accounts yet">Add one to give your agents a model to run on.</EmptyState>
         ) : (
           <div className="accounts">
             <nav className="accounts-list" aria-label="Accounts">

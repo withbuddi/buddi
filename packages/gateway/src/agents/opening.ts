@@ -8,12 +8,11 @@
  * used by the wizard that creates it, rather than a sentence invented inside a
  * route.
  *
- * It is deliberately generic. The wizard's first agent has memory, the clock,
- * the owner's profile and the roster-reading tools and nothing else
- * (`FIRST_AGENT_TOOLS`), so a starter naming a domain — an inbox, a balance —
- * would be an opening that promises what the grant cannot do. What it offers
- * instead is the three things that agent can actually do on day one: be told
- * something, be asked what it is, and be asked what else is possible.
+ * It is deliberately generic. The wizard's first agent is granted nearly every
+ * built-in family (`FIRST_AGENT_TOOLS`), but an inbox with no account or a
+ * domain whose plugin is not installed is still nothing to promise on day one.
+ * What it offers instead is three things that hold on any installation: be
+ * told something, be asked what it can do, and be asked what else is possible.
  *
  * This module holds no state and reaches no service: it is the vocabulary two
  * callers share, kept out of both of their files.

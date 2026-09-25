@@ -263,10 +263,11 @@ page contains mode settings, permissions, Stop, takeover and resume controls;
 the chat canvas shows the selected app.
 
 Computer mode requires macOS 14+, a native build with Xcode Command Line Tools,
-and owner-granted Accessibility and Screen Recording permissions. **Browser
-automation (Playwright)** remains an explicit alternative with dedicated-profile,
-per-conversation tabs; install Chromium only for that mode. There is no automatic
-fallback. Follow [setup and limits](docs/browser.md). Installing the plugin alone
+and owner-granted Accessibility and Screen Recording permissions. **The agents'
+own browser (Playwright)** has a dedicated profile and per-conversation tabs; it
+uses Playwright's Chromium, or Google Chrome when that is installed. Get Chromium
+with `buddi browser install` (about 150 MB) or the Install button on the Computer
+& browser page. There is no automatic fallback between modes. Follow [setup and limits](docs/browser.md). Installing the plugin alone
 does not grant agents access.
 
 ## Your agents are yours

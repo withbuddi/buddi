@@ -8,8 +8,9 @@ import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
-import type { BrowserController, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
+import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
 import type { BrowserCommand } from './types.js';
+import { detectBrowser, HEADLESS_NOTE, installBrowser, missingLibrariesMessage, needsHeadless, NO_BROWSER_STATUS, type BrowserAvailability, type InstallOutcome } from './availability.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
 export class HostController implements BrowserController {
@@ -20,6 +21,8 @@ export class HostController implements BrowserController {
   #changing = false;
   #requests = new Map<string, { expiresAt: number; revoked: boolean }>();
   #extension?: () => ExtensionBridge;
+  #problem?: 'missing-libraries';
+  #install?: NonNullable<BrowserEngineStatus['install']>;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     bridge?: () => ComputerBridge;
@@ -28,6 +31,12 @@ export class HostController implements BrowserController {
     lookup?: GuardedLookup;
     /** Defaults to this process's platform. Computer control exists only on darwin. */
     platform?: NodeJS.Platform;
+    /** Read for DISPLAY and WAYLAND_DISPLAY. Defaults to this process's. */
+    env?: NodeJS.ProcessEnv;
+    /** Which browser exists here. Defaults to looking on disk. */
+    detect?: () => BrowserAvailability;
+    /** Playwright's Chromium installer. Injectable for tests. */
+    installer?: (onLine: (line: string) => void) => Promise<InstallOutcome>;
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -49,8 +58,42 @@ export class HostController implements BrowserController {
     if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts), {
       controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
     });
-    const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}) });
+    const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
+      headless: this.#headless, detect: () => this.#detect(), report: (problem) => { this.#problem = problem; } });
     return new BrowserManager(() => new PlaywrightDriver(host.options, host), { controlFile: path.join(this.dir, 'control.json'), closeHost: () => host.close() });
+  }
+  get #headless(): boolean { return needsHeadless(this.options.platform ?? process.platform, this.options.env ?? process.env); }
+  #detect(): BrowserAvailability { return (this.options.detect ?? detectBrowser)(); }
+  /** The agents' own browser, said for the owner and the model alike. */
+  #engine(): BrowserEngineStatus {
+    const found = this.#detect();
+    const headless = this.#headless;
+    const problem = found.engine === 'none' ? undefined : this.#problem;
+    const message = found.engine === 'none' ? NO_BROWSER_STATUS
+      : problem === 'missing-libraries' ? missingLibrariesMessage()
+      : headless ? HEADLESS_NOTE : undefined;
+    return { engine: found.engine, headless, ...(problem ? { problem } : {}), ...(message ? { message } : {}), ...(this.#install ? { install: { ...this.#install } } : {}) };
+  }
+  /**
+   * Playwright's Chromium, downloaded into its usual cache. Started here and
+   * followed through the status: an install takes a minute or more, far
+   * longer than a request should wait.
+   */
+  installBrowser(): BrowserStatus {
+    if (this.#install?.state === 'running') return this.status();
+    const install: NonNullable<BrowserEngineStatus['install']> = { state: 'running', line: 'Starting the installer…' };
+    this.#install = install;
+    const run = this.options.installer ?? ((onLine) => installBrowser({ onLine }));
+    void run((line) => { install.line = line.slice(0, 300); }).then((outcome) => {
+      install.state = outcome.ok ? 'done' : 'failed';
+      install.line = outcome.ok ? 'Chromium is installed.' : outcome.detail.slice(0, 300);
+      if (outcome.missingLibraries && (this.options.platform ?? process.platform) === 'linux') this.#problem = 'missing-libraries';
+      else if (outcome.ok) this.#problem = undefined;
+    }, (error: unknown) => {
+      install.state = 'failed';
+      install.line = error instanceof Error ? error.message : String(error);
+    });
+    return this.status();
   }
   get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
   async enable(): Promise<void> {
@@ -66,7 +109,8 @@ export class HostController implements BrowserController {
   }
   status(scope?: BrowserScope): BrowserStatus {
     const status = this.#manager.status(scope);
-    const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions };
+    const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions,
+      ...(this.#settings.mode === 'playwright' ? { browser: this.#engine() } : {}) };
     return { ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => ({ ...session, ...metadata })) } : {}) };
   }
   screenshot(sessionId?: string): Buffer | undefined { return this.#manager.screenshot(sessionId); }

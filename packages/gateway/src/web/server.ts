@@ -1698,6 +1698,17 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (paired.status >= 400) pairLimiter.fail(pairKey, now); else pairLimiter.reset(pairKey);
       return sendJson(res, paired.status, paired.body);
     }
+    /*
+     * Playwright's Chromium, for an install that shipped without one. Started
+     * here and followed through `GET /api/browser`: it downloads about 150 MB,
+     * far longer than a request should wait. Owner-only and CSRF-checked like
+     * every other write: the gate above admits nobody else.
+     */
+    if (path === '/api/browser/install') {
+      if (!browser.installBrowser) return sendJson(res, 409, { error: 'This host cannot install a browser.' });
+      try { return sendJson(res, 202, browser.installBrowser()); }
+      catch (error) { return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
+    }
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
       const body = await readJsonBody(req);
       try {

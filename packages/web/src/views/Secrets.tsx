@@ -16,21 +16,7 @@
 import { useMemo, useState } from 'react';
 import { api, type SecretListingView, type SecretRule, type SecretsView } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import {
-  Button,
-  Empty,
-  ErrorBanner,
-  Field,
-  Notice,
-  PageFrame,
-  Pill,
-  Section,
-  Sheet,
-  Stack,
-  Tag,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Tag, Toolbar, useAsync, EmptyState } from '../ui';
 import {
   ACCOUNT_HELD_LINE,
   RULE_LABELS,
@@ -111,9 +97,9 @@ export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?:
           >
             <Stack divided>
               {data.secrets.length === 0 ? (
-                <Empty warm title="Nothing stored yet">
+                <EmptyState icon="key" title="Nothing stored yet">
                   Add one — a site password, an API token — and bind it to the places an agent may use it.
-                </Empty>
+                </EmptyState>
               ) : (
                 data.secrets.map((secret) => (
                   <SecretRow key={secret.name} secret={secret} accounts={accounts} destinations={data.destinations} timezone={timezone} onChanged={view.reload} />

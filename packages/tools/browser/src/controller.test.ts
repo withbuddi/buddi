@@ -73,3 +73,22 @@ describe('owner-controlled driver selection', () => {
     expect(factory.mock.calls.slice(2).every(([settings]) => settings.mode === 'computer')).toBe(true);
   });
 });
+describe('the agents\' own browser on this machine', () => {
+  it('says when no browser is installed, and follows an install to its end', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
+    let installed = false;
+    let finish!: () => void;
+    const controller = new HostController(dir, {
+      platform: 'linux', env: {},
+      detect: () => (installed ? { engine: 'chromium', executable: '/x/chrome' } : { engine: 'none' }),
+      installer: async (onLine) => { onLine('Downloading Chromium 10%'); await new Promise<void>((resolve) => { finish = resolve; }); installed = true; return { ok: true, detail: 'done', missingLibraries: false }; },
+    });
+    resources.push({ dir, controller }); await controller.enable();
+    expect(controller.status().browser).toMatchObject({ engine: 'none', headless: true, message: expect.stringContaining('No browser installed for the agents yet') });
+    expect(controller.installBrowser().browser?.install).toEqual({ state: 'running', line: 'Downloading Chromium 10%' });
+    finish(); await new Promise((resolve) => setTimeout(resolve, 0));
+    const after = controller.status().browser!;
+    expect(after).toMatchObject({ engine: 'chromium', headless: true, install: { state: 'done' } });
+    expect(after.message).toContain('headless');
+  });
+});

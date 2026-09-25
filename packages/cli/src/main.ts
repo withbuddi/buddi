@@ -203,6 +203,9 @@ export async function dispatch(command: Command): Promise<number> {
       // nothing on stdout, which belongs to the protocol.
       loadEnv();
       return runMcp();
+    case 'browser':
+      // No database and no environment: it only looks on disk, or runs Playwright's installer.
+      return runBrowser(command.action);
     case 'telegram': {
       await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);
@@ -288,4 +291,19 @@ if (invokedDirectly()) {
       console.error(describeDatabaseError(err, process.env.DATABASE_URL));
       process.exit(1);
     });
+}
+
+/**
+ * `buddi browser install|status`: Playwright's installer for Chromium, from
+ * the copy the browser plugin depends on, streamed to this terminal.
+ */
+async function runBrowser(action: 'install' | 'status'): Promise<number> {
+  const { browserLine, detectBrowser, installBrowser, installDepsCommand } = await import('@buddi/gateway');
+  if (action === 'status') { console.log(browserLine(detectBrowser())); return 0; }
+  console.log('Installing Chromium for the agents\' own browser (about 150 MB).');
+  const outcome = await installBrowser({ inherit: true });
+  if (!outcome.ok) { console.error(`buddi: the browser install failed: ${outcome.detail}`); return 1; }
+  console.log(browserLine(detectBrowser()));
+  if (process.platform === 'linux') console.log(`If the browser will not start for missing libraries, run once: ${installDepsCommand()}`);
+  return 0;
 }

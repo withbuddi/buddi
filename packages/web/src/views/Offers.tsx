@@ -25,7 +25,7 @@
 import { useState } from 'react';
 import { api, lapseSentence, type OfferRow } from '../api';
 import { fmtRelative } from '../format';
-import { Button, Card, Details, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Panel, Pill, Stack, Toolbar, useAsync } from '../ui';
+import { Button, Card, Details, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Panel, Pill, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { DismissAll } from './parts/DismissOffers';
 
 export function Offers({ embedded, agentId, agentName }: { timezone?: string; embedded?: boolean; agentId?: string; agentName?: string }): JSX.Element {
@@ -92,7 +92,7 @@ export function Offers({ embedded, agentId, agentName }: { timezone?: string; em
         </Toolbar>
       ) : null}
       {!data || rows.length === 0 ? (
-        <Empty>Nothing is on offer.</Empty>
+        <EmptyState icon="bulb" title="Nothing on offer">When an agent works out something you might want done, it waits here.</EmptyState>
       ) : (
         <Stack>
           {rows.map((offer) => (
