@@ -382,7 +382,7 @@ async function run(): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     console.log(`Dashboard: ${url}`);
-    console.log('The link expires in five minutes; reuse is rejected within the current server lifetime (not across restarts). Run buddi again for a fresh link.');
+    console.log('The link is good for five minutes. Run buddi again for a fresh one.');
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }

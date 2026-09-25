@@ -85,7 +85,7 @@ export async function runDashboard(
     const platform = opts.platform ?? process.platform;
     if (platform !== 'darwin') {
       out('the dashboard app bundle is macOS-only; elsewhere, bookmark nothing and run');
-      out('`buddi dashboard` — the link is one-time, so a bookmark would not work anyway');
+      out('`buddi dashboard` — the link lasts five minutes, so a bookmark would not work anyway');
       return 1;
     }
     const result =
@@ -128,7 +128,7 @@ export async function runDashboard(
   const url = `${webUrl(config, ticket)}${opts.hash ?? ''}`;
   out(`buddi dashboard — ${url}`);
   out(
-    `  token: in the ${source}${created ? ' (created just now)' : ''}; this link is one-time and expires in 5 minutes`,
+    `  token: in the ${source}${created ? ' (created just now)' : ''}; this link is good for 5 minutes`,
   );
   if (!config.enabled) {
     out(`  NOTE: ${WEB_ENABLED_VAR} is off, so \`buddi serve\` is not serving it right now`);

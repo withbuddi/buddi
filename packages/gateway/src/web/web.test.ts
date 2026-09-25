@@ -25,7 +25,6 @@ import {
   RateLimiter,
   REMOTE_SESSION_TTL_MS,
   SessionStore,
-  SpentTickets,
 } from './sessions.js';
 import { resolveAsset } from './static.js';
 import { toStreamEvent } from './stream.js';
@@ -147,18 +146,6 @@ describe('tickets', () => {
     const late = verifyTicket(token, ticket, new Date(now.getTime() + 61_000));
     expect(late.ok).toBe(false);
     if (!late.ok) expect(late.reason).toBe('expired');
-  });
-
-  it('are spendable exactly once', () => {
-    const spent = new SpentTickets();
-    const at = new Date();
-    const expiry = new Date(at.getTime() + 60_000);
-    expect(spent.spend('nonce-1', expiry, at)).toBe(true);
-    // A browser's prerender and then its navigation: both open, seconds apart.
-    expect(spent.spend('nonce-1', expiry, new Date(at.getTime() + 3_000))).toBe(true);
-    // Anyone later does not.
-    expect(spent.spend('nonce-1', expiry, new Date(at.getTime() + 11_000))).toBe(false);
-    expect(spent.spend('nonce-2', expiry, at)).toBe(true);
   });
 });
 

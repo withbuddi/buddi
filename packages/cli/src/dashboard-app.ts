@@ -104,7 +104,7 @@ export function buildInfoPlist(): string {
  */
 export function buildLauncherScript(spec: AppSpec): string {
   return `#!/bin/sh
-# Written by \`buddi dashboard --install-app\`. Holds no secret: the one-time
+# Written by \`buddi dashboard --install-app\`. Holds no secret: a five-minute
 # ticket is minted fresh, by the command below, every time this is opened.
 exec ${shellQuote(spec.nodePath)} ${shellQuote(spec.cliEntry)} dashboard
 `;
@@ -138,7 +138,7 @@ export function installDashboardApp(
   utimesSync(bundle, stamp, stamp);
 
   notes.push(`wrote ${bundle}`);
-  notes.push(`it runs: buddi dashboard — a fresh one-time link each open, nothing stored`);
+  notes.push(`it runs: buddi dashboard — a fresh five-minute link each open, nothing stored`);
   notes.push('open it from Launchpad or Spotlight ("Buddi Dashboard"), or drag it to the Dock');
   notes.push('remove it with: buddi dashboard --uninstall-app');
   return { path: bundle, notes };

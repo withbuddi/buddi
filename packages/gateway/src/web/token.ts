@@ -1,5 +1,5 @@
 /**
- * The dashboard's secret, and the one-time tickets minted from it.
+ * The dashboard's secret, and the five-minute tickets minted from it.
  *
  * Two different things, on purpose:
  *
@@ -9,11 +9,12 @@
  *  - **A ticket** is what `buddi dashboard` puts in `?t=…`. It is an HMAC over
  *    a nonce and an expiry, keyed by the token — so the CLI can mint one with
  *    no shared state with the running server, the server can verify it with no
- *    round trip, and the *nonce* is what makes it single-use: the server
- *    remembers the nonces it has spent and refuses a second presentation.
+ *    round trip, and the nonce keeps two tickets minted in the same
+ *    millisecond distinct. A ticket is good for its five minutes however many
+ *    times it is opened (server.ts says why a one-time rule was dropped).
  *
  * A URL that leaks (shell history, a screenshot) is therefore worth nothing a
- * few minutes later, and worth nothing at all if it has already been opened.
+ * few minutes later.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';

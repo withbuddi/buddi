@@ -251,47 +251,6 @@ export class SessionStore {
 }
 
 /**
- * The nonces of tickets already exchanged.
- *
- * This is what "one-time" means in code: the signature says the ticket is
- * genuine and unexpired, and this says it has not been used. Entries are kept
- * until the ticket they belong to would have expired anyway — a nonce cannot
- * come back after that, because its own signature no longer verifies.
- */
-/**
- * How long after its first use a ticket still opens. A browser opens a pasted
- * link more than once — the omnibox prerenders it, then the navigation fetches
- * it again — and the second fetch used to be the one the owner saw, as a blank
- * 401. Within this window the same nonce is honoured again; after it, never.
- * The link was a bearer for five minutes before its first use, so a few
- * seconds after it changes nothing about who could have had it.
- */
-export const TICKET_REUSE_GRACE_MS = 10_000;
-
-export class SpentTickets {
-  readonly #spent = new Map<string, { until: number; spentAt: number }>();
-
-  /** True the first time a nonce is seen and within the grace after it, false on every later presentation. */
-  spend(nonce: string, expiresAt: Date, now: Date = new Date()): boolean {
-    this.#prune(now);
-    const seen = this.#spent.get(nonce);
-    if (seen !== undefined) return now.getTime() - seen.spentAt < TICKET_REUSE_GRACE_MS;
-    this.#spent.set(nonce, { until: expiresAt.getTime(), spentAt: now.getTime() });
-    return true;
-  }
-
-  #prune(now: Date): void {
-    for (const [nonce, { until }] of this.#spent) {
-      if (until <= now.getTime()) this.#spent.delete(nonce);
-    }
-  }
-
-  get size(): number {
-    return this.#spent.size;
-  }
-}
-
-/**
  * A fixed window per remote address. Crude and sufficient: the dashboard is
  * bound to loopback, so this exists to make a local brute force pointless, not
  * to survive a botnet.
