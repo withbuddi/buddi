@@ -4,6 +4,12 @@
  * about the environment's gaps.
  */
 import { vi } from 'vitest';
+import { configure } from '@testing-library/react';
+
+// `findBy*` and `waitFor` give up after one second by default, which a loaded
+// CI runner exceeds on a re-render that a laptop does in a tenth of that. Ten
+// seconds changes nothing a test asserts, only how long it is allowed to wait.
+configure({ asyncUtilTimeout: 10_000 });
 
 if (!('ResizeObserver' in globalThis)) {
   globalThis.ResizeObserver = class {

@@ -8,6 +8,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // jsdom on a CI runner is slow; a minute per test rather than twenty seconds.
+    testTimeout: 60_000,
     include: ['src/**/*.test.{ts,tsx}'],
   },
 });

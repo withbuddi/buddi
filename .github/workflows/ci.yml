@@ -1,7 +1,8 @@
-# The quick lane, on every push to main: three runners at once, because the
+# The quick lane, on every push to main: four runners at once, because the
 # time is in two suites (the web app's jsdom tests and the gateway's) rather
-# than in the database — with no DATABASE_URL the database suites skip
-# themselves. Wall time is the slowest job, about four minutes. The full gate
+# than in the database (with no DATABASE_URL the database suites skip
+# themselves) and in typechecking every package. Wall time is the slowest
+# job, about four minutes. The full gate
 # with Postgres is gate.yml: pull requests, tags, nightly, on demand.
 name: ci
 on:
@@ -20,8 +21,10 @@ jobs:
             run: pnpm --filter @buddi/web test
           - name: gateway
             run: pnpm --filter @buddi/gateway test
+          - name: typecheck
+            run: node scripts/check-boundaries.mjs && pnpm -r typecheck
           - name: rest
-            run: node scripts/check-boundaries.mjs && pnpm -r typecheck && pnpm -r --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
+            run: pnpm -r --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
     name: quick (${{ matrix.lane.name }})
     steps:
       - uses: actions/checkout@v4
