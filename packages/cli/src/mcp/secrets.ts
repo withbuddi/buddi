@@ -1,5 +1,5 @@
 /**
- * No secret leaves through `buddi mcp` (docs/specs/mcp.md §2, §5.4).
+ * No secret leaves through `buddi mcp` (docs/mcp.md §2, §5.4).
  *
  * The routes this server reads already keep credentials out of what they
  * serve — an account says `configured`, never its key. This is the second

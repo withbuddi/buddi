@@ -1,5 +1,5 @@
 /**
- * The draft lifecycle (docs/specs/email.md §8), as rows.
+ * The draft lifecycle (docs/email.md §8), as rows.
  *
  * One module because three callers need the same rules and must not each have
  * their own: the tools an agent uses (`email.draft_reply`, `email.read_draft`,
@@ -37,7 +37,7 @@ export const OWNER_EDITOR = 'owner';
 /**
  * How long a live draft stands before it lapses, in days.
  *
- * A fortnight, from docs/specs/email.md §8: long enough that a draft written
+ * A fortnight, from docs/email.md §8: long enough that a draft written
  * about something slow is still there when the owner comes back to it, short
  * enough that a list of live drafts stays a list of decisions rather than an
  * archive. Nothing is deleted — `lapsed` is a status, and the draft is still

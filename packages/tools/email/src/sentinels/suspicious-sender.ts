@@ -1,7 +1,7 @@
 /**
  * `email.suspicious-sender` — somebody is wearing a name, or asking for money.
  *
- * docs/specs/email.md §7: *«a first-time sender imitating a known one (display
+ * docs/email.md §7: *«a first-time sender imitating a known one (display
  * name matches, address does not), or a message asking for credentials, a wire,
  * or a gift card»*; §12.5 is the acceptance test — *«a message asking for a
  * wire transfer from a look-alike address raises the suspicious-sender finding

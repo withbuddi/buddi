@@ -582,7 +582,7 @@ suite('the mail pages, over postgres', () => {
   });
 
   /**
-   * The rule form's two pickers (docs/specs/email.md §5).
+   * The rule form's two pickers (docs/email.md §5).
    *
    * A conversation is **picked, never typed**: the database names a thread by
    * the root Message-ID of its chain, which is not something an owner has. So

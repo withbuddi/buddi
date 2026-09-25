@@ -1,6 +1,6 @@
 /**
- * Owner secrets at the composition root (docs/specs/owner-secrets.md §7,
- * docs/specs/plugin-host-api.md §6, §9 step 3).
+ * Owner secrets at the composition root (docs/owner-secrets.md §7,
+ * docs/plugin-host-api.md §4.2, §6).
  *
  * Two jobs at start, both once:
  *
@@ -31,7 +31,7 @@ import type { Pool } from 'pg';
 const MAILBOX_SECRET_RE = /^EMAIL_[A-Z0-9_]+_[0-9a-f]{8}$/;
 
 /**
- * The provider accounts' destination (docs/specs/owner-secrets.md §3, §7):
+ * The provider accounts' destination (docs/owner-secrets.md §3, §7):
  * `<plugin>.account` shape under the gateway's own `accounts` name. The target
  * is the account row's id, and the destination checks it against the live
  * table — a removed account's binding delivers nothing. Pre-approved, because

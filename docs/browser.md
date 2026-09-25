@@ -1,6 +1,10 @@
-# Computer and browser control
+---
+title: "Computer and browser control"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Computer and browser control
 
 ## Default: the agents' own browser (2026-09-24)
 
@@ -201,7 +205,7 @@ Playwright mode, and `open` (native apps) and coordinate targets are refused her
 exactly as they are there. The extension never fills a password field: it
 refuses with a precondition error, and you sign in yourself. The one exception
 is `secret.fill` with one of the owner's own secrets
-([owner-secrets.md](specs/owner-secrets.md)): the owner's card, the origin the
+([owner-secrets.md](owner-secrets.md)): the owner's card, the origin the
 extension itself re-reads before anything is focused or cleared, and the value
 typed in one piece through the debugger — never a value the agent typed.
 

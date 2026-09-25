@@ -92,7 +92,7 @@ export class ProviderAccounts {
   }) {
     this.vault = deps.vault ?? createVault({ env: deps.env });
     // The account credentials are owner secrets bound to `accounts.provider`
-    // (docs/specs/owner-secrets.md §3, §7): the destination is registered here,
+    // (docs/owner-secrets.md §3, §7): the destination is registered here,
     // where the accounts live, and the adapters read and write through names
     // translated onto the owner secrets the adoption saved. buddi's own keys
     // (the legacy accounts' environment variables) pass through untouched.

@@ -1,6 +1,10 @@
-# Provider accounts
+---
+title: "Provider accounts"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Provider accounts
 
 Open **Settings → Model accounts** in the owner dashboard (`#/providers` still
 redirects there). Each account is an independent named

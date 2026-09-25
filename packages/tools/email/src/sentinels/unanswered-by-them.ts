@@ -1,7 +1,7 @@
 /**
  * `email.unanswered-by-them` — the owner asked, and nobody answered.
  *
- * docs/specs/email.md §7: *«the owner wrote to someone N days ago and nothing
+ * docs/email.md §7: *«the owner wrote to someone N days ago and nothing
  * came back; a nudge, once»*. The mirror of `email.waiting-on-me`, and the
  * conditions are the mirror of its conditions — every one of them there to keep
  * a helpful watcher from making the owner look impatient:

@@ -1,6 +1,6 @@
 /**
  * `email.fetch_attachment` — the one tool in this plugin that pulls bytes off
- * a mail server (docs/specs/email.md §10).
+ * a mail server (docs/email.md §10).
  *
  * Ingest records attachments as a *listing*: filename, type, size, and the
  * body part each one is. That is the right default — a mailbox is mostly

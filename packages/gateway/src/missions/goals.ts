@@ -1,5 +1,5 @@
 /**
- * Goals: a target with a clock, that buddi keeps (docs/specs/goals.md).
+ * Goals: a target with a clock, that buddi keeps (docs/goals.md).
  *
  * A reminder is one instant an agent promised to look at; a schedule is a
  * standing run the owner approved. A goal is the object neither of them is: a

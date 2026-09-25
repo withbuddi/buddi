@@ -150,7 +150,7 @@ export function guardedLookup(
  * The `http.header` destination
  * ------------------------------------------------------------------ */
 
-/** Core's own header destination (docs/specs/owner-secrets.md §3). */
+/** Core's own header destination (docs/owner-secrets.md §3). */
 export const HTTP_HEADER_KIND = 'http.header';
 /** The name the destination is registered under: core's `http` area. */
 export const HTTP_HEADER_PLUGIN = 'http';

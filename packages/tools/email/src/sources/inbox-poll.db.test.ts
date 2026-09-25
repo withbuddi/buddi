@@ -202,7 +202,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
   });
 
   /*
-   * The dates a message states are read as it lands (docs/specs/email.md §7).
+   * The dates a message states are read as it lands (docs/email.md §7).
    * Ingest is the cheap half of `email.date-stated`: the body is in hand, the
    * parse is one sweep, and the watcher then has nothing to catch up on.
    */

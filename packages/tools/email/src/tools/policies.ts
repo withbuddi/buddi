@@ -40,7 +40,7 @@ export interface PolicyView {
   id: string;
   /**
    * The mailbox this rule belongs to, or null for one that covers all of them.
-   * A policy belongs to an account (docs/specs/email.md §2 and §5): "ignore this
+   * A policy belongs to an account (docs/email.md §2 and §5): "ignore this
    * newsletter" is a statement about one inbox, and the same sender may be
    * worth reading on another.
    */

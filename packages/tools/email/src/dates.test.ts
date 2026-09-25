@@ -1,5 +1,5 @@
 /**
- * The date parser, as a table (docs/specs/email.md §7, `email.date-stated`).
+ * The date parser, as a table (docs/email.md §7, `email.date-stated`).
  *
  * No database and no clock: the reference instant is a parameter, so every row
  * below is a sentence in and a day out. What is being pinned down is not only

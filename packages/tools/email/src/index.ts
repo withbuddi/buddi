@@ -109,7 +109,7 @@ export function createEmailManifest(
         send: opts.send ?? smtpFactory,
         ...(opts.env ? { env: opts.env } : {}),
       }),
-      // --- email step 6b: attachments on request (docs/specs/email.md §10).
+      // --- email step 6b: attachments on request (docs/email.md §10).
       // It talks to IMAP, so it takes the same client factory the source does.
       createFetchAttachmentTool({
         connect: opts.connect ?? imapflowFactory,
@@ -117,7 +117,7 @@ export function createEmailManifest(
       }),
       // --- end step 6b ---
       /*
-       * What the owner's own screens write through (docs/specs/plugin-pages.md).
+       * What the owner's own screens write through (docs/plugin-pages.md).
        * Every one of them is `ownerOnly`: the registry never lists them to a
        * model, and `invoke` refuses them for anyone but the owner's own path.
        */
@@ -134,12 +134,12 @@ export function createEmailManifest(
     // unread in the inbox. Read-only, and measured on core's schedule
     // (`metrics.ts`).
     metrics: emailMetrics,
-    // The watchers (docs/specs/email.md §7). All six of them, as of step 6:
+    // The watchers (docs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
     sentinels: emailSentinels,
     // Learned rules are proposed on the owner's one inbox (core.proposals);
     // keeping one comes back here, and this plugin writes the rule its gate
-    // reads (docs/specs/learning.md §2 item 3).
+    // reads (docs/learning.md §2 item 3).
     policies: emailPolicyHandler,
     // Beyond its own schema: the draft bodies and attachments it keeps in the
     // Files library, the rules it proposes, and the triage runs its poll starts
@@ -511,7 +511,7 @@ export {
 } from './tools/shared.js';
 
 /* ------------------------------------------------------------------ *
- * Step 6: the four remaining watchers (docs/specs/email.md §7, §13.6)
+ * Step 6: the four remaining watchers (docs/email.md §7)
  *
  * Kept in one block of its own rather than folded into the exports above, so
  * that what step 6 added can be read — and merged — as one thing.

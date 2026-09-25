@@ -1,7 +1,7 @@
 /**
  * Who searches the web for an agent: the name of the owner's override and its
  * parser, and what one server-side search looks like when the runtime reports
- * it. Moved here from `@buddi/runtime` (docs/specs/plugin-host-api.md §3): the
+ * it. Moved here from `@buddi/runtime` (docs/plugin-host-api.md §3): the
  * runtime reads the override before a request is built, the web plugin reads
  * it to pick its backend and records the searches, and both now read it from
  * one place. Pure: names, a parser and types.

@@ -56,7 +56,7 @@ export const openMeteo: FetchForecast = async (query, http) => {
 
   // Through `ctx.buddi.http`, never the global `fetch`: it is the one
   // transport every long-lived caller shares, one connection per request,
-  // with the address guard in front (docs/specs/plugin-host-api.md §4).
+  // with the address guard in front (docs/plugin-host-api.md §4).
   const response = await http.request({
     url: url.toString(),
     method: 'GET',

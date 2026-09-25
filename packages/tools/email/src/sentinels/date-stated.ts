@@ -1,7 +1,7 @@
 /**
  * `email.date-stated` — a message names a day in the next fortnight.
  *
- * docs/specs/email.md §7: *«a message states a date within the next 14 days (a
+ * docs/email.md §7: *«a message states a date within the next 14 days (a
  * deadline, an appointment, a due date), and no reminder exists for it»*.
  *
  * The reading is done at ingest, on the body that is already in hand

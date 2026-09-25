@@ -1,7 +1,7 @@
 /**
  * Settings → Proposals: what the agents learned, waiting for the owner.
  *
- * Nothing an agent learns applies itself (docs/specs/learning.md). A skill, a
+ * Nothing an agent learns applies itself (docs/learning.md). A skill, a
  * rule, a change to its own file — each arrives here as a card saying what it
  * is, why the agent thinks so, and where it came from, including the mark
  * that untrusted text (a page, a mail, a file) was in view when it was made.

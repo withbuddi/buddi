@@ -114,7 +114,7 @@ export function transcriptRoute(conversationId: string): string {
 /* ------------------------------------------------------------------ *
  * Plugin pages
  *
- * A plugin's screens are data (`docs/specs/plugin-pages.md`), and so are their
+ * A plugin's screens are data (`docs/plugin-pages.md`), and so are their
  * routes: `#/p/<plugin>/<page>` for a rail place, one more segment for the
  * item a list-detail is showing, and `#/settings/<plugin>[.<page>]` for a
  * settings tab. Nothing here knows a plugin by name — the descriptor says
@@ -249,7 +249,7 @@ export const BACKUP_ROUTE = settingsRoute('backup');
  *
  * The mail hashes are here for a different reason: the Mail place and the
  * Email settings section are no longer compiled in at all — they are a
- * plugin's own pages now (`docs/specs/plugin-pages.md`) — and the routes they
+ * plugin's own pages now (`docs/plugin-pages.md`) — and the routes they
  * used to answer to are in bookmarks, in the owner's history, and in every
  * "open in buddi" link Telegram has ever sent. So `#/email/<threadId>` is
  * still a conversation, and it still lands on the same one; it simply lands on

@@ -1,7 +1,7 @@
 /**
  * Learning a policy from the owner's own history.
  *
- * docs/specs/email.md §2: *«buddi proposes policies from the owner's own history and
+ * docs/email.md §2: *«buddi proposes policies from the owner's own history and
  * the owner keeps or revokes them in one tap.»* The proposing happens here,
  * right after a triage run records its verdict, and it is deliberately timid:
  *
@@ -10,7 +10,7 @@
  *    well hear from, and the run is counted from the newest verdict back, so
  *    one dissenting judgement resets it.
  *  - **Nothing applies itself.** A proposal is a card on the owner's
- *    Settings → Proposals inbox (`core.proposals`, docs/specs/learning.md §2
+ *    Settings → Proposals inbox (`core.proposals`, docs/learning.md §2
  *    item 3), beside what the agents propose; this plugin writes no rule until
  *    the owner keeps it there, and then writes it through its own apply
  *    (`learned.ts`). The gate reads only kept rows. Promo is no exception. Since step 3 the
@@ -216,7 +216,7 @@ export interface OwnerReplies {
 /**
  * How often the owner writes back to this address, and how quickly.
  *
- * docs/specs/email.md §6 asks a triage run to be told *«how many times the owner
+ * docs/email.md §6 asks a triage run to be told *«how many times the owner
  * replied and how fast»*. "How fast" is measured the only way that means
  * anything: inside a thread, from their message to the owner's next one. A
  * reply with nothing before it in the thread is counted as a reply and left

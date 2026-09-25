@@ -1,7 +1,7 @@
 /**
  * `buddi mcp`, end to end: an MCP client talking to the server over an
  * in-memory transport, the server talking to a real dashboard on loopback,
- * the dashboard on a throwaway database (docs/specs/mcp.md §5).
+ * the dashboard on a throwaway database (docs/mcp.md §5).
  *
  * What is asserted, one family at a time:
  *   - the tools are listed, and the reads answer with what the routes serve;

@@ -1,5 +1,5 @@
 /**
- * `ctx.buddi`, built by core for each plugin (docs/specs/plugin-host-api.md).
+ * `ctx.buddi`, built by core for each plugin (docs/plugin-host-api.md).
  *
  * What the spec promises, checked where it lives: the six always-present
  * areas and only the declared ones beside them; one host per plugin, however

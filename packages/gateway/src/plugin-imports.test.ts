@@ -1,6 +1,6 @@
 /**
  * Every plugin reaches core through `ctx.buddi` and `@buddi/core/plugin`, and
- * nothing else (docs/specs/plugin-host-api.md §6).
+ * nothing else (docs/plugin-host-api.md §6).
  *
  * This is not a sandbox — a plugin runs in buddi's process and could import a
  * file by absolute path — it is what makes a reach past the host visible in
@@ -13,7 +13,7 @@
  *  - an import of `@buddi/runtime`, `@buddi/gateway` or any `@buddi/tool-*`;
  *  - a relative import that leaves the plugin's own package;
  *  - a `core.` table named in a SQL string, outside tests. Until each plugin
- *    connects as its own Postgres role (§11, deferred), this is the scope
+ *    connects as its own Postgres role (§6, not done), this is the scope
  *    rule for `ctx.buddi.db`.
  *
  * buddi-plugins runs the same check from its root `pnpm test`

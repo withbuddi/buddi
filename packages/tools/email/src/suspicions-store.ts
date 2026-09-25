@@ -1,7 +1,7 @@
 /**
  * The two tests behind `email.suspicious-sender`, and where each of them lives.
  *
- * docs/specs/email.md §7: *«a first-time sender imitating a known one (display
+ * docs/email.md §7: *«a first-time sender imitating a known one (display
  * name matches, address does not), or a message asking for credentials, a wire,
  * or a gift card»*. They are two different kinds of question and they are
  * answered in two different places on purpose:

@@ -1,5 +1,5 @@
 /**
- * The scrubber (docs/specs/owner-secrets.md §5, acceptance 4).
+ * The scrubber (docs/owner-secrets.md §5, acceptance 4).
  *
  * What a stored value looks like when it comes back out of a process, a page
  * or a header: exact, URL-encoded (both space spellings), JSON-escaped, and

@@ -1,5 +1,5 @@
 /**
- * What a mail watcher's wake run is handed (docs/specs/email.md §7, step 4).
+ * What a mail watcher's wake run is handed (docs/email.md §7, step 4).
  *
  * No database: the pool is a fake that answers the two queries the email
  * plugin's own thread readers make, so what is under test is the composition —

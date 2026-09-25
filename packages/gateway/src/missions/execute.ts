@@ -96,7 +96,7 @@ export interface PreparedRun {
  * `finding` is there for a wake run: the watcher that woke this mission knows
  * things the mission's own prompt cannot, and a `prepare` that can see it can
  * put them in front of the agent — the mail watchers hand over the conversation
- * the finding is about (docs/specs/email.md §7).
+ * the finding is about (docs/email.md §7).
  */
 export type PrepareRun = (
   mission: Mission,

@@ -60,7 +60,7 @@ describe('the shell', () => {
     }
     expect(legacyRedirect('#/conversations/abc')).toBe('#/activity/conversations/abc');
     /*
-     * Mail is a plugin's page now (docs/specs/plugin-pages.md §7 step 2), and
+     * Mail is a plugin's page now (docs/plugin-pages.md §7 item 2), and
      * these two hashes are in bookmarks, in the owner's history and in every
      * "open in buddi" link Telegram has sent. A conversation keeps its id.
      */

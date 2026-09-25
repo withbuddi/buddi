@@ -1,5 +1,5 @@
 /**
- * The mail watchers, in the order docs/specs/email.md §13 builds them.
+ * The mail watchers, in the order docs/email.md §7 lists them.
  *
  * All six of §7 are here now: step 4 built `email.waiting-on-me` and
  * `email.date-stated`, and step 6 the four that remained —
@@ -42,7 +42,7 @@ export {
   MAX_DATE_FINDINGS,
 } from './date-stated.js';
 
-/* ---- step 6 (docs/specs/email.md §13.6) ---- */
+/* ---- step 6 (docs/email.md §7) ---- */
 export {
   createPromisedReplySentinel,
   promisedReply,

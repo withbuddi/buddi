@@ -311,7 +311,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry, providerSelection: accounts?.selection }));
   adoptProcessCatalog(env, catalog);
   /*
-   * What `ctx.buddi` needs and no context carries (docs/specs/plugin-host-api.md):
+   * What `ctx.buddi` needs and no context carries (docs/plugin-host-api.md):
    * how the shared transport is made, which core may not import (the `http`
    * area makes one with its address guard as the socket's resolver), and the
    * live roster for `owner.agentForRole` — read on each call, so an agent
@@ -383,7 +383,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
   /*
-   * The output scrubber's source, once per process (docs/specs/owner-secrets.md
+   * The output scrubber's source, once per process (docs/owner-secrets.md
    * §5): every owner secret by name, buddi's own keys under theirs. Set here,
    * where every entry point builds its pool, so `buddi chat`, `buddi ask`,
    * `buddi serve` and the dashboard all scrub. The first async choke point

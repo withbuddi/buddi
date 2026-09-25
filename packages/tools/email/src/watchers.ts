@@ -1,7 +1,7 @@
 /**
  * The watchers' settings and the judgements they make, as pure functions.
  *
- * docs/specs/email.md §7 — all six sentinels live here: step 4's
+ * docs/email.md §7 — all six sentinels live here: step 4's
  * `email.waiting-on-me` and `email.date-stated`, and step 6's
  * `email.promised-reply`, `email.receipt-or-bill`, `email.suspicious-sender`
  * and `email.unanswered-by-them`. Each is a query plus a call into this file,
@@ -72,7 +72,7 @@ export const WARNING_WAITING_DAYS = 7;
  */
 export const STALE_WAITING_DAYS = 30;
 
-/* ---- step 6's three settings (docs/specs/email.md §7) ---- */
+/* ---- step 6's three settings (docs/email.md §7) ---- */
 
 /**
  * How long a promise may go unanswered before `email.promised-reply` says so.

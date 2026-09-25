@@ -1,7 +1,7 @@
 /**
  * The synthetic plugin the page engine is tested against.
  *
- * `docs/specs/plugin-pages.md` §7 step 1: the proof that the engine is generic
+ * `docs/plugin-pages.md` §7 item 1: the proof that the engine is generic
  * is a plugin that is not email using every component once. It ships two pages
  * — a rail place and a settings tab — a query per read and a tool per write,
  * and nothing behind them but constants, so the same fixture serves core's

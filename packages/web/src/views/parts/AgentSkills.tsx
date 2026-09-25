@@ -2,7 +2,7 @@
  * The agent sheet's Skills tab: the procedures this agent follows.
  *
  * Two kinds, kept apart like the Memory tab keeps preferences and notes. The
- * skills it learned are files it proposed and you kept (docs/specs/learning.md):
+ * skills it learned are files it proposed and you kept (docs/learning.md):
  * each shows its version, where it came from, the untrusted mark when a page
  * or a mail was in view as it was proposed, a link back to the proposal, and
  * "Remove". Removing deletes the current file only; every version stays in

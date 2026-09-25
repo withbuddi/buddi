@@ -1,5 +1,5 @@
 /**
- * The approval behind a secret's use (docs/specs/owner-secrets.md §2).
+ * The approval behind a secret's use (docs/owner-secrets.md §2).
  *
  * When a use needs the owner's yes, `use.ts` records an ordinary action for
  * this tool — the existing approvals path, so the card reaches every surface

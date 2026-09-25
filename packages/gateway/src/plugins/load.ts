@@ -230,7 +230,7 @@ export function packageUses(entry: string): { ok: true; uses: PluginUse[] } | { 
 /**
  * Why a loaded manifest's `uses` cannot register, or undefined: an area this
  * build does not have, or a list that is not the one its package.json — and
- * so the install card — declared (docs/specs/plugin-host-api.md §5).
+ * so the install card — declared (docs/plugin-host-api.md §5).
  */
 export function usesProblem(manifest: PluginManifest, entry: string): string | undefined {
   const declared = parsePluginUses(manifest.uses, `plugin "${manifest.name}"'s manifest uses`);

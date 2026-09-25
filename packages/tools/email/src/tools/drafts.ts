@@ -131,7 +131,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
   async execute(input, ctx) {
     const agentId = requireAgentId(ctx.agentId, 'email.draft_reply');
     const original = await requireMessage(ctx.buddi!.db, input.inReplyTo);
-    // docs/specs/email.md §4: "`send` and `draft_reply` take the account from the
+    // docs/email.md §4: "`send` and `draft_reply` take the account from the
     // thread they answer". There is no argument for it and there must not be
     // one — a reply leaves from the mailbox it arrived in, and an agent that
     // could choose otherwise could answer a client from the owner's private
@@ -155,7 +155,7 @@ export const draftReply: ToolDefinition<z.infer<typeof draftReplyInput>, unknown
       );
     }
 
-    // docs/specs/email.md §8: one conversation, one live draft. A second
+    // docs/email.md §8: one conversation, one live draft. A second
     // `draft_reply` on the same thread rewrites the one that is there rather
     // than stacking another beside it — "tapping Draft a reply twice edits one
     // draft" (§12.4) — with the one exception that makes the whole lifecycle
@@ -373,7 +373,7 @@ export const draftNew: ToolDefinition<z.infer<typeof draftNewInput>, unknown> = 
     if (to.length === 0) throw new Error('email.draft_new: at least one recipient is required');
     // `draft_new` always creates. It answers nothing, so there is no thread to
     // hold a live draft, and two new messages to the same stranger are two
-    // messages rather than one rewritten (docs/specs/email.md §8).
+    // messages rather than one rewritten (docs/email.md §8).
     const record = await insertLiveDraft({
       db: ctx.buddi!.db,
       files: ctx.buddi!.files!,

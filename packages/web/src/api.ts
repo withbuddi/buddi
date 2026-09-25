@@ -1201,7 +1201,7 @@ export interface EngineChange {
 }
 
 /* ------------------------------------------------------------------ *
- * Secrets: the owner vault (docs/specs/owner-secrets.md §6), from
+ * Secrets: the owner vault (docs/owner-secrets.md §6), from
  * `packages/gateway/src/web/secrets.ts`. There is no read path for a value:
  * a secret is a name, its bindings and its use record, and the writes are the
  * ownerOnly tools the act route invokes as the owner.
@@ -1515,7 +1515,7 @@ export const api = {
     ),
 
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
-  /* ---- secrets: the owner vault (docs/specs/owner-secrets.md §6) ---- */
+  /* ---- secrets: the owner vault (docs/owner-secrets.md §6) ---- */
   /** The page's one read: the secrets, the destinations the plugins register, buddi's own keys. */
   secrets: () => get<SecretsView>('/secrets'),
   /** The use log, newest first — one secret's when a name is given. */

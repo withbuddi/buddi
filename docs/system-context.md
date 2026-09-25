@@ -1,6 +1,10 @@
-# Built-in system context
+---
+title: "Built-in system context"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-18
+# Built-in system context
 
 Every agent run through the shared gateway wiring receives a turn-start clock
 snapshot and a bounded host summary, including Dashboard, Telegram, CLI,

@@ -1,5 +1,5 @@
 /**
- * Learned rules through the owner's one inbox (docs/specs/learning.md §2 item 3).
+ * Learned rules through the owner's one inbox (docs/learning.md §2 item 3).
  *
  * `learn.ts` decides *whether* a sender's history proposes a rule; this file
  * is how the proposal travels. It goes to `core.proposals` as a `policy`

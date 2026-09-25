@@ -1,7 +1,7 @@
 /**
  * The pinned phrase tables the four step-6 watchers read, and nothing else.
  *
- * docs/specs/email.md §7 asks four questions of a message's own words: did the
+ * docs/email.md §7 asks four questions of a message's own words: did the
  * owner promise to come back to somebody, is this a receipt, is somebody asking
  * for a password or a wire, and did the owner ask a question nobody answered.
  * Every one of them is a *judgement over text*, so it lives here: a string in,
@@ -189,7 +189,7 @@ export const GENERIC_NAMES: readonly string[] = [
  * than a corporate address book, and the two failures are not symmetric — the
  * collision costs a warning the agent reads the thread about, while dropping
  * the sort costs *silence* about the comma form, which is exactly the form an
- * impostor would copy. It is stated in docs/specs/email.md §7 as a limit.
+ * impostor would copy. It is stated in docs/email.md §7 as a limit.
  */
 export function nameKey(text: string): string {
   let out = (text ?? '')

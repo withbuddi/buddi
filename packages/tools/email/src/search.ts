@@ -1,5 +1,5 @@
 /**
- * The mail search query, built once (docs/specs/email.md §9).
+ * The mail search query, built once (docs/email.md §9).
  *
  * `email.search` and the Mail page's `threads` query ask the same question of the same
  * table. One builder writes the whole statement for both — not just the WHERE
@@ -39,7 +39,7 @@
  * the documented case-insensitive substring into a fuzzy word match that finds
  * `invoice` for `invoicing` and misses `@acme.` in an address. A search whose
  * meaning changes under the agent is worse than a slow one. Full-text search
- * over archives is §11's later work, on purpose.
+ * over archives is in §11's list of what is not done, on purpose.
  */
 import { localDateString } from '@buddi/core/plugin';
 import { normalizeAddress } from './mail.js';

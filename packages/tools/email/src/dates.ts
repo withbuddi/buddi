@@ -1,7 +1,7 @@
 /**
  * Dates stated in a message — the deterministic half of `email.date-stated`.
  *
- * docs/specs/email.md §7: *«a message states a date within the next 14 days (a
+ * docs/email.md §7: *«a message states a date within the next 14 days (a
  * deadline, an appointment, a due date), and no reminder exists for it»*. This
  * file finds the date. It is pure: a string and a reference instant in, a list
  * of `(day, phrase, confidence)` out, no database, no model, no clock of its

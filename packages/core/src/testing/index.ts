@@ -1,6 +1,6 @@
 /**
  * `@buddi/core/testing` — the one entry besides `@buddi/core/plugin` a
- * plugin's tests may import (docs/specs/plugin-host-api.md §6).
+ * plugin's tests may import (docs/plugin-host-api.md §6).
  *
  * A plugin's tests drive it through core's real machinery: a registry, a
  * migrated database, the approval path, a host built as `register()` builds

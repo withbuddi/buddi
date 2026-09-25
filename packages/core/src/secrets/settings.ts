@@ -1,5 +1,5 @@
 /**
- * The Keys and secrets page's reads and writes (docs/specs/owner-secrets.md §6).
+ * The Keys and secrets page's reads and writes (docs/owner-secrets.md §6).
  *
  * Reads are page queries on core's own `secrets` plugin; every write is an
  * `ownerOnly` tool — no model ever sees one, the same way email's add-account
@@ -194,7 +194,7 @@ const putInput = z.object({
 /**
  * Store what the owner typed, then look for it where it may already be. The
  * answer names the places and the counts; the owner decides about the one-tap
- * scrub (`secrets.scrub_history`) — the spec's §10 decision, history scrubbed
+ * scrub (`secrets.scrub_history`) — docs/owner-secrets.md §6, history scrubbed
  * on save only with the owner's tap.
  */
 const put = {

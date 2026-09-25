@@ -13,7 +13,7 @@ export const MAX_OPEN_GOALS = 12;
 /**
  * The sentence the owner reads when the thirteenth is proposed.
  *
- * A constant because the refusal is part of the contract (docs/specs/goals.md
+ * A constant because the refusal is part of the contract (docs/goals.md
  * §10.5): the tool repeats it verbatim, and the test asserts it verbatim.
  */
 export const TOO_MANY_GOALS =

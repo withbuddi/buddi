@@ -1,5 +1,5 @@
 /**
- * Policies a plugin learned, proposed through core (docs/specs/learning.md
+ * Policies a plugin learned, proposed through core (docs/learning.md
  * §2 item 3).
  *
  * The model proposes a policy with `learning.propose_policy`; a plugin that

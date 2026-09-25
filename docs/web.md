@@ -1,6 +1,10 @@
-# The web plugin
+---
+title: "The web plugin"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-15
+# The web plugin
 
 `@buddi/tool-web` gives an agent two things it did not have: the ability to
 search the live web, and the ability to read one page. It is a **capability**,

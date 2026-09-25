@@ -1,5 +1,5 @@
 /**
- * What the mail pages read (`docs/specs/plugin-pages.md` §3, `email.md` §8–§10).
+ * What the mail pages read (`docs/plugin-pages.md` §3, `email.md` §8–§10).
  *
  * These are the reads the Mail page and Settings → Email used to make through
  * `/api/email/*`. They are the same reads, over the same store functions, with
@@ -579,7 +579,7 @@ export function policiesQuery(): PageQuery {
 }
 
 /**
- * The conversations a `thread` rule may be about (docs/specs/email.md §5).
+ * The conversations a `thread` rule may be about (docs/email.md §5).
  *
  * A rule about one conversation is **picked, never typed**: the database names
  * a thread by the root Message-ID of its chain, which is not something an
@@ -618,7 +618,7 @@ export function ruleThreadsQuery(): PageQuery {
   };
 }
 
-/** The five numbers the mail watchers read (docs/specs/email.md §7). */
+/** The five numbers the mail watchers read (docs/email.md §7). */
 export function watcherSettingsQuery(): PageQuery {
   return {
     name: 'watcher_settings',

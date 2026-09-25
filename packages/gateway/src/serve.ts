@@ -490,7 +490,7 @@ export async function main(): Promise<void> {
   const { pool, now } = wiring;
 
   /*
-   * The gateway's own log sinks, scrubbed (docs/specs/owner-secrets.md §5,
+   * The gateway's own log sinks, scrubbed (docs/owner-secrets.md §5,
    * choke point 4): a scheduler, sentinel, source or mission loop line is text
    * leaving core, and the same automaton reads it. Synchronous by necessity;
    * the composition root primed it at boot, and a line before the first prime
@@ -687,7 +687,7 @@ export async function main(): Promise<void> {
         ...missionDeps,
         deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
         // Two, composed: the weekly digest on the recap, and the conversation
-        // a mail watcher's finding is about on a wake run (docs/specs/email.md §7).
+        // a mail watcher's finding is about on a wake run (docs/email.md §7).
         prepare: composePrepare(createDigestPrepare(pool, { now }), createMailWatcherPrepare(pool)),
         askApproval,
       }),

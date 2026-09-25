@@ -1,5 +1,5 @@
 /**
- * `http.header` (docs/specs/owner-secrets.md §3): the header inserted by the
+ * `http.header` (docs/owner-secrets.md §3): the header inserted by the
  * area itself, after the address checks, from the host the URL names — never
  * the caller's claim; HTTPS only; a pending approval and a refusal come back
  * as typed failures; the destination is registered under core's own name and

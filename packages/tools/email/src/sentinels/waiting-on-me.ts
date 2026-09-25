@@ -1,7 +1,7 @@
 /**
  * `email.waiting-on-me` — a conversation has been waiting on the owner.
  *
- * docs/specs/email.md §7: *«a thread in `waiting-on-me` for more than N days
+ * docs/email.md §7: *«a thread in `waiting-on-me` for more than N days
  * (default 2), from a sender the owner has replied to before»*. Four conditions,
  * and every one of them exists to keep this from being a nag:
  *
@@ -96,7 +96,7 @@ const WAITING_SOURCE = `
      -- twenty times a day about mail from 2019 forever.
      and li.at >= $1::timestamptz - make_interval(days => $3::int)
      -- The owner has written to them before, from this mailbox: his own mail,
-     -- whatever client he typed it in (docs/specs/email.md §5's departure).
+     -- whatever client he typed it in (docs/email.md §5).
      and exists (
        select 1 from email.messages o
         where o.account_id = li.account_id

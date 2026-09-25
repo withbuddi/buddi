@@ -1,5 +1,5 @@
 /**
- * Threads and the Sent folder, end to end (docs/email.md §13.3).
+ * Threads and the Sent folder, end to end (docs/email.md §3, §6).
  *
  * Skipped unless DATABASE_URL is set. It never touches the developer's data:
  * the suite creates its own database, migrates core plus this plugin into it,
@@ -409,7 +409,7 @@ suite('email threads (postgres + fake imap)', () => {
       ]);
       // The proposal about this thread is revoked, not carried forward: an
       // applied decision holds the thread's one live slot, so there is nothing
-      // left for the owner to keep (docs/specs/email.md §3). The fixture's
+      // left for the owner to keep (docs/email.md §3). The fixture's
       // unrelated `sender` proposal is untouched, hence the scope filter.
       const { rows: proposal } = await pool.query(
         `select revoked_at is not null as revoked from email.policies

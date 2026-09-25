@@ -1,6 +1,6 @@
 /**
  * The owner's secrets as rows, and their values in the vault
- * (docs/specs/owner-secrets.md §2, §7).
+ * (docs/owner-secrets.md §2, §7).
  *
  * Names, bindings and uses live in `core.secrets`, `core.secret_bindings` and
  * `core.secret_uses`; a value lives only in the vault, under

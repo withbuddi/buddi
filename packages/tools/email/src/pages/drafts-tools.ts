@@ -1,5 +1,5 @@
 /**
- * The owner's own hands on a draft (docs/specs/email.md §8).
+ * The owner's own hands on a draft (docs/email.md §8).
  *
  * An agent writes a draft; the owner reads the conversation it answers, edits
  * it, throws it away, or sends it — and "sends it" is `email.send`, gated,

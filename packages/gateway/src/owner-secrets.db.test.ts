@@ -1,6 +1,6 @@
 /**
  * The email plugin's mailbox passwords, moved into owner secrets at start
- * (docs/specs/owner-secrets.md §7, acceptance 5): adopted from a throwaway
+ * (docs/owner-secrets.md §7, acceptance 5): adopted from a throwaway
  * vault and from the day-1 `.env` copy, idempotently; the old entries gone
  * only after the new ones read back; the copies cleared from the environment
  * with the tuning knobs left alone; and both mailboxes then polled with no

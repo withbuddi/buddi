@@ -1,5 +1,5 @@
 /**
- * The tools `buddi mcp` publishes (docs/specs/mcp.md §4).
+ * The tools `buddi mcp` publishes (docs/mcp.md §4).
  *
  * Each is a thin client over the dashboard's own routes: reads return what the
  * dashboard would show, writes go through `POST /api/mcp/request` and wait for

@@ -1,5 +1,5 @@
 /**
- * Learned skills as files (docs/specs/learning.md §2, step 2).
+ * Learned skills as files (docs/learning.md §2, step 2).
  *
  * A kept `propose_skill` becomes a skill file in the agent's own skills
  * directory — `<agent dir>/skills/<name>.md`, the directory the catalog

@@ -1,6 +1,6 @@
 /**
  * `ctx.buddi`: the one surface a plugin reaches core through
- * (docs/specs/plugin-host-api.md).
+ * (docs/plugin-host-api.md).
  *
  * The rest of a context is the *call* — who called, in which conversation,
  * under which approval. This is the *host*: everything a plugin reaches beyond
@@ -31,7 +31,7 @@ export interface BuddiHost {
   log(line: string): void;
   /**
    * Replace any stored value a text contains with `‹secret:NAME›`
-   * (docs/specs/owner-secrets.md §5) — buddi's own keys included, under their
+   * (docs/owner-secrets.md §5) — buddi's own keys included, under their
    * own names. Never the reverse, and never a read: the only thing a plugin
    * learns is *that* a value was there, which is exactly what it must refuse
    * to store. Always present, like `log`.
@@ -154,7 +154,7 @@ export interface HttpRequest {
   method?: string;
   headers?: Record<string, string>;
   /**
-   * A secret goes into one header of this request (docs/specs/owner-secrets.md
+   * A secret goes into one header of this request (docs/owner-secrets.md
    * §3, `http.header`): core reads the secret by name, finds the binding that
    * names this request's host and header, applies the rule, and inserts the
    * header itself after the address checks — the value never passes through
@@ -266,7 +266,7 @@ export interface ScheduleArea {
 }
 
 /* ------------------------------------------------------------------ *
- * Secrets (docs/specs/owner-secrets.md §2, §3)
+ * Secrets (docs/owner-secrets.md §2, §3)
  * ------------------------------------------------------------------ */
 
 /**
@@ -349,7 +349,7 @@ export type SecretUseResult =
   | { refused: string };
 
 /**
- * The owner's secrets, used and never read (docs/specs/owner-secrets.md).
+ * The owner's secrets, used and never read (docs/owner-secrets.md).
  * There is no `get`: a value reaches a plugin only through one of its own
  * destinations' `deliver`.
  */

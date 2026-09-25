@@ -1,5 +1,5 @@
 /**
- * The weekly learning digest (docs/specs/learning.md §5).
+ * The weekly learning digest (docs/learning.md §5).
  *
  * Once a week, one message on Telegram and a card on Home: what buddi learned
  * (memory notes added, skills, rules and changes kept: counts and up to three

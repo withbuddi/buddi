@@ -1,5 +1,5 @@
 /**
- * A TOTP code from a seed (docs/specs/owner-secrets.md §4, "TOTP seeds").
+ * A TOTP code from a seed (docs/owner-secrets.md §4, "TOTP seeds").
  *
  * A secret marked TOTP keeps its value as the seed; what is delivered is the
  * current code. The owner turns TOTP on per secret, off by default, because it

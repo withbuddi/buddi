@@ -184,7 +184,7 @@ suite('email policies (postgres + fake imap)', () => {
         action: 'ignore',
         origin: 'learned',
         // Proposed, not applied: only INBOX is synced, so "never wrote back"
-        // is an inference (docs/specs/email.md §3). The owner keeps it on the page.
+        // is an inference (docs/email.md §3). The owner keeps it on the page.
         proposed: true,
       });
       // It says which verdicts it was learned from.
@@ -824,7 +824,7 @@ suite('email policies (postgres + fake imap)', () => {
 
   it('drops the run count on a day of synthetic headers', async () => {
     /*
-     * docs/specs/email.md §12.6 — "model runs for mail drop by two thirds". This is
+     * docs/email.md §12.6 — "model runs for mail drop by two thirds". This is
      * that measurement, on a synthetic day shaped like the one the review
      * described: about three quarters newsletters from a handful of repeat
      * senders, the rest genuine mail from people.

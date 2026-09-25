@@ -124,13 +124,12 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   const registry = new ToolRegistry();
   registry.register(createSystemManifest());
   // The approval behind an owner secret's use: an ownerOnly tool no model
-  // sees, run only from an approved action (docs/specs/owner-secrets.md §2).
+  // sees, run only from an approved action (docs/owner-secrets.md §2).
   registry.register(createSecretsManifest());
   // Nothing domain-specific is compiled in any more. Finance was the last one,
   // and it is now installed like any other plugin (`buddi plugins install
-  // packages/tools/finance` in a checkout), which is why an agent that grants
-  // `finance.*` needs that install before it will load. See
-  // docs/install-foundation.md.
+  // <path>/buddi-plugins/finance` in a checkout), which is why an agent that
+  // grants `finance.*` needs that install before it will load.
   registry.register(emailManifest);
   registry.register(memoryManifest);
   registry.register(artifactsManifest);
@@ -186,7 +185,7 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   // takes the registry for two reasons: a proposed grant is resolved against
   // it, and `platform.installed_tools` is a reflection of it.
   registry.register(createPlatformManifest(registry));
-  // The writes `buddi mcp` asks for, each one an approval (docs/specs/mcp.md).
+  // The writes `buddi mcp` asks for, each one an approval (docs/mcp.md).
   // Owner-only: no model's tool list holds them and no grant reaches them.
   registry.register(createMcpManifest(registry));
   // Delegation is registered last and takes the registry itself: the nested run

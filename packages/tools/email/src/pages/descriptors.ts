@@ -1,5 +1,5 @@
 /**
- * The two mail screens, as data (`docs/specs/plugin-pages.md`).
+ * The two mail screens, as data (`docs/plugin-pages.md`).
  *
  * `Mail.tsx` and `Email.tsx` used to be compiled into the dashboard; this is
  * what is left of them — a tree of generic components, a query per read and a
@@ -264,7 +264,7 @@ const mail: PageDescriptor = {
       text: 'What buddi has read, newest first. Open a conversation to read it, or the reply written for it.',
     },
     /*
-     * Four filters and a phrase, and not one more (docs/specs/email.md §9):
+     * Four filters and a phrase, and not one more (docs/email.md §9):
      * from, since, until and "has attachments" are the ones that answer a
      * question an owner actually has in front of a mailbox. It searches on
      * submit rather than on every keystroke — a substring search over bodies
@@ -534,7 +534,7 @@ const addRule: Component = {
     },
     {
       /*
-       * **Picked, never typed** (docs/specs/email.md §5). A thread is named in
+       * **Picked, never typed** (docs/email.md §5). A thread is named in
        * the database by the root Message-ID of its chain, which is not
        * something an owner has, so the one scope that cannot be a text field
        * is a list of subjects — re-read whenever the mailbox above changes.
@@ -605,7 +605,7 @@ const addRule: Component = {
   },
 };
 
-/** The five numbers the mail watchers read (docs/specs/email.md §7). */
+/** The five numbers the mail watchers read (docs/email.md §7). */
 const watchers: Component = {
   kind: 'form',
   title: 'Watchers',
@@ -803,14 +803,14 @@ const settings: PageDescriptor = {
         },
         /*
          * Learned rules are proposed on the owner's one inbox, beside what the
-         * agents propose (docs/specs/learning.md §2 item 3). A link rather
+         * agents propose (docs/learning.md §2 item 3). A link rather
          * than a second copy of those cards: keeping one is core's act and
          * this plugin's apply, and one place to do it is one place to get it
          * right. The link lands filtered to this plugin's rules.
          */
         /*
-         * Learned rules are proposed on the owner's one inbox (docs/specs/
-         * learning.md §2 item 3). A link rather than a second copy of those
+         * Learned rules are proposed on the owner's one inbox (docs/learning.md
+         * §2 item 3). A link rather than a second copy of those
          * cards: keeping one is core's act and this plugin's apply, and one
          * place to do it is one place to get it right. It lands filtered to
          * this plugin's rules.

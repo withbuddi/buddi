@@ -1,7 +1,7 @@
 /**
  * One generic page, drawn from a descriptor.
  *
- * `docs/specs/plugin-pages.md` §5. Everything here is a *shape*: a section, a
+ * `docs/plugin-pages.md` §5. Everything here is a *shape*: a section, a
  * list, a form, a detail. Nothing in this file knows a plugin, a tool or a
  * query by name — it is handed a tree, it draws it with the dashboard's own
  * primitives, and it asks the gateway for the data each piece names.

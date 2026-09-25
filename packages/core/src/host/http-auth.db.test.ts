@@ -1,6 +1,6 @@
 /**
  * The `http.header` path end to end, through the host a plugin is handed
- * (docs/specs/owner-secrets.md §3): a plugin declares `http` and asks for
+ * (docs/owner-secrets.md §3): a plugin declares `http` and asks for
  * `auth: { secret }`; core finds the binding whose target names this request's
  * host and header, applies the rule, reads the vault, inserts the header after
  * the address checks, and records the use. The database is created here and

@@ -1,7 +1,7 @@
 /**
  * The three routes a plugin's screens are made of.
  *
- * `docs/specs/plugin-pages.md` §3. The dashboard reads the descriptors once,
+ * `docs/plugin-pages.md` §3. The dashboard reads the descriptors once,
  * draws them with its own generic components, and then:
  *
  *   - `GET  /api/pages`                     — every descriptor, session-gated;

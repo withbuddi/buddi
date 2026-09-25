@@ -293,7 +293,7 @@ describe('imap body structure', () => {
       }),
       // The part id is what `email.fetch_attachment` later fetches by; it is
       // read here, at ingest, so a fetch does not have to parse the message
-      // again (docs/specs/email.md §10).
+      // again (docs/email.md §10).
     ).toEqual([{ filename: 'statement.pdf', mime: 'application/pdf', sizeBytes: 4096, part: '2' }]);
   });
 

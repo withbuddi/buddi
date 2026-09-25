@@ -1,13 +1,18 @@
-# Install: one command, then the dashboard
+---
+title: "Install: one command, then the dashboard"
+status: reference
+updated: 2026-09-25
+---
 
-Status: spec, partly built; see §12
+# Install: one command, then the dashboard
 
 Someone who is not a developer but can type `npm` should get from nothing to a
 working buddi, with their first agent answering in the browser, in ten minutes
-and without reading a terminal. Today the path is `git clone`, Docker Desktop,
-`.env`, `buddi init` and a handful of CLI commands. This spec replaces that
-path for owners, keeps it for developers, and makes the dashboard the surface
-that owns onboarding, upgrades and plugins.
+and without reading a terminal. The developer path — `git clone`, Docker
+Desktop, `.env`, `buddi init` and a handful of CLI commands — stays for
+developers; owners get the package, and the dashboard is the surface that owns
+onboarding, upgrades and plugins. Most of this page is built; §12 says exactly
+what is and what is not, and §13 is for developers working on the package.
 
 This is not a desktop app. A packaged app (Electron or Tauri, DMG or MSI) is a
 thin shell over everything below and is deferred until the install described
@@ -557,16 +562,15 @@ job does not exist yet (§12).
 
 ## 12. What of this is built
 
-Checked against the code on 2026-09-21. The unbuilt part of the order of work
-this section used to carry has moved to [the roadmap](ROADMAP.md).
+Checked against the code on 2026-09-21.
 
 Built:
 
 1. **The published package**: bundling and `bin` (`packages/install`).
 2. **Bundled Postgres under the supervisor**, `buddi` first run, the data
    directory layout, and the maintenance path for upgrade and restore
-   (`packages/install/src/{postgres,supervisor,launcher,environment}.ts`, and
-   [install-foundation.md](install-foundation.md)).
+   (`packages/install/src/{postgres,supervisor,launcher,environment}.ts`;
+   §13 has the map).
 3. **The wizard**, reusing the settings pages; `init` ends in it
    (`packages/cli/src/init.ts`, and [onboarding.md](onboarding.md)).
 4. **Encrypted backup to a folder**, restore with recovery mode, the Backup
@@ -580,7 +584,7 @@ Built:
 7. **The version check and the upgrade action in the dashboard**
    (`packages/web/src/views/Settings.tsx`, `packages/install/src/upgrade.ts`).
 
-Not built, and tracked in [the roadmap](ROADMAP.md):
+Not built:
 
 6. **Linux and Windows.** Linux: the file vault, the bundled Postgres and the
    systemd user unit (`packages/install/src/launcher.ts`, built 2026-09-24
@@ -597,3 +601,132 @@ plugin code executing in the process, and restore.
 
 The app shell, if it comes, wraps the result of steps 1 to 3 and adds
 signing, auto-update and a tray. It is not on this list.
+
+---
+
+## 13. For developers: the package, built and tried
+
+### Where the code lives
+
+- **`packages/install`** (`@buddi/install`) is the runtime of a packaged
+  install: `src/environment.ts` (data directory, private files, installation
+  state, startup lock), `src/supervisor.ts` (process supervision and the
+  control socket), `src/upgrade.ts` (the version check, `<data>/upgrade.json`
+  and the upgrade itself) and `src/launcher.ts`, the `buddi` binary the
+  tarball installs.
+- **The managed cluster** is not install-specific and lives in
+  `packages/core/src/postgres` (`binaries.ts`, `cluster.ts`): the per-platform
+  binaries, `initdb`, the authenticated start, the liveness probe. Core has no
+  dependency on `@embedded-postgres/*`; the binary package is resolved by name
+  from a root the caller supplies. `packages/install/src/postgres.ts` only
+  chooses between that cluster and an external `DATABASE_URL`.
+- **The backup engine** is `packages/core/src/backup`, a driver-based logical
+  dump that needs no `pg_dump`. Nothing in it reads `process.env`; every path
+  arrives in an options object, so the CLI, the supervisor and the dashboard
+  drive the same engine (§8).
+- **Plugin install** is `packages/gateway/src/plugins`: `stage.ts` fetches,
+  unpacks and reads a package **without importing it**, `approve.ts` is the two
+  approvals, `npm.ts` is the only place that shells out to npm, `hash.ts` is
+  what `buddi doctor` recomputes, and `paths.ts` puts everything under
+  `<data>/plugins` (§7).
+- **The dashboard's side of the control socket** is
+  `packages/gateway/src/web/service.ts`, used by the `/api/service` routes; the
+  page is the Service section of `packages/web/src/views/Settings.tsx`.
+- `scripts/release/build.mjs` and `scripts/release/smoke.mjs` are release
+  tooling, not runtime.
+
+`environment()` rewrites the environment before any `@buddi/*` package is
+imported, because those packages compute their path constants at import time.
+That is why it imports none of them, and why the launcher, the supervisor and
+the cluster reach `@buddi/core`, `@buddi/gateway` and `@buddi/cli` through
+dynamic imports. The tarball declares exactly one `bin`, the launcher's
+`buddi`; `build.mjs` strips `bin` from every other staged package.
+
+### Build and verify
+
+From a built checkout:
+
+```sh
+pnpm -r build
+pnpm --filter @buddi/install test
+node scripts/release/build.mjs
+node scripts/release/smoke.mjs /absolute/path/printed/by/build/buddi-0.1.0.tgz
+```
+
+The assembler stages into a new temporary directory, runs npm only there with
+install scripts disabled, and prints the tarball path. The smoke test installs
+that tarball into another temporary directory with a private file vault, a real
+Postgres and the dashboard, and exercises auth, repeat startup, gateway
+stop/start/crash, supervisor death (the database comes back with a *different*
+pid: restarted, not adopted), migration restart, password rotation, database
+death, and dashboard port conflicts, checking that a fixture row survives. By
+default it installs no LaunchAgent, touches no existing database or keychain,
+opens no browser and makes no model call. `--service` also tests the real
+macOS LaunchAgent path under a uniquely named test unit, then removes it.
+
+### Try it in Docker
+
+To meet the packaged install the way a stranger on a clean Linux machine would:
+
+```sh
+pnpm release:trial             # build, image, fresh volume, serve — in one go
+pnpm release:docker            # build the tarball, then an image containing only it
+scripts/release/docker/run.sh  # start it and print the dashboard link
+```
+
+The image is `node:22-bookworm-slim` plus the tarball installed with
+`npm install -g --ignore-scripts`. Optional dependencies stay on, which is how
+`@embedded-postgres/linux-<arch>` arrives, and the build fails if the image's
+architecture did not get its package. There is no checkout, no pnpm and no
+build tools in it; the one addition is `socat`, and buddi runs as the
+unprivileged `node` user.
+
+`run.sh` starts `buddi --no-service --no-open`, so the detached supervisor is
+what runs. The gateway binds 127.0.0.1 inside the container; `socat` forwards
+the container's address to it, and Docker publishes that on `127.0.0.1:4317`.
+The link printed is the launcher's own, good for five minutes;
+`docker exec buddi-trial buddi --no-service --no-open` mints another.
+
+**The port must be the same on both sides.** The dashboard refuses a write
+whose `Origin` is not its own, so the browser must reach it at the port the
+gateway bound. `run.sh` refuses to start when 4317 is already listening on the
+host — most likely your own buddi. `BUDDI_TRIAL_PORT=4318` works around it
+read-only: login and every `GET` work, and writes answer 403. To try the wizard
+for real, stop the local installation first.
+
+Data lives in the named volume `buddi-trial`, so the container is disposable
+and the installation is not; `--reset` removes the volume for a true first run.
+Ctrl-C asks the supervisor to stop and waits for it, so Postgres shuts down
+cleanly. On start, `run.sh` removes the supervisor lock, the control socket and
+`postgres/postmaster.pid` left from a previous container's pid namespace. This
+image is a trial harness, not a distribution.
+
+### Limits worth knowing
+
+- The `@embedded-postgres` package supplies `initdb`, `postgres` and `pg_ctl`,
+  **not** `pg_dump`, `pg_restore` or `psql`. The packaged launcher refuses the
+  checkout's direct-migration and Docker commands; `buddi upgrade`,
+  `buddi version` and the backup verbs work, because the supervisor serves them
+  without those binaries. The pinned distribution is 18.4.0-beta.17, a
+  PostgreSQL 18.4 server; its beta status is a release risk.
+- Postgres major upgrades fail closed. No cluster is converted or deleted
+  automatically.
+- Installing a plugin from a registry needs `npm` on the machine (the one
+  beside the running node, then `PATH`). A directory or a `.tgz` needs none.
+- The recorded `installedHash` covers a plugin's own files, not
+  `node_modules`: it detects a plugin edited after approval, not a tampered
+  dependency. It is not a signature.
+- There is no automatic whole-install rollback. The way back from a migration
+  that failed under new code is the backup taken before the upgrade, named in
+  `<data>/upgrade.json`, in `buddi doctor` and in the sentence the upgrade
+  prints.
+- The session cookie is `SameSite=Strict`, so a dashboard link opened from
+  outside the browser (a terminal, a chat message) without a ticket answers
+  401. The ticket in the link `buddi` prints is what gets in.
+- A stopped gateway is started from a terminal: the Settings switches are
+  served by the gateway itself, so a stop takes the page down with it.
+- A corrupted installation file, an ambiguous active lock, an inaccessible
+  vault or an occupied persisted port fails with diagnostics rather than
+  overwriting data. A process killed during stale-lock recovery can leave
+  `supervisor.lock.recovery`; check the lock and process state before removing
+  it by hand.

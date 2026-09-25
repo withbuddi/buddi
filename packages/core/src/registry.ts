@@ -264,7 +264,7 @@ export class ToolRegistry {
   readonly #pageTools = new Map<string, Set<string>>();
   /** Per plugin, the metrics `parseMetrics` checked and made strict. */
   readonly #metrics = new Map<string, RegisteredMetric[]>();
-  /** Per plugin, what its `ctx.buddi` is bound to (docs/specs/plugin-host-api.md §3). */
+  /** Per plugin, what its `ctx.buddi` is bound to (docs/plugin-host-api.md §3). */
   readonly #bindings = new Map<string, HostBinding>();
 
   /**

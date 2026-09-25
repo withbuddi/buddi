@@ -1,6 +1,6 @@
 /**
  * A mailbox's password, through the owner's secrets
- * (docs/specs/owner-secrets.md §3, §4, "Plugin account credentials").
+ * (docs/owner-secrets.md §3, §4, "Plugin account credentials").
  *
  * Each mailbox's password is an owner secret — named by the account row's
  * `secret_name`, as it always was — bound to this plugin's `email.account`

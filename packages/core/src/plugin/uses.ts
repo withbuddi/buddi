@@ -1,6 +1,6 @@
 /**
  * What a plugin declares it reaches in buddi beyond itself: the areas of
- * `ctx.buddi` that are not always present (docs/specs/plugin-host-api.md §5).
+ * `ctx.buddi` that are not always present (docs/plugin-host-api.md §5).
  *
  * Declared twice, on purpose. The manifest's `uses` is what `ctx.buddi` is
  * built from; `package.json`'s `buddi.uses` is what the install card reads,

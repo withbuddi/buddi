@@ -1,5 +1,5 @@
 /**
- * `ctx.buddi.secrets` (docs/specs/plugin-host-api.md §4.2, owner-secrets.md
+ * `ctx.buddi.secrets` (docs/plugin-host-api.md §4.2, owner-secrets.md
  * §2, §3, §7): the binding found, the target checked by the destination, the
  * rule applied — the kind's `maxRule` included — the first-time card raised
  * through the ordinary approvals path, a foreign kind refused, and no value in

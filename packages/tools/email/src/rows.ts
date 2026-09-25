@@ -147,7 +147,7 @@ export function toMessage(row: Record<string, any>): MessageRecord {
 }
 
 /**
- * Where a draft is in its life (docs/specs/email.md §8).
+ * Where a draft is in its life (docs/email.md §8).
  *
  * `draft` is the agent's words, `edited` the owner's over them, and the three
  * after are ends: sent, said no to, or left alone long enough that nobody is

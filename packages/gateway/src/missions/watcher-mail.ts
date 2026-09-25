@@ -1,7 +1,7 @@
 /**
  * What a mail watcher's wake run is given beyond the finding.
  *
- * docs/specs/email.md §7 asks that a watcher's finding lead to *«a report, a
+ * docs/email.md §7 asks that a watcher's finding lead to *«a report, a
  * draft, or a reminder, never to a send without the card»* — and §6 settled
  * what a mail run is given before it judges anything: **the thread, not the
  * message**. A wake run is a mail run. Without this the agent would be woken

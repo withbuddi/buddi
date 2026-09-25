@@ -1,5 +1,5 @@
 /**
- * The mail screens, as data (`docs/specs/plugin-pages.md`).
+ * The mail screens, as data (`docs/plugin-pages.md`).
  *
  * The Mail place and Settings → Email used to be compiled into the dashboard
  * by name — `Mail.tsx`, `Email.tsx`, a rail entry, a settings section and a

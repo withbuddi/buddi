@@ -276,7 +276,7 @@ export interface WebServerDeps {
   /**
    * Post a pending approval to the owner's Telegram chat — the same hook an
    * unattended run uses. An MCP write raises its card on both surfaces
-   * (docs/specs/mcp.md §2); without it the card is on the dashboard only.
+   * (docs/mcp.md §2); without it the card is on the dashboard only.
    */
   askApproval?: ((action: ActionRecord) => Promise<void>) | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
@@ -529,7 +529,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   writeDeps.resumeInteractive = (action, outcome) => chat?.resumeHost(action, outcome);
   /*
    * What an approved MCP write reaches: the functions the dashboard's own
-   * routes below call, and nothing else (docs/specs/mcp.md §2).
+   * routes below call, and nothing else (docs/mcp.md §2).
    */
   const unwrap = async <T>(result: WriteResult<T> | Promise<WriteResult<T>>): Promise<T> => {
     const settled = await result;
@@ -863,7 +863,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       pool: deps.pool,
       agentIds: () => deps.catalog.list().map((a) => a.id),
     });
-    /** The Keys and secrets page (docs/specs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
+    /** The Keys and secrets page (docs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
     const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
     /** The same, for the version and upgrade routes. */
     const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
@@ -1189,7 +1189,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         /*
          * The screens the installed plugins contribute, and nothing else: a
          * rail entry, a settings tab, and the tree of generic components each
-         * is made of (docs/specs/plugin-pages.md). Descriptors are data, like
+         * is made of (docs/plugin-pages.md). Descriptors are data, like
          * views — no plugin code ever runs in the page.
          */
         case '/api/pages':

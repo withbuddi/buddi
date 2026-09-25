@@ -1,6 +1,6 @@
 /**
  * `@buddi/core/plugin`: what a plugin imports from core
- * (docs/specs/plugin-host-api.md §3).
+ * (docs/plugin-host-api.md §3).
  *
  * The contract's types, and the pure helpers a plugin needs beside `ctx.buddi`
  * — a date in the owner's zone, a hash, a page's file answer, a URL check.

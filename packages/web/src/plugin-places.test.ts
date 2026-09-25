@@ -7,7 +7,7 @@
  * a capability nobody can discover — and, worse, one nobody is maintaining a
  * promise about: the rail entry and the settings tab were both invented before
  * the table existed, which is exactly how the email plugin ended up compiled
- * in by name (docs/specs/plugin-pages.md §1).
+ * in by name (docs/plugin-pages.md §1).
  *
  * So the list below is the shell's side of that promise. Each entry names the
  * file that draws the place and the row of the table that documents it, and

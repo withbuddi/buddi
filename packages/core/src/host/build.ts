@@ -1,5 +1,5 @@
 /**
- * Building `ctx.buddi` for one plugin (docs/specs/plugin-host-api.md §3, §4).
+ * Building `ctx.buddi` for one plugin (docs/plugin-host-api.md §3, §4).
  *
  * `register()` binds a plugin — its name, version, schema, tools, declared
  * hosts and declared areas — once (`hostBindingOf`). Every time core hands
@@ -363,7 +363,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   if (declared.has('proposals')) host.proposals = proposalsArea(binding, facts);
   if (declared.has('schedule')) host.schedule = scheduleArea(facts);
   if (declared.has('secrets')) host.secrets = secretsArea(binding, facts, host);
-  // `memory` is a type only in 1.0 (§11): a plugin that declares it gets
+  // `memory` is a type only (docs/plugin-host-api.md §4.2): a plugin that declares it gets
   // nothing yet, and a call is `undefined`.
   return host;
 }

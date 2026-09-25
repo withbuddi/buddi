@@ -1,6 +1,10 @@
-# Writing a plugin
+---
+title: "Writing a plugin"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-24 (host API 1.0)
+# Writing a plugin
 
 Everything an agent can actually *do* is a plugin. This document is the guide to
 writing one: the ten-minute path from nothing to a tool an agent can call, the
@@ -543,7 +547,7 @@ tier it will ever need and narrows each call:
 
 ```ts
 // The developer plugin. The mode is the owner's, set on the agent's page and
-// never by the agent; the always-gated rules (docs/specs/developer.md §5) are
+// never by the agent; the always-gated rules (docs/developer.md §5) are
 // a parser over the command's own words.
 tier: 'session',
 async tierFor(input, ctx) {
@@ -893,7 +897,7 @@ Two more things that hold in practice:
 
 A **goal** is core's object: a target, a deadline, an agent that holds it, and
 a rhythm of checks that runs whether or not anybody is talking to buddi
-(`docs/specs/goals.md`). What can be *measured* is not core's: it comes from
+(`docs/goals.md`). What can be *measured* is not core's: it comes from
 here.
 
 ```ts
@@ -1147,7 +1151,7 @@ Not available to a plugin, on purpose:
 - **Free layout, custom styling, your own components.** The dashboard draws
   your page with its own primitives, in the owner's theme. A plugin that needs
   its own interface serves its own app through the developer proxy
-  (`docs/specs/developer.md`): buddi proxies it behind the dashboard's session
+  (`docs/developer.md`): buddi proxies it behind the dashboard's session
   and the rail links to it.
 - **A place inside a core page.** You add *beside* Home, Settings and the rail,
   never inside them. Home blocks and view descriptors remain the way into Home
@@ -1178,7 +1182,7 @@ export interface PageQuery {
 
 A page is `pages` plus `queries`, and it follows the same rule views do: **a
 screen is data the page interprets; no plugin code runs in the browser.** The
-full contract is `docs/specs/plugin-pages.md`; the shape of it is:
+full contract is `docs/plugin-pages.md`; the shape of it is:
 
 - **Reads are queries, writes are tools.** A component that shows something
   names one of your `queries`; a button that changes something names one of
@@ -1838,7 +1842,7 @@ export const openMeteo: FetchForecast = async (query, http) => {
 
   // Through `ctx.buddi.http`, never the global `fetch`: it is the one
   // transport every long-lived caller shares, one connection per request,
-  // with the address guard in front (docs/specs/plugin-host-api.md §4).
+  // with the address guard in front (docs/plugin-host-api.md §4).
   const response = await http.request({
     url: url.toString(),
     method: 'GET',
@@ -2262,7 +2266,7 @@ third needs a fake transport:
   the plugin holds for as long as it lives — email's mailbox password, handed
   to one IMAP or SMTP session — and each such use is recorded as `held`, not
   delivered, so the owner can see which secrets a plugin's process keeps. The
-  product is `docs/specs/owner-secrets.md`.
+  product is `docs/owner-secrets.md`.
 - **Never `process.env` for a secret.** Not to read one the owner configured,
   and not to write one for later: the environment is readable by every plugin in
   the process.
@@ -2772,7 +2776,7 @@ version each arrived in — is §9b.
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
 | `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
-| `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/specs/owner-secrets.md §3. |
+| `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
 
@@ -2795,7 +2799,7 @@ version each arrived in — is §9b.
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0` — and neither can a tool with a `tierFor`: a permission is keyed on the tool, and the whole point of `tierFor` is that one tool has many costs. |
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
-| `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'other'` | no | This tool's output is text someone other than the owner wrote. A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/specs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
+| `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'other'` | no | This tool's output is text someone other than the owner wrote. A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
 | `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
 | `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
@@ -3031,7 +3035,7 @@ cannot reach the network. It is compared with the `Hosts:` line of your
 ## 9b. Reference: the host, `ctx.buddi`
 
 Everything a plugin reaches beyond its own arguments, in one object bound to
-the plugin (docs/specs/plugin-host-api.md). Core builds it at `register()` from
+the plugin (docs/plugin-host-api.md). Core builds it at `register()` from
 your manifest's name, schema, tools, `network` and `uses`, and puts it on every
 context it hands you: a tool's, a page query's, a metric's, a home block's, a
 preview's, a source's, a sentinel's. §1.1 is the idea; this is every member.
@@ -3117,7 +3121,7 @@ that say otherwise.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. With `auth: { secret, header? }` one of the owner's secrets goes into one header of this request (docs/specs/owner-secrets.md §3, `http.header`): core reads the secret by name, finds the binding that names this request's host and header, applies the rule, and inserts the header itself after the address checks — the value never passes through your hands. HTTPS only; `header` is `Authorization` when absent; a use waiting on the owner throws `SecretPendingError` with the action id, a refusal throws the refusal. |
+| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. With `auth: { secret, header? }` one of the owner's secrets goes into one header of this request (docs/owner-secrets.md §3, `http.header`): core reads the secret by name, finds the binding that names this request's host and header, applies the rule, and inserts the header itself after the address checks — the value never passes through your hands. HTTPS only; `header` is `Authorization` when absent; a use waiting on the owner throws `SecretPendingError` with the action id, a refusal throws the refusal. |
 
 #### `AccountsArea`
 

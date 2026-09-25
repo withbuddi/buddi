@@ -1,6 +1,6 @@
 /**
  * Words and shapes the Keys and secrets page reads and writes
- * (docs/specs/owner-secrets.md §6), kept out of the component so the rules
+ * (docs/owner-secrets.md §6), kept out of the component so the rules
  * can be reasoned about on their own. Pure: no React, no fetch.
  *
  * A binding's `target` is plain JSON that the destination itself checks at

@@ -1,6 +1,10 @@
-# Host execution
+---
+title: "Host execution"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-18
+# Host execution
 
 Grant `host.status`, `host.exec`, and `host.stop` (or `host.*`) to an agent to let
 it process files using Bash, Python and installed utilities on the host. Tool

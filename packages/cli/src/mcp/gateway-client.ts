@@ -2,7 +2,7 @@
  * The loopback client `buddi mcp` speaks to the running gateway with.
  *
  * It is the dashboard's own HTTP API, reached the way `buddi dashboard` reaches
- * it (docs/specs/mcp.md §3): on the default loopback binding the server mints a
+ * it (docs/mcp.md §3): on the default loopback binding the server mints a
  * session for any request that arrives on this machine, and on anything wider
  * the installation's token is turned into a five-minute ticket and exchanged for
  * a session exactly as the dashboard link is. The token itself never leaves

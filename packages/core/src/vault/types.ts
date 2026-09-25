@@ -73,7 +73,7 @@ export const VAULT_SERVICE = 'buddi';
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /**
- * Where an owner secret's value is filed (docs/specs/owner-secrets.md §7): by
+ * Where an owner secret's value is filed (docs/owner-secrets.md §7): by
  * the row's id, never its name, so a rename never touches the vault. The one
  * shape of name that is not environment-variable shaped, and it cannot be one
  * by accident.

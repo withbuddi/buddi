@@ -1,5 +1,5 @@
 /**
- * Search and attachments over a throwaway database (docs/specs/email.md §9, §10).
+ * Search and attachments over a throwaway database (docs/email.md §9, §10).
  *
  * Skipped unless DATABASE_URL is set. Artifacts are written under a temporary
  * data dir, so a fetched attachment never lands in the developer's own store,

@@ -1,6 +1,10 @@
-# Conversations: what the model sees, and what you can say while it works
+---
+title: "Conversations: what the model sees, and what you can say while it works"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Conversations: what the model sees, and what you can say while it works
 
 A conversation is a transcript on disk and a *projection* of it sent to the
 model. The two are not the same thing, and most of what is surprising about a
@@ -148,6 +152,6 @@ Where it lives: `packages/runtime/src/delegate.ts`,
 
 ## Related
 
-- [browser.md](browser.md) and [computer-use.md](computer-use.md) — what an
-  observation holds, which is what the compaction is about.
+- [browser.md](browser.md) — what an observation holds, which is what the
+  compaction is about.
 - [groups.md](groups.md) — a group passes the projection's own cap as well.

@@ -1,5 +1,5 @@
 /**
- * Where the owner's secrets go through this plugin (docs/specs/owner-secrets.md
+ * Where the owner's secrets go through this plugin (docs/owner-secrets.md
  * §3): the three destinations the manifest registers, and the pure helpers the
  * backends and the tools share.
  *
@@ -14,7 +14,7 @@
  * `deliver` parks the value against the use id and nothing else: the tool that
  * asked takes it the same turn and hands it straight to the driver, which is
  * the one place it goes (the extension backend's loopback socket included,
- * §10's decision). There is no read path and no log line carries one.
+ * owner-secrets.md §3). There is no read path and no log line carries one.
  */
 import type { SecretDestination } from '@buddi/core/plugin';
 import { BrowserPreconditionError } from './types.js';

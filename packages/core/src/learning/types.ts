@@ -1,5 +1,5 @@
 /**
- * Learning: buddi proposes, the owner keeps (docs/specs/learning.md).
+ * Learning: buddi proposes, the owner keeps (docs/learning.md).
  *
  * Everything an agent learns is a *proposal* with *provenance*. Nothing here
  * applies itself: a proposal is a row the owner reads, and keeping one is an
@@ -133,7 +133,7 @@ export const MAX_SOURCES = 25;
 
 /**
  * What a plugin gives core so a kept policy becomes the plugin's own rule
- * (docs/specs/learning.md §2 item 3, §4). Core stores the proposal; the
+ * (docs/learning.md §2 item 3, §4). Core stores the proposal; the
  * plugin stores the rule. Registered as `PluginManifest.policies`.
  */
 export interface PolicyHandlerContext {

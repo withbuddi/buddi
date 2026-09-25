@@ -1,5 +1,5 @@
 /**
- * The version of `ctx.buddi` (docs/specs/plugin-host-api.md §7).
+ * The version of `ctx.buddi` (docs/plugin-host-api.md §7).
  *
  * `major.minor`. A minor adds a method, an optional argument or an optional
  * field on a return and never changes what an existing call does; a major

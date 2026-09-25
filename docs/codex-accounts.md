@@ -1,6 +1,10 @@
-# Codex ChatGPT accounts
+---
+title: "Codex ChatGPT accounts"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference (flag-gated), 2026-09-21
+# Codex ChatGPT accounts
 
 Codex ChatGPT accounts are built and live behind `BUDDI_CODEX_EXPERIMENT=1`; they
 are off unless the flag is set. This page is the reference for what the adapter

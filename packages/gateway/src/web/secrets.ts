@@ -1,5 +1,5 @@
 /**
- * The dashboard's Keys and secrets routes (docs/specs/owner-secrets.md §6).
+ * The dashboard's Keys and secrets routes (docs/owner-secrets.md §6).
  *
  * The reads are core's own page queries (`secrets.list`, `secrets.uses`); the
  * writes are the ownerOnly tools of the same manifest — `secrets.put`,

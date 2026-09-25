@@ -1,6 +1,10 @@
-# Operations — backup, restore, and where your data actually lives
+---
+title: "Operations — backup, restore, and where your data actually lives"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Operations — backup, restore, and where your data actually lives
 
 This installation holds your financial history, your mail, the memories your agents
 have formed about you, and the personas you wrote. ARCHITECTURE.md promises that
@@ -964,4 +968,4 @@ does it for you: there is no way to send an unencrypted archive off the machine.
 No credential travels with an archive either way — but your financial history
 and your mail *are* in it, which is exactly what the passphrase is for. The
 provider APIs (Google Drive, Dropbox) that would remove the desktop client from
-this picture are not built; see [the roadmap](ROADMAP.md).
+this picture are not built.

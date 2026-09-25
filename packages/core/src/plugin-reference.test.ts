@@ -73,7 +73,7 @@ export const DOCUMENTED: Record<string, string> = {
 
 /**
  * The host's tables (§9b) carry one more column: the `ctx.buddi` version that
- * introduced each member (docs/specs/plugin-host-api.md §7). Every row must
+ * introduced each member (docs/plugin-host-api.md §7). Every row must
  * name one, and none may be newer than the host this build is.
  */
 export const HOST_DOCUMENTED = Object.keys(DOCUMENTED).filter((name) => DOCUMENTED[name] === path.join('host', 'types.ts'));
@@ -99,7 +99,7 @@ export function sinceColumn(markdown: string, name: string): Map<string, string>
 /**
  * What core runs a plugin's functions on, and the context the plugin is typed
  * against. The fields the first has and the second does not are the ones a
- * plugin reaches through `ctx.buddi` instead (docs/specs/plugin-host-api.md
+ * plugin reaches through `ctx.buddi` instead (docs/plugin-host-api.md
  * §3): the guide may name them only as the host's.
  */
 export const CORE_CONTEXTS: ReadonlyArray<{ core: string; plugin: string; file: string }> = [

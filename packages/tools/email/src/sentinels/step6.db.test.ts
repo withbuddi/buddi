@@ -1,5 +1,5 @@
 /**
- * The four step-6 mail watchers on fixtures (docs/specs/email.md §7, §13.6).
+ * The four step-6 mail watchers on fixtures (docs/email.md §7).
  *
  * Skipped unless DATABASE_URL is set. It never touches the developer's data:
  * the suite creates its own database, migrates core plus this plugin into it,

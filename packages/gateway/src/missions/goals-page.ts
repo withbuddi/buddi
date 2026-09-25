@@ -1,6 +1,6 @@
 /**
  * Where a goal shows: the Home block, the Goals page and the reads behind it
- * (docs/specs/goals.md §7).
+ * (docs/goals.md §7).
  *
  * Step 1 gave a goal a clock and a holder; this is the half the owner can see
  * without asking anybody. Three surfaces, one set of numbers:

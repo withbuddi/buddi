@@ -243,7 +243,7 @@ describe('the waiting-days setting', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Step 6's four watchers (docs/specs/email.md §7, §13.6)
+ * Step 6's four watchers (docs/email.md §7)
  * ------------------------------------------------------------------ */
 
 describe('email.promised-reply', () => {

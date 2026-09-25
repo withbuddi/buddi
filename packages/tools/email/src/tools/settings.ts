@@ -9,7 +9,7 @@
  *    nothing on the spot; the daily `email.retention` pass acts on it, and a
  *    *longer* window never brings back a body that is already gone.
  *
- * And the five the watchers read (docs/specs/email.md §7), one per watcher that
+ * And the five the watchers read (docs/email.md §7), one per watcher that
  * has a number to be told:
  *
  *  - `waitingDays` — how long a conversation may wait on the owner before

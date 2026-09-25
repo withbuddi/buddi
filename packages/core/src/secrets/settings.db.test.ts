@@ -1,5 +1,5 @@
 /**
- * The Keys and secrets page's machinery (docs/specs/owner-secrets.md §6): the
+ * The Keys and secrets page's machinery (docs/owner-secrets.md §6): the
  * owner's writes are `ownerOnly` tools; a save looks for the value where it may
  * already be (events, the transcript, memory) and says where; the one-tap scrub
  * replaces every form of it with the marker; the reads answer names, bindings

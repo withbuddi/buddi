@@ -1,5 +1,5 @@
 /**
- * The plugin host API at install and at load (docs/specs/plugin-host-api.md
+ * The plugin host API at install and at load (docs/plugin-host-api.md
  * §5, §7): `buddi.uses` is read off package.json and shown before anything is
  * imported, a manifest that says otherwise does not register, and a plugin
  * built for a newer host is refused at staging with both numbers.

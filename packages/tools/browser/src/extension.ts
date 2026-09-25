@@ -192,7 +192,7 @@ export class ExtensionDriver implements BrowserDriver {
    * refuses unless it is still `expectedOrigin` — the navigation between the
    * owner's approval and the fill refuses before anything is entered. The value
    * crosses the loopback socket to buddi's own paired extension (owner-secrets
-   * §10's decision) and is kept by nothing on the way.
+   * §3) and is kept by nothing on the way.
    */
   async secretFillField(observation: string, ref: string, value: string, expectedOrigin: string): Promise<void> {
     if (!this.#observation || observation !== this.#observation.id) throw new BrowserPreconditionError('Stale page observation. Use the latest observation.id and target ref.');

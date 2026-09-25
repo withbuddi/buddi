@@ -1,5 +1,5 @@
 /**
- * `learning.*`: an agent proposes, the owner keeps (docs/specs/learning.md).
+ * `learning.*`: an agent proposes, the owner keeps (docs/learning.md).
  *
  * Three tools, all tier `auto`, because a proposal changes nothing: it is a
  * row in `core.proposals` the owner reads on Settings → Proposals and keeps

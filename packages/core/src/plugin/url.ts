@@ -2,7 +2,7 @@
  * The address rules for reaching the web: what a URL may name before a socket
  * exists.
  *
- * Moved here from `@buddi/tool-web`'s `guard.ts` (docs/specs/plugin-host-api.md
+ * Moved here from `@buddi/tool-web`'s `guard.ts` (docs/plugin-host-api.md
  * §3) so a plugin can check a URL without importing another plugin: the browser
  * plugin was the first. Pure — a URL in, a verdict out, nothing resolved. The
  * half that resolves, `guardedLookup`, does I/O and lives with the `http` area

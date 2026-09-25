@@ -1,5 +1,5 @@
 /**
- * Output scrubbing (docs/specs/owner-secrets.md §5).
+ * Output scrubbing (docs/owner-secrets.md §5).
  *
  * Every text that leaves buddi's core for a model, a log, the canvas, Activity
  * or Telegram is scrubbed for every stored value, and each match is replaced

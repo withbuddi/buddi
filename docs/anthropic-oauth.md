@@ -1,6 +1,10 @@
-# Claude OAuth experiment
+---
+title: "Claude OAuth experiment"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Claude OAuth experiment
 
 Developed on `feature/anthropic-oauth`. The owner reported successful sign-in and
 assignment to Garage on 2026-09-19; the supplied Dashboard screenshot shows a

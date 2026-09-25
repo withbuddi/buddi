@@ -1,5 +1,5 @@
 /**
- * The owner's own hands on the standing decisions (docs/specs/email.md §5).
+ * The owner's own hands on the standing decisions (docs/email.md §5).
  *
  * `email.set_policy` and `email.revoke_policy` are gated, and rightly so: a
  * *model* proposing a rule that decides every future message from a sender is
@@ -44,7 +44,7 @@ const ruleInput = z
     /**
      * The conversation, when the scope is one: picked from a list and sent as
      * the thread's id, because a thread key is a Message-ID off the wire and
-     * not something an owner has (docs/specs/email.md §5).
+     * not something an owner has (docs/email.md §5).
      */
     thread: z.string().optional(),
     action: z.enum(POLICY_ACTIONS),

@@ -1,5 +1,5 @@
 /**
- * The four phrase tables, pinned (docs/plugins.md §2.3, docs/specs/email.md §7).
+ * The four phrase tables, pinned (docs/plugins.md §2.3, docs/email.md §7).
  *
  * The whole judgement of step 6's watchers is in `phrases.ts`, so the whole
  * judgement is testable without a database — and the tables below are the

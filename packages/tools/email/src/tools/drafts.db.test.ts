@@ -1,5 +1,5 @@
 /**
- * The draft lifecycle, against a real database (docs/specs/email.md §8).
+ * The draft lifecycle, against a real database (docs/email.md §8).
  *
  * Four facts, and each of them is a thing that could quietly go wrong in a way
  * nobody would notice until a letter went out:

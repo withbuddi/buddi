@@ -1,6 +1,10 @@
-# Groups: a team of agents in one conversation
+---
+title: "Groups: a team of agents in one conversation"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# Groups: a team of agents in one conversation
 
 A group is a persistent conversation with a chosen team of agents. You create
 "Household finances", add Concierge, Ledger and Finance Advisor, and say

@@ -25,3 +25,6 @@ build/
 # OS/editor
 .DS_Store
 .claude/worktrees/
+
+# planning notes, kept outside the published repository (see dev/README.md)
+dev/

@@ -1,7 +1,7 @@
 /**
  * `email.receipt-or-bill` — an order confirmation, a receipt, an invoice.
  *
- * docs/specs/email.md §7: *«an order confirmation, receipt, invoice or bill
+ * docs/email.md §7: *«an order confirmation, receipt, invoice or bill
  * arrived; the finding offers to hand it to the agent holding the `overview`
  * role and to record it»*.
  *

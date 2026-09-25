@@ -5,7 +5,7 @@
  * tests against — that uses every component once. Nothing in these tests, or
  * in the file they exercise, knows the name of a real plugin: if the engine
  * can draw this, it can draw email, and that is the whole claim of
- * `docs/specs/plugin-pages.md`.
+ * `docs/plugin-pages.md`.
  *
  * What is asserted is behaviour the owner would notice: a value drawn as text,
  * a URL per item, a write that sends the arguments the descriptor named, a

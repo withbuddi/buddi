@@ -165,7 +165,7 @@ export interface BrowserDriver {
    */
   handReady?(): boolean;
   /**
-   * The facts a secret fill is aimed by (docs/specs/owner-secrets.md §3), read
+   * The facts a secret fill is aimed by (docs/owner-secrets.md §3), read
    * from the live page: the field's own frame origin — never the top page's,
    * never the agent's claim — whether the page marks it as a password, and the
    * accessible name the form.data target carries. Refuses with a precondition

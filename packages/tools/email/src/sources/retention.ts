@@ -46,7 +46,7 @@ export function createRetentionSource(opts: RetentionSourceOptions = {}): Source
         ...(opts.retentionDays !== undefined ? { retentionDays: opts.retentionDays } : {}),
       });
       log(purgeLogLine(outcome));
-      // The draft lapse (docs/specs/email.md §8), in the plugin and on the same
+      // The draft lapse (docs/email.md §8), in the plugin and on the same
       // daily beat. It is housekeeping of exactly the same shape: it originates
       // no run, wakes nobody, and is not a finding — a draft nobody touched for
       // a fortnight is work to tidy, not news to report.

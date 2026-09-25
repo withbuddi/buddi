@@ -1,7 +1,7 @@
 /**
  * Plugin pages — a plugin's screens, as data.
  *
- * `docs/specs/plugin-pages.md`. A plugin already tells the dashboard how to
+ * `docs/plugin-pages.md`. A plugin already tells the dashboard how to
  * *draw a tool result* (`views.ts`); this tells it how to draw a whole screen:
  * a rail entry, or a settings tab, made of a small fixed set of generic
  * components. The rules are the ones views already follow, and they are the
@@ -29,7 +29,7 @@
  * The component set is sized by what email and finance need and does not grow
  * to fit one plugin's wish. A plugin that needs free layout, custom styling or
  * client-side logic serves its own app through the developer proxy
- * (`docs/specs/developer.md`).
+ * (`docs/developer.md`).
  */
 import type { Pool, PoolClient } from 'pg';
 import { z, type ZodTypeAny } from 'zod';
@@ -175,7 +175,7 @@ export type ArgRef =
  * open a chat the owner already has in their rail.
  *
  * `{ proposals: true }` is the second, as narrow: the owner's Proposals inbox
- * (docs/specs/learning.md), filtered to *this* plugin's rules. A plugin that
+ * (docs/learning.md), filtered to *this* plugin's rules. A plugin that
  * proposes policies through core has its proposals there, not on its own
  * page, and the only useful thing its page can say about them is where they
  * are. It names no plugin: the dashboard fills in the one drawing the page.
@@ -1405,7 +1405,7 @@ async function connectWithin(pool: Pool, ms: number): Promise<PoolClient> {
  * Two things it does **not** cover, and they are honest limits rather than
  * bugs: a superuser-ish role can still call `pg_read_file` or
  * `pg_terminate_backend`, neither of which writes a row. The answer to those
- * is a Postgres role without the grant — see `docs/specs/plugin-pages.md` §8.
+ * is a Postgres role without the grant — see `docs/plugin-pages.md` §8.
  *
  * The wrapper holds the client, takes one per statement and always gives it
  * back; `connect()` throws, so a query never sees one and cannot open a

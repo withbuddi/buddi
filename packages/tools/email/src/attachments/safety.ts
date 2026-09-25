@@ -1,5 +1,5 @@
 /**
- * What buddi will and will not put in the owner's library (docs/specs/email.md §10).
+ * What buddi will and will not put in the owner's library (docs/email.md §10).
  *
  * Three layers, in the order they can be applied:
  *

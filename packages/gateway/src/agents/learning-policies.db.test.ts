@@ -1,6 +1,6 @@
 /**
  * Learning step 3: a plugin proposes a policy through core, and the owner's
- * keep or discard comes back to that plugin (docs/specs/learning.md §2 item 3).
+ * keep or discard comes back to that plugin (docs/learning.md §2 item 3).
  *
  * What this file holds the gateway to: keeping a policy calls the plugin's own
  * apply and a discard its revoke; a plugin with no apply is refused cleanly

@@ -34,7 +34,7 @@ export interface GroupContext {
 export interface ToolContext {
   /**
    * The host: everything a plugin reaches beyond its arguments, bound to this
-   * plugin (docs/specs/plugin-host-api.md). Set by core every time it hands a
+   * plugin (docs/plugin-host-api.md). Set by core every time it hands a
    * plugin a context; absent only on a context no plugin has been handed yet.
    * `CoreToolContext` carries the facts it is built from.
    */
@@ -151,7 +151,7 @@ export interface ToolContext {
  * host is built from — the pool, the owner, the clock and zone, the preview
  * port, the protected paths, the provider accounts. Core's own; a plugin is
  * typed against `ToolContext` and reaches these through `ctx.buddi`
- * (docs/specs/plugin-host-api.md §3), and `@buddi/core/plugin` does not
+ * (docs/plugin-host-api.md §3), and `@buddi/core/plugin` does not
  * export this.
  */
 export interface CoreToolContext extends ToolContext {
@@ -185,7 +185,7 @@ export interface CoreToolContext extends ToolContext {
   previewPort?: number;
   /**
    * Directories no tool may write into, whatever it was granted: the owner's
-   * agent files and skills, learned ones included (docs/specs/learning.md §6).
+   * agent files and skills, learned ones included (docs/learning.md §6).
    * An agent learns by proposing; a file tool pointed at its own skills
    * directory refuses rather than letting it rewrite itself. Absolute paths,
    * set by the composition root; a tool that writes files checks them.
@@ -721,7 +721,7 @@ export interface PluginManifest {
   policies?: PolicyHandler;
   /**
    * What this plugin reaches in buddi beyond itself: the areas of `ctx.buddi`
-   * that are not always present (docs/specs/plugin-host-api.md §5). Shown on
+   * that are not always present (docs/plugin-host-api.md §5). Shown on
    * the install card one plain line each, and repeated in `package.json` as
    * `buddi.uses` because the card is drawn before anything is imported; the
    * two must match or the plugin does not register. An area not declared is
@@ -730,7 +730,7 @@ export interface PluginManifest {
   uses?: PluginUse[];
   /**
    * Where the owner's secrets can be delivered into this plugin
-   * (docs/specs/owner-secrets.md §3): each kind in the plugin's own namespace,
+   * (docs/owner-secrets.md §3): each kind in the plugin's own namespace,
    * `<plugin>.<what>`. Registered at `register()`; only a plugin that declares
    * `secrets` in `uses` may have any. The same as calling
    * `ctx.buddi.secrets.registerDestination` for each, before any context exists.

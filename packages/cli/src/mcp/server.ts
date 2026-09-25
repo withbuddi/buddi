@@ -1,5 +1,5 @@
 /**
- * `buddi mcp`: buddi as an MCP server over stdio (docs/specs/mcp.md).
+ * `buddi mcp`: buddi as an MCP server over stdio (docs/mcp.md).
  *
  * The client launches this process; it reaches the running gateway on
  * loopback (`gateway-client.ts`) and publishes the tools in `tools.ts`. Every

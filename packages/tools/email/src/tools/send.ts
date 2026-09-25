@@ -226,7 +226,7 @@ export async function buildEnvelope(
 ): Promise<SendEnvelope> {
   const draft = await requireDraft(ctx.buddi!.db, draftId);
   /*
-   * docs/specs/email.md §8: a draft that is discarded or lapsed is refused
+   * docs/email.md §8: a draft that is discarded or lapsed is refused
    * here, at describe time — before an approval card is ever put in front of
    * the owner, and again on the Executor's re-describe, which is what makes a
    * draft discarded while the card was open refuse instead of send.
@@ -253,7 +253,7 @@ export async function buildEnvelope(
     toolVersion: SEND_TOOL_VERSION,
     draftId: draft.id,
     accountAddress: account.address,
-    // docs/specs/email.md §4, identity: the account's own address, and one of its
+    // docs/email.md §4, identity: the account's own address, and one of its
     // aliases only when the owner says so on the card. Nothing is read off the
     // original's To or Cc — a sender can write any address there, including an
     // alias of the owner's that the message never actually reached. Both the
@@ -333,7 +333,7 @@ export function chosenIdentity(
 
 /**
  * Refuse, in the owner's own terms, when the draft moved under a standing
- * approval (docs/specs/email.md §8).
+ * approval (docs/email.md §8).
  *
  * The Executor already catches this: it re-describes before dispatch and
  * compares envelope hashes, and a changed body changes both `bodySha256` and

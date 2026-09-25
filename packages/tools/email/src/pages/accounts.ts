@@ -1,7 +1,7 @@
 /**
  * Adding and removing a mailbox — the owner's own hands, and nobody else's.
  *
- * These two were routes under `/api/email/accounts` (docs/specs/email.md §2)
+ * These two were routes under `/api/email/accounts` (docs/email.md §2)
  * and are now `ownerOnly` tools, which is what a page's write is: the registry
  * never lists them to a model, and `invoke` refuses them for anyone but the
  * owner's own path. Nothing else changed — the same three steps happen in the
@@ -25,7 +25,7 @@
  *
  * One thing the page can no longer do, and this file does instead: the old form
  * filled the IMAP and SMTP hosts in from the domain as the address was typed.
- * A page descriptor has no such logic (`docs/specs/plugin-pages.md` §4), so the
+ * A page descriptor has no such logic (`docs/plugin-pages.md` §4), so the
  * hosts are *optional* here and `hostsFor` fills them in when they are left
  * empty — the convention the form used, in the one place that can still apply it.
  */

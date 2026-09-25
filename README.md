@@ -116,8 +116,7 @@ script.
 password. buddi then proposes a Mail agent (@mail) that triages new mail in
 the background. Accept it with **Create @mail**; until you do, mail is fetched
 and threaded but nobody reads it. Sending always stops at an approval card
-that shows the full message. [docs/specs/email.md](docs/specs/email.md) has
-the rest.
+that shows the full message. [docs/email.md](docs/email.md) has the rest.
 
 **More agents.** Agent Father (@father) makes and changes agents. Say what you
 want one to do; it interviews you, proposes the file and the tools it should
@@ -168,7 +167,7 @@ something on an interval and produces findings; core decides whether a finding
 is worth waking you for. An unattended run stays quiet unless it has something
 to say, and when background work keeps failing you hear about it once, in
 plain words. Goals add a target with a date: buddi checks it hourly and wakes
-the agent that holds it when you drift ([docs/specs/goals.md](docs/specs/goals.md)).
+the agent that holds it when you drift ([docs/goals.md](docs/goals.md)).
 
 **Groups.** A group is one persistent conversation with a team of agents. A
 coordinator decides who works on each request, and you get one answer.
@@ -182,13 +181,13 @@ the Files page, with the conversation each came from.
 from, scoped per agent. Learning goes one step further: buddi proposes a
 skill, a mail rule or a change to an agent's file, and nothing is kept until
 you keep it. A weekly digest lists what is waiting.
-[docs/specs/learning.md](docs/specs/learning.md).
+[docs/learning.md](docs/learning.md).
 
 **Owner secrets.** Your passwords, API tokens and one-time codes go in
 Settings → Keys and secrets. An agent can have one filled into a login form,
 typed, or sent as a header, after an approval card that names where it goes.
 There is no way to read a value back, and values are scrubbed from anything an
-agent sees. [docs/specs/owner-secrets.md](docs/specs/owner-secrets.md).
+agent sees. [docs/owner-secrets.md](docs/owner-secrets.md).
 
 **The canvas.** The dashboard opens on a conversation, with a canvas beside
 it. What a run looked at is drawn there: a table, a chart, a document, a web
@@ -329,9 +328,9 @@ A tag `v<version>` runs the gate, builds the tarball, publishes it to npm
 GitHub release.
 
 Read next: [ARCHITECTURE.md](ARCHITECTURE.md) for the design,
-[docs/plugins.md](docs/plugins.md) to write a plugin,
-[docs/ROADMAP.md](docs/ROADMAP.md) for what is built and what comes next, and
-[docs/README.md](docs/README.md) for the index of everything else.
+[docs/plugins.md](docs/plugins.md) to write a plugin, and
+[docs/README.md](docs/README.md) for the index of everything else. The roadmap
+is kept outside this repository.
 
 ---
 

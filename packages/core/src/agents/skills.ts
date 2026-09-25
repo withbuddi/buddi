@@ -67,7 +67,7 @@ export const skillFrontmatterSchema = z
     created: asText.optional(),
     agents: z.array(z.string().min(1)).optional(),
     /*
-     * A learned skill's provenance (docs/specs/learning.md §2): the proposal
+     * A learned skill's provenance (docs/learning.md §2): the proposal
      * it was kept from and where that proposal came from. Written by the
      * keep, read by the agent sheet; none of it grants anything.
      */

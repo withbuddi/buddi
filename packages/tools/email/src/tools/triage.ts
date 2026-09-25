@@ -85,11 +85,11 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
     if (!row) throw new Error('email.triage_record: insert returned no row');
 
     /*
-     * A decision is made once (docs/specs/email.md §2). With this verdict recorded,
+     * A decision is made once (docs/email.md §2). With this verdict recorded,
      * the sender may now have three consecutive consistent ones — which is what
      * a policy is learned from. `learnFromVerdict` proposes at most one rule
      * and usually none; a proposal is a card on Settings → Proposals, and the
-     * rule is written only when the owner keeps it (docs/specs/learning.md).
+     * rule is written only when the owner keeps it (docs/learning.md).
      *
      * It must never break the recording. A verdict is the thing the agent was
      * asked for; a proposal is a convenience on top of it, and a failure to

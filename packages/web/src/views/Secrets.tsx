@@ -1,5 +1,5 @@
 /**
- * Settings → Keys and secrets (docs/specs/owner-secrets.md §6).
+ * Settings → Keys and secrets (docs/owner-secrets.md §6).
  *
  * The owner's vault, next to Model accounts and Computer & browser under the
  * same question: what agents may reach. Each row is a secret — a name, where

@@ -1,5 +1,5 @@
 /**
- * One use of an owner secret (docs/specs/owner-secrets.md §2, §3).
+ * One use of an owner secret (docs/owner-secrets.md §2, §3).
  *
  * Core finds the binding, asks the destination to check the target, applies
  * the rule, reads the vault and calls `deliver`. The value exists here and in

@@ -1,7 +1,7 @@
 /**
  * `email.promised-reply` — the owner said he would come back to somebody.
  *
- * docs/specs/email.md §7: *«the owner wrote "I'll get back to you" or asked
+ * docs/email.md §7: *«the owner wrote "I'll get back to you" or asked
  * buddi to draft, and nothing was sent within N days»*. Two halves, and they
  * are two different unkept promises:
  *

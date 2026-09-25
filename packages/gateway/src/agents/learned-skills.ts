@@ -1,5 +1,5 @@
 /**
- * Learned skills, as the gateway serves them (docs/specs/learning.md, step 2).
+ * Learned skills, as the gateway serves them (docs/learning.md §2).
  *
  * Core writes and reads the files (`core/learning/skill-files.ts`); this is
  * where an agent id becomes a directory, where a keep is checked against the

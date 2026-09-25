@@ -510,7 +510,7 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       const log = ctx.buddi?.log ?? ((line: string) => console.error(line));
       const env = opts.env ?? process.env;
 
-      // Accounts are plural (docs/specs/email.md §2). Every enabled one is polled in
+      // Accounts are plural (docs/email.md §2). Every enabled one is polled in
       // this pass, each with its own folders and its own cursor per folder. No
       // mailbox configured is still a valid, running state rather than a
       // failure: the loop has nothing to walk.
@@ -869,7 +869,7 @@ async function plantCursor(
 /**
  * The gate, and then the queue.
  *
- * docs/specs/email.md §5. Every message that landed is put in front of the policy
+ * docs/email.md §5. Every message that landed is put in front of the policy
  * table *before* anybody is woken, and what the gate decided is written to
  * `email.events` — every decision, including "nothing matched", because the
  * owner auditing the silence needs to be able to tell a message that was
@@ -943,7 +943,7 @@ async function drain(
     }
 
     /*
-     * The dates this message states, read here and stored (docs/specs/email.md
+     * The dates this message states, read here and stored (docs/email.md
      * §7's `email.date-stated`). It happens at ingest because the body is in
      * hand and the parse is a regex sweep over one string — and because the
      * alternative is the sentinel re-reading every message that ever landed.
@@ -1084,7 +1084,7 @@ function runAgentFor(decision: GateDecision, fallback: string): string {
 /**
  * The prompt, with what was decided about this sender before.
  *
- * docs/specs/email.md §1's complaint was that a run *«judges it from zero, records a
+ * docs/email.md §1's complaint was that a run *«judges it from zero, records a
  * verdict nothing reads back»*. The verdicts are read back here, along with the
  * sender's policy when there is one, so the run can be consistent with what was
  * decided rather than starting the argument again every week.
@@ -1144,7 +1144,7 @@ export const THREAD_TURNS_QUOTED = 3;
 export const THREAD_TURNS_LISTED = 10;
 
 /**
- * The conversation, bounded, as docs/specs/email.md §6 asks for it: the last few
+ * The conversation, bounded, as docs/email.md §6 asks for it: the last few
  * messages quoted, everything before them one line each, and the state.
  *
  * The message being triaged is left out of the block — it is the prompt's

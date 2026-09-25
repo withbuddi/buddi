@@ -1,6 +1,6 @@
 /**
  * Where a secret can go: the destinations plugins register
- * (docs/specs/owner-secrets.md §3).
+ * (docs/owner-secrets.md §3).
  *
  * One table per process, keyed by kind. A plugin registers only kinds in its
  * own namespace (`email.account` is email's), so no plugin can stand up a

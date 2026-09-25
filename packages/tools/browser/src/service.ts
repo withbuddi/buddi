@@ -86,7 +86,7 @@ export interface BrowserController {
   execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown>;
   /**
    * The owner's secret into one field of the page this conversation drives
-   * (docs/specs/owner-secrets.md §3, §4). Same authority as `execute`; the
+   * (docs/owner-secrets.md §3, §4). Same authority as `execute`; the
    * value crosses only from the vault through the destination's `deliver` to
    * the driver, and the result says filled, pending or the refusal — never a
    * value.
@@ -418,7 +418,7 @@ export class BrowserService {
 
   /**
    * One owner secret into one field of the page this conversation drives
-   * (docs/specs/owner-secrets.md §3, §4).
+   * (docs/owner-secrets.md §3, §4).
    *
    * The order is the security argument. The driver reads the field's frame
    * origin, its password mark and its accessible name from the live page — the

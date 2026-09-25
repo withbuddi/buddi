@@ -115,7 +115,7 @@ export interface StagedPlugin {
   /**
    * The areas of buddi it says it reaches beyond itself — `buddi.uses` in its
    * package.json, read without importing anything, which is what the card
-   * lists (docs/specs/plugin-host-api.md §5). The manifest must say the same
+   * lists (docs/plugin-host-api.md §5). The manifest must say the same
    * when it loads. Absent on a stage written before this existed.
    */
   uses?: PluginUse[];
@@ -413,7 +413,7 @@ export function scanDependencies(packageDir: string): StagedDependencies {
 
 /**
  * Give the staged package a `@buddi/core` that is the plugin API and nothing
- * else (docs/specs/plugin-host-api.md §6).
+ * else (docs/plugin-host-api.md §6).
  *
  * Core is a peer dependency so the plugin shares this process's core rather
  * than getting its own copy from the registry — a second registry, a second

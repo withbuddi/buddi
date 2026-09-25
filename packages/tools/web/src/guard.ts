@@ -6,7 +6,7 @@
  * `@buddi/core/plugin`, and the half that resolves (`guardedLookup`, handed to
  * the socket so the address approved is the address dialled) inside
  * `ctx.buddi.http`, where every plugin's requests get it
- * (docs/specs/plugin-host-api.md §4.2; the reasoning is at the top of core's
+ * (docs/plugin-host-api.md §4.2; the reasoning is at the top of core's
  * `host/http.ts`). Re-exported unchanged: every importer of this file, and of
  * `@buddi/tool-web`, keeps working.
  */

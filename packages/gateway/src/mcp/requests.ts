@@ -1,5 +1,5 @@
 /**
- * Writes that arrive through `buddi mcp`, as approvals (docs/specs/mcp.md §2).
+ * Writes that arrive through `buddi mcp`, as approvals (docs/mcp.md §2).
  *
  * An MCP client is a model, not the owner: whatever it reads can steer it. So
  * none of its writes applies directly. Each one is one of the gated,

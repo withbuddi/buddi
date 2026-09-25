@@ -16,7 +16,7 @@ export type Address = string;
 
 /**
  * An attachment as ingest sees it. The bytes are never fetched at ingest —
- * `email.fetch_attachment` pulls one on request (docs/specs/email.md §10).
+ * `email.fetch_attachment` pulls one on request (docs/email.md §10).
  */
 export interface AttachmentInfo {
   filename: string | null;

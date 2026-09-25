@@ -1,6 +1,10 @@
-# First run: you meet buddi
+---
+title: "First run: you meet buddi"
+status: reference
+updated: 2026-09-25
+---
 
-Status: reference, 2026-09-21
+# First run: you meet buddi
 
 The person opening this has just typed `npm install -g @withbuddi/buddi` and `buddi`, or
 was sent a link by someone who did. They are not a developer. They are about to

@@ -1,6 +1,6 @@
 /**
  * `@buddi/core/plugin` holds nothing with state or I/O
- * (docs/specs/plugin-host-api.md §3).
+ * (docs/plugin-host-api.md §3).
  *
  * Walks every module the entry point loads at run time — type-only imports
  * and exports are erased, so they are skipped — and fails naming the file
