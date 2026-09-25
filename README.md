@@ -329,6 +329,12 @@ A tag `v<version>` runs the gate, builds the tarball, publishes it to npm
 (pre-release versions under `next`, others under `latest`) and creates the
 GitHub release.
 
+**Changelog.** Every change an owner or plugin author could notice gets a line
+under Unreleased in `CHANGELOG.md`, in the same commit; CI refuses a change to
+`packages/*/src` without one unless the commit message says `[no changelog]`.
+Before a tag, `node scripts/release/changelog.mjs cut <version>` turns
+Unreleased into that version's section, which the release lifts into its notes.
+
 Read next: [docs/architecture.md](docs/architecture.md) for the design,
 [docs/plugins.md](docs/plugins.md) to write a plugin, and
 [docs/README.md](docs/README.md) for the index of everything else. The roadmap

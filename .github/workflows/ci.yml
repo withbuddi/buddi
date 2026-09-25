@@ -10,6 +10,37 @@ on:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md', 'feedback/**']
 jobs:
+  # Code an owner or a plugin author runs changed, so CHANGELOG.md has to say
+  # how. Seconds, with no install: git alone answers it.
+  changelog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: A code change comes with a CHANGELOG.md line
+        env:
+          BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git log -1 --format=%B HEAD | grep -qF '[no changelog]'; then
+            echo "The head commit says [no changelog]; not checking."; exit 0
+          fi
+          # A first push, or the first push after a force-push, names a commit
+          # that is all zeros or no longer exists: compare with the parent.
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git rev-parse HEAD^)
+          fi
+          changed=$(git diff --name-only "$base" HEAD)
+          code=$(printf '%s\n' "$changed" \
+            | grep -E '^packages/([^/]+|tools/[^/]+)/src/|^scripts/release/build\.mjs$' \
+            | grep -Ev '\.test\.tsx?$|/__tests__/' || true)
+          if [ -n "$code" ] && ! printf '%s\n' "$changed" | grep -qx 'CHANGELOG.md'; then
+            echo "::error::This change touches code under packages/*/src without a line under Unreleased in CHANGELOG.md; add one, or say [no changelog] in the commit message."
+            printf '%s\n' "$code"
+            exit 1
+          fi
+          echo "Changelog check passed."
   quick:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -25,7 +56,7 @@ jobs:
             run: node scripts/check-boundaries.mjs && pnpm -r typecheck
           - name: rest
             # `!buddi` is the workspace root, whose own test script is the whole gate.
-            run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
+            run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic && pnpm exec vitest run --dir scripts
     name: quick (${{ matrix.lane.name }})
     steps:
       - uses: actions/checkout@v4

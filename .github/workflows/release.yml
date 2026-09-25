@@ -64,6 +64,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pre=""; case "${{ steps.v.outputs.version }}" in *-*) pre="--prerelease";; esac
+          # The version's section of CHANGELOG.md; a missing or empty one fails the release.
+          section=$(node scripts/release/changelog.mjs section "${{ steps.v.outputs.version }}")
+          notes="$section
+
+          npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})."
           gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
-            --notes "npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})." \
+            --notes "$notes" \
             "${{ steps.pack.outputs.tgz }}" scripts/install-linux.sh
