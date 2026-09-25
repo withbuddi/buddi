@@ -1,6 +1,6 @@
 # buddi
 
-<img src="packages/web/public/mascot/core.png" alt="The Buddi Blob, buddi's mascot" width="160" align="right">
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/packages/web/public/mascot/core.png" alt="The Buddi Blob, buddi's mascot" width="160" align="right">
 
 buddi is a personal agent platform you run on your own machine. An agent is a
 markdown file: a front matter that names the tools it may call, and a body that
