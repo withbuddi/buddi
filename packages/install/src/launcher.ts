@@ -13,7 +13,8 @@ import { spawn, execFile } from 'node:child_process';
 import { request } from 'node:http';
 import { open, mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, SERVICE_UNIT_VAR } from './environment.js';
+import { existsSync } from 'node:fs';
+import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -25,6 +26,19 @@ const entry = fileURLToPath(import.meta.url);
 const root = path.resolve(path.dirname(entry), '../../..');
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+/*
+ * The dashboard port the owner asked for on this command line, read before
+ * `environment()` pins the installed one over it. On a first run it is the
+ * preferred port; on an existing installation it *moves* the port (see `run`),
+ * so `BUDDI_WEB_PORT=4417 buddi` means the same thing whenever it is typed.
+ */
+const askedWebPort = ((): number | undefined => {
+  const raw = process.env.BUDDI_WEB_PORT;
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`BUDDI_WEB_PORT is not a port: ${JSON.stringify(raw)}`);
+  return port;
+})();
 
 /**
  * Ask this installation's supervisor. The socket in the data directory is the
@@ -316,16 +330,36 @@ async function run(): Promise<void> {
   }
   if (args.length === 0 || args.every(a => ['--no-service', '--no-open'].includes(a))) {
     let running = false;
-    try {
-      const status = await control(ctx);
-      if (status.installRoot === root && status.nodePath === process.execPath) {
-        if (status.gateway === 'stopped') await control(ctx, 'start');
-        running = true;
-      }
-    } catch { /* A missing supervisor is normal on first run. */ }
+    let relaunched = false;
+    /*
+     * A different port for an installation that has one: the state file is
+     * rewritten and the service restarted, because the supervisor hands the
+     * gateway the environment it computed at its own start. Without a service
+     * (a foreground `buddi supervise`) the owner is told to restart it.
+     */
+    if (ctx.state !== undefined && askedWebPort !== undefined && askedWebPort !== ctx.state.webPort) {
+      const serviced = process.platform === 'darwin' ? existsSync(launchAgentPlist(ctx.data)) : process.platform === 'linux' ? existsSync(systemdUnitPath(ctx.data, ctx.env)) : false;
+      if (!serviced) throw new Error(`The dashboard port is ${ctx.state.webPort}. To move it to ${askedWebPort}, stop the running supervisor, change "webPort" in ${path.join(ctx.data, 'installation.json')}, and start it again.`);
+      const from = ctx.state.webPort;
+      await atomicJson(path.join(ctx.data, 'installation.json'), { ...ctx.state, webPort: askedWebPort });
+      console.log(`Moving the dashboard from port ${from} to ${askedWebPort}; the service restarts.`);
+      ctx = await environment(root);
+      await launchService(ctx, false);
+      relaunched = true;
+    } else {
+      try {
+        const status = await control(ctx);
+        if (status.installRoot === root && status.nodePath === process.execPath) {
+          if (status.gateway === 'stopped') await control(ctx, 'start');
+          running = true;
+        }
+      } catch { /* A missing supervisor is normal on first run. */ }
+    }
     if (!running) {
-      console.log('Starting Buddi. First run provisions a private Postgres cluster.');
-      await launchService(ctx, args.includes('--no-service'));
+      if (!relaunched) {
+        console.log('Starting Buddi. First run provisions a private Postgres cluster.');
+        await launchService(ctx, args.includes('--no-service'));
+      }
       const deadline = Date.now() + 120_000;
       for (;;) {
         await new Promise(resolve => setTimeout(resolve, 500));
