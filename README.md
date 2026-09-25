@@ -349,4 +349,4 @@ agent says is financial, legal or medical advice.
 
 ## License
 
-License: to be decided before the public release.
+[Apache License 2.0](LICENSE). Copyright 2026 withbuddi.

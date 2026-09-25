@@ -72,7 +72,7 @@ const manifest = {
   repository: { type: 'git', url: 'https://github.com/withbuddi/buddi' },
   homepage: 'https://github.com/withbuddi/buddi#readme',
   bugs: 'https://github.com/withbuddi/buddi/issues',
-  ...(hasLicense ? { license: 'SEE LICENSE IN LICENSE' } : {}),
+  ...(hasLicense ? { license: 'Apache-2.0' } : {}),
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
   files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),
