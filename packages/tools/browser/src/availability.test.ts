@@ -31,6 +31,12 @@ describe('detectBrowser', () => {
     expect(found).toEqual({ engine: 'none' });
     expect(browserLine(found)).toContain('buddi browser install');
   });
+  it('says where the browser lives', () => {
+    expect(browserLine({ engine: 'chromium', executable: '/data/browser/engines/chromium-1187/chrome-linux/chrome' }))
+      .toBe('Browser for agents: Chromium, installed in /data/browser/engines.');
+    expect(browserLine({ engine: 'chrome', executable: '/opt/google/chrome/chrome', channel: true }))
+      .toBe('Browser for agents: Google Chrome, at /opt/google/chrome/chrome.');
+  });
 });
 
 describe('needsHeadless', () => {

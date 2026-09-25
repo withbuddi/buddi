@@ -14,7 +14,7 @@ import { request } from 'node:http';
 import { open, mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
-import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, SERVICE_UNIT_VAR } from './environment.js';
+import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -359,6 +359,12 @@ async function run(): Promise<void> {
   }
   if (args[0] === 'browser') {
     // Needs no database and no supervisor: it looks on disk, or runs Playwright's installer.
+    // An install always goes into the data directory, even where Playwright's
+    // own cache already holds a build (see `browsersPath`); set before Playwright loads.
+    if (args[1] === 'install') {
+      ctx.env.PLAYWRIGHT_BROWSERS_PATH = browsersDir(ctx.data);
+      await mkdir(ctx.env.PLAYWRIGHT_BROWSERS_PATH, { recursive: true, mode: 0o700 });
+    }
     const cli = await import('@buddi/cli');
     process.exitCode = await cli.main(args);
     return;

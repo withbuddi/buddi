@@ -10,7 +10,7 @@
  */
 import { mkdir, readFile, writeFile, rename, open, stat, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { existsSync, constants } from 'node:fs';
+import { existsSync, readdirSync, constants } from 'node:fs';
 import { randomBytes, createHash, createHmac } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,6 +173,57 @@ export function defaultDataDir(platform: NodeJS.Platform | string = process.plat
   return path.join(env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'buddi');
 }
 
+/** Where the agents' Chromium lives when buddi fetched it: inside the data directory, with everything else buddi owns. */
+export function browsersDir(data: string): string {
+  return path.join(data, 'browser', 'engines');
+}
+
+/** Playwright's own cache, where its browsers go when `PLAYWRIGHT_BROWSERS_PATH` is not set. */
+export function playwrightCacheDir(platform: NodeJS.Platform | string = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
+  if (platform === 'darwin') return path.join(home, 'Library', 'Caches', 'ms-playwright');
+  if (platform === 'win32') return path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'ms-playwright');
+  return path.join(env.XDG_CACHE_HOME || path.join(home, '.cache'), 'ms-playwright');
+}
+
+/** What `browsersPath` reads, injectable so a test says what is on disk. */
+export interface BrowsersPathDeps {
+  platform?: NodeJS.Platform | string;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  exists?: (dir: string) => boolean;
+  /** The names in a directory; empty when it does not exist. */
+  list?: (dir: string) => string[];
+}
+
+function listDir(dir: string): string[] {
+  try { return readdirSync(dir); } catch { return []; }
+}
+
+/**
+ * The value for `PLAYWRIGHT_BROWSERS_PATH`, or undefined to leave Playwright
+ * at its own cache.
+ *
+ * The data directory is the place: a container's volume keeps it, and a
+ * backup of the data directory is a backup of everything buddi owns. One
+ * exception, so an existing install does not fetch 150 MB again: when the
+ * data-directory location does not exist yet and Playwright's cache already
+ * holds a Chromium build, the cache stays in use. `buddi browser install`
+ * creates the data-directory location, and from then on it wins. A value the
+ * owner set themselves is kept.
+ *
+ * Playwright reads the variable once, when its module loads, so this is set
+ * before any `@buddi/*` import (see the header of this file).
+ */
+export function browsersPath(data: string, deps: BrowsersPathDeps = {}): string | undefined {
+  const env = deps.env ?? process.env;
+  if (env.PLAYWRIGHT_BROWSERS_PATH) return env.PLAYWRIGHT_BROWSERS_PATH;
+  const own = browsersDir(data);
+  if ((deps.exists ?? existsSync)(own)) return own;
+  const cache = playwrightCacheDir(deps.platform ?? process.platform, env, deps.home ?? os.homedir());
+  const cached = (deps.list ?? listDir)(cache).some((name) => /^chromium-\d+$/.test(name));
+  return cached ? undefined : own;
+}
+
 export async function atomicJson(file: string, value: unknown): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
@@ -201,6 +252,8 @@ export async function environment(root: string, env: NodeJS.ProcessEnv = process
   env.BUDDI_HOME = data;
   env.BUDDI_WEB_ASSETS = path.join(root, 'packages/web/dist');
   env.BUDDI_WEB_REQUIRE_AUTH = '1';
+  const browsers = browsersPath(data, { env });
+  if (browsers !== undefined) env.PLAYWRIGHT_BROWSERS_PATH = browsers;
   const { parse, populate } = (await import('dotenv')).default;
   const settings = await readPrivateFile(env.BUDDI_ENV_FILE);
   if (settings !== undefined) populate(env as Record<string, string>, parse(settings));

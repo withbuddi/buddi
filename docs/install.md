@@ -142,8 +142,9 @@ One directory holds everything buddi owns:
 | Windows | `%LOCALAPPDATA%\buddi` |
 
 Inside: `postgres/` (the cluster), `artifacts/` (the store), `plugins/`
-(§7), `logs/`, `backups/`, `.env` (the few settings that are not secrets) and
-the file vault where there is no OS keychain. `BUDDI_DATA_DIR` overrides it,
+(§7), `logs/`, `backups/`, `browser/engines/` (the agents' Chromium, when
+buddi fetched it), `.env` (the few settings that are not secrets) and the file
+vault where there is no OS keychain. `BUDDI_DATA_DIR` overrides it,
 as today. Nothing is written outside it except the service unit and the OS
 keychain entries.
 
@@ -445,8 +446,12 @@ or Chromium already installed — or "not installed yet — buddi browser instal
 (about 150 MB)", and repeats that line on later runs until one is.
 `buddi browser install`, or **Install Chromium** in Settings → Computer &
 browser, runs Playwright's installer from the copy buddi ships;
-`BUDDI_BROWSER_INSTALL=1 buddi` does it on the first run. On a Linux server
-with no display the browser runs headless (see docs/browser.md).
+`BUDDI_BROWSER_INSTALL=1 buddi` does it on the first run. It lands in
+`<data>/browser/engines`, so a container that keeps its data volume keeps the
+browser too; `buddi browser` says where it is. An install that already had
+Chromium in Playwright's own cache keeps using it until `buddi browser install`
+runs again. On a Linux server with no display the browser runs headless (see
+docs/browser.md).
 
 The third browser mode, **Your browser**, is Chrome on every platform: the
 tarball carries the unpacked extension at `<root>/extension`, the owner loads it

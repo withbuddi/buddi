@@ -6,9 +6,12 @@ import path from 'node:path';
 import {
   acquireLock,
   atomicJson,
+  browsersDir,
+  browsersPath,
   dashboardReady,
   defaultDataDir,
   nativeEnvironment,
+  playwrightCacheDir,
   readPrivateFile,
   reloadLaunchAgent,
 } from './environment.js';
@@ -20,6 +23,25 @@ describe('the packaged installation environment', () => {
     expect(defaultDataDir('linux', { XDG_DATA_HOME: '/data' }, '/owner')).toBe('/data/buddi');
     expect(defaultDataDir('win32', { LOCALAPPDATA: '/local' }, '/owner')).toBe('/local/buddi');
     expect(defaultDataDir('darwin', { BUDDI_DATA_DIR: '/isolated' }, '/owner')).toBe('/isolated');
+  });
+
+  test('the agents\' browser lives in the data directory, unless an existing install already fetched it', () => {
+    expect(browsersDir('/data')).toBe('/data/browser/engines');
+    expect(playwrightCacheDir('linux', {}, '/owner')).toBe('/owner/.cache/ms-playwright');
+    expect(playwrightCacheDir('linux', { XDG_CACHE_HOME: '/cache' }, '/owner')).toBe('/cache/ms-playwright');
+    expect(playwrightCacheDir('darwin', {}, '/owner')).toBe('/owner/Library/Caches/ms-playwright');
+    const cache = (names: string[]) => (dir: string) => (dir === '/owner/.cache/ms-playwright' ? names : []);
+    const base = { platform: 'linux', env: {}, home: '/owner' } as const;
+    // A fresh machine: the data directory, created later by the installer.
+    expect(browsersPath('/data', { ...base, exists: () => false, list: cache([]) })).toBe('/data/browser/engines');
+    // An existing install with Chromium in Playwright's cache keeps it, so nothing is fetched again.
+    expect(browsersPath('/data', { ...base, exists: () => false, list: cache(['chromium-1187', 'ffmpeg-1011']) })).toBeUndefined();
+    // Only a Chromium build counts; FFmpeg alone is not a browser.
+    expect(browsersPath('/data', { ...base, exists: () => false, list: cache(['ffmpeg-1011']) })).toBe('/data/browser/engines');
+    // Once the data-directory location exists, it wins.
+    expect(browsersPath('/data', { ...base, exists: (dir) => dir === '/data/browser/engines', list: cache(['chromium-1187']) })).toBe('/data/browser/engines');
+    // A value the owner set is kept.
+    expect(browsersPath('/data', { ...base, env: { PLAYWRIGHT_BROWSERS_PATH: '/mine' }, exists: () => true, list: cache([]) })).toBe('/mine');
   });
 
   test('a live supervisor excludes all competing starters; release permits another', async () => {

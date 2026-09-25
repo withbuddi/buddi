@@ -51,6 +51,7 @@ answers twice:
 | Your private agents and skills | `private/agents` + `private/skills` at the repo root, or `~/.buddi/agents` + `~/.buddi/skills`, or wherever `BUDDI_AGENTS_DIR` / `BUDDI_SKILLS_DIR` point. `buddi doctor` prints the resolved paths in the `config` row | `<data>/agents` + `<data>/skills` | Yes |
 | Secrets | The **macOS keychain** (service `buddi`), or the encrypted file vault at `~/.buddi/vault.json`, or `.env` on a day-1 installation | The same keychain, or the file vault whose key is in `<data>/.env` | **No. Never.** |
 | The backups themselves | `<data dir>/backups` | `<data>/backups` | They are the backup |
+| The agents' Chromium, when buddi fetched it | Playwright's own cache (`~/.cache/ms-playwright` on Linux, `~/Library/Caches/ms-playwright` on macOS) | `<data>/browser/engines`. An install that already had Chromium in Playwright's cache before this location existed keeps using the cache; `buddi browser install` moves it here. `buddi browser` says where it is | No. `buddi browser install` fetches it again |
 
 ### Where the database listens, and what protects it
 

@@ -78,7 +78,7 @@ export class HostController implements BrowserController {
     return { engine: found.engine, headless, ...(problem ? { problem } : {}), ...(message ? { message } : {}), ...(this.#install ? { install: { ...this.#install } } : {}) };
   }
   /**
-   * Playwright's Chromium, downloaded into its usual cache. Started here and
+   * Playwright's Chromium, downloaded where `PLAYWRIGHT_BROWSERS_PATH` points (the data directory's `browser/engines` in a packaged install). Started here and
    * followed through the status: an install takes a minute or more, far
    * longer than a request should wait.
    */

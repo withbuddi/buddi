@@ -139,10 +139,24 @@ export function needsHeadless(platform: NodeJS.Platform = process.platform, env:
   return platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY;
 }
 
-/** One line for a terminal: what the agents' browser will be, or how to get one. */
+/**
+ * The folder Playwright keeps its browsers in, read off the Chromium binary:
+ * the parent of its `chromium-<build>` folder. The data directory's
+ * `browser/engines` when buddi fetched it, else Playwright's own cache.
+ */
+export function browsersFolder(executable: string): string {
+  let dir = path.dirname(executable);
+  while (path.dirname(dir) !== dir) {
+    if (/^chromium-\d+$/.test(path.basename(dir))) return path.dirname(dir);
+    dir = path.dirname(dir);
+  }
+  return path.dirname(executable);
+}
+
+/** One line for a terminal: what the agents' browser will be and where it lives, or how to get one. */
 export function browserLine(found: BrowserAvailability = detectBrowser()): string {
-  if (found.engine === 'chromium') return 'Browser for agents: Chromium, installed.';
-  if (found.engine === 'chrome') return 'Browser for agents: Google Chrome.';
+  if (found.engine === 'chromium') return found.executable ? `Browser for agents: Chromium, installed in ${browsersFolder(found.executable)}.` : 'Browser for agents: Chromium, installed.';
+  if (found.engine === 'chrome') return found.executable ? `Browser for agents: Google Chrome, at ${found.executable}.` : 'Browser for agents: Google Chrome.';
   return 'Browser for agents: not installed yet — buddi browser install (about 150 MB).';
 }
 
