@@ -26,7 +26,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm, registry-url: 'https://registry.npmjs.org' }
+        # No `registry-url`: it writes an .npmrc with a token placeholder, and
+        # npm then sends that instead of the OIDC token. Trusted publishing
+        # needs npm 11.5 or later; Node 22 ships an older one.
+        with: { node-version: 22, cache: pnpm }
+      - run: npm install -g npm@latest && npm --version
       - run: pnpm install --frozen-lockfile
       # The tarball is built from the workspace's dist output.
       - run: pnpm -r build
