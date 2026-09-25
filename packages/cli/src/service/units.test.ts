@@ -78,13 +78,24 @@ describe('buildSystemdUnit', () => {
 
   it('describes the same service as the plist', () => {
     expect(unit).toContain(
-      'ExecStart=/opt/homebrew/bin/node /Users/o/buddi/packages/gateway/dist/serve.js',
+      'ExecStart="/opt/homebrew/bin/node" "/Users/o/buddi/packages/gateway/dist/serve.js"',
     );
     expect(unit).toContain('WorkingDirectory=/Users/o/buddi');
     expect(unit).toContain('Restart=always');
     expect(unit).toContain('StandardOutput=append:/Users/o/buddi/data/logs/serve.log');
     expect(unit).toContain('StandardError=append:/Users/o/buddi/data/logs/serve.err');
     expect(unit).toContain('WantedBy=default.target');
+  });
+
+  it('carries the packaged supervisor\'s arguments and environment, quoted the way systemd reads them', () => {
+    const packaged = buildSystemdUnit({
+      ...SPEC, args: ['supervise'],
+      environment: { BUDDI_DATA_DIR: '/home/o/.local/share/buddi', BUDDI_SERVICE_UNIT: 'com.buddi.install.abc' },
+    });
+    expect(packaged).toContain('ExecStart="/opt/homebrew/bin/node" "/Users/o/buddi/packages/gateway/dist/serve.js" "supervise"');
+    expect(packaged).toContain('Environment="BUDDI_DATA_DIR=/home/o/.local/share/buddi"');
+    expect(packaged).toContain('Environment="BUDDI_SERVICE_UNIT=com.buddi.install.abc"');
+    expect(packaged).toContain('Environment=PATH="/opt/homebrew/bin:/usr/bin:/bin"');
   });
 });
 

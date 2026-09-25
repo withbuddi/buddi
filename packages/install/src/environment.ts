@@ -99,6 +99,31 @@ export function launchAgentPlist(data: string, home: string = os.homedir()): str
   return path.join(home, 'Library/LaunchAgents', `${launchAgentLabel(data)}.plist`);
 }
 
+/**
+ * The systemd *user* unit this installation installs on Linux — the same label,
+ * so `restartPlan` reads one name on both platforms. The unit sets
+ * `BUDDI_SERVICE_UNIT` to it, which is how a supervisor knows it is systemd's
+ * job (systemd has no `XPC_SERVICE_NAME`; `INVOCATION_ID` names any unit).
+ */
+export const SERVICE_UNIT_VAR = 'BUDDI_SERVICE_UNIT';
+
+export function systemdUnitPath(data: string, env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
+  const config = env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(home, '.config');
+  return path.join(config, 'systemd', 'user', `${launchAgentLabel(data)}.service`);
+}
+
+/**
+ * `systemctl --user`, as the caller runs it. `daemon-reload` reads the unit
+ * that was just written, `enable` makes it start at login, and `restart`
+ * (rather than `start`) is what makes a re-run of `buddi` after an upgrade pick
+ * up the unit file's new contents when the job is already running.
+ */
+export async function reloadSystemdUnit(exec: LaunchctlExec, unit: string): Promise<void> {
+  await exec('systemctl', ['--user', 'daemon-reload']);
+  await exec('systemctl', ['--user', 'enable', unit]);
+  await exec('systemctl', ['--user', 'restart', unit]);
+}
+
 /** `launchctl`, as the caller runs it. Only its rejection is inspected. */
 export type LaunchctlExec = (command: string, args: string[]) => Promise<unknown>;
 

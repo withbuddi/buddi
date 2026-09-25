@@ -51,7 +51,7 @@ import { promisify } from 'node:util';
  */
 import { compareSemver, parseSemver } from '@buddi/core/semver';
 import type { HttpTransport } from '@buddi/gateway';
-import { atomicJson, launchAgentLabel } from './environment.js';
+import { atomicJson, launchAgentLabel, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { JobStore } from './backup.js';
 import type { BackupControl, BackupJob } from './backup.js';
@@ -447,7 +447,7 @@ export function createInstaller(opts: { binary?: string; timeoutMs?: number; run
  * ------------------------------------------------------------------ */
 
 export interface RestartPlan {
-  mode: 'launchd' | 'spawn';
+  mode: 'launchd' | 'systemd' | 'spawn';
   reason: string;
 }
 
@@ -479,9 +479,14 @@ export interface RestartPlan {
  * machine that also has the plist installed used to read as launchd's and exit
  * into nothing, leaving the installation down until the next login.
  */
-export function restartPlan(facts: { platform: NodeJS.Platform | string; label: string; xpcServiceName?: string | undefined }): RestartPlan {
+export function restartPlan(facts: { platform: NodeJS.Platform | string; label: string; xpcServiceName?: string | undefined; serviceUnit?: string | undefined }): RestartPlan {
   if (facts.platform === 'darwin' && facts.label !== '' && facts.xpcServiceName === facts.label) {
     return { mode: 'launchd', reason: 'launchd keeps this job alive and runs the launcher from the install root' };
+  }
+  // The unit sets BUDDI_SERVICE_UNIT to its own label (launcher.ts), and
+  // `Restart=always` restarts the job whatever its exit status.
+  if (facts.platform === 'linux' && facts.label !== '' && facts.serviceUnit === facts.label) {
+    return { mode: 'systemd', reason: 'systemd keeps this unit alive and runs the launcher from the install root' };
   }
   return { mode: 'spawn', reason: 'nothing else would start the supervisor again' };
 }
@@ -521,9 +526,9 @@ export interface HandOverResult {
  * owner actually asked for.
  */
 export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
-  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME });
+  const plan = opts.plan ?? restartPlan({ platform: process.platform, label: launchAgentLabel(opts.ctx.data), serviceUnit: process.env[SERVICE_UNIT_VAR] ?? opts.env[SERVICE_UNIT_VAR], xpcServiceName: process.env.XPC_SERVICE_NAME ?? opts.env.XPC_SERVICE_NAME });
   const log = opts.log ?? ((line: string) => console.error(line));
-  if (plan.mode === 'launchd') {
+  if (plan.mode === 'launchd' || plan.mode === 'systemd') {
     log(`supervisor: exiting for the upgrade; ${plan.reason}.`);
     return { plan, ok: true, attempts: 0 };
   }
@@ -537,7 +542,7 @@ export async function handOver(opts: HandOverOptions): Promise<HandOverResult> {
       // The successor is ours, not launchd's, whatever started this process:
       // an inherited `XPC_SERVICE_NAME` would make it read its own hand-over
       // as launchd's and exit into nothing.
-      const { XPC_SERVICE_NAME: _launchd, ...env } = opts.env;
+      const { XPC_SERVICE_NAME: _launchd, [SERVICE_UNIT_VAR]: _systemd, ...env } = opts.env;
       const child = spawnProcess(process.execPath, [opts.launcher, 'supervise'], {
         detached: true, stdio: ['ignore', logFile.fd, logFile.fd], env,
       });
