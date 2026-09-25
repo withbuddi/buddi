@@ -693,8 +693,10 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (!check.ok || !spent.spend(check.nonce, check.expiresAt, now)) {
         if (limiter.blocked(key, now)) return sendEmpty(res, 429);
         limiter.fail(key, now);
-        // Never says which of "wrong", "expired" and "already used" it was.
-        return sendEmpty(res, 401);
+        // Never says which of "wrong", "expired" and "already used" it was —
+        // but says it to a person, on the page they opened, rather than as an
+        // empty status the browser dresses up as "this page isn't working".
+        return sendText(res, 401, 'This sign-in link is no longer valid: it was used already, or it is older than five minutes.\nRun `buddi` again for a fresh link.\n');
       }
       limiter.reset(key);
       const session = sessions.create(scope, now);
