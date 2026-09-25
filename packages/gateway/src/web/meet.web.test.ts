@@ -16,7 +16,7 @@ import { ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
-import { claimOpeningTurn, firstAgentPersona, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { claimOpeningTurn, firstAgentPersona, probeOllama, readFirstAgentPersona, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
 import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
@@ -407,6 +407,38 @@ it('recognises the older "How you work" as generated, and swaps it for the curre
   expect(written).not.toContain('and nothing else');
   expect(written).toContain('a browser of your own');
   expect(written).toContain('Today is {{today}}.');
+});
+
+it('shows the persona on a replay, keeps it on an untouched save, and replaces only the body on an edit', () => {
+  const dir = agentsDir();
+  const agentDir = path.join(dir, 'concierge');
+  mkdirSync(agentDir, { recursive: true });
+  const file = path.join(agentDir, 'agent.md');
+  const persona = 'Keep my books.\n\n- Nothing else.';
+  const head = ['---', 'id: concierge', 'handle: ada', 'name: Ada', 'description: Mine, for the books.', 'default: true', 'tools: [memory.*]', 'language: mirror', '---', ''];
+  writeFileSync(file, [...head, firstAgentPersona({ name: 'Ada', description: 'Mine, for the books.', instructions: persona }), ''].join('\n'), 'utf8');
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const deps = { pool: fakePool() as never, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => catalog.reload() };
+  // The wizard's field holds the owner's words, not the card line.
+  expect(readFirstAgentPersona(deps)).toEqual({ id: 'concierge', persona, generated: true });
+  const before = readFileSync(file, 'utf8');
+  updateFirstAgent(deps, { name: 'Ada' });
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  updateFirstAgent(deps, { instructions: 'Keep my books and my calendar.' });
+  let written = readFileSync(file, 'utf8');
+  expect(written).toContain('Keep my books and my calendar.');
+  expect(written).not.toContain('- Nothing else.');
+  expect(written).toContain('description: Mine, for the books.');
+  // A body written by hand is shown whole, and an edit replaces it whole.
+  writeFileSync(file, [...head, 'You are Ada, my own words.', ''].join('\n'), 'utf8');
+  catalog.reload();
+  expect(readFirstAgentPersona(deps)).toMatchObject({ persona: 'You are Ada, my own words.', generated: false });
+  updateFirstAgent(deps, { instructions: 'You are Ada, newer words.' });
+  written = readFileSync(file, 'utf8');
+  expect(written).toContain('You are Ada, newer words.');
+  expect(written).not.toContain('my own words');
+  expect(written).toContain('description: Mine, for the books.');
 });
 
 it('refuses to change an assistant that does not exist yet', () => {

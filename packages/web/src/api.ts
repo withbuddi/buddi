@@ -1435,6 +1435,8 @@ export const api = {
    * A separate route because writing the *first* agent is refused once there
    * is one, and "change either, or keep them" has to keep working.
    */
+  /** The assistant's persona as the wizard's purpose field shows it; 404 before there is one. */
+  firstAgentPersona: () => get<{ id: string; persona: string; generated: boolean }>('/onboarding/agent'),
   updateFirstAgent: (body: { name?: string; description?: string; instructions?: string; avatar?: string }) =>
     post<CreatedAgent>('/onboarding/agent/update', body),
   /**

@@ -644,9 +644,11 @@ export function updateFirstAgent(
   // module generated; a persona the owner wrote into the file stays theirs.
   const generated = generatedPersona(bodyOf(patched), agent.name, agent.description);
   const persona = instructions ?? generated?.instructions;
+  // A body the owner wrote is theirs: the wizard shows it whole (see
+  // `readFirstAgentPersona`), so an edit there replaces it whole.
   const content = generated
     ? replaceBody(patched, firstAgentPersona({ name: name ?? agent.name, description: description ?? agent.description, ...(persona ? { instructions: persona } : {}) }), agent.file)
-    : patched;
+    : instructions !== undefined ? replaceBody(patched, instructions, agent.file) : patched;
   try {
     parseAgentFile(content, { dirName: agent.id, file: agent.file });
   } catch (err) {
@@ -664,6 +666,23 @@ export function updateFirstAgent(
 }
 
 /** Everything after the frontmatter block, trimmed. */
+/**
+ * The assistant's persona as the wizard's purpose field shows it.
+ *
+ * While the body is still the generated one, only the owner's words inside
+ * it — what they typed, or the script's starting persona — so saving them
+ * back reframes rather than nests. A body written by hand is shown whole.
+ * Null when there is no assistant of the owner's own.
+ */
+export function readFirstAgentPersona(deps: Pick<OnboardingDeps, 'catalog'>): { id: string; persona: string; generated: boolean } | null {
+  const agent = privateAgent(deps.catalog);
+  if (!agent) return null;
+  const body = bodyOf(readFileSync(agent.file, 'utf8'));
+  const generated = generatedPersona(body, agent.name, agent.description);
+  if (!generated) return { id: agent.id, persona: body, generated: false };
+  return { id: agent.id, persona: generated.instructions ?? agent.description, generated: true };
+}
+
 function bodyOf(source: string): string {
   const match = /^---\n[\s\S]*?\n---\n?/.exec(source);
   return (match ? source.slice(match[0].length) : source).trim();

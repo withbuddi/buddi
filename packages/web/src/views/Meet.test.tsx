@@ -26,6 +26,7 @@ vi.mock('../api', async (load) => {
       skipOnboarding: vi.fn(),
       createFirstAgent: vi.fn(),
       updateFirstAgent: vi.fn(),
+      firstAgentPersona: vi.fn(),
       uploadAgentPicture: vi.fn(),
       removeAgentPicture: vi.fn(),
       assignProviderAccount: vi.fn(),
@@ -111,6 +112,7 @@ function quiet(): void {
   vi.mocked(chatApi.agents).mockResolvedValue({ agents: [], defaultAgentId: '' });
   // Another mode by default: the browser step settles with nothing to say.
   vi.mocked(api.browser).mockRejectedValue(new Error('not in this test'));
+  vi.mocked(api.firstAgentPersona).mockResolvedValue({ id: 'ada', persona: 'Keep my books. Nothing else.', generated: true });
   for (const call of [api.overview, api.conversations, chatApi.groups]) {
     vi.mocked(call as () => Promise<unknown>).mockRejectedValue(new Error('not in this test'));
   }
@@ -836,12 +838,29 @@ describe('change', () => {
     const changes = await screen.findAllByRole('button', { name: SCRIPT.change });
     fireEvent.click(changes[changes.length - 1]!);
     expect(await screen.findByDisplayValue('Ada')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Whatever I ask.')).toBeInTheDocument();
+    // The persona from its file, not the card line.
+    expect(await screen.findByDisplayValue('Keep my books. Nothing else.')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Whatever I ask.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
     await waitFor(() => expect(api.updateFirstAgent).toHaveBeenCalled());
     expect(api.createFirstAgent).not.toHaveBeenCalled();
-    // Untouched, the card line is not sent back as a persona.
+    // Untouched, nothing is sent back as a persona, and the card line never is.
     expect(vi.mocked(api.updateFirstAgent).mock.calls[0]![0]).not.toHaveProperty('instructions');
+    expect(vi.mocked(api.updateFirstAgent).mock.calls[0]![0]).not.toHaveProperty('description');
+  });
+
+  it('sends the persona back only when the owner edited it', async () => {
+    met();
+    vi.mocked(api.updateFirstAgent).mockResolvedValue({ agent: null, id: 'ada', handle: 'ada', file: '', live: true, accountId: null });
+    render(meet());
+    const changes = await screen.findAllByRole('button', { name: SCRIPT.change });
+    fireEvent.click(changes[changes.length - 1]!);
+    const field = await screen.findByDisplayValue('Keep my books. Nothing else.');
+    fireEvent.change(field, { target: { value: 'Keep my books and my calendar.' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
+    await waitFor(() => expect(api.updateFirstAgent).toHaveBeenCalled());
+    expect(vi.mocked(api.updateFirstAgent).mock.calls[0]![0]).toMatchObject({ instructions: 'Keep my books and my calendar.' });
+    expect(vi.mocked(api.updateFirstAgent).mock.calls[0]![0]).not.toHaveProperty('description');
   });
 
   it('moves the assistant onto the new brain when the brain changes', async () => {

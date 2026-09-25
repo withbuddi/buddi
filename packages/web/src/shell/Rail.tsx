@@ -8,7 +8,7 @@
  * count of things waiting on the owner, which is the reason to go there.
  *
  * Under a hairline at the foot, the owner's initial: a small menu with the
- * quick theme switch, the way to Appearance, and Replay first run.
+ * quick theme switch, the way to Appearance, and Run setup again.
  *
  * Icons are drawn, not typed: no emoji stands in for a place here.
  */
@@ -143,7 +143,7 @@ function OwnerMenu({
               Change appearance
             </DropdownMenu.Item>
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(WELCOME_ROUTE)}>
-              Replay first run
+              Run setup again
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
