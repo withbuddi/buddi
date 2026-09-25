@@ -214,6 +214,19 @@ async function restoreThroughSupervisor(ctx: InstallContext, rest: string[]): Pr
   }
 }
 
+/**
+ * What the service's own environment carries besides the data directory: the
+ * dashboard port the owner asked for on the command line. The supervisor is
+ * what provisions a first run and writes `installation.json`, and it runs
+ * under launchd or systemd with none of the caller's environment — so
+ * `BUDDI_WEB_PORT=4417 buddi` on a first run used to end on 4317. Once the
+ * state file exists it wins over this (environment.ts), so the value here
+ * only ever decides a first run.
+ */
+function serviceEnvironment(): Record<string, string> {
+  return askedWebPort === undefined ? {} : { BUDDI_WEB_PORT: String(askedWebPort) };
+}
+
 /** What `systemctl --user` needs to find the user's manager, when the caller had it. */
 function systemdSession(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
@@ -229,7 +242,7 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     await mkdir(dir, { recursive: true });
     await writeFile(plist, buildPlist({
       label, nodePath: process.execPath, serveEntry: entry, args: ['supervise'],
-      environment: { BUDDI_DATA_DIR: ctx.data }, workingDirectory: ctx.data,
+      environment: { BUDDI_DATA_DIR: ctx.data, ...serviceEnvironment() }, workingDirectory: ctx.data,
       path: [path.dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
       logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
     }), { mode: 0o600 });
@@ -250,7 +263,7 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     await mkdir(path.dirname(unit), { recursive: true });
     await writeFile(unit, buildSystemdUnit({
       label, nodePath: process.execPath, serveEntry: entry, args: ['supervise'],
-      environment: { BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label },
+      environment: { BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label, ...serviceEnvironment() },
       workingDirectory: ctx.data,
       path: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
       logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
