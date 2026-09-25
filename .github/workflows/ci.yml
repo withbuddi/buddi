@@ -24,7 +24,8 @@ jobs:
           - name: typecheck
             run: node scripts/check-boundaries.mjs && pnpm -r typecheck
           - name: rest
-            run: pnpm -r --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
+            # `!buddi` is the workspace root, whose own test script is the whole gate.
+            run: pnpm -r --filter '!buddi' --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
     name: quick (${{ matrix.lane.name }})
     steps:
       - uses: actions/checkout@v4
