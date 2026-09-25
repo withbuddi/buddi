@@ -9,6 +9,7 @@ import type {
   NeutralMessage,
   RuntimeProvider,
 } from './anthropic.js';
+import { ProviderError } from './anthropic.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import {
   InterjectionQueue,
@@ -23,6 +24,7 @@ import {
   normalizeForReplay,
   producedArtifactIds,
   runAgent,
+  SCREENSHOT_REFUSED_TEXT,
   selectTools,
   type Queryable,
 } from './loop.js';
@@ -376,6 +378,51 @@ describe('runAgent', () => {
     expect(JSON.stringify(provider.calls[2])).toContain('picture-2');
     expect(JSON.stringify(provider.calls[2])).not.toContain('picture-1');
     expect(JSON.stringify(db.messages)).not.toContain('picture-');
+  });
+
+  it('sends the turn again without pictures when the model does not take images, and sends none after', async () => {
+    const db = new FakeDb();
+    let imageNumber = 0;
+    const registry = new ToolRegistry();
+    registry.register({ name: 'demo', version: '1', schema: 'demo', migrationsDir: '', tools: [{
+      name: 'demo.double', description: 'observe', tier: 'auto', input: z.object({}), execute: async () => ({ observed: true }),
+      image: async () => ({ mime: 'image/jpeg', data: `picture-${++imageNumber}` }),
+    }] });
+    const call = (id: string): CompletionResponse => ({ content: [{ type: 'tool_use', id, name: 'demo.double', input: {} }], stopReason: 'tool_use', usage, model: 'test' });
+    const script = [call('1'), call('2'), { content: [{ type: 'text' as const, text: 'done' }], stopReason: 'end_turn' as const, usage, model: 'test' }];
+    const calls: CompletionRequest[] = [];
+    let refusals = 0;
+    let answered = 0;
+    const provider: RuntimeProvider = {
+      async complete(req) {
+        calls.push(structuredClone(req));
+        if (req.messages.some((m) => m.content.some((b) => b.type === 'image'))) {
+          refusals += 1;
+          throw new ProviderError({ status: 400, type: 'invalid_request_error', message: 'this model does not support image input', reason: 'images-unsupported' });
+        }
+        return script[answered++]!;
+      },
+    };
+    await runAgent({ agent, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'hello' });
+    // One refusal, one retry: the second request carries the text line, not the picture.
+    expect(refusals).toBe(1);
+    expect(calls).toHaveLength(4);
+    expect(JSON.stringify(calls[1])).toContain('picture-1');
+    expect(JSON.stringify(calls[2])).not.toContain('picture-');
+    expect(JSON.stringify(calls[2])).toContain(SCREENSHOT_REFUSED_TEXT);
+    // Later tool results in the same run add no pictures.
+    expect(calls[3]!.messages.some((m) => m.content.some((b) => b.type === 'image'))).toBe(false);
+    expect(db.events.filter((e) => e.kind === 'run.images-refused')).toHaveLength(1);
+    expect(JSON.stringify(db.messages)).not.toContain('picture-');
+  });
+
+  it('lets an images refusal through when there were no images to take out', async () => {
+    const db = new FakeDb();
+    const provider: RuntimeProvider = {
+      async complete() { throw new ProviderError({ status: 400, type: 'invalid_request_error', message: 'this model does not support image input', reason: 'images-unsupported' }); },
+    };
+    await expect(runAgent({ agent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId: 'probe', userMessage: 'hello' }))
+      .rejects.toThrow('does not support image input');
   });
 
   it.each(['auto', 'gated'] as const)('refuses an installed but ungranted %s tool at dispatch', async (tier) => {

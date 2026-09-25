@@ -227,6 +227,18 @@ export interface RuntimeProvider {
  * `code` so the queue's classifier can read it without walking anything, and
  * the whole chain is flattened into `detail` for the log.
  */
+/** A provider refusal the loop can act on. See `ProviderError.reason`. */
+export type ProviderErrorReason = 'images-unsupported';
+
+/**
+ * Whether a provider's error says the model does not take images. The
+ * capability matrix is per provider kind, so an OpenAI-compatible endpoint
+ * serving a text-only model is found out only by asking.
+ */
+export function refusesImages(message: string): boolean {
+  return /does not support images?\b|image input|image_url is not supported|vision.*not supported|not supported.*vision/i.test(message);
+}
+
 export class ProviderError extends Error {
   readonly retryAt: string | null;
   readonly status: number;
@@ -236,6 +248,12 @@ export class ProviderError extends Error {
   readonly code: string | null;
   /** The whole cause chain on one line. For a log, never for a chat window. */
   readonly detail: string;
+  /**
+   * What the refusal means, when the loop can act on it. `images-unsupported`:
+   * the model does not take images, though its provider kind does; the loop
+   * sends the turn again without them.
+   */
+  readonly reason: ProviderErrorReason | null;
 
   constructor(args: {
     status: number;
@@ -244,6 +262,7 @@ export class ProviderError extends Error {
     requestId?: string | null;
     retryAt?: string | null;
     cause?: unknown;
+    reason?: ProviderErrorReason;
   }) {
     super(args.message, args.cause === undefined ? undefined : { cause: args.cause });
     this.name = 'ProviderError';
@@ -252,6 +271,7 @@ export class ProviderError extends Error {
     this.requestId = args.requestId ?? null;
     this.retryAt = args.retryAt ?? null;
     this.code = args.cause === undefined ? null : (errorCodes(args.cause)[0] ?? null);
+    this.reason = args.reason ?? null;
     this.detail =
       args.cause === undefined ? args.message : `${args.message} <- ${describeCause(args.cause)}`;
   }
@@ -709,7 +729,7 @@ export function createAnthropicProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers) });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers), ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
   }
 
   const capabilities = providerCapabilities('anthropic');

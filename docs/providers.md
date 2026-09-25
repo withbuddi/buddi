@@ -20,6 +20,10 @@ Supported connections:
   gains `/v1`. HTTPS is required except for loopback local servers. Compatible model
   names are not restricted to OpenAI prefixes. The selected model/server must support
   the capabilities used by the agent, especially tool calling and images.
+  A model that turns images down (say, a text-only model on Ollama Cloud) does
+  not stop the run: buddi sends that turn again with each screenshot replaced by
+  a line of text, and sends no more pictures for the rest of the run. The run's
+  events record it once, as `run.images-refused`.
 - Previously configured Claude subscription/setup tokens, imported as legacy accounts.
   These are preserved, not promoted to refreshable OAuth connections. Token expiry and
   subscription renewal date are unknown. The extracted Chrome extension package is

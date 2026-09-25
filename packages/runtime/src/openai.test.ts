@@ -4,6 +4,7 @@ import {
   CLAUDE_CODE_SYSTEM_PREFIX,
   ProviderCapabilityError,
   ProviderError,
+  refusesImages,
   type CompletionRequest,
 } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
@@ -351,6 +352,26 @@ describe('createOpenAiProvider — failures', () => {
       message: 'bad model',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a model that does not take images, so the loop can send the turn again without them', async () => {
+    const provider = createOpenAiProvider(resolved(), { sleep: noSleep,
+      fetch: vi.fn(async () => jsonResponse(400, { error: { type: 'invalid_request_error', message: 'this model does not support image input' } })) as unknown as typeof fetch });
+    await expect(provider.complete(request)).rejects.toMatchObject({ name: 'ProviderError', status: 400, reason: 'images-unsupported' });
+    const other = createOpenAiProvider(resolved(), { sleep: noSleep,
+      fetch: vi.fn(async () => jsonResponse(400, { error: { type: 'invalid_request_error', message: 'bad model' } })) as unknown as typeof fetch });
+    expect((await other.complete(request).catch((e) => e)).reason).toBeNull();
+  });
+
+  it('recognises the ways a provider says a model does not take images', () => {
+    for (const said of [
+      'this model does not support image input',
+      'Model does not support images',
+      'image_url is not supported by this model',
+      'vision is not supported for this model',
+      'Image input is disabled for this deployment',
+    ]) expect(refusesImages(said), said).toBe(true);
+    for (const said of ['bad model', 'context length exceeded', 'rate limited']) expect(refusesImages(said), said).toBe(false);
   });
 
   it('retries a 429 on the shared budget and honours Retry-After', async () => {

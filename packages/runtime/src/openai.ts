@@ -32,6 +32,7 @@ import {
   OPENAI_TOOL_NAME_MAX,
   ProviderCapabilityError,
   ProviderError,
+  refusesImages,
   toolNameMap,
   wireToolName,
   type CompletionRequest,
@@ -471,7 +472,7 @@ export function createOpenAiProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers) });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers), ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
   }
 
   return {
@@ -597,10 +598,12 @@ class OpenAiStreamAssembly {
     if (!json) return;
     if (json.error && typeof json.error === 'object') {
       const error = json.error as Record<string, unknown>;
+      const message = typeof error.message === 'string' ? error.message : 'the stream reported an error';
       throw new ProviderError({
         status: 0,
         type: typeof error.type === 'string' ? error.type : 'stream_error',
-        message: typeof error.message === 'string' ? error.message : 'the stream reported an error',
+        message,
+        ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}),
       });
     }
     if (typeof json.model === 'string') this.#model = json.model;

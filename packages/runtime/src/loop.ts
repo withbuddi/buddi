@@ -12,6 +12,8 @@
 import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type CoreToolContext, type ToolRegistry } from '@buddi/core';
 import { primeSecretScrubber, scrubDeep, scrubText } from '@buddi/core';
 import type {
+  CompletionRequest,
+  CompletionResponse,
   ContentBlock,
   NativeSearchRecord,
   NeutralMessage,
@@ -20,6 +22,7 @@ import type {
   Usage,
   CompletionDelta,
 } from './anthropic.js';
+import { ProviderError } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import { compactObservations } from './projection.js';
 import {
@@ -611,6 +614,27 @@ async function persistMessage(
   return undefined;
 }
 
+/** What a screenshot becomes for a model that turned images down. */
+export const SCREENSHOT_REFUSED_TEXT = '(A screenshot was taken but this model does not take images. The text observation above is what it saw.)';
+/** What any other image becomes for that model. */
+export const IMAGE_REFUSED_TEXT = '(An image was here but this model does not take images.)';
+
+/**
+ * Replace every image block in the outgoing messages with a line of text,
+ * in place. A screenshot says the text observation is what the model saw.
+ * Returns whether there was anything to replace.
+ */
+function dropImages(messages: NeutralMessage[], screenshots: ReadonlySet<ContentBlock>): boolean {
+  let replaced = false;
+  for (const message of messages) {
+    if (!message.content.some((b) => b.type === 'image')) continue;
+    replaced = true;
+    message.content = message.content.map((b) => b.type !== 'image' ? b
+      : { type: 'text', text: screenshots.has(b) ? SCREENSHOT_REFUSED_TEXT : IMAGE_REFUSED_TEXT });
+  }
+  return replaced;
+}
+
 async function appendEvent(
   pool: Queryable,
   kind: string,
@@ -920,6 +944,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   ));
   const ephemeralImages = new Set<ContentBlock>();
+  /**
+   * The model turned images down: its provider kind takes them, this model
+   * does not. Nothing more is sent as a picture for the rest of the run; the
+   * tools' text observations carry on alone.
+   */
+  let imagesRefused = false;
 
   await appendEvent(
     pool,
@@ -996,7 +1026,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
      * quoting one — none of it crosses to the provider.
      */
     await primeSecretScrubber();
-    const res = await provider.complete({
+    const request = (): CompletionRequest => ({
       system: scrubText(
         waitingForOwner
           ? `${system}\n\nYou have asked the owner a question. Finish by stating that question and wait for their answer. Do not call more tools or claim the pending work is done.`
@@ -1009,6 +1039,24 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       ...(agent.thinking ? { thinking: agent.thinking } : {}),
       ...(opts.onDelta ? { onDelta: opts.onDelta } : {}),
     });
+    let res: CompletionResponse;
+    try {
+      res = await provider.complete(request());
+    } catch (err) {
+      // A model that does not take images, behind a provider kind that does:
+      // the pictures become a line of text and the turn is sent once more.
+      // Not an error for the owner; one event records it.
+      const refused = err instanceof ProviderError && err.reason === 'images-unsupported';
+      if (!refused || imagesRefused || !dropImages(messages, ephemeralImages)) throw err;
+      imagesRefused = true;
+      await appendEvent(
+        pool,
+        'run.images-refused',
+        { model: snapshot.model, ...(opts.runId ? { runId: opts.runId } : {}) },
+        conversationId,
+      );
+      res = await provider.complete(request());
+    }
     // The model has seen whatever was handed to it with the last turn's tool
     // results. Only now is it delivered: before this, the call could still
     // have failed and the words gone nowhere.
@@ -1158,7 +1206,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         if (!ctx.signal?.aborted) {
           try {
             const picture = await registry.image(call.name, outcome.output, toolCtx);
-            if (picture && capabilities.multimodalImage) images.push({ type: 'image', ...picture });
+            if (picture && capabilities.multimodalImage && !imagesRefused) images.push({ type: 'image', ...picture });
           } catch { /* Observation loss must never turn a completed action into a retry. */ }
         }
       } else if (outcome.reason === 'approval-required') {
