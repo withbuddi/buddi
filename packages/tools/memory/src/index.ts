@@ -1,7 +1,7 @@
 /**
  * @buddi/tool-memory — memory v1 as a plugin.
  *
- * Two kinds, separated on purpose (ARCHITECTURE.md, "Memory"): explicit user
+ * Two kinds, separated on purpose (docs/architecture.md, "Memory"): explicit user
  * preferences, which the owner authors and corrects by revision, and derived
  * memories, which an agent writes with provenance, scope and an expiry. No
  * embeddings yet — v1 is preferences plus source-linked notes, and recall is a

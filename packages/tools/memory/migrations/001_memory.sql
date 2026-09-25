@@ -1,6 +1,6 @@
 -- memory plugin schema (applied with search_path = memory, public).
 --
--- Two separated kinds (ARCHITECTURE.md, "Memory"):
+-- Two separated kinds (docs/architecture.md, "Memory"):
 --   preferences — user-authored, versioned, correctable. A correction is a NEW
 --                 revision; the previous one is superseded, never overwritten,
 --                 so "what did I used to want" stays answerable.

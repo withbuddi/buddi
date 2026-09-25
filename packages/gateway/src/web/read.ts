@@ -1,9 +1,9 @@
 /**
  * The dashboard's reads — the event log and everything hanging off it.
  *
- * ARCHITECTURE.md, "Secrets and operations": *«Observability is the event log:
- * run/step/action ids, queue age, ingest lag, retry counts, approval age,
- * provider usage.»* So this file adds no state of its own and computes nothing
+ * docs/architecture.md, "Secrets and operations": *«Observability is the event
+ * log: run, step and action ids, queue age, ingest lag, retry counts, approval
+ * age, provider usage.»* So this file adds no state of its own and computes nothing
  * the system does not already record: every number below is a row somewhere,
  * read back with a `select`.
  *

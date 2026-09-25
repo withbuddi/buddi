@@ -3,8 +3,8 @@
  *
  * The file holds AES-256-GCM ciphertext; the key is derived with scrypt from
  * `BUDDI_VAULT_KEY`, which is held *outside* the file and outside the database
- * — that is the whole point (ARCHITECTURE.md: "encrypted with keys held outside
- * the DB"). No key means locked, not readable-anyway.
+ * — that is the whole point (docs/architecture.md, "Secrets and operations").
+ * No key means locked, not readable-anyway.
  *
  * Each secret is sealed on its own, so reading one never decrypts the rest and
  * a corrupted entry cannot take the vault down with it.

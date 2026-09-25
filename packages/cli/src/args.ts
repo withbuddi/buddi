@@ -101,7 +101,7 @@ export type Command =
   | { kind: 'mcp' }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
-  /** Global pause control (ARCHITECTURE.md, "Queue, concurrency, recovery"). */
+  /** Global pause control (docs/architecture.md, "Queue, concurrency, recovery"). */
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number }

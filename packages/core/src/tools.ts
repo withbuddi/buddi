@@ -203,10 +203,10 @@ export interface CoreToolContext extends ToolContext {
 /**
  * What a gated tool says will actually happen — the *whole* of it.
  *
- * ARCHITECTURE.md, "Actions and approvals": the immutable action object carries
- * «the full effect envelope (e.g. every SMTP recipient incl. BCC, body,
- * attachment hashes)», and «the preview is rendered from this object, never
- * from model-written text». So the envelope is the tool's own structured
+ * docs/architecture.md, "Actions and approvals": the immutable action object
+ * carries «the full effect envelope (every SMTP recipient including BCC, the
+ * body, attachment hashes)», and «the preview is rendered from this object,
+ * never from model-written text». So the envelope is the tool's own structured
  * account of the effect, and the preview is the sentence the owner approves.
  */
 export interface EffectDescription {
@@ -437,7 +437,7 @@ export interface CoreSourceContext extends SourceContext {
 
 /**
  * A source: the half of the plugin contract that starts work with no agent in
- * the loop (ARCHITECTURE.md, "Drop-in tools and skills"). Mail arrives and a
+ * the loop (docs/architecture.md, "Drop-in tools and skills"). Mail arrives and a
  * triage run begins; nobody asked, and no model decided to look.
  *
  * A source owns its own cursor and its own transaction. Core only decides

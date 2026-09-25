@@ -8,7 +8,7 @@
  * transition, the same Executor, the same claim, the same effect ledger rows.
  * A surface establishes identity; authorization lives in core, and a *second*
  * implementation of the decision here would be a second place for it to be
- * wrong (ARCHITECTURE.md, "Owner and surface authentication").
+ * wrong (docs/architecture.md, "Owner and surface authentication").
  *
  * Because each write goes through core, each write emits core's own events —
  * so the dashboard shows its own actions in the log a second later, with no

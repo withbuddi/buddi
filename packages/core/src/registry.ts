@@ -1,7 +1,7 @@
 /**
  * Tool registry — the only thing core knows about tools.
  *
- * Fail-closed rules (ARCHITECTURE.md, "Trust model"):
+ * Fail-closed rules (docs/architecture.md, "Trust model"):
  *  - Unknown tool          -> refuse ('unknown-tool')
  *  - Invalid arguments     -> refuse ('invalid-args'), zod decides
  *  - Tier 'gated'          -> never executes here. The call becomes an immutable

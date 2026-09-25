@@ -1,6 +1,6 @@
 /**
  * The controls on an approval — the owner's own settings on an effect they are
- * about to authorize (docs/email.md §4, ARCHITECTURE.md "Actions and
+ * about to authorize (docs/email.md §4, docs/architecture.md "Actions and
  * approvals").
  *
  * The rule the whole boundary rests on is unchanged and is why this is a

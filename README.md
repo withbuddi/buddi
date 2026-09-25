@@ -160,7 +160,7 @@ runs on a timer, and the hosts it talks to. Nothing happens until you approve.
 own, such as sending mail, running a command or acting in a browser, stops the
 run and shows a card with exactly what will happen. You approve or reject it
 on the dashboard or on Telegram. Unknown tools, bad arguments and missing
-configuration never run. [ARCHITECTURE.md](ARCHITECTURE.md) has the model.
+configuration never run. [docs/architecture.md](docs/architecture.md) has the model.
 
 **Missions and watchers.** A mission is scheduled work. A watcher checks
 something on an interval and produces findings; core decides whether a finding
@@ -327,7 +327,7 @@ A tag `v<version>` runs the gate, builds the tarball, publishes it to npm
 (pre-release versions under `next`, others under `latest`) and creates the
 GitHub release.
 
-Read next: [ARCHITECTURE.md](ARCHITECTURE.md) for the design,
+Read next: [docs/architecture.md](docs/architecture.md) for the design,
 [docs/plugins.md](docs/plugins.md) to write a plugin, and
 [docs/README.md](docs/README.md) for the index of everything else. The roadmap
 is kept outside this repository.

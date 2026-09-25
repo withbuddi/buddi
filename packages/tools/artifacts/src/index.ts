@@ -2,7 +2,7 @@
  * @buddi/tool-artifacts — reading the artifact store.
  *
  * The one plugin that owns no schema. Artifacts are a core domain concept
- * (ARCHITECTURE.md, "Data model"): core holds the table because approvals,
+ * (docs/architecture.md, "Data model"): core holds the table because approvals,
  * transcripts and runs all reference it, and a dropped plugin must not take the
  * owner's files with it. What is droppable is *this* — the agent-facing reads
  * over that store — so `migrationsDir` is empty and uninstalling removes tools,

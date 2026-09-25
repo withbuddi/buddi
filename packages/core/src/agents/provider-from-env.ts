@@ -1,5 +1,5 @@
 /**
- * Credential choice, made once and explicitly (ARCHITECTURE.md, "Runtime provider
+ * Credential choice, made once and explicitly (docs/architecture.md, "Runtime provider
  * port": no ambient credentials — the caller passes `env`, nothing is discovered).
  *
  * This used to live in the gateway next to the one hardcoded agent. Agents are

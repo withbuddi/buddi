@@ -6,7 +6,7 @@
  * tool — the agent may compose freely, and only an owner approval bound to the
  * finished envelope puts anything on the wire.
  *
- * Drafts are artifacts (ARCHITECTURE.md, roadmap step 3): the body text is
+ * Drafts are artifacts: the body text is
  * saved into the core artifact store with the authoring agent as its
  * provenance, and the draft row points at that version. That is what lets an
  * approval reference a version and what makes the preview *be* what ships.

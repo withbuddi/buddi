@@ -5,7 +5,7 @@
  * loop sees is provider-neutral, so a second adapter (OpenAI) can implement the
  * same port without leaking Anthropic shapes upward.
  *
- * Credential kinds (ARCHITECTURE.md, "Credential kinds"):
+ * Credential kinds (docs/architecture.md, "Credential kinds"):
  *  - `api-key`            -> `x-api-key`, nothing else.
  *  - `subscription-token` -> `Authorization: Bearer` **plus** the Claude Code
  *    identity line as the system prompt's own first block. Without it the API

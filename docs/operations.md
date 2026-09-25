@@ -7,9 +7,9 @@ updated: 2026-09-25
 # Operations — backup, restore, and where your data actually lives
 
 This installation holds your financial history, your mail, the memories your agents
-have formed about you, and the personas you wrote. ARCHITECTURE.md promises that
-"rotation, backup/restore, and log redaction are specified" before you rely on the
-system daily. This document is the backup/restore half of that promise, and it
+have formed about you, and the personas you wrote. [architecture.md](architecture.md)
+promises that "rotation, backup/restore, and log redaction are specified" before you
+rely on the system daily. This document is the backup/restore half of that promise, and it
 is the page that **owns** backup and restore: what an archive holds, the
 passphrase, the schedule, restoring, the pre-restore snapshot and recovery mode
 are all here. [install.md](install.md) §8 keeps only what the install spec
@@ -413,8 +413,8 @@ and never a way into it.
 - A backup is a file that gets copied to a USB stick, an external disk, a cloud sync
   folder, a second laptop. Every one of those copies is a place a credential would
   then live, forever, with no rotation and no revocation.
-- ARCHITECTURE.md's rule is that "a secrets *table* would hand mail and model
-  credentials to anyone with the database file". An archive containing secrets is the
+- The rule in [architecture.md](architecture.md) is that "a secrets *table* would
+  hand mail and model credentials to anyone with the database file". An archive containing secrets is the
   same mistake in a different wrapper.
 - `BUDDI_VAULT_KEY` is the sharpest case: it is not one secret, it is the key that
   unlocks *every* secret in the file vault. It is scrubbed by shape, not by name, so a

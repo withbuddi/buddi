@@ -1,6 +1,6 @@
 -- Artifacts: the store for files a mission builds or a surface hands in.
 --
--- ARCHITECTURE.md names artifacts a first-class core concept ("Data model"):
+-- docs/architecture.md names artifacts a first-class core concept ("Data model"):
 -- previewable from any surface, referable by approvals, and — with surface
 -- attachment ingest — the landing place for a Telegram photo or PDF. Core owns
 -- the table; the bytes live outside the database under BUDDI_DATA_DIR, so a

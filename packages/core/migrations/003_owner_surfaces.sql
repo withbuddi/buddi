@@ -25,7 +25,7 @@ create index if not exists surface_identities_owner_idx
   on core.surface_identities (owner_id, surface);
 
 -- Polling offset per surface. Advanced only after the update is persisted
--- (ARCHITECTURE.md, "Offline contract").
+-- (docs/architecture.md, "Offline contract").
 create table if not exists core.surface_cursors (
   surface text primary key,
   cursor text,

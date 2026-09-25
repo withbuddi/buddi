@@ -2,7 +2,7 @@
  * Sentinels — deterministic watchers. No model, no prompt, no judgement.
  *
  * A sentinel is the second half of the "sources originate work" contract
- * (ARCHITECTURE.md, "Drop-in tools and skills"): a plugin ships code that runs
+ * (docs/architecture.md, "Sentinels"): a plugin ships code that runs
  * on a period, reads its own schema, and returns *findings*. What happens to a
  * finding — wake the owner now, note it for the weekly digest, or stay quiet
  * because it is the same fact as yesterday — is core's decision and lives in

@@ -1,9 +1,9 @@
 /**
  * Where the dashboard listens, and whether it listens at all.
  *
- * ARCHITECTURE.md, "Owner and surface authentication": *«Web UI: session auth,
- * CSRF protection, Origin checks, bound to localhost by default (remote access
- * = explicit authenticated transport).»* The binding is the first half of that
+ * docs/architecture.md, "Owner and surface authentication": the dashboard
+ * binds to `127.0.0.1` by default, CSRF and `Origin` checks gate every write,
+ * and remote access is an explicit, authenticated transport. The binding is the first half of that
  * sentence and it lives here: the default host is `127.0.0.1`, and moving it is
  * a deliberate edit to `BUDDI_WEB_HOST`, never a side effect of anything else.
  */

@@ -56,7 +56,7 @@ export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? path.resolve(
 );
 
 /**
- * Where agents and skills are looked for, in order (ARCHITECTURE.md, "Drop-in
+ * Where agents and skills are looked for, in order (docs/architecture.md, "Drop-in
  * tools and skills"): the examples this repository ships, then the owner's
  * private set, which overrides them and is never committed.
  *

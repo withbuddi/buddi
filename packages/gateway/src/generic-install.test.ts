@@ -8,7 +8,7 @@
  * dashboard shows no money block, and no surface's help text mentions a domain.
  *
  * It is a boundary test, not a unit test: if any of it fails, buddi has grown a
- * dependency on this owner's agents (ARCHITECTURE.md, principle 6).
+ * dependency on this owner's agents (docs/architecture.md, principle 6).
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

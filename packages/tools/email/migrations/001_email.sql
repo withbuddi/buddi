@@ -5,7 +5,7 @@
 -- is never a key on its own. Message-ID is *evidence* about the logical
 -- message, never the key, and is therefore nullable and unconstrained.
 --
--- Lifecycle is factored on purpose (ARCHITECTURE.md, "Email ingestion"):
+-- Lifecycle is factored on purpose (docs/architecture.md, "Email ingestion"):
 -- the mailbox occurrence (`messages`), what triage decided about it (`triage`,
 -- versioned so a policy change can re-triage), and what the owner might send
 -- (`drafts`) are three records. Send attempts are NOT here: the core effect
@@ -106,7 +106,8 @@ create table if not exists drafts (
   sent_message_id text null,
   sent_response text null,
   -- Set when a claimed send did not come back cleanly: the attempt is `unknown`
-  -- and needs review, never a blind retry (ARCHITECTURE.md, "Effectful side effects").
+  -- and needs review, never a blind retry (docs/architecture.md, "Effectful
+  -- side effects").
   send_error text null,
   unique (sent_action_id)
 );

@@ -24,6 +24,11 @@ unbuilt specs are kept outside this repository.
 - [The developer plugin](developer.md): an agent that works in a workspace.
 - [Built-in system context](system-context.md).
 
+## How it is built
+
+- [Architecture](architecture.md): the boundaries, the contracts and the
+  rules the code holds to.
+
 ## Writing plugins
 
 - [Writing a plugin](plugins.md): the guide and the full contract.

@@ -367,7 +367,7 @@ export interface RunResult {
   /** Set only when `stopped === 'awaiting-approval'`. */
   pendingActionId?: string;
   /**
-   * What this run actually ran on (ARCHITECTURE.md, "Per-run snapshot").
+   * What this run actually ran on (docs/architecture.md, "Runtime provider port").
    * Pinned provider, pinned model, credential kind — plus the concrete model
    * the endpoint says it served, which is the one that can differ from the pin.
    */

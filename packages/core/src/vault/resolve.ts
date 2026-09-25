@@ -1,9 +1,9 @@
 /**
  * Resolving one secret: vault first, environment second.
  *
- * The environment is the *documented day-1 fallback* (ARCHITECTURE.md,
- * "Credential kinds": «Secrets come from the vault; in the day-1 build they
- * come from `.env` via an explicit env-name reference»), not an accident — but
+ * The environment is the *documented fallback* (docs/architecture.md,
+ * "Credential kinds": «Credentials come from the vault, or from `.env` by
+ * explicit name»), not an accident — but
  * it is a fallback, so a secret the owner moved into the keychain wins over a
  * stale copy left in `.env`.
  *

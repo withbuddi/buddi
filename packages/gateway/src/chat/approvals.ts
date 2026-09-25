@@ -1,9 +1,9 @@
 /**
  * Approvals in the terminal.
  *
- * The rule from ARCHITECTURE.md does not change because the surface did: the
- * owner decides, core moves the row, and the Executor is the only thing that
- * runs the effect. So this file is deliberately thin — it calls exactly the
+ * The rule in docs/architecture.md ("Actions and approvals") does not change
+ * because the surface did: the owner decides, core moves the row, and the
+ * Executor is the only thing that runs the effect. So this file is deliberately thin — it calls exactly the
  * functions the Telegram surface calls, in exactly the same order:
  *
  *   decideApproval → executeApproved → resumeJobForAction

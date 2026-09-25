@@ -263,7 +263,7 @@ export const UNATTENDED_RETRY_PROFILE: RetryProfile = {
  * The job kinds that are work the owner is relying on, with nobody watching.
  *
  * Named here as strings rather than imported, because core must not depend on
- * the gateway that defines them (ARCHITECTURE.md principle 6). The gateway owns
+ * the gateway that defines them (docs/architecture.md principle 6). The gateway owns
  * the constants; a test there asserts the two lists agree, which is what keeps
  * this honest.
  */

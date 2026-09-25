@@ -2,7 +2,7 @@
  * `email.send` — the effect tool. Tier `gated`; the only thing in this plugin
  * that reaches the world.
  *
- * The shape of this file is the approval contract (ARCHITECTURE.md, "Actions
+ * The shape of this file is the approval contract (docs/architecture.md, "Actions
  * and approvals"):
  *
  *  - **`describe` renders the full envelope**, from rows, before any approval is

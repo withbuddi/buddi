@@ -214,7 +214,7 @@ export interface FirstAgentInput {
  * The example the owner's first agent takes the place of.
  *
  * The catalog's rule is that a private agent with the same id as an example
- * replaces it wholesale (docs/ARCHITECTURE.md, "Drop-in tools and skills"), so
+ * replaces it wholesale (docs/architecture.md, "Drop-in tools and skills"), so
  * writing the first agent under this id *is* the rename: there is one
  * assistant afterwards, the owner's, and Concierge is no longer listed beside
  * it pretending to be a colleague. The handle, name, face and description are

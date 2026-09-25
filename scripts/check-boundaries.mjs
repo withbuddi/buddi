@@ -2,7 +2,7 @@
 /**
  * Three boundary checks, all lightweight on purpose — no ESLint.
  *
- * 1. **Dependency direction** (ARCHITECTURE.md principle 6): core never imports
+ * 1. **Dependency direction** (docs/architecture.md principle 6): core never imports
  *    a tool or an upper layer. Tools import core, not the reverse. Scans
  *    packages/core sources and its package.json dependencies.
  *

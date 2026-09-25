@@ -43,7 +43,7 @@ export const MAX_REMINDER_TEXT = 500;
 /**
  * How late is too late.
  *
- * The machine sleeps (ARCHITECTURE.md, principle 3). A reminder found more than
+ * The machine sleeps (docs/architecture.md, principle 3). A reminder found more than
  * this long past its instant is `expired`, not fired: "pay the card before
  * midnight" delivered at noon the next day is not a late reminder, it is a
  * wrong one.

@@ -10,7 +10,7 @@
  * grant: an agent cannot reach a tool through a colleague that it could not
  * reach itself, because the colleague's grant is its own file's grant.
  *
- * Authorization is in code and fails closed (ARCHITECTURE.md, "Trust model"):
+ * Authorization is in code and fails closed (docs/architecture.md, "Trust model"):
  *
  *  - the caller must be known (`ctx.agentId`) — an anonymous run delegates nothing;
  *  - the target must appear in the caller's allowlist, which the host reads from

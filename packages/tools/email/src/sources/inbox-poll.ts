@@ -3,7 +3,7 @@
  *
  * Mail arrives and a triage run starts; no agent is in the loop, and nobody
  * asked. That is what makes this a *source* rather than a tool, and it carries
- * everything the contract demands (ARCHITECTURE.md, "Drop-in tools and skills"):
+ * everything the contract demands (docs/architecture.md, "Drop-in tools and skills"):
  *
  *  - **Identity is the quad.** `(account, mailbox, uidvalidity, uid)` with a
  *    unique constraint. A UID means nothing without its UIDVALIDITY.

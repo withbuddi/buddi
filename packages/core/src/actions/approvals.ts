@@ -6,8 +6,8 @@
  *
  *  - a second tap on an inline keyboard changes nothing and says so;
  *  - two paired surfaces racing on the same action resolve *one* decision, and
- *    the loser is told which way it went (ARCHITECTURE.md, "Approval callbacks
- *    are bound": resolution from any paired surface races on the same atomic
+ *    the loser is told which way it went (docs/architecture.md, "Owner and
+ *    surface authentication": resolution from any paired surface races on the same atomic
  *    state transition);
  *  - a decision arriving after expiry does not revive the action. The row is
  *    moved to `expired` instead, and the caller sees `expired`, not `approved`.

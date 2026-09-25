@@ -1,9 +1,9 @@
 /**
  * The dashboard's HTTP server — bound to loopback, CSRF-checked, and CORS-free.
  *
- * ARCHITECTURE.md, "Owner and surface authentication": *«Web UI: session auth,
- * CSRF protection, Origin checks, bound to localhost by default (remote access
- * = explicit authenticated transport).»* The binding is the credential. Each
+ * docs/architecture.md, "Owner and surface authentication": the dashboard
+ * binds to `127.0.0.1` by default, CSRF and `Origin` checks gate every write,
+ * and remote access is an explicit, authenticated transport. The binding is the credential. Each
  * rule runs here before any handler sees a request:
  *
  *   1. **Rate limit.** Failed authentications are counted per address; over

@@ -1,5 +1,5 @@
 /**
- * Owner identity and surface pairing (ARCHITECTURE.md, "Owner and surface
+ * Owner identity and surface pairing (docs/architecture.md, "Owner and surface
  * authentication").
  *
  * There is exactly one installation owner. Surfaces establish *identity* — they

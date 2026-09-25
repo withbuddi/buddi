@@ -1,7 +1,7 @@
 /**
  * The Executor: the only path by which a gated tool ever runs.
  *
- * ARCHITECTURE.md, "Actions and approvals" and "Effectful side effects", make
+ * docs/architecture.md, "Actions and approvals" and "Effectful side effects", make
  * the order non-negotiable, so it is spelled out here:
  *
  *   1. **Claim atomically.** One UPDATE moves `approved` to `executing` and

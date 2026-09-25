@@ -2,9 +2,9 @@
  * `buddi vault set | get | delete | list | import-env`.
  *
  * The vault is the OS keychain (or, off macOS, a file encrypted with a key held
- * outside the database). ARCHITECTURE.md is blunt about why there is no table:
- * *«A secrets table would hand mail and model credentials to anyone with the
- * database file.»*
+ * outside the database). docs/architecture.md ("Secrets and operations") is
+ * blunt about why there is no table: *«A secrets table would hand mail and
+ * model credentials to anyone with the database file.»*
  *
  * Two rules shape every command here:
  *

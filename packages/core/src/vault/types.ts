@@ -1,5 +1,5 @@
 /**
- * The vault port (ARCHITECTURE.md, "Secrets and operations").
+ * The vault port (docs/architecture.md, "Secrets and operations").
  *
  * A secrets *table* would hand mail and model credentials to anyone with the
  * database file, so secrets never live in Postgres. They live in the OS

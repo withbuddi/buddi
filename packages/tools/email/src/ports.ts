@@ -1,7 +1,7 @@
 /**
  * The transport ports.
  *
- * Transport is separate from authentication (ARCHITECTURE.md, "Email adapter"):
+ * Transport is separate from authentication (docs/architecture.md, "Email adapter"):
  * IMAP and SMTP are the transport, `app-password` and `xoauth2` are auth modes
  * behind one interface, and swapping the auth mode never changes the transport.
  * Both ports exist so the whole plugin can be exercised against fakes — nothing
@@ -118,7 +118,7 @@ export interface FlagState {
 }
 
 /**
- * Reading mail must not mutate it (ARCHITECTURE.md, "Trust model"): every fetch
+ * Reading mail must not mutate it (docs/architecture.md, "Trust model"): every fetch
  * in this port is a **peek**, so `\Seen` is never set by buddi looking at a
  * message. An implementation that cannot guarantee that is not an `ImapClient`.
  */
@@ -201,7 +201,7 @@ export interface SmtpClient {
 
 /**
  * Typed configuration problems. Expected failures are values; programming
- * defects still throw (ARCHITECTURE.md, "Runtime provider port").
+ * defects still throw (docs/architecture.md, "Runtime provider port").
  */
 export type EmailProblem =
   | { code: 'not-configured'; message: string }

@@ -1,9 +1,9 @@
 /**
  * Approvals over Telegram — the surface half of the authorization boundary.
  *
- * ARCHITECTURE.md, "Owner and surface authentication": *«Approval callbacks are
- * bound: a callback resolves exactly the pending action it references, from the
- * owner identity. A plain message saying "yes" never resolves anything.»*
+ * docs/architecture.md, "Owner and surface authentication": *«Approval
+ * callbacks are bound. A callback resolves exactly the pending action it names,
+ * from the owner identity. A plain message saying "yes" resolves nothing.»*
  *
  * That sentence is the whole design of this file:
  *

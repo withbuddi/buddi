@@ -2,7 +2,7 @@
  * How an approval reaches the suspended run that is waiting for it.
  *
  * A run that proposes a gated tool call does not hold a worker or a database
- * transaction open while the owner sleeps (ARCHITECTURE.md, "Queue, concurrency,
+ * transaction open while the owner sleeps (docs/architecture.md, "Queue, concurrency,
  * recovery": «Runs suspend durably while awaiting approval»). The queue owns
  * suspension; the approval machinery owns the decision. They meet at exactly
  * this interface and nowhere else:

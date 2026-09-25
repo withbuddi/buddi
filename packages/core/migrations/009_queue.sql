@@ -1,5 +1,4 @@
--- The durable job queue (ARCHITECTURE.md, "Queue, concurrency, recovery" —
--- Phase 1, not Phase 2).
+-- The durable job queue (docs/architecture.md, "Queue, concurrency, recovery").
 --
 -- Even a single owner overlaps: a Telegram message, a mail ingest, a retry and
 -- startup recovery all want to run at once. The queue is the one place where

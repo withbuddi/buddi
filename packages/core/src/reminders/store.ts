@@ -220,7 +220,7 @@ export async function dueReminders(
 /**
  * Close out the ones the machine slept through.
  *
- * ARCHITECTURE.md, principle 3: some things cannot be recovered. A nudge that
+ * docs/architecture.md, principle 3: some things cannot be recovered. A nudge that
  * is a day and a half late is one of them — delivering it would be worse than
  * the silence, so it is marked `expired` and stays visible as such.
  */

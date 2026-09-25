@@ -1,5 +1,5 @@
 /**
- * The immutable action object and the approval state machine (ARCHITECTURE.md,
+ * The immutable action object and the approval state machine (docs/architecture.md,
  * "Actions and approvals").
  *
  * Everything an approval is bound to is decided *before* the owner is asked:

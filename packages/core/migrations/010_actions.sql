@@ -1,6 +1,6 @@
 -- Actions, approvals and the effect ledger — the authorization boundary.
 --
--- ARCHITECTURE.md, "Actions and approvals": nothing at tier `gated` executes
+-- docs/architecture.md, "Actions and approvals": nothing at tier `gated` executes
 -- without an approval bound to an *immutable action object created before the
 -- approval request*. The three tables here are that machinery:
 --

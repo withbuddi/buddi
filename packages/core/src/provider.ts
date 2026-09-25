@@ -1,7 +1,7 @@
 /**
  * Provider port (Anthropic + OpenAI).
  *
- * Invariants (ARCHITECTURE.md, "Runtime provider port"):
+ * Invariants (docs/architecture.md, "Runtime provider port"):
  *  - Provider + credential source + wire are ONE choice (discriminated union), so
  *    "subscription login + custom base URL" is hard to express by accident.
  *    `PROVIDER_CREDENTIAL_INVARIANT` names it; `resolveProvider` enforces it even
