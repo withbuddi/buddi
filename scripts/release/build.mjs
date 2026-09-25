@@ -70,7 +70,7 @@ Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
 const manifest = {
   name: '@withbuddi/buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
   repository: { type: 'git', url: 'https://github.com/withbuddi/buddi' },
-  homepage: 'https://github.com/withbuddi/buddi#readme',
+  homepage: 'https://withbuddi.com',
   bugs: 'https://github.com/withbuddi/buddi/issues',
   ...(hasLicense ? { license: 'Apache-2.0' } : {}),
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },

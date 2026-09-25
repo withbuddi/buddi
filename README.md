@@ -2,6 +2,8 @@
 
 <img src="https://raw.githubusercontent.com/withbuddi/buddi/main/packages/web/public/mascot/core.png" alt="The Buddi Blob, buddi's mascot" width="160" align="right">
 
+[withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md)
+
 buddi is a personal agent platform you run on your own machine. An agent is a
 markdown file: a front matter that names the tools it may call, and a body that
 is its persona. Agents get real access: your mail, your files, a browser of
