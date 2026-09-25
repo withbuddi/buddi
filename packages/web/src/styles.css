@@ -2658,30 +2658,61 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 
 /*
- * The backdrop: the design system's field.
+ * The backdrop: the design system's field, and two shapes moving over it.
  *
  * Three soft shapes — blue high in the middle, sand low on the right, blue
  * low on the left — blurred far past their own edges over `--field-base`, so
  * the card keeps its own surface and every word keeps its contrast. The
  * colours are the tokens', so dark mode gets the deep glow rather than a
- * washed field. It drifts once every ninety seconds, with nothing but a
- * transform, and stands still for anyone who asked for less motion.
+ * washed field.
+ *
+ * The dashboard's own drift (ninety seconds, a few percent) reads as a still
+ * picture, and this is the one screen that should feel alive: so the field
+ * wanders further here, and a second layer — one blue and one sand shape, no
+ * ground of its own — drifts on its own period, so the two never line up into
+ * a loop the eye can follow. Transforms only; both stand still for anyone who
+ * asked for less motion.
  */
-.meet::before {
+.meet::before,
+.meet::after {
   content: '';
   position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  filter: blur(var(--space-12));
+  will-change: transform;
+}
+.meet::before {
   /* Wider than the page: the blur's own edges must never cross into view. */
   inset: -20%;
-  z-index: -1;
   background: var(--gradient-field);
-  filter: blur(48px);
   opacity: var(--field-opacity);
-  animation: ui-drift var(--drift) ease-in-out infinite alternate;
-  pointer-events: none;
+  animation: meet-field var(--drift-field) ease-in-out infinite alternate;
+}
+/* No ground, only shapes: whatever edge it shows as it moves is transparent. */
+.meet::after {
+  inset: -10%;
+  background:
+    radial-gradient(32% 38% at 28% 30%, var(--field-a), transparent 70%),
+    radial-gradient(28% 34% at 74% 70%, var(--field-b), transparent 70%);
+  opacity: calc(var(--field-opacity) * 0.55);
+  animation: meet-blobs var(--drift-blobs) ease-in-out infinite alternate;
+}
+@keyframes meet-field {
+  0% { transform: translate3d(-4%, -2%, 0) scale(1.02); }
+  50% { transform: translate3d(3%, 3%, 0) scale(1.08); }
+  100% { transform: translate3d(5%, -3%, 0) scale(1.04); }
+}
+@keyframes meet-blobs {
+  0% { transform: translate3d(-8%, 6%, 0) rotate(-6deg) scale(1); }
+  35% { transform: translate3d(6%, -4%, 0) rotate(4deg) scale(1.12); }
+  70% { transform: translate3d(-2%, -8%, 0) rotate(10deg) scale(1.05); }
+  100% { transform: translate3d(8%, 4%, 0) rotate(-2deg) scale(1.1); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .meet::before { animation: none; }
+  .meet::before,
+  .meet::after { animation: none; }
 }
 
 /*
@@ -2717,6 +2748,14 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   text-align: left;
 }
 .meet-head-who { display: flex; flex-direction: column; min-width: 0; }
+/* Buddi Blob, at the size the rail's mark had here; the art carries its own
+   transparent margin, so it stands on the field without a tile. */
+.meet-head-mascot {
+  flex: 0 0 auto;
+  width: var(--space-12);
+  height: var(--space-12);
+  object-fit: contain;
+}
 .meet-head-name {
   font-family: var(--font-display);
   font-size: var(--text-xl);
@@ -2793,11 +2832,27 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-dock-ask:empty { display: none; }
 
+/*
+ * The dock's one row, the same on every step: the quiet way out at the left,
+ * the step's actions at the right — secondary first, the primary last — all
+ * on one centre line, at one gap.
+ */
+.meet-dock-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+}
+.meet-dock-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-left: auto; }
+.meet-dock-actions:empty { display: none; }
+.meet-actions { display: contents; }
+
+/* What is being filled in: fields side by side where they fit, bottoms aligned. */
 .meet-ask {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  justify-content: flex-end;
   gap: var(--space-3);
 }
 .meet-ask > .ui-field { flex: 1 1 200px; }
@@ -2867,6 +2922,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 
 .meet-chosen-face {
   flex: 0 0 auto;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2878,7 +2934,9 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   font-size: 24px;
   line-height: 1;
 }
-.meet-faces { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.meet-chosen-face img { width: 100%; height: 100%; object-fit: contain; }
+.meet-faces { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--space-2); }
+.meet-face-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .meet-face {
   width: 32px;
   height: 32px;
@@ -2892,6 +2950,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   font-size: var(--text-lg);
 }
 .meet-face:hover { background: var(--surface-sunken); }
+.meet-face[data-kind='image'] { width: var(--control-h-lg); height: var(--control-h-lg); padding: 0; overflow: hidden; }
+.meet-face img { width: 100%; height: 100%; object-fit: contain; }
 .meet-face[data-chosen='true'] { border-color: var(--accent); background: var(--surface-sunken); }
 
 /* ---- the phone ---- */
@@ -2921,7 +2981,7 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   .meet { padding: var(--space-3); }
   .meet-stack { max-height: calc(100vh - var(--space-3) * 2); gap: var(--space-3); }
   .meet-board { max-height: none; }
-  .meet-head .ui-mark { width: 36px; height: 36px; border-radius: 12px; font-size: 21px; }
+  .meet-head-mascot { width: var(--space-10); height: var(--space-10); }
   .meet-scroll { padding: var(--space-4); }
   .meet-dock { padding: var(--space-3) var(--space-4); }
   .meet-cards { grid-template-columns: minmax(0, 1fr); }

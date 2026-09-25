@@ -21,10 +21,9 @@ import {
   rememberRestore,
   rememberedRestore,
   reopen,
-  suggestedName,
   thread,
 } from './machine';
-import { SCRIPT, SUGGESTED_NAMES } from './script';
+import { DEFAULT_ASSISTANT_NAME, SCRIPT } from './script';
 
 const onboarding = (over: Partial<OnboardingView> = {}): OnboardingView => ({
   state: 'pending',
@@ -252,10 +251,8 @@ describe('a pasted key', () => {
 });
 
 describe('the assistant buddi offers', () => {
-  it('rotates through the names rather than repeating one', () => {
-    expect(suggestedName(SUGGESTED_NAMES, 0)).toBe('Ada');
-    expect(suggestedName(SUGGESTED_NAMES, 1)).toBe('Sam');
-    expect(suggestedName(SUGGESTED_NAMES, SUGGESTED_NAMES.length)).toBe('Ada');
+  it('offers the brand, under the handle the shipped assistant already has', () => {
+    expect(idFor(DEFAULT_ASSISTANT_NAME)).toBe('buddi');
   });
 
   it('files a name the server will accept', () => {

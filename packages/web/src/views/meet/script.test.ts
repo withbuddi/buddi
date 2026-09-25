@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { BANNED_WORDS, SCRIPT, OPENING_INSTRUCTION, SUGGESTED_NAMES, FACES } from './script';
+import { BANNED_WORDS, SCRIPT, OPENING_INSTRUCTION, DEFAULT_ASSISTANT_NAME, MASCOTS, FACES } from './script';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const THREAD = path.resolve(HERE, '..', 'Meet.tsx');
@@ -40,7 +40,7 @@ function literals(file: string): string[] {
 }
 
 describe('the words on the screen', () => {
-  const said = sentences(SCRIPT).concat(OPENING_INSTRUCTION, [...SUGGESTED_NAMES], [...FACES]);
+  const said = sentences(SCRIPT).concat(OPENING_INSTRUCTION, DEFAULT_ASSISTANT_NAME, [...MASCOTS], [...FACES]);
 
   it('has something to say', () => {
     expect(said.length).toBeGreaterThan(30);

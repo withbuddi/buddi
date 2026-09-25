@@ -20,10 +20,24 @@ export const BANNED_WORDS = [
   'credential',
 ] as const;
 
-/** The names buddi offers for the assistant, rotated through. */
-export const SUGGESTED_NAMES = ['Ada', 'Sam', 'Noor', 'Kit', 'Juno', 'Remy'] as const;
+/**
+ * The assistant's name unless the owner changes it: the brand is who they meet.
+ * The shipped assistant already answers to `@buddi`, so the handle agrees.
+ */
+export const DEFAULT_ASSISTANT_NAME = 'buddi';
 
-/** The faces, unchanged from the screen this replaces. */
+/**
+ * The mascot's faces, bundled in `public/mascot/` (copies; the design repo is
+ * the source of truth). Offered first, `core` chosen by default; whichever is
+ * picked is uploaded as the assistant's picture.
+ */
+export const MASCOTS = ['core', 'coding', 'finance', 'garage', 'mail', 'maker', 'playground', 'research'] as const;
+export type MascotRole = (typeof MASCOTS)[number];
+
+/** Where a bundled mascot is served, relative to the page (the build's `base` is `./`). */
+export const mascotUrl = (role: MascotRole): string => `./mascot/${role}.png`;
+
+/** The emoji faces, offered under the mascots. */
 export const FACES = ['🙂', '📚', '🧭', '🦊', '🛟', '🌿', '🛠️', '🎧'] as const;
 
 /** What the assistant is asked to say before the owner has said anything. */
@@ -87,6 +101,14 @@ export const SCRIPT = {
       label: 'The model',
       submit: 'Use this one',
     },
+    /** Said while an answer is being saved and tried, until the verdict. */
+    checking: {
+      key: 'Checking that key…',
+      service: 'Asking the service…',
+      ollama: 'Asking Ollama…',
+      claude: 'Checking with Claude…',
+    },
+    back: 'Back',
     service: {
       address: 'Address',
       addressPlaceholder: 'The address they gave you',
@@ -103,6 +125,8 @@ export const SCRIPT = {
     ask: "Last thing: your assistant. I've picked a name and a face; change either, or keep them.",
     name: 'Name',
     face: 'A face',
+    /** The accessible name of one mascot face: "Buddi Blob, finance". */
+    mascot: (role: string): string => (role === 'core' ? 'Buddi Blob' : `Buddi Blob, ${role}`),
     purpose: 'What should it help you with?',
     purposeValue: 'Whatever I ask, and remembering what I tell it.',
     submit: 'Introduce us',
@@ -158,6 +182,10 @@ export const SCRIPT = {
   /** The end of the thread: it carries on somewhere the owner can find it. */
   done: {
     said: "You're all set. This conversation carries on in your dashboard.",
+    /** Over the button while the board shows itself out. */
+    leaving: 'Opening buddi…',
+    /** The same place when nothing moves by itself (reduced motion). */
+    ready: 'Ready when you are.',
     open: 'Open buddi',
   },
   telegram: {
