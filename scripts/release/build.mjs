@@ -49,6 +49,15 @@ for (const asset of ['examples/agents', 'examples/skills']) await cp(path.join(r
 // package (@buddi/install), not as loose scripts copied out of this checkout.
 await chmod(path.join(stage, LAUNCHER), 0o755);
 const product = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+// The version the tarball carries: the checkout's, unless the release names
+// one (a tag in CI, a pre-release cut by hand) — `BUDDI_RELEASE_VERSION`,
+// a bare semver, so `0.1.0-pre.14` publishes under npm's `next` tag while
+// `npm install buddi` keeps resolving to `latest`.
+const releaseVersion = (process.env.BUDDI_RELEASE_VERSION ?? '').trim();
+if (releaseVersion !== '' && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) {
+  throw new Error(`BUDDI_RELEASE_VERSION is not a version: ${JSON.stringify(releaseVersion)}`);
+}
+if (releaseVersion !== '') product.version = releaseVersion;
 const dependencies = Object.fromEntries(packages.map(({ dir, pkg }) => [pkg.name, `file:packages/${dir}`]));
 // Direct imports by the bootstrap and existing CLI. Internal packages remain separate modules.
 Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });

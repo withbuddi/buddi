@@ -1,0 +1,53 @@
+# A release: a tag `v<version>` builds the one tarball the trial and the
+# packaged install use (`pnpm release:pack`) and publishes it to npmjs.com
+# with provenance, through npm's trusted publishing (OIDC: no token lives in
+# this repository). A pre-release version (`v0.1.0-pre.14`) goes under the
+# `next` dist-tag, so `npm install buddi` never resolves to it; a plain
+# version (`v0.1.0`) goes under `latest`. The GitHub release is created in
+# the same run, marked pre-release for a pre-release version, with the
+# tarball and the Linux install script attached.
+#
+# Once, on npmjs.com: package `buddi` → Settings → Publishing access →
+# add a trusted publisher: GitHub, owner `withbuddi`, repository `buddi`,
+# workflow `release.yml`, environment `npm`.
+name: release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: write   # the GitHub release
+      id-token: write   # npm trusted publishing (provenance)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, registry-url: 'https://registry.npmjs.org' }
+      - run: pnpm install --frozen-lockfile
+      - name: Version from the tag
+        id: v
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          case "$v" in *-*) echo "tag=next" >> "$GITHUB_OUTPUT";; *) echo "tag=latest" >> "$GITHUB_OUTPUT";; esac
+      - name: Build the tarball
+        id: pack
+        env:
+          BUDDI_RELEASE_VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          out=$(pnpm -s release:pack | tail -1)
+          echo "tgz=${out##*Release: }" >> "$GITHUB_OUTPUT"
+      - name: Publish to npm
+        run: npm publish "${{ steps.pack.outputs.tgz }}" --provenance --access public --tag "${{ steps.v.outputs.tag }}"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""; case "${{ steps.v.outputs.version }}" in *-*) pre="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
+            --notes "npm: \`npm install -g buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})." \
+            "${{ steps.pack.outputs.tgz }}" scripts/install-linux.sh
