@@ -434,12 +434,14 @@ with a six-digit code in Computer & browser. Nothing about it is macOS-only.
 - **macOS**: the reference platform, and today the only supported one.
   Everything above; computer control (the browser plugin's computer mode)
   stays macOS-only.
-- **Linux** — *planned*. The target is full support: a systemd user unit, a
-  Secret Service or file vault, the bundled Postgres. Browser automation
-  through Playwright will work, and so will "Your browser" — the Chrome
-  extension in `<root>/extension`, loaded unpacked and paired from Settings;
-  computer control will not, and will say so. Today only the data-directory
-  layout knows Linux (§12).
+- **Linux** — *in trial* (2026-09-24, on a Pop!_OS home server). The packaged
+  install works: the file vault, the bundled Postgres, and a systemd *user*
+  unit written by `buddi` the way the LaunchAgent is on macOS (it survives
+  logout only after `loginctl enable-linger`). Browser automation through
+  Playwright and "Your browser" — the Chrome extension in `<root>/extension`,
+  loaded unpacked and paired from Settings — are untested there; computer
+  control will not work, and says so. A Secret Service vault is not planned
+  while the file vault covers a headless host (§12).
 - **Windows** — *planned*. The target is the core loop, the dashboard, the
   bundled Postgres, Telegram, email, memory and web plugins. Host execution
   (`host.exec`) refuses on Windows and will stay refused until it is written
@@ -563,11 +565,13 @@ Built:
 
 Not built, and tracked in [the roadmap](ROADMAP.md):
 
-6. **Linux and Windows.** The data-directory layout knows both platforms
-   (`packages/install/src/environment.ts`), and nothing else does: the vault
-   has a macOS keychain backend and a file fallback and no third
-   (`packages/core/src/vault/index.ts`), there is no Task Scheduler unit, and
-   the repository carries no CI workflow at all.
+6. **Linux and Windows.** Linux: the file vault, the bundled Postgres and the
+   systemd user unit (`packages/install/src/launcher.ts`, built 2026-09-24
+   for the trial on the home server) — no Secret Service backend, by choice.
+   Windows: the data-directory layout knows it
+   (`packages/install/src/environment.ts`) and nothing else does — no
+   Credential Manager vault, no Task Scheduler unit. The repository carries
+   no CI workflow at all.
 8. **The provider APIs for backup (Drive, Dropbox).** No code references
    either.
 

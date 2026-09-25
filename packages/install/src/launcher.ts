@@ -13,7 +13,7 @@ import { spawn, execFile } from 'node:child_process';
 import { request } from 'node:http';
 import { open, mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
-import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment } from './environment.js';
+import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
@@ -200,6 +200,11 @@ async function restoreThroughSupervisor(ctx: InstallContext, rest: string[]): Pr
   }
 }
 
+/** What `systemctl --user` needs to find the user's manager, when the caller had it. */
+function systemdSession(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
+}
+
 async function launchService(ctx: InstallContext, temporary: boolean): Promise<void> {
   await mkdir(path.join(ctx.data, 'logs'), { recursive: true, mode: 0o700 });
   if (!temporary && process.platform === 'darwin') {
@@ -218,7 +223,34 @@ async function launchService(ctx: InstallContext, temporary: boolean): Promise<v
     await reloadLaunchAgent((cmd, argv) => exec(cmd, argv, { env: nativeEnvironment(ctx.env) }), domain, label, plist);
     return;
   }
-  if (!temporary && process.platform !== 'darwin') throw new Error('Background installation is currently macOS-only. Use buddi --no-service or buddi supervise on this platform.');
+  if (!temporary && process.platform === 'linux') {
+    /*
+     * The same job as the LaunchAgent, as a systemd *user* unit: no root, the
+     * owner's own session, started at login and kept alive. `systemctl --user`
+     * needs the user's manager, which a desktop login or an SSH session on a
+     * systemd distribution has; where it is missing the error names it.
+     */
+    const label = launchAgentLabel(ctx.data);
+    const unit = systemdUnitPath(ctx.data, ctx.env);
+    const { buildSystemdUnit } = await import('@buddi/cli');
+    await mkdir(path.dirname(unit), { recursive: true });
+    await writeFile(unit, buildSystemdUnit({
+      label, nodePath: process.execPath, serveEntry: entry, args: ['supervise'],
+      environment: { BUDDI_DATA_DIR: ctx.data, [SERVICE_UNIT_VAR]: label },
+      workingDirectory: ctx.data,
+      path: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
+      logFile: path.join(ctx.data, 'logs/supervisor.log'), errorFile: path.join(ctx.data, 'logs/supervisor.log'),
+    }), { mode: 0o600 });
+    try {
+      await reloadSystemdUnit((cmd, argv) => exec(cmd, argv, { env: { ...nativeEnvironment(ctx.env), ...systemdSession(ctx.env) } }), `${label}.service`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`systemd could not start the service (${detail.trim()}). The unit is at ${unit}. Run buddi --no-service to start it in the foreground instead.`);
+    }
+    console.log(`Background service: systemd user unit ${label} (survives logout only after: loginctl enable-linger ${ctx.env.USER ?? '$USER'})`);
+    return;
+  }
+  if (!temporary && process.platform !== 'darwin') throw new Error('Background installation runs under launchd (macOS) or systemd (Linux). Use buddi --no-service or buddi supervise on this platform.');
   const log = await open(path.join(ctx.data, 'logs/supervisor.log'), 'a', 0o600);
   try {
     const child = spawn(process.execPath, [entry, 'supervise'], { detached: true, stdio: ['ignore', log.fd, log.fd], env: ctx.env });

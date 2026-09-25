@@ -91,7 +91,9 @@ next. Checked against the code and `git log` on 2026-09-21.
    migration, and Settings → Keys and secrets with the save-time look and the
    one-tap scrub.
 3. macOS app — a packaged desktop app around the existing service.
-4. Linux and Windows — a second vault backend, the Task Scheduler unit, and a
+4. Linux and Windows — Linux is in trial since 2026-09-24 (file vault, bundled
+   Postgres, systemd user unit; fixes as the trial finds them). Windows: the
+   Credential Manager vault and the Task Scheduler unit, then a
    three-platform CI job (see [install.md §12](install.md#12-what-of-this-is-built)).
 5. Drive and Dropbox — the provider APIs for backup, after the folder target
    has been used for real.

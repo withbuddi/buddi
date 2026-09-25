@@ -87,16 +87,19 @@ ${Object.entries(spec.environment ?? {}).map(([key, value]) => `    <key>${e(key
  * `append:`; that needs systemd 240 or newer.
  */
 export function buildSystemdUnit(spec: UnitSpec): string {
+  // systemd quotes a word with double quotes; a `"` or `\\` inside is escaped.
+  const q = (value: string): string => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const environment = Object.entries(spec.environment ?? {}).map(([key, value]) => `Environment=${q(`${key}=${value}`)}`);
   return `[Unit]
 Description=buddi — telegram surface + mission scheduler
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${spec.nodePath} ${spec.serveEntry}
+ExecStart=${[spec.nodePath, spec.serveEntry, ...(spec.args ?? [])].map(q).join(' ')}
 WorkingDirectory=${spec.workingDirectory}
-Environment=PATH=${spec.path}
-Restart=always
+Environment=PATH=${q(spec.path)}
+${environment.join('\n')}${environment.length > 0 ? '\n' : ''}Restart=always
 RestartSec=5
 StandardOutput=append:${spec.logFile}
 StandardError=append:${spec.errorFile}

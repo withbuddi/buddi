@@ -250,6 +250,10 @@ describe('the hand-over', () => {
     expect(restartPlan({ platform: 'darwin', label, xpcServiceName: '0' }).mode).toBe('spawn');
     expect(restartPlan({ platform: 'darwin', label, xpcServiceName: 'com.buddi.install.other' }).mode).toBe('spawn');
     expect(restartPlan({ platform: 'linux', label, xpcServiceName: label }).mode).toBe('spawn');
+    // On Linux the unit names itself in BUDDI_SERVICE_UNIT; anything else spawns.
+    expect(restartPlan({ platform: 'linux', label, serviceUnit: label }).mode).toBe('systemd');
+    expect(restartPlan({ platform: 'linux', label, serviceUnit: 'com.buddi.install.other' }).mode).toBe('spawn');
+    expect(restartPlan({ platform: 'darwin', label, serviceUnit: label }).mode).toBe('spawn');
   });
 
   test('waits for the successor to answer, and tries once more before giving up', async () => {
