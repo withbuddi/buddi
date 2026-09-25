@@ -175,8 +175,9 @@ The route is unchanged: `#/welcome`, and the dashboard sends the owner there —
 replacing the entry, not pushing it — when `core.onboarding` is still `pending`
 *and* the installation has no usable model account. A record that is `done`,
 `skipped` or `in-progress` (an interview another surface already claimed), and
-any installation that already has an account, never sees it. Settings → System
-has "Run setup again" regardless.
+any installation that already has an account, never sees it. There is no way
+to reopen a finished first run: everything it set has a page of its own in
+Settings and on the agent's Setup tab.
 
 What the owner sees is one thread, not a tour: buddi asks four things in
 message bubbles — a name, a clock, a brain for the assistant, and the assistant

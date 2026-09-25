@@ -9,14 +9,14 @@
  * Settings carries a dot, without a number, when a newer buddi is ready.
  *
  * Under a hairline at the foot, the owner's initial: a small menu with the
- * quick theme switch, the way to Appearance, and Run setup again.
+ * quick theme switch, the way to Appearance, and the running version.
  *
  * Icons are drawn, not typed: no emoji stands in for a place here.
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { ReactNode } from 'react';
 import { api } from '../api';
-import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, WELCOME_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
+import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { pageIcon } from '../pages/icons';
 import type { ThemeChoice } from '../theme';
@@ -153,9 +153,6 @@ function OwnerMenu({
             <DropdownMenu.Separator className="ui-menu-sep" />
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
               Change appearance
-            </DropdownMenu.Item>
-            <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(WELCOME_ROUTE)}>
-              Run setup again
             </DropdownMenu.Item>
             {version ? (
               <>

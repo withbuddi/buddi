@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { WELCOME_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
+import { parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
@@ -173,13 +173,6 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         {accounts.data && (accounts.data.vault.locked || accounts.data.vault.kind === 'none') ? (
           <Notice tone="warning">{accounts.data.vault.advice || 'Run buddi init on the host to configure secure credential storage.'}</Notice>
         ) : null}
-      </Section>
-      <Section title="First run" panel>
-        <p className="ui-card-meta">
-          The setup screens — you, a model account, an agent — are always there.{' '}
-          <a href={WELCOME_ROUTE}>Run setup again</a>. Nothing is undone by opening them; each screen saves
-          what you change and leaves the rest alone.
-        </p>
       </Section>
       <Service />
       <Tailscale />
