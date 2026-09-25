@@ -17,6 +17,7 @@ import { ModelPicker } from '../../ModelPicker';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
 import { Avatar, type Face } from './Avatar';
 import { FacePicker, mascotFile, type FaceChoice } from './FacePicker';
+import { KNOWN_ROLES, holderOf, isKnownRole, orderRoles } from '../../shell/roles';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
 
@@ -117,7 +118,7 @@ function Agent({
         </Notice>
       ) : null}
 
-      <Identity agent={agent} onSaved={onSaved} />
+      <Identity agent={agent} all={all} onSaved={onSaved} />
 
       <Section title="Runs on" panel>
         {accounts ? (
@@ -262,13 +263,15 @@ function Agent({
  * no agent named lands on is a fact about the installation, recorded from the
  * picker at the head of the Agents page, not a flag inside one persona.
  */
-function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }): JSX.Element {
+function Identity({ agent, all, onSaved }: { agent: AgentRow; all: readonly AgentRow[]; onSaved: () => void }): JSX.Element {
   const [name, setName] = useState(agent.name);
   const [handle, setHandle] = useState(agent.handle);
   const [description, setDescription] = useState(agent.description);
   const picker = useAsync(() => api.agentTools(agent.id), [agent.id]);
   const [picked, setPicked] = useState<string[] | null>(null);
-  const [roles, setRoles] = useState((agent.roles ?? []).join(', '));
+  // The four roles the surfaces know are chips; anything else is a line of text.
+  const [knownRoles, setKnownRoles] = useState<ReadonlySet<string>>(() => new Set((agent.roles ?? []).filter(isKnownRole)));
+  const [otherRoles, setOtherRoles] = useState((agent.roles ?? []).filter((r) => !isKnownRole(r)).join(', '));
   const [avatar, setAvatar] = useState(agent.avatar ?? '');
   // The persona is the body of the file: what the owner (or the wizard) wrote
   // there is what is shown, and what is saved back.
@@ -286,7 +289,14 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
   const granted = picker.data?.granted ?? agent.tools;
   const chosen = picked ?? granted;
   const toolsChanged = picker.data !== undefined && !sameTools(chosen, granted);
-  const nextRoles = list(roles, /[\n,]/);
+  const nextRoles = orderRoles(knownRoles, list(otherRoles, /[\n,]/));
+  const toggleRole = (role: string): void =>
+    setKnownRoles((current) => {
+      const next = new Set(current);
+      if (next.has(role)) next.delete(role);
+      else next.add(role);
+      return next;
+    });
   const same = (a: readonly string[], b: readonly string[]): boolean => a.join(',') === b.join(',');
   const dirty =
     name.trim() !== agent.name ||
@@ -295,7 +305,9 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
     avatar.trim() !== (agent.avatar ?? '') ||
     personaChanged ||
     toolsChanged ||
-    !same(nextRoles, agent.roles ?? []);
+    // Against the file's roles in the order the page saves them, so a file that
+    // lists them otherwise does not open as unsaved.
+    !same(nextRoles, orderRoles(new Set(agent.roles ?? []), agent.roles ?? []));
 
   const save = async (): Promise<void> => {
     setBusy(true);
@@ -369,10 +381,39 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         <Field label="Handle" hint="What you type to reach it. One handle, one agent.">
           <input value={handle} disabled={busy || agent.isExample} onChange={(e) => setHandle(e.target.value)} />
         </Field>
-        <Field label="Roles" hint="Capabilities it answers for, comma separated.">
-          <input value={roles} disabled={busy || agent.isExample} onChange={(e) => setRoles(e.target.value)} />
-        </Field>
       </FormGrid>
+      <div className="ui-field">
+        <span className="ui-field-label" id={`roles-${agent.id}`}>Roles</span>
+        <div className="role-chips" role="group" aria-labelledby={`roles-${agent.id}`}>
+          {KNOWN_ROLES.map((role) => {
+            const holder = holderOf(all, role.id);
+            const elsewhere = holder && holder.id !== agent.id ? holder : undefined;
+            return (
+              <button
+                key={role.id}
+                type="button"
+                className="role-chip"
+                aria-pressed={knownRoles.has(role.id)}
+                data-on={knownRoles.has(role.id) ? 'true' : undefined}
+                disabled={busy || agent.isExample}
+                onClick={() => toggleRole(role.id)}
+              >
+                <span className="role-chip-label">{role.label}</span>
+                <span className="role-chip-meaning">{role.meaning}</span>
+                {elsewhere ? (
+                  <span className="role-chip-holder">
+                    Held by {elsewhere.name}. If both claim it, the one listed first keeps it.
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+        <span className="ui-field-hint">Where buddi sends things when you do not say who. Tools are granted below.</span>
+      </div>
+      <Field label="Other roles" hint="Only a plugin that asks for a role by name reads these. Comma separated.">
+        <input value={otherRoles} disabled={busy || agent.isExample} onChange={(e) => setOtherRoles(e.target.value)} />
+      </Field>
       <FaceField agent={agent} avatar={avatar} onEmoji={setAvatar} onChanged={onSaved} disabled={busy} />
       <Field label="Description" hint="One or two sentences. Its colleagues read this.">
         <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />

@@ -281,6 +281,9 @@ problem. A role nobody claims is a configuration state: the surface says so in
 one sentence and names the frontmatter key. The gateway never contains the name
 of somebody's agent.
 
+An agent's Setup tab offers the four as chips, says which agent holds each one
+now, and keeps any other role in a line of text below them.
+
 ## Conversations, questions and offered actions
 
 A conversation is the unit of context, and it ends by itself

@@ -138,3 +138,48 @@ it('opens the file chooser from a button and names the chosen file', async () =>
   fireEvent.change(input, { target: { files: [new File(['GIF89a'], 'me.gif', { type: 'image/gif' })] } });
   expect(await screen.findByText('me.gif')).toBeInTheDocument();
 });
+
+/** The fixture, with a second agent listed first that holds the front desk. */
+function withRoles(demoRoles: string[]): AgentsView {
+  const [demo] = view.agents;
+  const concierge = { ...demo!, id: 'concierge', handle: 'concierge', name: 'Concierge', isDefault: false, roles: ['front-desk'] };
+  return { ...view, agents: [concierge, { ...demo!, roles: demoRoles }] } as AgentsView;
+}
+
+it('offers the four known roles as chips, says who holds one elsewhere, and saves them first', async () => {
+  vi.mocked(api.agents).mockResolvedValue(withRoles(['recap', 'orchard-lead']));
+  vi.mocked(api.updateAgentFile).mockResolvedValue({ id: 'demo', handle: 'demo', file: '', tools: [], changed: ['roles'], personaChanged: false, live: true, message: 'ok' });
+  render(<AgentSetup agentId="demo" />);
+  const chips = await screen.findByRole('group', { name: 'Roles' });
+  const chip = (label: string) => screen.getAllByRole('button').find((b) => b.querySelector('.role-chip-label')?.textContent === label)!;
+  expect(chips.querySelectorAll('.role-chip')).toHaveLength(4);
+  expect(chip('Front desk')).toHaveAttribute('aria-pressed', 'false');
+  expect(chip('Recap')).toHaveAttribute('aria-pressed', 'true');
+  expect(chip('Front desk')).toHaveTextContent('Where things go when you do not say who.');
+  // Held by another agent: said so, and still allowed.
+  expect(chip('Front desk')).toHaveTextContent('Held by Concierge.');
+  expect(chip('Recap')).not.toHaveTextContent('Held by');
+  // The others round-trip as text.
+  expect(screen.getByLabelText('Other roles')).toHaveValue('orchard-lead');
+
+  fireEvent.click(chip('Recap'));
+  expect(chip('Recap')).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(chip('Maker'));
+  fireEvent.click(chip('Front desk'));
+  fireEvent.change(screen.getByLabelText('Other roles'), { target: { value: 'orchard-lead, pickers' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save who it is' }));
+  await waitFor(() => expect(api.updateAgentFile).toHaveBeenCalled());
+  expect(vi.mocked(api.updateAgentFile).mock.calls[0]![1]).toMatchObject({ roles: ['front-desk', 'maker', 'orchard-lead', 'pickers'] });
+});
+
+it('counts an unchanged set of roles as saved, whatever order the file lists them in', async () => {
+  vi.mocked(api.agents).mockResolvedValue(withRoles(['orchard-lead', 'overview']));
+  render(<AgentSetup agentId="demo" />);
+  await screen.findByRole('group', { name: 'Roles' });
+  expect(screen.getByRole('button', { name: 'Save who it is' })).toBeDisabled();
+  const overview = screen.getAllByRole('button').find((b) => b.querySelector('.role-chip-label')?.textContent === 'Overview')!;
+  fireEvent.click(overview);
+  expect(screen.getByRole('button', { name: 'Save who it is' })).toBeEnabled();
+  fireEvent.click(overview);
+  expect(screen.getByRole('button', { name: 'Save who it is' })).toBeDisabled();
+});

@@ -2600,6 +2600,31 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .tool-picker-list label { cursor: pointer; }
 .tool-picker-list input:disabled + label { opacity: 0.55; cursor: default; }
 .tool-picker-confirm { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* The roles the surfaces know, as chips an owner turns on and off. */
+.role-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: var(--space-2); }
+.role-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.role-chip:hover:not(:disabled) { border-color: color-mix(in oklab, var(--accent) 30%, var(--line)); }
+.role-chip[data-on='true'] { border-color: color-mix(in oklab, var(--accent) 30%, var(--line)); background: var(--accent-soft); }
+.role-chip:focus-visible { border-color: var(--accent); outline: none; box-shadow: var(--shadow-focus); }
+.role-chip:disabled { opacity: 0.55; cursor: default; }
+.role-chip-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.role-chip[data-on='true'] .role-chip-label { color: var(--accent); }
+.role-chip-meaning { font-size: var(--text-xs); color: var(--text-muted); }
+.role-chip-holder { font-size: var(--text-xs); color: var(--text-faint); }
 .save-error { overflow-wrap: anywhere; max-width: 72ch; }
 
 /* ---- memory ---- */

@@ -14,6 +14,7 @@ import type { ChatAgent, GroupView } from '../chat/types';
 import { canGroup, groupableAgents, makerName } from './roster';
 import { Button, Field, Notice, Sheet, Stack, Toolbar } from '../ui';
 import { AgentAvatar } from '../ui';
+import { FRONT_DESK_ROLE } from './roles';
 
 export function GroupSheet({ agents, group, onClose, onCreated, onSaved, onArchived }: {
   agents: ChatAgent[];
@@ -82,7 +83,7 @@ function GroupForm({ agents, group, onClose, onCreated, onSaved, onArchived }: {
   const [name, setName] = useState(group?.name ?? '');
   const [members, setMembers] = useState<string[]>(group?.members ?? []);
   const [coordinator, setCoordinator] = useState<string>(
-    group?.coordinator ?? agents.find((a) => a.roles.includes('front-desk'))?.id ?? agents[0]?.id ?? '',
+    group?.coordinator ?? agents.find((a) => a.roles.includes(FRONT_DESK_ROLE))?.id ?? agents[0]?.id ?? '',
   );
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);

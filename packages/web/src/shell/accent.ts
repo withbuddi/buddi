@@ -13,6 +13,7 @@
  * gave a colour still keeps the same one from one load to the next.
  */
 import type { CSSProperties } from 'react';
+import { FRONT_DESK_ROLE } from './roles';
 
 /** The entries a hash lands on. Art is left out so no hashed colour moves. */
 export const AGENT_PALETTE = ['coding', 'finance', 'mail', 'research', 'calendar', 'files', 'memory'] as const;
@@ -38,7 +39,7 @@ const ROLE_ACCENTS: Readonly<Record<string, AccentKey>> = {
   calendar: 'calendar',
   files: 'files',
   memory: 'memory',
-  'front-desk': 'buddi',
+  [FRONT_DESK_ROLE]: 'buddi',
 };
 
 /**
