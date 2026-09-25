@@ -28,6 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, registry-url: 'https://registry.npmjs.org' }
       - run: pnpm install --frozen-lockfile
+      # The tarball is built from the workspace's dist output.
+      - run: pnpm -r build
       - name: Version from the tag
         id: v
         run: |
@@ -40,7 +42,9 @@ jobs:
           BUDDI_RELEASE_VERSION: ${{ steps.v.outputs.version }}
         run: |
           out=$(pnpm -s release:pack | tail -1)
-          echo "tgz=${out##*Release: }" >> "$GITHUB_OUTPUT"
+          tgz="${out##*Release: }"
+          test -f "$tgz" || { echo "release:pack printed no tarball: $out" >&2; exit 1; }
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
       - name: Publish to npm
         run: npm publish "${{ steps.pack.outputs.tgz }}" --provenance --access public --tag "${{ steps.v.outputs.tag }}"
       - name: GitHub release

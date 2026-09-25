@@ -28,5 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # The migration script imports core's built output, so the workspace is
+      # built once before it; `pnpm test` builds again, which is a no-op.
+      - run: pnpm -r build
       - run: node scripts/migrate.mjs
       - run: pnpm test
