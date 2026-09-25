@@ -304,6 +304,13 @@ async function run(): Promise<void> {
   }
   if (args[0] === 'doctor') {
     console.log(`Data: ${ctx.data}`);
+    // What the vault is and what it protects, said the same way everywhere
+    // (install.md §4): the keychain on a Mac, the file beside its key elsewhere.
+    const { vaultState } = await import('@buddi/core');
+    const vault = vaultState({ env: ctx.env });
+    console.log(`Vault: ${vault.selection === 'keychain' ? 'the macOS keychain'
+      : vault.selection === 'file' ? `encrypted file at ${vault.file}, opened by the key in ${path.join(ctx.data, 'vault-key')}${vault.locked ? ` — LOCKED: ${vault.advice}` : ' — protects it at rest; anyone with this account\'s files can open it'}`
+      : vault.selection === 'memory' ? 'in memory only (nothing persists)' : 'off — secrets come from the environment'}`);
     console.log(JSON.stringify(await control(ctx), null, 2));
     /*
      * The upgrade row, read from disk rather than from the supervisor: the one

@@ -169,6 +169,13 @@ Small, whenever a slot opens:
 
 ## Later
 
+- The file vault's key from systemd — read `BUDDI_VAULT_KEY` from
+  `$CREDENTIALS_DIRECTORY` when a unit hands it in (`LoadCredential=`,
+  TPM-sealed with `LoadCredentialEncrypted=` on a system unit), so a server
+  install can keep the key out of the data directory without a redesign.
+  Decided 2026-09-24 to keep the key file until then: on a user unit the gain
+  is a root-owned key file, not a hardware-bound one (install.md §4).
+
 - [Reusable Codex adapter](ideas/reusable-codex-adapter.md) — extract the
   Codex App Server integration into a package other projects can consume,
   once the [experiment](codex-accounts.md) is stable and a
