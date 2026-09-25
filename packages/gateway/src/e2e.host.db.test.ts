@@ -9,6 +9,7 @@ import { ensureOwner, completeOnboarding, pairSurfaceIdentity, configurePluginHo
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { createHostManifest, hostService, type HostService, execInput } from '@buddi/tool-host';
 import { startWebServer } from './web/server.js';
+import { csrfCookieName } from './web/http.js';
 import { mintTicket } from './web/token.js';
 import { readChatTranscript } from './web/chat.js';
 import { loadGatewayCatalog } from './agents/catalog.js';
@@ -160,7 +161,7 @@ suite('host execution permissions and file workflow', () => {
       const login = await fetch(`${origin}/?t=${ticket}`, { redirect: 'manual' });
       const cookies = login.headers.getSetCookie().map(c => c.split(';')[0]!);
       const headers = { Cookie: cookies.join('; '), Origin: origin, 'Content-Type': 'application/json',
-        'X-Buddi-CSRF': cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length) };
+        'X-Buddi-CSRF': cookies.find(c => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length) };
       // Stale polling tabs cannot deny service to a valid session or recovery
       // ticket sharing the proxy's IP. Invalid authentication stays limited.
       for (let i = 0; i < 10; i++) await fetch(`${origin}/api/host`);

@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PAGE_ACT_RATE } from './pages.js';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -80,7 +81,7 @@ class Client {
   readonly cookies = new Map<string, string>();
   constructor(readonly base: string) {}
   get csrf(): string {
-    return this.cookies.get('buddi_csrf') ?? '';
+    return this.cookies.get(csrfCookieName(portOf(new URL(this.base)))) ?? '';
   }
   private header(): Record<string, string> {
     const jar = [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ');

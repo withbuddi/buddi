@@ -9,7 +9,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Envelope, envelopeFields } from './views/Envelope';
-import type { ApprovalRow } from '../api';
+import { CSRF_COOKIE_PREFIX, type ApprovalRow } from '../api';
 
 afterEach(() => {
   cleanup();
@@ -81,7 +81,11 @@ describe('the approval view', () => {
   });
 
   it('approves through the existing route, with the CSRF header', async () => {
-    document.cookie = 'buddi_csrf=token-xyz';
+    // The cookie is named after this page's port; another dashboard on the
+    // same host leaves its own beside it, which must not be the one sent.
+    const port = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
+    document.cookie = `${CSRF_COOKIE_PREFIX}_${port}=token-xyz`;
+    document.cookie = `${CSRF_COOKIE_PREFIX}_${port + 1}=someone-elses`;
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     stubFetch((url, init) => {
       calls.push({ url, init });

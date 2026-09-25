@@ -19,6 +19,7 @@ import pngjs from 'pngjs';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 import { PROFILE_PHOTO_SETTING, syncProfilePhoto } from '../telegram/profile-photo.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -76,7 +77,7 @@ class Client {
     return res;
   }
   private write(): Record<string, string> {
-    return { 'x-buddi-csrf': this.cookies.get('buddi_csrf') ?? '', origin: this.base };
+    return { 'x-buddi-csrf': this.cookies.get(csrfCookieName(portOf(new URL(this.base)))) ?? '', origin: this.base };
   }
   async upload(path: string, file: { name: string; type: string; bytes: Buffer }): Promise<Response> {
     await this.fetch('/api/session');

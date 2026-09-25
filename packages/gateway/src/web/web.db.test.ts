@@ -45,6 +45,7 @@ import { SURFACE } from '../telegram/surface.js';
 import { webAssetsDir } from './config.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
+import { csrfCookieName, portOf, sessionCookieName } from './http.js';
 import { LOCAL_SESSION_TTL_MS, REMOTE_SESSION_TTL_MS } from './sessions.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
@@ -180,7 +181,7 @@ class Client {
   constructor(readonly base: string) {}
 
   get csrf(): string {
-    return this.cookies.get('buddi_csrf') ?? '';
+    return this.cookies.get(csrfCookieName(portOf(new URL(this.base)))) ?? '';
   }
 
   header(): Record<string, string> {
@@ -313,7 +314,7 @@ suite('the dashboard API', () => {
     const client = new Client(base);
     const res = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);
     expect(res.status).toBe(302);
-    expect(client.cookies.get('buddi_session')).toBeTruthy();
+    expect(client.cookies.get(sessionCookieName(web.port))).toBeTruthy();
     return client;
   };
 
@@ -343,8 +344,9 @@ suite('the dashboard API', () => {
     const first = await client.get('/api/session');
     expect(first.status).toBe(200);
     const minted = first.headers.getSetCookie();
-    expect(minted.some((c) => c.startsWith('buddi_session=') && c.includes('HttpOnly'))).toBe(true);
-    expect(minted.some((c) => c.startsWith('buddi_csrf=') && !c.includes('HttpOnly'))).toBe(true);
+    // Named after the port this dashboard bound, so two on one host keep apart.
+    expect(minted.some((c) => c.startsWith(`${sessionCookieName(web.port)}=`) && c.includes('HttpOnly'))).toBe(true);
+    expect(minted.some((c) => c.startsWith(`${csrfCookieName(web.port)}=`) && !c.includes('HttpOnly'))).toBe(true);
 
     // And the freely minted session is a real one: it can carry a write.
     const ok = await client.post('/api/pause', { paused: true });
@@ -400,7 +402,7 @@ suite('the dashboard API', () => {
     }
   });
 
-  it('exchanges a ticket once, for an HttpOnly session and a readable csrf cookie', async () => {
+  it('exchanges a ticket for an HttpOnly session and a readable csrf cookie, for its five minutes', async () => {
     const ticket = mintTicket(TOKEN);
     const client = new Client(base);
     const res = await client.get(`/?t=${encodeURIComponent(ticket)}`);
@@ -409,18 +411,24 @@ suite('the dashboard API', () => {
     // The clean URL carries no trace of the ticket.
     expect(res.headers.get('location')).toBe('/');
     const cookies = res.headers.getSetCookie();
-    expect(cookies.some((c) => c.startsWith('buddi_session=') && c.includes('HttpOnly'))).toBe(true);
+    expect(cookies.some((c) => c.startsWith(`${sessionCookieName(web.port)}=`) && c.includes('HttpOnly'))).toBe(true);
     expect(cookies.every((c) => c.includes('SameSite=Strict'))).toBe(true);
-    expect(cookies.some((c) => c.startsWith('buddi_csrf=') && !c.includes('HttpOnly'))).toBe(true);
+    expect(cookies.some((c) => c.startsWith(`${csrfCookieName(web.port)}=`) && !c.includes('HttpOnly'))).toBe(true);
     // Nothing in the response says anything about the token.
     expect(JSON.stringify(cookies)).not.toContain(TOKEN);
 
     // The session works...
     expect((await client.get('/api/overview')).status).toBe(200);
-    // ...and the ticket does not, a second time.
-    const replay = await new Client(base).get(`/?t=${encodeURIComponent(ticket)}`);
-    expect(replay.status).toBe(401);
-    expect(await replay.text()).toBe('');
+    // ...and so does the ticket again within its five minutes — a browser
+    // opens a pasted link more than once (server.ts says why the one-time
+    // rule went) — minting a session of its own.
+    const again = await new Client(base).get(`/?t=${encodeURIComponent(ticket)}`);
+    expect(again.status).toBe(302);
+    expect(again.headers.getSetCookie().some((c) => c.startsWith(`${sessionCookieName(web.port)}=`))).toBe(true);
+    // An expired one does not, and says so to the person who opened it.
+    const stale = await new Client(base).get(`/?t=${encodeURIComponent(mintTicket(TOKEN, new Date(Date.now() - 10 * 60_000)))}`);
+    expect(stale.status).toBe(401);
+    expect(await stale.text()).toContain('no longer valid');
   });
 
   it('refuses a forged, malformed or expired ticket', async () => {
@@ -946,8 +954,8 @@ suite('the dashboard API', () => {
       const client = new Client(base);
       const res = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);
       expect(res.status).toBe(302);
-      expect(maxAge(res, 'buddi_session')).toBe(LOCAL_SESSION_TTL_MS / 1000);
-      expect(maxAge(res, 'buddi_csrf')).toBe(LOCAL_SESSION_TTL_MS / 1000);
+      expect(maxAge(res, sessionCookieName(web.port))).toBe(LOCAL_SESSION_TTL_MS / 1000);
+      expect(maxAge(res, csrfCookieName(web.port))).toBe(LOCAL_SESSION_TTL_MS / 1000);
       // Still HttpOnly, still Strict, still no CORS — the lifetime is the only
       // thing that changed.
       expect(res.headers.getSetCookie().every((c) => c.includes('SameSite=Strict'))).toBe(true);
@@ -964,7 +972,7 @@ suite('the dashboard API', () => {
         const client = new Client(`http://127.0.0.1:${server.port}`);
         const opened = await client.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`);
         expect(opened.status).toBe(302);
-        expect(maxAge(opened, 'buddi_session')).toBe(Math.floor(TINY_TTL_MS / 1000));
+        expect(maxAge(opened, sessionCookieName(server.port))).toBe(Math.floor(TINY_TTL_MS / 1000));
 
         // Used steadily for longer than the whole idle lifetime. Under the old
         // rule the cookie was minted once and died on schedule regardless.
@@ -1007,7 +1015,7 @@ suite('the dashboard API', () => {
           },
         });
         expect(res.status).toBe(302);
-        expect(maxAge(res, 'buddi_session')).toBe(REMOTE_SESSION_TTL_MS / 1000);
+        expect(maxAge(res, sessionCookieName(server.port))).toBe(REMOTE_SESSION_TTL_MS / 1000);
         const session = await remote.json<{ scope: string }>('/api/session');
         expect(session.scope).toBe('remote');
 
@@ -1015,9 +1023,10 @@ suite('the dashboard API', () => {
         // network even with its cookie in hand.
         const local = new Client(`http://127.0.0.1:${server.port}`);
         expect((await local.get(`/?t=${encodeURIComponent(mintTicket(TOKEN))}`)).status).toBe(302);
+        expect(local.cookies.get(sessionCookieName(server.port))).toBeTruthy();
         const stolen = await fetch(`http://${lan as string}:${server.port}/api/session`, {
           headers: {
-            cookie: `buddi_session=${local.cookies.get('buddi_session') as string}`,
+            cookie: `${sessionCookieName(server.port)}=${local.cookies.get(sessionCookieName(server.port)) as string}`,
             'x-forwarded-for': '127.0.0.1',
           },
         });

@@ -26,6 +26,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import { mintTicket } from './token.js';
 
 const databaseUrl = await testDatabaseUrl();
@@ -98,7 +99,7 @@ suite('the group routes', () => {
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     const jar = [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
     if (jar !== '') headers.cookie = jar;
-    const csrf = opts.csrf === undefined ? (cookies.get('buddi_csrf') ?? '') : opts.csrf;
+    const csrf = opts.csrf === undefined ? (cookies.get(csrfCookieName(web.port)) ?? '') : opts.csrf;
     if (csrf !== null) headers['x-buddi-csrf'] = csrf;
     const origin = opts.origin === undefined ? base : opts.origin;
     if (origin !== null) headers.origin = origin;

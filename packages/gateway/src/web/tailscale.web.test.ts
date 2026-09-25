@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { SessionStore, TAILSCALE_SESSION_MAX_MS } from './sessions.js';
 import { mintTicket } from './token.js';
+import { csrfCookieName, portOf, sessionCookieName } from './http.js';
 import {
   TAILSCALED_SOCKET,
   daemonWhois,
@@ -191,6 +192,14 @@ interface Knobs {
   now: Date;
 }
 
+/**
+ * Every dashboard here is configured with a public origin, so its cookies are
+ * named after that origin's port (9443), whichever door a request came through.
+ */
+const PUBLIC_PORT = portOf(new URL('https://buddi.tail1234.ts.net:9443'));
+const SESSION_NAME = sessionCookieName(PUBLIC_PORT);
+const CSRF_NAME = csrfCookieName(PUBLIC_PORT);
+
 async function dashboard(
   row: { enabled: boolean; login: string } | null,
   whoisLogin: string | null = OWNER,
@@ -231,7 +240,7 @@ async function tailnetSession(app: WebServer): Promise<{ origin: string; headers
   const res = await fetch(`${origin}/api/session`, { headers: SERVE_HEADERS });
   expect(res.status).toBe(200);
   const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${CSRF_NAME}=`))!.slice(`${CSRF_NAME}=`.length);
   return {
     origin,
     headers: { ...SERVE_HEADERS, Cookie: cookies.join('; '), Origin: 'https://buddi.tail1234.ts.net:9443', 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' },
@@ -275,7 +284,7 @@ async function open(app: WebServer): Promise<{ origin: string; headers: Record<s
   const origin = `http://127.0.0.1:${app.port}`;
   const res = await fetch(`${origin}/api/session`);
   const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${CSRF_NAME}=`))!.slice(`${CSRF_NAME}=`.length);
   return { origin, headers: { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' } };
 }
 
@@ -314,7 +323,7 @@ it('refuses to change the setting from a ticket session established off this mac
   const exchange = await fetch(`${origin}/?t=${encodeURIComponent(mintTicket('fixture'))}`, { headers: proxy, redirect: 'manual' });
   expect(exchange.status).toBe(302);
   const cookies = exchange.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${CSRF_NAME}=`))!.slice(`${CSRF_NAME}=`.length);
   const headers = { ...proxy, Cookie: cookies.join('; '), Origin: 'https://buddi.tail1234.ts.net:9443', 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
   expect(((await (await fetch(`${origin}/api/session`, { headers })).json()) as Record<string, unknown>).signedInThrough).toBe('ticket');
 
@@ -357,13 +366,13 @@ it('ends a tailnet session when the daemon starts naming a different login for t
   app.knobs.whois = OWNER;
   const again = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
   expect(again.status).toBe(200);
-  expect(again.headers.getSetCookie().some((c) => c.startsWith('buddi_session='))).toBe(true);
+  expect(again.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_NAME}=`))).toBe(true);
 });
 
 it('ends a tailnet session after seven days, however much it is used', async () => {
   const app = await dashboard({ enabled: true, login: OWNER });
   const tailnet = await tailnetSession(app);
-  const minted = /buddi_session=([^;]+)/.exec(tailnet.headers.Cookie ?? '')![1];
+  const minted = new RegExp(`${SESSION_NAME}=([^;]+)`).exec(tailnet.headers.Cookie ?? '')![1];
   const started = app.knobs.now.getTime();
   // Every six hours, well inside the twelve-hour idle lifetime: sliding it
   // keeps *this* session alive right up to the absolute edge. The cookie is
@@ -373,7 +382,7 @@ it('ends a tailnet session after seven days, however much it is used', async () 
     const res = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
     expect(res.status).toBe(200);
     for (const cookie of res.headers.getSetCookie()) {
-      if (cookie.startsWith('buddi_session=')) expect(cookie.split(';')[0]!.slice('buddi_session='.length)).toBe(minted);
+      if (cookie.startsWith(`${SESSION_NAME}=`)) expect(cookie.split(';')[0]!.slice(`${SESSION_NAME}=`.length)).toBe(minted);
     }
   }
   // Past the edge the session is gone. The browser is still the person the
@@ -382,7 +391,7 @@ it('ends a tailnet session after seven days, however much it is used', async () 
   app.knobs.now = new Date(started + 7 * 24 * 3_600_000 + 1_000);
   const res = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
   expect(res.status).toBe(200);
-  const reminted = res.headers.getSetCookie().find((c) => c.startsWith('buddi_session='))!.split(';')[0]!.slice('buddi_session='.length);
+  const reminted = res.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_NAME}=`))!.split(';')[0]!.slice(`${SESSION_NAME}=`.length);
   expect(reminted).not.toBe(minted);
 
   // And the expired one is not honoured on its own: presented by a browser the

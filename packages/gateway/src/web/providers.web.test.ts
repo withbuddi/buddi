@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import type { ProviderSettings } from '../providers.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
 const servers: WebServer[] = [];
@@ -15,7 +16,7 @@ it('protects provider reads and credential writes with existing owner session, o
   expect((await fetch(`${origin}/api/providers`, { headers: { 'X-Forwarded-For': '100.64.0.2' } })).status).toBe(401);
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
-  const csrf = cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find(c => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
   const url = `${origin}/api/providers/credentials/OPENAI_API_KEY/save`;
   const body = JSON.stringify({ value: 'fixture-secret' });
@@ -39,7 +40,7 @@ it('protects named account creation and assignments and retires global credentia
   expect((await fetch(`${origin}/api/provider-accounts`, { headers: { 'X-Forwarded-For': '100.64.0.2' } })).status).toBe(401);
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
-  const csrf = cookies.find(c => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find(c => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
   for (const route of ['/api/provider-accounts/one/anthropic/login', '/api/provider-accounts/one/anthropic/complete-login', '/api/provider-accounts/one/anthropic/cancel-login', '/api/provider-accounts/one/anthropic/logout', '/api/provider-accounts/one/models', '/api/provider-accounts/probe-models', '/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);

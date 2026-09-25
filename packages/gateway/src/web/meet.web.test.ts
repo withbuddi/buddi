@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
 import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
@@ -75,7 +76,7 @@ async function boot(over: { env?: Record<string, string> } = {}) {
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   return { origin, headers: { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' } };
 }
 

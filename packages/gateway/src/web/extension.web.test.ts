@@ -9,6 +9,7 @@ import { BrowserService, type BrowserController, type BrowserDriver } from '@bud
 import WebSocket from 'ws';
 import { ExtensionEndpoint } from './extension.js';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 
 const TOKEN = 'fixture-extension-dashboard-token';
 /** A plausible unpacked extension ID: thirty-two letters, a to p. */
@@ -47,7 +48,7 @@ async function setup(options: { pingMs?: number; commandTimeoutMs?: number; canc
 async function session(origin: string) {
   const res = await fetch(`${origin}/api/session`, { redirect: 'manual' });
   const pairs = res.headers.getSetCookie().map((line) => line.split(';')[0]!);
-  const csrf = pairs.find((p) => p.startsWith('buddi_csrf='))?.slice('buddi_csrf='.length) ?? '';
+  const csrf = pairs.find((p) => p.startsWith(`${csrfCookieName(portOf(new URL(origin)))}=`))?.slice(`${csrfCookieName(portOf(new URL(origin)))}=`.length) ?? '';
   return { Cookie: pairs.join('; '), 'X-Buddi-CSRF': csrf, Origin: origin, 'Content-Type': 'application/json' };
 }
 

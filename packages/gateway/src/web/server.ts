@@ -142,9 +142,10 @@ import {
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
-  CSRF_COOKIE,
+  csrfCookieName,
   CSRF_HEADER,
-  SESSION_COOKIE,
+  sessionCookieName,
+  portOf,
   BodyTooLargeError,
   first,
   cookieHeader,
@@ -453,7 +454,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const origin = requestOrigin(req);
       if (origin === undefined || !allowed().has(origin)) return null;
       const scope = requestScope(req);
-      const session = sessions.get(parseCookies(req.headers.cookie)[SESSION_COOKIE], scope, now);
+      const session = sessions.get(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort())], scope, now);
       if (!session) return null;
       if (session.via === 'tailscale') {
         const confirmed = await identityOf(req, now);
@@ -619,9 +620,18 @@ export function createWebApp(deps: WebServerDeps): Server {
   const sessionCookies = (session: Session): string[] => {
     const maxAgeSeconds = SessionStore.maxAgeSeconds(session);
     return [
-      cookieHeader(SESSION_COOKIE, session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
-      cookieHeader(CSRF_COOKIE, session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(sessionCookieName(cookiePort()), session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(csrfCookieName(cookiePort()), session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
     ];
+  };
+
+  /**
+   * The port the cookies are named after (http.ts says why they carry one):
+   * the public origin's when there is one, else the port actually bound.
+   */
+  const cookiePort = (): number => {
+    if (deps.config.publicOrigin) return portOf(new URL(deps.config.publicOrigin));
+    return (server.address() as AddressInfo | null)?.port ?? deps.config.port;
   };
 
   /**
@@ -711,7 +721,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     const cookies = parseCookies(req.headers.cookie);
-    let session = sessions.get(cookies[SESSION_COOKIE], scope, now);
+    let session = sessions.get(cookies[sessionCookieName(cookiePort())], scope, now);
 
     /*
      * A Tailscale session is re-confirmed on every single request.
@@ -805,7 +815,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const presented = req.headers[CSRF_HEADER];
       const header = Array.isArray(presented) ? presented[0] : presented;
       if (!SessionStore.csrfMatches(session, header)) return sendEmpty(res, 403);
-      if (cookies[CSRF_COOKIE] !== session.csrf) return sendEmpty(res, 403);
+      if (cookies[csrfCookieName(cookiePort())] !== session.csrf) return sendEmpty(res, 403);
     }
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
@@ -1043,6 +1053,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             timezone: deps.timezone,
             host: deps.config.host,
             port: deps.config.port,
+            // Where buddi runs: a page opened from another machine is still
+            // about *this* one ("on this Mac" was wrong on a Linux server).
+            platform: process.platform,
             // Restored from a backup and not yet checked over. The shell reads
             // this on every page, because the banner belongs on every page.
             recovery: await inRecovery(deps.pool),
