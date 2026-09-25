@@ -809,6 +809,10 @@ fieldset:disabled { opacity: 0.6; }
 .ui-tab:hover { color: var(--text); }
 .ui-tab[aria-current='page'], .ui-tab[data-state='active'] { color: var(--text); border-bottom-color: var(--accent); }
 .ui-tab .ui-count { margin-left: 2px; }
+/* A row inside a tab: quieter pills, so the page's own tabs stay the first level. */
+.ui-tabs[data-level='secondary'] { border-bottom: 0; gap: var(--space-1); }
+.ui-tabs[data-level='secondary'] .ui-tab { margin: 0; padding: var(--space-1) var(--space-3); border: 0; border-radius: var(--radius-pill); font-size: var(--text-sm); }
+.ui-tabs[data-level='secondary'] .ui-tab[aria-current='page'] { background: var(--surface-sunken); color: var(--text); }
 
 /* A segmented control: the same tabs, as one pill with the chosen one raised. */
 .ui-segment { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-sunken); border: 1px solid var(--line); }

@@ -1163,7 +1163,7 @@ export function ChatPage({
               ] : [
                 { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
                 ...(agent ? [
-                  { label: 'Set up', hint: 'Account, model, tools and skills', href: agentRoute(agent.id, 'setup') },
+                  { label: 'Set up', hint: 'Identity, model and access', href: agentRoute(agent.id, 'setup') },
                   { label: 'Open agent page', hint: 'Profile, activity and setup', href: agentRoute(agent.id) },
                 ] : []),
               ]}
@@ -1319,7 +1319,7 @@ export function ChatPage({
             history={ownHistory}
             threadKey={conversationId ?? (group ? `group:${group.id}` : agentId)}
             model={group ? null : (agent?.model ?? null)}
-            setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup') : null)}
+            setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
             {...(!group && agent ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}

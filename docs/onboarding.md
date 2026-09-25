@@ -137,7 +137,7 @@ remembers." unless the owner sent one of their own — not the persona's first
 sentence, which read as "You're not a chatbot." under the name. A card line an
 earlier wizard derived that way is replaced the next time the persona changes.
 The persona stays editable afterwards in the Persona field on the agent's
-Setup tab. Changing the assistant later through
+Setup tab, under Identity. Changing the assistant later through
 `/api/onboarding/agent/update` rewrites the body only while it is still the
 generated one; an untouched field sends no new persona.
 

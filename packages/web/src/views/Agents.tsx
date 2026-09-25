@@ -121,6 +121,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
             agent={agents.find((a) => a.id === location.agentId)}
             agents={agents}
             tab={location.tab ?? 'conversations'}
+            {...(location.section ? { section: location.section } : {})}
             timezone={timezone}
             navigate={navigate}
             attention={attention}
@@ -223,6 +224,7 @@ function AgentPage({
   agent,
   agents,
   tab,
+  section,
   timezone,
   navigate,
   attention,
@@ -231,6 +233,8 @@ function AgentPage({
   agent: ChatAgent | undefined;
   agents: ChatAgent[];
   tab: string;
+  /** The part of the tab, where it has parts: Setup's identity, brain or access. */
+  section?: string;
   timezone: string;
   navigate: (route: string) => void;
   attention: PlaceProps['attention'];
@@ -272,7 +276,7 @@ function AgentPage({
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded agentId={agentId} /> : null}
       {tab === 'memory' ? <Memory embedded agents={agents} timezone={timezone} agentId={agentId} /> : null}
       {tab === 'skills' ? <AgentSkills agentId={agentId} agentName={name} /> : null}
-      {tab === 'setup' ? <AgentSetup agentId={agentId} /> : null}
+      {tab === 'setup' ? <AgentSetup agentId={agentId} section={section} navigate={navigate} /> : null}
     </div>
   );
 }

@@ -95,15 +95,20 @@ export function parseGroupChatRoute(hash: string): { groupId: string; conversati
   } catch { return null; }
 }
 
-export function agentRoute(agentId: string, tab?: string): string {
-  return `${AGENTS_ROUTE}/${encodeURIComponent(agentId)}${tab ? `/${tab}` : ''}`;
+/** An agent's page, on a tab, and on a part of that tab (Setup has three). */
+export function agentRoute(agentId: string, tab?: string, section?: string): string {
+  return `${AGENTS_ROUTE}/${encodeURIComponent(agentId)}${tab ? `/${tab}${section ? `/${section}` : ''}` : ''}`;
 }
 
-export function parseAgentRoute(hash: string): { agentId: string; tab?: string } | null {
-  const match = /^#\/agents\/([^/]+)(?:\/([a-z-]+))?$/.exec(hash);
+export function parseAgentRoute(hash: string): { agentId: string; tab?: string; section?: string } | null {
+  const match = /^#\/agents\/([^/]+)(?:\/([a-z-]+)(?:\/([a-z-]+))?)?$/.exec(hash);
   if (!match) return null;
   try {
-    return { agentId: decodeURIComponent(match[1]!), ...(match[2] ? { tab: match[2] } : {}) };
+    return {
+      agentId: decodeURIComponent(match[1]!),
+      ...(match[2] ? { tab: match[2] } : {}),
+      ...(match[3] ? { section: match[3] } : {}),
+    };
   } catch { return null; }
 }
 

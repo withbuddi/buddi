@@ -642,8 +642,9 @@ export function Sheet({
  * tabs and lists
  * ------------------------------------------------------------------ */
 
-export function Tabs({ children }: { children: ReactNode }): JSX.Element {
-  return <nav className="ui-tabs">{children}</nav>;
+/** A row of tabs. `secondary` is a row inside a tab: smaller, no rule under it. */
+export function Tabs({ level, label, children }: { level?: 'secondary'; label?: string; children: ReactNode }): JSX.Element {
+  return <nav className="ui-tabs" data-level={level} aria-label={label}>{children}</nav>;
 }
 
 export function Tab({

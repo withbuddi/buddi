@@ -177,7 +177,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
             label: 'Used by',
             value: a.assignedAgents.length ? (
               <span className="ui-row">
-                {a.assignedAgents.map((id) => <a key={id} href={agentRoute(id, 'setup')}>{id}</a>)}
+                {a.assignedAgents.map((id) => <a key={id} href={agentRoute(id, 'setup', 'brain')}>{id}</a>)}
               </span>
             ) : (
               <span className="ui-row">

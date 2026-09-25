@@ -85,6 +85,12 @@ it('still resolves a deep link to Setup', () => {
   expect(within(document.body).getAllByRole('link', { name: 'Talk to Developer' }).length).toBeGreaterThan(0);
 });
 
+it('resolves a deep link to a part of Setup, and keeps Setup the current tab', () => {
+  render(<Harness start="#/agents/developer/setup/brain" />);
+  expect(screen.getByRole('link', { name: 'Setup', current: 'page' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Brain', current: 'page' })).toHaveAttribute('href', '#/agents/developer/setup/brain');
+});
+
 it('adds an agent by opening a chat with the maker, found by its role', () => {
   render(<Harness start="#/agents" agents={[dev, father]} />);
   const add = screen.getByRole('link', { name: 'Add an agent' });
