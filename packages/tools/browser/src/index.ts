@@ -69,7 +69,7 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
     description: 'Owner-directed computer control: macOS screenshots, accessibility and native input by default; optional Playwright browser automation.',
     destinations: [fieldDestination, formDataDestination, nativeTypeDestination],
     tools: [
-      { name: 'browser.status', tier: 'auto', description: 'Read computer/browser mode, owner-allowed apps, permissions and this conversation’s controlling task. Does not open an app.',
+      { name: 'browser.status', tier: 'auto', description: 'Read computer/browser mode, owner-allowed apps, permissions and this conversation’s controlling task. In own-browser mode, `browser` says which browser is installed and, in `browser.message`, what the owner must do when none is. Does not open an app.',
         input: z.object({}).strict(), execute: async (_input, ctx) => service().status({ agentId: ctx.agentId, conversationId: ctx.conversationId }) },
       { name: 'secret.fill', tier: 'auto', sequential: true, input: secretFillInput,
         description: `Fill one field with the owner's own secret, by name, without ever seeing the value. Input { name, ref, observation }: copy observation.id and a ref from the latest result exactly like browser.act; works in Playwright and extension mode. The backend reads which page the field really sits on and the owner's binding must name that exact origin — a look-alike site is refused before anything is asked. A password goes only into a field the page marks as a password; a TOTP secret's current code fills any field; anything else fills as form data, which asks the owner every time. The result is {filled:true} — the value never appears anywhere — or {pending:true,actionId} when the owner has a decision card: tell the owner and wait. Observe again after a fill.`,
@@ -98,7 +98,9 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
 export const manifest = createBrowserManifest();
 export default manifest;
 export { BrowserService, browserStoppedMessage } from './service.js';
-export type { BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
+export { detectBrowser, needsHeadless, installBrowser, browserLine, playwrightCli, installDepsCommand, missingLibrariesMessage, NO_BROWSER_ACT, NO_BROWSER_STATUS, HEADLESS_NOTE } from './availability.js';
+export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome } from './availability.js';
+export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
 export { BrowserManager } from './manager.js';
 export { PlaywrightHost } from './host.js';
 export type { GuardedLookup } from './proxy.js';

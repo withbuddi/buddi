@@ -1320,6 +1320,7 @@ export const api = {
   browserControl: (action: 'stop' | 'takeover' | 'resume' | 'release', sessionId?: string) => post<BrowserStatus>(`/browser/${action}`, sessionId === undefined ? {} : { sessionId }),
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
+  browserInstall: () => post<BrowserStatus>('/browser/install', {}),
   /**
    * The way into a preview: a URL on the preview origin carrying a
    * single-use ticket. It is asked for per panel and never stored — the
@@ -1632,6 +1633,9 @@ export const api = {
   setDefaultAgent: (agentId: string) =>
     post<DefaultAgentView & { note: string }>('/agents/default', { agentId }),
   agentTools: (id: string) => get<ToolPickerView>(`/agents/${encodeURIComponent(id)}/tools`),
+  /** The agent's file as written: its front matter and its persona, the body below it. */
+  agentFile: (id: string) =>
+    get<{ id: string; file: string; frontmatter: Record<string, unknown>; persona: string }>(`/agents/${encodeURIComponent(id)}/file`),
   /** The owner's picture for an agent: a PNG, GIF or SVG of at most 1 MB, re-encoded server side. */
   uploadAgentPicture: (id: string, file: File) => {
     const form = new FormData();
@@ -1703,4 +1707,12 @@ export interface BrowserStatus {
   /** Why it cannot, in the mode's own words. */
   handMessage?: string;
   sessions?: BrowserStatus[];
+  /** The agents' own browser on this machine. Own-browser mode only. */
+  browser?: {
+    engine: 'chromium' | 'chrome' | 'none';
+    headless: boolean;
+    problem?: 'missing-libraries';
+    message?: string;
+    install?: { state: 'running' | 'done' | 'failed'; line?: string };
+  };
 }

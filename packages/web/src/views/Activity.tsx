@@ -11,28 +11,7 @@ import { api, type ConversationSummary, type Transcript, type TranscriptBlock } 
 import { Markdown } from '../chat/markdown';
 import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { ACTIVITY_ROUTE, chatRoute, transcriptRoute } from '../routes';
-import {
-  AgentAvatar,
-  Button,
-  ButtonLink,
-  Code,
-  Empty,
-  ErrorBanner,
-  List,
-  ListRow,
-  PageHeader,
-  Panel,
-  Pill,
-  Section,
-  Stack,
-  Stat,
-  StatePill,
-  Stats,
-  Tab,
-  Table,
-  Tabs,
-  useAsync,
-} from '../ui';
+import { AgentAvatar, Button, ButtonLink, Code, Empty, ErrorBanner, List, ListRow, PageHeader, Panel, Pill, Section, Stack, Stat, StatePill, Stats, Tab, Table, Tabs, useAsync, EmptyState } from '../ui';
 import { Alerts } from './Alerts';
 import { Events } from './Events';
 import { Jobs } from './Jobs';
@@ -92,7 +71,7 @@ function Conversations({ timezone, navigate, nameOf, agents }: { timezone: strin
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.conversations.length === 0 ? (
-          <Empty mascot>Nothing has run yet.</Empty>
+          <EmptyState icon="activity" title="Nothing has run yet">Conversations and runs show up here as your agents work.</EmptyState>
         ) : (
           <List>
             {data.conversations.map((c: ConversationSummary) => (
@@ -123,7 +102,7 @@ function ApprovalHistory({ timezone, nameOf }: { timezone: string; nameOf: (id: 
         {!data ? (
           <Empty>Loading…</Empty>
         ) : rows.length === 0 ? (
-          <Empty mascot>No approvals have been asked for yet.</Empty>
+          <EmptyState icon="bell" title="No approvals yet">When an agent asks before acting, the request and your answer are kept here.</EmptyState>
         ) : (
           <Table>
             <thead>

@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { fmtRelative, fmtTime, json } from '../format';
-import { Button, Code, Details, Empty, ErrorBanner, PageFrame, Panel, StatePill, Table, useAsync } from '../ui';
+import { Button, Code, Details, Empty, ErrorBanner, PageFrame, Panel, StatePill, Table, useAsync, EmptyState } from '../ui';
 
 export function Reminders({ timezone, embedded, agentId }: { timezone: string; embedded?: boolean; agentId?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.reminders(), [], 30_000);
@@ -30,8 +30,10 @@ export function Reminders({ timezone, embedded, agentId }: { timezone: string; e
     >
       <ErrorBanner message={error ?? failure} />
       <Panel flush>
-        {!data || rows.length === 0 ? (
-          <Empty>No reminders.</Empty>
+        {!data ? (
+          <Empty>Loading…</Empty>
+        ) : rows.length === 0 ? (
+          <EmptyState icon="bell" title="No reminders">Ask any agent to remind you of something, and it shows up here.</EmptyState>
         ) : (
           <Table>
             <thead>

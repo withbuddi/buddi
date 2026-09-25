@@ -130,7 +130,7 @@ export const SCRIPT = {
     purpose: 'What should it help you with?',
     /**
      * The assistant's persona, prefilled and editable: it becomes the body of
-     * the agent's file, and its first sentence the one-line card.
+     * the agent's file. The one-line card is a plain line of the server's.
      */
     purposeValue: [
       "You're not a chatbot. You're becoming someone this person can count on.",

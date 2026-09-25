@@ -64,18 +64,36 @@ export type WebOnboardingStep = (typeof WEB_ONBOARDING_STEPS)[number];
 /**
  * What the owner's first agent may reach.
  *
- * Its own memory, the clock, the owner's profile, the canvas, and the four
- * read-only platform tools that let it say who else is installed. No plugin
- * family and no role: a first agent is a conversation partner, and every
- * capability beyond this is something the owner adds deliberately afterwards.
+ * Nearly everything. The first assistant is the concierge and the owner's
+ * first experience of buddi: asked for a screenshot of a site, it should take
+ * one, not say it has no browser. The setup wizard's own default is "give
+ * agents their own browser", so the agent it creates must be able to use it.
+ * Being granted is not being unsupervised: every gated or session-tier tool —
+ * `host.exec`, `email.send`, `browser.act` — still asks the owner first.
+ *
+ * Every family here is compiled in (`builtInManifests`), so none can hold the
+ * agent back as "needs a plugin". What is left out, on purpose: the platform
+ * tools that write agents and grants (Agent Father's), and the interview's
+ * owner tools (below). Optional plugins (finance, developer, image) are the
+ * owner's to add.
  *
  * It lives here rather than in the dashboard bundle because a tool name is the
  * server's vocabulary — the page names no tool.
  */
 export const FIRST_AGENT_TOOLS: readonly string[] = [
+  'system.*',
+  'email.*',
   'memory.*',
+  'artifacts.*',
+  'web.*',
+  'browser.*',
+  'host.*',
   'reminder.*',
   'schedule.*',
+  'goal.*',
+  'learning.*',
+  'canvas.*',
+  'agent.delegate',
   // Two of the owner tools, named one by one rather than taken as a family.
   // `owner.*` also carries `rename_me` and `finish_onboarding`, which exist for
   // the interview another surface conducts — and an assistant holding them
@@ -84,7 +102,7 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   // write down what it is told; it may not run a first run.
   'owner.get_profile',
   'owner.set_profile',
-  'canvas.*',
+  // The read-only platform tools: who else is installed, and what they hold.
   'platform.list_agents',
   'platform.read_agent',
   'platform.installed_tools',
@@ -171,7 +189,7 @@ export class OnboardingRefusal extends Error {
 export interface FirstAgentInput {
   name: string;
   handle: string;
-  /** The one-line card. Empty with `instructions` given: their first sentence. */
+  /** The one-line card. Empty with `instructions` given: `FIRST_AGENT_DESCRIPTION`. */
   description: string;
   /**
    * The agent's persona, in the owner's words: written as the body of its
@@ -245,6 +263,14 @@ function checkHandle(value: string, catalog: AgentCatalog, replacing: string): s
 
 /** The most a persona written through the wizard may hold. */
 export const INSTRUCTIONS_MAX = 8000;
+
+/**
+ * The card line of a first assistant whose owner wrote none.
+ *
+ * Not the persona's first sentence: a persona is written to the agent, and
+ * "You're not a chatbot." read as the line under its name on Home and Agents.
+ */
+export const FIRST_AGENT_DESCRIPTION = 'Your first assistant. Ask it anything; it remembers.';
 
 /**
  * The card line a persona gives when the owner wrote no other: its first
@@ -376,7 +402,7 @@ async function writeFirstAgent(
     throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
   }
   const instructions = checkInstructions(input.instructions);
-  const description = input.description.trim() || (instructions ? firstSentence(instructions) : '');
+  const description = input.description.trim() || (instructions ? FIRST_AGENT_DESCRIPTION : '');
   if (description === '' || description.length > 1000) {
     throw new OnboardingRefusal(400, 'Say in a sentence or two what this agent is for (up to 1,000 characters).');
   }
@@ -475,7 +501,7 @@ async function writeFirstAgent(
 /** What "change" may alter about the assistant after it exists. */
 export interface FirstAgentUpdate {
   name?: string;
-  /** Omitted with `instructions` given: their first sentence. */
+  /** Omitted: the card line stays, unless it was a persona's first sentence, which becomes `FIRST_AGENT_DESCRIPTION`. */
   description?: string;
   /** A new persona; written only while the body is still the generated one. */
   instructions?: string;
@@ -542,9 +568,15 @@ export function updateFirstAgent(
     throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
   }
   const instructions = checkInstructions(input.instructions);
-  const description = input.description === undefined
-    ? instructions === undefined ? undefined : firstSentence(instructions)
-    : input.description.trim();
+  // A card line an earlier wizard derived from the persona's first sentence is
+  // replaced by the plain one; a line the owner wrote is theirs.
+  const derived = (() => {
+    const current = generatedPersona(bodyOf(readFileSync(agent.file, 'utf8')), agent.name, agent.description);
+    return current?.instructions !== undefined && firstSentence(current.instructions) === agent.description;
+  })();
+  const description = input.description !== undefined
+    ? input.description.trim()
+    : derived ? FIRST_AGENT_DESCRIPTION : undefined;
   if (description !== undefined && (description === '' || description.length > 1000)) {
     throw new OnboardingRefusal(400, 'Say in a sentence or two what this agent is for (up to 1,000 characters).');
   }

@@ -14,7 +14,7 @@ import { useState } from 'react';
 import { ApiError, api, type AgentSkillRow } from '../../api';
 import { fmtRelative } from '../../format';
 import { settingsRoute, transcriptRoute } from '../../routes';
-import { Button, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Section, Stack, Table, Toolbar, useAsync } from '../../ui';
+import { Button, Code, Details, Empty, ErrorBanner, Notice, Panel, Pill, Section, Stack, Table, Toolbar, useAsync, EmptyState } from '../../ui';
 
 export function AgentSkills({ agentId, agentName }: { agentId: string; agentName: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.agentSkills(agentId), [agentId], 30_000);
@@ -47,11 +47,11 @@ export function AgentSkills({ agentId, agentName }: { agentId: string; agentName
       {done ? <Notice tone="good" role="status">{done}</Notice> : null}
       <Section title="Learned" aside={<span className="muted">what {agentName} proposed and you kept</span>}>
         {learned.length === 0 ? (
-          <Empty>
+          <EmptyState icon="bulb" title="Nothing learned yet">
             {data.writable
-              ? `Nothing learned yet. When ${agentName} proposes a procedure and you keep it on Settings → Proposals, it appears here.`
+              ? `When ${agentName} proposes a procedure and you keep it on Settings → Proposals, it appears here.`
               : `${agentName} ships with buddi, so it keeps no learned skills of its own until it is yours.`}
-          </Empty>
+          </EmptyState>
         ) : (
           <Panel flush>
             <Table>

@@ -41,6 +41,21 @@ export interface BrowserStatus {
   hasScreenshot: boolean;
   /** Owner dashboard only; agent tools receive just their conversation. */
   sessions?: BrowserStatus[];
+  /** The agents' own browser on this machine: what launches, and how. Own-browser mode only. */
+  browser?: BrowserEngineStatus;
+}
+/** What the agents' own browser is here, and what the owner can do about it. */
+export interface BrowserEngineStatus {
+  /** `none`: nothing to launch until the owner installs one. */
+  engine: 'chromium' | 'chrome' | 'none';
+  /** No display on this Linux machine, so it runs headless. */
+  headless: boolean;
+  /** The last launch failed for missing Linux libraries. */
+  problem?: 'missing-libraries';
+  /** One or two sentences for the owner, when there is something to say. */
+  message?: string;
+  /** The install started from the dashboard, while it runs and after. */
+  install?: { state: 'running' | 'done' | 'failed'; line?: string };
 }
 export interface BrowserScope { sessionId?: string; agentId?: string; conversationId?: string }
 /**
@@ -78,6 +93,8 @@ export interface BrowserController {
   hand?(scope?: BrowserScope): BrowserHandOffer;
   configure?(settings: unknown): Promise<BrowserStatus>;
   checkPermissions?(prompt?: boolean): Promise<BrowserStatus>;
+  /** Start Playwright's Chromium install. Returns at once; the status carries its progress. */
+  installBrowser?(): BrowserStatus;
   rollover?(input: BrowserRollover): boolean;
 }
 

@@ -95,6 +95,8 @@ export type Command =
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
   /** The local dashboard over the event log. */
   | { kind: 'dashboard'; action: DashboardAction }
+  /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
+  | { kind: 'browser'; action: 'install' | 'status' }
   /** buddi as an MCP server over stdio, for Claude Code or any MCP client. */
   | { kind: 'mcp' }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
@@ -257,6 +259,15 @@ export function parseArgs(argv: string[]): Command {
       `unknown option for buddi dashboard: ${flag} ` +
         '(expected --token, --off, --install-app or --uninstall-app)',
     );
+  }
+
+  if (head === 'browser') {
+    const action = rest[0] ?? 'status';
+    if (action !== 'install' && action !== 'status') {
+      throw new UsageError(`unknown browser action: ${action} (expected install or status)`);
+    }
+    if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
+    return { kind: 'browser', action };
   }
 
   if (head === 'telegram') {
@@ -497,6 +508,9 @@ export const USAGE = `buddi — your personal agents, one command
   buddi dashboard --uninstall-app remove it
   buddi mcp                  buddi as an MCP server over stdio:
                              claude mcp add buddi -- buddi mcp
+
+  buddi browser [status]     which browser the agents' own browser uses here
+  buddi browser install      download Playwright's Chromium for it (about 150 MB)
 
   buddi telegram pair        a QR code + deep link that pairs a device
   buddi telegram devices     every paired device

@@ -10,6 +10,7 @@ import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'reac
 
 export { useAsync } from './async';
 export { Icon, ICON_NAMES, type IconName } from './Icon';
+import { Icon, type IconName } from './Icon';
 export { Avatar, AgentAvatar, Mascot, MascotProvider } from '../views/parts/Avatar';
 import { Mascot } from '../views/parts/Avatar';
 
@@ -237,6 +238,37 @@ export function Empty({
     <div className="ui-empty" data-mascot="true">
       <Mascot size="sm" />
       <p>{children}</p>
+    </div>
+  );
+}
+
+/**
+ * A region with nothing in it yet, said as a state rather than a problem:
+ * neutral, centered in its region, an icon, a title, one line and at most one
+ * way forward. For a page's or a section's own empty case — a loading line, or
+ * a filter that matched nothing, stays `Empty`. Warning tones are for problems.
+ */
+export function EmptyState({
+  icon,
+  title,
+  action,
+  children,
+}: {
+  /** One of buddi's icons by name, or any small mark. */
+  icon?: IconName | ReactNode;
+  title: ReactNode;
+  action?: ReactNode;
+  /** The one line: what fills this, or where it comes from. */
+  children?: ReactNode;
+}): JSX.Element {
+  return (
+    <div className="ui-empty-state">
+      {icon ? (
+        <span className="ui-empty-state-icon">{typeof icon === 'string' ? <Icon name={icon as IconName} /> : icon}</span>
+      ) : null}
+      <div className="ui-empty-state-title">{title}</div>
+      {children ? <p className="ui-empty-state-line">{children}</p> : null}
+      {action ? <div className="ui-empty-state-action">{action}</div> : null}
     </div>
   );
 }

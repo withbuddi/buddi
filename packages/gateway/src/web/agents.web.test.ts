@@ -390,6 +390,20 @@ describe('the default agent and the front-matter editor', () => {
     expect(catalog.get('scout')?.name).toBe('Scout II');
   });
 
+  it('round-trips the persona: read it, rewrite the body, keep the front matter', async () => {
+    const before = (await (await fetch(`${base}/api/agents/scout/file`)).json()) as { persona: string; frontmatter: Record<string, unknown> };
+    expect(before.persona).toContain("Scout's persona.");
+    const res = await post('/api/agents/scout/file', { persona: 'You are Scout.\n\nLook twice, report once.' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { personaChanged: boolean }).personaChanged).toBe(true);
+    const after = (await (await fetch(`${base}/api/agents/scout/file`)).json()) as { persona: string; frontmatter: Record<string, unknown> };
+    expect(after.persona.trim()).toBe('You are Scout.\n\nLook twice, report once.');
+    expect(after.frontmatter).toEqual(before.frontmatter);
+    const file = readFileSync(path.join(dir, 'agents', 'scout', 'agent.md'), 'utf8');
+    expect(file.startsWith(AGENTS.scout!.slice(0, AGENTS.scout!.indexOf('---', 3) + 3))).toBe(true);
+    expect(file).not.toContain("Scout's persona.");
+  });
+
   it('refuses a handle another agent already answers to', async () => {
     const res = await post('/api/agents/scout/file', { handle: 'demo' });
     expect(res.status).toBe(400);

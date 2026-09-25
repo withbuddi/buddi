@@ -363,7 +363,8 @@ it('keeps a generated persona across a rename, and writes a new one when the own
   expect(written).toContain(persona);
   updateFirstAgent(deps, { instructions: 'Keep my books. Nothing else.' });
   written = readFileSync(file, 'utf8');
-  expect(written).toMatch(/description: .?Keep my books\..?\n/);
+  // A card line an earlier wizard took from the persona becomes the plain one.
+  expect(written).toMatch(/description: .?Your first assistant\. Ask it anything; it remembers\..?\n/);
   expect(written).toContain('You are Noor.');
   expect(written).toContain('Keep my books. Nothing else.');
   expect(written).not.toContain(persona);

@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type AgentsView } from '../../api';
 import { AgentSetup } from './AgentSetup';
-vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), updateAgentFile: vi.fn() } }));
+vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
@@ -23,7 +23,7 @@ const tools = {
     ] },
   ],
 };
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.agents).mockResolvedValue(view); vi.mocked(api.agentTools).mockResolvedValue(tools); vi.mocked(api.assignProviderAccount).mockResolvedValue({ changed: ['account'], note: 'Saved' }); });
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.agentFile).mockResolvedValue({ id: 'demo', file: '/agents/demo/agent.md', frontmatter: {}, persona: 'You are Demo.\n\nKeep it short.' }); vi.mocked(api.agents).mockResolvedValue(view); vi.mocked(api.agentTools).mockResolvedValue(tools); vi.mocked(api.assignProviderAccount).mockResolvedValue({ changed: ['account'], note: 'Saved' }); });
 it('lets the owner explicitly select a second account from the same provider', async () => {
   render(<AgentSetup agentId="demo" />);
   const select = await screen.findByLabelText('Account');
@@ -83,4 +83,58 @@ it('offers Remove only when there is a picture', async () => {
   render(<AgentSetup agentId="demo" />);
   fireEvent.click(await screen.findByRole('button', { name: 'Remove picture' }));
   await waitFor(() => expect(api.removeAgentPicture).toHaveBeenCalledWith('demo'));
+});
+
+it('shows the persona from the file, and saves an edit to it with the rest of who it is', async () => {
+  vi.mocked(api.updateAgentFile).mockResolvedValue({ id: 'demo', handle: 'demo', file: '', tools: [], changed: [], personaChanged: true, live: true, message: '@demo updated.' });
+  render(<AgentSetup agentId="demo" />);
+  const persona = await screen.findByLabelText('Persona');
+  expect(persona).toHaveValue('You are Demo.\n\nKeep it short.');
+  expect(screen.queryByText(/is not edited here/)).not.toBeInTheDocument();
+  fireEvent.change(persona, { target: { value: 'You are Demo.\n\nKeep it shorter.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save who it is' }));
+  await waitFor(() => expect(api.updateAgentFile).toHaveBeenCalledWith('demo', expect.objectContaining({ persona: 'You are Demo.\n\nKeep it shorter.' })));
+});
+
+it('sends no persona when it was not touched', async () => {
+  vi.mocked(api.updateAgentFile).mockResolvedValue({ id: 'demo', handle: 'demo', file: '', tools: [], changed: ['name'], personaChanged: false, live: true, message: 'ok' });
+  render(<AgentSetup agentId="demo" />);
+  await screen.findByLabelText('Persona');
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Demo Two' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save who it is' }));
+  await waitFor(() => expect(api.updateAgentFile).toHaveBeenCalled());
+  expect(vi.mocked(api.updateAgentFile).mock.calls[0]![1]).not.toHaveProperty('persona');
+});
+
+it('picks a face as the wizard does: a mascot is uploaded as the picture, an emoji replaces it on save', async () => {
+  vi.mocked(api.agents).mockResolvedValue({ ...view, agents: [{ ...view.agents[0]!, picture: '/api/agents/demo/avatar?v=2' }] } as AgentsView);
+  vi.mocked(api.uploadAgentPicture).mockResolvedValue({ picture: '/api/agents/demo/avatar?v=3', side: 512, source: 'png' });
+  vi.mocked(api.removeAgentPicture).mockResolvedValue(undefined);
+  vi.mocked(api.updateAgentFile).mockResolvedValue({ id: 'demo', handle: 'demo', file: '', tools: [], changed: ['avatar'], personaChanged: false, live: true, message: 'ok' });
+  const fetched = vi.fn(async () => new Response(new Blob(['png']), { status: 200 }));
+  vi.stubGlobal('fetch', fetched);
+  render(<AgentSetup agentId="demo" />);
+  // The picture it wears now is shown chosen.
+  expect(await screen.findByRole('button', { name: 'The current picture' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.queryByLabelText(/An emoji/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Buddi Blob, finance' }));
+  await waitFor(() => expect(api.uploadAgentPicture).toHaveBeenCalledWith('demo', expect.objectContaining({ name: 'buddi-blob-finance.png' })));
+  expect(fetched).toHaveBeenCalledWith('./mascot/finance.png');
+  fireEvent.click(screen.getByRole('button', { name: '🦊' }));
+  expect(screen.getByRole('button', { name: '🦊' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Save who it is' }));
+  await waitFor(() => expect(api.updateAgentFile).toHaveBeenCalledWith('demo', expect.objectContaining({ avatar: '🦊' })));
+  await waitFor(() => expect(api.removeAgentPicture).toHaveBeenCalledWith('demo'));
+  vi.unstubAllGlobals();
+});
+
+it('opens the file chooser from a button and names the chosen file', async () => {
+  Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:preview'), revokeObjectURL: vi.fn() });
+  render(<AgentSetup agentId="demo" />);
+  const input = await screen.findByLabelText('Choose a picture');
+  const click = vi.spyOn(input, 'click');
+  fireEvent.click(screen.getByRole('button', { name: 'Upload a picture' }));
+  expect(click).toHaveBeenCalled();
+  fireEvent.change(input, { target: { files: [new File(['GIF89a'], 'me.gif', { type: 'image/gif' })] } });
+  expect(await screen.findByText('me.gif')).toBeInTheDocument();
 });

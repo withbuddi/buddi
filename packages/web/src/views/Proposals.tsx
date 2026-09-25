@@ -35,25 +35,7 @@ import { DiffLines } from '../canvas/views/DiffLines';
 import { lineDiff } from '../canvas/line-diff';
 import { fmtRelative } from '../format';
 import { agentRoute, settingsRoute, transcriptRoute } from '../routes';
-import {
-  Button,
-  Card,
-  Code,
-  Details,
-  Empty,
-  ErrorBanner,
-  Field,
-  KV,
-  List,
-  ListRow,
-  Notice,
-  PageFrame,
-  Section,
-  Pill,
-  Stack,
-  Toolbar,
-  useAsync,
-} from '../ui';
+import { Button, Card, Code, Details, Empty, ErrorBanner, Field, KV, List, ListRow, Notice, PageFrame, Section, Pill, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 
 const KIND_LABEL: Record<ProposalRow['kind'], string> = {
   skill: 'skill',
@@ -140,13 +122,13 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
       ) : null}
       {!data || open.length === 0 ? (
         <Section title="Waiting" panel>
-          <Empty>
-            {!data
-              ? 'Loading…'
-              : plugin
-                ? `No rule from ${plugin} is waiting. It proposes one when you decide the same way several times running.`
-                : 'Nothing proposed. When an agent learns something worth keeping, it waits here.'}
-          </Empty>
+          {!data ? (
+            <Empty>Loading…</Empty>
+          ) : plugin ? (
+            <EmptyState icon="bulb" title={`No rule from ${plugin} is waiting`}>It proposes one when you decide the same way several times running.</EmptyState>
+          ) : (
+            <EmptyState icon="bulb" title="Nothing proposed">When an agent learns something worth keeping, it waits here.</EmptyState>
+          )}
         </Section>
       ) : (
         // Each proposal is a record with its own card, so the cards are the

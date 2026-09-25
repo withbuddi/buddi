@@ -44,9 +44,14 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
   };
   const save = (next: ControlSettings) => void run(() => api.browserSettings(next));
   const perms = data.permissions;
-  const ready = !!data.enabled && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
+  // The agents' own browser: none installed, or installed but unable to start, is not ready.
+  const own = mode === 'playwright' ? data.browser : undefined;
+  const installing = own?.install?.state === 'running';
+  const noBrowser = own?.engine === 'none';
+  const ready = !!data.enabled && !noBrowser && !own?.problem && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
   const readyLine = computer ? 'Ready. Agents can use your computer within the apps you allow below.'
     : mode === 'extension' ? 'Ready. Agents work in your Chrome, in background tabs, through the buddi extension.'
+    : own?.engine === 'chrome' ? 'Ready. Agents work in their own browser, a separate Google Chrome profile. Your apps are never touched.'
     : 'Ready. Agents work in their own browser. Your apps are never touched.';
 
   return (
@@ -60,12 +65,19 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
           <>
             <Button size="sm" disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
             {computer && !ready && perms?.supported ? <Button size="sm" variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
+            {noBrowser || installing ? <Button size="sm" variant="accent" disabled={busy || installing} onClick={() => void run(() => api.browserInstall())}>{installing ? 'Installing…' : 'Install Chromium'}</Button> : null}
           </>
         }
       >
         <Stack>
           {!data.enabled ? (
             <Notice tone="warning">The host is not available. Start buddi serve on a machine with a desktop session.</Notice>
+          ) : noBrowser ? (
+            <Notice tone="warning" title="No browser installed for the agents yet">
+              Install Chromium here (about 150 MB), or run <code>buddi browser install</code> on this machine.
+            </Notice>
+          ) : own?.problem ? (
+            <Notice tone="warning">{own.message}</Notice>
           ) : ready ? (
             <Notice tone="good">{readyLine}</Notice>
           ) : (
@@ -87,6 +99,14 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
           ) : perms ? (
             <p className="muted">Computer control requires macOS 14 or later.</p>
           ) : null}
+          {own?.install ? (
+            <p className="muted" role="status">
+              {own.install.state === 'running' ? `Installing Chromium. ${own.install.line ?? ''}`
+                : own.install.state === 'done' ? 'Chromium is installed. Agents can open their browser now.'
+                : `The install did not finish: ${own.install.line ?? 'no reason given'}`}
+            </p>
+          ) : null}
+          {own?.headless && !noBrowser ? <p className="muted">The agents’ browser runs headless on this machine, since it has no display. Watch it and take over from the conversation’s Canvas.</p> : null}
           {computer && perms?.message ? <p className="muted">{perms.message}</p> : null}
           {computer && perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
         </Stack>

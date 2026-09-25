@@ -5,7 +5,7 @@ import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel } from './Browser';
 
-vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), browserInstall: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
@@ -26,6 +26,21 @@ function Panel(): JSX.Element {
 }
 
 describe('computer & browser settings', () => {
+  it('says plainly when no browser is installed, installs one on click, and says when it runs headless', async () => {
+    const own = { ...status, mode: 'playwright' as const, session: undefined, settings: { ...settings, mode: 'playwright' as const } };
+    vi.mocked(api.browser).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false } });
+    vi.mocked(api.browserInstall).mockResolvedValue({ ...own, browser: { engine: 'none', headless: false, install: { state: 'running' } } });
+    const { unmount } = render(<Browser />);
+    expect(await screen.findByText('No browser installed for the agents yet')).toBeInTheDocument();
+    expect(screen.queryByText(/^Ready\./)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Install Chromium' }));
+    await waitFor(() => expect(api.browserInstall).toHaveBeenCalledOnce());
+    unmount();
+    vi.mocked(api.browser).mockResolvedValue({ ...own, browser: { engine: 'chromium', headless: true } });
+    render(<Browser />);
+    expect(await screen.findByText(/runs headless on this machine/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install Chromium' })).not.toBeInTheDocument();
+  });
   it('shows permissions as a checklist, requests them only on click, and switches mode with one choice', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: true, accessibility: false, screenRecording: true } });
     render(<Browser />);

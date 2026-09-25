@@ -52,6 +52,7 @@ import {
   Table,
   Toolbar,
   useAsync,
+  EmptyState,
 } from '../ui';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import type {
@@ -1269,7 +1270,7 @@ function ListPiece({
       <ErrorBanner message={query.error} />
       <ActOutcome act={act} />
       {groups.every((group) => group.rows.length === 0) ? (
-        <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
+        query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
         <List>
           {component.select ? (
@@ -1345,7 +1346,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
       <ErrorBanner message={query.error} />
       <ActOutcome act={act} />
       {rows.length === 0 ? (
-        <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
+        query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
         <Table>
           <thead>
@@ -1796,7 +1797,7 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
       {rows.length === 0 ? (
-        <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing here.')}</Empty>
+        query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
         <Stack gap="lg" divided>
           {keyedRows(rows, component.key, {
@@ -2117,3 +2118,14 @@ export function PluginSettingsPage(props: {
 }
 
 export { Scope as PluginPageScope };
+
+/**
+ * A descriptor's `empty` sentence as an empty state: its first sentence is the
+ * title and the rest, when there is any, the one line under it.
+ */
+export function EmptyPiece({ text }: { text: string }): JSX.Element {
+  const at = text.search(/[.!?]\s/);
+  const title = at === -1 ? text.replace(/[.]$/, '') : text.slice(0, at + (text[at] === '.' ? 0 : 1));
+  const rest = at === -1 ? '' : text.slice(at + 1).trim();
+  return <EmptyState title={title}>{rest || null}</EmptyState>;
+}

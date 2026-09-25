@@ -301,6 +301,33 @@ fieldset:disabled { opacity: 0.6; }
 .ui-empty[data-mascot='true'] { display: flex; align-items: center; gap: var(--space-3); }
 .ui-empty[data-mascot='true'] > p { margin: 0; }
 
+/* Nothing here yet, as a state: neutral, centered in its region. */
+.ui-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 auto;
+  padding: var(--space-10) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+}
+.ui-empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-12);
+  height: var(--space-12);
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-xl);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.ui-empty-state-title { font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); color: var(--text); }
+.ui-empty-state-line { margin: 0; max-width: 42ch; font-size: var(--text-md); line-height: var(--leading); }
+.ui-empty-state-action { margin-top: var(--space-2); }
+
 /* The default agent's uploaded face, where a page has room to be friendly. */
 .ui-mascot {
   display: inline-flex;

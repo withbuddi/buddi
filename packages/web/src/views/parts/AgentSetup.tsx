@@ -10,12 +10,13 @@
  *  - the service reloads its catalog for new runs; existing runs keep their
  *    adapter.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
 import { Button, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
 import { Avatar, type Face } from './Avatar';
+import { FacePicker, mascotFile, type FaceChoice } from './FacePicker';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
 
@@ -269,6 +270,13 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
   const [picked, setPicked] = useState<string[] | null>(null);
   const [roles, setRoles] = useState((agent.roles ?? []).join(', '));
   const [avatar, setAvatar] = useState(agent.avatar ?? '');
+  // The persona is the body of the file: what the owner (or the wizard) wrote
+  // there is what is shown, and what is saved back.
+  const file = useAsync(() => api.agentFile(agent.id), [agent.id]);
+  const [persona, setPersona] = useState<string | null>(null);
+  const writtenPersona = file.data?.persona.trim() ?? '';
+  const nextPersona = persona ?? writtenPersona;
+  const personaChanged = file.data !== undefined && persona !== null && persona.trim() !== writtenPersona;
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -285,6 +293,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
     handle.trim().replace(/^@/, '') !== agent.handle ||
     description.trim() !== agent.description ||
     avatar.trim() !== (agent.avatar ?? '') ||
+    personaChanged ||
     toolsChanged ||
     !same(nextRoles, agent.roles ?? []);
 
@@ -301,7 +310,16 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         ...(toolsChanged && picker.data ? { tools: grantFrom(picker.data.groups, chosen) } : {}),
         roles: nextRoles,
         ...(avatar.trim() === '' ? {} : { avatar: avatar.trim() }),
+        ...(personaChanged && nextPersona.trim() !== '' ? { persona: nextPersona.trim() } : {}),
       });
+      // An emoji chosen over a picture takes the picture away, or the picture
+      // would go on winning over it everywhere.
+      if (agent.picture && avatar.trim() !== '' && avatar.trim() !== (agent.avatar ?? '')) {
+        await api.removeAgentPicture(agent.id);
+        window.dispatchEvent(new Event(AGENTS_CHANGED));
+      }
+      setPersona(null);
+      file.reload();
       setSaved(result.message);
       setPicked(null);
       picker.reload();
@@ -351,14 +369,11 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
         <Field label="Handle" hint="What you type to reach it. One handle, one agent.">
           <input value={handle} disabled={busy || agent.isExample} onChange={(e) => setHandle(e.target.value)} />
         </Field>
-        <Field label="Face" hint="An emoji. Left empty, its initials are drawn.">
-          <input value={avatar} disabled={busy || agent.isExample} onChange={(e) => setAvatar(e.target.value)} />
-        </Field>
         <Field label="Roles" hint="Capabilities it answers for, comma separated.">
           <input value={roles} disabled={busy || agent.isExample} onChange={(e) => setRoles(e.target.value)} />
         </Field>
       </FormGrid>
-      <Picture agent={agent} onChanged={onSaved} />
+      <FaceField agent={agent} avatar={avatar} onEmoji={setAvatar} onChanged={onSaved} disabled={busy} />
       <Field label="Description" hint="One or two sentences. Its colleagues read this.">
         <textarea rows={2} value={description} disabled={busy || agent.isExample} onChange={(e) => setDescription(e.target.value)} />
       </Field>
@@ -372,10 +387,21 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
           <ToolPicker view={picker.data} chosen={chosen} onChange={setPicked} disabled={busy || agent.isExample} />
         )}
       </div>
-      <p className="ui-card-meta">
-        Its persona — the body of the file below the front matter — is not edited here. Ask the agent that
-        makes agents to rewrite it, or edit <span className="mono">agent.md</span> directly.
-      </p>
+      <Field label="Persona" hint="Who it is and how it works, in its own file. It reads this before every conversation." wide>
+        {file.error ? (
+          <ErrorBanner message={file.error} />
+        ) : !file.data ? (
+          <Empty>Reading its file…</Empty>
+        ) : (
+          <textarea
+            className="setup-persona"
+            value={nextPersona}
+            rows={Math.max(6, nextPersona.split('\n').length + 1)}
+            disabled={busy || agent.isExample}
+            onChange={(e) => setPersona(e.target.value)}
+          />
+        )}
+      </Field>
       </Stack>
     </Section>
   );
@@ -390,7 +416,57 @@ function iconOf(agent: AgentRow): Face['avatar'] {
 }
 
 /**
- * The uploaded picture, beside the Face. It lives in the database, not in
+ * The face, picked as in the wizard: a mascot is uploaded as the picture at
+ * once, an emoji is a line in the file saved with the rest of "Who it is",
+ * and the owner's own picture is the upload under both rows.
+ */
+function FaceField({ agent, avatar, onEmoji, onChanged, disabled }: {
+  agent: AgentRow; avatar: string; onEmoji: (emoji: string) => void; onChanged: () => void; disabled: boolean;
+}): JSX.Element {
+  const [pending, setPending] = useState<FaceChoice | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const emojiChosen = avatar.trim() !== '' && (avatar.trim() !== (agent.avatar ?? '') || !agent.picture);
+  const face: FaceChoice | null = pending
+    ?? (emojiChosen ? { kind: 'emoji', value: avatar.trim() } : agent.picture ? { kind: 'kept', url: agent.picture } : null);
+  const pick = async (choice: FaceChoice): Promise<void> => {
+    setFailure(null);
+    if (choice.kind === 'emoji') { onEmoji(choice.value); return; }
+    if (choice.kind === 'kept') { onEmoji(agent.avatar ?? ''); return; }
+    setPending(choice);
+    setBusy(true);
+    try {
+      await api.uploadAgentPicture(agent.id, await mascotFile(choice.role));
+      onEmoji(agent.avatar ?? '');
+      onChanged();
+      window.dispatchEvent(new Event(AGENTS_CHANGED));
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ui-field">
+      <span className="ui-field-label">Face</span>
+      <FacePicker
+        face={face}
+        label="Face"
+        kept={agent.picture}
+        disabled={disabled || busy}
+        disableEmoji={agent.isExample}
+        onPick={(choice) => void pick(choice)}
+      >
+        <Picture agent={agent} onChanged={onChanged} />
+      </FacePicker>
+      {failure ? <span className="critical save-error" role="alert">{failure}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * The uploaded picture, under the Face. It lives in the database, not in
  * `agent.md`, so it is saved on its own and a shipped example can have one.
  */
 export function Picture({ agent, onChanged }: { agent: AgentRow; onChanged: () => void }): JSX.Element {
@@ -445,23 +521,38 @@ export function Picture({ agent, onChanged }: { agent: AgentRow; onChanged: () =
     tools: agent.tools,
     ...(preview ?? agent.picture ? { picture: (preview ?? agent.picture)! } : {}),
   };
+  const [dragging, setDragging] = useState(false);
+  const chooser = useRef<HTMLInputElement>(null);
+  const take = (next: File | null | undefined): void => {
+    setFailure(null);
+    setNote(null);
+    setFile(next ?? null);
+  };
   return (
-    <div className="ui-field">
-      <span className="ui-field-label">Picture</span>
+    <div
+      className="setup-upload"
+      data-dragging={dragging ? 'true' : undefined}
+      onDragOver={(e) => { e.preventDefault(); if (!busy) setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); if (!busy) take(e.dataTransfer.files?.[0]); }}
+    >
       <Toolbar>
         <Avatar id={agent.id} name={agent.name} size="xl" face={face} />
+        {/* The OS dialog cannot be styled; the control that opens it can. */}
         <input
+          ref={chooser}
           key={input}
+          className="sr-only"
           type="file"
           aria-label="Choose a picture"
           accept="image/png,image/gif,image/svg+xml,.png,.gif,.svg"
           disabled={busy}
-          onChange={(e) => {
-            setFailure(null);
-            setNote(null);
-            setFile(e.target.files?.[0] ?? null);
-          }}
+          onChange={(e) => take(e.target.files?.[0])}
         />
+        <Button disabled={busy} onClick={() => chooser.current?.click()}>
+          Upload a picture
+        </Button>
+        <span className="setup-upload-name">{file ? file.name : 'or drop one here'}</span>
         <span className="ui-toolbar-spacer" />
         {agent.picture && !file ? (
           <Button variant="ghost" disabled={busy} onClick={() => void remove()}>
@@ -477,7 +568,7 @@ export function Picture({ agent, onChanged }: { agent: AgentRow; onChanged: () =
       ) : (
         <span className="ui-field-hint">
           {note ??
-            'A PNG, GIF or SVG up to 1 MB, kept as a square PNG of at most 512 px; a GIF keeps its first frame. Without one, the Face above is drawn.'}
+            'Your own picture: a PNG, GIF or SVG up to 1 MB, kept as a square PNG; a GIF keeps its first frame.'}
         </span>
       )}
     </div>
