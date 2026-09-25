@@ -497,6 +497,9 @@ it('writes the persona as the body, and a plain card line rather than its first 
   expect(file).toContain(`You are Ada. There is exactly one owner`);
   expect(file).toContain(persona);
   expect(file).not.toContain("What you are for, in the owner's own words");
+  expect(file).toContain('a browser of your own');
+  expect(file).toContain('ask the owner first');
+  expect(file).not.toContain('and nothing else');
   expect(firstSentence('  - Hello there! More.')).toBe('Hello there!');
 });
 

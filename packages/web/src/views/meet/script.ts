@@ -121,6 +121,19 @@ export const SCRIPT = {
     refused: (why: string): string => why,
     answer: (label: string): string => label,
   },
+  /** The agents' own browser: found and said in one line, or fetched while the owner watches. */
+  browser: {
+    chrome: 'Your assistant will browse with Google Chrome.',
+    chromium: 'Your assistant will browse with its own Chromium.',
+    needs: 'Your assistant needs a browser of its own to look at websites. I am fetching one now, about 150 MB.',
+    installing: 'Fetching the browser…',
+    installed: 'Installed.',
+    skip: 'Skip for now',
+    skipped: 'Skipped. Settings → Computer & browser can install it whenever you like.',
+    missing: 'No browser for your assistant yet. Settings → Computer & browser can install one.',
+    failed: (why: string): string => `That did not work: ${why}`,
+    retry: 'Try again',
+  },
   assistant: {
     ask: "Last thing: your assistant. I've picked a name and a face; change either, or keep them.",
     name: 'Name',

@@ -91,6 +91,26 @@ and paste it again.") with the field still open. The chosen model is the
 account's default; "change" opens the model list in place. No account admin
 appears here. The accounts page in Settings is unchanged for later.
 
+**The browser**
+
+No question: buddi checks the agents' own browser through `GET /api/browser`
+(bundled Chromium, else Google Chrome, else none) and says what it found.
+
+> B: Your assistant will browse with Google Chrome.
+
+(or "…with its own Chromium.") and the thread moves straight on, with no
+button. On a Mac with Chrome nothing is downloaded. With none, buddi says it
+needs a browser of its own (about 150 MB) and starts the install itself
+(`POST /api/browser/install`), saying each line the installer prints, then
+"Installed." and on. The dock holds "Skip for now" (ghost, left of the
+primary) and the primary, which reads "Fetching the browser…" while it runs
+and "Try again" after a failure. A skip says that Settings → Computer &
+browser can install it later. The step is recorded as `browser` and never
+blocks completion: an installation that already has its assistant counts it
+as passed, and a replay says what is there now. In another mode (your apps,
+your Chrome) the step settles silently. The packaged launcher's first-run
+browser line stays as it is.
+
 **The assistant**
 
 > B: Last thing: your assistant. I've picked a name and a face; change either,

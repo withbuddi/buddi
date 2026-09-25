@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { api, chatApi, type OnboardingView, type OwnerView, type ProviderAccountsView } from '../api';
+import { api, chatApi, type BrowserStatus, type OnboardingView, type OwnerView, type ProviderAccountsView } from '../api';
 import { App } from '../App';
 import { Meet, FIRST_MESSAGE_TIMEOUT_MS, LEAVE_MS, PATIENCE_MS } from './Meet';
 import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, FACES, MASCOTS, SCRIPT } from './meet/script';
@@ -43,6 +43,8 @@ vi.mock('../api', async (load) => {
       session: vi.fn(),
       overview: vi.fn(),
       conversations: vi.fn(),
+      browser: vi.fn(),
+      browserInstall: vi.fn(),
     },
     chatApi: {
       ...real.chatApi,
@@ -107,6 +109,8 @@ function quiet(): void {
   vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' });
   vi.mocked(api.onboardingStep).mockResolvedValue(view());
   vi.mocked(chatApi.agents).mockResolvedValue({ agents: [], defaultAgentId: '' });
+  // Another mode by default: the browser step settles with nothing to say.
+  vi.mocked(api.browser).mockRejectedValue(new Error('not in this test'));
   for (const call of [api.overview, api.conversations, chatApi.groups]) {
     vi.mocked(call as () => Promise<unknown>).mockRejectedValue(new Error('not in this test'));
   }
@@ -455,6 +459,54 @@ describe('the questions', () => {
     const buttons = within(actions as HTMLElement).getAllByRole('button');
     expect(buttons.map((button) => button.textContent)).toEqual([SCRIPT.clock.another, SCRIPT.clock.yes]);
     expect(buttons[buttons.length - 1]).toBe(yes);
+  });
+});
+
+describe('the browser', () => {
+  const atBrowser = (): void => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ details: { accountId: 'a0' }, stepsDone: ['you', 'model'] }));
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
+  };
+  const own = (browser: NonNullable<BrowserStatus['browser']>): BrowserStatus =>
+    ({ state: 'idle', enabled: true, busy: false, hasScreenshot: false, mode: 'playwright', browser }) as BrowserStatus;
+
+  it('says which browser it found in one line and goes straight on, downloading nothing', async () => {
+    atBrowser();
+    vi.mocked(api.browser).mockResolvedValue(own({ engine: 'chrome', headless: false }));
+    render(meet());
+    expect(await screen.findByText(SCRIPT.browser.chrome)).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
+    expect(api.browserInstall).not.toHaveBeenCalled();
+    expect(api.onboardingStep).toHaveBeenCalledWith('browser', {});
+  });
+
+  it('fetches one when there is none, says the installer\'s lines, then "Installed." and on', async () => {
+    atBrowser();
+    vi.mocked(api.browser)
+      .mockResolvedValueOnce(own({ engine: 'none', headless: false }))
+      .mockResolvedValueOnce(own({ engine: 'none', headless: false }))
+      .mockResolvedValueOnce(own({ engine: 'none', headless: false, install: { state: 'running', line: 'Downloading Chromium 40%' } }))
+      .mockResolvedValue(own({ engine: 'chromium', headless: false, install: { state: 'done' } }));
+    vi.mocked(api.browserInstall).mockResolvedValue(own({ engine: 'none', headless: false, install: { state: 'running' } }));
+    render(meet());
+    expect(await screen.findByText(SCRIPT.browser.needs)).toBeInTheDocument();
+    expect(await screen.findByText('Downloading Chromium 40%', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.browser.installed, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
+    expect(api.browserInstall).toHaveBeenCalledOnce();
+  });
+
+  it('lets the owner skip it, with the way out left of the primary', async () => {
+    atBrowser();
+    vi.mocked(api.browser).mockResolvedValue(own({ engine: 'none', headless: false, install: { state: 'running' } }));
+    render(meet());
+    const skip = await screen.findByRole('button', { name: SCRIPT.browser.skip });
+    const primary = screen.getByRole('button', { name: SCRIPT.browser.installing });
+    expect(skip.compareDocumentPosition(primary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(skip);
+    expect(await screen.findByText(SCRIPT.browser.skipped)).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
   });
 });
 

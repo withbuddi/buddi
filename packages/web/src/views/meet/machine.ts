@@ -11,7 +11,7 @@
 import type { OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
 
 /** The questions, in the order they are asked. `handover` is the last one. */
-export const QUESTIONS = ['name', 'clock', 'brain', 'assistant', 'handover'] as const;
+export const QUESTIONS = ['name', 'clock', 'brain', 'browser', 'assistant', 'handover'] as const;
 
 export type QuestionId = (typeof QUESTIONS)[number];
 
@@ -20,6 +20,7 @@ export const STEP_OF: Record<QuestionId, string> = {
   name: 'you',
   clock: 'you',
   brain: 'model',
+  browser: 'browser',
   assistant: 'agent',
   handover: 'hello',
 };
@@ -33,6 +34,12 @@ export interface BrainAnswer {
   model: string;
 }
 
+/**
+ * The agents' own browser, as this step left it. `other` is a mode that is
+ * not the agents' own browser, where there is nothing to fetch.
+ */
+export type BrowserAnswer = 'chrome' | 'chromium' | 'installed' | 'skipped' | 'none' | 'other';
+
 export interface AssistantAnswer {
   id: string;
   name: string;
@@ -44,6 +51,7 @@ export interface MeetAnswers {
   name?: string;
   clock?: string;
   brain?: BrainAnswer;
+  browser?: BrowserAnswer;
   assistant?: AssistantAnswer;
 }
 
@@ -54,6 +62,8 @@ export interface MeetFacts {
   accounts?: ProviderAccountsView | undefined;
   /** The agent of the owner's own, when the roster has one. */
   assistant?: AssistantAnswer | undefined;
+  /** Which browser the agents' own browser finds now; absent in another mode. */
+  browser?: 'chrome' | 'chromium' | 'none' | undefined;
 }
 
 /** An account that could actually answer a question. */
@@ -98,6 +108,9 @@ export function answersFrom(facts: MeetFacts): MeetAnswers {
     ...(facts.owner?.preferredName ? { name: facts.owner.preferredName } : {}),
     ...(facts.owner?.timezone ? { clock: facts.owner.timezone } : {}),
     ...(brain ? { brain } : {}),
+    // Recorded once, never a gate: on a replay it says what is there now. An
+    // assistant that exists was made after this step, or before it existed.
+    ...(facts.onboarding?.stepsDone.includes('browser') || assistant ? { browser: facts.browser ?? 'other' } : {}),
     // An agent of the owner's own is what the record calls answered; the
     // roster is where its name and face come from.
     ...(assistant ? { assistant } : {}),
@@ -109,6 +122,7 @@ export function answered(answers: MeetAnswers, id: QuestionId): boolean {
   if (id === 'name') return typeof answers.name === 'string' && answers.name !== '';
   if (id === 'clock') return typeof answers.clock === 'string' && answers.clock !== '';
   if (id === 'brain') return answers.brain !== undefined;
+  if (id === 'browser') return answers.browser !== undefined;
   if (id === 'assistant') return answers.assistant !== undefined;
   return false;
 }

@@ -71,7 +71,7 @@ const accounts = (
 
 describe('the questions', () => {
   it('asks four things and then hands over, in that order', () => {
-    expect([...QUESTIONS]).toEqual(['name', 'clock', 'brain', 'assistant', 'handover']);
+    expect([...QUESTIONS]).toEqual(['name', 'clock', 'brain', 'browser', 'assistant', 'handover']);
   });
 
   it('draws every answered question above the open one, and nothing below it', () => {
@@ -146,9 +146,21 @@ describe('resume', () => {
     expect(answersFrom({ ...facts, onboarding: onboarding() }).brain).toBeUndefined();
   });
 
+  it('asks about the browser after the brain, never as a gate, and replays what is there now', () => {
+    const facts = {
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0' } }),
+      owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+      accounts: accounts([{}]),
+    };
+    expect(firstOpen(answersFrom(facts))).toBe('browser');
+    const recorded = answersFrom({ ...facts, onboarding: onboarding({ ...facts.onboarding, stepsDone: ['browser'] }), browser: 'none' });
+    expect(recorded.browser).toBe('none');
+    expect(firstOpen(recorded)).toBe('assistant');
+  });
+
   it('does not count an assistant the record says is still missing', () => {
     const answers = answersFrom({
-      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0' } }),
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, stepsDone: ['browser'], details: { accountId: 'a0' } }),
       owner: owner({ preferredName: 'A', timezone: 'UTC' }),
       accounts: accounts([{}]),
       // A shipped example is in the roster; it is not the owner's own.

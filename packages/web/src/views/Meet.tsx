@@ -397,11 +397,12 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * assistant was moved onto a moment ago being the case that bites.
    */
   const load = useCallback(async (replay = true, restoredNow = false): Promise<void> => {
-    const [onboarding, owner, accountView, roster] = await Promise.all([
+    const [onboarding, owner, accountView, roster, browserView] = await Promise.all([
       api.onboarding().catch(() => undefined),
       api.owner().catch(() => undefined),
       api.providerAccounts().catch(() => undefined),
       chatApi.agents().catch(() => undefined),
+      api.browser().catch(() => undefined),
     ]);
     setAccounts(accountView);
     setZones(owner?.zones ?? []);
@@ -426,6 +427,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       onboarding,
       owner,
       accounts: accountView,
+      browser: browserView?.browser?.engine,
       ...(own ? { assistant: { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '' } } : {}),
     };
     const replayed = answersFrom(facts);
@@ -858,6 +860,15 @@ function Question(props: QuestionProps): JSX.Element | null {
         )}
       </>
     );
+  }
+  if (id === 'browser') {
+    if (openNow) return <BrowserAsk {...props} />;
+    const said = browserLine(answers.browser);
+    return said ? (
+      <Buddi>
+        <Said>{said}</Said>
+      </Buddi>
+    ) : null;
   }
   if (id === 'assistant') {
     return (
@@ -1695,6 +1706,106 @@ function ClaudeCode({ value, onChange }: { value: string; onChange: (next: strin
       value={value}
       onChange={(event) => onChange(event.target.value)}
     />
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * 3½. The browser
+ * ------------------------------------------------------------------ */
+
+/** What buddi says once the browser step is settled; nothing in a mode that fetches nothing. */
+function browserLine(answer: MeetAnswers['browser']): string | null {
+  switch (answer) {
+    case 'chrome': return SCRIPT.browser.chrome;
+    case 'chromium': return SCRIPT.browser.chromium;
+    case 'installed': return SCRIPT.browser.installed;
+    case 'skipped': return SCRIPT.browser.skipped;
+    case 'none': return SCRIPT.browser.missing;
+    default: return null;
+  }
+}
+
+/**
+ * The agents' own browser, checked rather than asked.
+ *
+ * Found — Chrome on this Mac, or Chromium already fetched — and buddi says
+ * which in one line and moves on, with no button. Not found, and buddi fetches
+ * Playwright's Chromium itself, saying each line the installer prints; the
+ * owner can skip it, and the Computer & browser page is the fix for later.
+ * Never a gate: a failure or a skip still moves on.
+ */
+function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
+  const [phase, setPhase] = useState<'checking' | 'installing' | 'failed'>('checking');
+  const [line, setLine] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  /** This screen started an install, so a browser found afterwards is "Installed.". */
+  const started = useRef(false);
+  const settled = useRef(false);
+  // Held in a ref so a parent re-render does not restart the check.
+  const settleRef = useRef<(browser: NonNullable<MeetAnswers['browser']>) => void>(() => {});
+  settleRef.current = (browser) => {
+    if (settled.current) return;
+    settled.current = true;
+    onSettled({ ...answers, browser });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const settle = (browser: NonNullable<MeetAnswers['browser']>): void => { if (!cancelled) settleRef.current(browser); };
+    const fail = (why: string): void => {
+      if (cancelled) return;
+      started.current = false;
+      setPhase('failed');
+      setLine(why);
+    };
+    const follow = async (): Promise<void> => {
+      let status;
+      try { status = await api.browser(); } catch { return settle('other'); }
+      if (cancelled) return;
+      const own = status.browser;
+      if (!own) return settle('other');
+      if (own.install?.state === 'running') {
+        setPhase('installing');
+        setLine(own.install.line ?? null);
+        timer = window.setTimeout(() => void follow(), 1000);
+        return;
+      }
+      if (own.engine !== 'none') return settle(started.current ? 'installed' : own.engine);
+      if (started.current) return fail(own.install?.line ?? '');
+      // Nothing here: fetch it, and follow the installer.
+      started.current = true;
+      setPhase('installing');
+      try { await api.browserInstall(); } catch (err) { return fail(err instanceof ApiError ? err.message : String(err)); }
+      if (!cancelled) timer = window.setTimeout(() => void follow(), 1000);
+    };
+    void follow();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [attempt]);
+
+  if (phase === 'checking') return <Thinking />;
+  return (
+    <>
+      <Buddi>
+        <Said>{SCRIPT.browser.needs}</Said>
+        {phase === 'installing' ? <Thinking line={line ?? SCRIPT.browser.installing} /> : <Said>{SCRIPT.browser.failed(line ?? '')}</Said>}
+      </Buddi>
+      <Ask
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => settleRef.current('skipped')}>
+              {SCRIPT.browser.skip}
+            </Button>
+            <Button variant="accent" disabled={phase === 'installing'} onClick={() => { setPhase('installing'); setAttempt((n) => n + 1); }}>
+              {phase === 'installing' ? SCRIPT.browser.installing : SCRIPT.browser.retry}
+            </Button>
+          </>
+        }
+      />
+    </>
   );
 }
 
