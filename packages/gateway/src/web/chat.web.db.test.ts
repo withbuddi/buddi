@@ -560,6 +560,10 @@ suite('the dashboard chat API', () => {
     provider.script = [say('first answer'), say('second answer')];
 
     const first = (await (await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'one' })).json()) as any;
+    // The first turn is over before the second is sent: a message that lands
+    // while a run is still going is delivered *inside* that run (the same
+    // runId, by design), which on a slow machine is what this used to race.
+    await settled(first.conversationId, 1);
     const second = (await (
       await client.post(`/api/chat/${AGENT_ID}/messages`, {
         conversationId: first.conversationId,
