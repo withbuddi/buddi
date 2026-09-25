@@ -16,6 +16,7 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import type { PluginsEngine } from './plugins.js';
 import type { StagedPlugin } from '../plugins/index.js';
 
@@ -95,7 +96,7 @@ async function dashboard(engine: PluginsEngine, env: NodeJS.ProcessEnv = {}) {
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   return { origin, headers: { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf } };
 }
 

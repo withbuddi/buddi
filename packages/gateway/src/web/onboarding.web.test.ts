@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import { createFirstAgent } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { shouldStartFirstRun } from '../agents/first-run.js';
@@ -191,7 +192,7 @@ async function boot(opts: {
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
   return { app, origin, headers, catalog };
 }

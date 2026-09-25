@@ -3,6 +3,7 @@ import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type 
 import { BrowserService, BrowserManager, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
+import { csrfCookieName, portOf } from './http.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -26,11 +27,12 @@ async function setup(openAccess = true, supplied?: BrowserController, publicOrig
   return { app, origin, browser, driver };
 }
 
-async function session(origin: string, ticket?: string) {
+async function session(origin: string, ticket?: string, cookiePort = portOf(new URL(origin))) {
   // A ticket is only ever exchanged on the page URL, never on an API call.
   const res = await fetch(ticket ? `${origin}/?t=${encodeURIComponent(ticket)}` : `${origin}/api/session`, { redirect: 'manual' });
   const pairs = res.headers.getSetCookie().map((line) => line.split(';')[0]!);
-  const csrf = pairs.find((p) => p.startsWith('buddi_csrf='))?.slice('buddi_csrf='.length) ?? '';
+  const name = `${csrfCookieName(cookiePort)}=`;
+  const csrf = pairs.find((p) => p.startsWith(name))?.slice(name.length) ?? '';
   return { Cookie: pairs.join('; '), 'X-Buddi-CSRF': csrf, Origin: origin, 'Content-Type': 'application/json' };
 }
 
@@ -41,14 +43,17 @@ describe('browser dashboard endpoints', () => {
     const proxy = { Host: 'host.example:9443', 'X-Forwarded-For': '100.64.0.2' };
     expect((await fetch(`${origin}/api/session`, { headers: proxy })).status).toBe(401);
     expect((await fetch(`${origin}/api/session`, { headers: { ...proxy, Host: 'localhost:4317' } })).status).toBe(401);
-    const local = await session(origin);
+    // Behind a public origin the cookies carry its port, whichever door they came through.
+    const local = await session(origin, undefined, portOf(new URL(external)));
+    expect(local['X-Buddi-CSRF']).not.toBe('');
     expect((await fetch(`${origin}/api/session`, { headers: { ...local, ...proxy } })).status).toBe(401);
     const ticket = mintTicket(TOKEN, new Date());
     const response = await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' });
     expect(response.status).toBe(302);
     const pairs = response.headers.getSetCookie();
     expect(pairs.every((cookie) => cookie.includes('Secure') && cookie.includes('Max-Age=43200'))).toBe(true);
-    const csrf = pairs.find((value) => value.startsWith('buddi_csrf='))!.split(';')[0]!.slice('buddi_csrf='.length);
+    const csrfName = `${csrfCookieName(9443)}=`;
+    const csrf = pairs.find((value) => value.startsWith(csrfName))!.split(';')[0]!.slice(csrfName.length);
     const headers = { ...proxy, Cookie: pairs.map((value) => value.split(';')[0]).join('; '), 'X-Buddi-CSRF': csrf, Origin: external, 'Content-Type': 'application/json' };
     expect(await (await fetch(`${origin}/api/session`, { headers })).json()).toMatchObject({ scope: 'remote' });
     // The same link opens again within its five minutes (a browser prerenders,

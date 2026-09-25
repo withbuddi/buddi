@@ -61,7 +61,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Duplex } from 'node:stream';
 import { connect, type Socket } from 'node:net';
 import type { PreviewProvider, CoreToolContext, ToolRegistry } from '@buddi/core';
-import { CSRF_COOKIE, SESSION_COOKIE, cookieHeader, parseCookies, parseUrl } from './http.js';
+import { isBuddiCookie, cookieHeader, parseCookies, parseUrl } from './http.js';
 
 /** The route's own prefix. Everything below it is the app's. */
 export const PREVIEW_PREFIX = '/preview';
@@ -110,7 +110,7 @@ const HOP_BY_HOP = new Set([
 const NEVER_FORWARDED = new Set(['authorization', 'host', 'x-buddi-csrf']);
 
 /** Cookies that are buddi's and stop at this boundary, both directions. */
-const BUDDI_COOKIES = new Set([SESSION_COOKIE, CSRF_COOKIE, PREVIEW_COOKIE]);
+const isOwnCookie = (name: string): boolean => name === PREVIEW_COOKIE || isBuddiCookie(name);
 
 /** A header name, as RFC 9110 defines a token. */
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
@@ -312,7 +312,7 @@ export function forwardableCookies(header: string | undefined): string | undefin
     .map((part) => part.trim())
     .filter((part) => {
       const name = part.slice(0, part.indexOf('=') < 0 ? part.length : part.indexOf('=')).trim();
-      return part !== '' && !BUDDI_COOKIES.has(name);
+      return part !== '' && !isOwnCookie(name);
     });
   return kept.length > 0 ? kept.join('; ') : undefined;
 }
@@ -354,7 +354,7 @@ export function returnedResponseHeaders(
     if (hop.has(lower) || value === undefined) continue;
     if (lower === 'set-cookie') {
       const cookies = (Array.isArray(value) ? value : [value]).filter(
-        (cookie) => !BUDDI_COOKIES.has(cookie.slice(0, Math.max(0, cookie.indexOf('='))).trim()),
+        (cookie) => !isOwnCookie(cookie.slice(0, Math.max(0, cookie.indexOf('='))).trim()),
       );
       if (cookies.length > 0) out['set-cookie'] = cookies.map((cookie) => scopeCookiePath(cookie, prefix));
       continue;

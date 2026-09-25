@@ -19,7 +19,16 @@ import {
   webEnabled,
   webUrl,
 } from './config.js';
-import { cookieHeader, isLoopbackAddress, parseCookies, requestScope } from './http.js';
+import {
+  cookieHeader,
+  csrfCookieName,
+  isBuddiCookie,
+  isLoopbackAddress,
+  parseCookies,
+  portOf,
+  requestScope,
+  sessionCookieName,
+} from './http.js';
 import {
   LOCAL_SESSION_TTL_MS,
   RateLimiter,
@@ -295,6 +304,30 @@ describe('cookies', () => {
   it('parse back', () => {
     expect(parseCookies('a=1; b=two%20words; junk')).toEqual({ a: '1', b: 'two words' });
     expect(parseCookies(undefined)).toEqual({});
+  });
+
+  it('are named after a port, so two dashboards on one host keep apart', () => {
+    expect(sessionCookieName(4317)).toBe('buddi_session_4317');
+    expect(csrfCookieName(4317)).toBe('buddi_csrf_4317');
+    expect(sessionCookieName(4318)).not.toBe(sessionCookieName(4317));
+  });
+
+  it('recognise buddi`s own, with or without a port, and nothing else', () => {
+    for (const name of ['buddi_session', 'buddi_csrf', 'buddi_session_4317', 'buddi_csrf_9443']) {
+      expect(isBuddiCookie(name)).toBe(true);
+    }
+    for (const name of ['buddi_session_', 'buddi_session_x', 'buddi_sessions', 'buddi_csrf_1a', 'my_buddi_csrf', 'buddi_preview', 'sid']) {
+      expect(isBuddiCookie(name)).toBe(false);
+    }
+  });
+
+  it('take the port a URL implies, defaults included', () => {
+    expect(portOf(new URL('https://host.example'))).toBe(443);
+    expect(portOf(new URL('http://host.example'))).toBe(80);
+    expect(portOf(new URL('https://host.example:9443'))).toBe(9443);
+    expect(portOf(new URL('http://127.0.0.1:4317/api/session'))).toBe(4317);
+    // A default spelled out is still the default: URL drops it.
+    expect(portOf(new URL('https://host.example:443'))).toBe(443);
   });
 });
 

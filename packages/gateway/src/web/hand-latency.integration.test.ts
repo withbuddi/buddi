@@ -23,6 +23,7 @@ import { ToolRegistry, guardedLookup, type AgentCatalog, type CoreToolContext } 
 import { BrowserManager, PlaywrightDriver, PlaywrightHost, commandSchema } from '@buddi/tool-browser';
 import { DEFAULT_POLICY } from '@buddi/tool-web';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 
 const enabled = process.env.BUDDI_HAND_BENCH === '1';
 const TOKEN = 'fixture-hand-latency-token';
@@ -166,7 +167,7 @@ describe.skipIf(!enabled)('remote hand latency, end to end', () => {
     origin = `http://127.0.0.1:${app.port}`;
     const res = await fetch(`${origin}/api/session`, { redirect: 'manual' });
     const pairs = res.headers.getSetCookie().map((line) => line.split(';')[0]!);
-    csrf = pairs.find((p) => p.startsWith('buddi_csrf='))?.slice('buddi_csrf='.length) ?? '';
+    csrf = pairs.find((p) => p.startsWith(`${csrfCookieName(app.port)}=`))?.slice(`${csrfCookieName(app.port)}=`.length) ?? '';
     cookie = pairs.join('; ');
   }, 120_000);
 

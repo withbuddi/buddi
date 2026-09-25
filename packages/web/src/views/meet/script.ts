@@ -138,6 +138,8 @@ export const SCRIPT = {
   },
   /** Over the board, above the card. */
   tagline: 'Setting up, on this Mac.',
+  /** The same line where the machine is not a Mac — a Linux server, say. */
+  taglineElsewhere: 'Setting up, on this computer.',
   handover: {
     /** The one thing buddi says while the assistant is being woken. */
     waiting: 'One moment.',

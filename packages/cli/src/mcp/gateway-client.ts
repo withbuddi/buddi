@@ -15,9 +15,10 @@
  * becomes an approval on the gateway's side.
  */
 import {
-  CSRF_COOKIE,
+  csrfCookieName,
   CSRF_HEADER,
-  SESSION_COOKIE,
+  sessionCookieName,
+  portOf,
   defaultHttpTransport,
   ensureWebToken,
   isLoopback,
@@ -70,7 +71,7 @@ export class GatewayClient implements Gateway {
   readonly #ticket: (() => Promise<string>) | undefined;
   readonly #transport: HttpTransport;
   /** The session this client holds: its cookie, and the CSRF value it pairs with. */
-  #session: { id: string; csrf: string } | undefined;
+  #session: { id: string; csrf: string; cookie: string } | undefined;
   #signedIn: Promise<void> | undefined;
 
   constructor(opts: GatewayClientOptions) {
@@ -106,7 +107,7 @@ export class GatewayClient implements Gateway {
   async #request(path: string, method: string, body?: string, retried = false): Promise<TransportResponse> {
     await this.#signIn();
     const session = this.#session!;
-    const headers: Record<string, string> = { cookie: `${SESSION_COOKIE}=${session.id}; ${CSRF_COOKIE}=${session.csrf}` };
+    const headers: Record<string, string> = { cookie: `${session.cookie}=${session.id}; ${csrfCookieName(portOf(new URL(this.#base)))}=${session.csrf}` };
     if (method !== 'GET') {
       headers['content-type'] = 'application/json';
       headers.origin = this.#base;
@@ -133,7 +134,7 @@ export class GatewayClient implements Gateway {
     this.#signedIn ??= (async () => {
       const cookieOf = (res: TransportResponse): string | undefined => {
         const line = res.headers.get('set-cookie') ?? '';
-        const match = new RegExp(`(?:^|[;,]\\s*)${SESSION_COOKIE}=([^;]+)`).exec(line);
+        const match = new RegExp(`(?:^|[;,]\\s*)${sessionCookieName(portOf(new URL(this.#base)))}=([^;]+)`).exec(line);
         return match?.[1];
       };
       let id: string | undefined;
@@ -141,13 +142,13 @@ export class GatewayClient implements Gateway {
         const exchanged = await this.#send(`/?t=${encodeURIComponent(await this.#ticket())}`, 'GET', {});
         id = cookieOf(exchanged);
       }
-      const res = await this.#send('/api/session', 'GET', id ? { cookie: `${SESSION_COOKIE}=${id}` } : {});
+      const res = await this.#send('/api/session', 'GET', id ? { cookie: `${sessionCookieName(portOf(new URL(this.#base)))}=${id}` } : {});
       id = cookieOf(res) ?? id;
       const body = res.ok ? ((await res.json().catch(() => null)) as { csrf?: unknown } | null) : null;
       if (!id || typeof body?.csrf !== 'string') {
         throw new GatewayError(res.status, 'buddi answered but would not open a session for this client. Is the dashboard bound somewhere `buddi mcp` cannot sign in?');
       }
-      this.#session = { id, csrf: body.csrf };
+      this.#session = { id, csrf: body.csrf, cookie: sessionCookieName(portOf(new URL(this.#base))) };
     })().catch((err: unknown) => {
       this.#signedIn = undefined;
       throw err;

@@ -14,6 +14,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { z } from 'zod';
 import { afterEach, expect, it } from 'vitest';
 import { PREVIEW_PORT_ATTEMPTS, startWebServer, type WebServer } from './server.js';
+import { csrfCookieName, sessionCookieName } from './http.js';
 import {
   MAX_LIVE_COOKIES,
   MAX_LIVE_TICKETS,
@@ -175,11 +176,22 @@ it('scopes a cookie into the prefix, whatever path the app asked for', () => {
 });
 
 it('keeps buddi`s own cookies on this side of the proxy, and passes the app`s', () => {
-  expect(forwardableCookies('buddi_session=a; sid=b; buddi_csrf=c; buddi_preview=d')).toBe('sid=b');
-  expect(forwardableCookies('buddi_session=a')).toBeUndefined();
+  // Named after any port (a browser sends every dashboard's on this host), or
+  // unsuffixed as an older buddi named them: none of them is the app's.
+  expect(
+    forwardableCookies(
+      `${sessionCookieName(4317)}=a; sid=b; ${csrfCookieName(4317)}=c; buddi_preview=d; ${sessionCookieName(9443)}=e`,
+    ),
+  ).toBe('sid=b');
+  expect(forwardableCookies('buddi_session=a; buddi_csrf=b')).toBeUndefined();
+  expect(forwardableCookies(`${sessionCookieName(4317)}=a`)).toBeUndefined();
+  // Only buddi's exact names: a lookalike is the app's own.
+  expect(forwardableCookies('buddi_session_x=a; buddi_sessions=b; my_buddi_csrf=c')).toBe(
+    'buddi_session_x=a; buddi_sessions=b; my_buddi_csrf=c',
+  );
   const headers = forwardedRequestHeaders(
     {
-      cookie: 'buddi_session=secret; theirs=1',
+      cookie: `${sessionCookieName(4317)}=secret; theirs=1; ${csrfCookieName(4317)}=secret`,
       authorization: 'Bearer secret',
       'x-buddi-csrf': 'secret',
       // A `Connection` header nominates its own hop-by-hop fields; they go no
@@ -202,7 +214,14 @@ it('keeps buddi`s own cookies on this side of the proxy, and passes the app`s', 
 
 it('drops an upstream cookie that is named after one of buddi`s', () => {
   const headers = returnedResponseHeaders(
-    { 'set-cookie': ['buddi_session=junk; Path=/', 'theirs=1; Path=/'] },
+    {
+      'set-cookie': [
+        `${sessionCookieName(4317)}=junk; Path=/`,
+        'buddi_session=junk; Path=/',
+        `${csrfCookieName(4317)}=junk; Path=/`,
+        'theirs=1; Path=/',
+      ],
+    },
     '/preview/developer/web',
     'http://127.0.0.1:4317',
   );
@@ -450,7 +469,7 @@ it('needs its own cookie, and never accepts the dashboard`s', async () => {
   // port — cookies do not distinguish them. It buys nothing here.
   const session = await fetch(`${web.origin}/api/session`);
   const dashboardCookies = session.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
-  expect(dashboardCookies).toContain('buddi_session=');
+  expect(dashboardCookies).toContain(`${sessionCookieName(Number(new URL(web.origin).port))}=`);
   expect(
     (await fetch(`${web.previewOrigin}/preview/developer/web/`, { headers: { Cookie: dashboardCookies } })).status,
   ).toBe(401);

@@ -280,6 +280,11 @@ export interface MeetProps {
 }
 
 export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
+  // The machine buddi runs on, from the gateway: the browser may be elsewhere.
+  const [platform, setPlatform] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    api.session().then((s) => setPlatform(s.platform)).catch(() => {});
+  }, []);
   const [answers, setAnswers] = useState<MeetAnswers>({});
   const [open, setOpen] = useState<QuestionId | null>(null);
   const [accounts, setAccounts] = useState<ProviderAccountsView | undefined>(undefined);
@@ -487,7 +492,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
           <Mark size="lg" />
           <span className="meet-head-who">
             <span className="meet-head-name">buddi</span>
-            <span className="meet-head-line">{SCRIPT.tagline}</span>
+            <span className="meet-head-line">{platform === undefined || platform === 'darwin' ? SCRIPT.tagline : SCRIPT.taglineElsewhere}</span>
           </span>
         </header>
 
@@ -961,6 +966,15 @@ function BrainAsk(props: QuestionProps): JSX.Element {
       const saved = await api.saveProviderAccount(body);
       const verdict = await api.testProviderAccount(saved.id);
       if (verdict.state !== 'connected') {
+        // The account was saved so it could be tested; a test that failed
+        // leaves nothing behind, or every retry would add one more copy of
+        // an account that does not work.
+        try {
+          const listed = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id);
+          if (listed) await api.removeProviderAccount(saved.id, listed.revision);
+        } catch {
+          /* the message below is the thing that matters; Settings can still remove it */
+        }
         setProblem(verdict.message);
         return;
       }
@@ -997,6 +1011,11 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         <Buddi>
           <Said>{SCRIPT.brain.model.ask}</Said>
         </Buddi>
+        {problem ? (
+          <Buddi>
+            <Said>{problem}</Said>
+          </Buddi>
+        ) : null}
         <ModelChoice
           busy={busy}
           models={choice.models}

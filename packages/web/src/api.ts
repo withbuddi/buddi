@@ -17,7 +17,14 @@ import type {
   GroupView,
 } from './chat/types';
 
-export const CSRF_COOKIE = 'buddi_csrf';
+/**
+ * The CSRF cookie is named after the port (`buddi_csrf_<port>`), because a
+ * browser keeps one cookie of a name per host and ignores the port — two
+ * buddis on one machine would otherwise read each other's. This page's is the
+ * one named after its own port; behind a proxy whose port the gateway did not
+ * know, the single `buddi_csrf*` cookie on this host is it.
+ */
+export const CSRF_COOKIE_PREFIX = 'buddi_csrf';
 export const CSRF_HEADER = 'x-buddi-csrf';
 /** A window event: the roster changed (a picture, say); re-read it now rather than in 15 s. */
 export const AGENTS_CHANGED = 'buddi:agents-changed';
@@ -34,8 +41,11 @@ export class ApiError extends Error {
 }
 
 export function csrfToken(): string {
-  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`));
-  return match?.[1] ? decodeURIComponent(match[1]) : '';
+  const port = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
+  const own = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE_PREFIX}_${port}=([^;]*)`));
+  if (own?.[1]) return decodeURIComponent(own[1]);
+  const any = [...document.cookie.matchAll(new RegExp(`(?:^|; )${CSRF_COOKIE_PREFIX}(?:_\\d+)?=([^;]*)`, 'g'))];
+  return any.length === 1 && any[0]?.[1] ? decodeURIComponent(any[0][1]) : '';
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -1327,7 +1337,7 @@ export const api = {
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),
-  session: () => get<{ csrf: string; timezone: string; host: string; port: number; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
+  session: () => get<{ csrf: string; timezone: string; host: string; port: number; platform?: string; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
   eventKinds: () => get<{ kinds: Array<{ kind: string; count: number }> }>('/events/kinds'),

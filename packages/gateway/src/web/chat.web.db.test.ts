@@ -33,6 +33,7 @@ import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { createCoreArtifactStore } from '../telegram/attachments.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 
 const databaseUrl = await testDatabaseUrl();
@@ -225,7 +226,7 @@ class Client {
   constructor(readonly base: string) {}
 
   get csrf(): string {
-    return this.cookies.get('buddi_csrf') ?? '';
+    return this.cookies.get(csrfCookieName(portOf(new URL(this.base)))) ?? '';
   }
 
   header(): Record<string, string> {

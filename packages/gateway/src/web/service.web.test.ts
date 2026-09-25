@@ -10,6 +10,7 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -51,7 +52,7 @@ it('reports the supervisor and proxies its actions behind the session and CSRF g
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
 
   const view = await fetch(`${origin}/api/service`, { headers });
@@ -87,7 +88,7 @@ it('has nothing to control without a supervisor, and says so rather than guessin
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
   expect(await (await fetch(`${origin}/api/service`, { headers })).json()).toEqual({ supervised: false });
   expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(404);
@@ -107,7 +108,7 @@ it('reports a launchd job as supervised, with nothing to control from here', asy
   const origin = `http://127.0.0.1:${app.port}`;
   const session = await fetch(`${origin}/api/session`);
   const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith('buddi_csrf='))!.slice('buddi_csrf='.length);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
   expect(await (await fetch(`${origin}/api/service`, { headers })).json()).toEqual({ supervised: true, supervisor: 'launchd', label: 'com.buddi.serve' });
   expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(404);

@@ -37,6 +37,7 @@ import {
 } from './profile.js';
 import { mintTicket } from './token.js';
 import { createWebApp } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 
 const TOKEN = 'a-test-dashboard-token-long-enough';
 
@@ -348,7 +349,7 @@ describe('an agent profile', () => {
       }
       return {
         cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
-        csrf: jar.get('buddi_csrf') as string,
+        csrf: jar.get(csrfCookieName(portOf(new URL(base)))) as string,
       };
     };
 

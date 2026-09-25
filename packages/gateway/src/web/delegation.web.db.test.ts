@@ -40,6 +40,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import { bindDelegation, createDelegationManifest } from '../agents/delegation.js';
 import { mintTicket } from './token.js';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName, portOf } from './http.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -178,7 +179,7 @@ class Client {
   post(p: string, body: unknown = {}): Promise<Response> {
     return this.get(p, {
       method: 'POST', body: JSON.stringify(body),
-      headers: { 'content-type': 'application/json', 'x-buddi-csrf': this.cookies.get('buddi_csrf') ?? '', origin: this.base },
+      headers: { 'content-type': 'application/json', 'x-buddi-csrf': this.cookies.get(csrfCookieName(portOf(new URL(this.base)))) ?? '', origin: this.base },
     });
   }
 }

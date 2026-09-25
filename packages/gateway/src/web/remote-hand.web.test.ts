@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import type { BrowserController, BrowserHand, BrowserStatus, HandFrame, HandInput } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
+import { csrfCookieName } from './http.js';
 import { packFrame } from './remote-hand.js';
 
 /** The dashboard's half of `packFrame`: one message, header then JPEG. */
@@ -63,7 +64,7 @@ async function setup(browser: BrowserController, log?: (line: string) => void) {
   const origin = `http://127.0.0.1:${app.port}`;
   const res = await fetch(`${origin}/api/session`, { redirect: 'manual' });
   const pairs = res.headers.getSetCookie().map((line) => line.split(';')[0]!);
-  const csrf = pairs.find((p) => p.startsWith('buddi_csrf='))?.slice('buddi_csrf='.length) ?? '';
+  const csrf = pairs.find((p) => p.startsWith(`${csrfCookieName(app.port)}=`))?.slice(`${csrfCookieName(app.port)}=`.length) ?? '';
   const cookie = pairs.join('; ');
   return { app, origin, csrf, cookie,
     headers: { Cookie: cookie, 'X-Buddi-CSRF': csrf, Origin: origin, 'Content-Type': 'application/json' },

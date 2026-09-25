@@ -6,8 +6,28 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SessionScope } from './sessions.js';
 
-export const SESSION_COOKIE = 'buddi_session';
-export const CSRF_COOKIE = 'buddi_csrf';
+/**
+ * The cookie names carry the port, because a browser scopes a cookie to a
+ * host and ignores the port: two buddis on one machine — the checkout on 4317
+ * and a packaged install on 4417, or a tunnel to another machine's — would
+ * otherwise overwrite each other's `buddi_session` on `127.0.0.1` every time
+ * one of them re-issued it, and the other would answer 401 to a browser that
+ * had just signed in. The port is the public one when the dashboard is
+ * published behind a proxy (`BUDDI_WEB_PUBLIC_ORIGIN`), so the page can find
+ * its own CSRF cookie by `location.port`; the bound one otherwise.
+ */
+export const SESSION_COOKIE_PREFIX = 'buddi_session';
+export const CSRF_COOKIE_PREFIX = 'buddi_csrf';
+export function sessionCookieName(port: number): string { return `${SESSION_COOKIE_PREFIX}_${port}`; }
+export function csrfCookieName(port: number): string { return `${CSRF_COOKIE_PREFIX}_${port}`; }
+/** Whether a cookie name is one of buddi's own, whatever port it carries. */
+export function isBuddiCookie(name: string): boolean {
+  return new RegExp(`^(${SESSION_COOKIE_PREFIX}|${CSRF_COOKIE_PREFIX})(_\\d+)?$`).test(name);
+}
+/** The port a URL implies, `https` and `http` defaults included. */
+export function portOf(url: URL): number {
+  return Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+}
 export const CSRF_HEADER = 'x-buddi-csrf';
 
 /** The largest body any write accepts. Every one of them is a small object. */
