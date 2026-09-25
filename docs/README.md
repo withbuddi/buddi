@@ -1,8 +1,8 @@
 # Docs
 
 `docs/` holds reference for what is built, each file starting `Status:
-reference, <date>`. [`docs/specs/`](specs/) holds accepted specifications not
-fully built. [`docs/ideas/`](ideas/) holds proposals only; an accepted idea
+reference, <date>`. [`docs/specs/`](specs/) holds accepted specifications, built
+or not; a built one stays there until it is folded into a reference page. [`docs/ideas/`](ideas/) holds proposals only; an accepted idea
 moves to `specs/`, and a built one is folded into a reference page here and
 deleted.
 
@@ -22,12 +22,22 @@ order of what comes next.
 - [Writing a plugin](plugins.md)
 - [Using buddi from Claude Code](mcp.md) (`buddi mcp`)
 
-## Specs (accepted, not fully built)
+## Specs, built
 
-- [Email](specs/email.md) — steps 1 and 2 built, step 3 in progress.
-- [Developer](specs/developer.md), [Messengers](specs/messengers.md),
-  [Learning](specs/learning.md), [Owner secrets](specs/owner-secrets.md) —
-  accepted, not started.
+These specs are fully built; each is still the reference for its feature
+until it is folded into a page above.
+
+- [Email](specs/email.md) — all six steps.
+- [Owner secrets](specs/owner-secrets.md) — built and merged 2026-09-24.
+- [Plugin host API](specs/plugin-host-api.md) — built and merged 2026-09-24.
+- [Learning](specs/learning.md) — built 2026-09-23.
+- [Goals](specs/goals.md), [Plugin pages](specs/plugin-pages.md),
+  [MCP server](specs/mcp.md).
+- [Developer](specs/developer.md) — built; the plugin lives in buddi-plugins.
+
+## Specs (accepted, not started)
+
+- [Messengers](specs/messengers.md) — last on the roadmap.
 
 ## Ideas (proposals only)
 

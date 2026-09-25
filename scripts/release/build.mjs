@@ -45,6 +45,12 @@ await cp(path.join(root, 'packages/web/dist'), path.join(stage, 'packages/web/di
 // imports it, Chrome loads it.
 await cp(path.join(root, 'packages/extension/dist'), path.join(stage, 'extension'), { recursive: true });
 for (const asset of ['examples/agents', 'examples/skills']) await cp(path.join(root, asset), path.join(stage, asset), { recursive: true });
+// The front page npm shows, and the license when there is one. npm packs both
+// from the package root whatever `files` says, so copying them is enough.
+const { existsSync } = await import('node:fs');
+const hasLicense = existsSync(path.join(root, 'LICENSE'));
+await cp(path.join(root, 'README.md'), path.join(stage, 'README.md'));
+if (hasLicense) await cp(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
 // The launcher, the supervisor and the managed cluster ship as one built
 // package (@buddi/install), not as loose scripts copied out of this checkout.
 await chmod(path.join(stage, LAUNCHER), 0o755);
@@ -63,6 +69,10 @@ const dependencies = Object.fromEntries(packages.map(({ dir, pkg }) => [pkg.name
 Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
 const manifest = {
   name: '@withbuddi/buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
+  repository: { type: 'git', url: 'https://github.com/withbuddi/buddi' },
+  homepage: 'https://github.com/withbuddi/buddi#readme',
+  bugs: 'https://github.com/withbuddi/buddi/issues',
+  ...(hasLicense ? { license: 'SEE LICENSE IN LICENSE' } : {}),
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
   files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),
