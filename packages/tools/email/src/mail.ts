@@ -43,8 +43,8 @@ const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
  * handled by `normalizeAddress`; what is left is the two forms that reach the
  * same inbox while spelling it differently:
  *
- *  - **plus addressing** (`janedoe+bills@gmail.com`), which every major provider
- *    routes to `owner@example.com`, and which a correspondent may well have in
+ *  - **plus addressing** (`janedoe+cdc@gmail.com`), which every major provider
+ *    routes to `janedoe@gmail.com`, and which a correspondent may well have in
  *    their address book;
  *  - **Gmail's dots and its second domain** (`jane.doe@googlemail.com`), which
  *    Gmail itself treats as the same account.

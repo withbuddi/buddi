@@ -135,7 +135,7 @@ suite('email tools (postgres)', () => {
         to: ['owner@example.test', 'successor@client.test', 'colleague@client.test'],
         cc: ['director@client.test', 'Owner+web@example.test'],
         subject: 'Handover of the website',
-        bodyText: 'I am retiring. remy and noor take over from me.',
+        bodyText: 'I am retiring. Remy and Noor take over from me.',
         flags: ['\\Seen'],
         date: new Date('2026-09-11T08:00:00Z'),
       }),

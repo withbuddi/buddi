@@ -400,9 +400,9 @@ describe('the owner\'s own addresses', () => {
 describe('who a reply goes to', () => {
   const original = {
     from: 'Dorothée <TDorothee22@Gmail.com>',
-    to: ['owner@example.com', 'remy@example.test', 'noor@example.test'],
-    cc: ['successor@example.test', 'Janedoe+bills@gmail.com'],
-    owner: ['owner@example.com'],
+    to: ['janedoe@gmail.com', 'remy@example.test', 'noor@example.test'],
+    cc: ['successor@example.test', 'Janedoe+cdc@gmail.com'],
+    owner: ['janedoe@gmail.com'],
   };
 
   it('goes to the sender alone when nothing is asked for', () => {
@@ -440,10 +440,10 @@ describe('who a reply goes to', () => {
   it("never puts the owner on a reply, in any form of his address", () => {
     const reply = replyRecipients({ ...original, audience: 'everyone' });
     const everyone = [...reply.to, ...reply.cc, ...reply.bcc];
-    expect(everyone).not.toContain('owner@example.com');
-    expect(everyone).not.toContain('Janedoe+bills@gmail.com');
-    expect(everyone.some((a) => mailboxKey(a) === 'owner@example.com')).toBe(false);
-    expect(reply.excludedOwn).toEqual(['owner@example.com', 'janedoe+bills@gmail.com']);
+    expect(everyone).not.toContain('janedoe@gmail.com');
+    expect(everyone).not.toContain('Janedoe+cdc@gmail.com');
+    expect(everyone.some((a) => mailboxKey(a) === 'janedoe@gmail.com')).toBe(false);
+    expect(reply.excludedOwn).toEqual(['janedoe@gmail.com', 'janedoe+cdc@gmail.com']);
   });
 
   it('never carries a blind copy, whatever is asked for', () => {
@@ -469,7 +469,7 @@ describe('who a reply goes to', () => {
     const reply = replyRecipients({
       ...original,
       alsoTo: ['successor@example.test'],
-      alsoCc: ['watcher@example.test', 'owner@example.com'],
+      alsoCc: ['watcher@example.test', 'janedoe@gmail.com'],
     });
     expect(reply.to).toEqual(['tdorothee22@gmail.com', 'successor@example.test']);
     expect(reply.cc).toEqual(['watcher@example.test']);
@@ -481,8 +481,8 @@ describe('who a reply goes to', () => {
   it('has nobody to reply to when the owner is the only address on it', () => {
     const reply = replyRecipients({
       from: 'janedoe+self@gmail.com',
-      to: ['owner@example.com'],
-      owner: ['owner@example.com'],
+      to: ['janedoe@gmail.com'],
+      owner: ['janedoe@gmail.com'],
       audience: 'everyone',
     });
     expect(reply.to).toEqual([]);
@@ -508,9 +508,9 @@ describe('who a reply goes to', () => {
   it('counts nobody twice, and never the owner or the sender, among the others', () => {
     const reply = replyRecipients({
       from: 'her@example.test',
-      to: ['HER@example.test', 'janedoe+bills@gmail.com', 'him@example.test'],
+      to: ['HER@example.test', 'janedoe+cdc@gmail.com', 'him@example.test'],
       cc: ['him@example.test', 'jane.doe@googlemail.com'],
-      owner: ['owner@example.com'],
+      owner: ['janedoe@gmail.com'],
     });
     expect(reply.othersOnOriginal).toEqual(['him@example.test']);
   });
@@ -518,8 +518,8 @@ describe('who a reply goes to', () => {
   it('says there is no one else when the message was only between the two of them', () => {
     const reply = replyRecipients({
       from: 'her@example.test',
-      to: ['owner@example.com'],
-      owner: ['owner@example.com'],
+      to: ['janedoe@gmail.com'],
+      owner: ['janedoe@gmail.com'],
     });
     expect(reply.othersOnOriginal).toEqual([]);
   });
