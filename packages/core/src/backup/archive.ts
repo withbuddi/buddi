@@ -13,6 +13,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createGunzip } from 'node:zlib';
 import { DIR_MODE, memberPathProblem } from './manifest.js';
 
 /** sha256 of a file, streamed — an artifact may be large. */
@@ -113,17 +114,90 @@ export async function createArchive(stageDir: string, out: string): Promise<void
   }
 }
 
-/** Member paths inside the archive, normalised without the leading `./`. */
-export async function listMembers(archive: string): Promise<string[]> {
-  const res = await spawnCapture('tar', ['-tzf', archive]);
-  if (res.code !== 0) {
-    throw new TarError(`tar could not read ${archive} (exit ${res.code}): ${res.stderr.trim()}`);
+/**
+ * The archive's members as its headers name them: read from the tar stream
+ * itself, not from `tar -t`'s listing, because GNU tar silently strips a
+ * leading `../` or `/` from what it prints (and from what it extracts) while
+ * bsdtar prints the name as stored — the one check that exists to catch such
+ * a name cannot depend on which tar is installed. ustar names and prefixes,
+ * GNU long names (`L`) and pax `path` records are all honoured, so the name
+ * seen here is the name any tar would try to write.
+ */
+export interface ArchiveMember {
+  name: string;
+  /** The typeflag byte as a character: `0` or NUL a file, `5` a directory, `2` a symlink, `1` a hard link. */
+  type: string;
+}
+
+const BLOCK = 512;
+
+function octal(field: Buffer): number {
+  const text = field.toString('latin1').replace(/\0.*$/s, '').trim();
+  if (text === '') return 0;
+  // GNU base-256 for sizes over 8 GB: the high bit set on the first byte.
+  if ((field[0]! & 0x80) !== 0) {
+    let value = 0;
+    for (const byte of field.subarray(1)) value = value * 256 + byte;
+    return value;
   }
-  return res.stdout
-    .toString('utf8')
-    .split('\n')
-    .map((l) => l.replace(/^\.\//, '').trim())
-    .filter((l) => l !== '' && !l.endsWith('/'));
+  return parseInt(text, 8) || 0;
+}
+
+function field(block: Buffer, offset: number, length: number): string {
+  return block.subarray(offset, offset + length).toString('utf8').replace(/\0.*$/s, '');
+}
+
+export async function readMembers(archive: string): Promise<ArchiveMember[]> {
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve, reject) => {
+    createReadStream(archive)
+      .on('error', reject)
+      .pipe(createGunzip())
+      .on('error', (err) => reject(new TarError(`could not read ${archive}: ${err.message}`)))
+      .on('data', (chunk: Buffer) => chunks.push(chunk))
+      .on('end', resolve);
+  });
+  const bytes = Buffer.concat(chunks);
+  const members: ArchiveMember[] = [];
+  let at = 0;
+  let longName: string | undefined;
+  let paxPath: string | undefined;
+  while (at + BLOCK <= bytes.length) {
+    const block = bytes.subarray(at, at + BLOCK);
+    at += BLOCK;
+    if (block.every((b) => b === 0)) continue; // end-of-archive padding
+    const size = octal(block.subarray(124, 12 + 124));
+    const type = String.fromCharCode(block[156]!) || '0';
+    const dataBlocks = Math.ceil(size / BLOCK);
+    const data = bytes.subarray(at, at + size);
+    at += dataBlocks * BLOCK;
+    if (type === 'L') { longName = data.toString('utf8').replace(/\0+$/, ''); continue; }
+    if (type === 'x' || type === 'g') {
+      // pax records: `<len> <key>=<value>\n`; only `path` matters here.
+      for (const record of data.toString('utf8').split('\n')) {
+        const m = /^\d+ path=(.*)$/.exec(record);
+        if (m && type === 'x') paxPath = m[1];
+      }
+      continue;
+    }
+    let name = field(block, 0, 100);
+    if (field(block, 257, 6) === 'ustar') {
+      const prefix = field(block, 345, 155);
+      if (prefix !== '') name = `${prefix}/${name}`;
+    }
+    if (longName !== undefined) { name = longName; longName = undefined; }
+    if (paxPath !== undefined) { name = paxPath; paxPath = undefined; }
+    members.push({ name, type: type === '\0' ? '0' : type });
+  }
+  return members;
+}
+
+/** Member names, `./` stripped, directories left out — what `verify` compares. */
+export async function listMembers(archive: string): Promise<string[]> {
+  return (await readMembers(archive))
+    .filter((m) => m.type !== '5' && !m.name.endsWith('/'))
+    .map((m) => m.name.replace(/^\.\//, '').trim())
+    .filter((name) => name !== '' && name !== '.');
 }
 
 /**
@@ -139,27 +213,15 @@ export async function listMembers(archive: string): Promise<string[]> {
  * and directories, so a link in one did not come from `createBackup`.
  */
 export async function archiveSafetyProblems(archive: string): Promise<string[]> {
-  const res = await spawnCapture('tar', ['-tvzf', archive]);
-  if (res.code !== 0) {
-    throw new TarError(`tar could not read ${archive} (exit ${res.code}): ${res.stderr.trim()}`);
-  }
   const problems: string[] = [];
   let links = 0;
-  for (const raw of res.stdout.toString('utf8').split('\n')) {
-    const line = raw.trimEnd();
-    if (line === '') continue;
-    // The mode column: `l` is a symlink, `h` a hard link in GNU tar's listing.
-    const kind = line[0];
-    if (kind === 'l' || kind === 'h') {
+  for (const member of await readMembers(archive)) {
+    if (member.type === '1' || member.type === '2') {
       links += 1;
       continue;
     }
-    // The member name is the rest of the line after the timestamp. Both bsdtar
-    // and GNU tar put it last, so the tail after the date is the path.
-    const member = memberNameIn(line);
-    if (member === null) continue;
-    const relative = member.replace(/^\.\//, '').replace(/\/$/, '');
-    // `./` itself: the archive's own root, which every tar lists.
+    const relative = member.name.replace(/^\.\//, '').replace(/\/$/, '');
+    // `./` itself: the archive's own root, which every tar writes.
     if (relative === '' || relative === '.') continue;
     const problem = memberPathProblem(relative);
     if (problem !== null) problems.push(problem);
@@ -168,17 +230,6 @@ export async function archiveSafetyProblems(archive: string): Promise<string[]> 
     problems.push(`${links} link(s): a buddi archive holds regular files only`);
   }
   return problems;
-}
-
-/**
- * The path out of one `tar -tv` line.
- *
- * The columns before it differ between bsdtar and GNU tar, but both end with
- * the name, and both put a time field immediately before it.
- */
-function memberNameIn(line: string): string | null {
-  const match = /(?:\d{2}:\d{2}(?::\d{2})?|\s\d{4})\s+(.+)$/.exec(line);
-  return match?.[1] ?? null;
 }
 
 /** One member's bytes, without unpacking the rest. */
