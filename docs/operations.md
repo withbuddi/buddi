@@ -33,7 +33,7 @@ installation** and they keep their data in different places, so every row below
 answers twice:
 
 - a **developer checkout** — `git clone`, Docker Desktop, `buddi db up`;
-- a **packaged install** — `npm install -g buddi`, where the supervisor owns a
+- a **packaged install** — `npm install -g @withbuddi/buddi`, where the supervisor owns a
   bundled Postgres and everything sits under one data directory, `<data>`:
   `~/Library/Application Support/buddi` on macOS,
   `${XDG_DATA_HOME:-~/.local/share}/buddi` on Linux, `%LOCALAPPDATA%\buddi` on

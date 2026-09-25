@@ -30,7 +30,7 @@ import {
 async function installation(version = '0.1.0'): Promise<ReadyContext> {
   const root = await mkdtemp(path.join(tmpdir(), 'buddi-root-'));
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-data-'));
-  await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'buddi', version }));
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: '@withbuddi/buddi', version }));
   return { root, data, env: {}, state: { version: 1, database: 'managed', webPort: 4317, dbPort: 5555, phase: 'ready' } };
 }
 
@@ -51,8 +51,8 @@ function backupControl(overrides: Partial<BackupControl> = {}): BackupControl {
 /** The registry, as a transport. No test in this file touches the network. */
 function registry(version: string): (url: string) => Promise<{ status: number; json: () => Promise<unknown> }> {
   return async (url: string) => {
-    expect(url).toBe('https://registry.example/buddi/latest');
-    return { status: 200, json: async () => ({ name: 'buddi', version }) };
+    expect(url).toBe('https://registry.example/%40withbuddi%2Fbuddi/latest');
+    return { status: 200, json: async () => ({ name: '@withbuddi/buddi', version }) };
   };
 }
 
@@ -178,6 +178,9 @@ describe('the check', () => {
 describe('where npm is told to install', () => {
   test('is read off the install root, never off npm\'s own prefix', () => {
     expect(installTarget('/opt/homebrew/lib/node_modules/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
+    // The scoped name the package is published under sits one level deeper.
+    expect(installTarget('/opt/homebrew/lib/node_modules/@withbuddi/buddi')).toEqual({ prefix: '/opt/homebrew', global: true });
+    expect(installTarget('/tmp/smoke/node_modules/@withbuddi/buddi').prefix).toBe('/tmp/smoke');
     expect(installArgs('buddi@0.1.1', { registry: 'https://r.example', root: '/opt/homebrew/lib/node_modules/buddi' }))
       .toEqual(['install', '-g', '--prefix', '/opt/homebrew', 'buddi@0.1.1', '--registry', 'https://r.example', '--ignore-scripts', '--no-audit', '--no-fund']);
     // What the release smoke makes: a plain tree, upgraded in place.
@@ -295,7 +298,7 @@ describe('an upgrade', () => {
     expect(job.phases).toEqual(['starting', 'backup', 'stopping', 'installing', 'restarting']);
     expect(stopGateway).toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
-    expect(install).toHaveBeenCalledWith('buddi@0.1.0', { registry: 'https://registry.example', root: ctx.root, target: { prefix: path.dirname(ctx.root), global: false } });
+    expect(install).toHaveBeenCalledWith('@withbuddi/buddi@0.1.0', { registry: 'https://registry.example', root: ctx.root, target: { prefix: path.dirname(ctx.root), global: false } });
     expect(restart).toHaveBeenCalled();
     // The point of no return, on disk before it is taken.
     const state = JSON.parse(await readFile(path.join(ctx.data, 'installation.json'), 'utf8')) as typeof ctx.state;
@@ -327,7 +330,7 @@ describe('an upgrade', () => {
     const { upgrade, install } = service(ctx);
     // Nothing was checked yet, so starting an upgrade with no version asks.
     await settled(upgrade, (upgrade.start() as BackupJob).id);
-    expect(install).toHaveBeenCalledWith('buddi@0.1.1', expect.anything());
+    expect(install).toHaveBeenCalledWith('@withbuddi/buddi@0.1.1', expect.anything());
     // And what it resolved to is what the history names, never `latest`.
     expect((await upgrade.view()).history.at(-1)).toMatchObject({ to: '0.1.1', step: 'installing' });
   });
@@ -516,7 +519,7 @@ describe('finishing in the new code', () => {
     expect(recoverySentence(entry)).toBe(
       'Upgrade to 0.1.1 failed while migrating: relation "core.jobs" already exists. ' +
       'The backup taken first is buddi-backup-20260101-000000.tar.gz. ' +
-      'Reinstall with `npm install -g buddi@0.1.0` and run `buddi backup restore buddi-backup-20260101-000000.tar.gz`.',
+      'Reinstall with `npm install -g @withbuddi/buddi@0.1.0` and run `buddi backup restore buddi-backup-20260101-000000.tar.gz`.',
     );
     // New code that cannot start at all is the same failure, one step earlier.
     expect(recoverySentence({ ...entry, step: 'starting', error: 'Postgres binaries missing' }))

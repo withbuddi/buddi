@@ -2,7 +2,7 @@
 #
 # buddi — packaged install on Linux, from a GitHub release.
 #
-# The distribution is `npm install -g buddi` (docs/install.md §1). Until the
+# The distribution is `npm install -g @withbuddi/buddi` (docs/install.md §1). Until the
 # package is on npmjs.org, the same tarball is attached to a GitHub release, and
 # this script is the `curl | bash` in front of it: it checks Node, fetches the
 # newest release's tarball with `gh` (the repository is private) and installs

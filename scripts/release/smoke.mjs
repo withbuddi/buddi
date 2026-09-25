@@ -1157,7 +1157,7 @@ try {
     path.join(releases, JSON.parse(binaryPacked.stdout)[0].filename), { manifest: binaryManifest });
 
   const next = await buildRelease(nextVersion);
-  await registry.publish('buddi', nextVersion, next.file, { manifest: next.manifest });
+  await registry.publish('@withbuddi/buddi', nextVersion, next.file, { manifest: next.manifest });
 
   /*
    * A tick that is seconds rather than an hour, and a "once a day" gate that
@@ -1331,7 +1331,7 @@ try {
    * now, so the same bytes are refused before anything in the install root is
    * touched. */
   const corrupt = await buildRelease(corruptVersion);
-  await registry.publish('buddi', corruptVersion, corrupt.file, {
+  await registry.publish('@withbuddi/buddi', corruptVersion, corrupt.file, {
     manifest: corrupt.manifest,
     integrity: `sha512-${Buffer.alloc(64, 7).toString('base64')}`,
     tag: false,
@@ -1343,7 +1343,7 @@ try {
   assert.equal(failedBytes.phases.includes('restarting'), false, 'the bytes never reached the hand-over');
   assert.match(failedBytes.error, /EINTEGRITY|integrity check/i, 'npm caught the hash before anything was replaced');
   const untouched = JSON.parse(await readFile(installedPackage, 'utf8'));
-  assert.equal(untouched.name, 'buddi');
+  assert.equal(untouched.name, '@withbuddi/buddi');
   assert.equal(untouched.version, nextVersion, 'the installed package is untouched');
   assert.ok((await stat(path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js'))).size > 0,
     'and the launcher the recovery needs is still there');
@@ -1377,7 +1377,7 @@ try {
         + 'select buddi_smoke_no_such_function();\n');
     }
   });
-  await registry.publish('buddi', unMigratableVersion, unMigratable.file, { manifest: unMigratable.manifest, tag: false });
+  await registry.publish('@withbuddi/buddi', unMigratableVersion, unMigratable.file, { manifest: unMigratable.manifest, tag: false });
   const doomedMigration = await socketCall(socketA, '/upgrade', 'POST', { version: unMigratableVersion });
   assert.equal(doomedMigration.status, 202, JSON.stringify(doomedMigration.body));
   for (let i = 0; i < 2400; i++) {
@@ -1412,7 +1412,7 @@ try {
   assert.match(doctored, new RegExp(`Version: ${unMigratableVersion.replace(/\./g, '\\.')}`));
   assert.match(doctored, new RegExp(`Upgrade to ${unMigratableVersion.replace(/\./g, '\\.')} failed while migrating`));
   assert.ok(doctored.includes(migrationEntry.backup), 'the recovery sentence names the archive');
-  assert.ok(doctored.includes(`npm install -g buddi@${nextVersion}`), 'and the command that puts the old code back');
+  assert.ok(doctored.includes(`npm install -g @withbuddi/buddi@${nextVersion}`), 'and the command that puts the old code back');
   assert.ok(doctored.includes(`buddi backup restore ${migrationEntry.backup}`), 'and the command that puts the data back');
 
   /* 8. The recovery the sentence describes, done.
@@ -1422,7 +1422,7 @@ try {
   process.kill(pid, 'SIGTERM');
   await reaped(pid);
   pid = undefined;
-  await exec('npm', ['install', '--prefix', testRoot, `buddi@${nextVersion}`, '--registry', registry.url,
+  await exec('npm', ['install', '--prefix', testRoot, `@withbuddi/buddi@${nextVersion}`, '--registry', registry.url,
     '--ignore-scripts', '--no-audit', '--no-fund'], { env, timeout: 900_000 });
   assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, nextVersion, 'the previous version is installed again');
   await cliU(startArgs);

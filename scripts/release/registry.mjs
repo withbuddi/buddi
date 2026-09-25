@@ -6,7 +6,7 @@
  * only way to exercise it without publishing to npmjs.org is to be the
  * registry. This serves the two documents npm asks for (the packument and the
  * tarball) and one more that `@buddi/install` asks for on its own: the
- * `/buddi/latest` manifest behind the version check.
+ * `/@withbuddi%2Fbuddi/latest` manifest behind the version check.
  *
  * Two packages, and the second one is not optional.
  *

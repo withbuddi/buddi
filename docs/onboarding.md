@@ -2,7 +2,7 @@
 
 Status: reference, 2026-09-21
 
-The person opening this has just typed `npm install -g buddi` and `buddi`, or
+The person opening this has just typed `npm install -g @withbuddi/buddi` and `buddi`, or
 was sent a link by someone who did. They are not a developer. They are about to
 meet their own assistant for the first time, and that is what the screen should
 feel like: an introduction, not a settings tour.

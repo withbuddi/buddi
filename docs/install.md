@@ -19,7 +19,7 @@ it is what the shell would need anyway.
 ## 1. What an owner does
 
 ```
-npm install -g buddi
+npm install -g @withbuddi/buddi
 buddi
 ```
 
@@ -63,7 +63,7 @@ the upgrade included, therefore passes `--ignore-scripts`. Provisioning of the
 cluster happens on first run, so a failed install leaves no half-state.
 
 Versioning: the package version is the product version. `buddi upgrade`
-becomes `npm install -g buddi@latest` followed by the existing
+becomes `npm install -g @withbuddi/buddi@latest` followed by the existing
 build-free sequence: backup, migrate, restart. The dashboard shows the running
 version and says when a newer one is published (a version check against the
 npm registry, once a day, owner can turn it off).
@@ -521,14 +521,14 @@ job does not exist yet (§12).
 
 ## 11. Acceptance
 
-1. A clean macOS user account with Node 22: `npm install -g buddi && buddi`
+1. A clean macOS user account with Node 22: `npm install -g @withbuddi/buddi && buddi`
    opens the wizard within a minute; a pasted key and a first agent produce
    an answer without any other terminal command.
 2. The same on Ubuntu and on Windows 11, with computer control and host
    execution declining in the words above rather than failing.
 3. Reload or restart in the middle of the wizard resumes at the same step
    with everything already entered still there.
-4. `npm install -g buddi@<next>` then `buddi upgrade` migrates and restarts
+4. `npm install -g @withbuddi/buddi@<next>` then `buddi upgrade` migrates and restarts
    with a backup taken first; the dashboard shows the new version.
 5. `buddi plugins install <published plugin>` shows the plan, waits for
    approval, registers the plugin, and its tools appear in the agents'

@@ -34,7 +34,7 @@ COPY ${TARBALL} /tmp/buddi.tgz
 # architecture the image will actually run as did not get its package.
 RUN npm install -g --ignore-scripts --no-audit --no-fund /tmp/buddi.tgz \
  && rm /tmp/buddi.tgz \
- && node -e "const fs=require('fs'),p='/usr/local/lib/node_modules/buddi/node_modules/@embedded-postgres/linux-'+process.arch;fs.accessSync(p+'/native/bin/postgres');console.log('Postgres binaries: @embedded-postgres/linux-'+process.arch)"
+ && node -e "const fs=require('fs'),p='/usr/local/lib/node_modules/@withbuddi/buddi/node_modules/@embedded-postgres/linux-'+process.arch;fs.accessSync(p+'/native/bin/postgres');console.log('Postgres binaries: @embedded-postgres/linux-'+process.arch)"
 
 # The owner is not root here either. `node` (uid 1000) already has a home; the
 # data directory is created in the image so that the named volume mounted over

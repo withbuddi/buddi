@@ -2,12 +2,12 @@
 # packaged install use (`pnpm release:pack`) and publishes it to npmjs.com
 # with provenance, through npm's trusted publishing (OIDC: no token lives in
 # this repository). A pre-release version (`v0.1.0-pre.14`) goes under the
-# `next` dist-tag, so `npm install buddi` never resolves to it; a plain
+# `next` dist-tag, so `npm install @withbuddi/buddi` never resolves to it; a plain
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
 # the same run, marked pre-release for a pre-release version, with the
 # tarball and the Linux install script attached.
 #
-# Once, on npmjs.com: package `buddi` → Settings → Publishing access →
+# Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
 # add a trusted publisher: GitHub, owner `withbuddi`, repository `buddi`,
 # workflow `release.yml`, environment `npm`.
 name: release
@@ -49,5 +49,5 @@ jobs:
         run: |
           pre=""; case "${{ steps.v.outputs.version }}" in *-*) pre="--prerelease";; esac
           gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
-            --notes "npm: \`npm install -g buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})." \
+            --notes "npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})." \
             "${{ steps.pack.outputs.tgz }}" scripts/install-linux.sh

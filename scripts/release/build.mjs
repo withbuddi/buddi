@@ -52,7 +52,7 @@ const product = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8
 // The version the tarball carries: the checkout's, unless the release names
 // one (a tag in CI, a pre-release cut by hand) — `BUDDI_RELEASE_VERSION`,
 // a bare semver, so `0.1.0-pre.14` publishes under npm's `next` tag while
-// `npm install buddi` keeps resolving to `latest`.
+// `npm install @withbuddi/buddi` keeps resolving to `latest`.
 const releaseVersion = (process.env.BUDDI_RELEASE_VERSION ?? '').trim();
 if (releaseVersion !== '' && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) {
   throw new Error(`BUDDI_RELEASE_VERSION is not a version: ${JSON.stringify(releaseVersion)}`);
@@ -62,7 +62,7 @@ const dependencies = Object.fromEntries(packages.map(({ dir, pkg }) => [pkg.name
 // Direct imports by the bootstrap and existing CLI. Internal packages remain separate modules.
 Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
 const manifest = {
-  name: 'buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
+  name: '@withbuddi/buddi', version: product.version, type: 'module', description: 'Your personal agents, on your computer',
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
   files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),

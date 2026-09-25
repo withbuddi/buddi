@@ -14,7 +14,7 @@
  *    the archive taken before it started, named in the history and in the one
  *    sentence the doctor prints.
  *  - **The step that cannot be undone happens in the *new* code.** Installing
- *    the package is reversible (`npm install -g buddi@<previous>`); migrating
+ *    the package is reversible (`npm install -g @withbuddi/buddi@<previous>`); migrating
  *    is not. So the supervisor installs, records where it is in
  *    `installation.json`, and hands over — and the new supervisor migrates and
  *    writes the outcome. An upgrade interrupted anywhere is a `phase` on disk,
@@ -60,6 +60,13 @@ const run = promisify(execFile);
 
 /** Where `buddi` is published, and where the check and the install both look. */
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
+/**
+ * The package on npmjs.com. Scoped, because npm refuses `buddi` as too close
+ * to an existing package; the command is still `buddi`, only the install line
+ * names the scope. The registry escapes the slash in a scoped name.
+ */
+export const PACKAGE_NAME = '@withbuddi/buddi';
+export const PACKAGE_PATH = encodeURIComponent(PACKAGE_NAME);
 
 /** Once a day, as the disclosure in Settings says. */
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -268,7 +275,7 @@ export function versionView(state: UpgradeState): VersionView {
  * docs/install.md §10 can describe this outbound call in one sentence.
  */
 export async function fetchLatestVersion(registry: string, http: HttpTransport): Promise<string> {
-  const response = await http(`${registry.replace(/\/+$/, '')}/buddi/latest`, {
+  const response = await http(`${registry.replace(/\/+$/, '')}/${PACKAGE_PATH}/latest`, {
     method: 'GET',
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
@@ -305,7 +312,9 @@ export interface InstallTarget {
  * was. The root we are running from is the only fact that cannot be wrong.
  */
 export function installTarget(root: string, platform: NodeJS.Platform | string = process.platform): InstallTarget {
-  const parent = path.dirname(root);
+  // A scoped package sits one level deeper: `node_modules/@withbuddi/buddi`.
+  let parent = path.dirname(root);
+  if (path.basename(parent).startsWith('@')) parent = path.dirname(parent);
   if (path.basename(parent) === 'node_modules') {
     const grandparent = path.dirname(parent);
     // `<prefix>/lib/node_modules/buddi` is a global install everywhere but
@@ -458,7 +467,7 @@ export interface RestartPlan {
  * writes (`buildPlist`, `packages/cli/src/service/units.ts`) carries
  * `KeepAlive: true` and `ProgramArguments` of `[<node>, <root>/packages/
  * install/dist/launcher.js, supervise]` — an *absolute path into the install
- * root*, which `npm install -g buddi@<next>` rewrites in place. So under
+ * root*, which `npm install -g @withbuddi/buddi@<next>` rewrites in place. So under
  * launchd the whole hand-over is `process.exit(0)`: launchd restarts the job
  * unconditionally (`KeepAlive: true` ignores the exit status) and runs the new
  * code from the same path, with the same environment, under the same job.
@@ -604,7 +613,7 @@ export function recoverySentence(entry: UpgradeHistoryEntry): string {
   const where = entry.step === 'starting' ? 'while starting' : 'while migrating';
   return `Upgrade to ${entry.to} failed ${where}: ${entry.error ?? 'unknown error'}. ` +
     `The backup taken first is ${entry.backup ?? 'not available'}. ` +
-    `Reinstall with \`npm install -g buddi@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
+    `Reinstall with \`npm install -g ${PACKAGE_NAME}@${entry.from}\` and run \`buddi backup restore ${entry.backup ?? '<backup>'}\`.`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -751,7 +760,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       const resolved = await resolveVersion(version);
       if ('error' in resolved) return await give('checking', resolved.error, false);
       to = resolved.version;
-      spec = `buddi@${resolved.version}`;
+      spec = `${PACKAGE_NAME}@${resolved.version}`;
     }
 
     /*
@@ -790,7 +799,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
      * decided on is the failure this refuses to walk into.
      */
     const installed = await installedPackage(ctx.root);
-    if (installed.name !== 'buddi' || !isVersion(installed.version)) {
+    if (installed.name !== PACKAGE_NAME || !isVersion(installed.version)) {
       return await give('installing', `what was installed is ${installed.name ?? 'not a package'} ${installed.version ?? ''}`.trim() + ', not buddi at a version this can read', true);
     }
     if (tarball === undefined && installed.version !== to) {
@@ -904,7 +913,7 @@ export async function finishUpgrade(ctx: ReadyContext, pending: UpgradeInProgres
   /*
    * Whose code finished this, rather than whose code was meant to.
    *
-   * The recovery an owner is told to run is `npm install -g buddi@<from>`,
+   * The recovery an owner is told to run is `npm install -g @withbuddi/buddi@<from>`,
    * and the supervisor that comes up afterwards finds the same marker and
    * migrates happily — the migration that broke is not in that tree any more.
    * Calling that `done: <from> to <to>` would put a version that is not
