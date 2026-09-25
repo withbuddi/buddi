@@ -366,9 +366,9 @@ describe('send preview', () => {
 
 describe('the owner\'s own addresses', () => {
   it('collapses case, plus-tags and Gmail\'s dots onto one mailbox', () => {
-    expect(mailboxKey('Jane.Doe@Gmail.COM')).toBe('owner@example.com');
-    expect(mailboxKey('janedoe+bills@gmail.com')).toBe('owner@example.com');
-    expect(mailboxKey('jane.doe@googlemail.com')).toBe('owner@example.com');
+    expect(mailboxKey('Jane.Doe@Gmail.COM')).toBe('janedoe@gmail.com');
+    expect(mailboxKey('janedoe+bills@gmail.com')).toBe('janedoe@gmail.com');
+    expect(mailboxKey('jane.doe@googlemail.com')).toBe('janedoe@gmail.com');
     // Dots are Gmail's rule and nobody else's: elsewhere they are part of the
     // local part and two addresses that differ by one are two people.
     expect(mailboxKey('jean.dupont@example.test')).toBe('jean.dupont@example.test');
