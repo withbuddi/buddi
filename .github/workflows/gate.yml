@@ -1,0 +1,38 @@
+# The full gate: `pnpm test` with a throwaway Postgres — boundaries, build,
+# typecheck, every suite including the database ones, the generic-install
+# check. About twelve minutes, so it runs where it earns its keep: before a
+# release, on a pull request, nightly, and on demand. A push to main gets the
+# quick lane in ci.yml instead.
+name: gate
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+  schedule:
+    - cron: '17 4 * * *'   # nightly, 04:17 UTC
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: buddi
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: buddi
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U buddi" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://buddi:test@127.0.0.1:5432/buddi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: node scripts/migrate.mjs
+      - run: pnpm test

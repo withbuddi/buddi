@@ -15,7 +15,11 @@ on:
   push:
     tags: ['v*']
 jobs:
+  # The full gate first: a tag publishes only what passed everything.
+  gate:
+    uses: ./.github/workflows/gate.yml
   publish:
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm

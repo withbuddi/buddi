@@ -1,35 +1,20 @@
-# The gate, on every push and pull request: the same `pnpm test` an owner
-# runs, against a throwaway Postgres. No secrets, no publishing.
+# The quick lane, on every push to main: boundaries, build, typecheck and
+# every suite that needs no database (with no DATABASE_URL the database
+# suites skip themselves). A few minutes. The full gate with Postgres is
+# gate.yml: pull requests, tags, nightly, on demand.
 name: ci
 on:
   push:
     branches: [main]
-  pull_request:
+    paths-ignore: ['docs/**', '**/*.md', 'feedback/**']
 jobs:
-  gate:
+  quick:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: buddi
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: buddi
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U buddi" --health-interval 5s
-          --health-timeout 5s --health-retries 20
-    env:
-      DATABASE_URL: postgres://buddi:test@127.0.0.1:5432/buddi
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      # The migration script imports core's built output, so the workspace is
-      # built once before it; `pnpm test` builds again, which is a no-op.
-      - run: pnpm -r build
-      - run: node scripts/migrate.mjs
       - run: pnpm test
