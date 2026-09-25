@@ -82,9 +82,16 @@ a:not([class]):hover { text-decoration: underline; }
   *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
-/* A scrolling region inside a card: a thin scrollbar in the hairline colour, both themes. */
-.thin-scroll { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
-.thin-scroll::-webkit-scrollbar { width: var(--space-2); height: var(--space-2); }
-.thin-scroll::-webkit-scrollbar-track { background: transparent; }
-.thin-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: var(--radius-pill); border: var(--space-0) solid transparent; background-clip: padding-box; }
-.thin-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--text-muted); }
+/*
+ * Every scrolling region draws the same thin scrollbar: the thumb in the
+ * hairline colour on a transparent track, both themes, tokens only — the
+ * system's bar never appears inside the app. A strip that hides its bar on
+ * purpose (a tab row, the settings nav, the agent rail) says so where it is.
+ * `.thin-scroll` remains as a name for a region that wants to say it out loud.
+ */
+*, .thin-scroll { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+::-webkit-scrollbar { width: var(--space-2); height: var(--space-2); }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: var(--radius-pill); border: var(--space-0) solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--text-muted); }
+::-webkit-scrollbar-corner { background: transparent; }
