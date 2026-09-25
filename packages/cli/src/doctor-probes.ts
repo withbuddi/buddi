@@ -276,7 +276,13 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       // keychain the useful sentence is about the *vault* — which file, which
       // variable, which command — not about the secret that happened to be
       // asked for first.
-      return checkVault({ ...(await secrets()), state: vaultState({ env }) });
+      // An injected vault (a test's memory vault) is the vault: `vaultState`
+      // reads the machine, and on Linux that is the file vault, locked until
+      // `buddi init` — true of the machine, false of the probe's own vault.
+      const state = opts.vault !== undefined
+        ? { selection: opts.vault.kind, locked: false, advice: '' }
+        : vaultState({ env });
+      return checkVault({ ...(await secrets()), state });
     },
 
     async modelCredential(): Promise<ProbeResult> {
