@@ -171,7 +171,7 @@ it('keeps the gate: no session, no CSRF, no foreign origin', async () => {
 it('falls back to what the last supervisor wrote down when the socket has gone', async () => {
   const data = await mkdtemp(path.join(tmpdir(), 'buddi-upgrade-data-'));
   await writeFile(path.join(data, 'upgrade.json'), JSON.stringify({
-    check: { enabled: true, lastAt: '2026-01-02T03:04:05.000Z', latest: '0.1.1' },
+    check: { enabled: true, lastAt: '2026-01-02T03:04:05.000Z', latest: '0.1.1', latestNotes: '### Fixed\n\n- A thing.' },
     current: '0.1.1',
     history: [{ from: '0.1.0', to: '0.1.1', startedAt: '2026-01-02T03:05:00.000Z', finishedAt: '2026-01-02T03:06:00.000Z', outcome: 'done', backup: 'buddi-backup-20260102-030500.tar.gz' }],
   }), 'utf8');
@@ -183,6 +183,7 @@ it('falls back to what the last supervisor wrote down when the socket has gone',
   expect(await view.json()).toEqual({
     current: '0.1.1',
     latest: '0.1.1',
+    latestNotes: '### Fixed\n\n- A thing.',
     checkedAt: '2026-01-02T03:04:05.000Z',
     checkEnabled: true,
     // The newest is what is running now, so there is nothing to offer.

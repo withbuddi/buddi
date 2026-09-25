@@ -96,6 +96,8 @@ export interface UpgradeCheckState {
   enabled: boolean;
   lastAt?: string;
   latest?: string;
+  /** The release notes `latest` was published with (markdown). Only ever `latest`'s. */
+  latestNotes?: string;
   /** What the registry did instead of answering. Never fails anything else. */
   error?: string;
 }
@@ -126,6 +128,8 @@ export interface UpgradeState {
 export interface VersionView {
   current: string;
   latest?: string;
+  /** What changes in `latest`, as its release published it (markdown). */
+  latestNotes?: string;
   checkedAt?: string;
   checkEnabled: boolean;
   updateAvailable: boolean;
@@ -242,6 +246,7 @@ export async function readUpgradeState(data: string, current: string): Promise<U
       enabled: check.enabled !== false,
       ...(typeof check.lastAt === 'string' ? { lastAt: check.lastAt } : {}),
       ...(typeof check.latest === 'string' ? { latest: check.latest } : {}),
+      ...(typeof check.latest === 'string' && typeof check.latestNotes === 'string' ? { latestNotes: check.latestNotes } : {}),
       ...(typeof check.error === 'string' ? { error: check.error } : {}),
     },
     current,
@@ -259,6 +264,7 @@ export function versionView(state: UpgradeState): VersionView {
   return {
     current: state.current,
     ...(state.check.latest === undefined ? {} : { latest: state.check.latest }),
+    ...(state.check.latest === undefined || state.check.latestNotes === undefined ? {} : { latestNotes: state.check.latestNotes }),
     ...(state.check.lastAt === undefined ? {} : { checkedAt: state.check.lastAt }),
     checkEnabled: state.check.enabled,
     updateAvailable: isNewer(state.check.latest, state.current),
@@ -267,27 +273,41 @@ export function versionView(state: UpgradeState): VersionView {
   };
 }
 
+/** Release notes longer than this are cut; `build.mjs` keeps them to 8 KB. */
+export const NOTES_LIMIT = 8 * 1024;
+
+/** The newest published version, and the notes its release carried, if any. */
+export interface LatestRelease {
+  version: string;
+  notes?: string;
+}
+
 /**
  * Ask the registry for the newest published version.
  *
- * One GET of `<registry>/buddi/latest`, which is a few hundred bytes — the
+ * One GET of `<registry>/buddi/latest`, which is a few kilobytes at most — the
  * smallest question that answers "is there a newer buddi", and the reason
- * docs/install.md §10 can describe this outbound call in one sentence.
+ * docs/install.md §10 can describe this outbound call in one sentence. The
+ * same document carries the release notes (`buddi.notes`, written by
+ * `scripts/release/build.mjs`), so they cost no second request.
  */
-export async function fetchLatestVersion(registry: string, http: HttpTransport): Promise<string> {
+export async function fetchLatestRelease(registry: string, http: HttpTransport): Promise<LatestRelease> {
   const response = await http(`${registry.replace(/\/+$/, '')}/${PACKAGE_PATH}/latest`, {
     method: 'GET',
     headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
   });
   if (response.status !== 200) throw new Error(`the registry answered ${response.status}`);
-  const body = await response.json() as { version?: unknown };
+  const body = await response.json() as { version?: unknown; buddi?: { notes?: unknown } };
   if (typeof body.version !== 'string' || body.version === '') throw new Error('the registry named no version');
   // Whatever that registry is, what it says becomes a spec for `npm install`
   // and a number on the dashboard. It gets to name a version, and nothing else.
   if (!isVersion(body.version)) throw new Error(`the registry named "${body.version}", which is not a version`);
-  return body.version;
+  const notes = typeof body.buddi === 'object' && body.buddi !== null ? body.buddi.notes : undefined;
+  if (typeof notes !== 'string' || notes.trim() === '') return { version: body.version };
+  return { version: body.version, notes: notes.trim().slice(0, NOTES_LIMIT) };
 }
+
 
 /* ------------------------------------------------------------------ *
  * Installing the package
@@ -682,9 +702,14 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       return await save({ ...state, check: { ...state.check, lastAt: at, error: 'this installation has no outbound transport' } });
     }
     try {
-      const latest = await fetchLatestVersion(registry, opts.http);
-      // A check that answered clears the error a check that did not left.
-      return await save({ ...state, check: { enabled: state.check.enabled, lastAt: at, latest } });
+      const latest = await fetchLatestRelease(registry, opts.http);
+      // A check that answered clears the error a check that did not left, and
+      // the notes are always the ones this answer carried: notes kept from an
+      // older `latest` would describe the wrong release.
+      return await save({ ...state, check: {
+        enabled: state.check.enabled, lastAt: at, latest: latest.version,
+        ...(latest.notes === undefined ? {} : { latestNotes: latest.notes }),
+      } });
     } catch (err) {
       // A registry that did not answer changes nothing but the error: the last
       // version we learned is still the last version we learned.

@@ -27,6 +27,7 @@ import { Secrets } from './Secrets';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
+import { Markdown } from '../chat/markdown';
 import { Proposals } from './Proposals';
 import { Plugins } from './Plugins';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
@@ -690,6 +691,11 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
             <p className="ui-card-meta">{CHECK_DISCLOSURE}</p>
           </Stack>
         </Section>
+        {data?.updateAvailable && data.latest && data.latestNotes ? (
+          <Section title={`What changes in ${data.latest}`}>
+            <Markdown text={data.latestNotes} />
+          </Section>
+        ) : null}
         <Section>
           <Stack gap="sm">
             <UpgradeProgress {...upgrade} job={upgrade.job ?? ended ?? undefined} />

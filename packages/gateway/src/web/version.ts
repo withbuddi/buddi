@@ -56,7 +56,7 @@ export interface UpgradeAttempt {
 
 /** The file itself, as the supervisor, the CLI and this module all read it. */
 export interface UpgradeFile {
-  check: { enabled: boolean; lastAt?: string; latest?: string; error?: string };
+  check: { enabled: boolean; lastAt?: string; latest?: string; latestNotes?: string; error?: string };
   current: string;
   registry?: string;
   history: UpgradeAttempt[];
@@ -190,6 +190,7 @@ function fromFile(file: UpgradeFile): Record<string, unknown> {
   return {
     current: file.current,
     ...(latest === undefined ? {} : { latest }),
+    ...(latest === undefined || typeof file.check.latestNotes !== 'string' ? {} : { latestNotes: file.check.latestNotes }),
     ...(file.check.lastAt === undefined ? {} : { checkedAt: file.check.lastAt }),
     checkEnabled: file.check.enabled,
     // The same comparison the supervisor makes (`@buddi/core`'s semver), so

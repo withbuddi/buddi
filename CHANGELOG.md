@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Settings → System → Version shows what changes in a newer buddi before you upgrade to it.
+
 ### Changed
 
 - The agents' Chromium now lives in the data directory, at `browser/engines`, so a container that keeps its data volume keeps the browser too.

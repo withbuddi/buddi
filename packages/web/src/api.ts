@@ -945,6 +945,8 @@ export interface TailscaleView {
 export interface VersionView {
   current: string;
   latest?: string;
+  /** What changes in `latest`, as its release published it (markdown). */
+  latestNotes?: string;
   checkedAt?: string;
   checkEnabled: boolean;
   updateAvailable: boolean;

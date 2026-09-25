@@ -71,6 +71,19 @@ describe('the version panel', () => {
     await waitFor(() => expect(api.setVersionCheck).toHaveBeenCalledWith(false));
   });
 
+  it('shows what changes in the newer version when its release carried notes, and nothing when not', async () => {
+    vi.mocked(api.version).mockResolvedValue({ ...AVAILABLE, latestNotes: '### Fixed\n\n- The browser starts on Ubuntu.' });
+    const { unmount } = render(<Version />);
+    expect(await screen.findByText('What changes in 0.1.1')).toBeInTheDocument();
+    expect(screen.getByRole('listitem')).toHaveTextContent('The browser starts on Ubuntu.');
+    unmount();
+
+    vi.mocked(api.version).mockResolvedValue(AVAILABLE);
+    render(<Version />);
+    await screen.findByRole('button', { name: 'Upgrade to 0.1.1' });
+    expect(screen.queryByText(/What changes in/)).not.toBeInTheDocument();
+  });
+
   it('warns what an upgrade does, and only then sends the version it offered', async () => {
     vi.mocked(api.version).mockResolvedValue(AVAILABLE);
     vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });

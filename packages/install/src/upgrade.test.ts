@@ -49,10 +49,10 @@ function backupControl(overrides: Partial<BackupControl> = {}): BackupControl {
 }
 
 /** The registry, as a transport. No test in this file touches the network. */
-function registry(version: string): (url: string) => Promise<{ status: number; json: () => Promise<unknown> }> {
+function registry(version: string, extra: Record<string, unknown> = {}): (url: string) => Promise<{ status: number; json: () => Promise<unknown> }> {
   return async (url: string) => {
     expect(url).toBe('https://registry.example/%40withbuddi%2Fbuddi/latest');
-    return { status: 200, json: async () => ({ name: '@withbuddi/buddi', version }) };
+    return { status: 200, json: async () => ({ name: '@withbuddi/buddi', version, ...extra }) };
   };
 }
 
@@ -135,6 +135,28 @@ describe('the check', () => {
     expect(view.latest).toBe('0.1.1');
     expect(view.updateAvailable).toBe(true);
     expect(view.checkedAt).toBeDefined();
+  });
+
+  test('keeps the release notes the registry document carries', async () => {
+    const ctx = await installation();
+    const { upgrade } = service(ctx, { http: registry('0.1.1', { buddi: { notes: '### Fixed\n\n- A thing.\n' } }) as never });
+    const view = await upgrade.check();
+    expect(view.latestNotes).toBe('### Fixed\n\n- A thing.');
+    // Written down, so the gateway and the next supervisor read the same.
+    expect((await readUpgradeState(ctx.data, '0.1.0')).check.latestNotes).toBe('### Fixed\n\n- A thing.');
+  });
+
+  test('a release without notes, or with notes that are not text, has none, and clears the last ones', async () => {
+    const ctx = await installation();
+    await writeUpgradeState(ctx.data, { check: { enabled: true, latest: '0.1.1', latestNotes: 'Old notes.' }, current: '0.1.0', history: [] });
+    const { upgrade } = service(ctx, { http: registry('0.1.2') as never });
+    const view = await upgrade.check();
+    expect(view.latest).toBe('0.1.2');
+    expect(view.latestNotes).toBeUndefined();
+    const odd = service(ctx, { http: registry('0.1.3', { buddi: { notes: 42 } }) as never });
+    expect((await odd.upgrade.check()).latestNotes).toBeUndefined();
+    const long = service(ctx, { http: registry('0.1.4', { buddi: { notes: 'x'.repeat(20_000) } }) as never });
+    expect((await long.upgrade.check()).latestNotes).toHaveLength(8 * 1024);
   });
 
   test('a registry that does not answer sets the error and changes nothing else', async () => {

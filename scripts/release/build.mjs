@@ -6,6 +6,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { BINARY_VERSION } from '../../packages/core/dist/postgres/index.js';
+import { CHANGELOG, ChangelogError, sectionOf } from './changelog.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** The one binary, relative to the package root. */
@@ -64,6 +65,28 @@ if (releaseVersion !== '' && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(releaseVe
   throw new Error(`BUDDI_RELEASE_VERSION is not a version: ${JSON.stringify(releaseVersion)}`);
 }
 if (releaseVersion !== '') product.version = releaseVersion;
+// The release notes: the version's section of CHANGELOG.md, carried in the
+// manifest so the installation's daily check can show them before an upgrade.
+// A release must have them. A pre-release may go without when
+// BUDDI_RELEASE_NOTES_OPTIONAL=1, and a trial build (no version named) takes
+// them when they are there.
+const NOTES_LIMIT = 8 * 1024;
+let notes;
+try {
+  notes = sectionOf(await readFile(CHANGELOG, 'utf8'), product.version);
+} catch (error) {
+  if (!(error instanceof ChangelogError) && error.code !== 'ENOENT') throw error;
+  const reason = error instanceof ChangelogError ? error.message : 'There is no CHANGELOG.md.';
+  const optional = releaseVersion === ''
+    || (product.version.includes('-') && process.env.BUDDI_RELEASE_NOTES_OPTIONAL === '1');
+  if (!optional) throw new Error(reason);
+  console.error(`${reason} The tarball carries no release notes.`);
+}
+if (notes !== undefined && Buffer.byteLength(notes) > NOTES_LIMIT) {
+  // Cut at a line, inside the limit, so no character is split.
+  const cut = Buffer.from(notes).subarray(0, NOTES_LIMIT - 8).toString('utf8').replace(/\uFFFD$/, '');
+  notes = `${cut.slice(0, Math.max(cut.lastIndexOf('\n'), 0)).trimEnd()}\n\n…`;
+}
 const dependencies = Object.fromEntries(packages.map(({ dir, pkg }) => [pkg.name, `file:packages/${dir}`]));
 // Direct imports by the bootstrap and existing CLI. Internal packages remain separate modules.
 Object.assign(dependencies, { dotenv: '^16.4.7', pg: '^8.13.1' });
@@ -74,6 +97,7 @@ const manifest = {
   bugs: 'https://github.com/withbuddi/buddi/issues',
   ...(hasLicense ? { license: 'Apache-2.0' } : {}),
   engines: { node: '>=22' }, bin: { buddi: LAUNCHER },
+  ...(notes === undefined ? {} : { buddi: { notes } }),
   files: ['packages', 'examples', 'extension'], dependencies,
   bundledDependencies: Object.keys(dependencies),
   optionalDependencies: Object.fromEntries(['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64', 'windows-x64'].map(platform => [`@embedded-postgres/${platform}`, BINARY_VERSION])),

@@ -823,6 +823,11 @@ move: `migrateAtStart` in `packages/gateway/src/plugins/migrate.ts`, called by
 (`packages/install/src/supervisor.ts`). `buddi migrate` is still there for the
 owner who wants to migrate *without* starting.
 
+A packaged install asks the npm registry once a day whether a newer buddi is
+out. When one is, Settings → System → Version shows what changes in it before
+you upgrade: the release's section of `CHANGELOG.md`, carried in the same small
+answer as the version number, so no second request.
+
 So the migration is no longer the step you can silently skip. Two are:
 
 | Skip | What you get |
