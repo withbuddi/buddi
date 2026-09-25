@@ -275,6 +275,8 @@ suite('the mail pages, over postgres', () => {
       { value: 'from .env', tone: 'neutral' },
     ]);
     expect(accounts.accounts[0].secretName).toBe(GMAIL_SECRET_NAME);
+    // The cell says where, in words; the name is the tooltip behind it.
+    expect(accounts.accounts[0].password).toBe('In the vault');
 
     /*
      * A body longer than the engine will carry is cut with a sentence rather

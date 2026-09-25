@@ -32,6 +32,7 @@
 import { useState } from 'react';
 import { api, type DigestSchedule, type ProposalRow } from '../api';
 import { DiffLines } from '../canvas/views/DiffLines';
+import { PluginAgentOffers, useAgentOffers } from './parts/AgentOffer';
 import { lineDiff } from '../canvas/line-diff';
 import { fmtRelative } from '../format';
 import { agentRoute, settingsRoute, transcriptRoute } from '../routes';
@@ -100,6 +101,7 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
     }
   };
 
+  const agentOffers = useAgentOffers();
   const open = (data?.open ?? []).filter((p) => inFilter(p, plugin));
   const closed = (data?.closed ?? []).filter((p) => inFilter(p, plugin));
 
@@ -120,6 +122,8 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
           {done}
         </Notice>
       ) : null}
+      {/* An agent a plugin offers is a proposal too, and owners look for it here. */}
+      {plugin ? null : <PluginAgentOffers offers={agentOffers.offers} reload={agentOffers.reload} />}
       {!data || open.length === 0 ? (
         <Section title="Waiting" panel>
           {!data ? (

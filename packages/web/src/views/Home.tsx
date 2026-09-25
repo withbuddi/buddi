@@ -34,7 +34,7 @@ import {
 } from '../ui';
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
-import { AgentOffer } from './parts/AgentOffer';
+import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 
 export function Home({
   timezone,
@@ -70,7 +70,10 @@ export function Home({
   const failedJobs = data?.jobs?.failed ?? 0;
   const urgent = data?.sentinels?.openUrgent ?? 0;
   const proposed = proposals.data?.open.length ?? 0;
-  const toSetUp: AgentOfferRow[] = agentOffers.data?.offers ?? [];
+  // An offer whose accept is already waiting is drawn once, as its card above.
+  const toSetUp: AgentOfferRow[] = (agentOffers.data?.offers ?? []).filter(
+    (offer) => !pending.some((action) => isPendingAccept(action, offer.plugin, offer.agent)),
+  );
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
@@ -134,8 +137,8 @@ export function Home({
                   agent={offer.agent}
                   text={offer.text}
                   label={`Create @${offer.handle}`}
+                  handle={offer.handle}
                   onDismiss={() => { void api.dismissAgentOffer(offer.plugin, offer.agent).then(() => agentOffers.reload()); }}
-                  onDone={() => agentOffers.reload()}
                 />
               </Panel>
             ))}

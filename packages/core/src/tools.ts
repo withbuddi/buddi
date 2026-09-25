@@ -551,7 +551,18 @@ export interface SuggestedAgent {
    * the same gated `platform.accept_plugin_agent`; the owner may dismiss it.
    */
   offer?: { text: string; query?: string };
+  /**
+   * One of the mascots the dashboard ships (`packages/web/public/mascot/`),
+   * by name. When the proposal is accepted the gateway keeps that picture as
+   * the new agent's own, as if the owner had uploaded it. Optional; an agent
+   * without one draws its initials.
+   */
+  avatar?: BundledMascot;
 }
+
+/** The mascots the dashboard ships, by file name (`mascot/<name>.png`). */
+export const BUNDLED_MASCOTS = ['core', 'coding', 'finance', 'garage', 'mail', 'maker', 'playground', 'research'] as const;
+export type BundledMascot = (typeof BUNDLED_MASCOTS)[number];
 
 /**
  * A host this plugin reaches, and why.

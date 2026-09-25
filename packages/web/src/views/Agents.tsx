@@ -16,6 +16,8 @@ import { ROLE_MAKER, cannotRunFix, cannotRunSentence, orderAgents, waitingText }
 import { Avatar, Button, ButtonLink, Empty, ErrorBanner, List, ListRow, Notice, PageHeader, Panel, Pill, Sheet, Tab, Tabs, Tag, Toolbar, useAsync, EmptyState } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
+import { useThisMachine } from '../useThisMachine';
+import { PluginAgentOffers, useAgentOffers } from './parts/AgentOffer';
 import { Memory } from './Memory';
 import { AgentSkills } from './parts/AgentSkills';
 import { Reminders } from './Reminders';
@@ -44,8 +46,11 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
   const tab = /[?&]tab=([a-z]+)/.exec(hash)?.[1] ?? 'team';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   const team = useAsync(() => api.agents(), []);
+  const thisMachine = useThisMachine();
   const offers = useAsync(() => api.offers(), [], 20_000);
-  const offerCount = offers.data?.offers.length ?? 0;
+  // What a plugin offers is an offer too: the tab counts both, and draws both.
+  const agentOffers = useAgentOffers();
+  const offerCount = (offers.data?.offers.length ?? 0) + agentOffers.offers.length;
   const defaultAgentId = team.data?.default?.defaultAgentId ?? shellDefault ?? null;
   // A new agent is a conversation with the maker, found by its role: the same
   // door the profile's "Ask the maker to change this" opens, nothing made here.
@@ -54,7 +59,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
     <div className="ui-page">
       <PageHeader
         title="Agents"
-        lede="Your team. Each one is a file on this Mac — what it can reach is listed on its page."
+        lede={`Your team. Each one is a file on ${thisMachine} — what it can reach is listed on its page.`}
         actions={maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
       />
       <Tabs>
@@ -65,6 +70,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
         ))}
       </Tabs>
       {tab === 'missions' ? <Missions timezone={timezone} embedded /> : null}
+      {tab === 'offers' ? <PluginAgentOffers offers={agentOffers.offers} reload={agentOffers.reload} /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
       {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}

@@ -43,6 +43,7 @@ import { openChatStream } from './stream';
 import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
 import { accentAttrs, accentOf } from '../shell/accent';
+import { useThisMachine } from '../useThisMachine';
 
 const MIN_WIDTH = 320;
 /* Until the owner drags the grip, the column has no width of its own: the
@@ -108,6 +109,7 @@ export function ChatPage({
   requestedTab,
   onConversationOpened,
 }: ChatPageProps): JSX.Element {
+  const thisMachine = useThisMachine();
   const [descriptors, setDescriptors] = useState<ViewDescriptor[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ChatConversation | null>(null);
@@ -1114,7 +1116,7 @@ export function ChatPage({
                   <>
                     <a className="wb-head-name" href={agentRoute(agent.id)} title={`${agent.name}'s page`}>{agent.name}</a>
                     {' '}<span className="wb-head-handle">@{agent.handle}</span>
-                    {` · ${line.tone === 'quiet' && line.text === 'New conversation' ? 'on this Mac' : line.text}`}
+                    {` · ${line.tone === 'quiet' && line.text === 'New conversation' ? `on ${thisMachine}` : line.text}`}
                   </>
                 ) : 'No agent'}
               </span>

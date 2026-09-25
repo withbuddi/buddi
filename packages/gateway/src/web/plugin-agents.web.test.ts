@@ -6,8 +6,11 @@
  * and say a sentence to another agent. This route is the button instead, and
  * the claim worth pinning down is that being a button changed nothing about
  * the decision. It is the same gated `platform.accept_plugin_agent`, invoked
- * as the owner, so what comes back is an approval to draw and never a written
- * file; and an agent nobody proposes is a 404 rather than anything at all.
+ * as the owner, so an action is recorded with the whole grant in its preview;
+ * the owner's click then decides it through the card's own decide. An agent
+ * nobody proposes is a 404 rather than anything at all. The end-to-end run —
+ * the agent really created, a second click "already there" — is
+ * `plugin-agents.web.db.test.ts`.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,7 +31,7 @@ import {
 } from '../agents/catalog.js';
 import { bindPlatformTools } from '../agents/platform.js';
 import { acceptAgentRoute } from './plugins.js';
-import type { PagesDeps } from './pages.js';
+import type { AcceptAgentDeps } from './plugins.js';
 
 const GARDEN: PluginManifest = {
   name: 'garden',
@@ -93,7 +96,11 @@ function fakePool(recorded: Array<Record<string, unknown>>) {
   };
 }
 
-function deps(recorded: Array<Record<string, unknown>>): PagesDeps {
+function deps(
+  recorded: Array<Record<string, unknown>>,
+  approved: string[] = [],
+  roster: Array<{ id: string; handle: string; name: string }> = [],
+): AcceptAgentDeps {
   const root = mkdtempSync(path.join(tmpdir(), 'buddi-accept-route-'));
   const agentsDir = path.join(root, 'agents');
   const skillsDir = path.join(root, 'skills');
@@ -124,23 +131,46 @@ function deps(recorded: Array<Record<string, unknown>>): PagesDeps {
     now: () => new Date('2026-09-15T12:00:00Z'),
     timezone: 'Europe/Paris',
   } as CoreToolContext;
-  return { registry, ctx, now: () => new Date('2026-09-15T12:00:00Z') };
+  return {
+    registry,
+    ctx,
+    now: () => new Date('2026-09-15T12:00:00Z'),
+    agents: () => roster,
+    approve: async (actionId) => {
+      approved.push(actionId);
+      return { ok: true, status: 200, body: { action: {} as never, execution: { state: 'succeeded' }, resumed: 'no-job' } };
+    },
+  };
 }
 
-it('records a pending action as the owner, and hands back its preview', async () => {
+it('records the action as the owner, with the whole grant, and approves it in the same call', async () => {
   const recorded: Array<Record<string, unknown>> = [];
-  const reply = await acceptAgentRoute(deps(recorded), 'garden', 'gardener');
+  const approved: string[] = [];
+  const reply = await acceptAgentRoute(deps(recorded, approved), 'garden', 'gardener');
   expect(reply.status).toBe(200);
-  const body = reply.body as { approvalId?: string; preview?: string; result?: unknown };
+  const body = reply.body as { approvalId?: string; agent?: { id: string; handle: string; name: string } };
   expect(body.approvalId).toBe('action-1');
-  // The whole grant, in the registered tools' own words: the button changed
-  // where the decision is made, not what is being decided.
-  expect(body.preview).toContain('The garden plugin (1.2.0) proposes an agent');
-  expect(body.preview).toContain('garden.water_log');
-  // Nothing ran. A gated tool invoked here is an approval, never an effect.
-  expect(body.result).toBeUndefined();
+  expect(body.agent).toEqual({ id: 'gardener', handle: 'gardener', name: 'Gardener' });
+  // The card still exists as the record, with the grant in the tools' own words.
   expect(recorded).toHaveLength(1);
   expect(recorded[0]).toMatchObject({ tool: 'platform.accept_plugin_agent', agent_id: 'owner', tier: 'gated' });
+  expect(String(recorded[0]!.preview)).toContain('The garden plugin (1.2.0) proposes an agent');
+  expect(String(recorded[0]!.preview)).toContain('garden.water_log');
+  // And the owner's click decided it: the same decide the card's Approve runs.
+  expect(approved).toEqual(['action-1']);
+});
+
+it('answers "already there" for an agent the roster holds, recording nothing', async () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  const approved: string[] = [];
+  const reply = await acceptAgentRoute(
+    deps(recorded, approved, [{ id: 'gardener', handle: 'gardener', name: 'Gardener' }]),
+    'garden',
+    'gardener',
+  );
+  expect(reply).toEqual({ status: 200, body: { already: true, agent: { id: 'gardener', handle: 'gardener', name: 'Gardener' } } });
+  expect(recorded).toEqual([]);
+  expect(approved).toEqual([]);
 });
 
 it('is case-insensitive about the proposed id, like the tool is', async () => {

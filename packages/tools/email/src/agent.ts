@@ -116,5 +116,7 @@ export const mailAgents: SuggestedAgent[] = [
     tools: [...MAIL_TRIAGE_TOOLS],
     persona: PERSONA,
     offer: { text: TRIAGE_OFFER_TEXT, query: TRIAGE_OFFER_QUERY },
+    // Its face is the mail mascot the dashboard ships.
+    avatar: 'mail',
   },
 ];

@@ -25,6 +25,9 @@ vi.mock('../api', async (importOriginal) => {
       reminders: vi.fn(),
       conversations: vi.fn(),
       offers: vi.fn(),
+      agentOffers: vi.fn(),
+      dismissAgentOffer: vi.fn(),
+      acceptPluginAgent: vi.fn(),
     },
   };
 });
@@ -56,6 +59,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.keepProposal).mockResolvedValue({ proposal: proposal({ state: 'kept' }), applied: true, note: 'Written as check-a-bank-balance-in-the-browser.md, version 1; advisor loads it on its next run.' });
   vi.mocked(api.discardProposal).mockResolvedValue({ proposal: proposal({ state: 'discarded' }) });
+  vi.mocked(api.agentOffers).mockResolvedValue({ offers: [] });
+  vi.mocked(api.approvals).mockResolvedValue({ pending: [], recent: [] } as never);
 });
 
 const renderPage = async (): Promise<void> => {
@@ -63,6 +68,18 @@ const renderPage = async (): Promise<void> => {
 };
 
 describe('the Proposals inbox', () => {
+  it('lists the agents your plugins offer, and creates one in one click', async () => {
+    vi.mocked(api.proposals).mockResolvedValue({ open: [], closed: [] });
+    vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Background triage needs a mail agent.' }] });
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'a-1', agent: { id: 'mail-triage', handle: 'mail', name: 'Mail' } });
+    await renderPage();
+    expect(await screen.findByText('From your plugins')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create @mail' }));
+    expect(await screen.findByText(/@mail is ready/)).toBeInTheDocument();
+    expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage');
+  });
+
   it('draws the card: what, why, where it came from, unmarked when the run read nothing untrusted', async () => {
     vi.mocked(api.proposals).mockResolvedValue({ open: [proposal()], closed: [] });
     await renderPage();
