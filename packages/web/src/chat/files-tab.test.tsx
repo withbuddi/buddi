@@ -97,6 +97,10 @@ describe('the Files tab on a conversation', () => {
   it('reads the folder again when a change to a file comes back, and keeps the owner on it', async () => {
     page();
     const tab = await screen.findByRole('tab', { name: 'Files' });
+    // The conversation's own result must have landed first: its arrival
+    // selects the Figures tab, and on a slow machine it can land *after* the
+    // click below and take the screen back from the Files pane.
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Figures/ })).toHaveAttribute('aria-selected', 'true'));
     fireEvent.mouseDown(tab, { button: 0 });
     await screen.findByText('index.html');
     const before = listed;
