@@ -39,3 +39,18 @@ describe('the Settings entry', () => {
     expect(screen.queryByTestId('rail-dot')).not.toBeInTheDocument();
   });
 });
+
+describe('the owner menu', () => {
+  it('names the running version, and the newer one when there is one', async () => {
+    const { userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    render(
+      <Tooltip.Provider>
+        <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} updateAvailable version={{ current: '0.1.0-pre.17', latest: '0.1.0-pre.18', updateAvailable: true }} />
+      </Tooltip.Provider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'You' }));
+    expect(await screen.findByText('buddi 0.1.0-pre.17')).toBeInTheDocument();
+    expect(screen.getByText('A newer buddi is ready: 0.1.0-pre.18')).toBeInTheDocument();
+  });
+});

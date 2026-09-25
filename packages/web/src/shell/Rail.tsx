@@ -30,6 +30,7 @@ export function Rail({
   onTheme,
   plugins = [],
   updateAvailable = false,
+  version,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -45,6 +46,8 @@ export function Rail({
   plugins?: PluginPageDescriptor[];
   /** A newer buddi is ready to install: Settings gets a dot. */
   updateAvailable?: boolean;
+  /** The running version, and the newer one when the daily check found it. */
+  version?: RailVersion | undefined;
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -94,7 +97,7 @@ export function Rail({
         {ICONS[SETTINGS_ROUTE]}
       </RailLink>
 
-      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} />
+      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} />
     </nav>
   );
 }
@@ -109,14 +112,18 @@ const THEMES: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
  * The owner's own corner: who this is, and the switches worth having one
  * click away. Everything else about appearance is in Settings.
  */
+export interface RailVersion { current: string; latest?: string | undefined; updateAvailable: boolean }
+
 function OwnerMenu({
   theme,
   onTheme,
   onNavigate,
+  version,
 }: {
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
   onNavigate: (route: string) => void;
+  version?: RailVersion | undefined;
 }): JSX.Element {
   const owner = useAsync(() => api.owner(), []);
   const name = owner.data?.preferredName?.trim() || null;
@@ -150,6 +157,21 @@ function OwnerMenu({
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(WELCOME_ROUTE)}>
               Run setup again
             </DropdownMenu.Item>
+            {version ? (
+              <>
+                <DropdownMenu.Separator className="ui-menu-sep" />
+                {/* The version, where an owner looks for it: under their own name. A
+                    newer one is a line they can click; otherwise it is a quiet fact. */}
+                <DropdownMenu.Item
+                  className="ui-menu-item rail-owner-version"
+                  data-update={version.updateAvailable ? 'true' : undefined}
+                  onSelect={() => onNavigate(settingsRoute('system'))}
+                >
+                  <span className="mono">buddi {version.current}</span>
+                  {version.updateAvailable && version.latest ? <span className="rail-owner-update">A newer buddi is ready: {version.latest}</span> : null}
+                </DropdownMenu.Item>
+              </>
+            ) : null}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>

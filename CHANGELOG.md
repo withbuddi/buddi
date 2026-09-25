@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- The menu under your initial at the foot of the rail names the running buddi version, and the newer one when the daily check found it.
 - Settings → System → Version shows what changes in a newer buddi before you upgrade to it.
 - When a newer buddi is ready, Home says so under the greeting and Settings gets a dot in the sidebar.
 

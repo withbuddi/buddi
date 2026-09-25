@@ -344,6 +344,7 @@ export function App(): JSX.Element {
             onTheme={setTheme}
             plugins={pluginPages.rail}
             updateAvailable={update !== null}
+            version={version && !version.checkout ? { current: version.current, latest: version.latest, updateAvailable: version.updateAvailable } : version ? { current: version.current, updateAvailable: false } : undefined}
           />
 
           {onChat && !railNarrow ? (

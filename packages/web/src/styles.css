@@ -157,6 +157,9 @@ main[data-ground='plain'] { background: var(--bg); }
 }
 :root[data-theme='dark'] .rail-owner-face { background: var(--buddi-cream); color: var(--buddi-navy); }
 .rail-owner-menu { width: 280px; z-index: 50; }
+.rail-owner-version { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; color: var(--text-muted); font-size: var(--text-sm); }
+.rail-owner-version[data-update='true'] { color: var(--text); }
+.rail-owner-update { color: var(--accent); font-weight: var(--weight-medium); }
 .rail-owner-head { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; }
 .rail-owner-who { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .rail-owner-name { font-family: var(--font-display); font-size: var(--text-base); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
