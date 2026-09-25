@@ -647,11 +647,15 @@ async function ask(rt: ToolRuntime, agent: string, message: string, conversation
   const deadline = rt.now() + rt.waitMs;
   await rt.progress(`@${agent} is working (conversation ${conversationId}).`);
   let waitingOn: string | null = null;
-  // After an approval the resumed run can read as finished a beat before its
-  // last message is persisted; an empty answer at that instant is a race, not
-  // the answer. A few more polls, then it is taken as it is.
+  // A run can read as finished a beat before its last message is readable
+  // (seen on a loaded CI runner, with and without an approval in between);
+  // an empty answer at that instant is a race, not the answer. A bounded
+  // grace — a few more polls, and no more than a minute by the clock the
+  // caller gave — then it is taken as it is.
   let emptyPolls = 0;
+  let emptySince: number | null = null;
   const EMPTY_GRACE_POLLS = 20;
+  const EMPTY_GRACE_MS = 60_000;
 
   for (;;) {
     const transcript = await rt.gateway.get<Transcript>(`/api/chat/conversations/${enc(conversationId)}`);
@@ -677,7 +681,7 @@ async function ask(rt: ToolRuntime, agent: string, message: string, conversation
           return { conversationId, agent, answer, stopped: 'approval expired', actionId: last.actionId };
         }
         // Decided: the dashboard resumes the run, and a new run appears.
-      } else if (answer === '' && waitingOn !== null && emptyPolls < EMPTY_GRACE_POLLS && rt.now() < deadline) {
+      } else if (answer === '' && emptyPolls < EMPTY_GRACE_POLLS && rt.now() < deadline && rt.now() - (emptySince ??= rt.now()) < EMPTY_GRACE_MS) {
         emptyPolls += 1;
       } else {
         return { conversationId, agent, answer, ...(last.stopped && last.stopped !== 'end_turn' ? { stopped: last.stopped } : {}) };
