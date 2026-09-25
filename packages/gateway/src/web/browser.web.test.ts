@@ -51,7 +51,11 @@ describe('browser dashboard endpoints', () => {
     const csrf = pairs.find((value) => value.startsWith('buddi_csrf='))!.split(';')[0]!.slice('buddi_csrf='.length);
     const headers = { ...proxy, Cookie: pairs.map((value) => value.split(';')[0]).join('; '), 'X-Buddi-CSRF': csrf, Origin: external, 'Content-Type': 'application/json' };
     expect(await (await fetch(`${origin}/api/session`, { headers })).json()).toMatchObject({ scope: 'remote' });
-    expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(401);
+    // The same link opens again within its five minutes (a browser prerenders,
+    // then navigates); an expired one does not.
+    expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(302);
+    const stale = mintTicket(TOKEN, new Date(Date.now() - 10 * 60_000));
+    expect((await fetch(`${origin}/?t=${stale}`, { headers: proxy, redirect: 'manual' })).status).toBe(401);
     browser.checkPermissions = vi.fn(async () => browser.status());
     expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers: { ...headers, Origin: 'https://evil.example' }, body: '{}' })).status).toBe(403);
     expect((await fetch(`${origin}/api/browser/permissions`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);

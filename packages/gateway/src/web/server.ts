@@ -18,10 +18,15 @@
  *      has none, so the CSRF machinery below works unchanged; nothing the owner
  *      does ever shows an authentication step.
  *   3. **The ticket exchange.** Only on a non-loopback binding (or by explicit
- *      ask): a `?t=` on any page GET is verified against the installation's token,
- *      spent once, and answered with a redirect to a clean URL carrying an
- *      HttpOnly session cookie. The token never appears in a log line, an
- *      error, or the redirect target.
+ *      ask): a `?t=` on any page GET is verified against the installation's token
+ *      and answered with a redirect to a clean URL carrying an HttpOnly session
+ *      cookie. The ticket is good for its five minutes however many times it
+ *      is opened: a browser opens a pasted link more than once (it prerenders,
+ *      then navigates; an extension may fetch it too), and a one-time rule
+ *      turned that into a blank refusal for the owner. Whoever could reuse it
+ *      within five minutes had it already; after that it is a signature over
+ *      an expired time. The token never appears in a log line, an error, or
+ *      the redirect target.
  *   4. **The session, when the binding is not loopback.** Anything else without
  *      a live session cookie is `401` with an empty body. Not a message, not a
  *      `WWW-Authenticate`, not a different status for "expired" — one bit, and
@@ -172,7 +177,6 @@ import {
 import {
   RateLimiter,
   SessionStore,
-  SpentTickets,
   type Session,
   type SessionScope,
 } from './sessions.js';
@@ -407,7 +411,7 @@ export function previewAppOf(server: Server): PreviewApp | undefined {
   return PREVIEW_APPS.get(server);
 }
 
-/** The query parameter carrying a one-time ticket. */
+/** The query parameter carrying a five-minute ticket. */
 export const TICKET_PARAM = 't';
 
 /** How many doors along from `dashboard + 1` a preview port is looked for. */
@@ -419,7 +423,6 @@ export const PREVIEW_LINK_WINDOW_MS = 60_000;
 
 export function createWebApp(deps: WebServerDeps): Server {
   const sessions = new SessionStore(deps.sessionTtlMs ?? {});
-  const spent = new SpentTickets();
   const limiter = new RateLimiter();
   /*
    * Pairing has a budget of its own, and it is spent per session rather than
@@ -682,21 +685,20 @@ export function createWebApp(deps: WebServerDeps): Server {
     // for as long as that session is used.
     const scope = requestScope(req);
 
-    // The ticket exchange. Only ever on a GET, and only ever once per ticket,
-    // and only ever on a page URL: a ticket is handed out as a link somebody
+    // The ticket exchange. Only ever on a GET, and only ever on a page URL: a ticket is handed out as a link somebody
     // opens, never as a query on an API call. So under /api/ the parameter is
     // just a parameter, and a poller that happens to use the same name cannot
     // spend a 401 and a sign-in failure on every request.
     const ticket = url.pathname.startsWith('/api/') ? null : url.searchParams.get(TICKET_PARAM);
     if (ticket !== null && (method === 'GET' || method === 'HEAD')) {
       const check = verifyTicket(deps.token, ticket, now);
-      if (!check.ok || !spent.spend(check.nonce, check.expiresAt, now)) {
+      if (!check.ok) {
         if (limiter.blocked(key, now)) return sendEmpty(res, 429);
         limiter.fail(key, now);
-        // Never says which of "wrong", "expired" and "already used" it was —
-        // but says it to a person, on the page they opened, rather than as an
-        // empty status the browser dresses up as "this page isn't working".
-        return sendText(res, 401, 'This sign-in link is no longer valid: it was used already, or it is older than five minutes.\nRun `buddi` again for a fresh link.\n');
+        // Never says which of "wrong" and "expired" it was — but says it to a
+        // person, on the page they opened, rather than as an empty status the
+        // browser dresses up as "this page isn't working".
+        return sendText(res, 401, 'This sign-in link is no longer valid: a link lasts five minutes.\nRun `buddi` again for a fresh one.\n');
       }
       limiter.reset(key);
       const session = sessions.create(scope, now);
@@ -1049,7 +1051,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             // from the page rather than implied by a number in a source file.
             scope: session.scope,
             // How this browser got in. `local` is the open loopback mint,
-            // `ticket` the one-time exchange, `tailscale` an identity the
+            // `ticket` the five-minute ticket exchange, `tailscale` an identity the
             // local daemon confirmed — and then the name to greet.
             signedInThrough: session.via,
             ...(session.via === 'tailscale' ? { tailscaleName: session.tailscaleName, tailscaleLogin: session.tailscaleLogin } : {}),

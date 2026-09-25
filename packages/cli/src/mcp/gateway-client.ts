@@ -4,7 +4,7 @@
  * It is the dashboard's own HTTP API, reached the way `buddi dashboard` reaches
  * it (docs/specs/mcp.md §3): on the default loopback binding the server mints a
  * session for any request that arrives on this machine, and on anything wider
- * the installation's token is turned into a one-time ticket and exchanged for
+ * the installation's token is turned into a five-minute ticket and exchanged for
  * a session exactly as the dashboard link is. The token itself never leaves
  * this process.
  *
@@ -60,7 +60,7 @@ export interface Gateway {
 
 export interface GatewayClientOptions {
   baseUrl: string;
-  /** How to sign in when the binding is not open: a one-time ticket. */
+  /** How to sign in when the binding is not open: a five-minute ticket. */
   ticket?: (() => Promise<string>) | undefined;
   transport?: HttpTransport;
 }

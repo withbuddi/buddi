@@ -490,8 +490,8 @@ export const USAGE = `buddi — your personal agents, one command
   buddi service start|stop   load/unload it without touching the plist
   buddi service uninstall|status|logs|restart
 
-  buddi dashboard            open the local dashboard (one-time link)
-  buddi dashboard --token    print just the one-time token
+  buddi dashboard            open the local dashboard (a five-minute link)
+  buddi dashboard --token    print just the five-minute ticket
   buddi dashboard --off      how to turn the dashboard off
   buddi dashboard --install-app   a double-clickable "Buddi Dashboard" in ~/Applications
   buddi dashboard --uninstall-app remove it
