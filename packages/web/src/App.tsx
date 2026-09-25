@@ -380,6 +380,7 @@ export function App(): JSX.Element {
                 timezone={timezone}
                 navigate={navigate}
                 agents={agents}
+                defaultAgentId={defaultAgentId}
                 attention={attention}
                 pluginPages={pluginPages}
               />
@@ -416,6 +417,8 @@ export interface PlaceProps {
   timezone: string;
   navigate: (next: string, replace?: boolean) => void;
   agents: ChatAgent[];
+  /** The agent the page opens on, as `/api/chat/agents` says; orders the roster with the front desk and the maker. */
+  defaultAgentId?: string | null;
   attention: ReturnType<typeof useAttention>;
 }
 

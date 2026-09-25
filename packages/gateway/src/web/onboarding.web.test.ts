@@ -12,7 +12,7 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { createFirstAgent } from './onboarding.js';
+import { createFirstAgent, firstSentence } from './onboarding.js';
 import { loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { shouldStartFirstRun } from '../agents/first-run.js';
 import type { ProviderAccounts } from '../provider-accounts.js';
@@ -463,6 +463,39 @@ it('rewrites the shipped Concierge into the owner’s assistant instead of stand
   // Bound to the account the wizard named, not to whichever one came first.
   expect(created.assigned).toBe('two');
   expect(service.assign).toHaveBeenCalledWith('concierge', { accountId: 'two', model: 'claude-sonnet-4-5' });
+});
+
+it('writes the persona as the body and its first sentence as the card line', async () => {
+  const dir = agentsDir();
+  const shipped = { id: 'concierge', handle: 'buddi', name: 'Concierge', description: 'The agent buddi ships with.', source: 'example' as const };
+  const persona = [
+    "You're not a chatbot. You're becoming someone this person can count on.",
+    '',
+    'Some starting truths:',
+    '',
+    '- Help for real. Do the thing, then say what you did.',
+  ].join('\n');
+  await createFirstAgent(
+    {
+      pool: fakePool() as never,
+      catalog: {
+        list: () => [shipped],
+        get: (id: string) => (id === 'concierge' ? shipped : undefined),
+        byHandle: (handle: string) => (handle === 'buddi' ? shipped : undefined),
+      } as unknown as AgentCatalog,
+      providerAccounts: accounts([{ id: 'one', enabled: true, configured: true }]),
+      agentsDir: dir,
+      examplesDir: path.join(dir, '..', 'examples'),
+      reload: () => {},
+    },
+    { name: 'Ada', handle: 'ada', description: '', instructions: persona, accountId: 'one' },
+  );
+  const file = readFileSync(path.join(dir, 'concierge', 'agent.md'), 'utf8');
+  expect(file).toMatch(/description: .?You're not a chatbot\..?\n/);
+  expect(file).toContain(`You are Ada. There is exactly one owner`);
+  expect(file).toContain(persona);
+  expect(file).not.toContain("What you are for, in the owner's own words");
+  expect(firstSentence('  - Hello there! More.')).toBe('Hello there!');
 });
 
 it('lets the owner keep the shipped handle, and refuses one another agent holds', async () => {

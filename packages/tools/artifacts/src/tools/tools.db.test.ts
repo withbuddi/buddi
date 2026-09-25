@@ -78,7 +78,7 @@ suite('artifacts tools (postgres)', () => {
       createdBy: 'owner',
     });
     imageId = photo.id;
-  });
+  }, 60_000); // a fresh schema plus fixtures: under the whole gate's load the default 10 s was flaky
 
   afterAll(async () => {
     await pool?.end();

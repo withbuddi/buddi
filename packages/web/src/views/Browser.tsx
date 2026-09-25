@@ -15,19 +15,26 @@ import { RemoteHand } from './RemoteHand';
 
 export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
+  const session = useAsync(() => api.session(), []);
+  // Computer control is macOS-only. An unreadable or older session answer keeps the page as it was.
+  const macOS = session.data?.platform ? session.data.platform === 'darwin' : true;
+  const settled = !!session.data || !!session.error;
   return (
     <PageFrame embedded={embedded} title="Computer & browser">
       <ErrorBanner message={error} />
-      {!data ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} reload={reload} timezone={timezone} />}
+      {!data || !settled ? <Empty>Checking the host…</Empty> : <ControlSettingsView key={JSON.stringify(data.settings ?? null)} data={data} macOS={macOS} reload={reload} timezone={timezone} />}
     </PageFrame>
   );
 }
 
-function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; reload: () => void; timezone?: string }): JSX.Element {
+function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserStatus; macOS: boolean; reload: () => void; timezone?: string }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
-  const settings = data.settings;
+  // Off macOS a stored "Use my apps" is the agents' own browser, which is how the host runs it.
+  const settings = data.settings && !macOS && data.settings.mode === 'computer' ? { ...data.settings, mode: 'playwright' as const } : data.settings;
+  const mode = settings?.mode ?? (!macOS && data.mode === 'computer' ? 'playwright' : data.mode);
+  const computer = mode === 'computer';
   const sessions = data.sessions?.length ? data.sessions : data.session ? [data] : [];
   const active = sessions.length > 0 || data.busy;
   const run = async (action: () => Promise<unknown>) => {
@@ -37,7 +44,10 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
   };
   const save = (next: ControlSettings) => void run(() => api.browserSettings(next));
   const perms = data.permissions;
-  const ready = !!data.enabled && (!perms?.supported || (perms.accessibility && perms.screenRecording));
+  const ready = !!data.enabled && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
+  const readyLine = computer ? 'Ready. Agents can use your computer within the apps you allow below.'
+    : mode === 'extension' ? 'Ready. Agents work in your Chrome, in background tabs, through the buddi extension.'
+    : 'Ready. Agents work in their own browser. Your apps are never touched.';
 
   return (
     <Stack gap="lg">
@@ -49,7 +59,7 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
         actions={
           <>
             <Button size="sm" disabled={busy} onClick={() => void run(() => api.computerPermissions(false))}>Check again</Button>
-            {!ready && perms?.supported ? <Button size="sm" variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
+            {computer && !ready && perms?.supported ? <Button size="sm" variant="accent" disabled={busy || active} onClick={() => void run(() => api.computerPermissions(true))}>Request macOS permissions</Button> : null}
           </>
         }
       >
@@ -57,11 +67,11 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
           {!data.enabled ? (
             <Notice tone="warning">The host is not available. Start buddi serve on a machine with a desktop session.</Notice>
           ) : ready ? (
-            <Notice tone="good">Ready. Agents can use your computer within the apps you allow below.</Notice>
+            <Notice tone="good">{readyLine}</Notice>
           ) : (
             <Notice tone="warning">macOS has not granted everything yet. Grant the permissions below, then check again.</Notice>
           )}
-          {perms?.supported ? (
+          {!computer ? null : perms?.supported ? (
             <ul className="perm-list">
               <li className="perm-row">
                 <Pill tone={perms.accessibility ? 'good' : 'warning'}>{perms.accessibility ? 'Granted' : 'Needed'}</Pill>
@@ -77,8 +87,8 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
           ) : perms ? (
             <p className="muted">Computer control requires macOS 14 or later.</p>
           ) : null}
-          {perms?.message ? <p className="muted">{perms.message}</p> : null}
-          {perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
+          {computer && perms?.message ? <p className="muted">{perms.message}</p> : null}
+          {computer && perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
         </Stack>
       </Section>
 
@@ -86,7 +96,7 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
         title="Who is driving"
         panel
         actions={sessions.length > 0 ? (
-          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{data.mode === 'computer' ? 'Stop computer control' : 'Stop all browsers'}</Button>
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => void run(() => api.browserControl('stop'))}>{computer ? 'Stop computer control' : 'Stop all browsers'}</Button>
         ) : undefined}
       >
         {sessions.length === 0 ? (
@@ -112,12 +122,14 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
           <Section title="How agents get a screen" panel>
             <Stack divided>
             <div className="mode-choice" role="radiogroup" aria-label="Control mode">
-              <ModeOption
-                current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
-                title="Use my apps"
-                body="Agents work in your own windows, signed in as you, in the browser profile you choose below. One agent at a time. Releasing control leaves everything open."
-                onPick={() => save({ ...settings, mode: 'computer' })}
-              />
+              {macOS ? (
+                <ModeOption
+                  current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
+                  title="Use my apps"
+                  body="Agents work in your own windows, signed in as you, in the browser profile you choose below. One agent at a time. Releasing control leaves everything open."
+                  onPick={() => save({ ...settings, mode: 'computer' })}
+                />
+              ) : null}
               <ModeOption
                 current={settings.mode} value="playwright" disabled={busy || active || !data.enabled}
                 title="Give agents their own browser"
@@ -131,12 +143,13 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
                 onPick={() => save({ ...settings, mode: 'extension' })}
               />
             </div>
+            {!macOS ? <p className="muted">Using your own apps is macOS-only.</p> : null}
             {active ? <p className="muted">Finish or stop the current session before changing this.</p> : null}
             {settings.mode === 'extension' ? <ExtensionPairing busy={busy} timezone={timezone} /> : null}
             </Stack>
           </Section>
 
-          <Section title="Apps agents may use" panel>
+          {macOS ? <Section title="Apps agents may use" panel>
             <Stack>
               {settings.mode !== 'computer' ? (
                 <p className="muted">Only used by “Use my apps”. The list is kept for when you switch back.</p>
@@ -150,7 +163,7 @@ function ControlSettingsView({ data, reload, timezone }: { data: BrowserStatus; 
                 </div>
               </Details>
             </Stack>
-          </Section>
+          </Section> : null}
           {picking ? (
             <AppPicker
               chosen={settings.allowedApps}

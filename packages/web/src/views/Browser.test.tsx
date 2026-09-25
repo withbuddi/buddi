@@ -5,13 +5,14 @@ import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
 import { Browser, BrowserPanel } from './Browser';
 
-vi.mock('../api', () => ({ api: { browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
+vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
 const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] };
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'darwin' });
   vi.mocked(api.browser).mockResolvedValue(status); vi.mocked(api.browserControl).mockResolvedValue(status);
   vi.mocked(api.browserProfiles).mockResolvedValue({ profiles: [{ directory: 'Default', name: 'Amen' }, { directory: 'Profile 2', name: 'Work' }] });
   vi.mocked(api.extension).mockResolvedValue({ connected: false, pending: false, path: '/opt/buddi/extension' });
@@ -35,6 +36,16 @@ describe('computer & browser settings', () => {
     await waitFor(() => expect(api.browserSettings).toHaveBeenCalledWith({ ...settings, mode: 'playwright' }));
     fireEvent.click(screen.getByRole('button', { name: 'Request macOS permissions' }));
     await waitFor(() => expect(api.computerPermissions).toHaveBeenCalledWith(true));
+  });
+  it('off macOS, offers no computer control and shows a stored choice of it as the agents\' own browser', async () => {
+    vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'linux' });
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: false, accessibility: false, screenRecording: false } });
+    render(<Browser />);
+    expect(await screen.findByText('Using your own apps is macOS-only.')).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /Use my apps/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Give agents their own browser/ })).toBeChecked();
+    expect(screen.getByText(/Agents work in their own browser/)).toBeInTheDocument();
+    expect(screen.queryByText('Apps agents may use')).not.toBeInTheDocument();
   });
   it('adds an app from the installed list by name, and disables changes during a session', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings });

@@ -138,6 +138,38 @@ export function renderTarget(kind: string, target: unknown): string {
   }
 }
 
+/** The kind a model account's credential is bound with; its target is the account id. */
+export const PROVIDER_ACCOUNT_KIND = 'accounts.provider';
+
+/** A model account as this page names it: the owner's label and which provider it is. */
+export interface AccountName {
+  label: string;
+  provider: string;
+}
+
+/** The model account a secret is the credential of, when one of its bindings says so and the account is known. */
+export function accountOf(
+  bindings: readonly { kind: string; target: unknown }[],
+  accounts: ReadonlyMap<string, AccountName>,
+): AccountName | undefined {
+  for (const binding of bindings) {
+    if (binding.kind === PROVIDER_ACCOUNT_KIND && typeof binding.target === 'string') {
+      const account = accounts.get(binding.target);
+      if (account) return account;
+    }
+  }
+  return undefined;
+}
+
+/** A target as a row reads it, with a model account's label in place of its id. */
+export function renderPlace(kind: string, target: unknown, accounts: ReadonlyMap<string, AccountName>): string {
+  if (kind === PROVIDER_ACCOUNT_KIND && typeof target === 'string') {
+    const account = accounts.get(target);
+    if (account) return account.label;
+  }
+  return renderTarget(kind, target);
+}
+
 /** A use's outcome as the tone its pill wears (§6). */
 export function outcomeTone(outcome: string): 'good' | 'warning' | 'critical' | undefined {
   if (outcome === 'delivered') return 'good';

@@ -12,7 +12,7 @@ import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
-import { waitingText } from '../shell/roster';
+import { orderAgents, waitingText } from '../shell/roster';
 import { accentAttrs, accentOf } from '../shell/accent';
 import {
   AgentAvatar,
@@ -39,11 +39,13 @@ export function Home({
   timezone,
   navigate,
   agents,
+  defaultAgentId,
   attention,
 }: {
   timezone: string;
   navigate: (route: string) => void;
   agents: ChatAgent[];
+  defaultAgentId?: string | null;
   attention: Map<string, AgentAttention>;
 }): JSX.Element {
   const overview = useAsync<Overview>(() => api.overview(), [], 15_000);
@@ -53,6 +55,9 @@ export function Home({
   const conversations = useAsync(() => api.conversations(), [], 30_000);
   const offers = useAsync(() => api.offers(), [], 30_000);
   const proposals = useAsync(() => api.proposals(), [], 60_000);
+  const owner = useAsync(() => api.owner(), []);
+  // The same order as the rail and the Agents page: front desk first, the maker last.
+  const team = useMemo(() => orderAgents(agents, defaultAgentId ?? null), [agents, defaultAgentId]);
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
 
   const data = overview.data;
@@ -80,7 +85,7 @@ export function Home({
         <header className="home-hero">
           <div className="home-hero-text">
             <p className="home-date">{fmtDay(data?.now, timezone)}</p>
-            <h1 className="home-greeting">{greeting(data?.now, timezone)}</h1>
+            <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
           </div>
           <Mascot size="lg" />
@@ -142,7 +147,7 @@ export function Home({
           <Empty mascot>No agents yet. Add one under Agents.</Empty>
         ) : (
           <div className="home-team">
-            {agents.map((agent) => {
+            {team.map((agent) => {
               const waiting = waitingText(attention.get(agent.id));
               return (
                 <a
@@ -359,12 +364,14 @@ function hourIn(iso: string | undefined, timezone: string): number {
   }
 }
 
-export function greeting(iso: string | undefined, timezone: string): string {
+/** The time of day's greeting, by the owner's name when there is one: "Good evening, Amen." */
+export function greeting(iso: string | undefined, timezone: string, name?: string | null): string {
   const hour = hourIn(iso, timezone);
-  if (hour < 5) return 'Still up?';
-  if (hour < 12) return 'Good morning.';
-  if (hour < 18) return 'Good afternoon.';
-  return 'Good evening.';
+  const to = name?.trim() ? `, ${name.trim()}` : '';
+  if (hour < 5) return `Still up${to}?`;
+  if (hour < 12) return `Good morning${to}.`;
+  if (hour < 18) return `Good afternoon${to}.`;
+  return `Good evening${to}.`;
 }
 
 function fmtDay(iso: string | undefined, timezone: string): string {

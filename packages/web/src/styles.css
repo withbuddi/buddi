@@ -2856,6 +2856,9 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   gap: var(--space-3);
 }
 .meet-ask > .ui-field { flex: 1 1 200px; }
+.meet-ask > .ui-field[data-wide='true'] { flex-basis: 100%; }
+/* The persona: as tall as what it says, still the owner's to edit. */
+.meet-purpose { field-sizing: content; max-height: 60vh; }
 .meet-dock .wb-composer { margin: 0; }
 .meet-input {
   flex: 1 1 200px;

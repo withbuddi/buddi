@@ -1742,7 +1742,10 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
         ? { kind: 'emoji', value: existing.avatar }
         : { kind: 'mascot', role: 'core' },
   );
-  const [purpose, setPurpose] = useState<string>(existing?.description || SCRIPT.assistant.purposeValue);
+  // A new assistant starts from the persona; an existing one shows its card
+  // line, and only an edit to it is sent as a new persona.
+  const initialPurpose = existing?.description || SCRIPT.assistant.purposeValue;
+  const [purpose, setPurpose] = useState<string>(initialPurpose);
   const [saving, setSaving] = useState(false);
 
   /*
@@ -1762,12 +1765,16 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
     if (name.trim() === '' || saving) return;
     setSaving(true);
     const emoji = face.kind === 'emoji' ? { avatar: face.value } : {};
+    // The persona is the agent's instructions; the server takes its first
+    // sentence as the card line.
+    const persona = !existing || (purpose.trim() !== '' && purpose !== initialPurpose) ? { instructions: purpose.trim() } : {};
     const written = existing
-      ? api.updateFirstAgent({ name: name.trim(), description: purpose.trim(), ...emoji })
+      ? api.updateFirstAgent({ name: name.trim(), ...persona, ...emoji })
       : api.createFirstAgent({
           name: name.trim(),
           handle: idFor(name),
-          description: purpose.trim(),
+          description: '',
+          ...persona,
           ...emoji,
           ...(answers.brain ? { accountId: answers.brain.accountId } : {}),
         });
@@ -1853,8 +1860,14 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
           })}
         </div>
       </div>
-      <Field label={SCRIPT.assistant.purpose} grow>
-        <input value={purpose} maxLength={1000} onChange={(event) => setPurpose(event.target.value)} />
+      <Field label={SCRIPT.assistant.purpose} wide>
+        <textarea
+          className="meet-purpose"
+          value={purpose}
+          maxLength={8000}
+          rows={Math.max(4, purpose.split('\n').length + 1)}
+          onChange={(event) => setPurpose(event.target.value)}
+        />
       </Field>
     </Ask>
   );

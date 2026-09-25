@@ -39,14 +39,14 @@ const AGENT_TABS = [
   { id: 'setup', label: 'Setup' },
 ] as const;
 
-export function Agents({ hash, timezone, navigate, agents, attention }: PlaceProps): JSX.Element {
+export function Agents({ hash, timezone, navigate, agents, attention, defaultAgentId: shellDefault }: PlaceProps): JSX.Element {
   const location = parseAgentRoute(hash);
   const tab = /[?&]tab=([a-z]+)/.exec(hash)?.[1] ?? 'team';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   const team = useAsync(() => api.agents(), []);
   const offers = useAsync(() => api.offers(), [], 20_000);
   const offerCount = offers.data?.offers.length ?? 0;
-  const defaultAgentId = team.data?.default?.defaultAgentId ?? null;
+  const defaultAgentId = team.data?.default?.defaultAgentId ?? shellDefault ?? null;
   // A new agent is a conversation with the maker, found by its role: the same
   // door the profile's "Ask the maker to change this" opens, nothing made here.
   const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));

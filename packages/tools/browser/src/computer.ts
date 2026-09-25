@@ -9,7 +9,8 @@ export const browserApps = ['com.google.Chrome', 'com.apple.Safari', 'org.chromi
 /** The browsers that keep several profiles and accept `--profile-directory`. */
 export const chromiumApps: readonly string[] = ['com.google.Chrome', 'org.chromium.Chromium', 'com.microsoft.edgemac', 'com.brave.Browser'];
 export const settingsSchema = z.object({
-  mode: z.enum(['computer', 'playwright', 'extension']).default('computer'),
+  /** A separate browser by default on every platform; "Use my apps" is an explicit, macOS-only choice. */
+  mode: z.enum(['computer', 'playwright', 'extension']).default('playwright'),
   browserApp: z.enum(browserApps).default('com.google.Chrome'),
   allowedApps: z.array(z.string().min(3).max(200).regex(/^[A-Za-z0-9.-]+$/)).min(1).max(32).default(['com.google.Chrome', 'com.apple.Safari']),
   /** A Chromium profile directory ("Default", "Profile 2"). Absent: whatever window is in front. */

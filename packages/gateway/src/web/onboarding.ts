@@ -171,7 +171,14 @@ export class OnboardingRefusal extends Error {
 export interface FirstAgentInput {
   name: string;
   handle: string;
+  /** The one-line card. Empty with `instructions` given: their first sentence. */
   description: string;
+  /**
+   * The agent's persona, in the owner's words: written as the body of its
+   * file, under the name line and above how it works. Absent, the body quotes
+   * the description instead, as it always did.
+   */
+  instructions?: string;
   avatar?: string;
   /**
    * The account the wizard just tested, bound to the new agent.
@@ -236,18 +243,49 @@ function checkHandle(value: string, catalog: AgentCatalog, replacing: string): s
   return handle;
 }
 
-/** The persona a generic first agent starts with: the owner's words, framed. */
-export function firstAgentPersona(input: { name: string; description: string }): string {
+/** The most a persona written through the wizard may hold. */
+export const INSTRUCTIONS_MAX = 8000;
+
+/**
+ * The card line a persona gives when the owner wrote no other: its first
+ * sentence, on one line. "You're not a chatbot. You're becoming…" is
+ * "You're not a chatbot."
+ */
+export function firstSentence(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? '';
+  const plain = line.replace(/^[-*>#\s]+/, '');
+  const sentence = (/^.*?[.!?](?=\s|$)/.exec(plain)?.[0] ?? plain).trim();
+  return sentence.length > 200 ? `${sentence.slice(0, 199).trimEnd()}…` : sentence;
+}
+
+function personaHead(name: string): string {
+  return `You are ${name}. There is exactly one owner: the person you are talking to. Today is {{today}}.`;
+}
+
+/**
+ * The persona a generic first agent starts with: the owner's words, framed.
+ *
+ * With `instructions`, those words are the persona itself, verbatim. Without,
+ * the description is quoted as what the agent is for — the shape every first
+ * agent had before the wizard asked for a persona, kept byte for byte so an
+ * older file is still recognised as untouched.
+ */
+export function firstAgentPersona(input: { name: string; description: string; instructions?: string }): string {
+  const own = input.instructions?.trim();
   return [
-    `You are ${input.name}. There is exactly one owner: the person you are talking to. Today is {{today}}.`,
+    personaHead(input.name),
     '',
-    'What you are for, in the owner\'s own words:',
-    '',
-    input.description
-      .trim()
-      .split('\n')
-      .map((line) => `> ${line.trim()}`)
-      .join('\n'),
+    ...(own
+      ? [own]
+      : [
+          'What you are for, in the owner\'s own words:',
+          '',
+          input.description
+            .trim()
+            .split('\n')
+            .map((line) => `> ${line.trim()}`)
+            .join('\n'),
+        ]),
     '',
     '## How you work',
     '',
@@ -337,7 +375,8 @@ async function writeFirstAgent(
   if (name === '' || name.length > 60) {
     throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
   }
-  const description = input.description.trim();
+  const instructions = checkInstructions(input.instructions);
+  const description = input.description.trim() || (instructions ? firstSentence(instructions) : '');
   if (description === '' || description.length > 1000) {
     throw new OnboardingRefusal(400, 'Say in a sentence or two what this agent is for (up to 1,000 characters).');
   }
@@ -384,7 +423,7 @@ async function writeFirstAgent(
     // Absent unless there is something to say: a missing key is the model's
     // own default, and writing `thinking: undefined` would be a claim.
     ...(thinking ? { thinking } : {}),
-    persona: firstAgentPersona({ name, description }),
+    persona: firstAgentPersona({ name, description, ...(instructions ? { instructions } : {}) }),
   });
   // The loader's own verdict, before anything is written.
   try {
@@ -436,8 +475,34 @@ async function writeFirstAgent(
 /** What "change" may alter about the assistant after it exists. */
 export interface FirstAgentUpdate {
   name?: string;
+  /** Omitted with `instructions` given: their first sentence. */
   description?: string;
+  /** A new persona; written only while the body is still the generated one. */
+  instructions?: string;
   avatar?: string;
+}
+
+function checkInstructions(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const text = value.trim();
+  if (text === '' || text.length > INSTRUCTIONS_MAX) {
+    throw new OnboardingRefusal(400, `Say who this agent should be, in up to ${INSTRUCTIONS_MAX.toLocaleString('en-GB')} characters.`);
+  }
+  return text;
+}
+
+/**
+ * Is this body still one first run generated, and with which persona?
+ * `null` when the owner (or anyone) has written their own; otherwise the
+ * persona it carries, or none for the older shape that quoted the description.
+ */
+function generatedPersona(body: string, name: string, description: string): { instructions?: string } | null {
+  if (body === firstAgentPersona({ name, description }).trim()) return {};
+  const head = `${personaHead(name)}\n\n`;
+  const tail = firstAgentPersona({ name, description, instructions: '\u0000' }).split('\u0000')[1]!.trimEnd();
+  if (!body.startsWith(head) || !body.endsWith(tail)) return null;
+  const instructions = body.slice(head.length, body.length - tail.length).trim();
+  return instructions && firstAgentPersona({ name, description, instructions }).trim() === body ? { instructions } : null;
 }
 
 /** The owner's own agent, if they have one. Examples are not it. */
@@ -476,7 +541,10 @@ export function updateFirstAgent(
   if (name !== undefined && (name === '' || name.length > 60)) {
     throw new OnboardingRefusal(400, 'A name is one to 60 characters.');
   }
-  const description = input.description === undefined ? undefined : input.description.trim();
+  const instructions = checkInstructions(input.instructions);
+  const description = input.description === undefined
+    ? instructions === undefined ? undefined : firstSentence(instructions)
+    : input.description.trim();
   if (description !== undefined && (description === '' || description.length > 1000)) {
     throw new OnboardingRefusal(400, 'Say in a sentence or two what this agent is for (up to 1,000 characters).');
   }
@@ -500,12 +568,14 @@ export function updateFirstAgent(
   } catch (err) {
     throw new OnboardingRefusal(400, err instanceof Error ? err.message : String(err));
   }
-  // The persona quotes the name and the purpose, so leaving it alone would
-  // leave an assistant introducing itself by its old name. It is rewritten
-  // only while it is still word for word the one this module generated.
-  const untouched = bodyOf(patched) === firstAgentPersona({ name: agent.name, description: agent.description }).trim();
-  const content = untouched
-    ? replaceBody(patched, firstAgentPersona({ name: name ?? agent.name, description: description ?? agent.description }), agent.file)
+  // The persona carries the name (and, in its older shape, the purpose), so
+  // leaving it alone would leave an assistant introducing itself by its old
+  // name. It is rewritten only while it is still word for word the one this
+  // module generated; a persona the owner wrote into the file stays theirs.
+  const generated = generatedPersona(bodyOf(patched), agent.name, agent.description);
+  const persona = instructions ?? generated?.instructions;
+  const content = generated
+    ? replaceBody(patched, firstAgentPersona({ name: name ?? agent.name, description: description ?? agent.description, ...(persona ? { instructions: persona } : {}) }), agent.file)
     : patched;
   try {
     parseAgentFile(content, { dirName: agent.id, file: agent.file });

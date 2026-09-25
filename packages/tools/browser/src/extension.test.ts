@@ -95,7 +95,7 @@ describe('the mode choice', () => {
     const controller = new HostController(dir, { extensionBridge: () => fake });
     controllers.push(controller);
     await controller.enable();
-    expect(controller.status().mode).toBe('computer');
+    expect(controller.status().mode).toBe('playwright');
 
     const settings = { ...controller.status().settings!, mode: 'extension' as const };
     expect((await controller.configure(settings)).mode).toBe('extension');
