@@ -142,7 +142,7 @@ export async function webTokenExists(opts: EnsureTokenOptions = {}): Promise<Tok
  * ------------------------------------------------------------------ */
 
 function sign(token: string, payload: string): string {
-  return createHmac('sha256', token).update(payload, 'utf8').digest('base64url');
+  return createHmac('sha256', token).update(payload, 'utf8').digest().subarray(0, MAC_BYTES).toString('base64url');
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -151,10 +151,18 @@ function constantTimeEqual(a: string, b: string): boolean {
   return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-/** `<nonce>.<expiryMs>.<hmac>` — opaque to everything but this file. */
+/**
+ * `<nonce>.<expiry>.<mac>` — opaque to everything but this file, and short
+ * on purpose: a link is copied out of a terminal, where a long one wraps and
+ * loses a character on the way to the browser (it happened three times on the
+ * first Linux trial). Eight characters of nonce, the expiry in seconds as
+ * base 36, and the first 16 bytes of the HMAC — 128 bits of signature over a
+ * five-minute window — make about forty characters instead of a hundred.
+ */
+const MAC_BYTES = 16;
 export function mintTicket(token: string, now: Date = new Date(), ttlMs = TICKET_TTL_MS): string {
-  const nonce = randomBytes(12).toString('base64url');
-  const exp = now.getTime() + ttlMs;
+  const nonce = randomBytes(6).toString('base64url');
+  const exp = Math.ceil((now.getTime() + ttlMs) / 1000).toString(36);
   const payload = `${nonce}.${exp}`;
   return `${payload}.${sign(token, payload)}`;
 }
@@ -167,7 +175,7 @@ export function verifyTicket(token: string, ticket: string, now: Date = new Date
   const parts = (ticket ?? '').split('.');
   if (parts.length !== 3) return { ok: false, reason: 'malformed' };
   const [nonce, expRaw, sig] = parts as [string, string, string];
-  const exp = Number(expRaw);
+  const exp = /^[0-9a-z]{1,12}$/.test(expRaw) ? parseInt(expRaw, 36) * 1000 : Number.NaN;
   if (nonce === '' || !Number.isFinite(exp)) return { ok: false, reason: 'malformed' };
   if (!constantTimeEqual(sign(token, `${nonce}.${expRaw}`), sig)) {
     return { ok: false, reason: 'bad-signature' };

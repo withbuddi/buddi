@@ -131,6 +131,12 @@ echo "Open this on your own machine:"
 echo "  $link"
 echo "The ticket expires in five minutes. For a fresh one:"
 echo "  docker exec $CONTAINER buddi --no-service --no-open"
+# The trial runs on this machine, so the browser is opened here, the way a
+# first run on macOS opens it: nothing to copy out of a terminal. --no-open
+# (or a machine with no `open`) leaves the link above to the owner.
+if [ "${BUDDI_TRIAL_NO_OPEN:-}" = "" ] && command -v open >/dev/null 2>&1; then
+  open "$link" && echo "(opened in your browser)"
+fi
 if [ "$HOST_PORT" != "$INTERNAL" ]; then
   echo
   echo "Note: the host port is $HOST_PORT but the gateway's is $INTERNAL, so the browser's"
