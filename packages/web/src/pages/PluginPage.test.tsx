@@ -26,6 +26,7 @@ vi.mock('../api', async (load) => ({
     pageAct: vi.fn(),
     approval: vi.fn(),
     decide: vi.fn(),
+    acceptPluginAgent: vi.fn(),
   },
 }));
 
@@ -1190,5 +1191,50 @@ describe('the page as the design system draws it', () => {
     drawInbox();
     const empty = await screen.findByText('Choose a thing to read it here.');
     expect(empty.closest('.ui-split-detail')).toHaveAttribute('data-empty', 'true');
+  });
+});
+
+/*
+ * An agent the plugin proposes, offered where it is needed: the line, and the
+ * same accept the Plugins page runs, with the approval drawn in place.
+ */
+describe('an agent offer', () => {
+  const offerPage: PluginPageDescriptor = {
+    plugin: 'email',
+    id: 'settings',
+    title: 'Email',
+    place: 'settings',
+    data: { query: 'mailboxes' },
+    body: [
+      {
+        kind: 'agent-offer',
+        agent: 'mail-triage',
+        text: 'Background triage needs a mail agent.',
+        label: 'Create @mail',
+        when: { path: 'triage', equals: 'needs-agent' },
+      },
+      { kind: 'notice', text: 'Mailboxes.' },
+    ],
+  } as PluginPageDescriptor;
+
+  const drawOffer = (triage: string): ReturnType<typeof render> => {
+    vi.mocked(api.pageQuery).mockResolvedValue({ data: { triage } } as never);
+    return render(<PluginPage page={offerPage} navigate={navigate} timezone="UTC" />);
+  };
+
+  it('says the line and starts the gated accept, drawing its approval here', async () => {
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'act-9' });
+    drawOffer('needs-agent');
+    expect(await screen.findByText('Background triage needs a mail agent.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create @mail' }));
+    await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage'));
+    expect(await screen.findByText('Send it now')).toBeInTheDocument();
+    expect(api.pageAct).not.toHaveBeenCalled();
+  });
+
+  it('is not there once the agent is', async () => {
+    drawOffer('ready');
+    expect(await screen.findByText('Mailboxes.')).toBeInTheDocument();
+    expect(screen.queryByText('Background triage needs a mail agent.')).not.toBeInTheDocument();
   });
 });

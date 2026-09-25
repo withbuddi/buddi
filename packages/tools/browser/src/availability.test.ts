@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { browserLine, detectBrowser, NO_BROWSER_ACT, needsHeadless } from './availability.js';
+import { browserLine, detectBrowser, InstallProgressReader, NO_BROWSER_ACT, NO_BROWSER_STATUS, needsHeadless, probeLaunch } from './availability.js';
 import { PlaywrightHost } from './host.js';
 
 /** A filesystem that holds exactly these files. */
@@ -49,5 +49,82 @@ describe('launching with no browser', () => {
       const host = new PlaywrightHost({ profileDir: path.join(dir, 'profile'), detect: () => ({ engine: 'none' }) });
       await expect(host.open({ adopt: () => {} }, () => true)).rejects.toThrow(NO_BROWSER_ACT);
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+/*
+ * What Playwright 1.63's installer prints when its output is piped: one
+ * "Downloading" line per package, a progress line per tenth, one "downloaded
+ * to" line when the package is in place. A retry repeats its "Downloading".
+ */
+const INSTALLER = [
+  'Downloading Chrome for Testing 140.0.7339.16 (playwright chromium v1187) from https://cdn.playwright.dev/builds/cft/140.0.7339.16/linux64/chrome-linux64.zip',
+  '|■■■■■■■■                                                                        |  10% of 170.4 MiB',
+  '|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                            |  45% of 170.4 MiB',
+  '|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 170.4 MiB',
+  'Chrome for Testing 140.0.7339.16 (playwright chromium v1187) downloaded to /root/.cache/ms-playwright/chromium-1187',
+  'Downloading Chrome Headless Shell 140.0.7339.16 (playwright chromium-headless-shell v1187) from https://cdn.playwright.dev/builds/cft/140.0.7339.16/linux64/chrome-headless-shell-linux64.zip',
+  '|■■■■■■■■■■■■■■■■                                                                |  20% of 104.3 MiB',
+];
+
+describe('InstallProgressReader', () => {
+  it('reads the installer into numbers, package by package', () => {
+    const reader = new InstallProgressReader();
+    const seen = INSTALLER.map((line) => reader.read(line));
+    expect(seen[0]).toEqual({ phase: 'downloading', percent: 0, what: 'Chromium', download: 1 });
+    expect(seen[2]).toEqual({ phase: 'downloading', percent: 45, what: 'Chromium', download: 1 });
+    expect(seen[4]).toEqual({ phase: 'installing', percent: 100, what: 'Chromium', download: 1 });
+    // The switch to the next package starts it at zero and counts it.
+    expect(seen[5]).toEqual({ phase: 'downloading', percent: 0, what: 'Chromium headless shell', download: 2 });
+    expect(seen[6]).toEqual({ phase: 'downloading', percent: 20, what: 'Chromium headless shell', download: 2 });
+  });
+
+  it('reads the older titles, a retry, FFmpeg, and a completed run', () => {
+    const reader = new InstallProgressReader();
+    reader.read('Downloading Chromium 131.0.6778.33 (playwright build v1148) from https://playwright.azureedge.net/builds/chromium/1148/chromium-linux.zip');
+    expect(reader.read('|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 164.8 MiB')).toMatchObject({ what: 'Chromium', percent: 50, download: 1 });
+    // A retry of the same package is not a new one.
+    expect(reader.read('Downloading Chromium 131.0.6778.33 (playwright build v1148) from https://playwright-akamai.azureedge.net/builds/chromium/1148/chromium-linux.zip')).toEqual({ phase: 'downloading', percent: 0, what: 'Chromium', download: 1 });
+    reader.read('Chromium 131.0.6778.33 (playwright build v1148) downloaded to /home/me/.cache/ms-playwright/chromium-1148');
+    expect(reader.read('Downloading FFMPEG playwright build v1010 from https://playwright.azureedge.net/builds/ffmpeg/1010/ffmpeg-linux.zip')).toMatchObject({ what: 'FFmpeg', download: 2 });
+    expect(reader.read('Downloading FFmpeg (playwright ffmpeg v1011) from https://cdn.playwright.dev/builds/ffmpeg/1011/ffmpeg-linux.zip')).toMatchObject({ what: 'FFmpeg', download: 3 });
+    // Lines it does not know change nothing.
+    expect(reader.read('BEWARE: your OS is not officially supported by Playwright')).toMatchObject({ what: 'FFmpeg', percent: 0, download: 3 });
+    expect(reader.finish(true)).toEqual({ phase: 'done', percent: 100, what: 'Chromium', download: 3 });
+  });
+
+  it('says failed where it stopped', () => {
+    const reader = new InstallProgressReader();
+    reader.read(INSTALLER[0]!);
+    reader.read(INSTALLER[2]!);
+    expect(reader.finish(false)).toEqual({ phase: 'failed', percent: 45, what: 'Chromium', download: 1 });
+  });
+});
+
+describe('probeLaunch', () => {
+  it('says there is nothing to launch before anything is installed', async () => {
+    expect(await probeLaunch({ headless: true, detect: () => ({ engine: 'none' }) })).toEqual({
+      ok: false, message: NO_BROWSER_STATUS, problem: 'no-browser',
+    });
+  });
+
+  it('launches the Chrome it found by path when Playwright cannot find it by channel', async () => {
+    const seen: unknown[] = [];
+    const answer = await probeLaunch({
+      headless: false,
+      detect: () => ({ engine: 'chrome', executable: '/usr/bin/google-chrome', channel: false }),
+      launch: async (options) => { seen.push(options); },
+    });
+    expect(answer).toEqual({ ok: true });
+    expect(seen).toEqual([{ headless: false, executablePath: '/usr/bin/google-chrome' }]);
+  });
+
+  it('names missing libraries only on Linux', async () => {
+    const launch = async (): Promise<void> => { throw new Error('error while loading shared libraries: libnss3.so'); };
+    const detect = () => ({ engine: 'chromium' as const, executable: '/x/chrome' });
+    expect(await probeLaunch({ headless: true, detect, launch, platform: 'linux' })).toMatchObject({ problem: 'missing-libraries' });
+    expect(await probeLaunch({ headless: true, detect, launch, platform: 'darwin' })).toMatchObject({
+      ok: false, message: expect.stringContaining('would not start: error while loading shared libraries'),
+    });
   });
 });

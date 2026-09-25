@@ -174,7 +174,7 @@ interface BuddiHost {
 ```
 
 **owner.** `id: string`, `timezone: string`, `agentForRole(role): string |
-undefined`, `protectedPaths: readonly string[]`. Wraps `ownerId`,
+undefined`, `hasAgent(id): boolean` (1.1), `protectedPaths: readonly string[]`. Wraps `ownerId`,
 `timezone`, `agentForRole` and `protectedPaths` as they are set today.
 Never returns an agent's file, grant or provider.
 

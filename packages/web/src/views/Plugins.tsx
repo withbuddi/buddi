@@ -33,7 +33,7 @@ import {
 import { fmtRelative } from '../format';
 import { AGENTS_ROUTE } from '../routes';
 import { Button, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
-import { ApprovalCard, useDecide } from './parts/ApprovalCard';
+import { AcceptApproval, useAcceptPluginAgent } from './parts/AgentOffer';
 
 /** How often a running stage is asked where it has got to. */
 const JOB_POLL_MS = 1_500;
@@ -712,20 +712,9 @@ function Unlocks({ plugin, unlocks }: { plugin?: string; unlocks: PluginUnlock[]
 
 /** One proposed agent: what it is, and the button that starts the approval. */
 function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): JSX.Element {
-  const [busy, setBusy] = useState(false);
-  const [approvalId, setApprovalId] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  // The same accept Home and a plugin's own page offer (`parts/AgentOffer`).
+  const offer = useAcceptPluginAgent(plugin, unlock.id);
   const accepted = unlock.drift.state !== 'not-accepted';
-  const accept = (): void => {
-    if (!plugin) return;
-    setBusy(true);
-    setFailure(null);
-    api
-      .acceptPluginAgent(plugin, unlock.id)
-      .then((answer) => setApprovalId(answer.approvalId ?? null))
-      .catch((error: unknown) => setFailure(error instanceof ApiError ? error.message : String(error)))
-      .finally(() => setBusy(false));
-  };
   return (
     <Stack gap="sm">
       <Toolbar>
@@ -734,40 +723,13 @@ function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): 
         <span className="ui-card-meta">{unlock.drift.message}</span>
         <Spacer />
         {plugin && !accepted ? (
-          <Button size="sm" disabled={busy || approvalId !== null} onClick={accept}>
+          <Button size="sm" disabled={offer.busy || offer.approvalId !== null} onClick={offer.accept}>
             Accept
           </Button>
         ) : null}
       </Toolbar>
-      <ErrorBanner message={failure} />
-      {approvalId ? <Approval id={approvalId} onDecided={() => setApprovalId(null)} /> : null}
-    </Stack>
-  );
-}
-
-/**
- * The approval the Accept button produced, drawn where it was asked for.
- *
- * The very card Home draws, from the same route: a decision made here and a
- * decision made there are the same row, and the same race.
- */
-function Approval({ id, onDecided }: { id: string; onDecided: () => void }): JSX.Element {
-  const action = useAsync<ApprovalRow>(() => api.approval(id), [id]);
-  const { busy, note, failure, decide } = useDecide(() => onDecided());
-  if (action.error) return <ErrorBanner message={action.error} />;
-  if (!action.data) return <Empty>Loading the approval…</Empty>;
-  return (
-    <Stack gap="sm">
-      <ApprovalCard
-        action={action.data}
-        timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-        busy={busy === id}
-        onDecide={(actionId, decision, scope, choices) => {
-          void decide(actionId, decision, scope, choices);
-        }}
-      />
-      {note ? <Notice tone="good" role="status">{note}</Notice> : null}
-      <ErrorBanner message={failure} />
+      <ErrorBanner message={offer.failure} />
+      {offer.approvalId ? <AcceptApproval id={offer.approvalId} onDecided={offer.clear} /> : null}
     </Stack>
   );
 }

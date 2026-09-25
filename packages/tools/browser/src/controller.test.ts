@@ -81,14 +81,50 @@ describe('the agents\' own browser on this machine', () => {
     const controller = new HostController(dir, {
       platform: 'linux', env: {},
       detect: () => (installed ? { engine: 'chromium', executable: '/x/chrome' } : { engine: 'none' }),
-      installer: async (onLine) => { onLine('Downloading Chromium 10%'); await new Promise<void>((resolve) => { finish = resolve; }); installed = true; return { ok: true, detail: 'done', missingLibraries: false }; },
+      installer: async (onLine) => {
+        onLine('Downloading Chrome for Testing 140.0.7339.16 (playwright chromium v1187) from https://cdn.playwright.dev/builds/cft/140.0.7339.16/linux64/chrome-linux64.zip');
+        onLine('|■■■■■■■■                                                                        |  10% of 170.4 MiB');
+        await new Promise<void>((resolve) => { finish = resolve; }); installed = true; return { ok: true, detail: 'done', missingLibraries: false };
+      },
     });
     resources.push({ dir, controller }); await controller.enable();
     expect(controller.status().browser).toMatchObject({ engine: 'none', headless: true, message: expect.stringContaining('No browser installed for the agents yet') });
-    expect(controller.installBrowser().browser?.install).toEqual({ state: 'running', line: 'Downloading Chromium 10%' });
+    // Numbers for a progress bar, and none of the installer's own text.
+    expect(controller.installBrowser().browser?.install).toEqual({
+      state: 'running',
+      progress: { phase: 'downloading', percent: 10, what: 'Chromium', download: 1 },
+    });
     finish(); await new Promise((resolve) => setTimeout(resolve, 0));
     const after = controller.status().browser!;
-    expect(after).toMatchObject({ engine: 'chromium', headless: true, install: { state: 'done' } });
+    expect(after).toMatchObject({ engine: 'chromium', headless: true, install: { state: 'done', line: 'Chromium is installed.', progress: { phase: 'done', percent: 100 } } });
     expect(after.message).toContain('headless');
+  });
+
+  it('checks that the browser launches, headless as the machine dictates, and says why not', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
+    const launches: Array<{ headless: boolean }> = [];
+    let failWith: string | null = null;
+    const controller = new HostController(dir, {
+      platform: 'linux', env: {},
+      detect: () => ({ engine: 'chromium', executable: '/x/chrome' }),
+      launch: async (options) => { launches.push(options); if (failWith) throw new Error(failWith); },
+    });
+    resources.push({ dir, controller }); await controller.enable();
+
+    expect(await controller.checkLaunch()).toEqual({ ok: true });
+    expect(launches).toEqual([{ headless: true }]);
+
+    failWith = 'browserType.launch: Host system is missing dependencies to run browsers.\n  sudo npx playwright install-deps';
+    const missing = await controller.checkLaunch();
+    expect(missing).toMatchObject({ ok: false, problem: 'missing-libraries', message: expect.stringContaining('lacks system libraries') });
+    expect(missing.ok ? '' : missing.command).toContain('install-deps chromium');
+    // Remembered, as a failed launch from a session would be.
+    expect(controller.status().browser?.problem).toBe('missing-libraries');
+
+    failWith = 'Target page, context or browser has been closed\nmore detail';
+    expect(await controller.checkLaunch()).toEqual({
+      ok: false,
+      message: 'The browser is installed but would not start: Target page, context or browser has been closed',
+    });
   });
 });

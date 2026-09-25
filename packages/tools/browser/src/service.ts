@@ -1,3 +1,4 @@
+import type { InstallProgress, LaunchCheck } from './availability.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
@@ -54,8 +55,13 @@ export interface BrowserEngineStatus {
   problem?: 'missing-libraries';
   /** One or two sentences for the owner, when there is something to say. */
   message?: string;
-  /** The install started from the dashboard, while it runs and after. */
-  install?: { state: 'running' | 'done' | 'failed'; line?: string };
+  /**
+   * The install started from the dashboard, while it runs and after.
+   * `progress` is the installer's output read into numbers, for a progress
+   * bar; `line` is buddi's sentence at the end — installed, or why not —
+   * never the installer's raw progress text.
+   */
+  install?: { state: 'running' | 'done' | 'failed'; line?: string; progress?: InstallProgress };
 }
 export interface BrowserScope { sessionId?: string; agentId?: string; conversationId?: string }
 /**
@@ -95,6 +101,8 @@ export interface BrowserController {
   checkPermissions?(prompt?: boolean): Promise<BrowserStatus>;
   /** Start Playwright's Chromium install. Returns at once; the status carries its progress. */
   installBrowser?(): BrowserStatus;
+  /** Launch the agents' browser once and close it: does it start on this machine? Owner UI only. */
+  checkLaunch?(): Promise<LaunchCheck>;
   rollover?(input: BrowserRollover): boolean;
 }
 

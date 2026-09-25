@@ -98,8 +98,8 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
 export const manifest = createBrowserManifest();
 export default manifest;
 export { BrowserService, browserStoppedMessage } from './service.js';
-export { detectBrowser, needsHeadless, installBrowser, browserLine, playwrightCli, installDepsCommand, missingLibrariesMessage, NO_BROWSER_ACT, NO_BROWSER_STATUS, HEADLESS_NOTE } from './availability.js';
-export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome } from './availability.js';
+export { detectBrowser, needsHeadless, installBrowser, browserLine, playwrightCli, installDepsCommand, missingLibrariesMessage, probeLaunch, InstallProgressReader, MISSING_LIBRARIES_SENTENCE, NO_BROWSER_ACT, NO_BROWSER_STATUS, HEADLESS_NOTE } from './availability.js';
+export type { BrowserAvailability, BrowserEngine, DetectDeps, InstallOutcome, InstallProgress, LaunchCheck, ProbeDeps } from './availability.js';
 export type { BrowserEngineStatus, BrowserStatus, BrowserController, BrowserHandOffer, BrowserScope, BrowserRollover, BrowserMode } from './service.js';
 export { BrowserManager } from './manager.js';
 export { PlaywrightHost } from './host.js';

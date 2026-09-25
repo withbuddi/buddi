@@ -135,6 +135,7 @@ type Component =
   | { kind: 'button'; action: ToolRef }
   | { kind: 'approval'; path: string }          // an approval id in the data; draws ApprovalCard
   | { kind: 'artifact'; path: string; label: string }  // an artifact id; draws the download link
+  | { kind: 'agent-offer'; agent: string; text: string; label: string }  // one of this plugin's proposed agents: a line and an accept button (the gated platform.accept_plugin_agent, card in place). Added 2026-09-25.
   | { kind: 'editor'; query: QueryRef; fields: Field[]; save: ToolRef; actions?: ToolRef[]; footnote?: string; readOnlyWhen?: Visibility; version: string };
 
 interface Visibility { path: string; equals?: unknown; in?: unknown[]; not?: true }

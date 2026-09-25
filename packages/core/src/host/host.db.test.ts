@@ -94,7 +94,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.0');
+    expect(host.version).toBe('1.1');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();

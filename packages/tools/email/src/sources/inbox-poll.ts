@@ -520,6 +520,16 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       // other account has had its turn, so `runSources` still records it in
       // `core.source_runs.last_error` and the rest of the mail still lands.
       const failures: unknown[] = [];
+      /*
+       * Is there anybody to hand new mail to? The triage agent is proposed by
+       * this plugin, not shipped: until the owner accepts it, a run enqueued
+       * for it is a job for an agent that does not exist. So the mail still
+       * lands, threads still move and the cursor still advances — only the
+       * runs wait, the messages stay unstamped, and the next poll after the
+       * agent exists starts them. Said once per poll, not once per message.
+       */
+      const triageReady = ctx.buddi!.owner.hasAgent(agentId);
+      let saidWaiting = false;
       for (const account of await listAccounts(ctx.buddi!.db)) {
         const auth = await mailboxAuth(ctx, account, opts.env);
         if (!auth.ok) {
@@ -648,7 +658,12 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
         }
 
         try {
-          await drain(ctx, account, agentId, limit, pending);
+          const waiting = await drain(ctx, account, agentId, limit, pending, triageReady);
+          if (waiting > 0 && !saidWaiting) {
+            saidWaiting = true;
+            log(`email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard`);
+          }
+          await recordTriageWaiting(ctx.buddi!.db, account.id, triageReady ? false : waiting > 0 ? true : null, ctx.buddi!.clock.now());
         } catch (err) {
           failures.push(err);
         }
@@ -889,11 +904,14 @@ async function drain(
   agentId: string,
   limit: number,
   pending: PendingTriage[],
-): Promise<void> {
+  triageReady = true,
+): Promise<number> {
   const recovered = await unstamped(ctx.buddi!.db, account.id, limit);
   const byId = new Map(recovered.map((p) => [p.id, p]));
   for (const p of pending) byId.set(p.id, p);
-  if (byId.size === 0) return;
+  if (byId.size === 0) return 0;
+  /** Messages that would have gone to the triage agent, which does not exist yet. */
+  let waiting = 0;
 
   // One read of the policy table per poll, not per message.
   const policies = await loadPolicies(ctx.buddi!.db, account.id);
@@ -912,6 +930,19 @@ async function drain(
     const action = decision.refused ? 'refused' : decision.action;
 
     /*
+     * No triage agent yet, and this message would go to it: leave it exactly
+     * as it landed — unstamped, no event, no run — and the first poll after
+     * the owner accepts @mail picks it up through `unstamped`. An `ignore`
+     * needs no agent and still applies; a `hand-to-agent` to someone who does
+     * exist still goes to them.
+     */
+    const ignoring = !decision.refused && decision.action === 'ignore' && Boolean(decision.policy);
+    if (!triageReady && !ignoring && runAgentFor(decision, agentId) === agentId) {
+      waiting += 1;
+      continue;
+    }
+
+    /*
      * The dates this message states, read here and stored (docs/specs/email.md
      * §7's `email.date-stated`). It happens at ingest because the body is in
      * hand and the parse is a regex sweep over one string — and because the
@@ -923,7 +954,6 @@ async function drain(
      * the message its run, so it is logged and the message left unscanned for
      * the next poll.
      */
-    const ignoring = !decision.refused && decision.action === 'ignore' && Boolean(decision.policy);
     try {
       if (!ignoring) {
         await scanMessageDates(
@@ -1011,6 +1041,22 @@ async function drain(
     await settleEvent(ctx.buddi!.db, message.id, 'done');
     await stamp(ctx, message.id);
   }
+  return waiting;
+}
+
+/**
+ * The poll's record that mail is waiting for a triage agent: set (and kept
+ * from the first time) while it is, cleared once a poll finds the agent.
+ * `null` leaves it as it was — no agent, but nothing new waiting either.
+ */
+async function recordTriageWaiting(db: Db, accountId: string, waiting: boolean | null, now: Date): Promise<void> {
+  if (waiting === null) return;
+  await db.query(
+    `update email.accounts
+        set triage_waiting_since = case when $2::boolean then coalesce(triage_waiting_since, $3) else null end
+      where id = $1`,
+    [accountId, waiting, now],
+  );
 }
 
 /**

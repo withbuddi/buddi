@@ -336,6 +336,7 @@ export class ToolRegistry {
             ...(manifest.pages ? { pages: manifest.pages } : {}),
             ...(manifest.queries ? { queries: manifest.queries } : {}),
             tools: manifest.tools.map((t) => t.name),
+            agents: (manifest.agents ?? []).map((a) => a.id),
           })
         : undefined;
     /*

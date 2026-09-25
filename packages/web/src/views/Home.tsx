@@ -7,7 +7,7 @@
  * the agent that runs it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type OfferRow, type Overview, type ReminderRow } from '../api';
+import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -34,6 +34,7 @@ import {
 } from '../ui';
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
+import { AgentOffer } from './parts/AgentOffer';
 
 export function Home({
   timezone,
@@ -55,6 +56,7 @@ export function Home({
   const conversations = useAsync(() => api.conversations(), [], 30_000);
   const offers = useAsync(() => api.offers(), [], 30_000);
   const proposals = useAsync(() => api.proposals(), [], 60_000);
+  const agentOffers = useAsync(() => api.agentOffers(), [], 60_000);
   const owner = useAsync(() => api.owner(), []);
   // The same order as the rail and the Agents page: front desk first, the maker last.
   const team = useMemo(() => orderAgents(agents, defaultAgentId ?? null), [agents, defaultAgentId]);
@@ -68,7 +70,8 @@ export function Home({
   const failedJobs = data?.jobs?.failed ?? 0;
   const urgent = data?.sentinels?.openUrgent ?? 0;
   const proposed = proposals.data?.open.length ?? 0;
-  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0);
+  const toSetUp: AgentOfferRow[] = agentOffers.data?.offers ?? [];
+  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
@@ -86,7 +89,7 @@ export function Home({
           <div className="home-hero-text">
             <p className="home-date">{fmtDay(data?.now, timezone)}</p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
-            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed)}</p>
+            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length)}</p>
           </div>
           <Mascot size="lg" />
         </header>
@@ -122,6 +125,20 @@ export function Home({
                 </a>
               </Notice>
             ) : null}
+            {/* An agent a plugin needs and nobody has yet: the plugin's line,
+                the same accept the Plugins page runs, and a way to say no. */}
+            {toSetUp.map((offer) => (
+              <Panel key={`${offer.plugin}/${offer.agent}`}>
+                <AgentOffer
+                  plugin={offer.plugin}
+                  agent={offer.agent}
+                  text={offer.text}
+                  label={`Create @${offer.handle}`}
+                  onDismiss={() => { void api.dismissAgentOffer(offer.plugin, offer.agent).then(() => agentOffers.reload()); }}
+                  onDone={() => agentOffers.reload()}
+                />
+              </Panel>
+            ))}
             {proposed > 0 ? (
               <Notice tone="accent">
                 <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
@@ -438,7 +455,7 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
   );
 }
 
-export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0): string {
+export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0, agentsToSetUp = 0): string {
   if (needs === 0) return 'Nothing needs you. Your agents are on it.';
   const parts: string[] = [];
   if (approvals > 0) parts.push(`${approvals} approval${approvals === 1 ? '' : 's'} waiting`);
@@ -446,6 +463,7 @@ export function needsSentence(needs: number, approvals: number, failed: number, 
   if (urgent > 0) parts.push(`${urgent} urgent alert${urgent === 1 ? '' : 's'}`);
   if (paused) parts.push('the installation is paused');
   if (proposals > 0) parts.push(`${proposals} proposal${proposals === 1 ? '' : 's'} to review`);
+  if (agentsToSetUp > 0) parts.push(`${agentsToSetUp === 1 ? 'an agent' : `${agentsToSetUp} agents`} to set up`);
   const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
   return `${capitalise(list)}.`;
 }

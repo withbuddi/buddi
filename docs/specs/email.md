@@ -130,6 +130,20 @@ proposals, for the reason above — is unchanged. 855 messages, a second's work.
   ingest (`Delivered-To`, the RCPT TO), it can pick the default; until
   then the owner does.
 
+**The triage agent is proposed, not assumed** (2026-09-25). The poll hands
+every new inbound message to `mail-triage`; the plugin now proposes that agent
+(`agents` in the manifest, `src/agent.ts`: @mail, role `mail`, the model-facing
+email tools named one by one with memory, reminders and the canvas, never an
+`ownerOnly` tool). Saving a mailbox while no agent has that id answers with a
+note, and Settings → Email shows one line — "Background triage needs a mail
+agent." — with **Create @mail**, the same gated `platform.accept_plugin_agent`
+the Plugins page runs; Home offers it too until accepted or dismissed. Until it
+exists the poll still ingests and threads mail but starts no run: the messages
+stay unstamped (so the first poll after the accept triages them), it logs "no
+triage agent yet — accept the Mail offer on the dashboard" once per poll, and
+records `accounts.triage_waiting_since` (migration `016`), which the mailbox
+row shows as "triage waiting".
+
 ## 5. The policy gate
 
 Before a new message wakes anyone, the source runs the gate:

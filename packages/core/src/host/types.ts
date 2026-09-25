@@ -70,6 +70,12 @@ export interface OwnerArea {
   readonly timezone: string;
   /** The first runnable agent holding a role, or undefined when nobody does. */
   agentForRole(role: string): string | undefined;
+  /**
+   * Whether an agent with this id is installed. `true` where the host has no
+   * roster to ask (a one-shot CLI process), so a caller never stops on a guess.
+   * Since 1.1.
+   */
+  hasAgent(id: string): boolean;
   /** Directories no plugin may write into, whatever it was granted. */
   readonly protectedPaths: readonly string[];
 }

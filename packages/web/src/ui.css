@@ -561,6 +561,27 @@ fieldset:disabled { opacity: 0.6; }
 .ui-table td .ui-toolbar { flex-wrap: nowrap; }
 
 /* ================================================================== *
+ * progress
+ * ================================================================== */
+
+.ui-progress {
+  inline-size: 100%;
+  block-size: var(--space-1);
+  background: var(--line);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.ui-progress-fill {
+  block-size: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  transition: inline-size 0.3s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-progress-fill { transition: none; }
+}
+
+/* ================================================================== *
  * text blocks
  * ================================================================== */
 

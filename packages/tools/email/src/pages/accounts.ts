@@ -31,10 +31,12 @@
  */
 import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
+import { TRIAGE_OFFER_TEXT } from '../agent.js';
 import { INBOX, secretNameFor } from '../config.js';
 import { ACCOUNT_KIND } from '../credentials.js';
 import { ACCOUNT_COLUMNS, toAccount } from '../rows.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
+import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
 
 /** One provider's endpoints. Implicit or STARTTLS on the ports named here. */
 export interface MailHosts {
@@ -301,10 +303,19 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
         await ctx.buddi!.db.query(`delete from email.accounts where id = $1`, [written.id]).catch(() => {});
         throw new AccountRefusal('The password could not be kept safely. Unlock this machine and try again.');
       }
+      /*
+       * The poll hands every new message to the triage agent, and a mailbox
+       * saved before that agent exists is mail with nobody to read it. Said
+       * here, in the answer the page shows, and offered on the same page.
+       */
+      const triageMissing = !ctx.buddi!.owner.hasAgent(TRIAGE_AGENT_ID);
       return {
         added: true,
         address: written.address,
-        note: `${written.address} is set up. buddi will read it from the next poll.`,
+        note: triageMissing
+          ? `${written.address} is set up. buddi will read it from the next poll. ${TRIAGE_OFFER_TEXT} Create @mail on this page and new mail gets triaged.`
+          : `${written.address} is set up. buddi will read it from the next poll.`,
+        ...(triageMissing ? { triage: 'needs-agent' as const } : {}),
       };
     },
   };

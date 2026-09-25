@@ -320,6 +320,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   configurePluginHost({
     httpTransport: createHttpTransport,
     agentForRole: (role) => catalog.agentsWithRole(role).find((agent) => agent.availability.ok)?.id,
+    // Installed at all, runnable or not: a plugin asking this is deciding
+    // whether to offer the agent, and one held back is not one to offer again.
+    hasAgent: (id) => catalog.get(id) !== undefined,
     env,
   });
 

@@ -435,10 +435,11 @@ suite('the mail pages, over postgres', () => {
     };
 
     for (const page of emailPageDescriptors) {
+      // The top of a page is handed its own `data` read, and nothing at all
+      // without one — which is exactly why a `when` up there needs one.
+      const root = page.data ? await answer(page.data, null) : null;
       for (const [i, component] of page.body.entries()) {
-        // No `data` query on either descriptor, so the top of a page is handed
-        // nothing at all — which is exactly why a `when` up here cannot work.
-        await walk(component, null, `${page.id}.body.${i}`);
+        await walk(component, root, `${page.id}.body.${i}`);
       }
     }
     // The conditions that are left, and where each one stands.
@@ -450,6 +451,8 @@ suite('the mail pages, over postgres', () => {
       // The two draft notices, each asked of the draft the editor is about.
       'mail.body.2.0.detail.2.0.when(unresolved)',
       'mail.body.2.0.detail.2.1.when(notLive)',
+      // The offer of @mail, asked of the settings page's own accounts read.
+      'settings.body.2.0.when(triage)',
     ]);
     expect(roots).toContain('mail.body.2.0.detail.3 → thread');
   });
@@ -654,6 +657,37 @@ suite('the mail pages, over postgres', () => {
     expect((await listAccounts(pool, { enabledOnly: false })).some((a) => a.address === ADDED)).toBe(false);
     expect(await findSecret(pool, account.secretName)).toBeNull();
     expect(await vault.get(ownerSecretVaultName(secret.id))).toBeNull();
+  });
+
+  /*
+   * The poll hands every new message to `mail-triage`, which the plugin
+   * proposes and nobody has until the owner accepts it. A mailbox saved
+   * before then is mail with nobody to read it, so the save says so and the
+   * settings page's data carries what its offer line is drawn against.
+   */
+  it('says on save that background triage needs a mail agent, while there is none', async () => {
+    configurePluginHost({ hasAgent: (id) => id !== 'mail-triage' });
+    try {
+      const added = await act('email.add_account', { address: ADDED, password: 'letmein' });
+      expect(added).toMatchObject({ added: true, triage: 'needs-agent' });
+      expect(added.note).toContain('Background triage needs a mail agent.');
+      expect(added.note).toContain('Create @mail');
+      expect((await ask('accounts')).triage).toBe('needs-agent');
+      expect(await ask('triage_offer')).toEqual({ wanted: true });
+
+      configurePluginHost({ hasAgent: () => true });
+      expect((await ask('accounts')).triage).toBe('ready');
+      const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
+      await act('email.remove_account', { id: account.id });
+    } finally {
+      configurePluginHost({ hasAgent: () => true });
+    }
+    // With the agent there, the save says nothing about it.
+    const again = await act('email.add_account', { address: ADDED, password: 'letmein' });
+    expect(again.triage).toBeUndefined();
+    expect(again.note).not.toContain('triage');
+    const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
+    await act('email.remove_account', { id: account.id });
   });
 
   it('does not exist for an agent: an ownerOnly tool is unknown, not forbidden', async () => {

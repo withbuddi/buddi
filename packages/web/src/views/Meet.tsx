@@ -33,6 +33,8 @@ import {
   api,
   chatApi,
   type BackupJob,
+  type BrowserInstallProgress,
+  type BrowserLaunchCheck,
   type OllamaProbe,
   type PairingOffer,
   type ProviderAccountsView,
@@ -40,7 +42,8 @@ import {
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Button, ButtonLink, Field, Icon, Mark } from '../ui';
+import { Button, ButtonLink, Code, Field, Icon, Mark, Stack, Toolbar } from '../ui';
+import { InstallProgress } from './parts/InstallProgress';
 import {
   DEFAULT_ASSISTANT_NAME,
   OPENING_INSTRUCTION,
@@ -1728,15 +1731,20 @@ function browserLine(answer: MeetAnswers['browser']): string | null {
 /**
  * The agents' own browser, checked rather than asked.
  *
- * Found — Chrome on this Mac, or Chromium already fetched — and buddi says
- * which in one line and moves on, with no button. Not found, and buddi fetches
- * Playwright's Chromium itself, saying each line the installer prints; the
- * owner can skip it, and the Computer & browser page is the fix for later.
- * Never a gate: a failure or a skip still moves on.
+ * Found — Chrome on this Mac, or Chromium already fetched — and buddi makes
+ * sure it opens, says which in one line and moves on, with no button. Not
+ * found, and buddi fetches Playwright's Chromium itself with a progress bar
+ * and one line of its own ("Fetching Chromium… 45%"), never the installer's
+ * text; then it launches it once to be sure. A browser on disk that cannot
+ * start — a Linux machine short of system libraries — is said plainly, with
+ * the command to run in a block to copy, "Try again" as the primary and
+ * "Skip for now" beside it. Never a gate: a failure or a skip still moves on.
  */
 function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
-  const [phase, setPhase] = useState<'checking' | 'installing' | 'failed'>('checking');
+  const [phase, setPhase] = useState<'checking' | 'installing' | 'launching' | 'failed'>('checking');
   const [line, setLine] = useState<string | null>(null);
+  const [command, setCommand] = useState<string | null>(null);
+  const [progress, setProgress] = useState<BrowserInstallProgress | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   /** This screen started an install, so a browser found afterwards is "Installed.". */
   const started = useRef(false);
@@ -1753,11 +1761,21 @@ function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
     let cancelled = false;
     let timer: number | undefined;
     const settle = (browser: NonNullable<MeetAnswers['browser']>): void => { if (!cancelled) settleRef.current(browser); };
-    const fail = (why: string): void => {
+    const fail = (why: string, run?: string): void => {
       if (cancelled) return;
       started.current = false;
       setPhase('failed');
       setLine(why);
+      setCommand(run ?? null);
+    };
+    /** Launch it once and close it: a browser that cannot start is not one the owner has. */
+    const launch = async (engine: 'chromium' | 'chrome'): Promise<void> => {
+      setPhase('launching');
+      let check: BrowserLaunchCheck;
+      try { check = await api.browserCheck(); } catch (err) { return fail(err instanceof ApiError ? err.message : String(err)); }
+      if (cancelled) return;
+      if (check.ok) return settle(started.current ? 'installed' : engine);
+      return fail(check.message, check.command);
     };
     const follow = async (): Promise<void> => {
       let status;
@@ -1767,15 +1785,16 @@ function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
       if (!own) return settle('other');
       if (own.install?.state === 'running') {
         setPhase('installing');
-        setLine(own.install.line ?? null);
+        setProgress(own.install.progress);
         timer = window.setTimeout(() => void follow(), 1000);
         return;
       }
-      if (own.engine !== 'none') return settle(started.current ? 'installed' : own.engine);
+      if (own.engine !== 'none') return launch(own.engine);
       if (started.current) return fail(own.install?.line ?? '');
       // Nothing here: fetch it, and follow the installer.
       started.current = true;
       setPhase('installing');
+      setProgress(undefined);
       try { await api.browserInstall(); } catch (err) { return fail(err instanceof ApiError ? err.message : String(err)); }
       if (!cancelled) timer = window.setTimeout(() => void follow(), 1000);
     };
@@ -1787,11 +1806,22 @@ function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
   }, [attempt]);
 
   if (phase === 'checking') return <Thinking />;
+  const busy = phase === 'installing' || phase === 'launching';
   return (
     <>
       <Buddi>
-        <Said>{SCRIPT.browser.needs}</Said>
-        {phase === 'installing' ? <Thinking line={line ?? SCRIPT.browser.installing} /> : <Said>{SCRIPT.browser.failed(line ?? '')}</Said>}
+        {started.current || phase === 'installing' ? <Said>{SCRIPT.browser.needs}</Said> : null}
+        {phase === 'installing' ? (
+          <div className="wb-msg" data-role="assistant">
+            <div className="wb-bubble">
+              <InstallProgress progress={progress} />
+            </div>
+          </div>
+        ) : phase === 'launching' ? (
+          <Thinking line={SCRIPT.browser.launching} />
+        ) : (
+          <Said>{SCRIPT.browser.failed(line ?? '')}</Said>
+        )}
       </Buddi>
       <Ask
         actions={
@@ -1799,13 +1829,33 @@ function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
             <Button variant="ghost" onClick={() => settleRef.current('skipped')}>
               {SCRIPT.browser.skip}
             </Button>
-            <Button variant="accent" disabled={phase === 'installing'} onClick={() => { setPhase('installing'); setAttempt((n) => n + 1); }}>
-              {phase === 'installing' ? SCRIPT.browser.installing : SCRIPT.browser.retry}
+            <Button variant="accent" disabled={busy} onClick={() => { setPhase('launching'); setCommand(null); setAttempt((n) => n + 1); }}>
+              {busy ? SCRIPT.browser.installing : SCRIPT.browser.retry}
             </Button>
           </>
         }
-      />
+      >
+        {phase === 'failed' && command ? <CommandBlock command={command} /> : null}
+      </Ask>
     </>
+  );
+}
+
+/** A command the owner runs themselves, in a block, with a way to copy it. */
+function CommandBlock({ command }: { command: string }): JSX.Element {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
+  const copy = (): void => {
+    if (!navigator.clipboard?.writeText) { setCopied('failed'); return; }
+    void navigator.clipboard.writeText(command).then(() => setCopied('done'), () => setCopied('failed'));
+  };
+  return (
+    <Stack gap="sm">
+      <Code label="The command to run">{command}</Code>
+      <Toolbar align="end">
+        {copied === 'failed' ? <span className="ui-toolbar-note">Select it to copy.</span> : null}
+        <Button size="sm" onClick={copy}>{copied === 'done' ? 'Copied' : 'Copy'}</Button>
+      </Toolbar>
+    </Stack>
   );
 }
 

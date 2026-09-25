@@ -207,6 +207,8 @@ export type Component =
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })
+  /** One of the plugin's proposed agents: a line, and the gated accept. */
+  | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
   | (ComponentCommon & {
       kind: 'editor';

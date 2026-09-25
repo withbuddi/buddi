@@ -183,14 +183,16 @@ beforeEach(() => {
 
 describe('a manifest can carry suggested agents', () => {
   it('reads them off the registry, whichever plugin they came from', () => {
+    // The built-in mail plugin proposes its triage agent too, so the fixture's
+    // is found by name rather than assumed to be the only one.
     const proposals = pluginAgentProposals(h.registry);
-    expect(proposals.map((p) => `${p.plugin}/${p.agent.id}`)).toEqual(['garden/gardener']);
-    expect(proposals[0]?.pluginVersion).toBe('1.2.0');
+    expect(proposals.map((p) => `${p.plugin}/${p.agent.id}`)).toContain('garden/gardener');
+    expect(proposals.find((p) => p.plugin === 'garden')?.pluginVersion).toBe('1.2.0');
   });
 
   it('lists them with what is still un-accepted, without creating anything', async () => {
     const result = (await h.tool('platform.plugin_agents').execute({}, h.ctx)) as any;
-    expect(result.agents[0]).toMatchObject({
+    expect(result.agents.find((a: any) => a.plugin === 'garden')).toMatchObject({
       plugin: 'garden',
       id: 'gardener',
       accepted: false,
@@ -230,6 +232,20 @@ describe('accepting produces a gated action with a preview about access', () => 
     expect(preview).toContain('It reaches nothing else — not email');
     expect(preview).toContain('when-a-plant-is-dry');
     expect(preview).toContain('this file is YOURS');
+  });
+
+  it('accepts the mail plugin\'s triage agent with the grant it names, and the mail role', () => {
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(h, 'platform.accept_plugin_agent', {
+      plugin: 'email',
+      agent: 'mail-triage',
+    });
+    expect(envelope.fromPlugin.name).toBe('email');
+    expect(envelope.tools).toContain('email.triage_record');
+    expect(envelope.tools).toContain('email.send');
+    expect(envelope.tools).not.toContain('email.add_account');
+    expect(envelope.content).toContain('handle: mail');
+    expect(envelope.content).toMatch(/roles: \[mail\]/);
+    expect(preview).toContain('@mail');
   });
 
   it('writes nothing while it is only describing', () => {
