@@ -43,4 +43,4 @@ export { main as runPluginsCli, parsePluginsArgs } from './plugins-cli.js';
 export * from './plugins/index.js';
 export { main as runServe } from './serve.js';
 // The agents' own browser, for the launcher's first-run line and `buddi browser install`.
-export { detectBrowser, browserLine, installBrowser, installDepsCommand } from '@buddi/tool-browser';
+export { detectBrowser, browserLine, installBrowser, installDepsCommand, noSandboxMessage } from '@buddi/tool-browser';

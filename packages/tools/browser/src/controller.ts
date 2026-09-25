@@ -3,14 +3,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ToolContext } from '@buddi/core/plugin';
 import { BrowserManager } from './manager.js';
-import { PlaywrightHost } from './host.js';
+import { PlaywrightHost, type LaunchProblem } from './host.js';
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
 import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
 import type { BrowserCommand } from './types.js';
-import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
+import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
 export class HostController implements BrowserController {
@@ -21,7 +21,7 @@ export class HostController implements BrowserController {
   #changing = false;
   #requests = new Map<string, { expiresAt: number; revoked: boolean }>();
   #extension?: () => ExtensionBridge;
-  #problem?: 'missing-libraries';
+  #problem?: LaunchProblem;
   #install?: NonNullable<BrowserEngineStatus['install']>;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
@@ -73,6 +73,7 @@ export class HostController implements BrowserController {
     const problem = found.engine === 'none' ? undefined : this.#problem;
     const message = found.engine === 'none' ? NO_BROWSER_STATUS
       : problem === 'missing-libraries' ? missingLibrariesMessage()
+      : problem === 'no-sandbox' ? noSandboxMessage()
       : headless ? HEADLESS_NOTE : undefined;
     return { engine: found.engine, headless, ...(problem ? { problem } : {}), ...(message ? { message } : {}), ...(this.#install ? { install: { ...this.#install } } : {}) };
   }
@@ -106,7 +107,7 @@ export class HostController implements BrowserController {
    * Launch the agents' browser once and close it, headed or headless as this
    * machine dictates. Only the agents' own browser has a binary to start; the
    * other modes answer ok, since there is nothing of buddi's to launch.
-   * A missing-libraries failure is remembered as the status's problem, as a
+   * A missing-libraries or no-sandbox failure is remembered as the status's problem, as a
    * failed launch from a real session would be.
    */
   async checkLaunch(): Promise<LaunchCheck> {
@@ -118,7 +119,7 @@ export class HostController implements BrowserController {
       ...(this.options.launch ? { launch: this.options.launch } : {}),
     });
     if (check.ok) this.#problem = undefined;
-    else if (check.problem === 'missing-libraries') this.#problem = 'missing-libraries';
+    else if (check.problem === 'missing-libraries' || check.problem === 'no-sandbox') this.#problem = check.problem;
     return check;
   }
   get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }

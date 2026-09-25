@@ -60,6 +60,30 @@ export function isMissingLibraries(message: string): boolean {
   return /missing dependencies|error while loading shared libraries|install-deps/i.test(message);
 }
 
+/**
+ * The command that lets Chromium start its sandbox on Ubuntu 23.10 or newer,
+ * where AppArmor stops programs from making the private space the sandbox
+ * needs. Needs sudo; buddi never runs it.
+ */
+export const SANDBOX_COMMAND = 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0';
+
+/** The sentence before the sandbox command, for a page that shows the command on its own to copy. */
+export const NO_SANDBOX_SENTENCE = 'The browser is installed, but this system does not let it start its sandbox. On Ubuntu 23.10 or newer, run once, with sudo:';
+
+/** Said when a launch failed because the system would not let Chromium start its sandbox. */
+export function noSandboxMessage(): string {
+  return `${NO_SANDBOX_SENTENCE} ${SANDBOX_COMMAND}`;
+}
+
+/**
+ * A launch error that means Chromium could not start its sandbox: AppArmor on
+ * newer Ubuntu, or a container's default seccomp profile. buddi never turns
+ * the sandbox off; the owner changes the system instead.
+ */
+export function isSandboxUnavailable(message: string): boolean {
+  return /No usable sandbox|apparmor_restrict_unprivileged_userns|apparmor-userns-restrictions|SUID sandbox/i.test(message);
+}
+
 function bundled(): string | undefined {
   try { return chromium.executablePath(); } catch { return undefined; }
 }
@@ -294,7 +318,7 @@ export type LaunchCheck =
       message: string;
       /** A command the owner can copy, when there is one to run. */
       command?: string;
-      problem?: 'missing-libraries' | 'no-browser';
+      problem?: 'missing-libraries' | 'no-sandbox' | 'no-browser';
     };
 
 /** What the probe launches with. Injectable, so a test never opens a browser. */
@@ -303,10 +327,13 @@ export interface ProbeDeps {
   detect?: () => BrowserAvailability;
   platform?: NodeJS.Platform;
   /** Launch, open about:blank, close. Throws with the launch's own error. */
-  launch?: (options: { headless: boolean; executablePath?: string; channel?: string }) => Promise<void>;
+  launch?: (options: LaunchOptions) => Promise<void>;
 }
 
-async function launchOnce(options: { headless: boolean; executablePath?: string; channel?: string }): Promise<void> {
+/** What the probe hands to `launch`. The sandbox is on, as in a real session. */
+export interface LaunchOptions { headless: boolean; executablePath?: string; channel?: string; chromiumSandbox: true }
+
+async function launchOnce(options: LaunchOptions): Promise<void> {
   const browser = await chromium.launch({ ...options, timeout: 20_000 });
   try {
     const page = await browser.newPage();
@@ -324,7 +351,8 @@ async function launchOnce(options: { headless: boolean; executablePath?: string;
  * A failure is said in the words the rest of the plugin already uses: no
  * browser is `NO_BROWSER_STATUS`, missing Linux libraries is
  * `missingLibrariesMessage()` with its `install-deps` command beside it to
- * copy, and anything else is the launch's own first line.
+ * copy, a system that will not let Chromium start its sandbox is
+ * `noSandboxMessage()` with its `sysctl` command, and anything else is the launch's own first line.
  */
 export async function probeLaunch(deps: ProbeDeps): Promise<LaunchCheck> {
   const found = (deps.detect ?? detectBrowser)();
@@ -333,12 +361,16 @@ export async function probeLaunch(deps: ProbeDeps): Promise<LaunchCheck> {
     ? (!found.channel && found.executable ? { executablePath: found.executable } : { channel: 'chrome' })
     : {};
   try {
-    await (deps.launch ?? launchOnce)({ headless: deps.headless, ...engine });
+    // The same sandbox setting as a real session, or the probe says "installed" for a browser that cannot run.
+    await (deps.launch ?? launchOnce)({ headless: deps.headless, ...engine, chromiumSandbox: true });
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if ((deps.platform ?? process.platform) === 'linux' && isMissingLibraries(message)) {
       return { ok: false, message: MISSING_LIBRARIES_SENTENCE, command: installDepsCommand(), problem: 'missing-libraries' };
+    }
+    if ((deps.platform ?? process.platform) === 'linux' && isSandboxUnavailable(message)) {
+      return { ok: false, message: NO_SANDBOX_SENTENCE, command: SANDBOX_COMMAND, problem: 'no-sandbox' };
     }
     const first = message.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? 'no reason given';
     return { ok: false, message: `The browser is installed but would not start: ${first.slice(0, 300)}` };

@@ -2,7 +2,10 @@ import { mkdir, chmod } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { checkUrl, DEFAULT_POLICY, type AddressPolicy } from '@buddi/core/plugin';
 import { startProxy, type GuardedLookup } from './proxy.js';
-import { detectBrowser, isMissingLibraries, missingLibrariesMessage, NO_BROWSER_ACT, type BrowserAvailability } from './availability.js';
+import { detectBrowser, isMissingLibraries, isSandboxUnavailable, missingLibrariesMessage, noSandboxMessage, NO_BROWSER_ACT, type BrowserAvailability } from './availability.js';
+
+/** Why a launch failed, when it is a reason the owner must fix on the system. */
+export type LaunchProblem = 'missing-libraries' | 'no-sandbox';
 
 export interface DriverOptions {
   profileDir: string;
@@ -13,7 +16,7 @@ export interface DriverOptions {
   /** Which browser exists here. Defaults to looking on disk. */
   detect?: () => BrowserAvailability;
   /** Told why the last launch failed for a reason the owner must fix, or undefined once one works. */
-  report?: (problem: 'missing-libraries' | undefined) => void;
+  report?: (problem: LaunchProblem | undefined) => void;
   policy?: AddressPolicy;
   allowedHosts?: readonly string[];
   /** Core's `guardedLookup`, for the SOCKS guard. Without it Playwright mode does not launch. */
@@ -95,6 +98,10 @@ export class PlaywrightHost {
       if (process.platform === 'linux' && isMissingLibraries(message)) {
         this.options.report?.('missing-libraries');
         throw new Error(missingLibrariesMessage());
+      }
+      if (process.platform === 'linux' && isSandboxUnavailable(message)) {
+        this.options.report?.('no-sandbox');
+        throw new Error(noSandboxMessage());
       }
       throw new Error(`Could not open the agents' browser. Close any other buddi process using this profile, then try again. ${message}`);
     }

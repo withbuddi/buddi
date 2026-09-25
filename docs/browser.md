@@ -246,6 +246,22 @@ status with the command to run once with sudo
 (`playwright install-deps chromium`, from the Playwright buddi ships). buddi
 never runs sudo itself.
 
+Chromium runs its pages in a sandbox, and buddi always keeps it on. Some
+systems do not let a program set that sandbox up, and then the browser stops at
+launch with "No usable sandbox". The status, the first-run check and
+`browser.act` say so in one sentence with the command to copy. On Ubuntu 23.10
+or newer, AppArmor is what blocks it; run once, with sudo:
+
+```sh
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+That lasts until the next reboot. To keep it, put the line
+`kernel.apparmor_restrict_unprivileged_userns=0` in a file such as
+`/etc/sysctl.d/60-buddi-browser.conf`. In a Docker container, the default
+seccomp profile is what blocks it; start the container with
+`--security-opt seccomp=unconfined`.
+
 On Linux with neither `DISPLAY` nor `WAYLAND_DISPLAY` set — a headless server —
 the browser launches headless and the status says so. Watching and taking over
 from the Canvas go through CDP (screencast and Playwright's mouse and

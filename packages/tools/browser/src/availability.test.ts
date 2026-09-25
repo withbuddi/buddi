@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { browserLine, detectBrowser, InstallProgressReader, NO_BROWSER_ACT, NO_BROWSER_STATUS, needsHeadless, probeLaunch } from './availability.js';
+import { browserLine, detectBrowser, InstallProgressReader, NO_BROWSER_ACT, NO_BROWSER_STATUS, NO_SANDBOX_SENTENCE, needsHeadless, probeLaunch, SANDBOX_COMMAND } from './availability.js';
 import { PlaywrightHost } from './host.js';
 
 /** A filesystem that holds exactly these files. */
@@ -116,7 +116,7 @@ describe('probeLaunch', () => {
       launch: async (options) => { seen.push(options); },
     });
     expect(answer).toEqual({ ok: true });
-    expect(seen).toEqual([{ headless: false, executablePath: '/usr/bin/google-chrome' }]);
+    expect(seen).toEqual([{ headless: false, executablePath: '/usr/bin/google-chrome', chromiumSandbox: true }]);
   });
 
   it('names missing libraries only on Linux', async () => {
@@ -126,5 +126,23 @@ describe('probeLaunch', () => {
     expect(await probeLaunch({ headless: true, detect, launch, platform: 'darwin' })).toMatchObject({
       ok: false, message: expect.stringContaining('would not start: error while loading shared libraries'),
     });
+  });
+
+  it('launches with the sandbox on, as a real session does', async () => {
+    const seen: unknown[] = [];
+    await probeLaunch({ headless: true, detect: () => ({ engine: 'chromium', executable: '/x/chrome' }), launch: async (options) => { seen.push(options); } });
+    expect(seen).toEqual([{ headless: true, chromiumSandbox: true }]);
+  });
+
+  it('says a system that will not let Chromium start its sandbox, with the command to copy', async () => {
+    const launch = async (): Promise<void> => {
+      throw new Error('browserType.launchPersistentContext: Target page, context or browser has been closed\n[pid=12][err] No usable sandbox! If you are running on Ubuntu 23.10+ or another Linux distro that has disabled unprivileged user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md');
+    };
+    const detect = () => ({ engine: 'chromium' as const, executable: '/x/chrome' });
+    expect(await probeLaunch({ headless: true, detect, launch, platform: 'linux' })).toEqual({
+      ok: false, message: NO_SANDBOX_SENTENCE, command: SANDBOX_COMMAND, problem: 'no-sandbox',
+    });
+    expect(NO_SANDBOX_SENTENCE).not.toMatch(/userns|seccomp/);
+    expect(SANDBOX_COMMAND).toBe('sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0');
   });
 });

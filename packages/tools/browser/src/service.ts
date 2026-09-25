@@ -51,8 +51,8 @@ export interface BrowserEngineStatus {
   engine: 'chromium' | 'chrome' | 'none';
   /** No display on this Linux machine, so it runs headless. */
   headless: boolean;
-  /** The last launch failed for missing Linux libraries. */
-  problem?: 'missing-libraries';
+  /** The last launch failed for missing Linux libraries, or because the system would not let Chromium start its sandbox. */
+  problem?: 'missing-libraries' | 'no-sandbox';
   /** One or two sentences for the owner, when there is something to say. */
   message?: string;
   /**

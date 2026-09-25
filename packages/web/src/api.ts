@@ -1737,7 +1737,7 @@ export interface BrowserStatus {
   browser?: {
     engine: 'chromium' | 'chrome' | 'none';
     headless: boolean;
-    problem?: 'missing-libraries';
+    problem?: 'missing-libraries' | 'no-sandbox';
     message?: string;
     /**
      * The install started from the dashboard. `progress` is the installer
@@ -1761,4 +1761,4 @@ export interface BrowserInstallProgress {
 /** Whether the agents' browser opened and closed once, and what to do when it did not. */
 export type BrowserLaunchCheck =
   | { ok: true }
-  | { ok: false; message: string; command?: string; problem?: 'missing-libraries' | 'no-browser' };
+  | { ok: false; message: string; command?: string; problem?: 'missing-libraries' | 'no-sandbox' | 'no-browser' };

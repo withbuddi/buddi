@@ -112,7 +112,7 @@ describe('the agents\' own browser on this machine', () => {
     resources.push({ dir, controller }); await controller.enable();
 
     expect(await controller.checkLaunch()).toEqual({ ok: true });
-    expect(launches).toEqual([{ headless: true }]);
+    expect(launches).toEqual([{ headless: true, chromiumSandbox: true }]);
 
     failWith = 'browserType.launch: Host system is missing dependencies to run browsers.\n  sudo npx playwright install-deps';
     const missing = await controller.checkLaunch();
@@ -120,6 +120,10 @@ describe('the agents\' own browser on this machine', () => {
     expect(missing.ok ? '' : missing.command).toContain('install-deps chromium');
     // Remembered, as a failed launch from a session would be.
     expect(controller.status().browser?.problem).toBe('missing-libraries');
+
+    failWith = 'Target page, context or browser has been closed\n[err] No usable sandbox! See apparmor-userns-restrictions.md';
+    expect(await controller.checkLaunch()).toMatchObject({ ok: false, problem: 'no-sandbox', command: 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' });
+    expect(controller.status().browser).toMatchObject({ problem: 'no-sandbox', message: expect.stringContaining('does not let it start its sandbox') });
 
     failWith = 'Target page, context or browser has been closed\nmore detail';
     expect(await controller.checkLaunch()).toEqual({

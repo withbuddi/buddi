@@ -528,6 +528,24 @@ describe('the browser', () => {
     expect(api.browserCheck).toHaveBeenCalledTimes(2);
   });
 
+  it('says a system that will not let the browser start its sandbox, with its command to copy', async () => {
+    atBrowser();
+    vi.mocked(api.browser).mockResolvedValue(own({ engine: 'chromium', headless: true }));
+    vi.mocked(api.browserCheck)
+      .mockResolvedValueOnce({
+        ok: false,
+        problem: 'no-sandbox',
+        message: 'The browser is installed, but this system does not let it start its sandbox. On Ubuntu 23.10 or newer, run once, with sudo:',
+        command: 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0',
+      })
+      .mockResolvedValue({ ok: true });
+    render(meet());
+    expect(await screen.findByText(/does not let it start its sandbox/)).toBeInTheDocument();
+    expect(screen.getByText('sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.browser.retry }));
+    expect(await screen.findByText(SCRIPT.browser.chromium)).toBeInTheDocument();
+  });
+
   it('lets the owner skip it, with the way out left of the primary', async () => {
     atBrowser();
     vi.mocked(api.browser).mockResolvedValue(own({ engine: 'none', headless: false, install: { state: 'running' } }));
