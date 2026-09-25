@@ -2283,6 +2283,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           name: typeof body.name === 'string' ? body.name : '',
           handle: typeof body.handle === 'string' ? body.handle : '',
           description: typeof body.description === 'string' ? body.description : '',
+          ...(typeof body.instructions === 'string' ? { instructions: body.instructions } : {}),
           ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
           ...(typeof body.accountId === 'string' && body.accountId.trim() !== ''
             ? { accountId: body.accountId.trim() }
@@ -2335,6 +2336,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         const changed = updateFirstAgent(onboardingDeps(), {
           ...(typeof body.name === 'string' ? { name: body.name } : {}),
           ...(typeof body.description === 'string' ? { description: body.description } : {}),
+          ...(typeof body.instructions === 'string' ? { instructions: body.instructions } : {}),
           ...(typeof body.avatar === 'string' ? { avatar: body.avatar } : {}),
         });
         const view = readAgents(deps.catalog).find((agent) => agent.id === changed.id);

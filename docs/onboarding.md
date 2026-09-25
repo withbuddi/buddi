@@ -98,8 +98,20 @@ appears here. The accounts page in Settings is unchanged for later.
 
 Inline: a name field prefilled with "buddi" (the brand, and the handle the
 shipped assistant already answers to), a face picker — a row of Buddi Blob
-mascots first, the core one chosen, then the emoji set — and one line "What should it help you with?" prefilled with
-"Whatever I ask, and remembering what I tell it." Primary: "Introduce us".
+mascots first, the core one chosen, then the emoji set — and "What should it
+help you with?", a multi-line field grown to fit and prefilled with the
+assistant's starting persona (`SCRIPT.assistant.purposeValue` in
+`packages/web/src/views/meet/script.ts`, opening "You're not a chatbot. You're
+becoming someone this person can count on."). The owner may edit it or replace
+it. Primary: "Introduce us".
+
+The persona is sent as `instructions` and written, verbatim, as the body of the
+agent file, between the name line ("You are Ada. There is exactly one owner…")
+and the "How you work" section. The file's `description`, the one line on the
+Home and Agents cards, is the persona's first sentence unless the owner sent
+one of their own. Changing the assistant later through
+`/api/onboarding/agent/update` rewrites the body only while it is still the
+generated one; an untouched field sends no new persona.
 
 This creates the assistant through `/api/onboarding/agent`, bound to the
 account just tested, and records it as the installation's default agent. A

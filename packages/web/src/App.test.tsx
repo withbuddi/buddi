@@ -91,6 +91,9 @@ describe('home', () => {
     expect(greeting('2026-09-14T15:00:00Z', 'UTC')).toBe('Good afternoon.');
     expect(greeting('2026-09-14T21:00:00Z', 'UTC')).toBe('Good evening.');
     expect(greeting('2026-09-14T03:00:00Z', 'UTC')).toBe('Still up?');
+    expect(greeting('2026-09-14T21:00:00Z', 'UTC', 'Amen')).toBe('Good evening, Amen.');
+    expect(greeting('2026-09-14T03:00:00Z', 'UTC', 'Amen')).toBe('Still up, Amen?');
+    expect(greeting('2026-09-14T21:00:00Z', 'UTC', '  ')).toBe('Good evening.');
   });
 
   it('puts what needs a human above the team', async () => {

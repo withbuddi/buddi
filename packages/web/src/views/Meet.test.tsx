@@ -359,7 +359,11 @@ describe('the questions', () => {
     vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
     render(meet());
     expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
-    expect(screen.getByDisplayValue(SCRIPT.assistant.purposeValue)).toBeInTheDocument();
+    // The persona, whole, in a field that holds more than a line.
+    const purpose = screen.getByLabelText(SCRIPT.assistant.purpose);
+    expect(purpose.tagName).toBe('TEXTAREA');
+    expect(purpose).toHaveValue(SCRIPT.assistant.purposeValue);
+    expect(SCRIPT.assistant.purposeValue).toMatch(/^You're not a chatbot\. You're becoming someone this person can count on\.\n/);
     // The brand is who the owner meets unless they change it, wearing the mascot.
     expect(screen.getByDisplayValue(DEFAULT_ASSISTANT_NAME)).toBeInTheDocument();
     const faces = screen.getByRole('group', { name: SCRIPT.assistant.face });
@@ -381,7 +385,7 @@ describe('the questions', () => {
     render(meet());
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.assistant.submit }));
     await waitFor(() => expect(api.createFirstAgent).toHaveBeenCalled());
-    expect(vi.mocked(api.createFirstAgent).mock.calls[0]![0]).toMatchObject({ accountId: 'tested' });
+    expect(vi.mocked(api.createFirstAgent).mock.calls[0]![0]).toMatchObject({ accountId: 'tested', instructions: SCRIPT.assistant.purposeValue });
   });
 
   it('gives the assistant the mascot as its real picture, through the avatar upload', async () => {
@@ -784,6 +788,8 @@ describe('change', () => {
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
     await waitFor(() => expect(api.updateFirstAgent).toHaveBeenCalled());
     expect(api.createFirstAgent).not.toHaveBeenCalled();
+    // Untouched, the card line is not sent back as a persona.
+    expect(vi.mocked(api.updateFirstAgent).mock.calls[0]![0]).not.toHaveProperty('instructions');
   });
 
   it('moves the assistant onto the new brain when the brain changes', async () => {

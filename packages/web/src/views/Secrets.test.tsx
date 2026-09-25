@@ -13,7 +13,7 @@ vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
   return {
     ...original,
-    api: { ...original.api, secrets: vi.fn(), secretUses: vi.fn(), secretsAct: vi.fn() },
+    api: { ...original.api, secrets: vi.fn(), secretUses: vi.fn(), secretsAct: vi.fn(), providerAccounts: vi.fn(async () => ({ vault: { kind: 'file', locked: false, advice: '' }, accounts: [] })) },
   };
 });
 
@@ -74,6 +74,30 @@ describe('the rows', () => {
     expect(screen.getByText(/Stored, not usable until it has a binding/)).toBeInTheDocument();
     // And the row's own way back to its bindings, not a rebind.
     expect(screen.getByRole('button', { name: 'Add a binding' })).toBeInTheDocument();
+  });
+
+  it('names a model account’s credential by its account, keeping the stored name as a quiet line', async () => {
+    const name = 'PROVIDER_ACCOUNT_5d0c7a4e-1b2c-4d3e-8f90-123456789abc';
+    const id = '5d0c7a4e-1b2c-4d3e-8f90-123456789abc';
+    vi.mocked(api.secrets).mockResolvedValue({ ...VIEW, secrets: [{
+      name, totp: false,
+      bindings: [{ kind: 'accounts.provider', target: id, rule: 'pre-approved', firstApprovedAt: null, heldByPlugin: false }],
+      lastUse: { at: '2026-09-24T08:00:00Z', kind: 'accounts.provider', target: id, agentId: 'concierge', outcome: 'delivered' },
+    }] });
+    vi.mocked(api.providerAccounts).mockResolvedValue({ vault: { kind: 'file', locked: false, advice: '' }, accounts: [
+      { id, label: 'Ollama Cloud, or another service', kind: 'openai-compatible', auth: 'api-key' },
+    ] } as never);
+    vi.mocked(api.secretUses).mockResolvedValue({ uses: [
+      { at: '2026-09-24T08:00:00Z', secret: name, kind: 'accounts.provider', target: id, plugin: 'core', agent: 'concierge', outcome: 'delivered', detail: null },
+    ] } as never);
+    render(<Secrets embedded timezone="UTC" />);
+    expect(await screen.findByRole('heading', { name: 'Ollama Cloud, or another service' })).toBeInTheDocument();
+    expect(screen.getByText('OpenAI-compatible')).toBeInTheDocument();
+    expect(screen.getByText(name)).toBeInTheDocument();
+    expect(screen.queryByText(id)).not.toBeInTheDocument();
+    expect(screen.getByText(/Last used .* by concierge — accounts\.provider, Ollama Cloud, or another service\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use log' }));
+    expect(await screen.findByText(/accounts\.provider, Ollama Cloud, or another service$/)).toBeInTheDocument();
   });
 
   it('fetches one secret’s use log when its row opens it', async () => {

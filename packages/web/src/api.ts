@@ -1418,7 +1418,8 @@ export const api = {
     post<OnboardingView>('/onboarding/step', { step, ...learned }),
   completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
   skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
-  createFirstAgent: (body: { name: string; handle: string; description: string; avatar?: string; accountId?: string }) =>
+  /** `instructions` is the persona, written as the file's body; an empty `description` takes its first sentence. */
+  createFirstAgent: (body: { name: string; handle: string; description: string; instructions?: string; avatar?: string; accountId?: string }) =>
     post<CreatedAgent>('/onboarding/agent', body),
   /**
    * Is Ollama running on the machine buddi runs on?
@@ -1433,7 +1434,7 @@ export const api = {
    * A separate route because writing the *first* agent is refused once there
    * is one, and "change either, or keep them" has to keep working.
    */
-  updateFirstAgent: (body: { name?: string; description?: string; avatar?: string }) =>
+  updateFirstAgent: (body: { name?: string; description?: string; instructions?: string; avatar?: string }) =>
     post<CreatedAgent>('/onboarding/agent/update', body),
   /**
    * Give the assistant the brain the thread just tested — and move whatever

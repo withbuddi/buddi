@@ -155,6 +155,13 @@ function ProviderMark({ kind, auth }: { kind: ProviderAccount['kind']; auth: Pro
   return <span className="ui-avatar" data-tint={tint} aria-hidden="true" title={`${kind} · ${auth}`}>{letter}</span>;
 }
 
+/** Success reads good; limits and outages read warning; a rejected credential or missing model reads critical. */
+function testTone(state: string): 'good' | 'warning' | 'critical' {
+  if (state === 'connected') return 'good';
+  if (['rate-limited', 'quota-exhausted', 'provider-unavailable'].includes(state)) return 'warning';
+  return 'critical';
+}
+
 function StatusDot({ account: a }: { account: ProviderAccount }): JSX.Element {
   const tone = !a.enabled ? undefined : a.configured ? 'good' : 'warning';
   const text = !a.enabled ? 'Disabled' : a.configured ? 'Configured' : 'Needs credential';
@@ -207,12 +214,14 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
         {a.kind !== 'codex' && <Button disabled={busy || !a.enabled || !a.configured} onClick={() => void run(() => api.testProviderAccount(a.id), 'Connection test finished.')}>Test connection</Button>}
         <Button variant="danger" disabled={busy || a.assignedAgents.length > 0} title={a.assignedAgents.length ? 'Reassign its agents before removing this account' : undefined} onClick={() => setRemoving(true)}>Remove account</Button>
       </Toolbar>
-      {a.test && <Notice role="status" tone={a.test.state === 'ok' ? 'good' : 'warning'}>
-        <p>{a.test.state}{a.test.httpStatus ? ` · HTTP ${a.test.httpStatus}` : ''}: {a.test.message}</p>
-        <p className="muted">Tested at: {new Date(a.test.checkedAt).toLocaleString()} (your browser’s local time). This is not a quota reset or subscription renewal date.</p>
-        {a.test.retryAt ? <p>Provider suggested retry time: {new Date(a.test.retryAt).toLocaleString()}. This is retry advice, not a guaranteed quota reset.</p>
-          : ['rate-limited', 'quota-exhausted'].includes(a.test.state) && <p className="muted">The provider did not supply a usable Retry-After time. Reset time is unknown.</p>}
-      </Notice>}
+      {a.test && <>
+        <Notice role="status" tone={testTone(a.test.state)}>
+          <p>{a.test.message}</p>
+          {a.test.retryAt ? <p>Provider suggested retry time: {new Date(a.test.retryAt).toLocaleString()}. This is retry advice, not a guaranteed quota reset.</p>
+            : ['rate-limited', 'quota-exhausted'].includes(a.test.state) && <p>The provider did not supply a usable Retry-After time. Reset time is unknown.</p>}
+        </Notice>
+        <p className="muted">Tested at {new Date(a.test.checkedAt).toLocaleString()}{a.test.httpStatus ? ` · HTTP ${a.test.httpStatus}` : ''}. This is not a quota reset or subscription renewal date.</p>
+      </>}
       {editing && (
         <Sheet title={`Edit ${a.label}`} onClose={() => setEditing(false)}>
           <AccountForm account={a} busy={busy} run={run} onDone={() => setEditing(false)} />

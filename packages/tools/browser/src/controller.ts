@@ -26,6 +26,8 @@ export class HostController implements BrowserController {
     extensionBridge?: () => ExtensionBridge;
     manager?: (settings: ControlSettings) => BrowserManager;
     lookup?: GuardedLookup;
+    /** Defaults to this process's platform. Computer control exists only on darwin. */
+    platform?: NodeJS.Platform;
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -50,9 +52,15 @@ export class HostController implements BrowserController {
     const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}) });
     return new BrowserManager(() => new PlaywrightDriver(host.options, host), { controlFile: path.join(this.dir, 'control.json'), closeHost: () => host.close() });
   }
+  get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
   async enable(): Promise<void> {
     if (this.#enabled) return;
-    try { this.#settings = settingsSchema.parse(JSON.parse(await readFile(path.join(this.dir, 'settings.json'), 'utf8'))); }
+    try {
+      const stored = settingsSchema.parse(JSON.parse(await readFile(path.join(this.dir, 'settings.json'), 'utf8')));
+      // Computer control is macOS-only: elsewhere a stored choice of it runs, and reads, as the agents' own browser.
+      // The file keeps what the owner chose.
+      this.#settings = stored.mode === 'computer' && !this.#macOS ? { ...stored, mode: 'playwright' } : stored;
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     this.#manager = this.#create(); await this.#manager.enable(); this.#enabled = true;
   }
@@ -106,6 +114,7 @@ export class HostController implements BrowserController {
   }
   async configure(input: unknown): Promise<BrowserStatus> {
     const next = settingsSchema.parse(input);
+    if (next.mode === 'computer' && !this.#macOS) throw new Error('Computer control is macOS-only. Choose another mode.');
     if (!this.#enabled) throw new Error('Host control is unavailable. Start buddi serve.');
     if (this.#changing) throw new Error('Settings are already changing.');
     const current = this.#manager.status();

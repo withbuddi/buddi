@@ -16,7 +16,7 @@ import { ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
 import { OPENING_TURN_SPEAKER } from '@buddi/core';
-import { claimOpeningTurn, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
+import { claimOpeningTurn, firstAgentPersona, probeOllama, updateFirstAgent, withFirstRunFacts, OLLAMA_BASE_URL, OLLAMA_CLOUD_BASE_URL, OLLAMA_DOWNLOAD_URL } from './onboarding.js';
 import { readChatTranscript } from './chat.js';
 import { readConversation } from './read.js';
 import { saveTelegramToken, telegramPairing, TelegramWebError } from './telegram.js';
@@ -340,6 +340,33 @@ it('changes the assistant in place: same file, same id, new name, face and purpo
   expect(catalog.list().filter((agent) => agent.source !== 'example').length).toBe(1);
   // A persona the owner wrote themselves is not rewritten under them.
   expect(written).toMatch(/You are Ada\. Keep notes\./);
+});
+
+it('keeps a generated persona across a rename, and writes a new one when the owner gives it', async () => {
+  const dir = agentsDir();
+  const agentDir = path.join(dir, 'concierge');
+  mkdirSync(agentDir, { recursive: true });
+  const file = path.join(agentDir, 'agent.md');
+  const persona = "You're not a chatbot. You're becoming someone.\n\n- Help for real.";
+  writeFileSync(
+    file,
+    ['---', 'id: concierge', 'handle: ada', 'name: Ada', "description: \"You're not a chatbot.\"", 'default: true',
+      'tools: [memory.*]', 'language: mirror', '---', '', firstAgentPersona({ name: 'Ada', description: "You're not a chatbot.", instructions: persona }), ''].join('\n'),
+    'utf8',
+  );
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const deps = { pool: fakePool() as never, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => catalog.reload() };
+  updateFirstAgent(deps, { name: 'Noor' });
+  let written = readFileSync(file, 'utf8');
+  expect(written).toContain('You are Noor.');
+  expect(written).toContain(persona);
+  updateFirstAgent(deps, { instructions: 'Keep my books. Nothing else.' });
+  written = readFileSync(file, 'utf8');
+  expect(written).toMatch(/description: .?Keep my books\..?\n/);
+  expect(written).toContain('You are Noor.');
+  expect(written).toContain('Keep my books. Nothing else.');
+  expect(written).not.toContain(persona);
 });
 
 it('refuses to change an assistant that does not exist yet', () => {

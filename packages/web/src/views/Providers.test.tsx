@@ -71,9 +71,20 @@ it('labels test time separately from provider retry advice', async () => {
   } }] });
   render(<Providers />);
   expect(await screen.findByText(/HTTP 429/)).toBeInTheDocument();
-  expect(screen.getByText(/Tested at:/)).toHaveTextContent('not a quota reset or subscription renewal date');
+  expect(screen.getByText(/Tested at/)).toHaveTextContent('not a quota reset or subscription renewal date');
+  expect(screen.getByText(/Tested at/).closest('.ui-notice')).toBeNull();
+  expect(screen.getByText('Provider limit.').closest('.ui-notice')).toHaveAttribute('data-tone', 'warning');
   expect(screen.getByText(/Provider suggested retry time:/)).toHaveTextContent('not a guaranteed quota reset');
   expect(api.testProviderAccount).not.toHaveBeenCalled();
+});
+it('draws a successful test in the good tone without a state label', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {
+    state: 'connected', message: 'Connection succeeded.', checkedAt: '2026-09-19T02:00:00Z',
+  } }] });
+  render(<Providers />);
+  const verdict = await screen.findByText('Connection succeeded.');
+  expect(verdict.closest('.ui-notice')).toHaveAttribute('data-tone', 'good');
+  expect(screen.queryByText(/connected:/)).not.toBeInTheDocument();
 });
 it('states reset time is unknown when no retry advice was supplied', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, test: {

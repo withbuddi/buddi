@@ -2,10 +2,18 @@
 
 Status: reference, 2026-09-21
 
-## Default: native computer control (2026-09-18)
+## Default: the agents' own browser (2026-09-24)
+
+A new installation starts in **Give agents their own browser** (Playwright) on
+every platform. **Use my apps** (native computer control) is offered only on
+macOS and is an explicit owner choice. An existing `settings.json` keeps its
+stored mode; on a non-macOS host a stored Computer choice runs and reads as
+Playwright, and the file is left as written.
+
+## Native computer control (2026-09-18, default until 2026-09-24)
 
 The owner clarified that the original OS-first design is the requirement.
-**Computer** is now the default mode. The earlier headed Playwright driver is
+**Computer** was the default mode until 2026-09-24. The earlier headed Playwright driver is
 preserved as an explicit **Browser automation** option. Buddi never silently
 switches modes when permissions, accessibility or a website fail.
 
@@ -21,9 +29,9 @@ delegation restrictions and owner Stop apply in both modes.
    browser package builds a fixed, ad-hoc-signed Swift executable at
    `packages/tools/browser/dist/native/buddi-computer`. No downloaded actuator,
    AppleScript, shell command, browser extension, CDP or WebDriver is used by
-   Computer mode. Non-macOS hosts must explicitly select Playwright.
-2. Open **Host browser → Computer & browser settings**. Choose Computer control
-   (default), the browser app, and allowed application bundle IDs. Chrome and
+   Computer mode. Non-macOS hosts are not offered it.
+2. Open **Host browser → Computer & browser settings**. Choose Use my apps, the
+   browser app, and allowed application bundle IDs. Chrome and
    Safari are initially allowed, Chrome is initially selected. Native apps such
    as `com.apple.TextEdit` and `com.apple.calculator` require an owner settings
    change. Agents cannot change the mode or allowlist.

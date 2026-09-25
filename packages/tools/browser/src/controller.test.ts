@@ -15,18 +15,32 @@ const resources: Array<{ dir: string; controller: HostController }> = [];
 const ctx = (id = 'a'): CoreToolContext => hosted({ ownerId: 'owner', db: {} as never, now: () => new Date(), timezone: 'UTC', agentId: id, conversationId: id,
   ownerRequest: { id: `request-${id}`, text: 'Open the app', expiresAt: Date.now() + 60_000 } });
 const open = commandSchema.parse({ action: 'open', appId: 'com.apple.Safari' });
-async function setup() {
+async function setup(platform: NodeJS.Platform = 'darwin', mode: 'computer' | 'playwright' = 'computer') {
   const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
   const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async () => {}), close: vi.fn(async () => {}), screenshot: async () => undefined,
     observe: async () => ({ id: 'o', url: 'app://fixture', title: 'Fixture', tree: '', tabs: [], capturedAt: new Date().toISOString() }) };
   const factory = vi.fn((settings) => new BrowserManager(() => driver, { controlFile: path.join(dir, 'control.json'), maxSessions: settings.mode === 'computer' ? 1 : 8, allowOpen: settings.mode === 'computer' }));
-  const controller = new HostController(dir, { manager: factory });
+  const controller = new HostController(dir, { manager: factory, platform });
   resources.push({ dir, controller }); await controller.enable();
+  if (mode === 'computer') await controller.configure({ ...controller.status().settings!, mode: 'computer' });
   return { dir, controller, driver, factory };
 }
 afterEach(async () => { for (const { dir, controller } of resources.splice(0)) { await controller.shutdown(); await rm(dir, { recursive: true, force: true }); } });
 describe('owner-controlled driver selection', () => {
-  it('defaults to computer mode and serializes conversations on the desktop', async () => {
+  it('defaults a new installation to the agents\' own browser', async () => {
+    const { controller } = await setup('darwin', 'playwright');
+    expect(controller.status().mode).toBe('playwright');
+  });
+  it('treats a stored computer choice as the agents\' own browser off macOS, and keeps the file', async () => {
+    const { dir } = await setup('darwin', 'computer');
+    const linux = new HostController(dir, { manager: () => new BrowserManager(() => ({} as BrowserDriver), { controlFile: path.join(dir, 'control.json') }), platform: 'linux' });
+    resources.push({ dir: await mkdtemp(path.join(tmpdir(), 'buddi-computer-')), controller: linux });
+    await linux.enable();
+    expect(linux.status().mode).toBe('playwright');
+    expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')).mode).toBe('computer');
+    await expect(linux.configure({ ...linux.status().settings!, mode: 'computer' })).rejects.toThrow('macOS-only');
+  });
+  it('serializes conversations on the desktop in computer mode', async () => {
     const { controller } = await setup();
     expect(controller.status().mode).toBe('computer');
     await controller.execute(open, ctx());
@@ -55,6 +69,7 @@ describe('owner-controlled driver selection', () => {
     const { controller, factory } = await setup();
     await expect(controller.configure({ mode: 'computer', allowedApps: [] })).rejects.toThrow();
     expect(controller.status().mode).toBe('computer');
-    expect(factory.mock.calls.every(([settings]) => settings.mode === 'computer')).toBe(true);
+    // The first two managers (constructor, enable) are the fresh-install default, from before the owner chose computer mode.
+    expect(factory.mock.calls.slice(2).every(([settings]) => settings.mode === 'computer')).toBe(true);
   });
 });

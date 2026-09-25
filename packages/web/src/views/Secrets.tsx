@@ -13,7 +13,7 @@
  * buddi's own keys sit at the bottom, read-only: the vault is one place, so
  * the page shows everything it holds.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api, type SecretListingView, type SecretRule, type SecretsView } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import {
@@ -39,11 +39,14 @@ import {
   foundSentence,
   outcomeTone,
   parseTargetInput,
-  renderTarget,
+  accountOf,
+  renderPlace,
   scrubbedSentence,
+  type AccountName,
   targetInputText,
   targetPlaceholder,
 } from './secret-rules';
+import { providerName } from './Providers';
 
 /** One write: the tool invoked as the owner, its answer or `null` on a refusal. */
 async function writeSecret(
@@ -74,6 +77,12 @@ interface BindingDraft {
 
 export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const view = useAsync(() => api.secrets(), []);
+  // A model account's credential is stored under a generated name; the page names it by its account.
+  const providerAccounts = useAsync(() => api.providerAccounts(), []);
+  const accounts = useMemo(
+    () => new Map<string, AccountName>((providerAccounts.data?.accounts ?? []).map((a) => [a.id, { label: a.label, provider: providerName(a) }])),
+    [providerAccounts.data],
+  );
   const [adding, setAdding] = useState(false);
   const data: SecretsView | undefined = view.data;
   return (
@@ -107,7 +116,7 @@ export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?:
                 </Empty>
               ) : (
                 data.secrets.map((secret) => (
-                  <SecretRow key={secret.name} secret={secret} destinations={data.destinations} timezone={timezone} onChanged={view.reload} />
+                  <SecretRow key={secret.name} secret={secret} accounts={accounts} destinations={data.destinations} timezone={timezone} onChanged={view.reload} />
                 ))
               )}
             </Stack>
@@ -147,11 +156,13 @@ export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?:
 /** One secret: its bindings, its last use, its log, and the owner's own actions. */
 function SecretRow({
   secret,
+  accounts,
   destinations,
   timezone,
   onChanged,
 }: {
   secret: SecretListingView;
+  accounts: ReadonlyMap<string, AccountName>;
   destinations: SecretsView['destinations'];
   timezone?: string;
   onChanged: () => void;
@@ -169,13 +180,16 @@ function SecretRow({
     }
   };
   const last = secret.lastUse;
+  const account = accountOf(secret.bindings, accounts);
   return (
     <Stack gap="sm">
       <div className="ui-card-head">
-        <h3 className="ui-card-title">{secret.name}</h3>
+        <h3 className="ui-card-title">{account ? account.label : secret.name}</h3>
+        {account ? <Tag>{account.provider}</Tag> : null}
         {secret.totp ? <Tag>TOTP</Tag> : null}
         {last ? <Pill tone={outcomeTone(last.outcome)}>{last.outcome}</Pill> : null}
       </div>
+      {account ? <p className="ui-card-meta mono">{secret.name}</p> : null}
       {secret.bindings.length === 0 ? (
         <p className="ui-card-meta">{UNBOUND_LINE}</p>
       ) : (
@@ -183,7 +197,7 @@ function SecretRow({
           {secret.bindings.map((binding, index) => (
             <div key={index} className="ui-row">
               <Tag>{binding.kind}</Tag>
-              <span className="mono">{renderTarget(binding.kind, binding.target)}</span>
+              <span className="mono">{renderPlace(binding.kind, binding.target, accounts)}</span>
               <Pill tone="muted">{RULE_LABELS[binding.rule] ?? binding.rule}</Pill>
             </div>
           ))}
@@ -192,7 +206,7 @@ function SecretRow({
       {secret.bindings.some((binding) => binding.heldByPlugin) ? <p className="ui-card-meta">{ACCOUNT_HELD_LINE}</p> : null}
       <p className="ui-card-meta">
         {last
-          ? `Last used ${fmtRelative(last.at)}${last.agentId ? ` by ${last.agentId}` : ''} — ${last.kind}, ${renderTarget(last.kind, last.target)}.`
+          ? `Last used ${fmtRelative(last.at)}${last.agentId ? ` by ${last.agentId}` : ''} — ${last.kind}, ${renderPlace(last.kind, last.target, accounts)}.`
           : 'Never used.'}
       </p>
       <ErrorBanner message={failure} />
@@ -228,7 +242,7 @@ function SecretRow({
           Use log
         </Button>
       </Toolbar>
-      {logOpen ? <UseLog name={secret.name} timezone={timezone} /> : null}
+      {logOpen ? <UseLog name={secret.name} accounts={accounts} timezone={timezone} /> : null}
       {sheet === 'replace' ? (
         <ReplaceValueSheet secret={secret} onClose={() => setSheet(null)} onChanged={onChanged} />
       ) : null}
@@ -241,7 +255,7 @@ function SecretRow({
 }
 
 /** One secret's use log, asked for when the row is opened, newest first. */
-function UseLog({ name, timezone }: { name: string; timezone?: string }): JSX.Element {
+function UseLog({ name, accounts, timezone }: { name: string; accounts: ReadonlyMap<string, AccountName>; timezone?: string }): JSX.Element {
   const log = useAsync(() => api.secretUses(name, 50), [name]);
   if (log.error) return <ErrorBanner message={log.error} />;
   if (!log.data) return <Empty>Reading the log…</Empty>;
@@ -253,7 +267,7 @@ function UseLog({ name, timezone }: { name: string; timezone?: string }): JSX.El
         <div key={index} className="ui-list-row">
           <span className="ui-list-main">
             <span className="ui-list-title">
-              {fmtTime(use.at, timezone ?? 'UTC')} — {use.kind}, {renderTarget(use.kind, use.target)}
+              {fmtTime(use.at, timezone ?? 'UTC')} — {use.kind}, {renderPlace(use.kind, use.target, accounts)}
             </span>
             <span className="ui-list-sub">
               {use.agent ? use.agent : 'the owner'}
