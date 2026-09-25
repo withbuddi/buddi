@@ -387,7 +387,7 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
           <ToolPicker view={picker.data} chosen={chosen} onChange={setPicked} disabled={busy || agent.isExample} />
         )}
       </div>
-      <Field label="Persona" hint="Who it is and how it works, in its own file. It reads this before every conversation." wide>
+      <Field label="Persona" hint={<>Who it is and how it works, in its own file. It reads this before every conversation; <code>{'{{today}}'}</code> is filled in with the date at run time.</>} wide>
         {file.error ? (
           <ErrorBanner message={file.error} />
         ) : !file.data ? (

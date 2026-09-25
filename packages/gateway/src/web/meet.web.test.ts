@@ -370,6 +370,45 @@ it('keeps a generated persona across a rename, and writes a new one when the own
   expect(written).not.toContain(persona);
 });
 
+it('recognises the older "How you work" as generated, and swaps it for the current one', () => {
+  const dir = agentsDir();
+  const agentDir = path.join(dir, 'concierge');
+  mkdirSync(agentDir, { recursive: true });
+  const file = path.join(agentDir, 'agent.md');
+  const persona = "You're becoming someone.\n\n- Help for real.";
+  const older = [
+    'You are Ada. There is exactly one owner: the person you are talking to. Today is {{today}}.',
+    '',
+    persona,
+    '',
+    '## How you work',
+    '',
+    '- Answer in one or two short paragraphs. Lead with the answer, then the reason.',
+    '- Ask one thing at a time and wait. Never send a list of questions.',
+    "- You hold your memory, the clock, the owner's profile and the roster-reading tools, and nothing else.",
+    '  When something needs data you cannot reach, say so plainly and say what would answer it — never guess,',
+    '  not even at a small number.',
+    "- Write down what the owner tells you about themselves with the memory and profile tools, as they say it.",
+    '- You are the first agent of this installation. If the owner asks what else is possible, say that agents',
+    '  are files they can add, and that you can be given more tools whenever they want.',
+  ].join('\n');
+  writeFileSync(
+    file,
+    ['---', 'id: concierge', 'handle: ada', 'name: Ada', 'description: Mine.', 'default: true',
+      'tools: [memory.*]', 'language: mirror', '---', '', older, ''].join('\n'),
+    'utf8',
+  );
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const deps = { pool: fakePool() as never, catalog, agentsDir: dir, examplesDir: path.join(dir, 'examples'), reload: () => catalog.reload() };
+  updateFirstAgent(deps, { instructions: 'Keep my books.' });
+  const written = readFileSync(file, 'utf8');
+  expect(written).toContain('Keep my books.');
+  expect(written).not.toContain('and nothing else');
+  expect(written).toContain('a browser of your own');
+  expect(written).toContain('Today is {{today}}.');
+});
+
 it('refuses to change an assistant that does not exist yet', () => {
   const dir = agentsDir();
   const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };

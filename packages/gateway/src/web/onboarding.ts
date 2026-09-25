@@ -54,6 +54,8 @@ export const WEB_ONBOARDING_STEPS = [
   'welcome',
   'you',
   'model',
+  // Never a gate: a missing browser is fixed later, from Computer & browser.
+  'browser',
   'agent',
   'hello',
   'extras',
@@ -296,7 +298,10 @@ function personaHead(name: string): string {
  * agent had before the wizard asked for a persona, kept byte for byte so an
  * older file is still recognised as untouched.
  */
-export function firstAgentPersona(input: { name: string; description: string; instructions?: string }): string {
+export function firstAgentPersona(
+  input: { name: string; description: string; instructions?: string },
+  section: readonly string[] = HOW_YOU_WORK,
+): string {
   const own = input.instructions?.trim();
   return [
     personaHead(input.name),
@@ -313,18 +318,48 @@ export function firstAgentPersona(input: { name: string; description: string; in
             .join('\n'),
         ]),
     '',
-    '## How you work',
-    '',
-    '- Answer in one or two short paragraphs. Lead with the answer, then the reason.',
-    '- Ask one thing at a time and wait. Never send a list of questions.',
-    '- You hold your memory, the clock, the owner\'s profile and the roster-reading tools, and nothing else.',
-    '  When something needs data you cannot reach, say so plainly and say what would answer it — never guess,',
-    '  not even at a small number.',
-    '- Write down what the owner tells you about themselves with the memory and profile tools, as they say it.',
-    '- You are the first agent of this installation. If the owner asks what else is possible, say that agents',
-    '  are files they can add, and that you can be given more tools whenever they want.',
+    ...section,
   ].join('\n');
 }
+
+/**
+ * The generated "How you work": what the first assistant holds, said so it
+ * neither underclaims ("I have no tool for that") nor acts without asking.
+ * It matches `FIRST_AGENT_TOOLS`; change them together.
+ */
+export const HOW_YOU_WORK: readonly string[] = [
+  '## How you work',
+  '',
+  '- Answer in one or two short paragraphs. Lead with the answer, then the reason.',
+  '- Ask one thing at a time and wait. Never send a list of questions.',
+  '- You have real tools: mail, web search and page reading, a browser of your own, memory, reminders,',
+  '  schedules, goals, the canvas, running commands on this machine, and handing work to other agents.',
+  '  Use them. When the owner asks for something they cover, do it rather than explain it.',
+  '- Some actions ask the owner first: sending mail, running a command, acting in the browser. Propose them',
+  '  plainly and let the owner approve; do not avoid them because they need a yes.',
+  '- When a tool refuses or something is not installed, tell the owner the tool\'s own sentence and what',
+  '  would fix it (the browser, for instance, says how to install one). Never say you have no tool when you',
+  '  were given one. When something needs data you cannot reach, say so and never guess, not even a small number.',
+  '- Write down what the owner tells you about themselves with the memory and profile tools, as they say it.',
+];
+
+/**
+ * The section every first agent was written with before it held the wide
+ * grant. Still recognised as generated, so a later change swaps it for the
+ * current one rather than leaving a file that underclaims.
+ */
+const HOW_YOU_WORK_V1: readonly string[] = [
+  '## How you work',
+  '',
+  '- Answer in one or two short paragraphs. Lead with the answer, then the reason.',
+  '- Ask one thing at a time and wait. Never send a list of questions.',
+  '- You hold your memory, the clock, the owner\'s profile and the roster-reading tools, and nothing else.',
+  '  When something needs data you cannot reach, say so plainly and say what would answer it — never guess,',
+  '  not even at a small number.',
+  '- Write down what the owner tells you about themselves with the memory and profile tools, as they say it.',
+  '- You are the first agent of this installation. If the owner asks what else is possible, say that agents',
+  '  are files they can add, and that you can be given more tools whenever they want.',
+];
 
 /**
  * A path with every existing ancestor resolved through its symlinks.
@@ -523,12 +558,15 @@ function checkInstructions(value: string | undefined): string | undefined {
  * persona it carries, or none for the older shape that quoted the description.
  */
 function generatedPersona(body: string, name: string, description: string): { instructions?: string } | null {
-  if (body === firstAgentPersona({ name, description }).trim()) return {};
-  const head = `${personaHead(name)}\n\n`;
-  const tail = firstAgentPersona({ name, description, instructions: '\u0000' }).split('\u0000')[1]!.trimEnd();
-  if (!body.startsWith(head) || !body.endsWith(tail)) return null;
-  const instructions = body.slice(head.length, body.length - tail.length).trim();
-  return instructions && firstAgentPersona({ name, description, instructions }).trim() === body ? { instructions } : null;
+  for (const section of [HOW_YOU_WORK, HOW_YOU_WORK_V1]) {
+    if (body === firstAgentPersona({ name, description }, section).trim()) return {};
+    const head = `${personaHead(name)}\n\n`;
+    const tail = firstAgentPersona({ name, description, instructions: '\u0000' }, section).split('\u0000')[1]!.trimEnd();
+    if (!body.startsWith(head) || !body.endsWith(tail)) continue;
+    const instructions = body.slice(head.length, body.length - tail.length).trim();
+    if (instructions && firstAgentPersona({ name, description, instructions }, section).trim() === body) return { instructions };
+  }
+  return null;
 }
 
 /** The owner's own agent, if they have one. Examples are not it. */
