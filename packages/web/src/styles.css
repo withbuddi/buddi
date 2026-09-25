@@ -130,7 +130,7 @@ main[data-ground='plain'] { background: var(--bg); }
 .rail-spacer { flex: 1 1 auto; }
 
 /* The owner's corner: under one hairline, their initial, which opens the
-   quick theme switch, Appearance and Replay first run. Navy on cream in the
+   quick theme switch, Appearance and Run setup again. Navy on cream in the
    light, cream on navy in the dark: the one face on the rail that is not an
    agent's. */
 .rail-owner { display: flex; justify-content: center; margin-top: var(--space-2); padding-top: 10px; border-top: 1px solid var(--line); }

@@ -64,8 +64,7 @@ import {
   rebindBrain,
   updateFirstAgent,
   withFirstRunFacts,
-  type OnboardingDeps,
-} from './onboarding.js';
+  type OnboardingDeps, readFirstAgentPersona } from './onboarding.js';
 import {
   TelegramWebError,
   saveTelegramToken,
@@ -1278,6 +1277,11 @@ export function createWebApp(deps: WebServerDeps): Server {
          * page: the dashboard bundle reaches no host but its own, and the
          * answer is about the machine buddi runs on rather than the browser's.
          */
+        // The assistant's persona, for the wizard's "change": what the purpose field shows.
+        case '/api/onboarding/agent': {
+          const persona = readFirstAgentPersona(onboardingDeps());
+          return persona ? sendJson(res, 200, persona) : sendJson(res, 404, { error: 'There is no assistant of your own yet.' });
+        }
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
         case '/api/telegram':

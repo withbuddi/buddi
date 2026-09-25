@@ -81,3 +81,10 @@ a:not([class]):hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* A scrolling region inside a card: a thin scrollbar in the hairline colour, both themes. */
+.thin-scroll { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.thin-scroll::-webkit-scrollbar { width: var(--space-2); height: var(--space-2); }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: var(--radius-pill); border: var(--space-0) solid transparent; background-clip: padding-box; }
+.thin-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--text-muted); }

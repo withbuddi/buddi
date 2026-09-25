@@ -558,7 +558,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         </header>
 
         <div className="meet-board">
-        <div className="meet-scroll" ref={scroller}>
+        <div className="meet-scroll thin-scroll" ref={scroller}>
           <div className="meet-thread" data-testid="meet-thread">
               <Buddi>
                 {SCRIPT.opening.map((line, at) => (
@@ -1827,10 +1827,24 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
         ? { kind: 'emoji', value: existing.avatar }
         : { kind: 'mascot', role: 'core' },
   );
-  // A new assistant starts from the persona; an existing one shows its card
-  // line, and only an edit to it is sent as a new persona.
-  const initialPurpose = existing?.description || SCRIPT.assistant.purposeValue;
-  const [purpose, setPurpose] = useState<string>(initialPurpose);
+  /*
+   * A new assistant starts from the script's persona. An existing one shows
+   * its own, read from its file — never its card line, which saved back would
+   * overwrite the persona with one sentence — and only an edit is sent.
+   */
+  const [initialPurpose, setInitialPurpose] = useState<string | null>(existing ? null : SCRIPT.assistant.purposeValue);
+  const [purpose, setPurpose] = useState<string>(existing ? '' : SCRIPT.assistant.purposeValue);
+  useEffect(() => {
+    if (!existing) return undefined;
+    let cancelled = false;
+    api.firstAgentPersona().then(
+      (read) => { if (!cancelled) { setInitialPurpose(read.persona); setPurpose(read.persona); } },
+      (err: unknown) => { if (!cancelled) onTrouble(err instanceof ApiError ? err.message : String(err)); },
+    );
+    return () => { cancelled = true; };
+    // Read once per assistant.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existing?.id]);
   const [saving, setSaving] = useState(false);
 
   /*
@@ -1852,7 +1866,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
     const emoji = face.kind === 'emoji' ? { avatar: face.value } : {};
     // The persona is the agent's instructions; the card line is the server's
     // plain one unless the owner wrote their own.
-    const persona = !existing || (purpose.trim() !== '' && purpose !== initialPurpose) ? { instructions: purpose.trim() } : {};
+    const persona = !existing || (initialPurpose !== null && purpose.trim() !== '' && purpose.trim() !== initialPurpose.trim()) ? { instructions: purpose.trim() } : {};
     const written = existing
       ? api.updateFirstAgent({ name: name.trim(), ...persona, ...emoji })
       : api.createFirstAgent({
@@ -1891,7 +1905,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
   return (
     <Ask
       actions={
-        <Button variant="accent" disabled={saving || name.trim() === ''} onClick={submit}>
+        <Button variant="accent" disabled={saving || name.trim() === '' || initialPurpose === null} onClick={submit}>
           {SCRIPT.assistant.submit}
         </Button>
       }
