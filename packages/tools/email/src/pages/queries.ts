@@ -483,7 +483,10 @@ export function accountsQuery(): PageQuery {
           label: account.displayName ? `${account.displayName} — ${account.address}` : account.address,
           aliases: account.aliases.join(', '),
           host: `${account.imapHost}:${account.imapPort} · ${account.smtpHost}:${account.smtpPort}`,
-          // A name, never a value. Nothing in the email schema holds a credential.
+          // Where the password is, in words; the secret's name is the detail
+          // behind it (a tooltip), never the cell. A name, never a value:
+          // nothing in the email schema holds a credential.
+          password: 'In the vault',
           secretName: account.secretName,
           lastSync: synced.get(account.id)
             ? relative(synced.get(account.id) ?? null, now)

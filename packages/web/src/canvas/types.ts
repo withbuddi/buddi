@@ -64,6 +64,10 @@ export interface ColumnMap {
    * slug its words.
    */
   pill?: { tone?: Tone | ValueRef; labels?: Record<string, string> };
+  /** `wrap` breaks a long value; `truncate` cuts it to one line, whole on hover. */
+  fit?: 'wrap' | 'truncate';
+  /** A path within the row whose value is the cell's tooltip. */
+  hint?: string;
 }
 
 export interface TableMap {

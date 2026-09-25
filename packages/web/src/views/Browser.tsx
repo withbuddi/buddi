@@ -13,6 +13,7 @@ import { chatRoute } from '../routes';
 import { InstallProgress } from './parts/InstallProgress';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
+import { useThisMachine } from '../useThisMachine';
 
 export function Browser({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const { data, error, reload } = useAsync(() => api.browser(), [], 3_000);
@@ -256,6 +257,7 @@ function sameGateway(gateway: string): boolean {
  */
 function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string }): JSX.Element {
   const { data, error, reload } = useAsync(() => api.extension(), [], 3_000);
+  const thisMachine = useThisMachine();
   const probe = useAsync(() => askExtension(), [], 3_000).data ?? null;
   const [code, setCode] = useState('');
   const [working, setWorking] = useState(false);
@@ -282,7 +284,7 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
       <Toolbar>
         <Pill tone={data?.connected ? 'good' : 'warning'}>{data?.connected ? 'Connected' : 'Not connected'}</Pill>
         <span className="muted">
-          {data?.connected && data.pairedAt ? `Paired with Chrome on this Mac since ${fmtTime(data.pairedAt, zone)}`
+          {data?.connected && data.pairedAt ? `Paired with Chrome on ${thisMachine} since ${fmtTime(data.pairedAt, zone)}`
             : data?.pairedAt ? 'Paired, but Chrome is not running the extension right now.'
             : 'No browser is paired with this buddi yet.'}
           {data?.extension ? ` · extension ${data.extension}` : ''}

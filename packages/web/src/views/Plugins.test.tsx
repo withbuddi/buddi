@@ -229,11 +229,11 @@ describe('the plugins section', () => {
   /**
    * The button that finishes what "1 agent proposed" starts.
    *
-   * Accepting is gated, so the page never writes an agent: it asks the route,
-   * gets an approval back, and draws the very card Home draws — with the whole
-   * tool grant on it — for the owner to decide there.
+   * The owner's click is the approval: the route records the gated action and
+   * decides it in the same request, so the page gets the agent back and says
+   * it is ready, with no second card to find.
    */
-  it('accepts a proposed agent and draws the approval in place', async () => {
+  it('accepts a proposed agent in one click and says it is ready', async () => {
     vi.mocked(api.plugins).mockResolvedValue(
       view({
         installed: [
@@ -250,35 +250,19 @@ describe('the plugins section', () => {
         ],
       }),
     );
-    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'action-1', preview: 'the whole grant' });
-    vi.mocked(api.approval).mockResolvedValue({
-      id: 'action-1',
-      tool: 'platform.accept_plugin_agent',
-      toolVersion: '1',
-      agentId: 'owner',
-      conversationId: null,
-      jobId: null,
-      preview: 'This gives @gardener your garden tools (2)',
-      envelope: {},
-      canonicalArgs: {},
-      argsHash: 'sha256-x',
-      policyVersion: 1,
-      state: 'pending',
-      decidedBy: null,
-      decidedVia: null,
-      decidedAt: null,
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      createdAt: new Date().toISOString(),
-      outcome: null,
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({
+      approvalId: 'action-1',
+      agent: { id: 'gardener', handle: 'gardener', name: 'Gardener' },
     });
 
     render(<Plugins />);
     fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('garden', 'gardener'));
 
-    // The card, with the grant on it, and the decision still the owner's.
-    expect(await screen.findByText('This gives @gardener your garden tools (2)')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(await screen.findByText(/@gardener is ready/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Talk to @gardener' })).toHaveAttribute('href', '#/chat/gardener');
+    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(api.approval).not.toHaveBeenCalled();
   });
 
   /**

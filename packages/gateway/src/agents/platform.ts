@@ -84,6 +84,7 @@ import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } fro
 import { DELEGATES_FILE, readDelegates } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
+import { storeBundledMascot } from './mascots.js';
 import {
   composeAgentFile,
   composeSkillFile,
@@ -2380,12 +2381,18 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       // The assignment is what makes it live rather than merely present: an
       // agent file with no account behind it sits in the roster disabled.
       const assigned = await assignAccount(binding, envelope.id, envelope.account);
+      // A proposal that names a shipped mascot arrives with its face, kept in
+      // the same store as an uploaded picture. Best effort: a missing file
+      // leaves the initials, never an unfinished approval.
+      const suggestion = findProposal(registry, input.plugin, input.agent).agent;
+      const pictured = ctx.db ? await storeBundledMascot(ctx.db, envelope.id, suggestion.avatar) : false;
       return {
         ok: true,
         id: envelope.id,
         handle: envelope.handle,
         file: envelope.file,
         tools: envelope.tools,
+        ...(pictured ? { picture: suggestion.avatar } : {}),
         fromPlugin: envelope.fromPlugin,
         skills: envelope.skills.map((s) => s.name),
         account: envelope.account,

@@ -49,6 +49,7 @@ import { RECORD_ITSELF } from '../plugins/load.js';
 import { incomingRoot } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 import type { PagesDeps } from './pages.js';
+import type { DecideResult, WriteResult } from './write.js';
 
 /** A refusal in the shape the router sends. Same contract as `backups.ts`. */
 export interface RouteReply {
@@ -704,24 +705,44 @@ export async function uninstallRoute(
  * Accepting an agent a plugin proposes
  * ------------------------------------------------------------------ */
 
+/** What the accept route needs beyond a page: the roster, and the owner's yes. */
+export interface AcceptAgentDeps extends PagesDeps {
+  /** The agents the roster holds right now. Read again after the approval ran. */
+  agents: () => ReadonlyArray<{ id: string; handle: string; name: string }>;
+  /**
+   * Decide an approval `approved` as the owner — the very function the card's
+   * Approve button runs (`decideApprovalFromWeb`), so the record and the
+   * execution are the same ones a card decision makes.
+   */
+  approve: (actionId: string) => Promise<WriteResult<DecideResult>>;
+  /**
+   * The accept already waiting for this proposal, when the gateway raised one
+   * (`raiseAgentOffers`): the click decides that card rather than a second.
+   */
+  pendingAccept?: (plugin: string, agentId: string) => Promise<string | null>;
+}
+
 /**
  * `POST /api/plugins/<name>/agents/<id>/accept` — the owner accepting a
  * proposal from the page that told them it exists.
  *
- * Reading "1 agent proposed" and then being told to go and say a sentence to
- * another agent is an instruction, not a button, and most owners never
- * followed it. So the button is here, and it does exactly what the sentence
- * did: `platform.accept_plugin_agent`, invoked as the owner, which is gated
- * and therefore records the same immutable action an agent's call would. The
- * page draws the approval card in place and the owner approves it there —
- * there is no path here that writes an agent file without that.
+ * The owner's click on "Create @mail" is the approval. Owners who were shown a
+ * second card after pressing the button read it as a failure, not a step. So
+ * this route still invokes the gated `platform.accept_plugin_agent` as the
+ * owner — which records the same immutable action an agent's call would, with
+ * the whole grant in its preview — and then decides that action `approved`
+ * through the dashboard's own decide, in the same request. The card exists as
+ * the record; the owner session is who approved it.
  *
- * Nothing about the account is sent: with no agent of its own behind it, the
- * tool falls back to where the default agent speaks, which is what this page
- * would have had to look up anyway.
+ * Only the dashboard calls this route, and only behind the owner's session and
+ * CSRF token. An agent or an MCP client accepting a proposal calls the tool
+ * itself and gets the card, as before.
+ *
+ * An agent the roster already holds is answered as "already there", never as a
+ * second agent or a refusal.
  */
 export async function acceptAgentRoute(
-  deps: PagesDeps,
+  deps: AcceptAgentDeps,
   plugin: string,
   agentId: string,
 ): Promise<RouteReply> {
@@ -731,14 +752,41 @@ export async function acceptAgentRoute(
   if (!proposal) {
     return { status: 404, body: { error: `No installed plugin proposes an agent "${agentId}" under "${plugin}".` } };
   }
-  const result = await deps.registry.invoke(
-    'platform.accept_plugin_agent',
-    { plugin: proposal.plugin, agent: proposal.agent.id },
-    { ...deps.ctx, agentId: OWNER_AGENT_ID, now: deps.now },
-  );
-  if (result.ok) return { status: 200, body: { result: result.output } };
-  if (result.reason === 'approval-required') {
-    return { status: 200, body: { approvalId: result.actionId, preview: result.preview } };
+  const present = (): { id: string; handle: string; name: string } | undefined => {
+    const found = deps.agents().find((a) => a.id.toLowerCase() === proposal.agent.id.toLowerCase());
+    return found ? { id: found.id, handle: found.handle, name: found.name } : undefined;
+  };
+  const already = present();
+  if (already) return { status: 200, body: { already: true, agent: already } };
+
+  const waiting = (await deps.pendingAccept?.(proposal.plugin, proposal.agent.id)) ?? null;
+  let approvalId: string | null = waiting;
+  if (waiting === null) {
+    const result = await deps.registry.invoke(
+      'platform.accept_plugin_agent',
+      { plugin: proposal.plugin, agent: proposal.agent.id },
+      { ...deps.ctx, agentId: OWNER_AGENT_ID, now: deps.now },
+    );
+    if (!result.ok && result.reason !== 'approval-required') {
+      return { status: result.reason === 'unknown-tool' ? 404 : 400, body: { error: result.message } };
+    }
+    approvalId = result.ok ? null : result.actionId;
   }
-  return { status: result.reason === 'unknown-tool' ? 404 : 400, body: { error: result.message } };
+  if (approvalId !== null) {
+    const decided = await deps.approve(approvalId);
+    if (!decided.ok) return { status: decided.status, body: { error: decided.body.error, approvalId } };
+    const execution = decided.body.execution;
+    if (execution && execution.state !== 'succeeded') {
+      return {
+        status: 409,
+        body: { error: execution.message ?? `Creating @${proposal.agent.handle} did not finish (${execution.state}).`, approvalId },
+      };
+    }
+  }
+  const agent = present() ?? {
+    id: proposal.agent.id,
+    handle: proposal.agent.handle,
+    name: proposal.agent.name,
+  };
+  return { status: 200, body: { approvalId, agent } };
 }

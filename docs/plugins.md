@@ -2952,6 +2952,7 @@ closed when it is absent rather than guess.
 | `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
 | `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
 | `offer` | `{ text, query? }` | no | Offer it on Home while no agent has its id: `text` is the card's one line; `query` names one of your page queries whose answer carries `wanted: true` while the offer is worth making. Accepting is the same gated `platform.accept_plugin_agent`; the owner may dismiss it. A page can offer it in place with the `agent-offer` component. |
+| `avatar` | `BundledMascot` | no | The face it arrives with: one of the bundled Buddi Blob mascots (`core`, `coding`, `finance`, `garage`, `mail`, `maker`, `playground`, `research`), stored as the agent's picture when the owner accepts. Without one it shows its initials until the owner picks a face. |
 
 #### `SuggestedSkill`
 

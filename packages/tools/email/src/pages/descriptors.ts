@@ -713,14 +713,17 @@ const settings: PageDescriptor = {
           query: { query: 'accounts' },
           rows: 'accounts',
           columns: [
-            { key: 'address', label: 'Address' },
-            { key: 'called', label: 'Called' },
+            // Long values wrap or are cut, so the table stays inside the page
+            // and Remove stays in view.
+            { key: 'address', label: 'Address', fit: 'wrap' },
+            { key: 'called', label: 'Called', fit: 'wrap' },
             // A reply leaves from the alias the message was addressed to, so
             // which ones a mailbox answers to is part of what it *is*.
-            { key: 'aliases', label: 'Also receives as' },
-            { key: 'host', label: 'Host' },
+            { key: 'aliases', label: 'Also receives as', fit: 'wrap' },
+            { key: 'host', label: 'Host', fit: 'truncate' },
             { key: 'lastSync', label: 'Last sync' },
-            { key: 'secretName', label: 'Password kept as' },
+            // Where the password is, in words; the vault's name for it on hover.
+            { key: 'password', label: 'Password', hint: 'secretName' },
             // An array of `{ value, tone }`: one pill per fact about the row.
             { key: 'state', label: 'State', pill: {} },
           ],

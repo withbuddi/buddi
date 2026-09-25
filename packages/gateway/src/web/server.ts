@@ -85,7 +85,7 @@ import { listSecrets, secretUses, secretsAct, type SecretsDeps } from './secrets
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, inRecovery, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
+import { getAction, inRecovery, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
 import { browserHost } from '../browser-host.js';
@@ -207,7 +207,7 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
-import { dismissAgentOffer, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
+import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
   upgradeJobRoute,
@@ -2074,8 +2074,9 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
     /*
      * Accepting an agent a plugin proposes, from the page that lists it. It
-     * is the owner invoking the same gated tool Agent Father invokes, so what
-     * comes back is an approval to draw, never a written file.
+     * is the owner invoking the same gated tool Agent Father invokes, and the
+     * owner's click is the approval: the action is recorded, then decided
+     * through the card's own decide in the same request.
      */
     const offerDismissed = /^\/api\/agent-offers\/([^/]+)\/([^/]+)\/dismiss$/.exec(path);
     if (offerDismissed) {
@@ -2088,7 +2089,15 @@ export function createWebApp(deps: WebServerDeps): Server {
     const acceptAgent = /^\/api\/plugins\/([^/]+)\/agents\/([^/]+)\/accept$/.exec(path);
     if (acceptAgent) {
       return reply(res, await acceptAgentRoute(
-        pagesDeps(),
+        {
+          ...pagesDeps(),
+          agents: () => deps.catalog.list(),
+          approve: (actionId) => decideApprovalFromWeb(writeDeps, actionId, 'approved'),
+          pendingAccept: async (plugin, agentId) => {
+            const pending = await listPendingActions(deps.pool, { now: deps.now() }).catch(() => []);
+            return pending.find((action) => isPendingAccept(action, plugin, agentId))?.id ?? null;
+          },
+        },
         decodeURIComponent(acceptAgent[1] as string),
         decodeURIComponent(acceptAgent[2] as string),
       ));
@@ -2434,7 +2443,17 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const pageAct = /^\/api\/pages\/([a-z][a-z0-9_-]{0,39})\/act$/.exec(path);
     if (pageAct) {
-      return reply(res, await actOnPage(pagesDeps(), pageAct[1] as string, body, session));
+      const acted = await actOnPage(pagesDeps(), pageAct[1] as string, body, session);
+      /*
+       * A write that made one of this plugin's agents wanted (the first
+       * mailbox saved) raises its approval at once, before the page reads
+       * again: the card is there when the drawer closes. Once per agent.
+       */
+      if (acted.status === 200 && (acted.body as { result?: unknown }).result !== undefined) {
+        await raiseAgentOffers({ ...agentOffersDeps(), askApproval: deps.askApproval, log }, pageAct[1] as string)
+          .catch((err: unknown) => log(`agent offers: ${err instanceof Error ? err.message : String(err)}`));
+      }
+      return reply(res, acted);
     }
 
     /*

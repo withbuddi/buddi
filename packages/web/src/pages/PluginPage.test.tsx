@@ -25,6 +25,7 @@ vi.mock('../api', async (load) => ({
     pageQuery: vi.fn(),
     pageAct: vi.fn(),
     approval: vi.fn(),
+    approvals: vi.fn(),
     decide: vi.fn(),
     acceptPluginAgent: vi.fn(),
   },
@@ -56,6 +57,9 @@ const DATA: Record<string, unknown> = {
       {
         id: 'acc-1',
         address: 'owner@example.com',
+        host: 'imap.example.com:993 · smtp.example.com:465',
+        password: 'In the vault',
+        secretName: 'EMAIL_OWNER_b68f74ea',
         state: 'ready',
         tone: 'good',
         states: [{ value: 'ready', tone: 'good' }],
@@ -243,7 +247,9 @@ const settings: Component[] = [
         query: { query: 'accounts' },
         rows: 'accounts',
         columns: [
-          { key: 'address', label: 'Address' },
+          { key: 'address', label: 'Address', fit: 'wrap' },
+          { key: 'host', label: 'Host', fit: 'truncate' },
+          { key: 'password', label: 'Password', hint: 'secretName' },
           { key: 'state', label: 'State', pill: { tone: { path: 'tone' } } },
           { key: 'states', label: 'Also', pill: {} },
         ],
@@ -422,6 +428,7 @@ beforeEach(() => {
   vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
     Promise.resolve({ data: DATA[query] })) as typeof api.pageQuery);
   vi.mocked(api.pageAct).mockResolvedValue({ result: { ok: true } });
+  vi.mocked(api.approvals).mockResolvedValue({ pending: [], recent: [] });
   vi.mocked(api.approval).mockImplementation(((id: string) =>
     Promise.resolve(approvalRow(id, id === 'act-1' ? 'Send draft d1' : 'Send it now'))) as typeof api.approval);
 });
@@ -865,6 +872,18 @@ describe('a settings page', () => {
     expect(pill).toHaveAttribute('data-tone', 'good');
   });
 
+  it('keeps long cells inside the table: wrapped, cut with a tooltip, or short with the detail on hover', async () => {
+    draw('settings');
+    const address = (await screen.findByText('owner@example.com')).closest('td') as HTMLElement;
+    expect(address).toHaveAttribute('data-fit', 'wrap');
+    const host = screen.getAllByText('imap.example.com:993 · smtp.example.com:465')[0]!.closest('td') as HTMLElement;
+    expect(host).toHaveAttribute('data-fit', 'truncate');
+    expect(host).toHaveAttribute('title', 'imap.example.com:993 · smtp.example.com:465');
+    const password = screen.getAllByText('In the vault')[0]!.closest('td') as HTMLElement;
+    expect(password).toHaveAttribute('title', 'EMAIL_OWNER_b68f74ea');
+    expect(password.textContent).toBe('In the vault');
+  });
+
   it('draws a section\'s own action beside its heading', async () => {
     draw('settings');
     const head = (await screen.findByText('Accounts')).closest('.ui-section-head') as HTMLElement;
@@ -1196,7 +1215,8 @@ describe('the page as the design system draws it', () => {
 
 /*
  * An agent the plugin proposes, offered where it is needed: the line, and the
- * same accept the Plugins page runs, with the approval drawn in place.
+ * same accept the Plugins page runs. The click is the approval: the agent comes
+ * back, and the line says it is ready.
  */
 describe('an agent offer', () => {
   const offerPage: PluginPageDescriptor = {
@@ -1222,14 +1242,41 @@ describe('an agent offer', () => {
     return render(<PluginPage page={offerPage} navigate={navigate} timezone="UTC" />);
   };
 
-  it('says the line and starts the gated accept, drawing its approval here', async () => {
-    vi.mocked(api.acceptPluginAgent).mockResolvedValue({ approvalId: 'act-9' });
+  it('says the line, creates the agent in one click, and says it is ready', async () => {
+    vi.mocked(api.acceptPluginAgent).mockResolvedValue({
+      approvalId: 'act-9',
+      agent: { id: 'mail-triage', handle: 'mail', name: 'Mail' },
+    });
     drawOffer('needs-agent');
     expect(await screen.findByText('Background triage needs a mail agent.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Create @mail' }));
     await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('email', 'mail-triage'));
-    expect(await screen.findByText('Send it now')).toBeInTheDocument();
+    expect(await screen.findByText(/@mail is ready/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Talk to @mail' })).toHaveAttribute('href', '#/chat/mail-triage');
+    // No second step: no card is drawn.
+    expect(api.approval).not.toHaveBeenCalled();
     expect(api.pageAct).not.toHaveBeenCalled();
+  });
+
+  it('draws the card the gateway raised in place of the button, and approving it is the one click', async () => {
+    const raised = {
+      ...APPROVAL,
+      id: 'act-raised',
+      tool: 'platform.accept_plugin_agent',
+      preview: 'The email plugin (1.0.0) proposes an agent',
+      canonicalArgs: { plugin: 'email', agent: 'mail-triage' },
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    } as ApprovalRow;
+    vi.mocked(api.approvals).mockResolvedValue({ pending: [raised], recent: [] });
+    vi.mocked(api.decide).mockResolvedValue({ action: raised, execution: { state: 'succeeded' } } as never);
+    drawOffer('needs-agent');
+    expect(await screen.findByText('The email plugin (1.0.0) proposes an agent')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create @mail' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(api.decide).toHaveBeenCalled());
+    expect(vi.mocked(api.decide).mock.calls[0]![0]).toBe('act-raised');
+    expect(await screen.findByText(/@mail is ready/)).toBeInTheDocument();
+    expect(api.acceptPluginAgent).not.toHaveBeenCalled();
   });
 
   it('is not there once the agent is', async () => {

@@ -1363,15 +1363,20 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
           <tbody>
             {rows.map((row, index) => (
               <tr key={index}>
-                {component.columns.map((column) => (
-                  <td key={column.key}>
-                    {column.pill ? (
-                      <PillCell column={column} row={row} />
-                    ) : (
-                      fmtValue(readPath(row, column.key), column.type ?? 'text', null)
-                    )}
-                  </td>
-                ))}
+                {component.columns.map((column) => {
+                  const text = column.pill ? null : fmtValue(readPath(row, column.key), column.type ?? 'text', null);
+                  return (
+                    <td key={column.key} data-fit={column.fit} title={cellTitle(column, row, text)}>
+                      {column.pill ? (
+                        <PillCell column={column} row={row} />
+                      ) : column.fit === 'truncate' ? (
+                        <span className="ui-table-cut">{text}</span>
+                      ) : (
+                        text
+                      )}
+                    </td>
+                  );
+                })}
                 {component.actions && component.actions.length > 0 ? (
                   <td>
                     <Toolbar align="end">
@@ -1398,6 +1403,18 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
       )}
     </PieceSection>
   );
+}
+
+/**
+ * A cell's tooltip: the column's `hint` read from the row, or — for a cell cut
+ * to one line — the whole of what was cut.
+ */
+function cellTitle(column: ColumnMap, row: unknown, text: string | null): string | undefined {
+  if (column.hint) {
+    const hint = readPath(row, column.hint);
+    if (hint !== undefined && hint !== null && hint !== '') return String(hint);
+  }
+  return column.fit === 'truncate' && text ? text : undefined;
 }
 
 /**
@@ -1873,9 +1890,9 @@ function ButtonPiece({ component, data }: { component: Of<'button'>; data: unkno
 
 /**
  * One of this plugin's proposed agents, offered in place: the plugin's line,
- * and the same accept the Plugins page runs, approval card and all. Once the
- * approval is decided the page reads again, so a `when` over the roster can
- * take the line away.
+ * and the same accept the Plugins page runs. The click creates the agent, and
+ * the line says so; the page's next read lets a `when` over the roster take it
+ * away.
  */
 function AgentOfferPiece({ component }: { component: Of<'agent-offer'> }): JSX.Element {
   const scope = useScope();
@@ -1885,7 +1902,6 @@ function AgentOfferPiece({ component }: { component: Of<'agent-offer'> }): JSX.E
       agent={component.agent}
       text={component.text}
       label={component.label}
-      onDone={scope.refresh}
     />
   );
 }

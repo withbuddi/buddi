@@ -176,6 +176,30 @@ describe('page descriptors', () => {
     expect(() => parse([withPill({ labels: { open: '' } })], { queries: ['rows'] })).toThrow(/labels/);
   });
 
+  it('takes how a column fits and the tooltip behind it, and refuses a fit it does not know', () => {
+    const withColumn = (column: Record<string, unknown>): unknown =>
+      page({
+        body: [
+          {
+            kind: 'table',
+            query: { query: 'rows' },
+            rows: 'rows',
+            columns: [{ key: 'address', label: 'Address', ...column }],
+          },
+        ],
+      });
+    const [parsed] = parse([withColumn({ fit: 'wrap' })], { queries: ['rows'] });
+    expect((parsed!.body[0] as { columns: Array<{ fit?: string }> }).columns[0]!.fit).toBe('wrap');
+    const [cut] = parse([withColumn({ fit: 'truncate', hint: 'secretName' })], { queries: ['rows'] });
+    expect((cut!.body[0] as { columns: Array<{ fit?: string; hint?: string }> }).columns[0]).toMatchObject({
+      fit: 'truncate',
+      hint: 'secretName',
+    });
+    expect(() => parse([withColumn({ fit: 'squeeze' })], { queries: ['rows'] })).toThrow(/fit/);
+    expect(() => parse([withColumn({ wrap: true })], { queries: ['rows'] })).toThrow();
+    expect(() => parse([withColumn({ hint: '' })], { queries: ['rows'] })).toThrow(/hint/);
+  });
+
   it('refuses a link to a page that is not this plugin\'s', () => {
     expect(() => parse([page({ body: [{ kind: 'link', label: 'Away', to: { page: 'elsewhere' } }] })])).toThrow(
       'plugin demo: page board, body[0].to.page: links to elsewhere, which is not a page of this plugin',

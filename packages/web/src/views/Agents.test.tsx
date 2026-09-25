@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, chatApi } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { Agents } from './Agents';
@@ -14,7 +14,7 @@ vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
   return {
     ...real,
-    api: { ...real.api, agents: vi.fn(), offers: vi.fn() },
+    api: { ...real.api, agents: vi.fn(), offers: vi.fn(), agentOffers: vi.fn(), dismissAgentOffer: vi.fn(), acceptPluginAgent: vi.fn(), approvals: vi.fn() },
     chatApi: { ...real.chatApi, conversations: vi.fn() },
   };
 });
@@ -43,6 +43,23 @@ beforeEach(() => {
   vi.mocked(api.agents).mockResolvedValue({ agents: [], default: { defaultAgentId: null, choices: [], problem: null } } as never);
   vi.mocked(chatApi.conversations).mockResolvedValue({ conversations: [] } as never);
   vi.mocked(api.offers).mockResolvedValue({ offers: [], closed: [] } as never);
+  vi.mocked(api.agentOffers).mockResolvedValue({ offers: [] });
+  vi.mocked(api.approvals).mockResolvedValue({ pending: [], recent: [] } as never);
+});
+
+/*
+ * The agent a plugin offers is where an owner looks for offers: above the
+ * agents' own, with both answers, and the no is the one Home hears.
+ */
+it('lists what the plugins offer under Offers, with Create and Not now', async () => {
+  vi.mocked(api.agentOffers).mockResolvedValue({ offers: [{ plugin: 'email', agent: 'mail-triage', handle: 'mail', name: 'Mail', description: 'Triages mail.', text: 'Background triage needs a mail agent.' }] });
+  vi.mocked(api.dismissAgentOffer).mockResolvedValue({ dismissed: true });
+  render(<Harness start="#/agents?tab=offers" />);
+  expect(await screen.findByText('From your plugins')).toBeInTheDocument();
+  expect(screen.getByText('Background triage needs a mail agent.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Create @mail' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+  await waitFor(() => expect(api.dismissAgentOffer).toHaveBeenCalledWith('email', 'mail-triage'));
 });
 
 it('opens the agent sheet on Conversations when the card is clicked', async () => {

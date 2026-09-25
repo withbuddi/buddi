@@ -1629,7 +1629,13 @@ export const api = {
    * the tool was not gated, which it is.
    */
   acceptPluginAgent: (plugin: string, agent: string) =>
-    post<{ approvalId?: string; preview?: string; result?: unknown }>(
+    post<{
+      /** The approval the owner's click decided; absent when it was already there. */
+      approvalId?: string | null;
+      /** The agent, created now or already on the roster. */
+      agent: { id: string; handle: string; name: string };
+      already?: boolean;
+    }>(
       `/plugins/${encodeURIComponent(plugin)}/agents/${encodeURIComponent(agent)}/accept`,
     ),
   recovery: () => get<RecoveryView>('/recovery'),

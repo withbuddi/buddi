@@ -559,6 +559,14 @@ fieldset:disabled { opacity: 0.6; }
 .ui-table td.clickable { cursor: pointer; }
 .ui-table .sub { color: var(--text-muted); font-size: var(--text-sm); margin-top: 2px; }
 .ui-table td .ui-toolbar { flex-wrap: nowrap; }
+/* A column that keeps the table inside its page (a plugin table's `fit`):
+   `wrap` breaks a long value, anywhere if it has no spaces; `truncate` keeps
+   one line and cuts it, the whole value in the cell's tooltip. A table with
+   such a column lets its headings wrap too, so the actions column stays in view. */
+.ui-table td[data-fit='wrap'] { overflow-wrap: anywhere; min-width: 12ch; }
+.ui-table td[data-fit='truncate'] { max-width: 24ch; }
+.ui-table-cut { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-table:has(td[data-fit]) th { white-space: normal; }
 
 /* ================================================================== *
  * progress

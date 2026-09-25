@@ -113,6 +113,18 @@ export interface ColumnMap {
    * not one sentence to be parsed.
    */
   pill?: { tone?: Tone | ValueRef; labels?: Record<string, string> };
+  /**
+   * How a long value keeps the table inside its page. `wrap` breaks it across
+   * lines, anywhere if it must (an address has no spaces); `truncate` keeps one
+   * line and cuts it, with the whole value in the cell's tooltip. Left out, the
+   * cell is as wide as its value, and a table of long values scrolls sideways.
+   */
+  fit?: 'wrap' | 'truncate';
+  /**
+   * A path within the row whose value is the cell's tooltip: the detail
+   * behind a short cell ("In the vault", and the secret's name on hover).
+   */
+  hint?: string;
 }
 
 export interface TableMap {
@@ -365,6 +377,8 @@ export const columnMapSchema = z
       })
       .strict()
       .optional(),
+    fit: z.enum(['wrap', 'truncate']).optional(),
+    hint: viewPathSchema.pipe(z.string().min(1)).optional(),
   })
   .strict();
 

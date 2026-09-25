@@ -33,7 +33,7 @@ import {
 import { fmtRelative } from '../format';
 import { AGENTS_ROUTE } from '../routes';
 import { Button, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
-import { AcceptApproval, useAcceptPluginAgent } from './parts/AgentOffer';
+import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 
 /** How often a running stage is asked where it has got to. */
 const JOB_POLL_MS = 1_500;
@@ -699,18 +699,17 @@ function Unlocks({ plugin, unlocks }: { plugin?: string; unlocks: PluginUnlock[]
         {unlocks.map((unlock) => (
           <Unlock key={unlock.id} plugin={plugin} unlock={unlock} />
         ))}
-        {/* Accepting one is an approval with the whole grant in front of you.
-            It can happen here now, and it still happens on the Agents page. */}
+        {/* Accepting one here is the approval: the click creates it. */}
         <p className="ui-card-meta">
-          Nothing here is created by installing. Accepting one shows you the whole tool grant and waits
-          for your approval — here, or <a href={AGENTS_ROUTE}>on the Agents page</a>.
+          Nothing here is created by installing. Accept creates the agent with the tools listed. You can
+          change or remove it <a href={AGENTS_ROUTE}>on the Agents page</a>.
         </p>
       </Stack>
     </Section>
   );
 }
 
-/** One proposed agent: what it is, and the button that starts the approval. */
+/** One proposed agent: what it is, and the button that creates it. */
 function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): JSX.Element {
   // The same accept Home and a plugin's own page offer (`parts/AgentOffer`).
   const offer = useAcceptPluginAgent(plugin, unlock.id);
@@ -722,14 +721,14 @@ function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): 
         <Pill tone={unlock.drift.state === 'up-to-date' ? 'good' : 'warning'}>{unlock.drift.state}</Pill>
         <span className="ui-card-meta">{unlock.drift.message}</span>
         <Spacer />
-        {plugin && !accepted ? (
-          <Button size="sm" disabled={offer.busy || offer.approvalId !== null} onClick={offer.accept}>
+        {plugin && !accepted && !offer.created ? (
+          <Button size="sm" disabled={offer.busy} onClick={offer.accept}>
             Accept
           </Button>
         ) : null}
       </Toolbar>
       <ErrorBanner message={offer.failure} />
-      {offer.approvalId ? <AcceptApproval id={offer.approvalId} onDecided={offer.clear} /> : null}
+      {offer.created ? <AgentReady agent={offer.created} /> : null}
     </Stack>
   );
 }
