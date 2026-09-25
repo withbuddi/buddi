@@ -11,6 +11,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The dashboard's type is DM Sans, with DM Mono for code, shipped inside the package. It loads no font from the internet, as before.
 - The agents' Chromium now lives in the data directory, at `browser/engines`, so a container that keeps its data volume keeps the browser too.
 
 ### Fixed

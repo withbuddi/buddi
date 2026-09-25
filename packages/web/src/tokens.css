@@ -31,13 +31,15 @@
 
 :root {
   /* ---- type ---- */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-  /* The voice of the hub: a rounded face where the system has one (SF Pro
-     Rounded on Apple), the plain sans everywhere else. No font file, still. */
-  --font-display: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Display',
-    'Segoe UI', Roboto, sans-serif;
+  /* DM Sans for everything, DM Mono for code: Open Font License, bundled by
+     Vite from the fontsource packages imported in main.tsx, so the dashboard
+     still loads nothing from the internet. DM Sans is variable (weight
+     100–1000, optical size 9–40), so the weights below render as drawn. */
+  --font-sans: 'DM Sans Variable', 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'DM Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  /* The display face is the same family: the token stays so titles, the
+     greeting, names and stat values keep their own voice in the stylesheet. */
+  --font-display: var(--font-sans);
 
   /* ---- type scale ----
    * Six product sizes and nothing between them, the greeting, and two display
