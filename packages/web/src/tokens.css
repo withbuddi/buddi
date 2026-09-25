@@ -120,6 +120,8 @@
   --dur: 160ms;
   --dur-slow: 320ms;
   --drift: 90s;  /* the field's slow drift */
+  --drift-field: 38s;  /* first run's field: slow enough to stay calm, quick enough to be seen */
+  --drift-blobs: 27s;  /* the soft shapes drifting over it, out of step with the field */
 
   /* ---- the mascot palette: fixed in both themes ---- */
   --buddi-blue: #3f8ef7;

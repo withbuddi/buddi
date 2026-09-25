@@ -18,8 +18,13 @@ a bubble on the owner's side, so the thread reads back as a conversation.
 
 - No progress bar, no step names, no Back. The thread scrolls; earlier answers
   are visible above and each carries a small "change" link.
-- One primary action at a time, on the right, in the composer's place.
-- "Set up later" is a quiet link under the composer, present throughout.
+- One primary action at a time, on the right, in the composer's place. Every
+  step's dock has the same bottom row: "Set up later" (a quiet link, present
+  throughout) at its left, the step's secondary actions ("Pick another",
+  "Back", "Not now") and then the primary at its right, on one line. Fields
+  sit above that row.
+- While an answer is being saved and tried, buddi's typing dots show with a
+  line saying what it is doing ("Checking that key…"), until the verdict.
 - The screen is the chat layout the owner will use afterwards: same column
   width, same bubbles, same composer. When the real assistant takes over, the
   screen does not change; the speaker does.
@@ -91,13 +96,16 @@ appears here. The accounts page in Settings is unchanged for later.
 > B: Last thing: your assistant. I've picked a name and a face; change either,
 > or keep them.
 
-Inline: a name field prefilled with one from a short list buddi rotates
-through (Ada, Sam, Noor, Kit, Juno, Remy), a face picker with the same emoji
-set as today, and one line "What should it help you with?" prefilled with
+Inline: a name field prefilled with "buddi" (the brand, and the handle the
+shipped assistant already answers to), a face picker — a row of Buddi Blob
+mascots first, the core one chosen, then the emoji set — and one line "What should it help you with?" prefilled with
 "Whatever I ask, and remembering what I tell it." Primary: "Introduce us".
 
 This creates the assistant through `/api/onboarding/agent`, bound to the
-account just tested, and records it as the installation's default agent.
+account just tested, and records it as the installation's default agent. A
+mascot face is then uploaded through `/api/agents/:id/avatar` (the bundled
+copy in `packages/web/public/mascot/`), so it is the agent's real picture
+everywhere; an emoji face is written into the agent file as before.
 
 Being the default is an installation record (`core.web_settings`, key
 `agents`), not a flag in the agent file: the owner changes it from the picker
@@ -115,8 +123,8 @@ message it is prompted to make: introduce itself by the name it was given,
 say one thing it can do today, and ask one question. buddi's scripted bubbles
 stop here.
 
-The composer is now the real composer. The onboarding record is marked done
-when the first assistant message has arrived. If the model never answers, the
+The onboarding record is marked done when the first assistant message has
+arrived. If the model never answers, the
 thread says so in buddi's voice ("Your assistant isn't answering. The AI you
 picked may be down; try again, or pick another brain above.") and offers the
 brain cards again.
@@ -132,6 +140,12 @@ the chat already has for offers:
   QR code and the deep link: "Scan this with your phone and press Start."
   The pairing completes when the phone says hello; the thread confirms it.
 - **Not now** — dismisses the chips. Nothing else is offered on first run.
+
+Either way the thread ends with "You're all set", and the dock holds one line,
+"Opening buddi…", and the "Open buddi" button — no composer, because the board
+leaves for the same conversation in the dashboard by itself after three
+seconds (never under reduced motion, where the line says "Ready when you are."
+and the button is the whole offer).
 
 The thread is the owner's first conversation; it stays in their history like
 any other.

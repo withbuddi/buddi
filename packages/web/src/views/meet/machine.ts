@@ -225,14 +225,6 @@ export function keyKind(secret: string): 'anthropic' | 'openai' {
   return secret.trim().startsWith('sk-ant-') ? 'anthropic' : 'openai';
 }
 
-/**
- * A name for the assistant, rotated rather than random: the same install
- * offered the same first suggestion twice in a row looks like it is not
- * listening, and a random one cannot be reproduced in a test.
- */
-export function suggestedName(names: readonly string[], at: number): string {
-  return names[((at % names.length) + names.length) % names.length]!;
-}
 
 /** `Ada` → `ada`. What the server files the assistant under. */
 export function idFor(name: string): string {

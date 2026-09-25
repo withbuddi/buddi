@@ -110,8 +110,8 @@ export function AgentAvatar({
  *
  * Empty states and the Home greeting leave room for the default agent's face —
  * but only the picture the owner uploaded for it (`/api/agents/:id/avatar`).
- * The art lives with the design, not in this package: it reaches the product
- * only as an upload. With no picture, or one that fails to load, the slot
+ * The art lives with the design repo; first run bundles copies to offer as a
+ * face, but even those reach an agent only as an upload. With no picture, or one that fails to load, the slot
  * draws nothing — never a monogram, an emoji or a placeholder blob.
  */
 const MascotContext = createContext<string | null>(null);

@@ -8,11 +8,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, chatApi, type OnboardingView, type OwnerView, type ProviderAccountsView } from '../api';
 import { App } from '../App';
 import { Meet, FIRST_MESSAGE_TIMEOUT_MS, LEAVE_MS, PATIENCE_MS } from './Meet';
-import { BANNED_WORDS, SCRIPT } from './meet/script';
+import { BANNED_WORDS, DEFAULT_ASSISTANT_NAME, FACES, MASCOTS, SCRIPT } from './meet/script';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -26,6 +26,8 @@ vi.mock('../api', async (load) => {
       skipOnboarding: vi.fn(),
       createFirstAgent: vi.fn(),
       updateFirstAgent: vi.fn(),
+      uploadAgentPicture: vi.fn(),
+      removeAgentPicture: vi.fn(),
       assignProviderAccount: vi.fn(),
       bindBrain: vi.fn(),
       owner: vi.fn(),
@@ -331,7 +333,7 @@ describe('the questions', () => {
     const key = await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder);
     await waitFor(() => expect(key).toHaveFocus());
     // And the address card, whose first field is the address.
-    fireEvent.click(screen.getByRole('button', { name: '←' }));
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.back }));
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
     const address = await screen.findByLabelText(SCRIPT.brain.service.address);
     await waitFor(() => expect(address).toHaveFocus());
@@ -358,7 +360,15 @@ describe('the questions', () => {
     render(meet());
     expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
     expect(screen.getByDisplayValue(SCRIPT.assistant.purposeValue)).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: SCRIPT.assistant.face }).children.length).toBeGreaterThan(4);
+    // The brand is who the owner meets unless they change it, wearing the mascot.
+    expect(screen.getByDisplayValue(DEFAULT_ASSISTANT_NAME)).toBeInTheDocument();
+    const faces = screen.getByRole('group', { name: SCRIPT.assistant.face });
+    const buttons = within(faces).getAllByRole('button');
+    expect(buttons).toHaveLength(MASCOTS.length + FACES.length);
+    // Mascots first, the core one chosen; the emoji still there under them.
+    expect(buttons[0]).toHaveAccessibleName(SCRIPT.assistant.mascot('core'));
+    expect(buttons[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(within(faces).getByRole('button', { name: FACES[0] })).toHaveAttribute('aria-pressed', 'false');
     // And buddi has already said which model it will think with.
     expect(screen.getByText(SCRIPT.brain.works('qwen3:4b'))).toBeInTheDocument();
   });
@@ -372,6 +382,75 @@ describe('the questions', () => {
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.assistant.submit }));
     await waitFor(() => expect(api.createFirstAgent).toHaveBeenCalled());
     expect(vi.mocked(api.createFirstAgent).mock.calls[0]![0]).toMatchObject({ accountId: 'tested' });
+  });
+
+  it('gives the assistant the mascot as its real picture, through the avatar upload', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ details: { accountId: 'a0' } }));
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
+    vi.mocked(api.createFirstAgent).mockResolvedValue({ agent: null, id: 'concierge', handle: 'buddi', file: '', live: true, accountId: 'a0' });
+    vi.mocked(api.uploadAgentPicture).mockResolvedValue({ picture: '/api/agents/concierge/avatar?v=1', side: 256, source: 'png' });
+    const fetched = vi.fn(async () => new Response(new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' })));
+    vi.stubGlobal('fetch', fetched);
+    try {
+      render(meet());
+      fireEvent.click(await screen.findByRole('button', { name: SCRIPT.assistant.mascot('research') }));
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
+      await waitFor(() => expect(api.uploadAgentPicture).toHaveBeenCalled());
+      const body = vi.mocked(api.createFirstAgent).mock.calls[0]![0];
+      expect(body).toMatchObject({ name: 'buddi', handle: 'buddi' });
+      // A mascot is a picture, not an emoji in the file.
+      expect(body.avatar).toBeUndefined();
+      expect(fetched).toHaveBeenCalledWith('./mascot/research.png');
+      const [id, file] = vi.mocked(api.uploadAgentPicture).mock.calls[0]!;
+      expect(id).toBe('concierge');
+      expect(file.type).toBe('image/png');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps an emoji face an emoji, with no picture uploaded', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ details: { accountId: 'a0' } }));
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{}]));
+    vi.mocked(api.createFirstAgent).mockResolvedValue({ agent: null, id: 'concierge', handle: 'buddi', file: '', live: true, accountId: 'a0' });
+    render(meet());
+    fireEvent.click(await screen.findByRole('button', { name: FACES[1] }));
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.assistant.submit }));
+    await waitFor(() => expect(api.createFirstAgent).toHaveBeenCalled());
+    expect(vi.mocked(api.createFirstAgent).mock.calls[0]![0]).toMatchObject({ avatar: FACES[1] });
+    expect(api.uploadAgentPicture).not.toHaveBeenCalled();
+  });
+
+  it('says it is checking from the click until the verdict', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.probeModels).mockRejectedValue(new Error('no'));
+    vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'one' });
+    let verdict: (value: { state: string; message: string }) => void = () => {};
+    vi.mocked(api.testProviderAccount).mockReturnValue(new Promise((resolve) => (verdict = resolve)) as never);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
+    fireEvent.change(await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder), { target: { value: 'sk-ant-slow' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
+    expect(await screen.findByText(SCRIPT.brain.checking.key)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SCRIPT.brain.key.submit })).toBeDisabled();
+    verdict({ state: 'invalid-key', message: 'refused' });
+    expect(await screen.findByText(SCRIPT.brain.key.refused)).toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.brain.checking.key)).not.toBeInTheDocument();
+  });
+
+  it('lines every dock up the same way: the way out left, the primary last on the right', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen' }));
+    const { container } = render(meet());
+    const yes = await screen.findByRole('button', { name: SCRIPT.clock.yes });
+    const row = container.querySelector('.meet-dock-row')!;
+    const actions = row.querySelector('.meet-dock-actions')!;
+    // One row: "Set up later" first, then the step's actions, primary last.
+    expect(row.firstElementChild).toHaveTextContent(SCRIPT.later);
+    const buttons = within(actions as HTMLElement).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual([SCRIPT.clock.another, SCRIPT.clock.yes]);
+    expect(buttons[buttons.length - 1]).toBe(yes);
   });
 });
 
@@ -565,9 +644,9 @@ describe('the way out', () => {
       expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
       const open = screen.getAllByRole('link', { name: SCRIPT.done.open });
       expect(open.some((link) => link.getAttribute('href') === '#/chat/ada/c1')).toBe(true);
-      // The composer is still the composer: this is a conversation, not a page
-      // that has ended.
-      expect(screen.getByPlaceholderText(/Message Ada/)).toBeInTheDocument();
+      // Nothing to type into on a board about to leave: one line, one button.
+      expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
+      expect(screen.getByText(SCRIPT.done.leaving)).toBeInTheDocument();
       expect(navigate).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(LEAVE_MS + 100);
       expect(navigate).toHaveBeenCalledWith('#/chat/ada/c1', true);
@@ -583,6 +662,9 @@ describe('the way out', () => {
     render(meet(navigate));
     fireEvent.click(await screen.findByText(SCRIPT.offers.notNow));
     expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+    // And the line under it does not promise a move that will not happen.
+    expect(screen.getByText(SCRIPT.done.ready)).toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.done.leaving)).not.toBeInTheDocument();
     await new Promise((resolve) => setTimeout(resolve, LEAVE_MS + 200));
     expect(navigate).not.toHaveBeenCalled();
     expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
@@ -627,9 +709,9 @@ describe('the way out', () => {
         await screen.findByText(SCRIPT.telegram.scan);
       }
       fireEvent.click(screen.getByRole('button', { name: SCRIPT.offers.notNow }));
-      // The composer is back, and the thread ends the way it ends.
-      expect(await screen.findByPlaceholderText(/Message Ada/)).toBeInTheDocument();
-      expect(screen.getByText(SCRIPT.done.said)).toBeInTheDocument();
+      // The thread ends the way it ends, with nothing left to type into.
+      expect(await screen.findByText(SCRIPT.done.said)).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText(/Message Ada/)).not.toBeInTheDocument();
       expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0);
       page.unmount();
     }

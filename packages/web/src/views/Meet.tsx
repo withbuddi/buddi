@@ -37,16 +37,18 @@ import {
   type PairingOffer,
   type ProviderAccountsView,
 } from '../api';
-import { Composer } from '../chat/Composer';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Button, ButtonLink, Field, Mark } from '../ui';
+import { Button, ButtonLink, Field, Icon, Mark } from '../ui';
 import {
+  DEFAULT_ASSISTANT_NAME,
   FACES,
+  MASCOTS,
   OPENING_INSTRUCTION,
   SCRIPT,
-  SUGGESTED_NAMES,
+  mascotUrl,
+  type MascotRole,
 } from './meet/script';
 import {
   STEP_OF,
@@ -58,7 +60,6 @@ import {
   rememberRestore,
   rememberedRestore,
   reopen,
-  suggestedName,
   thread,
   type BrainAnswer,
   type MeetAnswers,
@@ -185,22 +186,32 @@ function Said({ children, at = 0 }: { children: ReactNode; at?: number }): JSX.E
     const timer = window.setTimeout(() => setShown(true), TYPING_MS * at);
     return () => window.clearTimeout(timer);
   }, [still, at]);
-  if (!shown) {
-    return (
-      <div className="wb-msg" data-role="assistant">
-        <span className="wb-working" role="status" aria-live="polite">
-          <span className="wb-dots" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </span>
-        </span>
-      </div>
-    );
-  }
+  if (!shown) return <Thinking />;
   return (
     <div className="wb-msg" data-role="assistant">
       <div className="wb-bubble">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * buddi at work: the typing dots, with a line saying what it is doing.
+ *
+ * The same indicator a scripted bubble shows before it lands, so "busy" on
+ * this screen always looks like buddi about to say something — and then it
+ * does, with the verdict.
+ */
+function Thinking({ line }: { line?: string }): JSX.Element {
+  return (
+    <div className="wb-msg" data-role="assistant">
+      <span className="wb-working" role="status" aria-live="polite">
+        {line}
+        <span className="wb-dots" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+      </span>
     </div>
   );
 }
@@ -237,11 +248,25 @@ function Buddi({ children }: { children: ReactNode }): JSX.Element {
  * grows past the window. Each question still owns its own input; it renders
  * through here, so nothing had to be split in two to be placed in two.
  */
-const DockSlot = createContext<HTMLElement | null>(null);
+interface DockSlots {
+  /** Above: the fields, cards or lines being answered. */
+  body: HTMLElement | null;
+  /** Below, on the dock's one row: the actions, primary last and rightmost. */
+  actions: HTMLElement | null;
+}
 
-function Dock({ children }: { children: ReactNode }): JSX.Element {
-  const slot = useContext(DockSlot);
-  return slot ? createPortal(children, slot) : <>{children}</>;
+const DockSlot = createContext<DockSlots>({ body: null, actions: null });
+
+function Dock({ children, actions }: { children?: ReactNode; actions?: ReactNode }): JSX.Element {
+  const slots = useContext(DockSlot);
+  const body = children === undefined || children === null ? null : slots.body ? createPortal(children, slots.body) : children;
+  const row = actions === undefined || actions === null ? null : slots.actions ? createPortal(actions, slots.actions) : actions;
+  return (
+    <>
+      {body}
+      {row}
+    </>
+  );
 }
 
 /** What the owner said, with the way back to it. */
@@ -256,12 +281,31 @@ function Answered({ text, onChange }: { text: string; onChange: () => void }): J
   );
 }
 
-/** Where an answer is given: the composer's place, primary action on the right. */
-function Ask({ children }: { children: ReactNode }): JSX.Element {
+/**
+ * Where an answer is given.
+ *
+ * Every step has the same two parts, so every step lines up the same way: what
+ * is being filled in sits above (`children`), and the actions sit on the dock's
+ * bottom row (`actions`) — secondary ones first, the primary last, flush right,
+ * with the quiet way out at the row's left edge.
+ */
+function Ask({ children, actions }: { children?: ReactNode; actions?: ReactNode }): JSX.Element {
   return (
-    <Dock>
-      <div className="meet-ask">{children}</div>
+    <Dock
+      actions={actions ? <span className="meet-actions">{actions}</span> : null}
+    >
+      {children ? <div className="meet-ask">{children}</div> : null}
     </Dock>
+  );
+}
+
+/** The way back to the four brains, as a real, labelled action. */
+function Back({ onClick, disabled }: { onClick: () => void; disabled?: boolean }): JSX.Element {
+  return (
+    <Button variant="ghost" onClick={onClick} disabled={disabled}>
+      <Icon name="chevron-left" />
+      {SCRIPT.brain.back}
+    </Button>
   );
 }
 
@@ -271,6 +315,8 @@ export interface ExistingAssistant {
   name: string;
   avatar: string;
   description: string;
+  /** The picture it wears, when it has one (a mascot chosen here, or an upload). */
+  picture?: string;
 }
 
 export interface MeetProps {
@@ -303,8 +349,10 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * the assistant question writes a first agent or changes the one there is.
    */
   const [existing, setExisting] = useState<ExistingAssistant | null>(null);
-  /** The dock's element, once it is on the page, for the open question to fill. */
-  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  /** The dock's two elements, once they are on the page, for the open question to fill. */
+  const [dockBody, setDockBody] = useState<HTMLElement | null>(null);
+  const [dockActions, setDockActions] = useState<HTMLElement | null>(null);
+  const slots = useMemo<DockSlots>(() => ({ body: dockBody, actions: dockActions }), [dockBody, dockActions]);
   /**
    * Where this thread carries on once the assistant has spoken.
    *
@@ -313,6 +361,12 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * thing that can happen, and offers the way out instead.
    */
   const [carriesOn, setCarriesOn] = useState<string | null>(null);
+  /**
+   * The thread has ended and the dock itself offers the way out, as the
+   * primary action; the quiet link would only say the same thing twice.
+   */
+  const [closed, setClosed] = useState(false);
+  const close = useCallback((): void => setClosed(true), []);
   /**
    * The other way this screen can go.
    *
@@ -361,7 +415,13 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     if (own) setAssistantAgent(own);
     setExisting(
       onboarding && !onboarding.needs.agent && own
-        ? { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '', description: own.description }
+        ? {
+            id: own.id,
+            name: own.name,
+            avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '',
+            description: own.description,
+            ...(own.picture ? { picture: own.picture } : {}),
+          }
         : null,
     );
     const facts = {
@@ -479,7 +539,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   }, [shown.length, open, answers, trouble]);
 
   return (
-    <DockSlot.Provider value={slot}>
+    <DockSlot.Provider value={slots}>
     <div className="meet">
       <div className="meet-stack">
       {/*
@@ -489,7 +549,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         card, and the page itself never scrolls.
       */}
         <header className="meet-head">
-          <Mark size="lg" />
+          {/* Buddi Blob, the mascot: a bundled copy of the design repo's art. */}
+          <img className="meet-head-mascot" src={mascotUrl('core')} alt="" aria-hidden="true" />
           <span className="meet-head-who">
             <span className="meet-head-name">buddi</span>
             <span className="meet-head-line">{platform === undefined || platform === 'darwin' ? SCRIPT.tagline : SCRIPT.taglineElsewhere}</span>
@@ -534,6 +595,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                   existing={existing}
                   navigate={navigate}
                   onCarriesOn={setCarriesOn}
+                  onClosed={close}
                   onSettled={(next) => settle(id, next)}
                   onChange={() => change(id)}
                   onTrouble={setTrouble}
@@ -551,8 +613,13 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         </div>
 
         <footer className="meet-dock">
-          <div className="meet-dock-ask" ref={setSlot} />
-          {carriesOn ? (
+          <div className="meet-dock-ask" ref={setDockBody} />
+          {/* One row, every step: the quiet way out on the left, the step's
+              actions on the right with the primary last. */}
+          <div className="meet-dock-row">
+          {closed ? (
+            <span />
+          ) : carriesOn ? (
             <a
               className="meet-later"
               href={carriesOn}
@@ -568,6 +635,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
               {SCRIPT.later}
             </button>
           )}
+          <div className="meet-dock-actions" ref={setDockActions} />
+          </div>
         </footer>
         </div>
       </div>
@@ -684,19 +753,24 @@ function FromABackup({
       ) : null}
 
       {state === 'form' ? (
-        <Ask>
-          <button type="button" className="meet-quiet" onClick={() => onState('idle')}>
-            {SCRIPT.restore.cancel}
-          </button>
+        <Ask
+          actions={
+            <>
+              <Button variant="ghost" onClick={() => onState('idle')}>
+                {SCRIPT.restore.cancel}
+              </Button>
+              <Button variant="accent" disabled={sending || !file} onClick={send}>
+                {SCRIPT.restore.submit}
+              </Button>
+            </>
+          }
+        >
           <Field label={SCRIPT.restore.file} grow>
             <input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
           </Field>
           <Field label={SCRIPT.restore.passphrase} hint={SCRIPT.restore.passphraseHint}>
             <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
           </Field>
-          <Button variant="accent" disabled={sending || !file} onClick={send}>
-            {SCRIPT.restore.submit}
-          </Button>
         </Ask>
       ) : null}
 
@@ -736,6 +810,8 @@ interface QuestionProps {
   existing: ExistingAssistant | null;
   /** The thread is over: where it carries on, as a route. */
   onCarriesOn: (route: string) => void;
+  /** The thread has ended and the dock now offers the way out itself. */
+  onClosed: () => void;
   navigate: (next: string, replace?: boolean) => void;
   onSettled: (next: MeetAnswers) => void;
   onChange: () => void;
@@ -821,7 +897,13 @@ function NameAsk({ answers, onSettled, onTrouble }: QuestionProps): JSX.Element 
       .finally(() => setSaving(false));
   };
   return (
-    <Ask>
+    <Ask
+      actions={
+        <Button variant="accent" disabled={saving || value.trim() === ''} onClick={submit}>
+          {SCRIPT.name.submit}
+        </Button>
+      }
+    >
       <input
         ref={field}
         className="meet-input"
@@ -837,9 +919,6 @@ function NameAsk({ answers, onSettled, onTrouble }: QuestionProps): JSX.Element 
           }
         }}
       />
-      <Button variant="accent" disabled={saving || value.trim() === ''} onClick={submit}>
-        {SCRIPT.name.submit}
-      </Button>
     </Ask>
   );
 }
@@ -862,18 +941,28 @@ function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: Questio
   };
   if (!picking) {
     return (
-      <Ask>
-        <button type="button" className="meet-quiet" onClick={() => setPicking(true)}>
-          {SCRIPT.clock.another}
-        </button>
-        <Button variant="accent" disabled={saving} onClick={() => save(browserZone)}>
-          {SCRIPT.clock.yes}
-        </Button>
-      </Ask>
+      <Ask
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setPicking(true)}>
+              {SCRIPT.clock.another}
+            </Button>
+            <Button variant="accent" disabled={saving} onClick={() => save(browserZone)}>
+              {SCRIPT.clock.yes}
+            </Button>
+          </>
+        }
+      />
     );
   }
   return (
-    <Ask>
+    <Ask
+      actions={
+        <Button variant="accent" disabled={saving} onClick={() => save(zone)}>
+          {SCRIPT.clock.yes}
+        </Button>
+      }
+    >
       <select className="meet-input" aria-label={SCRIPT.clock.label} value={zone} onChange={(event) => setZone(event.target.value)}>
         {(zones.includes(zone) ? zones : [zone, ...zones]).map((option) => (
           <option key={option} value={option}>
@@ -881,9 +970,6 @@ function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: Questio
           </option>
         ))}
       </select>
-      <Button variant="accent" disabled={saving} onClick={() => save(zone)}>
-        {SCRIPT.clock.yes}
-      </Button>
     </Ask>
   );
 }
@@ -1011,7 +1097,11 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         <Buddi>
           <Said>{SCRIPT.brain.model.ask}</Said>
         </Buddi>
-        {problem ? (
+        {busy ? (
+          <Buddi>
+            <Thinking line={SCRIPT.brain.checking.service} />
+          </Buddi>
+        ) : problem ? (
           <Buddi>
             <Said>{problem}</Said>
           </Buddi>
@@ -1176,7 +1266,13 @@ function ModelChoice({
 }): JSX.Element {
   const [chosen, setChosen] = useState(models[0] ?? '');
   return (
-    <Ask>
+    <Ask
+      actions={
+        <Button variant="accent" disabled={busy || chosen === ''} onClick={() => onUse(chosen)}>
+          {SCRIPT.brain.model.submit}
+        </Button>
+      }
+    >
       <Field label={SCRIPT.brain.model.label} grow>
         <select value={chosen} onChange={(event) => setChosen(event.target.value)}>
           {models.map((model) => (
@@ -1186,9 +1282,6 @@ function ModelChoice({
           ))}
         </select>
       </Field>
-      <Button variant="accent" disabled={busy || chosen === ''} onClick={() => onUse(chosen)}>
-        {SCRIPT.brain.model.submit}
-      </Button>
     </Ask>
   );
 }
@@ -1208,10 +1301,14 @@ function KeyCard({
   const field = useOpened<HTMLInputElement>();
   const [secret, setSecret] = useState('');
   const [override, setOverride] = useState<'anthropic' | 'openai' | null>(null);
+  /** Listing the key's models, before the save and the test even start. */
+  const [probing, setProbing] = useState(false);
+  const working = busy || probing;
   const kind = override ?? keyKind(secret);
   const submit = (): void => {
     const value = secret.trim();
-    if (value === '' || busy) return;
+    if (value === '' || working) return;
+    setProbing(true);
     void (async () => {
       // The model list first, so the default buddi names is one this key can
       // actually reach rather than one this page believes in.
@@ -1226,6 +1323,7 @@ function KeyCard({
         // A key that cannot list models may still answer; the test below is
         // the verdict that counts.
       }
+      setProbing(false);
       await onUse(
         { label: kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai, kind, auth: 'api-key', baseUrl: '', defaultModel, enabled: true, secret: value },
         kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai,
@@ -1234,12 +1332,25 @@ function KeyCard({
   };
   return (
     <>
-      {problem ? (
+      {working ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.key} />
+        </Buddi>
+      ) : problem ? (
         <Buddi>
           <Said>{SCRIPT.brain.key.refused}</Said>
         </Buddi>
       ) : null}
-      <Ask>
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={working} />
+            <Button variant="accent" disabled={working || secret.trim() === ''} onClick={submit}>
+              {SCRIPT.brain.key.submit}
+            </Button>
+          </>
+        }
+      >
         <Field label={SCRIPT.brain.key.field} grow>
           <input
             ref={field}
@@ -1264,12 +1375,6 @@ function KeyCard({
         >
           {kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai} · {SCRIPT.brain.key.which}
         </button>
-        <button type="button" className="meet-quiet" onClick={onBack}>
-          ←
-        </button>
-        <Button variant="accent" disabled={busy || secret.trim() === ''} onClick={submit}>
-          {SCRIPT.brain.key.submit}
-        </Button>
       </Ask>
     </>
   );
@@ -1311,12 +1416,31 @@ function OllamaCard({
   };
   return (
     <>
-      {problem ? (
+      {busy ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.ollama} />
+        </Buddi>
+      ) : problem ? (
         <Buddi>
           <Said>{problem}</Said>
         </Buddi>
       ) : null}
-      <Ask>
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={busy} />
+            {probe?.running ? (
+              <Button variant="accent" disabled={busy || models.length === 0} onClick={use}>
+                {SCRIPT.brain.ollama.connect}
+              </Button>
+            ) : probe ? (
+              <ButtonLink variant="accent" href={probe.downloadUrl} target="_blank" rel="noreferrer">
+                {SCRIPT.brain.ollama.download}
+              </ButtonLink>
+            ) : null}
+          </>
+        }
+      >
         <span className="meet-line">
           {probe === null
             ? SCRIPT.brain.ollama.looking
@@ -1324,18 +1448,6 @@ function OllamaCard({
               ? SCRIPT.brain.ollama.found
               : SCRIPT.brain.ollama.missing}
         </span>
-        <button type="button" className="meet-quiet" onClick={onBack}>
-          ←
-        </button>
-        {probe?.running ? (
-          <Button variant="accent" disabled={busy || models.length === 0} onClick={use}>
-            {SCRIPT.brain.ollama.connect}
-          </Button>
-        ) : probe ? (
-          <a className="ui-btn" href={probe.downloadUrl} target="_blank" rel="noreferrer">
-            {SCRIPT.brain.ollama.download}
-          </a>
-        ) : null}
       </Ask>
     </>
   );
@@ -1364,8 +1476,12 @@ function ServiceCard({
   const field = useOpened<HTMLInputElement>();
   const [address, setAddress] = useState(offered);
   const [secret, setSecret] = useState('');
+  /** Asking the service for its models, before the save and the test start. */
+  const [probing, setProbing] = useState(false);
+  const working = busy || probing;
   const submit = (): void => {
-    if (address.trim() === '' || busy) return;
+    if (address.trim() === '' || working) return;
+    setProbing(true);
     void (async () => {
       const auth = secret.trim() ? ('api-key' as const) : ('none' as const);
       const make = (defaultModel: string): Parameters<typeof api.saveProviderAccount>[0] => ({
@@ -1391,6 +1507,7 @@ function ServiceCard({
       } catch {
         /* Said below by the save or the test, in its own words. */
       }
+      setProbing(false);
       // A service that names its own default has answered the question; one
       // that offers thirty has not, and buddi asks rather than guessing.
       onOffer(flagged ? [flagged] : models, make, SCRIPT.brain.cards.service.title);
@@ -1398,12 +1515,25 @@ function ServiceCard({
   };
   return (
     <>
-      {problem ? (
+      {working ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.service} />
+        </Buddi>
+      ) : problem ? (
         <Buddi>
           <Said>{problem}</Said>
         </Buddi>
       ) : null}
-      <Ask>
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={working} />
+            <Button variant="accent" disabled={working || address.trim() === ''} onClick={submit}>
+              {SCRIPT.brain.service.submit}
+            </Button>
+          </>
+        }
+      >
         <Field label={SCRIPT.brain.service.address} grow>
           <input
             ref={field}
@@ -1415,12 +1545,6 @@ function ServiceCard({
         <Field label={SCRIPT.brain.service.key}>
           <input type="password" autoComplete="off" spellCheck={false} value={secret} onChange={(event) => setSecret(event.target.value)} />
         </Field>
-        <button type="button" className="meet-quiet" onClick={onBack}>
-          ←
-        </button>
-        <Button variant="accent" disabled={busy || address.trim() === ''} onClick={submit}>
-          {SCRIPT.brain.service.submit}
-        </Button>
       </Ask>
     </>
   );
@@ -1513,7 +1637,11 @@ function ClaudeCard({
 
   return (
     <>
-      {problem ?? trouble ? (
+      {working || busy ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.claude} />
+        </Buddi>
+      ) : problem ?? trouble ? (
         <Buddi>
           <Said>{problem ?? trouble}</Said>
         </Buddi>
@@ -1523,27 +1651,34 @@ function ClaudeCard({
           <Buddi>
             <Said>{SCRIPT.brain.claude.waiting}</Said>
           </Buddi>
-          <Ask>
-            <a className="ui-btn" href={attempt.url} target="_blank" rel="noreferrer">
-              {SCRIPT.brain.claude.open}
-            </a>
+          <Ask
+            actions={
+              <>
+                <ButtonLink href={attempt.url} target="_blank" rel="noreferrer">
+                  {SCRIPT.brain.claude.open}
+                </ButtonLink>
+                <Button variant="accent" disabled={working || code.trim() === ''} onClick={finish}>
+                  {SCRIPT.brain.claude.finish}
+                </Button>
+              </>
+            }
+          >
             <Field label={SCRIPT.brain.claude.paste} grow>
               <ClaudeCode value={code} onChange={setCode} />
             </Field>
-            <Button variant="accent" disabled={working || code.trim() === ''} onClick={finish}>
-              {SCRIPT.brain.claude.finish}
-            </Button>
           </Ask>
         </>
       ) : (
-        <Ask>
-          <button type="button" className="meet-quiet" onClick={onBack}>
-            ←
-          </button>
-          <Button variant="accent" disabled={busy || working} onClick={start}>
-            {SCRIPT.brain.claude.start}
-          </Button>
-        </Ask>
+        <Ask
+          actions={
+            <>
+              <Back onClick={onBack} disabled={busy || working} />
+              <Button variant="accent" disabled={busy || working} onClick={start}>
+                {SCRIPT.brain.claude.start}
+              </Button>
+            </>
+          }
+        />
       )}
     </>
   );
@@ -1569,10 +1704,44 @@ function ClaudeCode({ value, onChange }: { value: string; onChange: (next: strin
  * 4. The assistant
  * ------------------------------------------------------------------ */
 
+/** A face for the assistant: one of the mascots, an emoji, or the picture it already wears. */
+type AssistantFace =
+  | { kind: 'mascot'; role: MascotRole }
+  | { kind: 'emoji'; value: string }
+  | { kind: 'kept'; url: string };
+
+const sameFace = (a: AssistantFace, b: AssistantFace): boolean =>
+  a.kind === b.kind &&
+  (a.kind === 'mascot' ? a.role === (b as typeof a).role : a.kind === 'emoji' ? a.value === (b as typeof a).value : true);
+
+/**
+ * The bundled mascot, as a file the avatar upload takes.
+ *
+ * Through the same route an owner's own picture goes, so the gateway keeps
+ * one way a picture is checked, re-encoded and stored — and the roster, the
+ * chat header and the canvas draw it like any other.
+ */
+async function mascotFile(role: MascotRole): Promise<File> {
+  const response = await fetch(mascotUrl(role));
+  if (!response.ok) throw new Error(`The picture could not be read (${response.status}).`);
+  const blob = await response.blob();
+  return new File([blob], `buddi-blob-${role}.png`, { type: 'image/png' });
+}
+
 function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: QuestionProps): JSX.Element {
-  const [at] = useState(() => Math.floor(Math.random() * SUGGESTED_NAMES.length));
-  const [name, setName] = useState(() => existing?.name ?? suggestedName(SUGGESTED_NAMES, at));
-  const [face, setFace] = useState<string>(existing?.avatar || FACES[0]);
+  const [name, setName] = useState(() => existing?.name ?? DEFAULT_ASSISTANT_NAME);
+  /*
+   * An assistant that already wears a picture keeps it unless the owner picks
+   * another face: which mascot it was is not something the roster says, and
+   * guessing would overwrite it.
+   */
+  const [face, setFace] = useState<AssistantFace>(() =>
+    existing?.picture
+      ? { kind: 'kept', url: existing.picture }
+      : existing?.avatar
+        ? { kind: 'emoji', value: existing.avatar }
+        : { kind: 'mascot', role: 'core' },
+  );
   const [purpose, setPurpose] = useState<string>(existing?.description || SCRIPT.assistant.purposeValue);
   const [saving, setSaving] = useState(false);
 
@@ -1584,59 +1753,109 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
    * writing a *first* agent is refused, and rightly: there is one, and the
    * change belongs in its file. Same name, same face, same purpose, one
    * assistant either way.
+   *
+   * A mascot is a picture, not a line in the file: it is uploaded once the
+   * agent exists. An emoji chosen over a picture takes the picture away, or
+   * the picture would go on winning over it everywhere.
    */
   const submit = (): void => {
     if (name.trim() === '' || saving) return;
     setSaving(true);
+    const emoji = face.kind === 'emoji' ? { avatar: face.value } : {};
     const written = existing
-      ? api.updateFirstAgent({ name: name.trim(), description: purpose.trim(), avatar: face })
+      ? api.updateFirstAgent({ name: name.trim(), description: purpose.trim(), ...emoji })
       : api.createFirstAgent({
           name: name.trim(),
           handle: idFor(name),
           description: purpose.trim(),
-          avatar: face,
+          ...emoji,
           ...(answers.brain ? { accountId: answers.brain.accountId } : {}),
         });
-    written
-      .then((saved) => {
-        onReload();
-        onSettled({ ...answers, assistant: { id: saved.id, name: name.trim(), avatar: face } });
-      })
-      .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
-      .finally(() => setSaving(false));
+    void (async () => {
+      let saved: { id: string };
+      try {
+        saved = await written;
+      } catch (err) {
+        onTrouble(err instanceof ApiError ? err.message : String(err));
+        setSaving(false);
+        return;
+      }
+      // The agent exists either way from here; a picture that did not take is
+      // said, and the assistant keeps its fallback face.
+      let pictureTrouble: string | null = null;
+      try {
+        if (face.kind === 'mascot') await api.uploadAgentPicture(saved.id, await mascotFile(face.role));
+        else if (face.kind === 'emoji' && existing?.picture) await api.removeAgentPicture(saved.id);
+      } catch (err) {
+        pictureTrouble = err instanceof ApiError ? err.message : String(err);
+      }
+      setSaving(false);
+      onReload();
+      onSettled({ ...answers, assistant: { id: saved.id, name: name.trim(), avatar: face.kind === 'emoji' ? face.value : '' } });
+      if (pictureTrouble) onTrouble(pictureTrouble);
+    })();
   };
 
   return (
-    <Ask>
+    <Ask
+      actions={
+        <Button variant="accent" disabled={saving || name.trim() === ''} onClick={submit}>
+          {SCRIPT.assistant.submit}
+        </Button>
+      }
+    >
       {/* The face is the assistant, so it is shown at the size of a face and
           not at the size of a control: big, beside its name, changing as the
           owner picks. */}
-      <span className="meet-chosen-face" aria-hidden="true">
-        {face}
+      <span className="meet-chosen-face" data-kind={face.kind === 'emoji' ? 'emoji' : 'image'} aria-hidden="true">
+        {face.kind === 'emoji' ? face.value : <img src={face.kind === 'mascot' ? mascotUrl(face.role) : face.url} alt="" />}
       </span>
       <Field label={SCRIPT.assistant.name}>
         <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
       </Field>
       <div className="meet-faces" role="group" aria-label={SCRIPT.assistant.face}>
-        {FACES.map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            className="meet-face"
-            data-chosen={face === emoji ? 'true' : undefined}
-            aria-pressed={face === emoji}
-            onClick={() => setFace(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
+        {/* The mascots first, then the emoji: two rows, one choice. */}
+        <div className="meet-face-row">
+          {MASCOTS.map((role) => {
+            const option: AssistantFace = { kind: 'mascot', role };
+            const chosen = sameFace(face, option);
+            return (
+              <button
+                key={role}
+                type="button"
+                className="meet-face"
+                data-kind="image"
+                data-chosen={chosen ? 'true' : undefined}
+                aria-pressed={chosen}
+                aria-label={SCRIPT.assistant.mascot(role)}
+                onClick={() => setFace(option)}
+              >
+                <img src={mascotUrl(role)} alt="" />
+              </button>
+            );
+          })}
+        </div>
+        <div className="meet-face-row">
+          {FACES.map((emoji) => {
+            const chosen = face.kind === 'emoji' && face.value === emoji;
+            return (
+              <button
+                key={emoji}
+                type="button"
+                className="meet-face"
+                data-chosen={chosen ? 'true' : undefined}
+                aria-pressed={chosen}
+                onClick={() => setFace({ kind: 'emoji', value: emoji })}
+              >
+                {emoji}
+              </button>
+            );
+          })}
+        </div>
       </div>
       <Field label={SCRIPT.assistant.purpose} grow>
         <input value={purpose} maxLength={1000} onChange={(event) => setPurpose(event.target.value)} />
       </Field>
-      <Button variant="accent" disabled={saving || name.trim() === ''} onClick={submit}>
-        {SCRIPT.assistant.submit}
-      </Button>
     </Ask>
   );
 }
@@ -1653,7 +1872,7 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
  * instruction from the script — and does not render it. Everything after it is
  * an ordinary conversation, in the owner's history like any other.
  */
-function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, onPickAnotherBrain }: QuestionProps): JSX.Element {
+function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, navigate, onPickAnotherBrain }: QuestionProps): JSX.Element {
   const assistant = answers.assistant;
   const [conversationId, setConversationId] = useState<string | null>(met);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1789,13 +2008,15 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
     return () => window.clearTimeout(timer);
   }, [closing, carriesOn, still, navigate]);
 
-  const send = (text: string): void => {
-    if (!assistant || !conversationId) return;
-    setRunning(true);
-    void chatApi
-      .send(assistant.id, { conversationId, text })
-      .catch(() => setRunning(false));
-  };
+  /*
+   * The end, in the dock: one line and one button, and nothing to type into.
+   * A composer here was an offer the board withdrew three seconds later; the
+   * conversation carries on in the dashboard, where the composer is real.
+   */
+  const ended = closing && carriesOn !== null;
+  useEffect(() => {
+    if (ended) onClosed();
+  }, [ended, onClosed]);
 
   return (
     <>
@@ -1829,11 +2050,13 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
           <Buddi>
             <Said>{SCRIPT.handover.silent}</Said>
           </Buddi>
-          <Ask>
-            <Button variant="accent" onClick={onPickAnotherBrain}>
-              {SCRIPT.handover.again}
-            </Button>
-          </Ask>
+          <Ask
+            actions={
+              <Button variant="accent" onClick={onPickAnotherBrain}>
+                {SCRIPT.handover.again}
+              </Button>
+            }
+          />
         </>
       ) : null}
 
@@ -1851,20 +2074,22 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
         underneath the thing the owner is filling in.
       */}
       {spoken && offers === 'open' ? (
-        <Ask>
-          <button type="button" className="ui-btn" onClick={() => setOffers('phone')}>
-            {SCRIPT.offers.phone}
-          </button>
-          <Button
-            variant="accent"
-            onClick={() => {
-              setOffers('gone');
-              setClosing(true);
-            }}
-          >
-            {SCRIPT.offers.notNow}
-          </Button>
-        </Ask>
+        <Ask
+          actions={
+            <>
+              <Button onClick={() => setOffers('phone')}>{SCRIPT.offers.phone}</Button>
+              <Button
+                variant="accent"
+                onClick={() => {
+                  setOffers('gone');
+                  setClosing(true);
+                }}
+              >
+                {SCRIPT.offers.notNow}
+              </Button>
+            </>
+          }
+        />
       ) : null}
 
       {spoken && offers === 'phone' ? (
@@ -1877,10 +2102,9 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
         />
       ) : null}
 
-      {assistant && offers !== 'open' && offers !== 'phone' ? (
-        <Dock>
-        {closing && carriesOn ? (
-          <div className="meet-ask">
+      {ended && carriesOn ? (
+        <Ask
+          actions={
             <ButtonLink
               variant="accent"
               href={carriesOn}
@@ -1891,18 +2115,12 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, navigate, 
             >
               {SCRIPT.done.open}
             </ButtonLink>
-          </div>
-        ) : null}
-        <Composer
-          disabled={!conversationId}
-          running={running}
-          onSend={(text) => send(text)}
-          onStop={() => {
-            if (conversationId) void chatApi.cancel(conversationId).catch(() => {});
-          }}
-          agentName={assistant.name}
-        />
-        </Dock>
+          }
+        >
+          {/* Under reduced motion nothing leaves by itself, so the line does
+              not say it will. */}
+          <span className="meet-line">{still ? SCRIPT.done.ready : SCRIPT.done.leaving}</span>
+        </Ask>
       ) : null}
     </>
   );
@@ -2022,7 +2240,20 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
         <Buddi>
           <Said>{stale ? SCRIPT.telegram.expired : SCRIPT.telegram.scan}</Said>
         </Buddi>
-        <Ask>
+        <Ask
+          actions={
+            <>
+              <Button variant="ghost" onClick={onDismiss}>
+                {SCRIPT.offers.notNow}
+              </Button>
+              {stale ? (
+                <Button variant="accent" onClick={again}>
+                  {SCRIPT.telegram.newCode}
+                </Button>
+              ) : null}
+            </>
+          }
+        >
           {stale ? null : (
             <div className="meet-pair">
               {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
@@ -2031,14 +2262,6 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
               </a>
             </div>
           )}
-          <button type="button" className="meet-quiet" onClick={onDismiss}>
-            {SCRIPT.offers.notNow}
-          </button>
-          {stale ? (
-            <Button variant="accent" onClick={again}>
-              {SCRIPT.telegram.newCode}
-            </Button>
-          ) : null}
         </Ask>
       </>
     );
@@ -2050,7 +2273,18 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
         <Said>{SCRIPT.telegram.how}</Said>
         {note ? <Said>{note}</Said> : null}
       </Buddi>
-      <Ask>
+      <Ask
+        actions={
+          <>
+            <Button variant="ghost" onClick={onDismiss}>
+              {SCRIPT.offers.notNow}
+            </Button>
+            <Button variant="accent" disabled={saving || token.trim() === ''} onClick={save}>
+              {SCRIPT.telegram.submit}
+            </Button>
+          </>
+        }
+      >
         <Field label={SCRIPT.telegram.field} grow>
           <input
             ref={field}
@@ -2067,12 +2301,6 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
             }}
           />
         </Field>
-        <button type="button" className="meet-quiet" onClick={onDismiss}>
-          {SCRIPT.offers.notNow}
-        </button>
-        <Button variant="accent" disabled={saving || token.trim() === ''} onClick={save}>
-          {SCRIPT.telegram.submit}
-        </Button>
       </Ask>
     </>
   );
