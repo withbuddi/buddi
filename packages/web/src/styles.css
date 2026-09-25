@@ -735,6 +735,13 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-groups-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 2px 12px; }
 .wb-groups-label { font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
 .wb-agent-rail[data-collapsed='true'] .wb-groups-label { display: none; }
+/* Lain down, the groups block is a column of faces like the agents above it:
+   the separator and the + sit on the rail's centre line, and a group's stacked
+   faces are centred as one mark. */
+.wb-agent-rail[data-collapsed='true'] .wb-groups { align-items: center; }
+.wb-agent-rail[data-collapsed='true'] .wb-groups-head { padding: 0; justify-content: center; }
+.wb-agent-rail[data-collapsed='true'] .wb-group-face { justify-content: center; }
+.wb-agent-rail[data-collapsed='true'] .wb-group-stack { width: auto; min-width: 0; flex-basis: auto; }
 .wb-group-stack { display: inline-flex; align-items: center; justify-content: center; position: relative; background: transparent; }
 /* Each member's own face — photo, emoji or tinted initial — as a small circle
    overlapping the next, the way a team is drawn everywhere. */
