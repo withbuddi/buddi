@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Settings → Version now reads the running version from the installed package, which is named `@withbuddi/buddi`, instead of falling back to the core library's version.
 - When the system will not let Chromium start its sandbox, the browser status says so in one sentence with the command to run, and the check now tests the browser with the sandbox on.
 - A model that turns images down no longer stops the run: buddi sends the turn again with each screenshot replaced by a line of text.
 

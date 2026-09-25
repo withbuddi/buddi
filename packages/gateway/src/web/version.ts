@@ -124,7 +124,7 @@ function installedVersion(env: NodeJS.ProcessEnv): string | undefined {
   try {
     const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown };
     // Only that package's version, never whatever else happens to sit there.
-    if (pkg.name !== 'buddi' || typeof pkg.version !== 'string' || pkg.version === '') return undefined;
+    if ((pkg.name !== '@withbuddi/buddi' && pkg.name !== 'buddi') || typeof pkg.version !== 'string' || pkg.version === '') return undefined;
     return pkg.version;
   } catch {
     return undefined;
