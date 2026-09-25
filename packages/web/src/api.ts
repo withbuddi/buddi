@@ -360,6 +360,17 @@ export interface OfferRow {
   lapseReason?: 'owner-moved-on' | 'rolled-over' | 'agent-removed' | null;
 }
 
+/** An agent a plugin offers on Home, while nobody has one with its id. */
+export interface AgentOfferRow {
+  plugin: string;
+  agent: string;
+  handle: string;
+  name: string;
+  description: string;
+  /** The plugin's one line: why the owner would want it. */
+  text: string;
+}
+
 /**
  * One thing an agent learned and proposed, as the inbox draws it.
  *
@@ -1321,6 +1332,8 @@ export const api = {
   browserSettings: (settings: ControlSettings) => post<BrowserStatus>('/browser/settings', settings),
   computerPermissions: (prompt = false) => post<BrowserStatus>('/browser/permissions', { prompt }),
   browserInstall: () => post<BrowserStatus>('/browser/install', {}),
+  /** Launch the agents' browser once and close it: does it start here? */
+  browserCheck: () => post<BrowserLaunchCheck>('/browser/check', {}),
   /**
    * The way into a preview: a URL on the preview origin carrying a
    * single-use ticket. It is asked for per panel and never stored — the
@@ -1369,6 +1382,11 @@ export const api = {
   /** The owner cleared exactly the displayed offers. */
   dismissOffers: (ids: readonly string[]) =>
     post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
+  /** Agents a plugin offers on Home while nobody has them (`SuggestedAgent.offer`). */
+  agentOffers: () => get<{ offers: AgentOfferRow[] }>('/agent-offers'),
+  /** Home stops offering this one. It stays on the Plugins page. */
+  dismissAgentOffer: (plugin: string, agent: string) =>
+    post<{ dismissed: boolean }>(`/agent-offers/${encodeURIComponent(plugin)}/${encodeURIComponent(agent)}/dismiss`, {}),
   /** Open proposals, and under `closed` what was kept, discarded or expired this week. */
   proposals: () =>
     get<{
@@ -1715,6 +1733,26 @@ export interface BrowserStatus {
     headless: boolean;
     problem?: 'missing-libraries';
     message?: string;
-    install?: { state: 'running' | 'done' | 'failed'; line?: string };
+    /**
+     * The install started from the dashboard. `progress` is the installer
+     * read into numbers, for a bar; `line` is buddi's sentence at the end.
+     */
+    install?: { state: 'running' | 'done' | 'failed'; line?: string; progress?: BrowserInstallProgress };
   };
 }
+
+/** Where a browser install stands, in numbers — never the installer's text. */
+export interface BrowserInstallProgress {
+  phase: 'downloading' | 'installing' | 'done' | 'failed';
+  /** Percent of the current download, 0–100. */
+  percent: number;
+  /** What is being fetched: `Chromium`. */
+  what: string;
+  /** Which download it is on, from 1. */
+  download: number;
+}
+
+/** Whether the agents' browser opened and closed once, and what to do when it did not. */
+export type BrowserLaunchCheck =
+  | { ok: true }
+  | { ok: false; message: string; command?: string; problem?: 'missing-libraries' | 'no-browser' };

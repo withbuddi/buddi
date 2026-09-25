@@ -173,6 +173,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   button: true,
   approval: true,
   artifact: true,
+  'agent-offer': true,
   editor: true,
 };
 

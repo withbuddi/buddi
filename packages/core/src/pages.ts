@@ -468,6 +468,13 @@ export type Component =
   | (ComponentCommon & { kind: 'approval'; path: string })
   /** An artifact id in the data; draws the download link. */
   | (ComponentCommon & { kind: 'artifact'; path: string; label: string })
+  /**
+   * An agent this plugin proposes (`manifest.agents`), offered where it is
+   * needed: one line and one button. Accepting is the gated
+   * `platform.accept_plugin_agent` the Plugins page's Accept runs, with the
+   * approval card drawn in place — never a second road to an agent file.
+   */
+  | (ComponentCommon & { kind: 'agent-offer'; agent: string; text: string; label: string })
   | (ComponentCommon & {
       kind: 'editor';
       query: QueryRef;
@@ -781,6 +788,15 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
     z
       .object({
         ...common,
+        kind: z.literal('agent-offer'),
+        agent: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'an agent id is kebab-case'),
+        text: sentence,
+        label,
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
         kind: z.literal('editor'),
         query: queryRefSchema,
         fields: z.array(fieldSchema).min(1).max(24),
@@ -988,6 +1004,29 @@ function unkeyedLists(root: unknown, at: string): string[] {
   return found;
 }
 
+/** Every `agent-offer` in a tree, with where it was. */
+function agentOffers(root: unknown, at: string): Array<{ agent: string; at: string }> {
+  const found: Array<{ agent: string; at: string }> = [];
+  const stack: Array<{ value: unknown; at: string }> = [{ value: root, at }];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const { value, at: where } = stack.pop() as { value: unknown; at: string };
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => stack.push({ value: child, at: `${where}[${index}]` }));
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.kind === 'agent-offer' && typeof record.agent === 'string') found.push({ agent: record.agent, at: where });
+    for (const [key, child] of Object.entries(record)) {
+      if (DATA_KEYED.has(key) || NOT_COMPONENTS.has(key)) continue;
+      stack.push({ value: child, at: `${where}${where === '' ? '' : '.'}${key}` });
+    }
+  }
+  return found;
+}
+
 /** Is this a zod schema at all? Duck-typed: core does not own the plugin's zod. */
 function isZodSchema(value: unknown): value is ZodTypeAny {
   return (
@@ -1057,6 +1096,8 @@ export function parsePageContributions(opts: {
   pages?: readonly unknown[];
   queries?: readonly PageQuery[];
   tools?: readonly string[];
+  /** The ids of the agents the same manifest proposes, for `agent-offer`. */
+  agents?: readonly string[];
 }): PageContributions {
   const { plugin } = opts;
   const queryNames = new Set<string>();
@@ -1112,6 +1153,22 @@ export function parsePageContributions(opts: {
         `plugin ${plugin}: page ${page.id}, ${at}: a list needs \`key\` (or a \`select.key\`) — ` +
           'a row keyed by its position collides across groups and across the folded rows',
       );
+    }
+  }
+
+  /*
+   * An offer names an agent the same manifest proposes. Anything else would be
+   * a button that can only ever answer "no plugin proposes that".
+   */
+  const proposed = new Set(opts.agents ?? []);
+  for (const page of pages) {
+    for (const offer of agentOffers(page.body, 'body')) {
+      if (!proposed.has(offer.agent)) {
+        throw new Error(
+          `plugin ${plugin}: page ${page.id}, ${offer.at}: offers ${offer.agent}, which this plugin does not propose — ` +
+            `it proposes ${proposed.size === 0 ? 'no agent' : [...proposed].join(', ')}`,
+        );
+      }
     }
   }
 

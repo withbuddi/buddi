@@ -101,6 +101,8 @@ export interface PluginHostServices {
   httpTransport?: HttpTransportFactory;
   /** The live roster's answer for a role, for contexts that carry none. */
   agentForRole?: (role: string) => string | undefined;
+  /** Whether the live roster holds an agent with this id. */
+  hasAgent?: (id: string) => boolean;
   /** How a run is started, for contexts that carry none (a tool's). */
   enqueueRun?: (input: EnqueueRunInput) => Promise<void>;
   /** Where operational lines go when the context has no `log`. */
@@ -165,6 +167,7 @@ export type HostFacts = Pick<CoreToolContext, 'db' | 'now' | 'timezone'> &
   Partial<Omit<CoreToolContext, 'db' | 'now' | 'timezone' | 'buddi'>> &
   Partial<Pick<CoreSourceContext, 'log' | 'enqueueRun'>> & {
     agentForRole?: (role: string) => string | undefined;
+    hasAgent?: (id: string) => boolean;
   };
 
 function quoteIdent(name: string): string {
@@ -254,6 +257,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       id: facts.ownerId ?? OWNER_ID,
       timezone: facts.timezone,
       agentForRole: (role) => (facts.agentForRole ?? services.agentForRole)?.(role),
+      hasAgent: (id) => (facts.hasAgent ?? services.hasAgent)?.(id) ?? true,
       protectedPaths: facts.protectedPaths ?? [],
     },
     clock: {

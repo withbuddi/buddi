@@ -162,6 +162,46 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
   });
 
   /*
+   * The triage agent is proposed, not shipped. Until the owner accepts it the
+   * poll keeps the mail and starts no run for an agent that does not exist —
+   * and says so once, and records it against the mailbox for the page.
+   */
+  it('starts no run while there is no triage agent, and starts them once there is', async () => {
+    const server = new FakeImapServer();
+    server.add('INBOX', fakeMessage({ subject: 'Rent due', messageId: '<wait-a@x>' }));
+    server.add('INBOX', fakeMessage({ subject: 'Lunch?', messageId: '<wait-b@x>' }));
+    const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+
+    const lines: string[] = [];
+    const ctx = contextFor();
+    Object.assign(ctx, { hasAgent: () => false, log: (line: string) => lines.push(line) });
+    await source.poll(ctx);
+
+    expect(await messageCount()).toBe(2);
+    expect(ctx.runs).toEqual([]);
+    const said = lines.filter((l) => l.includes('no triage agent yet'));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard');
+    const { rows: unstampedRows } = await pool.query(
+      `select count(*)::int as n from email.messages where triage_enqueued_at is null`,
+    );
+    expect(unstampedRows[0].n).toBe(2);
+    const { rows: events } = await pool.query(`select count(*)::int as n from email.events`);
+    expect(events[0].n).toBe(0);
+    const waitingSince = async (): Promise<Date | null> =>
+      (await pool.query(`select triage_waiting_since from email.accounts where id = $1`, [accountId])).rows[0]
+        .triage_waiting_since;
+    expect(await waitingSince()).toEqual(new Date('2026-09-13T12:00:00Z'));
+
+    // The owner accepts @mail: the next poll starts the runs it held back.
+    const later = contextFor();
+    Object.assign(later, { hasAgent: () => true });
+    await source.poll(later);
+    expect(later.runs.map((r) => r.agentId)).toEqual(['mail-triage', 'mail-triage']);
+    expect(await waitingSince()).toBeNull();
+  });
+
+  /*
    * The dates a message states are read as it lands (docs/specs/email.md §7).
    * Ingest is the cheap half of `email.date-stated`: the body is in hand, the
    * parse is one sweep, and the watcher then has nothing to catch up on.

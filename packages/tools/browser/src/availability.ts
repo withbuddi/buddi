@@ -47,9 +47,12 @@ export function installDepsCommand(): string {
   return cli ? `sudo "${process.execPath}" "${cli}" install-deps chromium` : 'sudo npx playwright install-deps chromium';
 }
 
+/** The sentence before the command, for a page that shows the command on its own to copy. */
+export const MISSING_LIBRARIES_SENTENCE = 'The browser is installed, but this machine lacks system libraries it needs. Run once, with sudo:';
+
 /** Said when a launch failed because Linux lacks the libraries Chromium needs. */
 export function missingLibrariesMessage(): string {
-  return `The browser is installed, but this machine lacks system libraries it needs. Run once, with sudo: ${installDepsCommand()}`;
+  return `${MISSING_LIBRARIES_SENTENCE} ${installDepsCommand()}`;
 }
 
 /** A launch error that means missing shared libraries rather than anything buddi can fix. */
@@ -171,4 +174,173 @@ export function installBrowser(options: { onLine?: (line: string) => void; inher
         : { ok: false, detail: last || `The installer stopped with code ${code}.`, missingLibraries });
     });
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Install progress, read off the installer's lines
+ * ------------------------------------------------------------------ */
+
+/**
+ * Where an install stands, in numbers the page can draw — never the
+ * installer's own text. `download` counts the packages fetched so far,
+ * one-based: Playwright's Chromium is three (the browser, its headless shell,
+ * FFmpeg), each with a progress line of its own.
+ */
+export interface InstallProgress {
+  phase: 'downloading' | 'installing' | 'done' | 'failed';
+  /** Percent of the current download, 0–100. */
+  percent: number;
+  /** What is being fetched, in the owner's words: `Chromium`. */
+  what: string;
+  /** Which download it is on, from 1. 0 before the first has started. */
+  download: number;
+}
+
+/** A package's name in plain words: `chromium-headless-shell` is "Chromium headless shell". */
+function packageWords(name: string): string {
+  const known: Record<string, string> = {
+    chromium: 'Chromium',
+    'chromium-headless-shell': 'Chromium headless shell',
+    ffmpeg: 'FFmpeg',
+    winldd: 'a Windows helper',
+  };
+  if (known[name]) return known[name] as string;
+  const words = name.split(/[-\s]+/).filter(Boolean);
+  if (words.length === 0) return 'Chromium';
+  return [words[0]!.charAt(0).toUpperCase() + words[0]!.slice(1), ...words.slice(1).map((w) => w.toLowerCase())].join(' ');
+}
+
+/**
+ * What a `Downloading …` line is fetching. Newer Playwright titles name the
+ * package — `Chrome for Testing 140.0.7339.16 (playwright chromium v1187)` —
+ * and older ones only the product and its version — `Chromium 131.0.6778.33
+ * (playwright build v1148)`; either way the words before the version.
+ */
+function downloadWhat(title: string): string {
+  const named = /\(playwright ([a-z][a-z0-9-]*) v\d+\)/i.exec(title);
+  if (named && named[1] !== 'build') return packageWords(named[1]!.toLowerCase());
+  const product = title.split(/\s+/).filter(Boolean);
+  const version = product.findIndex((word) => /^\d/.test(word) || word.startsWith('(') || word.toLowerCase() === 'playwright');
+  return packageWords((version === -1 ? product : product.slice(0, version)).join(' ').toLowerCase());
+}
+
+/**
+ * Reads Playwright's installer, line by line, into `InstallProgress`.
+ *
+ * The lines it knows: `Downloading <title> from <url>` starts a package (a
+ * retry names the same title again and is not a new one), `|■■■■   |  45% of
+ * 164.8 MiB` is progress on it, and `<title> downloaded to <dir>` ends it —
+ * the install is then `installing` until the next package or the end.
+ * Anything else is ignored: the numbers never go backwards on a line this
+ * does not understand.
+ */
+export class InstallProgressReader {
+  #title: string | undefined;
+  #progress: InstallProgress = { phase: 'downloading', percent: 0, what: 'Chromium', download: 0 };
+
+  get progress(): InstallProgress {
+    return { ...this.#progress };
+  }
+
+  read(raw: string): InstallProgress {
+    const line = raw.replace(/\u001b\[[0-9;]*m/g, '').trim();
+    const starting = /^Downloading (.+?)(?:\s+from\s+\S+)?$/.exec(line);
+    if (starting) {
+      const title = starting[1]!.trim();
+      if (title !== this.#title) {
+        this.#title = title;
+        this.#progress = { phase: 'downloading', percent: 0, what: downloadWhat(title), download: this.#progress.download + 1 };
+      } else {
+        this.#progress = { ...this.#progress, phase: 'downloading', percent: 0 };
+      }
+      return this.progress;
+    }
+    const bar = /(\d{1,3})% of /.exec(line);
+    if (bar) {
+      const percent = Math.max(0, Math.min(100, Number(bar[1])));
+      this.#progress = { ...this.#progress, phase: 'downloading', percent: Math.max(percent, this.#progress.phase === 'downloading' ? this.#progress.percent : 0) };
+      return this.progress;
+    }
+    if (/ downloaded to /.test(line)) {
+      this.#progress = { ...this.#progress, phase: 'installing', percent: 100 };
+      return this.progress;
+    }
+    return this.progress;
+  }
+
+  /** The installer has exited. */
+  finish(ok: boolean): InstallProgress {
+    this.#progress = ok
+      ? { phase: 'done', percent: 100, what: 'Chromium', download: this.#progress.download }
+      : { ...this.#progress, phase: 'failed' };
+    return this.progress;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Does it launch?
+ * ------------------------------------------------------------------ */
+
+/** Whether the agents' browser opened and closed once, and what to do when it did not. */
+export type LaunchCheck =
+  | { ok: true }
+  | {
+      ok: false;
+      /**
+       * One sentence for the owner — the same words the status and
+       * `browser.act` say. With a `command`, the sentence leads into it and
+       * the command is not repeated inside it.
+       */
+      message: string;
+      /** A command the owner can copy, when there is one to run. */
+      command?: string;
+      problem?: 'missing-libraries' | 'no-browser';
+    };
+
+/** What the probe launches with. Injectable, so a test never opens a browser. */
+export interface ProbeDeps {
+  headless: boolean;
+  detect?: () => BrowserAvailability;
+  platform?: NodeJS.Platform;
+  /** Launch, open about:blank, close. Throws with the launch's own error. */
+  launch?: (options: { headless: boolean; executablePath?: string; channel?: string }) => Promise<void>;
+}
+
+async function launchOnce(options: { headless: boolean; executablePath?: string; channel?: string }): Promise<void> {
+  const browser = await chromium.launch({ ...options, timeout: 20_000 });
+  try {
+    const page = await browser.newPage();
+    await page.goto('about:blank');
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/**
+ * Launch the agents' browser once — headed or headless as this machine
+ * dictates — open about:blank, and close it. Not the agents' profile and not
+ * their proxy: this asks only whether the binary starts here.
+ *
+ * A failure is said in the words the rest of the plugin already uses: no
+ * browser is `NO_BROWSER_STATUS`, missing Linux libraries is
+ * `missingLibrariesMessage()` with its `install-deps` command beside it to
+ * copy, and anything else is the launch's own first line.
+ */
+export async function probeLaunch(deps: ProbeDeps): Promise<LaunchCheck> {
+  const found = (deps.detect ?? detectBrowser)();
+  if (found.engine === 'none') return { ok: false, message: NO_BROWSER_STATUS, problem: 'no-browser' };
+  const engine = found.engine === 'chrome'
+    ? (!found.channel && found.executable ? { executablePath: found.executable } : { channel: 'chrome' })
+    : {};
+  try {
+    await (deps.launch ?? launchOnce)({ headless: deps.headless, ...engine });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if ((deps.platform ?? process.platform) === 'linux' && isMissingLibraries(message)) {
+      return { ok: false, message: MISSING_LIBRARIES_SENTENCE, command: installDepsCommand(), problem: 'missing-libraries' };
+    }
+    const first = message.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? 'no reason given';
+    return { ok: false, message: `The browser is installed but would not start: ${first.slice(0, 300)}` };
+  }
 }

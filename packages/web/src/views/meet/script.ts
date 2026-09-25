@@ -127,6 +127,8 @@ export const SCRIPT = {
     chromium: 'Your assistant will browse with its own Chromium.',
     needs: 'Your assistant needs a browser of its own to look at websites. I am fetching one now, about 150 MB.',
     installing: 'Fetching the browser…',
+    /** After it is on disk: launched once and closed, to be sure it starts. */
+    launching: 'Making sure it opens…',
     installed: 'Installed.',
     skip: 'Skip for now',
     skipped: 'Skipped. Settings → Computer & browser can install it whenever you like.',

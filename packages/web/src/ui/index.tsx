@@ -546,6 +546,27 @@ export function Table({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
+/**
+ * How far something has got: a fill on a hairline track. `value` is a
+ * percent; the fill moves without a transition under reduced motion.
+ */
+export function Progress({ value, label }: { value: number; label: string }): JSX.Element {
+  const percent = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)));
+  return (
+    <div
+      className="ui-progress"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+      aria-valuetext={`${percent}%`}
+    >
+      <div className="ui-progress-fill" style={{ inlineSize: `${percent}%` }} />
+    </div>
+  );
+}
+
 export function Code({ children, label }: { children: ReactNode; label?: string }): JSX.Element {
   return (
     <pre className="ui-code" aria-label={label}>

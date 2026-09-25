@@ -207,6 +207,7 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
+import { dismissAgentOffer, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
   upgradeJobRoute,
@@ -857,6 +858,11 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
     /** What the plugin page routes need: the registry, and the owner's context. */
     const pagesDeps = (): PagesDeps => ({ registry: deps.registry, ctx: deps.ctx, now: deps.now, log });
+    const agentOffersDeps = (): AgentOffersDeps => ({
+      ...pagesDeps(),
+      pool: deps.pool,
+      agentIds: () => deps.catalog.list().map((a) => a.id),
+    });
     /** The Keys and secrets page (docs/specs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
     const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
     /** The same, for the version and upgrade routes. */
@@ -1188,6 +1194,10 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/pages':
           return reply(res, listPageDescriptors(pagesDeps()));
+        case '/api/agent-offers':
+          // Agents a plugin offers on Home while nobody has them. Accepting
+          // is the Plugins page's own accept route, below.
+          return sendJson(res, 200, await readAgentOffers(agentOffersDeps()));
         case '/api/chat/views':
           // How the installed plugins want their tool output drawn. The page
           // owns the renderers and learns the domain mapping from here, so an
@@ -1713,6 +1723,17 @@ export function createWebApp(deps: WebServerDeps): Server {
       try { return sendJson(res, 202, browser.installBrowser()); }
       catch (error) { return sendJson(res, 409, { error: error instanceof Error ? error.message : String(error) }); }
     }
+    /*
+     * Does the agents' browser start here? Launched once and closed, headed or
+     * headless as the machine dictates, after an install and before the
+     * wizard says "Installed." — a binary on disk that cannot start for want
+     * of a system library is not a browser the owner has.
+     */
+    if (path === '/api/browser/check') {
+      if (!browser.checkLaunch) return sendJson(res, 200, { ok: true });
+      try { return sendJson(res, 200, await browser.checkLaunch()); }
+      catch (error) { return sendJson(res, 200, { ok: false, message: error instanceof Error ? error.message : String(error) }); }
+    }
     if (path === '/api/browser/settings' || path === '/api/browser/permissions') {
       const body = await readJsonBody(req);
       try {
@@ -2056,6 +2077,14 @@ export function createWebApp(deps: WebServerDeps): Server {
      * is the owner invoking the same gated tool Agent Father invokes, so what
      * comes back is an approval to draw, never a written file.
      */
+    const offerDismissed = /^\/api\/agent-offers\/([^/]+)\/([^/]+)\/dismiss$/.exec(path);
+    if (offerDismissed) {
+      return reply(res, await dismissAgentOffer(
+        agentOffersDeps(),
+        decodeURIComponent(offerDismissed[1] as string),
+        decodeURIComponent(offerDismissed[2] as string),
+      ));
+    }
     const acceptAgent = /^\/api\/plugins\/([^/]+)\/agents\/([^/]+)\/accept$/.exec(path);
     if (acceptAgent) {
       return reply(res, await acceptAgentRoute(

@@ -17,6 +17,8 @@
  *    as an agent would call it: the page draws the approval card in place,
  *    with the identity select on it, and nothing here reaches SMTP.
  */
+import { TRIAGE_OFFER_TEXT } from '../agent.js';
+import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
 import type { Component, Field, PageDescriptor, QueryRef } from '@buddi/core/plugin';
 import {
   MAX_DATE_CONFIDENCE,
@@ -680,6 +682,9 @@ const settings: PageDescriptor = {
   id: 'settings',
   title: 'Email',
   place: 'settings',
+  // The page's own read, for the one line below that depends on it: whether
+  // the mail that lands has an agent to triage it.
+  data: { query: 'accounts' },
   body: [
     {
       kind: 'notice',
@@ -691,6 +696,18 @@ const settings: PageDescriptor = {
       title: 'Mailboxes',
       note: 'What this installation reads and sends as.',
       body: [
+        /*
+         * A mailbox with nobody to triage it: the poll keeps the mail and
+         * starts no run until @mail exists. One line, and the same gated
+         * accept the Plugins page runs — the approval card is drawn here.
+         */
+        {
+          kind: 'agent-offer',
+          agent: TRIAGE_AGENT_ID,
+          text: TRIAGE_OFFER_TEXT,
+          label: 'Create @mail',
+          when: { path: 'triage', equals: 'needs-agent' },
+        },
         {
           kind: 'table',
           query: { query: 'accounts' },

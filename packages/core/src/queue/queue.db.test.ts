@@ -521,11 +521,15 @@ suite('queue (postgres)', () => {
       // the queue used to allow.
       for (let n = 1; n <= 5; n += 1) {
         await waitFor(async () => ((await getJob(pool, job.id))?.attempts ?? 0) >= n);
+        // The last failure is left where the backoff put it — minutes away —
+        // so the worker cannot lease it again between here and the read below.
+        if (n === 5) break;
         await pool.query(
           `update core.jobs set run_after = now() where id = $1::uuid and state = 'pending'`,
           [job.id],
         );
       }
+      await waitFor(async () => (await getJob(pool, job.id))?.state === 'pending');
       await worker.stop();
       const after = await getJob(pool, job.id);
       expect(after?.state).toBe('pending');

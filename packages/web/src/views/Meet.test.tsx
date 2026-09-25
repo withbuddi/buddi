@@ -46,6 +46,7 @@ vi.mock('../api', async (load) => {
       conversations: vi.fn(),
       browser: vi.fn(),
       browserInstall: vi.fn(),
+      browserCheck: vi.fn(),
     },
     chatApi: {
       ...real.chatApi,
@@ -476,27 +477,55 @@ describe('the browser', () => {
   it('says which browser it found in one line and goes straight on, downloading nothing', async () => {
     atBrowser();
     vi.mocked(api.browser).mockResolvedValue(own({ engine: 'chrome', headless: false }));
+    vi.mocked(api.browserCheck).mockResolvedValue({ ok: true });
     render(meet());
     expect(await screen.findByText(SCRIPT.browser.chrome)).toBeInTheDocument();
     expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
     expect(api.browserInstall).not.toHaveBeenCalled();
+    // Found is not enough: it was launched once before buddi said so.
+    expect(api.browserCheck).toHaveBeenCalledOnce();
     expect(api.onboardingStep).toHaveBeenCalledWith('browser', {});
   });
 
-  it('fetches one when there is none, says the installer\'s lines, then "Installed." and on', async () => {
+  it('fetches one when there is none, with a bar in its own words, checks it opens, then "Installed." and on', async () => {
     atBrowser();
     vi.mocked(api.browser)
       .mockResolvedValueOnce(own({ engine: 'none', headless: false }))
       .mockResolvedValueOnce(own({ engine: 'none', headless: false }))
-      .mockResolvedValueOnce(own({ engine: 'none', headless: false, install: { state: 'running', line: 'Downloading Chromium 40%' } }))
+      .mockResolvedValueOnce(own({ engine: 'none', headless: false, install: { state: 'running', progress: { phase: 'downloading', percent: 45, what: 'Chromium', download: 1 } } }))
       .mockResolvedValue(own({ engine: 'chromium', headless: false, install: { state: 'done' } }));
     vi.mocked(api.browserInstall).mockResolvedValue(own({ engine: 'none', headless: false, install: { state: 'running' } }));
+    vi.mocked(api.browserCheck).mockResolvedValue({ ok: true });
     render(meet());
     expect(await screen.findByText(SCRIPT.browser.needs)).toBeInTheDocument();
-    expect(await screen.findByText('Downloading Chromium 40%', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('Fetching Chromium… 45%', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '45');
     expect(await screen.findByText(SCRIPT.browser.installed, {}, { timeout: 4000 })).toBeInTheDocument();
     expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
     expect(api.browserInstall).toHaveBeenCalledOnce();
+    expect(api.browserCheck).toHaveBeenCalledOnce();
+  });
+
+  it('says why a browser that will not start will not, with the command to copy and Try again as the primary', async () => {
+    atBrowser();
+    vi.mocked(api.browser).mockResolvedValue(own({ engine: 'chromium', headless: true }));
+    vi.mocked(api.browserCheck)
+      .mockResolvedValueOnce({
+        ok: false,
+        problem: 'missing-libraries',
+        message: 'The browser is installed, but this machine lacks system libraries it needs. Run once, with sudo:',
+        command: 'sudo npx playwright install-deps chromium',
+      })
+      .mockResolvedValue({ ok: true });
+    render(meet());
+    expect(await screen.findByText(/lacks system libraries it needs/)).toBeInTheDocument();
+    expect(screen.getByText('sudo npx playwright install-deps chromium')).toBeInTheDocument();
+    const skip = screen.getByRole('button', { name: SCRIPT.browser.skip });
+    const retry = screen.getByRole('button', { name: SCRIPT.browser.retry });
+    expect(skip.compareDocumentPosition(retry) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(retry);
+    expect(await screen.findByText(SCRIPT.browser.chromium)).toBeInTheDocument();
+    expect(api.browserCheck).toHaveBeenCalledTimes(2);
   });
 
   it('lets the owner skip it, with the way out left of the primary', async () => {

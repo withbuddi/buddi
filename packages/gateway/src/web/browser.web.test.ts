@@ -79,6 +79,19 @@ describe('browser dashboard endpoints', () => {
     expect(await started.json()).toMatchObject({ browser: { install: { state: 'running' } } });
     expect(installBrowser).toHaveBeenCalledOnce();
   });
+  it('checks that the browser launches, for the owner only, and relays the reason when it does not', async () => {
+    const { origin, browser } = await setup(); const headers = await session(origin);
+    const checkLaunch = vi.fn(async () => ({ ok: false as const, message: 'The browser is installed, but this machine lacks system libraries it needs. Run once, with sudo:', command: 'sudo npx playwright install-deps chromium', problem: 'missing-libraries' as const }));
+    browser.checkLaunch = checkLaunch;
+    expect((await fetch(`${origin}/api/browser/check`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+    expect((await fetch(`${origin}/api/browser/check`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBeGreaterThanOrEqual(400);
+    expect(checkLaunch).not.toHaveBeenCalled();
+    const checked = await fetch(`${origin}/api/browser/check`, { method: 'POST', headers, body: '{}' });
+    expect(checked.status).toBe(200);
+    expect(await checked.json()).toMatchObject({ ok: false, command: 'sudo npx playwright install-deps chromium' });
+    checkLaunch.mockResolvedValueOnce({ ok: true } as never);
+    expect(await (await fetch(`${origin}/api/browser/check`, { method: 'POST', headers, body: '{}' })).json()).toEqual({ ok: true });
+  });
   it('protects mode settings and permission prompts with owner authentication, CSRF and origin', async () => {
     const { origin, browser } = await setup(); const headers = await session(origin);
     const configure = vi.fn(async () => browser.status()); const checkPermissions = vi.fn(async () => browser.status());

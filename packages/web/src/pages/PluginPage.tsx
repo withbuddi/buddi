@@ -54,6 +54,7 @@ import {
   useAsync,
   EmptyState,
 } from '../ui';
+import { AgentOffer } from '../views/parts/AgentOffer';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import type {
   ArgRef,
@@ -904,6 +905,8 @@ function Piece({
       return <ArtifactPiece component={component} data={data} />;
     case 'editor':
       return <EditorPiece component={component} data={data} />;
+    case 'agent-offer':
+      return <AgentOfferPiece component={component} />;
     default:
       return null;
   }
@@ -1865,6 +1868,25 @@ function ButtonPiece({ component, data }: { component: Of<'button'>; data: unkno
       </Toolbar>
       <ActOutcome act={act} />
     </>
+  );
+}
+
+/**
+ * One of this plugin's proposed agents, offered in place: the plugin's line,
+ * and the same accept the Plugins page runs, approval card and all. Once the
+ * approval is decided the page reads again, so a `when` over the roster can
+ * take the line away.
+ */
+function AgentOfferPiece({ component }: { component: Of<'agent-offer'> }): JSX.Element {
+  const scope = useScope();
+  return (
+    <AgentOffer
+      plugin={scope.plugin}
+      agent={component.agent}
+      text={component.text}
+      label={component.label}
+      onDone={scope.refresh}
+    />
   );
 }
 

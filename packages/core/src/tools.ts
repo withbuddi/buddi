@@ -543,6 +543,14 @@ export interface SuggestedAgent {
   language?: 'mirror' | 'en' | 'fr';
   /** Skills written into this agent's own `skills/` when it is accepted. */
   skills?: SuggestedSkill[];
+  /**
+   * Offer it on Home while no agent has its id (optional): `text` is the card's
+   * one line, and `query`, when given, names one of this plugin's page queries
+   * whose answer carries `wanted: true` while the offer is worth making — a
+   * mail agent is not worth offering before there is a mailbox. Accepting is
+   * the same gated `platform.accept_plugin_agent`; the owner may dismiss it.
+   */
+  offer?: { text: string; query?: string };
 }
 
 /**

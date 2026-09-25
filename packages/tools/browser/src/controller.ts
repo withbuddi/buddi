@@ -10,7 +10,7 @@ import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBrid
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
 import type { BrowserCommand } from './types.js';
-import { detectBrowser, HEADLESS_NOTE, installBrowser, missingLibrariesMessage, needsHeadless, NO_BROWSER_STATUS, type BrowserAvailability, type InstallOutcome } from './availability.js';
+import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
 export class HostController implements BrowserController {
@@ -37,6 +37,8 @@ export class HostController implements BrowserController {
     detect?: () => BrowserAvailability;
     /** Playwright's Chromium installer. Injectable for tests. */
     installer?: (onLine: (line: string) => void) => Promise<InstallOutcome>;
+    /** How the launch check launches. Injectable, so a test never opens a browser. */
+    launch?: ProbeDeps['launch'];
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -81,19 +83,43 @@ export class HostController implements BrowserController {
    */
   installBrowser(): BrowserStatus {
     if (this.#install?.state === 'running') return this.status();
-    const install: NonNullable<BrowserEngineStatus['install']> = { state: 'running', line: 'Starting the installer…' };
+    // The installer's lines are read into numbers here and go no further: the
+    // page draws a bar and says it in buddi's words, never the installer's.
+    const reader = new InstallProgressReader();
+    const install: NonNullable<BrowserEngineStatus['install']> = { state: 'running', progress: reader.progress };
     this.#install = install;
     const run = this.options.installer ?? ((onLine) => installBrowser({ onLine }));
-    void run((line) => { install.line = line.slice(0, 300); }).then((outcome) => {
+    void run((line) => { install.progress = reader.read(line); }).then((outcome) => {
       install.state = outcome.ok ? 'done' : 'failed';
+      install.progress = reader.finish(outcome.ok);
       install.line = outcome.ok ? 'Chromium is installed.' : outcome.detail.slice(0, 300);
       if (outcome.missingLibraries && (this.options.platform ?? process.platform) === 'linux') this.#problem = 'missing-libraries';
       else if (outcome.ok) this.#problem = undefined;
     }, (error: unknown) => {
       install.state = 'failed';
+      install.progress = reader.finish(false);
       install.line = error instanceof Error ? error.message : String(error);
     });
     return this.status();
+  }
+  /**
+   * Launch the agents' browser once and close it, headed or headless as this
+   * machine dictates. Only the agents' own browser has a binary to start; the
+   * other modes answer ok, since there is nothing of buddi's to launch.
+   * A missing-libraries failure is remembered as the status's problem, as a
+   * failed launch from a real session would be.
+   */
+  async checkLaunch(): Promise<LaunchCheck> {
+    if (this.#settings.mode !== 'playwright') return { ok: true };
+    const check = await probeLaunch({
+      headless: this.#headless,
+      detect: () => this.#detect(),
+      platform: this.options.platform ?? process.platform,
+      ...(this.options.launch ? { launch: this.options.launch } : {}),
+    });
+    if (check.ok) this.#problem = undefined;
+    else if (check.problem === 'missing-libraries') this.#problem = 'missing-libraries';
+    return check;
   }
   get #macOS(): boolean { return (this.options.platform ?? process.platform) === 'darwin'; }
   async enable(): Promise<void> {

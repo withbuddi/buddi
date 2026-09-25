@@ -31,6 +31,7 @@ describe('the mail pages, as contributions', () => {
       ['email', 'settings', 'settings'],
     ]);
     expect(registry.queries().map((q) => q.name)).toEqual([
+      'triage_offer',
       'threads',
       'thread',
       'draft',
@@ -148,7 +149,7 @@ describe('the mail pages, as contributions', () => {
     const broken = copy(manifest.pages ?? []);
     const settings = broken.find((p) => p.id === 'settings');
     const section = (settings as { body: any[] }).body.find((c: any) => c.title === 'Mailboxes');
-    section.body[0].actions[0].tool = 'platform.delete_everything';
+    section.body.find((c: any) => c.kind === 'table').actions[0].tool = 'platform.delete_everything';
     const registry = new ToolRegistry();
     expect(() => registry.register({ ...manifest, pages: broken })).toThrow(
       /names platform\.delete_everything, which this plugin does not contribute/,

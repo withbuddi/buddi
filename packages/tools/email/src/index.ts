@@ -33,6 +33,7 @@ import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
 import { emailPolicyHandler } from './policies/learned.js';
 import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
+import { mailAgents } from './agent.js';
 import type { EnvLike } from './config.js';
 import { accountDestination } from './credentials.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
@@ -122,6 +123,9 @@ export function createEmailManifest(
        */
       ...emailPageTools({ connect: opts.connect ?? imapflowFactory }),
     ],
+    // The triage agent the poll hands every new message to, proposed rather
+    // than assumed: nothing exists until the owner accepts it (`agent.ts`).
+    agents: mailAgents,
     // The Mail place and the Email settings tab, and the reads they make.
     pages: emailPages(),
     queries: emailQueries(),
@@ -640,3 +644,4 @@ export {
   type UnansweredAsk,
   type WatcherSettingsPatch,
 } from './watchers.js';
+export { mailAgents, MAIL_TRIAGE_TOOLS, TRIAGE_OFFER_QUERY, TRIAGE_OFFER_TEXT } from './agent.js';

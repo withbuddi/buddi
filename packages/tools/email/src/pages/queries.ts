@@ -19,7 +19,8 @@
  *    arrives from `message`, when the owner opens one.
  */
 import { z } from 'zod';
-import { QueryRefusal, type PageQuery, type ProposalsArea, type ToolContext } from '@buddi/core/plugin';
+import { QueryRefusal, type DbArea, type PageQuery, type ProposalsArea, type ToolContext } from '@buddi/core/plugin';
+import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
 import {
   booleanFilter,
   buildSearch,
@@ -465,7 +466,14 @@ export function accountsQuery(): PageQuery {
       const now = ctx.buddi!.clock.now();
       const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
       const synced = await lastSyncByAccount(ctx.buddi!.db);
+      const waiting = await triageWaitingByAccount(ctx.buddi!.db);
       return {
+        /*
+         * Whether new mail has anybody to triage it. `needs-agent` is what
+         * the page's offer line is drawn against: a mailbox, and no agent
+         * with the id the poll hands messages to.
+         */
+        triage: triageState(accounts.length, ctx),
         accounts: accounts.map((account) => ({
           id: account.id,
           address: account.address,
@@ -491,6 +499,8 @@ export function accountsQuery(): PageQuery {
               ? { value: 'on', tone: 'neutral' }
               : { value: 'off', tone: 'warning' },
             ...(account.addedVia === 'env' ? [{ value: 'from .env', tone: 'neutral' }] : []),
+            // The poll's own record: new mail landed with nobody to triage it.
+            ...(waiting.get(account.id) ? [{ value: 'triage waiting', tone: 'warning' }] : []),
           ],
         })),
       };
@@ -642,9 +652,48 @@ function undefinedTable(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === '42P01';
 }
 
+/**
+ * `ready`, `needs-agent`, or `no-mailbox`: whether mail that lands has an
+ * agent to triage it. Asked of the live roster, not of the last poll, so the
+ * line appears the moment a mailbox is saved and goes the moment @mail exists.
+ */
+export function triageState(mailboxes: number, ctx: Pick<ToolContext, 'buddi'>): 'ready' | 'needs-agent' | 'no-mailbox' {
+  if (mailboxes === 0) return 'no-mailbox';
+  return ctx.buddi!.owner.hasAgent(TRIAGE_AGENT_ID) ? 'ready' : 'needs-agent';
+}
+
+/** Which accounts the poll last found with mail and nobody to triage it. */
+async function triageWaitingByAccount(db: Pick<DbArea, 'query'>): Promise<Map<string, boolean>> {
+  try {
+    const { rows } = await db.query(`select id, triage_waiting_since from email.accounts`);
+    return new Map(rows.map((row: { id: unknown; triage_waiting_since: unknown }) => [String(row.id), row.triage_waiting_since !== null && row.triage_waiting_since !== undefined]));
+  } catch (error) {
+    // A schema that predates the column is not a failure of the page.
+    if ((error as { code?: string } | null)?.code === '42703') return new Map();
+    throw error;
+  }
+}
+
+/**
+ * What Home asks before offering @mail (`SuggestedAgent.offer.query`): wanted
+ * once there is a mailbox for it to read. Whether the agent already exists is
+ * the gateway's half of the question.
+ */
+export function triageOfferQuery(): PageQuery {
+  return {
+    name: 'triage_offer',
+    params: noParams,
+    async produce(_params, ctx: ToolContext) {
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
+      return { wanted: accounts.length > 0 };
+    },
+  };
+}
+
 /** Every read the two mail pages make. */
 export function emailPageQueries(): PageQuery[] {
   return [
+    triageOfferQuery(),
     threadsQuery(),
     threadQuery(),
     draftQuery(),

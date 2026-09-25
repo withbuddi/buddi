@@ -276,7 +276,7 @@ interface BuddiHost {
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
-  owner: OwnerArea;           // id, timezone, agentForRole, protectedPaths
+  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
   dir: DirArea;               // <data>/plugins-data/<plugin>
@@ -2951,6 +2951,7 @@ closed when it is absent rather than guess.
 | `maxTurns` | `number` | no | Turn budget per run. Omitted, the default of 40 applies; a run that reaches the budget stops and says so. |
 | `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
 | `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
+| `offer` | `{ text, query? }` | no | Offer it on Home while no agent has its id: `text` is the card's one line; `query` names one of your page queries whose answer carries `wanted: true` while the offer is worth making. Accepting is the same gated `platform.accept_plugin_agent`; the owner may dismiss it. A page can offer it in place with the `agent-offer` component. |
 
 #### `SuggestedSkill`
 
@@ -3072,6 +3073,7 @@ that say otherwise.
 | `id` | `string` | yes | 1.0 | The owner's id. |
 | `timezone` | `string` | yes | 1.0 | The owner's IANA zone. |
 | `agentForRole` | `(role) => string \| undefined` | yes | 1.0 | The first runnable agent holding a role, or `undefined`. Never an agent's file, grant or provider. |
+| `hasAgent` | `(id) => boolean` | yes | 1.1 | Whether an agent with this id is installed — for a plugin that proposes one and must not start runs for it before the owner accepts it. `true` where there is no roster to ask. |
 | `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
 
 #### `ClockArea`

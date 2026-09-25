@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
 import { fmtTime } from '../format';
 import { chatRoute } from '../routes';
+import { InstallProgress } from './parts/InstallProgress';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 
@@ -99,10 +100,13 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
           ) : perms ? (
             <p className="muted">Computer control requires macOS 14 or later.</p>
           ) : null}
-          {own?.install ? (
+          {/* A bar and one line in buddi's words while it runs; the
+              installer's own progress text never reaches the page. */}
+          {own?.install?.state === 'running' ? (
+            <InstallProgress progress={own.install.progress} />
+          ) : own?.install ? (
             <p className="muted" role="status">
-              {own.install.state === 'running' ? `Installing Chromium. ${own.install.line ?? ''}`
-                : own.install.state === 'done' ? 'Chromium is installed. Agents can open their browser now.'
+              {own.install.state === 'done' ? 'Chromium is installed. Agents can open their browser now.'
                 : `The install did not finish: ${own.install.line ?? 'no reason given'}`}
             </p>
           ) : null}
