@@ -12,9 +12,9 @@ import type { SessionScope } from './sessions.js';
  * and a packaged install on 4417, or a tunnel to another machine's — would
  * otherwise overwrite each other's `buddi_session` on `127.0.0.1` every time
  * one of them re-issued it, and the other would answer 401 to a browser that
- * had just signed in. The port is the public one when the dashboard is
- * published behind a proxy (`BUDDI_WEB_PUBLIC_ORIGIN`), so the page can find
- * its own CSRF cookie by `location.port`; the bound one otherwise.
+ * had just signed in. The port is the one the request arrived on as the
+ * browser sees it (`requestPort`), so the page finds its own CSRF cookie by
+ * `location.port`, on loopback and behind a proxy alike.
  */
 export const SESSION_COOKIE_PREFIX = 'buddi_session';
 export const CSRF_COOKIE_PREFIX = 'buddi_csrf';
@@ -27,6 +27,37 @@ export function isBuddiCookie(name: string): boolean {
 /** The port a URL implies, `https` and `http` defaults included. */
 export function portOf(url: URL): number {
   return Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+}
+/**
+ * The port the browser sees for this request, which is what its cookies are
+ * named after: the loopback page on `127.0.0.1:4317` and the tailnet page on
+ * `<host>.ts.net:9443` each hold their own pair, on their own host.
+ *
+ * Read from the Host header, which is the caller's to write. That is fine
+ * here: the port only names a cookie, so a forged one merely looks up a
+ * cookie the browser does not have. A Host that does not parse names the
+ * bound port. A Host with no port means the scheme's default, which only the
+ * browser knows for sure: the public origin's when it is that host, else 443
+ * when a proxy says it terminated HTTPS, else 80.
+ */
+export function requestPort(req: IncomingMessage, bound: number, publicOrigin?: string): number {
+  const host = req.headers.host;
+  if (typeof host !== 'string' || host === '') return bound;
+  let url: URL;
+  try {
+    url = new URL(`http://${host}`);
+  } catch {
+    return bound;
+  }
+  if (url.port !== '') return Number(url.port);
+  if (publicOrigin) {
+    try {
+      const pub = new URL(publicOrigin);
+      if (pub.hostname === url.hostname) return portOf(pub);
+    } catch { /* a bad public origin names nothing */ }
+  }
+  const proto = req.headers['x-forwarded-proto'];
+  return (Array.isArray(proto) ? proto[0] : proto)?.trim().toLowerCase() === 'https' ? 443 : 80;
 }
 export const CSRF_HEADER = 'x-buddi-csrf';
 

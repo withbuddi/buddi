@@ -98,6 +98,11 @@ delivered twice.
   CORS. Binding it elsewhere (`BUDDI_WEB_HOST`) turns on the ticket exchange
   and session cookies: remote access is an explicit, authenticated transport
   (`packages/gateway/src/web/server.ts`).
+- **Cookies are named per port.** A browser keeps one cookie of a name per
+  host whatever the port, so the session and CSRF cookies carry the port the
+  request arrived on, from its Host: `buddi_csrf_4317` on `127.0.0.1:4317`,
+  `buddi_csrf_9443` on the tailnet address. Two buddis on one machine, or one
+  reached both ways, keep their sessions apart.
 - **Approval callbacks are bound.** A callback resolves exactly the pending
   action it names, from the owner identity. A plain message saying "yes"
   resolves nothing. Decisions from any paired surface race on the same atomic

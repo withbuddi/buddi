@@ -20,14 +20,17 @@ import type {
 /**
  * The CSRF cookie is named after the port (`buddi_csrf_<port>`), because a
  * browser keeps one cookie of a name per host and ignores the port — two
- * buddis on one machine would otherwise read each other's. This page's is the
- * one named after its own port; behind a proxy whose port the gateway did not
- * know, the single `buddi_csrf*` cookie on this host is it.
+ * buddis on one machine would otherwise read each other's. The gateway names
+ * it after the port this page was loaded on, so this page's is the one named
+ * after `location.port`.
  */
 export const CSRF_COOKIE_PREFIX = 'buddi_csrf';
 export const CSRF_HEADER = 'x-buddi-csrf';
 /** A window event: the roster changed (a picture, say); re-read it now rather than in 15 s. */
 export const AGENTS_CHANGED = 'buddi:agents-changed';
+
+/** What a write refused by the CSRF gate tells the owner. */
+export const STALE_COOKIES = "This page's sign-in no longer matches its cookies. Reload the page and try again.";
 
 export class ApiError extends Error {
   constructor(
@@ -40,6 +43,16 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * This page's CSRF value, or '' when it has none.
+ *
+ * The exact-port cookie is the answer. Only when there is none, and exactly
+ * one `buddi_csrf*` cookie on this host, is that one taken: a proxy that
+ * rewrites Host on the way in (the gateway then names the cookie after its
+ * own port) still works. With two or more there is no telling which is ours,
+ * and guessing would send another buddi's token; the write then fails with
+ * the sentence `request` gives a 403.
+ */
 export function csrfToken(): string {
   const port = Number(location.port) || (location.protocol === 'https:' ? 443 : 80);
   const own = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE_PREFIX}_${port}=([^;]*)`));
@@ -61,10 +74,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const text = await res.text();
   const body: unknown = text === '' ? null : safeJson(text);
   if (!res.ok) {
+    const stated = body && typeof body === 'object' && 'error' in body ? String((body as { error: unknown }).error) : undefined;
+    // A bare 403 on a write is the gateway's origin and CSRF gate: this page's
+    // cookies no longer match the session it holds. A 403 that says why is
+    // shown as it is.
+    const method = (init.method ?? 'GET').toUpperCase();
     const message =
-      body && typeof body === 'object' && 'error' in body
-        ? String((body as { error: unknown }).error)
-        : `request failed (${res.status})`;
+      stated ??
+      (res.status === 403 && method !== 'GET' && method !== 'HEAD'
+        ? STALE_COOKIES
+        : `request failed (${res.status})`);
     throw new ApiError(res.status, message, body);
   }
   return body as T;

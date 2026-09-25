@@ -144,7 +144,7 @@ import {
   csrfCookieName,
   CSRF_HEADER,
   sessionCookieName,
-  portOf,
+  requestPort,
   BodyTooLargeError,
   first,
   cookieHeader,
@@ -454,7 +454,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const origin = requestOrigin(req);
       if (origin === undefined || !allowed().has(origin)) return null;
       const scope = requestScope(req);
-      const session = sessions.get(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort())], scope, now);
+      const session = sessions.get(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort(req))], scope, now);
       if (!session) return null;
       if (session.via === 'tailscale') {
         const confirmed = await identityOf(req, now);
@@ -617,22 +617,22 @@ export function createWebApp(deps: WebServerDeps): Server {
    * the page has to echo back in a header. Both carry the same `Max-Age`, which
    * is the lifetime this session's scope earned it.
    */
-  const sessionCookies = (session: Session): string[] => {
+  const sessionCookies = (req: IncomingMessage, session: Session): string[] => {
     const maxAgeSeconds = SessionStore.maxAgeSeconds(session);
     return [
-      cookieHeader(sessionCookieName(cookiePort()), session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
-      cookieHeader(csrfCookieName(cookiePort()), session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(sessionCookieName(cookiePort(req)), session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
+      cookieHeader(csrfCookieName(cookiePort(req)), session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
     ];
   };
 
   /**
-   * The port the cookies are named after (http.ts says why they carry one):
-   * the public origin's when there is one, else the port actually bound.
+   * The port this request's cookies are named after (http.ts says why they
+   * carry one): the port the browser sees, from the request's Host, so the
+   * loopback page and the tailnet page each keep their own pair. Set, read and
+   * checked through this one function.
    */
-  const cookiePort = (): number => {
-    if (deps.config.publicOrigin) return portOf(new URL(deps.config.publicOrigin));
-    return (server.address() as AddressInfo | null)?.port ?? deps.config.port;
-  };
+  const cookiePort = (req: IncomingMessage): number =>
+    requestPort(req, (server.address() as AddressInfo | null)?.port ?? deps.config.port, deps.config.publicOrigin);
 
   /**
    * The origins a write may claim, resolved against the port actually bound.
@@ -716,12 +716,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       clean.searchParams.delete(TICKET_PARAM);
       return sendEmpty(res, 302, {
         Location: `${clean.pathname}${clean.search}`,
-        'Set-Cookie': sessionCookies(session),
+        'Set-Cookie': sessionCookies(req, session),
       });
     }
 
     const cookies = parseCookies(req.headers.cookie);
-    let session = sessions.get(cookies[sessionCookieName(cookiePort())], scope, now);
+    let session = sessions.get(cookies[sessionCookieName(cookiePort(req))], scope, now);
 
     /*
      * A Tailscale session is re-confirmed on every single request.
@@ -757,7 +757,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      */
     if (!session && openAccess && scope === 'local') {
       session = sessions.create(scope, now);
-      res.setHeader('Set-Cookie', sessionCookies(session));
+      res.setHeader('Set-Cookie', sessionCookies(req, session));
     }
 
     /*
@@ -781,7 +781,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           tailscaleAddress: identity.address,
           tailscaleName: identity.name,
         });
-        res.setHeader('Set-Cookie', sessionCookies(session));
+        res.setHeader('Set-Cookie', sessionCookies(req, session));
       }
     }
 
@@ -805,7 +805,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * `renewCookie` is what keeps it to roughly one response per half-life
      * instead of one per request.
      */
-    if (sessions.renewCookie(session, now)) res.setHeader('Set-Cookie', sessionCookies(session));
+    if (sessions.renewCookie(session, now)) res.setHeader('Set-Cookie', sessionCookies(req, session));
 
     const mutating = method !== 'GET' && method !== 'HEAD';
 
@@ -815,7 +815,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const presented = req.headers[CSRF_HEADER];
       const header = Array.isArray(presented) ? presented[0] : presented;
       if (!SessionStore.csrfMatches(session, header)) return sendEmpty(res, 403);
-      if (cookies[csrfCookieName(cookiePort())] !== session.csrf) return sendEmpty(res, 403);
+      if (cookies[csrfCookieName(cookiePort(req))] !== session.csrf) return sendEmpty(res, 403);
     }
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {

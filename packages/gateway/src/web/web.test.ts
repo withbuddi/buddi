@@ -26,6 +26,7 @@ import {
   isLoopbackAddress,
   parseCookies,
   portOf,
+  requestPort,
   requestScope,
   sessionCookieName,
 } from './http.js';
@@ -328,6 +329,23 @@ describe('cookies', () => {
     expect(portOf(new URL('http://127.0.0.1:4317/api/session'))).toBe(4317);
     // A default spelled out is still the default: URL drops it.
     expect(portOf(new URL('https://host.example:443'))).toBe(443);
+  });
+
+  it('follow the port the request arrived on, from its Host', () => {
+    const at = (headers: Record<string, string>) => ({ headers } as never);
+    const pub = 'https://buddi.tail1234.ts.net:9443';
+    // What the browser sees, with or without a public origin.
+    expect(requestPort(at({ host: '127.0.0.1:4317' }), 4317, pub)).toBe(4317);
+    expect(requestPort(at({ host: 'buddi.tail1234.ts.net:9443' }), 4317, pub)).toBe(9443);
+    expect(requestPort(at({ host: 'localhost:4999' }), 4317)).toBe(4999);
+    // No port in Host: the scheme's default, as the public origin or the proxy says.
+    expect(requestPort(at({ host: 'buddi.tail1234.ts.net' }), 4317, 'https://buddi.tail1234.ts.net')).toBe(443);
+    expect(requestPort(at({ host: 'other.example', 'x-forwarded-proto': 'https' }), 4317, pub)).toBe(443);
+    expect(requestPort(at({ host: 'other.example' }), 4317, pub)).toBe(80);
+    // Missing or unparseable: the bound port, never a throw.
+    expect(requestPort(at({}), 4317, pub)).toBe(4317);
+    expect(requestPort(at({ host: 'bad host:x' }), 4317)).toBe(4317);
+    expect(requestPort(at({ host: '[::1' }), 4317)).toBe(4317);
   });
 });
 

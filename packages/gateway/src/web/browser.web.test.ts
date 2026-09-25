@@ -4,6 +4,7 @@ import { BrowserService, BrowserManager, commandSchema, type BrowserController, 
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
 import { csrfCookieName, portOf } from './http.js';
+import { hostFetch } from '../__fixtures__/host-fetch.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -40,11 +41,14 @@ describe('browser dashboard endpoints', () => {
   it('requires a remote ticket behind an HTTPS proxy and preserves write protection', async () => {
     const external = 'https://host.example:9443';
     const { origin, browser } = await setup(true, undefined, external);
+    // The proxied requests carry the Host the browser used, which `fetch` would overwrite.
+    const fetch = hostFetch;
     const proxy = { Host: 'host.example:9443', 'X-Forwarded-For': '100.64.0.2' };
     expect((await fetch(`${origin}/api/session`, { headers: proxy })).status).toBe(401);
     expect((await fetch(`${origin}/api/session`, { headers: { ...proxy, Host: 'localhost:4317' } })).status).toBe(401);
-    // Behind a public origin the cookies carry its port, whichever door they came through.
-    const local = await session(origin, undefined, portOf(new URL(external)));
+    // Cookies carry the port the request arrived on: the bound one on loopback,
+    // the public one through the proxy.
+    const local = await session(origin);
     expect(local['X-Buddi-CSRF']).not.toBe('');
     expect((await fetch(`${origin}/api/session`, { headers: { ...local, ...proxy } })).status).toBe(401);
     const ticket = mintTicket(TOKEN, new Date());

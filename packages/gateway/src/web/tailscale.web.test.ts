@@ -14,6 +14,7 @@ import { startWebServer, type WebServer } from './server.js';
 import { SessionStore, TAILSCALE_SESSION_MAX_MS } from './sessions.js';
 import { mintTicket } from './token.js';
 import { csrfCookieName, portOf, sessionCookieName } from './http.js';
+import { hostFetch } from '../__fixtures__/host-fetch.js';
 import {
   TAILSCALED_SOCKET,
   daemonWhois,
@@ -193,8 +194,15 @@ interface Knobs {
 }
 
 /**
- * Every dashboard here is configured with a public origin, so its cookies are
- * named after that origin's port (9443), whichever door a request came through.
+ * These requests say which Host they came in on, as Tailscale Serve's do, and
+ * the platform `fetch` would overwrite it.
+ */
+const fetch = hostFetch;
+
+/**
+ * Every dashboard here is configured with a public origin. A request through
+ * Serve arrives with its Host (`…ts.net:9443`), so its cookies carry 9443; a
+ * loopback request carries the bound port.
  */
 const PUBLIC_PORT = portOf(new URL('https://buddi.tail1234.ts.net:9443'));
 const SESSION_NAME = sessionCookieName(PUBLIC_PORT);
@@ -203,6 +211,7 @@ const CSRF_NAME = csrfCookieName(PUBLIC_PORT);
 async function dashboard(
   row: { enabled: boolean; login: string } | null,
   whoisLogin: string | null = OWNER,
+  publicOrigin: string | undefined = 'https://buddi.tail1234.ts.net:9443',
 ): Promise<WebServer & { knobs: Knobs }> {
   const knobs: Knobs = { whois: whoisLogin, now: new Date('2026-03-01T00:00:00Z') };
   const app = await startWebServer({
@@ -212,7 +221,7 @@ async function dashboard(
     ctx: { ownerId: 'owner' } as CoreToolContext,
     timezone: 'UTC',
     now: () => knobs.now,
-    config: { enabled: true, host: '127.0.0.1', port: 0, publicOrigin: 'https://buddi.tail1234.ts.net:9443' },
+    config: { enabled: true, host: '127.0.0.1', port: 0, publicOrigin },
     token: 'fixture',
     env: {},
     log: () => {},
@@ -284,9 +293,56 @@ async function open(app: WebServer): Promise<{ origin: string; headers: Record<s
   const origin = `http://127.0.0.1:${app.port}`;
   const res = await fetch(`${origin}/api/session`);
   const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const csrf = cookies.find((c) => c.startsWith(`${CSRF_NAME}=`))!.slice(`${CSRF_NAME}=`.length);
+  const name = csrfCookieName(app.port);
+  const csrf = cookies.find((c) => c.startsWith(`${name}=`))!.slice(`${name}=`.length);
   return { origin, headers: { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' } };
 }
+
+/** The names of the cookies a response set, value dropped. */
+const cookieNames = (res: Response): string[] => res.headers.getSetCookie().map((c) => c.split('=')[0]!);
+
+it('names the cookies after the port each request arrived on, public origin or not', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  // The loopback page: the bound port, not the public origin's.
+  const local = await fetch(`http://127.0.0.1:${app.port}/api/session`);
+  expect(cookieNames(local)).toEqual([sessionCookieName(app.port), csrfCookieName(app.port)]);
+  // The tailnet page: the port in Serve's Host.
+  const tailnet = await fetch(`http://127.0.0.1:${app.port}/api/session`, { headers: SERVE_HEADERS });
+  expect(cookieNames(tailnet)).toEqual([SESSION_NAME, CSRF_NAME]);
+
+  const bare = await dashboard(null, OWNER, undefined);
+  expect(cookieNames(await fetch(`http://127.0.0.1:${bare.port}/api/session`))).toEqual([sessionCookieName(bare.port), csrfCookieName(bare.port)]);
+  // Another spelling of loopback, on another port a local proxy forwards from.
+  expect(cookieNames(await fetch(`http://127.0.0.1:${bare.port}/api/session`, { headers: { Host: 'localhost:4999' } }))).toEqual([sessionCookieName(4999), csrfCookieName(4999)]);
+  // A Host that does not parse names the bound port rather than throwing. It
+  // is also not a loopback Host, so only a ticket signs it in.
+  const odd = await fetch(`http://127.0.0.1:${bare.port}/?t=${encodeURIComponent(mintTicket('fixture'))}`, { headers: { Host: 'bad host:x' } });
+  expect(odd.status).toBe(302);
+  expect(cookieNames(odd)).toEqual([sessionCookieName(bare.port), csrfCookieName(bare.port)]);
+});
+
+it('keeps a loopback session and a tailnet session apart, each working on its own host', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  const local = await open(app);
+  const tailnet = await tailnetSession(app);
+  // Tailnet first: saving the setting from loopback ends tailnet sessions.
+  for (const side of [tailnet, local]) {
+    expect((await fetch(`${side.origin}/api/session`, { headers: side.headers })).status).toBe(200);
+    const write = await fetch(`${side.origin}/api/tailscale`, { method: 'PUT', headers: side.headers, body: JSON.stringify({ enabled: true, login: OWNER }) });
+    // The tailnet one is refused for what it is, not for its cookies.
+    expect(write.status).toBe(side === local ? 200 : 403);
+    if (side === tailnet) expect(((await write.json()) as { error: string }).error).toMatch(/from the computer buddi runs on/);
+  }
+});
+
+it('refuses a write whose CSRF cookie is named after another port', async () => {
+  const app = await dashboard(null);
+  const { origin, headers } = await open(app);
+  // The right session and header, but the CSRF cookie a page on 9443 would hold.
+  const cookie = headers.Cookie!.replace(`${csrfCookieName(app.port)}=`, `${CSRF_NAME}=`);
+  const res = await fetch(`${origin}/api/tailscale`, { method: 'PUT', headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ enabled: false, login: OWNER }) });
+  expect(res.status).toBe(403);
+});
 
 it('tells the page what it needs to draw the panel, and saves a change', async () => {
   const app = await dashboard(null);
