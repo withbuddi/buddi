@@ -142,13 +142,20 @@ the file vault where there is no OS keychain. `BUDDI_DATA_DIR` overrides it,
 as today. Nothing is written outside it except the service unit and the OS
 keychain entries.
 
-Secrets go in the vault, which already has a macOS keychain backend and an
-encrypted-file backend. Linux gains a Secret Service backend (`secret-tool`
-or the D-Bus API) where one is present, and falls back to the file vault
-otherwise; Windows gains Credential Manager through the same interface. The
-file vault's passphrase is derived from a per-install key kept alongside the
-data, so an owner is never asked for a passphrase; the trade-off (the data
-directory is the trust boundary) is stated in the security page of the wizard.
+Secrets go in the vault: the macOS keychain on a Mac, an encrypted file
+everywhere else (`<data>/vault.json`, opened by the per-install key in
+`<data>/vault-key`, mode `0600`, minted on the first run). Windows gains
+Credential Manager through the same interface when it comes. Linux keeps the
+file vault on purpose, decided 2026-09-24: a Secret Service backend would help
+only desktop Linux with a keyring daemon, and a server has none. What the file
+vault protects is said plainly, in `buddi doctor` and here: the file at rest
+and against another account on the machine. The key sits beside the
+ciphertext under the owner's `0700` data directory, so anyone who can read
+that directory can open the vault — the same trust boundary as the database
+beside it. A backup is different: it is sealed with the owner's passphrase and
+the key never leaves the machine. The stronger form for a server — the key
+handed in by systemd (`LoadCredential=`, TPM-sealed where there is one) —
+waits on a system-unit install and is a roadmap note, not a redesign.
 
 ---
 

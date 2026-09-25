@@ -134,9 +134,13 @@ Two things follow from the first row that are worth saying plainly:
 
 macOS has a keychain and buddi uses it; there is nothing in this section for
 you. Everywhere else — Linux, a container, CI — the vault is an encrypted file
-at `~/.buddi/vault.json`, and **`BUDDI_VAULT_KEY` is the key that opens it**.
-It is held outside the file it unlocks, which is the whole point: a stolen
-`vault.json` on its own is ciphertext.
+(`vault.json` in the data directory), and **`BUDDI_VAULT_KEY` is the key that
+opens it**. It is held outside the file it unlocks, which is the whole point:
+a stolen `vault.json` on its own is ciphertext. A packaged install keeps the
+key in `<data>/vault-key` (mode `0600`) beside the data; a checkout keeps it in
+`.env`. Either way the key and the ciphertext share the owner's `0700` data
+directory, so what the vault protects is the file at rest and against another
+account on the machine — not against someone who already has this account.
 
 `buddi init` generates that key if there is none and writes it into `.env`, at
 mode `600`, in the line `.env.example` already reserves for it. It is the
