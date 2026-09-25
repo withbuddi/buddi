@@ -30,7 +30,9 @@ jobs:
         # npm then sends that instead of the OIDC token. Trusted publishing
         # needs npm 11.5 or later; Node 22 ships an older one.
         with: { node-version: 22, cache: pnpm }
-      - run: npm install -g npm@latest && npm --version
+      # npm 11: trusted publishing needs 11.5 or later, and 11 is what the
+      # release build's `npm pack --json` was written against.
+      - run: npm install -g npm@11 && npm --version
       - run: pnpm install --frozen-lockfile
       # The tarball is built from the workspace's dist output.
       - run: pnpm -r build

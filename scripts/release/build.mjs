@@ -73,5 +73,15 @@ const install = spawnSync('npm', ['install', '--omit=dev', '--omit=optional', '-
 if (install.status !== 0) throw new Error(`Release dependency installation failed. Staging preserved: ${stage}`);
 const packed = spawnSync('npm', ['pack', '--ignore-scripts', '--json'], { cwd: stage, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
 if (packed.status !== 0) throw new Error(packed.stderr);
-const filename = JSON.parse(packed.stdout)[0].filename;
+// `npm pack --json` answers an array of one entry in npm 10 and 11; newer
+// npm has printed other shapes, so the entry is found rather than indexed,
+// and the staged .tgz itself is the fallback.
+const parsedPack = (() => { try { return JSON.parse(packed.stdout); } catch { return undefined; } })();
+const packEntry = Array.isArray(parsedPack) ? parsedPack[0] : parsedPack;
+let filename = packEntry && typeof packEntry.filename === 'string' ? packEntry.filename : undefined;
+if (filename === undefined) {
+  const { readdirSync } = await import('node:fs');
+  filename = readdirSync(stage).find((name) => name.endsWith('.tgz'));
+}
+if (filename === undefined) throw new Error(`npm pack produced no tarball in ${stage}: ${packed.stdout.slice(0, 200)}`);
 console.log(`Release: ${path.join(stage, filename)}`);
