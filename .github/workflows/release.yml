@@ -1,7 +1,7 @@
 # A release: a tag `v<version>` builds the one tarball the trial and the
 # packaged install use (`pnpm release:pack`) and publishes it to npmjs.com
-# through npm's trusted publishing (OIDC: no token lives in this repository;
-# provenance waits for the repository to be public). A pre-release version (`v0.1.0-pre.14`) goes under the
+# with provenance, through npm's trusted publishing (OIDC: no token lives in
+# this repository). A pre-release version (`v0.1.0-pre.14`) goes under the
 # `next` dist-tag, so `npm install @withbuddi/buddi` never resolves to it; a plain
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
 # the same run, marked pre-release for a pre-release version, with the
@@ -56,10 +56,9 @@ jobs:
           test -f "$tgz" || { echo "release:pack printed no tarball: $out" >&2; exit 1; }
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
       - name: Publish to npm
-        # No --provenance while the repository is private: npm issues the
-        # attestation only for a public source repository. Add it back the
-        # day the repository opens; trusted publishing itself does not need it.
-        run: npm publish "${{ steps.pack.outputs.tgz }}" --access public --tag "${{ steps.v.outputs.tag }}"
+        # --provenance: npm attests the build to this public repository and
+        # this workflow run, so an installer can verify where the tarball came from.
+        run: npm publish "${{ steps.pack.outputs.tgz }}" --provenance --access public --tag "${{ steps.v.outputs.tag }}"
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
