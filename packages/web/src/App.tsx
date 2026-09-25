@@ -13,7 +13,7 @@
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useState } from 'react';
-import { AGENTS_CHANGED, api, chatApi } from './api';
+import { AGENTS_CHANGED, api, chatApi, type VersionView } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
 import {
@@ -41,6 +41,7 @@ import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
 import type { GroupView } from './chat/types';
 import { Rail } from './shell/Rail';
+import { useAsync } from './ui';
 import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
 import { applyAppearance, useAppearance } from './appearance';
@@ -130,6 +131,14 @@ export function App(): JSX.Element {
    * — and an installation with none is served an empty list.
    */
   const pluginPages = usePluginPages();
+  /*
+   * Whether a newer buddi is known. Read once here, for the rail's dot and
+   * Home's notice, rather than once by each. The supervisor asks the registry
+   * once a day, so an hour between reads is plenty. A checkout never has one
+   * to offer: it upgrades with git.
+   */
+  const version = useAsync<VersionView>(() => Promise.resolve().then(() => api.version()), [], 60 * 60_000).data;
+  const update = version && !version.checkout && version.updateAvailable ? version : null;
   /** When each agent last spoke, for the roster's quiet line. */
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -334,6 +343,7 @@ export function App(): JSX.Element {
             theme={theme}
             onTheme={setTheme}
             plugins={pluginPages.rail}
+            updateAvailable={update !== null}
           />
 
           {onChat && !railNarrow ? (
@@ -383,6 +393,7 @@ export function App(): JSX.Element {
                 defaultAgentId={defaultAgentId}
                 attention={attention}
                 pluginPages={pluginPages}
+                update={update}
               />
             </main>
           )}
@@ -420,6 +431,8 @@ export interface PlaceProps {
   /** The agent the page opens on, as `/api/chat/agents` says; orders the roster with the front desk and the maker. */
   defaultAgentId?: string | null;
   attention: ReturnType<typeof useAttention>;
+  /** A newer buddi the installation can upgrade to, when one is known. Home says so. */
+  update?: VersionView | null;
 }
 
 function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; pluginPages: PluginPages }): JSX.Element {

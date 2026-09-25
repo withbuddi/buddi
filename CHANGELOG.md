@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - Settings → System → Version shows what changes in a newer buddi before you upgrade to it.
+- When a newer buddi is ready, Home says so under the greeting and Settings gets a dot in the sidebar.
 
 ### Changed
 

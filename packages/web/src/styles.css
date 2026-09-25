@@ -127,6 +127,7 @@ main[data-ground='plain'] { background: var(--bg); }
   font-variant-numeric: tabular-nums;
   box-shadow: 0 0 0 2px var(--surface);
 }
+.rail-dot { position: absolute; top: -2px; right: -4px; }
 .rail-spacer { flex: 1 1 auto; }
 
 /* The owner's corner: under one hairline, their initial, which opens the

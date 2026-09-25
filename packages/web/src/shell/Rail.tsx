@@ -6,6 +6,7 @@
  * read rather than guessed. The current place is filled and accented and
  * marked on the rail's own edge. Home carries the one badge in the rail: the
  * count of things waiting on the owner, which is the reason to go there.
+ * Settings carries a dot, without a number, when a newer buddi is ready.
  *
  * Under a hairline at the foot, the owner's initial: a small menu with the
  * quick theme switch, the way to Appearance, and Run setup again.
@@ -28,6 +29,7 @@ export function Rail({
   theme,
   onTheme,
   plugins = [],
+  updateAvailable = false,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -41,6 +43,8 @@ export function Rail({
    * them, and the rail knows nothing about any of them but the descriptor.
    */
   plugins?: PluginPageDescriptor[];
+  /** A newer buddi is ready to install: Settings gets a dot. */
+  updateAvailable?: boolean;
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -84,6 +88,7 @@ export function Rail({
         href={SETTINGS_ROUTE}
         active={place === SETTINGS_ROUTE}
         badge={0}
+        dot={updateAvailable ? 'a newer buddi is ready' : undefined}
         onClick={() => onNavigate(SETTINGS_ROUTE)}
       >
         {ICONS[SETTINGS_ROUTE]}
@@ -157,6 +162,7 @@ function RailLink({
   href,
   active,
   badge,
+  dot,
   onClick,
   children,
 }: {
@@ -164,6 +170,8 @@ function RailLink({
   href: string;
   active: boolean;
   badge: number;
+  /** A mark without a count, and what it means, for the accessible name. */
+  dot?: string;
   onClick: () => void;
   children: ReactNode;
 }): JSX.Element {
@@ -173,12 +181,13 @@ function RailLink({
       href={href}
       data-active={active ? 'true' : undefined}
       aria-current={active ? 'page' : undefined}
-      aria-label={badge > 0 ? `${label}, ${badge} waiting` : label}
+      aria-label={badge > 0 ? `${label}, ${badge} waiting` : dot ? `${label}, ${dot}` : label}
       onClick={(e) => { e.preventDefault(); onClick(); }}
     >
       <span className="rail-icon">
         {children}
         {badge > 0 ? <span className="rail-badge" aria-hidden="true">{badge > 99 ? '99+' : badge}</span> : null}
+        {badge === 0 && dot ? <span className="ui-badge rail-dot" data-kind="dot" data-testid="rail-dot" aria-hidden="true" /> : null}
       </span>
       <span className="rail-label">{label}</span>
     </a>

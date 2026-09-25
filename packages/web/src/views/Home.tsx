@@ -7,7 +7,7 @@
  * the agent that runs it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow } from '../api';
+import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -42,12 +42,15 @@ export function Home({
   agents,
   defaultAgentId,
   attention,
+  update,
 }: {
   timezone: string;
   navigate: (route: string) => void;
   agents: ChatAgent[];
   defaultAgentId?: string | null;
   attention: Map<string, AgentAttention>;
+  /** A newer buddi, as the shell read it from `/version`. Never a checkout's. */
+  update?: VersionView | null;
 }): JSX.Element {
   const overview = useAsync<Overview>(() => api.overview(), [], 15_000);
   const approvals = useAsync(() => api.approvals(), [], 10_000);
@@ -98,6 +101,12 @@ export function Home({
         </header>
       </div>
     <div className="home">
+      {update && update.updateAvailable && !update.checkout && update.latest ? (
+        <Notice tone="accent">
+          A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}
+          <a href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings → Version.</a>
+        </Notice>
+      ) : null}
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
       {note ? <Notice tone="good" role="status">{note}</Notice> : null}
