@@ -1,7 +1,8 @@
-# The quick lane, on every push to main: boundaries, build, typecheck and
-# every suite that needs no database (with no DATABASE_URL the database
-# suites skip themselves). A few minutes. The full gate with Postgres is
-# gate.yml: pull requests, tags, nightly, on demand.
+# The quick lane, on every push to main: three runners at once, because the
+# time is in two suites (the web app's jsdom tests and the gateway's) rather
+# than in the database — with no DATABASE_URL the database suites skip
+# themselves. Wall time is the slowest job, about four minutes. The full gate
+# with Postgres is gate.yml: pull requests, tags, nightly, on demand.
 name: ci
 on:
   push:
@@ -11,10 +12,22 @@ jobs:
   quick:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - name: web
+            run: pnpm --filter @buddi/web test
+          - name: gateway
+            run: pnpm --filter @buddi/gateway test
+          - name: rest
+            run: node scripts/check-boundaries.mjs && pnpm -r typecheck && pnpm -r --filter '!@buddi/web' --filter '!@buddi/gateway' test && pnpm check:generic
+    name: quick (${{ matrix.lane.name }})
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm -r build
+      - run: ${{ matrix.lane.run }}
