@@ -7,12 +7,12 @@
  * working through the symlink `pnpm link --global` leaves behind (Node resolves
  * the entry point's real path before this module is evaluated).
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hydrateDatabaseUrl, type DatabaseUrlResolution } from '@buddi/core';
 import { loadPluginsOnce } from '@buddi/gateway';
-import { config as loadDotenv } from 'dotenv';
+import { config as loadDotenv, parse as parseDotenv } from 'dotenv';
 
 /** `packages/cli/dist` at runtime, `packages/cli/src` under vitest. */
 export const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -39,10 +39,26 @@ export function findRepoRoot(start: string, exists: (dir: string) => boolean = i
 
 export const REPO_ROOT = process.env.BUDDI_INSTALL_ROOT ?? findRepoRoot(MODULE_DIR);
 
-/** Everything the installation writes: artifacts, logs. Overridable for tests. */
-export const DATA_DIR = process.env.BUDDI_DATA_DIR ?? path.join(REPO_ROOT, 'data');
-export const LOG_DIR = path.join(DATA_DIR, 'logs');
 export const ENV_FILE = process.env.BUDDI_ENV_FILE ?? path.join(REPO_ROOT, '.env');
+
+/**
+ * One value out of `.env` before `.env` is loaded: the data directory decides
+ * where the logs, the backups and the service units point, and those paths
+ * are computed here at import, before any command calls `loadEnv()`. Read
+ * from the file directly so `BUDDI_DATA_DIR=` in `.env` is honoured the same
+ * as the variable in the environment, which wins when both are set.
+ */
+function envFileValue(name: string): string | undefined {
+  try {
+    return parseDotenv(readFileSync(ENV_FILE, 'utf8'))[name];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Everything the installation writes: artifacts, logs. Overridable for tests. */
+export const DATA_DIR = process.env.BUDDI_DATA_DIR ?? envFileValue('BUDDI_DATA_DIR') ?? path.join(REPO_ROOT, 'data');
+export const LOG_DIR = path.join(DATA_DIR, 'logs');
 export const ENV_EXAMPLE_FILE = path.join(REPO_ROOT, '.env.example');
 /** What the service supervises: the built long-running process. */
 export const SERVE_ENTRY = path.join(REPO_ROOT, 'packages', 'gateway', 'dist', 'serve.js');
