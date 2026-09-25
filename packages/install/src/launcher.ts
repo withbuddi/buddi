@@ -227,6 +227,15 @@ function serviceEnvironment(): Record<string, string> {
   return askedWebPort === undefined ? {} : { BUDDI_WEB_PORT: String(askedWebPort) };
 }
 
+/**
+ * A URL a terminal can open on a click (OSC 8), so a link that wraps is never
+ * copied by hand. The visible text is the URL itself; a terminal that does not
+ * know the sequence still shows it, and a log file gets the plain URL.
+ */
+function terminalLink(url: string): string {
+  return process.stdout.isTTY ? `\u001b]8;;${url}\u0007${url}\u001b]8;;\u0007` : url;
+}
+
 /** What `systemctl --user` needs to find the user's manager, when the caller had it. */
 function systemdSession(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].filter(key => typeof env[key] === 'string').map(key => [key, env[key] as string]));
@@ -401,7 +410,7 @@ async function run(): Promise<void> {
       if (Date.now() > deadline) throw new Error(`Gateway did not become ready. Inspect ${path.join(ctx.data, 'logs/gateway.log')}`);
       await new Promise(resolve => setTimeout(resolve, 250));
     }
-    console.log(`Dashboard: ${url}`);
+    console.log(`Dashboard: ${terminalLink(url)}`);
     console.log('The link is good for five minutes. Run buddi again for a fresh one.');
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;

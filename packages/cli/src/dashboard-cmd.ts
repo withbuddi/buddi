@@ -106,7 +106,7 @@ export async function runDashboard(
    */
   if (isLoopback(config.host) && env.BUDDI_WEB_REQUIRE_AUTH !== '1' && action !== 'token') {
     const url = `${webUrl(config)}${opts.hash ?? ''}`;
-    out(`buddi dashboard — ${url}`);
+    out(`buddi dashboard — ${process.stdout.isTTY ? `\u001b]8;;${url}\u0007${url}\u001b]8;;\u0007` : url}`);
     out('  open on this machine: bookmark it, nothing here expires');
     if (!config.enabled) {
       out(`  NOTE: ${WEB_ENABLED_VAR} is off, so \`buddi serve\` is not serving it right now`);
