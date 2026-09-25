@@ -8,7 +8,7 @@
 # newest release's tarball with `gh` (the repository is private) and installs
 # it globally. Nothing is cloned and nothing is built here.
 #
-#   gh release download -R withbuddi/buddi -p install-linux.sh -O - | bash
+#   gh release download v0.1.0-pre.1 -R withbuddi/buddi -p install-linux.sh -O - | bash
 #
 # Optional: BUDDI_RELEASE=<tag> installs that release instead of the newest.
 set -euo pipefail
@@ -43,11 +43,12 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 bold "Fetching the release tarball from $REPO"
-if [ -n "${BUDDI_RELEASE:-}" ]; then
-  gh release download "$BUDDI_RELEASE" -R "$REPO" -p 'buddi-*.tgz' -D "$tmp"
-else
-  gh release download -R "$REPO" -p 'buddi-*.tgz' -D "$tmp"
-fi
+# The newest release, pre-releases included: `gh release download` with no
+# tag skips pre-releases, and every trial release is one.
+tag=${BUDDI_RELEASE:-$(gh release list -R "$REPO" --limit 1 --json tagName -q '.[0].tagName')}
+if [ -z "$tag" ]; then fail "  $REPO has no release to install."; exit 1; fi
+printf '  release  %s\n' "$tag"
+gh release download "$tag" -R "$REPO" -p 'buddi-*.tgz' -D "$tmp"
 tgz=$(ls "$tmp"/buddi-*.tgz | head -n1)
 printf '  %s\n' "$(basename "$tgz")"
 
