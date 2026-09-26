@@ -78,7 +78,8 @@ the host gave them a directory.
 ## 4. The areas
 
 Six are always present because they reach nothing beyond the plugin
-itself. Seven must be declared (§5).
+itself. Seven must be declared (§5), and one member of an always-present
+area, `owner.notify`, must be declared too.
 
 ### 4.1 Always present
 
@@ -97,7 +98,8 @@ interface BuddiHost {
 
 **owner.** `id: string`, `timezone: string`, `agentForRole(role): string |
 undefined`, `hasAgent(id): boolean` (1.1), `protectedPaths: readonly
-string[]`. Never returns an agent's file, grant or provider.
+string[]`, and `notify(message)` (1.2) when the plugin declares
+`owner:notify`. Never returns an agent's file, grant or provider.
 
 **clock.** `now(): Date`, `today(): string` (the owner's local date).
 
@@ -123,6 +125,15 @@ undefined`. Page descriptors and queries stay in the manifest; this is only
 what a query or a tool asks of the host.
 
 ### 4.2 Declared
+
+**owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,
+dedupeKey?, agentId? }): Promise<{ id }>` tells the owner something
+([notifications.md](notifications.md)). The kind is always `plugin` and the
+plugin's name is on the row. A plugin picks an urgency (`now`, `today`,
+`digest`), never a channel: the owner's settings pick that, so a plugin
+cannot send anything through a channel the owner did not choose. Offers and
+approval cards are core's and do not pass through. A `dedupeKey` collapses
+only with the plugin's own messages.
 
 **http.** `request(req: HttpRequest): Promise<HttpResponse>` on the shared
 transport. Every plugin's requests pass the address guard: `checkUrl` in front
@@ -206,7 +217,7 @@ password), the one stated exception to "never held". The product is
 ## 5. Permissions
 
 The manifest carries `uses: ('http' | 'accounts' | 'files' | 'files:library'
-| 'memory' | 'proposals' | 'schedule' | 'secrets')[]`. Because the staged
+| 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify')[]`. Because the staged
 install screen may not import anything, the same list goes in
 `package.json` as `buddi.uses`; at load the two must match or the plugin
 does not register, as `network` is compared with `buddi.md`.
@@ -215,7 +226,8 @@ The owner sees the list at install, beside the tools, the schema, the
 timers and the hosts, one plain line each: "sends web requests", "uses a
 model account you pick", "reads every file in your Files library",
 "reads and writes memory as the agent that calls it", "proposes rules",
-"starts agent runs by itself", "fills secrets you bind to it". An area
+"starts agent runs by itself", "fills secrets you bind to it", "can send
+you messages when you are away". An area
 not declared is absent from `ctx.buddi`, so a call to it is a type error
 and, at runtime, `undefined`. Adding an area in an upgrade is shown as a
 change on the upgrade card.
@@ -271,7 +283,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.1`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.2`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -294,7 +306,7 @@ checks that table against the interface as it does for `ToolContext`.
 4. The email plugin adds and removes a mailbox with no `createVault`
    import, and no mailbox password is in `process.env`.
 5. A plugin declaring `buddi.hostApi: "^1.9"` is refused at stage time on a
-   `1.1` host.
+   `1.2` host.
 
 A tarball install of the scaffold has a known problem that predates the host:
 it needs the `link:` devDependency removed, the peer resolution fixed and

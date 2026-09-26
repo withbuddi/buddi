@@ -364,6 +364,14 @@ again", so one place decides what counts as waiting.
 The dashboard draws this as a rail of agents grouped by role, in a fixed
 order. An agent that cannot run is greyed, with the reason on hover.
 
+**Notifications are rows, not state.** What buddi tells the owner unasked
+goes through one call, `notifyOwner` in core, which writes a row in
+`core.owner_notifications` and routes it by urgency and presence
+([notifications.md](notifications.md)). A row records where the message
+went and whether it was seen or acted on; it never lights a permanent dot.
+The two things above stay the only things that count as waiting, and an
+unseen notification adds nothing to them.
+
 ## The canvas and view descriptors
 
 The dashboard is chat-first: a conversation with a panel that draws what the

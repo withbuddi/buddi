@@ -21,6 +21,7 @@ unbuilt specs are kept outside this repository.
 - [Goals](goals.md): a target with a clock.
 - [Learning](learning.md): buddi proposes, the owner keeps.
 - [Owner secrets](owner-secrets.md): used, never seen.
+- [Notifications](notifications.md): what reaches you, when, and where.
 - [The developer plugin](developer.md): an agent that works in a workspace.
 - [Built-in system context](system-context.md).
 
