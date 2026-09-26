@@ -36,6 +36,8 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
       return { label: 'Telegram', ...(bot ? { where: `@${bot}` } : {}) };
     },
     can: { offers: true, attachments: false, markdown: false },
+    // The default when the owner picked none: the phone first.
+    priority: 0,
     async deliver(message) {
       const approvals = opts.approvals?.();
       if (message.kind === 'approval' && message.actionId && approvals) {

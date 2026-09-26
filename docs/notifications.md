@@ -3,8 +3,8 @@
 What buddi tells you without being asked, when it tells you, and where.
 
 A **surface** is where you talk to buddi: the dashboard, the Telegram chat.
-A **channel** is how buddi reaches you when you are not looking: today, a
-Telegram message. Telegram is both. Core decides what reaches you and when;
+A **channel** is how buddi reaches you when you are not looking: a
+Telegram message, a notification on this computer. Telegram is both. Core decides what reaches you and when;
 a channel only carries it.
 
 ## What reaches you
@@ -73,20 +73,33 @@ is a complete answer.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Default channel | the first one there is | Where messages go. |
+| Default channel | Telegram, else the system notification, else the first there is | Where messages go. |
 | Per kind | the default channel | A channel, or `off`: kept for the record, never sent. Approvals and questions cannot be off. |
 | Quiet hours | none | Start and end on your clock, like `22:00` and `07:00`. |
 | End of day | `18:00` | When the day's held items go out. |
 
 ## Channels
 
-| Channel | Kind | What it sends |
-| --- | --- | --- |
-| Telegram | `telegram.chat` | The message as text, with offers as buttons. An approval is the card with its Approve and Reject buttons, the same one a run in the chat gets. |
+| Channel | Kind | What it sends | What leaves the machine |
+| --- | --- | --- | --- |
+| Telegram | `telegram.chat` | The message as text, with offers as buttons. An approval is the card with its Approve and Reject buttons, the same one a run in the chat gets. | The title and text, to Telegram. |
+| System notification | `local.notification` | The title and the first 200 characters of the text, on the computer buddi runs on. | Nothing. |
 
-The gateway registers Telegram when the bot is running. A channel is
-registered with `registerChannel({ kind, describe, can, deliver })`;
-`deliver` answers `{ id }` or `'refused'`, or throws.
+- **Telegram** is registered when the bot is running.
+- **System notification** is registered at boot where there is something to
+  show on. On a Mac, `terminal-notifier` when it is installed (a click opens
+  the dashboard, on this machine's address), otherwise `osascript`'s
+  `display notification` (a click opens nothing). The service is a user
+  LaunchAgent, so it runs in your session and can show one. On Linux,
+  `notify-send` when it is installed and `DISPLAY` or `WAYLAND_DISPLAY` is
+  set for the service. Anywhere else, no channel. A command that fails or
+  takes more than 5 seconds is refused, with the first line it printed as
+  the reason.
+
+With no default picked, messages go to Telegram, then the system
+notification, then a plugin's channel. A channel is registered with
+`registerChannel({ kind, describe, can, priority?, deliver })`; `deliver`
+answers `{ id }`, `'refused'` or `{ refused: reason }`, or throws.
 
 ## The record
 

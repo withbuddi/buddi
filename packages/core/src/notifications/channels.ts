@@ -17,9 +17,13 @@ export function registerChannel(channel: OwnerChannel): () => void {
   };
 }
 
-/** Every channel, in the order they were registered. */
+/** Every channel, the default-when-none-is-picked first: by `priority`, then as registered. */
 export function listChannels(): Array<{ kind: string; label: string; where?: string; can: OwnerChannel['can'] }> {
-  return [...channels.values()].map((c) => ({ kind: c.kind, ...c.describe(), can: c.can }));
+  return ordered().map((c) => ({ kind: c.kind, ...c.describe(), can: c.can }));
+}
+
+function ordered(): OwnerChannel[] {
+  return [...channels.values()].sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 }
 
 /** Tests only: forget every channel. */
@@ -30,7 +34,7 @@ export function clearChannels(): void {
 /**
  * The channel a message of this kind goes to: the kind's own choice when it
  * names a registered channel, else the default channel, else the first one
- * registered. `off` when the owner turned the kind off; null when there is
+ * registered (by `priority`). `off` when the owner turned the kind off; null when there is
  * nowhere to go.
  */
 export function channelFor(settings: NotificationSettings, kind?: string): string | 'off' | null {
@@ -38,8 +42,12 @@ export function channelFor(settings: NotificationSettings, kind?: string): strin
   if (own === 'off') return ALWAYS_REACH.has(kind as NotificationKind) ? channelFor(settings) : 'off';
   if (own && channels.has(own)) return own;
   if (settings.defaultChannel && channels.has(settings.defaultChannel)) return settings.defaultChannel;
-  for (const k of channels.keys()) if (k !== 'dashboard') return k;
-  return null;
+  return firstChannel();
+}
+
+/** The default when the owner picked none: the lowest `priority`, then the first registered. */
+function firstChannel(): string | null {
+  return ordered()[0]?.kind ?? null;
 }
 
 /**
@@ -55,6 +63,7 @@ export async function deliverTo(
   try {
     const answer = await channel.deliver(message);
     if (answer === 'refused') return { ok: false, error: `${channel.describe().label} refused it` };
+    if ('refused' in answer) return { ok: false, error: answer.refused };
     return { ok: true, id: answer.id };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

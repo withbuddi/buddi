@@ -40,6 +40,7 @@ import { missionOwnerAgent } from './missions/reminders.js';
 import { createDigestPrepare, recapMissionId, timezoneFromEnv } from './missions/recap.js';
 import { ownerDeliver } from './owner-notify.js';
 import { createTelegramChannel } from './telegram/channel.js';
+import { createLocalNotificationChannel } from './channels/local-notification.js';
 
 const USAGE = `buddi missions — scheduled missions
 
@@ -362,6 +363,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
 
     if (process.env.TELEGRAM_BOT_TOKEN?.trim()) registerChannel(createTelegramChannel({ pool, env: process.env }));
+    const localChannel = createLocalNotificationChannel();
+    if (localChannel) registerChannel(localChannel);
     const occurrence = await insertOccurrence(pool, mission.id, revision, now(), 'claimed');
     const execute = createMissionExecutor({
       pool,

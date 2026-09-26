@@ -73,12 +73,25 @@ export interface DeliverableMessage extends OwnerMessage {
 
 /** A way to reach the owner, registered by whoever owns the transport. */
 export interface OwnerChannel {
-  /** `telegram.chat`, `email.self`, `mac.notification`, `<plugin>.<what>`. Never `dashboard`. */
+  /** `telegram.chat`, `local.notification`, `email.self`, `<plugin>.<what>`. Never `dashboard`. */
   kind: string;
   describe(): { label: string; where?: string };
   can: { offers: boolean; attachments: boolean; markdown: boolean };
-  deliver(message: DeliverableMessage): Promise<{ id: string } | 'refused'>;
+  /**
+   * Which channel is the default when the owner picked none: the lowest
+   * first, then the order they were registered. Absent is 100.
+   */
+  priority?: number;
+  /**
+   * `{ id }` once the transport took it. `'refused'`, or `{ refused }` with a
+   * sentence saying why, when it did not: the reason is what the row's
+   * `error` says.
+   */
+  deliver(message: DeliverableMessage): Promise<ChannelAnswer>;
 }
+
+/** What a channel's `deliver` answers. */
+export type ChannelAnswer = { id: string } | 'refused' | { refused: string };
 
 /** The Notifications page's values, defaults filled in. */
 export interface NotificationSettings {

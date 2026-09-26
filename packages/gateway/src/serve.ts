@@ -96,6 +96,7 @@ import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
 import { delegateAllowlist } from './agents/delegation.js';
 import { createTelegramChannel } from './telegram/channel.js';
+import { createLocalNotificationChannel } from './channels/local-notification.js';
 import { notifyApproval, ownerDeliver, ownerText } from './owner-notify.js';
 import { describePaired, startTelegram, type TelegramDeps } from './telegram/main.js';
 
@@ -658,6 +659,20 @@ export async function main(): Promise<void> {
       }));
     };
     if (telegram) registerTelegramChannel();
+    // This machine's system notification (docs/notifications.md): registered
+    // only where there is something to show on — osascript or
+    // terminal-notifier on macOS, notify-send with a display on Linux.
+    const localChannel = createLocalNotificationChannel({
+      // Loopback: a click opens the dashboard on this machine.
+      dashboardUrl: (route) => {
+        const { host, port } = webConfig(process.env);
+        return dashboardRouteUrl({ host, port }, route);
+      },
+    });
+    if (localChannel) {
+      registerChannel(localChannel);
+      console.log(`  notifications: ${localChannel.describe().where}`);
+    }
     let starting: Promise<{ botUsername: string | null }> | undefined;
     const startTelegramNow = async (): Promise<{ botUsername: string | null; refused?: string }> => {
       // The whole point of recovery is that nothing this installation was told
