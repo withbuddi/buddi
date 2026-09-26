@@ -121,3 +121,52 @@ export function isKnownTimezone(timezone: string): boolean {
     return false;
   }
 }
+
+/** `HH:MM` on a 24-hour clock, `00:00` to `23:59`. */
+export const LOCAL_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** Minutes since local midnight for `HH:MM`; throws on anything else. */
+export function minutesOfLocalTime(hhmm: string): number {
+  const match = LOCAL_TIME.exec(hhmm.trim());
+  if (!match) throw new Error(`"${hhmm}" is not a time like 18:00`);
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/** Where the owner's wall clock stands at `date`, in minutes since local midnight. */
+export function localMinutesOfDay(date: Date, timezone: string): number {
+  const parts = dateTimeFormatter(timezone).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return part('hour') * 60 + part('minute');
+}
+
+/** How far `timezone` is ahead of UTC at `instant`, in milliseconds, to the minute. */
+function zoneOffsetMs(instant: number, timezone: string): number {
+  const parts = dateTimeFormatter(timezone).formatToParts(new Date(instant));
+  const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const wall = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'));
+  return wall - Math.floor(instant / 60_000) * 60_000;
+}
+
+/** The instant the owner's clock reads `minutes` past midnight on the local day `y-m-d`. */
+function instantOfLocal(y: number, m: number, d: number, minutes: number, timezone: string): Date {
+  const wall = Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60);
+  let at = wall - zoneOffsetMs(wall, timezone);
+  // Once more, for a day on which the offset changes between the guess and the answer.
+  const second = wall - zoneOffsetMs(at, timezone);
+  if (second !== at) at = second;
+  return new Date(at);
+}
+
+/**
+ * The next instant after `after` at which the owner's clock reads `hhmm`:
+ * today when that time is still ahead, tomorrow otherwise. The end of the
+ * working day, the end of quiet hours.
+ */
+export function nextLocalTime(after: Date, timezone: string, hhmm: string): Date {
+  const minutes = minutesOfLocalTime(hhmm);
+  const [y, m, d] = localDateString(after, timezone).split('-').map(Number) as [number, number, number];
+  const today = instantOfLocal(y, m, d, minutes, timezone);
+  if (today.getTime() > after.getTime()) return today;
+  const tomorrow = new Date(Date.UTC(y, m - 1, d + 1));
+  return instantOfLocal(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth() + 1, tomorrow.getUTCDate(), minutes, timezone);
+}

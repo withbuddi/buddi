@@ -280,7 +280,7 @@ interface BuddiHost {
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
-  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths
+  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths; notify with `owner:notify`
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
   dir: DirArea;               // <data>/plugins-data/<plugin>
@@ -383,6 +383,7 @@ the timers and the hosts:
 | `proposals` | proposes rules |
 | `schedule` | starts agent runs by itself |
 | `secrets` | fills secrets you bind to it |
+| `owner:notify` | can send you messages when you are away |
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
@@ -2775,7 +2776,7 @@ version each arrived in — is §9b.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
@@ -3080,6 +3081,7 @@ that say otherwise.
 | `agentForRole` | `(role) => string \| undefined` | yes | 1.0 | The first runnable agent holding a role, or `undefined`. Never an agent's file, grant or provider. |
 | `hasAgent` | `(id) => boolean` | yes | 1.1 | Whether an agent with this id is installed — for a plugin that proposes one and must not start runs for it before the owner accepts it. `true` where there is no roster to ask. |
 | `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
+| `notify` | `(message: PluginOwnerMessage) => Promise<{ id }>` | no | 1.2 | Tell the owner something: `urgency` (`now`, `today`, `digest`), a one-line `title`, optional `text`, `link: { route }`, `dedupeKey` and `agentId`. Declared as `owner:notify`. The kind is always `plugin`, your name is on the message, and the owner's settings pick the channel, never you. See [notifications.md](notifications.md). |
 
 #### `ClockArea`
 

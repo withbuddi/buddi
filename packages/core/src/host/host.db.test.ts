@@ -94,7 +94,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.1');
+    expect(host.version).toBe('1.2');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -103,7 +103,32 @@ suite('ctx.buddi', () => {
       expect(host[area], area).toBeUndefined();
     }
     expect(host.owner.id).toBe('owner');
+    expect(host.owner.notify).toBeUndefined();
     expect(host.clock.today()).toBe('2026-09-23');
+  });
+
+  it('lets a plugin that declared owner:notify tell the owner, as itself and never as core', async () => {
+    const registry = new ToolRegistry();
+    registry.register(plugin('weather', { uses: ['owner:notify'] }));
+    const host = await hostOf(registry, 'weather.host');
+    const { id } = await host.owner.notify!({
+      urgency: 'digest',
+      title: 'Rain tomorrow',
+      dedupeKey: 'rain',
+      ...({ kind: 'approval', offers: [{ id: 'x' }], actionId: '00000000-0000-4000-8000-000000000000' } as object),
+    });
+    const { rows } = await pool.query(
+      'select kind, urgency, plugin_id, dedupe_key, action_id, offers from core.owner_notifications where id = $1',
+      [id],
+    );
+    expect(rows[0]).toEqual({
+      kind: 'plugin',
+      urgency: 'digest',
+      plugin_id: 'weather',
+      dedupe_key: 'plugin:weather:rain',
+      action_id: null,
+      offers: [],
+    });
   });
 
   it('builds each plugin its own host from one shared context', async () => {

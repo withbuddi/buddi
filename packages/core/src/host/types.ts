@@ -78,6 +78,31 @@ export interface OwnerArea {
   hasAgent(id: string): boolean;
   /** Directories no plugin may write into, whatever it was granted. */
   readonly protectedPaths: readonly string[];
+  /**
+   * Tell the owner something (docs/notifications.md). Declared as
+   * `owner:notify`; absent otherwise. Core picks the channel, never the
+   * plugin; the row carries the plugin's name. Since 1.2.
+   */
+  notify?(message: PluginOwnerMessage): Promise<{ id: string }>;
+}
+
+/**
+ * What a plugin may say to the owner: an urgency, a title, a few lines, a
+ * dashboard link, a key that collapses repeats. The kind is always `plugin`
+ * and the channel is the owner's choice.
+ */
+export interface PluginOwnerMessage {
+  urgency: 'now' | 'today' | 'digest';
+  /** One line: the whole message on a small channel. */
+  title: string;
+  /** A few lines, markdown-light. */
+  text?: string;
+  /** A dashboard place: `#/chat/…`, `#/settings/…`. */
+  link?: { route: string };
+  /** "This thing, again": collapses with an unsent message under the same key, this plugin's keys only. */
+  dedupeKey?: string;
+  /** The agent this is about, when there is one. */
+  agentId?: string;
 }
 
 /** The clock. Never read the wall clock directly. */

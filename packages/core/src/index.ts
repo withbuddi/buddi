@@ -26,6 +26,7 @@ export * from './sentinels/index.js';
 export * from './sources/index.js';
 export * from './offers/index.js';
 export * from './questions/index.js';
+export * from './notifications/index.js';
 export * from './owner.js';
 export * from './onboarding/index.js';
 export * from './pending-input.js';

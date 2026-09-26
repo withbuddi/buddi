@@ -28,6 +28,7 @@ import {
   type EnvLike,
 } from '../artifacts/store.js';
 import { proposePolicy } from '../learning/policies.js';
+import { notifyOwner } from '../notifications/notify.js';
 import { OWNER_ID } from '../owner.js';
 import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
@@ -363,6 +364,30 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   if (declared.has('proposals')) host.proposals = proposalsArea(binding, facts);
   if (declared.has('schedule')) host.schedule = scheduleArea(facts);
   if (declared.has('secrets')) host.secrets = secretsArea(binding, facts, host);
+  if (declared.has('owner:notify')) {
+    // The kind is always `plugin` and the plugin's name is on the row: a
+    // plugin picks an urgency, never a channel (docs/notifications.md,
+    // threats). Offers and approval cards are core's, bound to rows a plugin
+    // cannot forge, so neither passes through. Keys are namespaced so one
+    // plugin cannot collapse another's messages or core's.
+    host.owner.notify = async (message) => {
+      const result = await notifyOwner(
+        facts.db,
+        { now: () => facts.now(), timezone: facts.timezone, log },
+        {
+          kind: 'plugin',
+          urgency: message.urgency,
+          title: message.title,
+          ...(message.text ? { text: message.text } : {}),
+          ...(message.link ? { link: { route: message.link.route } } : {}),
+          ...(message.dedupeKey ? { dedupeKey: `plugin:${plugin}:${message.dedupeKey}` } : {}),
+          ...(message.agentId ? { agentId: message.agentId } : {}),
+          pluginId: plugin,
+        },
+      );
+      return { id: result.id };
+    };
+  }
   // `memory` is a type only (docs/plugin-host-api.md §4.2): a plugin that declares it gets
   // nothing yet, and a call is `undefined`.
   return host;

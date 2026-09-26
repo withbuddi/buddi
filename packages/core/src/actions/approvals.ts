@@ -15,6 +15,7 @@
  * Who decided and from where are recorded on the row, because "the owner
  * approved this" is the fact the whole boundary rests on.
  */
+import { markActedForAction } from '../notifications/store.js';
 import type { Queryable } from '../owner.js';
 import { emitActionEvent } from './store.js';
 import {
@@ -171,6 +172,9 @@ export async function decideApproval(
       },
       action.conversationId,
     );
+    // Whatever told the owner about this request has been acted on, wherever
+    // they decided it. The record's bookkeeping, never the decision's.
+    await markActedForAction(pool, action.id, now).catch(() => 0);
     return { ok: true, action };
   }
 

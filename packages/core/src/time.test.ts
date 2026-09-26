@@ -3,6 +3,9 @@ import {
   DEFAULT_TIMEZONE,
   localDateString,
   localDateTimeString,
+  localMinutesOfDay,
+  minutesOfLocalTime,
+  nextLocalTime,
   timezoneFromEnv,
 } from './time.js';
 
@@ -74,5 +77,29 @@ describe('localDateTimeString', () => {
   it('refuses an unknown zone and an invalid date', () => {
     expect(() => localDateTimeString(new Date(), 'Mars/Olympus')).toThrow(/unknown timezone/);
     expect(() => localDateTimeString(new Date('nope'), 'UTC')).toThrow(/invalid date/);
+  });
+});
+
+describe('nextLocalTime', () => {
+  it('is today while the time is still ahead, in the owner zone', () => {
+    // 14:00 UTC is 10:00 in New York (EDT): 18:00 local is 22:00 UTC the same day.
+    const at = nextLocalTime(new Date('2026-09-14T14:00:00Z'), 'America/New_York', '18:00');
+    expect(at.toISOString()).toBe('2026-09-14T22:00:00.000Z');
+  });
+
+  it('is tomorrow once the time has passed', () => {
+    const at = nextLocalTime(new Date('2026-09-14T22:00:00Z'), 'America/New_York', '18:00');
+    expect(at.toISOString()).toBe('2026-09-15T22:00:00.000Z');
+  });
+
+  it('follows the clock across a change of offset', () => {
+    // New York leaves daylight time on 2026-11-01: 07:00 local is 11:00 UTC before, 12:00 after.
+    const at = nextLocalTime(new Date('2026-10-31T20:00:00Z'), 'America/New_York', '07:00');
+    expect(at.toISOString()).toBe('2026-11-01T12:00:00.000Z');
+  });
+
+  it('reads minutes of the local day', () => {
+    expect(localMinutesOfDay(new Date('2026-09-14T14:05:00Z'), 'America/New_York')).toBe(10 * 60 + 5);
+    expect(() => minutesOfLocalTime('25:00')).toThrow();
   });
 });

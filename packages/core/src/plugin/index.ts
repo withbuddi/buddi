@@ -114,6 +114,7 @@ export type {
   MemoryArea,
   MemoryNote,
   OwnerArea,
+  PluginOwnerMessage,
   PagesArea,
   ProposalsArea,
   RegisterHost,

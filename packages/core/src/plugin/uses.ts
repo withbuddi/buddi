@@ -21,6 +21,7 @@ export const PLUGIN_USES = [
   'proposals',
   'schedule',
   'secrets',
+  'owner:notify',
 ] as const;
 
 export type PluginUse = (typeof PLUGIN_USES)[number];
@@ -39,6 +40,7 @@ export const PLUGIN_USE_WORDS: Readonly<Record<PluginUse, string>> = {
   proposals: 'proposes rules',
   schedule: 'starts agent runs by itself',
   secrets: 'fills secrets you bind to it',
+  'owner:notify': 'can send you messages when you are away',
 };
 
 export function isPluginUse(value: unknown): value is PluginUse {

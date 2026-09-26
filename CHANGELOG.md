@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A plugin can send you a message through `ctx.buddi.owner.notify` once it declares `owner:notify`. The install card says "can send you messages when you are away", the message carries the plugin's name, and your settings choose where it goes, never the plugin. The host API is now 1.2.
 - A camera button in the composer snaps one picture of another tab in your browser and attaches it to the message. The browser's own chooser picks the tab; nothing is recorded.
 - The menu under your initial at the foot of the rail names the running buddi version, and the newer one when the daily check found it.
 - Settings → System → Version shows what changes in a newer buddi before you upgrade to it.
