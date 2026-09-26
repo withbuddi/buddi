@@ -112,6 +112,8 @@ script.
 - "Take a screenshot of example.com." It opens its own browser, asks you
   first, and shows the page on the canvas beside the chat.
 - Drop a PDF or a CSV on the chat and ask about it.
+- Click the camera in the composer, pick another tab of your browser, and ask
+  about what it shows.
 - "Every Friday at 6, send me a recap of the week." A mission, on a schedule.
 
 **A mailbox.** In Settings → Email, add an account with its address and an app

@@ -8,7 +8,7 @@
  * once you are typing, so it never competes with the placeholder for the same
  * line.
  *
- * Files arrive three ways — the paperclip, a paste, a drop — and all three
+ * Files arrive four ways — the paperclip, a paste, a drop, a tab snap — and all four
  * land in the same row above the text, as tiles: an image as its own
  * thumbnail, anything else as a mark for its family with the name and size.
  * The drop target is the whole chat column, not this box; the page owns that
@@ -33,6 +33,7 @@ import { chatApi, ApiError } from '../api';
 import { Icon } from '../ui';
 import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
+import { snapTab } from './snap';
 import type { UploadedAttachment } from './types';
 
 /**
@@ -137,6 +138,9 @@ export const Composer = forwardRef<ComposerHandle, {
 
   const [text, setText] = useState(() => readDraft(storageKey));
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [snapping, setSnapping] = useState(false);
+  /** Why the last tab snap gave nothing, in the browser's words made plain. */
+  const [snapNote, setSnapNote] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -524,6 +528,22 @@ export const Composer = forwardRef<ComposerHandle, {
           >
             <Icon name="clip" />
           </button>
+          <button
+            className="ui-icon-btn" data-size="sm"
+            aria-label="Snap a tab"
+            title="Snap a tab — one picture of another tab in this browser, attached here"
+            onClick={() => {
+              setSnapNote(null);
+              setSnapping(true);
+              snapTab()
+                .then((file) => { if (file) { take([file]); area.current?.focus(); } })
+                .catch((err: unknown) => setSnapNote(err instanceof Error ? err.message : String(err)))
+                .finally(() => setSnapping(false));
+            }}
+            disabled={disabled || snapping}
+          >
+            <Icon name="camera" />
+          </button>
 
           {model ? (
             setupHref ? (
@@ -574,11 +594,13 @@ export const Composer = forwardRef<ComposerHandle, {
               thread, where the reply will land, not here. */}
           <span
             className="wb-hint"
-            data-shown={(text !== '' && !running) || failed > 0 || filesWait}
-            data-tone={failed > 0 ? 'critical' : undefined}
+            data-shown={(text !== '' && !running) || failed > 0 || filesWait || snapNote !== null}
+            data-tone={failed > 0 || snapNote !== null ? 'critical' : undefined}
           >
             {failed > 0
               ? (failed === 1 && failures[0]?.error ? failures[0].error : `${failed} files failed to upload and will not be sent`)
+              : snapNote !== null
+                ? snapNote
               : filesWait
                 ? FILES_DURING_RUN
                 : 'Enter sends, Shift+Enter for a new line'}

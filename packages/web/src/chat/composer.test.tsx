@@ -471,3 +471,28 @@ describe('the composer draft', () => {
     }
   });
 });
+
+describe('the tab snap', () => {
+  it('attaches the frame the browser gave, like a dropped image', async () => {
+    const snap = await import('./snap');
+    vi.spyOn(snap, 'snapTab').mockResolvedValue(new File(['png'], 'Tab 2026-09-25 19.00.00.png', { type: 'image/png' }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(
+        JSON.stringify({ artifactId: 'art-11', filename: 'Tab 2026-09-25 19.00.00.png', mime: 'image/png', kind: 'image', sizeBytes: 3 }),
+        { status: 200 },
+      )),
+    );
+    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    await act(async () => { screen.getByRole('button', { name: 'Snap a tab' }).click(); });
+    await waitFor(() => expect(screen.getByText(/Tab 2026-09-25/)).toBeDefined());
+  });
+
+  it('says so when the browser cannot capture', async () => {
+    const snap = await import('./snap');
+    vi.spyOn(snap, 'snapTab').mockRejectedValue(new Error(snap.SNAP_UNSUPPORTED));
+    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    await act(async () => { screen.getByRole('button', { name: 'Snap a tab' }).click(); });
+    await waitFor(() => expect(screen.getByText(snap.SNAP_UNSUPPORTED)).toBeDefined());
+  });
+});
