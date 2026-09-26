@@ -533,8 +533,11 @@ Settings → Backup; the terminal path below is the same engine.
 ### 1. Get Postgres running
 
 ```
-buddi db up          # a developer checkout; a packaged install's supervisor owns it
+buddi status         # says whether the database is reachable
 ```
+
+In a source checkout, start its Postgres container with `buddi db up` first. A
+packaged install's supervisor runs its own database.
 
 ### 2. Verify the archive before you commit to it
 
@@ -877,7 +880,7 @@ not happen:
 
 | Fails at | Where you are | What to do |
 | --- | --- | --- |
-| backup | nothing was touched | `buddi doctor`, `buddi db up`, then run it again |
+| backup | nothing was touched | `buddi status` says what is down; fix it, then run it again |
 | install / build | the database is untouched, the service is running again on the code it had | fix the build, run it again |
 | migrate | new code is built, the schema is partly migrated, **and the service is deliberately left down** | fix what the named migration is complaining about, then `buddi service start` — a start migrates, so it finishes the job and refuses to serve if it still cannot. `buddi migrate` first if you would rather see it separately |
 | doctor | the upgrade finished; a row wants attention | read the row. This is a configuration question, not a failed upgrade |

@@ -67,7 +67,7 @@ fields. Files still own persona, tools, language and turn budget. Newly installe
 must be assigned an account; there is no silent default or cross-account fallback.
 
 macOS uses Keychain by default. Windows/Linux use the AES-256-GCM file vault with
-`BUDDI_VAULT_KEY` outside Postgres. Run `buddi init` on the host to initialize it.
+`BUDDI_VAULT_KEY` outside Postgres. A packaged install creates the key on its first run; in a source checkout, `buddi init` does.
 Database backups alone cannot restore credentials; preserve the vault and its master
 key separately. A locked vault fails closed.
 
