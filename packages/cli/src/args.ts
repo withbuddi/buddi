@@ -93,6 +93,8 @@ export type Command =
    * migrates. There is no `--yes`: the command asks nothing in the first place.
    */
   | { kind: 'upgrade'; backup: boolean }
+  /** `buddi uninstall`: `--yes` skips the question, `--keep-data` keeps the data and its secrets. */
+  | { kind: 'uninstall'; yes: boolean; keepData: boolean; backup: boolean }
   | { kind: 'service'; action: ServiceAction }
   | { kind: 'db'; action: DbAction }
   | { kind: 'telegram'; action: TelegramAction; deviceId?: string }
@@ -199,6 +201,17 @@ export function parseArgs(argv: string[]): Command {
       else throw new UsageError(`unknown option for buddi upgrade: ${arg} (expected --no-backup)`);
     }
     return { kind: 'upgrade', backup };
+  }
+
+  if (head === 'uninstall') {
+    const command: Extract<Command, { kind: 'uninstall' }> = { kind: 'uninstall', yes: false, keepData: false, backup: true };
+    for (const arg of rest) {
+      if (arg === '--yes' || arg === '-y') command.yes = true;
+      else if (arg === '--keep-data') command.keepData = true;
+      else if (arg === '--no-backup') command.backup = false;
+      else throw new UsageError(`unknown option for buddi uninstall: ${arg} (expected --yes, --keep-data or --no-backup)`);
+    }
+    return command;
   }
 
   if (head === 'db') {

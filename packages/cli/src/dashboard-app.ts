@@ -26,7 +26,7 @@
  * command. The bundle is unsigned: it is written locally by the owner's own
  * `buddi`, never downloaded, so Gatekeeper's quarantine bit is never set on it.
  */
-import { chmodSync, mkdirSync, rmSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CLI_ENTRY } from './paths.js';
@@ -149,4 +149,19 @@ export function uninstallDashboardApp(opts: { home?: string } = {}): AppInstall 
   if (!existsSync(bundle)) return { path: bundle, notes: [`no bundle at ${bundle}`] };
   rmSync(bundle, { recursive: true, force: true });
   return { path: bundle, notes: [`removed ${bundle}`] };
+}
+
+/**
+ * The bundle, when it exists and runs the CLI at `cliEntry`: the one
+ * `buddi uninstall` may remove. A bundle another installation wrote on the
+ * same machine (a checkout beside a packaged install) is left alone.
+ */
+export function dashboardAppOwnedBy(cliEntry: string, home: string = os.homedir()): string | undefined {
+  const bundle = dashboardAppPath(home);
+  try {
+    const script = readFileSync(path.join(bundle, 'Contents', 'MacOS', APP_EXECUTABLE), 'utf8');
+    return script.includes(shellQuote(cliEntry)) ? bundle : undefined;
+  } catch {
+    return undefined;
+  }
 }

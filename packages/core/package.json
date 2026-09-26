@@ -33,6 +33,10 @@
       "types": "./dist/semver.d.ts",
       "default": "./dist/semver.js"
     },
+    "./uninstall": {
+      "types": "./dist/uninstall.d.ts",
+      "default": "./dist/uninstall.js"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"

@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- `buddi uninstall` removes buddi from the machine: the background service, the data directory with its bundled Postgres, the secrets in the keychain (the file vault on Linux), the dashboard app, the extension pairing and the Telegram menu. It prints every path first and removes nothing until you type yes (or pass `--yes`). It takes one last backup and moves it to `~/buddi-backups`, where it stays; `--no-backup` skips it and `--keep-data` keeps the data directory and its secrets for a reinstall. In a source checkout it removes the service and the keychain entries, stops the Docker Postgres, and leaves the repository and `.env` alone.
 - [docs/dashboard.md](docs/dashboard.md): the dashboard place by place, with one thing to try in each. The docs index has a new group, "Where you talk to buddi": the dashboard, Telegram (now with example exchanges), the command line (now opening with what it is for and five examples), Claude Code and notifications.
 - `secret.list` tells an agent which of your secrets the browser may fill, by name, and where each may go, so it no longer asks you for the names. It never returns a value.
 - A goal can watch a number you report yourself, like your weight. When no plugin measures it, the agent creates the metric as it proposes the goal and takes the number you just said as the start; the card says "measured by you, when you tell buddi", and `goal.metrics` lists these metrics with the source `owner`.

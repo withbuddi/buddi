@@ -11,9 +11,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import { request } from 'node:http';
-import { open, mkdir, writeFile } from 'node:fs/promises';
+import { open, mkdir, writeFile, rm, rename, copyFile } from 'node:fs/promises';
+import os from 'node:os';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
@@ -100,8 +101,19 @@ async function backupThroughSupervisor(ctx: InstallContext, rest: string[]): Pro
     console.error(`buddi: ${unsupported} is for a source checkout. A packaged backup goes to ${path.join(ctx.data, 'backups')} with everything in it.`);
     return 2;
   }
-  const { job } = await ask<{ job: { id: string } }>(ctx, 'POST', '/backup', {});
   console.log('Backing up. buddi keeps running while it does.');
+  try {
+    console.log(`Wrote ${await supervisedBackup(ctx)}.`);
+    return 0;
+  } catch (error) {
+    console.error(`buddi: ${(error as Error).message}`);
+    return 1;
+  }
+}
+
+/** Ask the supervisor for a backup and follow it to the end: the archive's full path. */
+async function supervisedBackup(ctx: InstallContext): Promise<string> {
+  const { job } = await ask<{ job: { id: string } }>(ctx, 'POST', '/backup', {});
   let last = '';
   for (;;) {
     const state = await ask<{ phase: string; detail?: string; error?: string; finishedAt?: string; report?: unknown }>(ctx, 'GET', `/jobs/${job.id}`);
@@ -110,16 +122,91 @@ async function backupThroughSupervisor(ctx: InstallContext, rest: string[]): Pro
       console.log(`  ${state.phase}${state.detail === undefined ? '' : ` — ${state.detail}`}`);
     }
     if (state.finishedAt !== undefined) {
-      if (state.phase === 'done') {
-        const name = (state.report as { archive?: string } | undefined)?.archive;
-        console.log(name ? `Wrote ${path.join(ctx.data, 'backups', name)}.` : `The backup is in ${path.join(ctx.data, 'backups')}.`);
-        return 0;
-      }
-      console.error(`buddi: the backup did not finish: ${state.error ?? 'no reason given'}`);
-      return 1;
+      const name = (state.report as { archive?: string } | undefined)?.archive;
+      if (state.phase === 'done' && name) return path.join(ctx.data, 'backups', name);
+      throw new Error(`the backup did not finish: ${state.error ?? 'no reason given'}`);
     }
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
+}
+
+/**
+ * `buddi uninstall`, in a packaged installation. The order and the refusals
+ * are in `uninstall.ts`; this wires them to the real machine: the supervisor's
+ * socket, `launchctl`/`systemctl`, the keychain, the Telegram Bot API.
+ */
+async function uninstall(ctx: InstallContext, rest: string[]): Promise<number> {
+  const { parseUninstallArgs, uninstallPackaged } = await import('./uninstall.js');
+  let options: ReturnType<typeof parseUninstallArgs>;
+  try { options = parseUninstallArgs(rest); }
+  catch (error) { console.error(`buddi: ${(error as Error).message}`); return 2; }
+  const core = await import('@buddi/core');
+  const { purgeKeychain, clearTelegramMenu } = await import('@buddi/core/uninstall');
+  const { dashboardAppOwnedBy } = await import('@buddi/cli');
+  const home = os.homedir();
+  const lockPid = (): number | undefined => {
+    let pid: number;
+    try { pid = Number(readFileSync(path.join(ctx.data, 'supervisor.lock'), 'utf8').trim()); } catch { return undefined; }
+    if (!Number.isInteger(pid) || pid <= 0) return undefined;
+    try { process.kill(pid, 0); return pid; } catch { return undefined; }
+  };
+  const service = ctx.env.BUDDI_VAULT_SERVICE ?? 'buddi';
+  const vault = (() => { try { return core.createVault({ env: ctx.env }); } catch { return undefined; } })();
+  const stored = await vault?.get('TELEGRAM_BOT_TOKEN').catch(() => null) ?? null;
+  const token = stored ?? (ctx.env.TELEGRAM_BOT_TOKEN?.startsWith('<') ? undefined : ctx.env.TELEGRAM_BOT_TOKEN?.trim() || undefined);
+  const app = dashboardAppOwnedBy(path.join(root, 'packages/cli/dist/main.js'), home);
+  return await uninstallPackaged(options, {
+    data: ctx.data, home, platform: process.platform, env: ctx.env, uid: process.getuid?.() ?? 501,
+    exists: existsSync,
+    remove: file => rm(file, { recursive: true, force: true }),
+    move: async (from, to) => {
+      await mkdir(path.dirname(to), { recursive: true, mode: 0o700 });
+      try { await rename(from, to); }
+      catch { await copyFile(from, to); await rm(from, { force: true }); }
+    },
+    exec: (command, argv) => new Promise(resolve => {
+      execFile(command, argv, { env: { ...nativeEnvironment(ctx.env), ...systemdSession(ctx.env) } }, (error, stdout, stderr) => {
+        const code = (error as { code?: unknown } | null)?.code;
+        resolve({ code: error ? (typeof code === 'number' ? code : 1) : 0, stdout: String(stdout), stderr: error && typeof code !== 'number' ? error.message : String(stderr) });
+      });
+    }),
+    supervisor: {
+      answers: () => control(ctx).then(() => true, () => false),
+      stopGateway: async () => { await control(ctx, 'stop'); },
+      backup: () => supervisedBackup(ctx),
+      passphrase: async () => (await ask<{ passphrase: string }>(ctx, 'GET', '/passphrase')).passphrase,
+    },
+    supervisorPid: lockPid,
+    signal: (pid, signal) => { try { process.kill(pid, signal); } catch { /* gone already */ } },
+    ...(core.vaultSelection({ env: ctx.env }) === 'keychain' ? {
+      keychain: {
+        service,
+        names: () => core.createKeychainVault({ service }).list(),
+        purge: (names: string[]) => purgeKeychain(service, names, core.defaultRunSecurity),
+      },
+    } : {}),
+    ...(token === undefined ? {} : {
+      telegram: {
+        collect: async () => {
+          if (ctx.state?.database === 'managed') await core.hydrateDatabaseUrl(ctx.env);
+          const pool = core.createPool(ctx.env.DATABASE_URL as string);
+          try {
+            const paired = await core.listSurfaceIdentities(pool, 'telegram');
+            const chats = paired.map(identity => identity.externalChatId).filter((id): id is string => typeof id === 'string' && id !== '');
+            const { defaultHttpTransport } = await import('@buddi/gateway');
+            return () => clearTelegramMenu(token, chats, defaultHttpTransport);
+          } finally { await pool.end().catch(() => {}); }
+        },
+      },
+    }),
+    ...(app === undefined ? {} : { app }),
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    io: {
+      log: line => console.log(line),
+      error: line => console.error(line),
+      ask: async question => (process.stdin.isTTY === true ? await prompt(question) : undefined),
+    },
+  });
 }
 
 /**
@@ -352,6 +439,7 @@ async function run(): Promise<void> {
   }
   // Help is the command table's, whatever the command: `buddi service status --help`.
   const wantsHelp = args.some(arg => arg === '--help' || arg === '-h') || args[0] === 'help';
+  if (!wantsHelp && args[0] === 'uninstall') { process.exitCode = await uninstall(ctx, args.slice(1)); return; }
   const serviceJson = args.slice(2).every(arg => arg === '--json') && (args.includes('--json') || process.env.BUDDI_JSON === '1');
   if (!wantsHelp && args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1] as string) && args.slice(2).every(arg => arg === '--json')) {
     let status: SupervisorStatus;

@@ -75,6 +75,7 @@ const PARSED: string[][] = [
   ['doctor'],
   ['version'],
   ['upgrade'],
+  ['uninstall'],
   ['init'],
   ['migrate'],
   ['serve'],

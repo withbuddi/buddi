@@ -250,6 +250,16 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
     case 'service':
       await loadEnvironment();
       return service(command.action, json);
+    case 'uninstall': {
+      // A packaged install answers this in its launcher, before this parser.
+      if (installKind(env) === 'packaged') {
+        console.error('buddi uninstall runs from the installed buddi command. Run it as buddi uninstall.');
+        return 2;
+      }
+      await loadEnvironment();
+      const { runUninstall } = await import('./uninstall-cmd.js');
+      return runUninstall({ yes: command.yes, keepData: command.keepData, backup: command.backup }, env);
+    }
     case 'dashboard':
       await loadEnvironment();
       return runDashboard(command.action);

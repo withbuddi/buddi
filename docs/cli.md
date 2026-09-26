@@ -175,6 +175,10 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - `buddi service logs`: Follow the service's log. Ctrl-C stops following.
 - `buddi service install`: Install the background service, started at login. Source checkout only.
 - `buddi service uninstall`: Remove the background service. Your data stays. Source checkout only.
+- `buddi uninstall [--yes] [--keep-data] [--no-backup]`: Remove buddi from this machine: the service, the data, the secrets. It lists everything first and asks.
+  - `--yes`: Do not ask.
+  - `--keep-data`: Keep the data directory and the secrets that open it, for a reinstall.
+  - `--no-backup`: Skip the last backup it takes first.
 - `buddi backup create [--encrypt] [--out <dir>] [--no-artifacts] [--prune [n]]`: Write one archive of this installation: the database, your agents and skills, and your files.
   - `--encrypt`: Seal it with your backup passphrase from the vault. A packaged install always does.
   - `--out <dir>`: Write it here instead of the backups directory. Source checkout only.

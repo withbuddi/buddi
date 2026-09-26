@@ -559,7 +559,21 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi service uninstall',
     flags: [],
     applies: 'checkout',
-    elsewhere: CHECKOUT_ONLY('service uninstall', 'A packaged install stops with buddi service stop; docs/install.md says how to remove it.'),
+    elsewhere: CHECKOUT_ONLY('service uninstall', 'A packaged install stops with buddi service stop, and buddi uninstall removes it.'),
+  },
+  {
+    name: 'uninstall',
+    group: 'Operate',
+    summary: 'Remove buddi from this machine: the service, the data, the secrets. It lists everything first and asks.',
+    usage: 'buddi uninstall [--yes] [--keep-data] [--no-backup]',
+    flags: [
+      { flag: '--yes', meaning: 'Do not ask.' },
+      { flag: '--keep-data', meaning: 'Keep the data directory and the secrets that open it, for a reinstall.' },
+      { flag: '--no-backup', meaning: 'Skip the last backup it takes first.' },
+    ],
+    example: 'buddi uninstall',
+    exitCodes: [{ code: 1, meaning: 'Something listed could not be removed, or nothing was: the question was not answered yes, the backup failed, or the data directory is not an installation.' }],
+    applies: 'both',
   },
   {
     name: 'backup create',

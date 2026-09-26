@@ -11,3 +11,4 @@ export * from './service/index.js';
 export * from './telegram-cmd.js';
 export * from './vault-cmd.js';
 export { dispatch, doctor, exitCodeForError, main, migrate } from './main.js';
+export { dashboardAppOwnedBy, dashboardAppPath } from './dashboard-app.js';
