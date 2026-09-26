@@ -21,6 +21,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- A secret's browser binding takes the site as you type it: a bare host becomes its https origin, a full address is cut to its origin, and anything else is refused with an example.
 - On Telegram a browser screenshot's caption no longer counts steps; the count appears only when five or fewer are left.
 - Signing in with Claude from the first run starts the account on the model catalogue's default for Claude, rather than a fixed Sonnet 5; Sonnet 5 is used only when the catalogue names none.
 - A goal that stays off track wakes its agent at most once per cadence for the same drift: once a week for a weekly goal, once a day for a daily one. The first drift still wakes it at once. A watcher's finding can set its own `cooldownMs`.

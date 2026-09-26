@@ -169,3 +169,14 @@ describe('what a save reports', () => {
     expect(UNBOUND_LINE).toMatch(/Stored, not usable/);
   });
 });
+
+describe('a browser.field target', () => {
+  it('takes a bare host as https and keeps only the origin', () => {
+    expect(parseTargetInput('browser.field', 'auth.wikimedia.org')).toEqual({ ok: true, target: 'https://auth.wikimedia.org' });
+    expect(parseTargetInput('browser.field', 'https://en.wikipedia.org/w/index.php?title=Special:UserLogin')).toEqual({ ok: true, target: 'https://en.wikipedia.org' });
+    expect(parseTargetInput('browser.field', 'http://localhost:8443/x')).toEqual({ ok: true, target: 'http://localhost:8443' });
+  });
+  it('refuses what is not a site', () => {
+    expect(parseTargetInput('browser.field', 'not a site at all').ok).toBe(false);
+  });
+});

@@ -51,7 +51,7 @@ export const UNBOUND_LINE = 'Stored, not usable until it has a binding.';
  * the parts separated by one.
  */
 export function targetPlaceholder(kind: string): string {
-  if (kind === 'browser.field') return 'the exact origin — scheme, host and port — e.g. https://localhost:8443';
+  if (kind === 'browser.field') return 'the origin of the site that holds the field, e.g. https://en.wikipedia.org';
   if (kind === 'browser.form.data') return 'the origin, then the field name — e.g. https://localhost:8443 card-number';
   if (kind === 'browser.native.type') return 'the app’s bundle id, e.g. com.bank.app';
   if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
@@ -98,7 +98,19 @@ export function parseTargetInput(kind: string, text: string): TargetParse {
       return { ok: false, error: 'That opens like JSON but does not parse.' };
     }
   }
-  if (kind === 'browser.field' || kind === 'browser.native.type' || isAccountKind(kind)) return { ok: true, target: raw };
+  if (kind === 'browser.field') {
+    // An origin, the way the binding compares it: scheme, lower-cased host,
+    // port. A bare host is what people type; https is what they mean.
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+      const url = new URL(withScheme);
+      if (url.origin === 'null' || (url.protocol !== 'https:' && url.protocol !== 'http:')) throw new Error('not an origin');
+      return { ok: true, target: url.origin };
+    } catch {
+      return { ok: false, error: 'Give the site as an origin, like https://en.wikipedia.org.' };
+    }
+  }
+  if (kind === 'browser.native.type' || isAccountKind(kind)) return { ok: true, target: raw };
   const two = TWO_PART_KINDS[kind];
   if (two === undefined) return { ok: true, target: raw };
   const parts = lastTwoParts(raw);
