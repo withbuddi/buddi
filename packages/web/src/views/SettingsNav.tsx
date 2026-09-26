@@ -31,6 +31,7 @@ export interface SettingsEntry {
 const SECTION_ICONS: Record<(typeof SETTINGS_SECTIONS)[number]['id'], IconName> = {
   you: 'person',
   appearance: 'sun',
+  notifications: 'bell',
   memory: 'notebook',
   proposals: 'bulb',
   accounts: 'key',

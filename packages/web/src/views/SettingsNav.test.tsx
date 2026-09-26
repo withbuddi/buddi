@@ -68,7 +68,7 @@ describe('the settings list', () => {
     expect(groups.map((g) => g.getAttribute('aria-labelledby') && document.getElementById(g.getAttribute('aria-labelledby')!)?.textContent))
       .toEqual(['You', 'Models and access', 'Running', 'Plugins']);
     const names = (group: HTMLElement): string[] => within(group).getAllByRole('link').map((a) => a.textContent ?? '');
-    expect(names(groups[0]!)).toEqual(['Profile', 'Appearance', 'Memory', 'Proposals']);
+    expect(names(groups[0]!)).toEqual(['Profile', 'Appearance', 'Notifications', 'Memory', 'Proposals']);
     expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser', 'Keys and secrets']);
     expect(names(groups[2]!)).toEqual(['Watchers', 'Backup', 'System']);
     expect(names(groups[3]!)[0]).toBe('All plugins');
@@ -209,7 +209,7 @@ describe('on a narrow window', () => {
     expect(labels).toEqual(['You', 'Models and access', 'Running', 'Plugins']);
     const options = [...list.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
     expect(options.map((o) => o.textContent)).toEqual([
-      'Profile', 'Appearance', 'Memory', 'Proposals',
+      'Profile', 'Appearance', 'Notifications', 'Memory', 'Proposals',
       'Model accounts', 'Computer & browser', 'Keys and secrets',
       'Watchers', 'Backup', 'System',
       'All plugins', 'Alpha', 'mike', 'Zulu',

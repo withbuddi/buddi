@@ -30,7 +30,8 @@ A mission that decides to stay silent sends nothing and writes nothing here.
 | `digest` | Kept for the record. | Kept for the record; the recap can read it. |
 
 - **On the dashboard** means the page told buddi in the last two minutes
-  that you are looking at it. Telegram messages you send count as being on
+  that you are looking at it: the page tells buddi every 30 seconds while it
+  is in front, and says so when you leave it. Telegram messages you send count as being on
   Telegram, and a message then goes to Telegram straight away.
 - **The end of the day** is 18:00 on your clock (the timezone in your owner
   profile, else `BUDDI_TZ`). Everything held for the day goes out as one
@@ -47,6 +48,23 @@ A mission that decides to stay silent sends nothing and writes nothing here.
 
 Titles and text are scrubbed for your stored secrets before they are kept
 or sent. Where you are is never sent anywhere.
+
+## On the dashboard
+
+- **A card at the top right** for each `now` message kept for the dashboard:
+  the title, its first line, the agent's face, and "See" when it has a link.
+  Drawing it marks it seen, so it does not go to your channel ten minutes
+  later. Three at most; the rest wait under "and N more". Dismissing one is
+  the same as seeing it. The page checks for new ones every 30 seconds while
+  you are there, and when you come back to it.
+- **Home, under "Needs you"**: watcher finds, reminders, failures, reports
+  and plugin messages not seen yet, and whatever is held for the end of the
+  day, one line each with the agent. Approvals keep their own cards and are
+  not listed twice. The greeting counts them.
+- **Settings → Notifications**: the default channel with a "Send a test"
+  button for each, a channel or Off per kind (approvals and questions cannot
+  be off), quiet hours and the end of the day, and the last twenty messages
+  with where each went and whether you saw it.
 
 ## Settings
 
@@ -124,4 +142,5 @@ The dashboard's endpoints:
 | `POST /api/notifications/:id/seen` | `{ ok: true }`, or 404. |
 | `GET /api/notifications/settings` | `{ settings, channels }`. |
 | `PUT /api/notifications/settings` | The whole value replaced; 400 with a sentence when it cannot be. |
-| `POST /api/presence` `{ state: 'active' \| 'away' }` | `{ ok: true }`. `active` every 30 seconds while the page is visible and focused, `away` on blur or hide. The dashboard does not send it yet, so for now every `now` message goes to your channel at once. |
+| `POST /api/notifications/test` `{ channel }` | `{ ok: true }` once that channel took one line; 404 for a channel that is not there, 502 with a sentence when it refused. Not recorded. |
+| `POST /api/presence` `{ state: 'active' \| 'away' }` | `{ ok: true }`. The page sends `active` when it loads or comes back in front and every 30 seconds while it stays there, and `away` on blur or hide; at most one a second. |

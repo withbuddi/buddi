@@ -229,6 +229,7 @@ export type SettingsGroup = (typeof SETTINGS_GROUPS)[number]['id'];
 export const SETTINGS_SECTIONS = [
   { id: 'you', label: 'Profile', group: 'you' },
   { id: 'appearance', label: 'Appearance', group: 'you' },
+  { id: 'notifications', label: 'Notifications', group: 'you' },
   { id: 'memory', label: 'Memory', group: 'you' },
   { id: 'proposals', label: 'Proposals', group: 'you' },
   { id: 'accounts', label: 'Model accounts', group: 'access' },

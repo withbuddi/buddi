@@ -41,7 +41,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
-import { listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './notifications.js';
+import { listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute, testChannelRoute } from './notifications.js';
 import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
@@ -1900,6 +1900,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (path === '/api/presence') return reply(res, await presenceRoute(deps.pool, body, deps.now()));
+    if (path === '/api/notifications/test') return reply(res, await testChannelRoute(body, deps.now()));
     const seen = /^\/api\/notifications\/([^/]+)\/seen$/.exec(path);
     if (seen) return reply(res, await markSeenRoute(deps.pool, decodeURIComponent(seen[1] as string), deps.now()));
 

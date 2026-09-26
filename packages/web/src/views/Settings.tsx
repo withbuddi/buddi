@@ -30,6 +30,7 @@ import { Memory } from './Memory';
 import { Markdown } from '../chat/markdown';
 import { Proposals } from './Proposals';
 import { Plugins } from './Plugins';
+import { Notifications } from './Notifications';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 
 export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
@@ -71,6 +72,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           ) : null}
           {section === 'you' ? <You embedded /> : null}
           {section === 'appearance' ? <AppearanceSection /> : null}
+          {section === 'notifications' ? <Notifications timezone={timezone} /> : null}
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded /> : null}

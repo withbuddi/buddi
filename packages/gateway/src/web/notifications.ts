@@ -6,6 +6,7 @@
  *   POST /api/notifications/:id/seen        the page drew it, or the owner opened it
  *   GET  /api/notifications/settings        the settings, and the channels there are
  *   PUT  /api/notifications/settings        the whole settings value, replaced
+ *   POST /api/notifications/test { channel } one line through that channel, now
  *   POST /api/presence { state }            `active` every 30 s while the page is
  *                                           visible and focused; `away` on blur or hide
  *
@@ -14,6 +15,7 @@
  * the owner is present on Home and Settings too.
  */
 import {
+  deliverTo,
   listChannels,
   listNotifications,
   markSeen,
@@ -61,4 +63,22 @@ export async function presenceRoute(pool: Queryable, body: Record<string, unknow
   if (state !== 'active' && state !== 'away') return { status: 400, body: { error: '`state` must be "active" or "away".' } };
   await presenceTouch(pool, WEB_PRESENCE_SURFACE, now, state);
   return { status: 200, body: { ok: true } };
+}
+
+/** What "Send a test" sends: one line, nothing to act on. */
+export const TEST_MESSAGE_TITLE = 'A test from buddi. This is where your messages will arrive.';
+
+/**
+ * "Send a test": one line straight through the named channel. Not a
+ * notification: it skips the routing, quiet hours and the record, so a test
+ * never shows in the last twenty or waits for the morning.
+ */
+export async function testChannelRoute(body: Record<string, unknown>, now: Date): Promise<NotificationsRouteReply> {
+  const channel = typeof body.channel === 'string' ? body.channel.trim() : '';
+  if (!channel) return { status: 400, body: { error: '`channel` must name a channel.' } };
+  if (!listChannels().some((c) => c.kind === channel)) return { status: 404, body: { error: 'There is no such channel.' } };
+  const sent = await deliverTo(channel, { id: `test:${now.getTime()}`, kind: 'recap', urgency: 'now', title: TEST_MESSAGE_TITLE });
+  return sent.ok
+    ? { status: 200, body: { ok: true } }
+    : { status: 502, body: { error: `The test did not go through: ${sent.error}.` } };
 }
