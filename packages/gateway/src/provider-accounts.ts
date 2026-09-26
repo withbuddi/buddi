@@ -1,17 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
+  OLLAMA_CLOUD_ACCOUNT_URL, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   putOwnerSecret, registerSecretDestination, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
+import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
@@ -24,7 +25,7 @@ const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as 
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
   label: z.string().trim().min(1).max(100), kind: z.enum(['anthropic', 'openai', 'openai-compatible', 'codex']),
-  auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt', 'anthropic-oauth']),
+  auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt', 'anthropic-oauth', 'device-key']),
   baseUrl: z.string().trim().max(2048).optional(), defaultModel: z.string().trim().min(1).max(150),
   enabled: z.boolean(), secret: z.string().trim().min(1).max(16384).optional(),
   /**
@@ -73,6 +74,8 @@ export class ProviderAccounts {
   readonly vault: Vault | undefined;
   readonly codex: CodexAccounts | undefined;
   readonly anthropic: AnthropicAccounts | undefined;
+  readonly ollama: OllamaAccounts | undefined;
+  #devices = new Map<string, OllamaDeviceView>();
   #tokenInfo = new Map<string, { tokenExpiresAt: string; reconnectRequired: boolean }>();
   #rows = new Map<string, Row>();
   #bindings = new Map<string, Binding>();
@@ -90,6 +93,8 @@ export class ProviderAccounts {
     catalog: () => AgentCatalog; reload: () => void; vault?: Vault;
     test?: (resolved: ResolvedProvider) => Promise<void>;
     listModels?: typeof listProviderModels;
+    /** The one signed `/api/me` call and the device name, replaceable in tests. */
+    ollama?: { protocol?: OllamaConnectProtocol; deviceName?: () => string; now?: () => number };
   }) {
     this.vault = deps.vault ?? createVault({ env: deps.env });
     // The account credentials are owner secrets bound to `accounts.provider`
@@ -112,6 +117,7 @@ export class ProviderAccounts {
     }
     if (subscriptionSignIns(deps.env).codex && this.accountVault) this.codex = new CodexAccounts({ vault: this.accountVault });
     if (this.accountVault) this.anthropic = new AnthropicAccounts(this.accountVault);
+    if (this.accountVault) this.ollama = new OllamaAccounts(this.accountVault, deps.ollama?.protocol, deps.ollama?.now, deps.ollama?.deviceName);
   }
 
   get anthropicOAuthEnabled() { return subscriptionSignIns(this.deps.env).claude && !!this.anthropic; }
@@ -170,10 +176,17 @@ export class ProviderAccounts {
     const bindings = await this.deps.pool.query('select agent_id as "agentId", account_id as "accountId", model from core.agent_provider_accounts');
     const configured = new Map<string, boolean>();
     this.#tokenInfo.clear();
+    this.#devices.clear();
     for (const row of result.rows as Row[]) {
       try {
         const raw = await this.#secret(row);
         configured.set(row.id, row.auth === 'none' || !!raw);
+        if (row.auth === 'device-key') {
+          // Configured means connected: a key nobody pressed Connect for signs nothing useful.
+          const device = raw ? readOllamaDevice(raw) : null;
+          configured.set(row.id, !!device?.connectedAt);
+          if (device) this.#devices.set(row.id, deviceView(device));
+        }
         if (row.auth === 'anthropic-oauth' && raw) {
           const tokens = readAnthropicTokens(raw);
           this.#tokenInfo.set(row.id, { tokenExpiresAt: new Date(tokens.expiresAt).toISOString(), reconnectRequired: tokens.state !== 'ready' });
@@ -200,6 +213,7 @@ export class ProviderAccounts {
       : row.kind === 'codex' && !this.codex ? SIGNIN_HIDDEN.codex
       : row.auth === 'anthropic-oauth' && !this.anthropicOAuthEnabled ? SIGNIN_HIDDEN.claude
       : !row.enabled ? `Provider account “${row.label}” is disabled.`
+      : row.auth === 'device-key' && !this.#configured.get(row.id) ? `Connect Ollama for “${row.label}” in Settings → Model accounts.`
       : !this.#configured.get(row.id) ? `Provider account “${row.label}” needs a credential or vault access.`
       : accountModelProblem(row.kind, binding!.model);
     return { provider, availability: issue ? { ok: false, problem: { code: 'missing-credential', message: issue } } : { ok: true } };
@@ -220,6 +234,7 @@ export class ProviderAccounts {
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         ...(row.kind === 'codex' ? { login: this.codex?.view(row.id) ?? null } : {}),
+        ...(row.auth === 'device-key' ? { device: this.#devices.get(row.id) ?? null, login: this.ollama?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
       })),
@@ -302,6 +317,11 @@ export class ProviderAccounts {
     if (input.kind === 'codex' && !this.codex) throw new ProviderAccountError(400, SIGNIN_HIDDEN.codex);
     if (input.kind === 'codex' && input.secret) throw new ProviderAccountError(400, 'ChatGPT accounts use device sign-in, not a pasted token.');
     if (input.auth === 'anthropic-oauth' && (input.kind !== 'anthropic' || input.secret)) throw new ProviderAccountError(400, 'Claude OAuth requires an Anthropic account and browser sign-in, not a pasted token.');
+    if (input.auth === 'device-key') {
+      if (input.kind !== 'openai-compatible' || input.secret) throw new ProviderAccountError(400, 'An Ollama device key is made by buddi and connected on ollama.com, not pasted.');
+      if (input.baseUrl && input.baseUrl.replace(/\/+$/, '') !== OLLAMA_CLOUD_ACCOUNT_URL) throw new ProviderAccountError(400, 'A device key only connects to Ollama Cloud. Use a key for another address.');
+      if (!this.ollama) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
+    }
     const old = input.id ? await this.#row(input.id) : undefined;
     if (input.auth === 'anthropic-oauth' && !old && !this.anthropicOAuthEnabled) throw new ProviderAccountError(400, SIGNIN_HIDDEN.claude);
     if (old?.deleting) throw new ProviderAccountError(409, 'Removal is pending. Unlock the vault and finish removing this account.');
@@ -311,7 +331,7 @@ export class ProviderAccounts {
     if (input.auth === 'none' && (input.kind !== 'openai-compatible' || input.secret)) throw new ProviderAccountError(400, 'No-key authentication is only available for compatible endpoints.');
     if (input.secret && /[\r\n\x00-\x1f]/.test(input.secret)) throw new ProviderAccountError(400, 'Credential cannot contain control characters.');
     let baseUrl: string;
-    try { baseUrl = accountBaseUrl(input.kind, input.baseUrl); }
+    try { baseUrl = accountBaseUrl(input.kind, input.auth === 'device-key' ? OLLAMA_CLOUD_ACCOUNT_URL : input.baseUrl); }
     catch (e) { throw new ProviderAccountError(400, (e as Error).message); }
     // Never send an existing key to a newly edited destination without the
     // owner explicitly supplying a credential for that destination.
@@ -324,7 +344,8 @@ export class ProviderAccounts {
     const oauthLease = old?.auth === 'anthropic-oauth' ? await this.#anthropicAccess(old, false) : undefined;
     try {
     if (old?.auth === 'anthropic-oauth') this.anthropic?.forget(id);
-    let secretRef = old?.secretRef ?? (input.auth === 'anthropic-oauth' ? `ANTHROPIC_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : input.kind === 'codex' ? `CODEX_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : null);
+    let secretRef = old?.secretRef ?? (input.auth === 'anthropic-oauth' ? `ANTHROPIC_ACCOUNT_${randomUUID().replaceAll('-', '_')}` : input.kind === 'codex' ? `CODEX_ACCOUNT_${randomUUID().replaceAll('-', '_')}`
+      : input.auth === 'device-key' ? `OLLAMA_DEVICE_${randomUUID().replaceAll('-', '_')}` : null);
     if (input.secret) {
       if (!this.vault) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
       // The credential is an owner secret bound to this account row
@@ -392,6 +413,7 @@ export class ProviderAccounts {
     const oauthLease = row.auth === 'anthropic-oauth' ? await this.#anthropicAccess(row, false) : undefined;
     try {
     this.anthropic?.forget(id);
+    this.ollama?.forget(id);
     // A tombstone prevents reactivation even if vault deletion is denied.
     const disabled = await this.deps.pool.query(`update core.provider_accounts set enabled=false,deleting=true,revision=revision+1
       where id=$1 and revision=$2 returning id`, [id,revision]);
@@ -485,6 +507,15 @@ export class ProviderAccounts {
   }
 
   async #usableSecret(row: Row, signal?: AbortSignal): Promise<string | null> {
+    if (row.auth === 'device-key') {
+      if (!this.ollama || !row.secretRef) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
+      try { return await this.ollama.credential(row.secretRef); }
+      catch (error) {
+        // Never propagate vault errors, which may carry key material.
+        throw new ProviderAccountError(409, error instanceof Error && /^(Connect this Ollama|Invalid Ollama device key|The credential vault)/.test(error.message)
+          ? error.message : 'Could not read the Ollama device key. Check the vault and connect again.');
+      }
+    }
     if (row.auth !== 'anthropic-oauth') {
       if (row.auth === 'none' || row.secretRef === null) return this.#secret(row);
       // A legacy account names buddi's own key (`CLAUDE_CODE_OAUTH_TOKEN`,
@@ -583,6 +614,48 @@ export class ProviderAccounts {
         await this.load();
         return action === 'login' ? this.anthropic!.start(id, row.revision + 1, owner) : { completed: true };
       } finally { await lease.release(); }
+    });
+  }
+
+  /**
+   * Ollama Cloud with a device key: `connect` makes a key pair in the vault and
+   * answers with the page to press Connect on; `poll` asks ollama.com once
+   * whether that happened; `disconnect` removes the key from the vault. The
+   * device stays listed on ollama.com until the owner removes it there.
+   */
+  ollamaAction(id: string, action: 'connect' | 'poll' | 'disconnect', body: { revision?: unknown; attemptId?: unknown }, owner: string) {
+    return this.#serial(async () => {
+      const row = await this.#row(id);
+      if (!owner || row.auth !== 'device-key' || !row.secretRef) throw new ProviderAccountError(409, 'This is not an Ollama Cloud account connected with a device key.');
+      if (!this.ollama) throw new ProviderAccountError(409, 'Configure a credential vault on the host first.');
+      if (row.deleting) throw new ProviderAccountError(409, 'Removal is pending. Unlock the vault and finish removing this account.');
+      if (action === 'poll') {
+        if (typeof body.attemptId !== 'string') throw new ProviderAccountError(400, 'Connect first.');
+        let answer;
+        try { answer = await this.ollama.poll(id, row.revision, owner, body.attemptId, row.secretRef); }
+        catch (error) { throw new ProviderAccountError(409, (error as Error).message); }
+        if (answer.state === 'connected') { this.#modelLists.delete(id); this.#tests.delete(id); await this.load(); }
+        return answer;
+      }
+      if (row.revision !== body.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
+      if (action === 'connect' && !row.enabled) throw new ProviderAccountError(409, 'Enable this account before connecting it.');
+      this.ollama.forget(id);
+      if (action === 'disconnect') {
+        try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
+        catch { throw new ProviderAccountError(409, 'Could not remove the Ollama device key. Unlock the vault and retry.'); }
+      }
+      // A new key, or none: runs that started on the old one stop at their next call.
+      await this.deps.pool.query('update core.provider_accounts set revision=revision+1,updated_at=now() where id=$1', [id]);
+      this.#modelLists.delete(id); this.#tests.delete(id);
+      if (action === 'disconnect') {
+        await this.load();
+        return { removed: true, note: 'Disconnected. The key is gone from buddi; the device stays listed on ollama.com until you remove it in your ollama.com settings.' };
+      }
+      let started;
+      try { started = await this.ollama.start(id, row.revision + 1, owner, row.secretRef); }
+      catch (error) { await this.load(); throw new ProviderAccountError(409, (error as Error).message); }
+      await this.load();
+      return started;
     });
   }
 

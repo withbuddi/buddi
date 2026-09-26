@@ -2,7 +2,14 @@ import { modelProblem, type ProviderKind, type ResolvedProvider } from './provid
 
 /** Account identity is separate from the protocol used by the runtime adapter. */
 export type ProviderAccountKind = 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
-export type ProviderAccountAuth = 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth';
+export type ProviderAccountAuth = 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth' | 'device-key';
+
+/**
+ * Where an Ollama Cloud account connected with a device key points. The key is
+ * only ever used to sign requests to this address
+ * (buddi-planning specs/ollama-connect.md).
+ */
+export const OLLAMA_CLOUD_ACCOUNT_URL = 'https://ollama.com/v1';
 export interface ProviderAccount {
   id: string;
   label: string;
@@ -56,6 +63,11 @@ export function resolveProviderAccount(account: ProviderAccount, model: string, 
   const subscription = account.auth === 'legacy-subscription-token' || account.auth === 'anthropic-oauth';
   if (subscription && account.kind !== 'anthropic') throw new Error('Subscription credential does not belong to this provider.');
   if (account.auth === 'none' && account.kind !== 'openai-compatible') throw new Error('This provider requires a credential.');
+  if (account.auth === 'device-key') {
+    if (account.kind !== 'openai-compatible' || accountBaseUrl(account.kind, account.baseUrl) !== OLLAMA_CLOUD_ACCOUNT_URL) throw new Error('A device key only connects to Ollama Cloud.');
+    if (!secret?.trim()) throw new Error('Connect this Ollama account first.');
+    return { kind: 'openai', baseUrl: OLLAMA_CLOUD_ACCOUNT_URL, credentialKind: 'api-key', secret: '', model, compatible: true, deviceKey: secret };
+  }
   if (account.auth !== 'none' && !secret?.trim()) throw new Error('Provider account credential is missing or the vault is locked.');
   return {
     kind: accountProtocol(account.kind),

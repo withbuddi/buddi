@@ -103,6 +103,12 @@ export type ResolvedProvider = {
   credentialKind: CredentialKind;
   secret: string;
   model: string;
+  /**
+   * An Ollama device key (PKCS8 PEM), for an `ollama-cloud` account connected
+   * with `auth: 'device-key'`: each request to ollama.com is signed with it
+   * instead of carrying a bearer token. `secret` is empty then.
+   */
+  deviceKey?: string;
 };
 
 export type ProviderResolution =

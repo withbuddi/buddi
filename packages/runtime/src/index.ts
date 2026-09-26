@@ -18,3 +18,4 @@ export * from './codex-policy.js';
 export * from './codex-session.js';
 export * from './provider-models.js';
 export { AnthropicOAuthProtocol, createAnthropicLogin, parseAnthropicCode, readAnthropicTokens, type AnthropicTokens } from './anthropic-oauth.js';
+export * from './ollama-signing.js';

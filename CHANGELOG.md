@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - The first-run page shows the running buddi version under its title.
+- An Ollama Cloud account can connect with a device key instead of a pasted key, the way `ollama login` does: buddi makes a key pair in the vault, you press Connect on ollama.com, and each request is signed with the key. `buddi status` and the account say "connected as <your ollama.com name>, device buddi on <this computer>". Disconnecting removes the key from buddi; the device stays listed on ollama.com until you remove it there.
 
 ## 0.1.0-pre.19 — 2026-09-26
 

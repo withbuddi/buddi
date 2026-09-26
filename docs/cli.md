@@ -53,7 +53,7 @@ What you type most days.
 - `buddi`: Open the dashboard. In a packaged install the first run sets everything up.
 - `buddi status [--json]`: One screen: version, service, database, agents, what needs you, and whether a newer buddi is out.
   - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
-  - JSON: { version, install, service: { state, detail }, database: { reachable, error? }, agents: { ready: [{ handle, id }], unavailable: [{ handle, id, reason }] }, needsYou: { approvals, questions } | null, lastRecapAt | null, update: { available, latest? } }. service.state is running, stopped, not-installed or unknown.
+  - JSON: { version, install, service: { state, detail }, database: { reachable, error? }, agents: { ready: [{ handle, id }], unavailable: [{ handle, id, reason }] }, needsYou: { approvals, questions } | null, lastRecapAt | null, update: { available, latest? }, ollama: [{ label, line }] }. service.state is running, stopped, not-installed or unknown.
 - `buddi ask "<question>" [--agent <handle>] [--resume <id> | --last] [--file <path>] [--wait <seconds>] [--json]`: Ask one question, print the answer, and exit. Made for scripts.
   - `--agent <handle>`: Ask this agent, by handle or id, instead of the default one.
   - `--resume <id>`: Continue that conversation. With no question, it finishes a run that stopped for an approval you have since given.

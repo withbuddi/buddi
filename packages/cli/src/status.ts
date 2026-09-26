@@ -29,6 +29,8 @@ export interface StatusReport {
   needsYou: { approvals: number; questions: number } | null;
   lastRecapAt: string | null;
   update: { available: boolean; latest?: string };
+  /** Ollama Cloud accounts connected with a device key: "connected as <user>, device <name>". */
+  ollama: Array<{ label: string; line: string }>;
 }
 
 /** Everything `collectStatus` reads, injectable so the report is testable. */
@@ -42,6 +44,8 @@ export interface StatusSources {
   attention(): Promise<{ approvals: number; questions: number }>;
   lastRecapAt(): Promise<Date | null>;
   update(): Promise<{ available: boolean; latest?: string }>;
+  /** Optional: the device-key accounts, each with its one line. */
+  ollama?(): Promise<Array<{ label: string; line: string }>>;
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -73,6 +77,7 @@ export async function collectStatus(sources: StatusSources): Promise<StatusRepor
   const needsYou = database.reachable ? await sources.attention().catch(() => null) : null;
   const lastRecap = database.reachable ? await sources.lastRecapAt().catch(() => null) : null;
   const update = await sources.update().catch(() => ({ available: false }));
+  const ollama = database.reachable && sources.ollama ? await sources.ollama().catch(() => []) : [];
 
   return {
     version,
@@ -83,6 +88,7 @@ export async function collectStatus(sources: StatusSources): Promise<StatusRepor
     needsYou,
     lastRecapAt: lastRecap ? lastRecap.toISOString() : null,
     update,
+    ollama,
   };
 }
 
@@ -119,6 +125,8 @@ export function renderStatus(report: StatusReport, timezone = 'UTC'): string {
     else lines.push(`${count(ready.length, 'agent can', 'agents can')} run: ${ready.map((a) => `@${a.handle}`).join(', ')}.`);
     for (const agent of unavailable) lines.push(`@${agent.handle} cannot run: ${agent.reason.replace(/\.$/, '')}.`);
   }
+
+  for (const account of report.ollama ?? []) lines.push(`${account.label}: ${account.line}.`);
 
   if (report.needsYou === null) {
     lines.push(report.database.reachable ? 'What needs you could not be read.' : 'What needs you is unknown without the database.');

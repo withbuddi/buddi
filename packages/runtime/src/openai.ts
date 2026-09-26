@@ -28,6 +28,7 @@
  */
 import { SseParser, frameJson, type SseFrame } from './sse.js';
 import { providerAuthHeaders, type ResolvedProvider } from '@buddi/core';
+import { signOllamaRequest } from './ollama-signing.js';
 import {
   OPENAI_TOOL_NAME_MAX,
   ProviderCapabilityError,
@@ -425,12 +426,24 @@ export function createOpenAiProvider(
   const url = `${resolved.baseUrl.replace(/\/+$/, '')}${CHAT_COMPLETIONS_PATH}`;
   const capabilities = providerCapabilities('openai');
 
-  function headers(): Record<string, string> {
+  /**
+   * Where this attempt goes and with which headers. A device-key account signs
+   * every attempt afresh (the signature covers a timestamp) instead of
+   * sending a bearer token.
+   */
+  function target(): { url: string; headers: Record<string, string> } {
+    if (resolved.deviceKey) {
+      const signed = signOllamaRequest('POST', url, resolved.deviceKey, now());
+      return { url: signed.url, headers: { 'content-type': 'application/json', authorization: signed.authorization } };
+    }
     return {
-      'content-type': 'application/json',
-      // OpenAI takes a bearer token and nothing else; `providerAuthHeaders`
-      // already knows that from the resolved provider's kind.
-      ...providerAuthHeaders(resolved),
+      url,
+      headers: {
+        'content-type': 'application/json',
+        // OpenAI takes a bearer token and nothing else; `providerAuthHeaders`
+        // already knows that from the resolved provider's kind.
+        ...providerAuthHeaders(resolved),
+      },
     };
   }
 
@@ -508,8 +521,9 @@ export function createOpenAiProvider(
         // Every attempt is a dispatch; a caller counting calls is told of each.
         await req.onDispatch?.();
         try {
-          res = await doFetch(url, {
-            method: 'POST', headers: headers(), body: payload,
+          const attempt = target();
+          res = await doFetch(attempt.url, {
+            method: 'POST', headers: attempt.headers, body: payload,
             ...(req.signal ? { signal: req.signal } : {}),
             ...(assembly ? { onChunk: (text: string, status: number) => { if (status >= 200 && status < 300) assembly.push(text); } } : {}),
           });

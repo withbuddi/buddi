@@ -2039,13 +2039,16 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     const anthropicRoute = /^\/api\/provider-accounts\/([^/]+)\/anthropic\/(login|complete-login|cancel-login|logout)$/.exec(path);
+    const ollamaRoute = /^\/api\/provider-accounts\/([^/]+)\/ollama\/(connect|poll|disconnect)$/.exec(path);
     const accountRoute = /^\/api\/provider-accounts\/([^/]+)\/(test|remove|login|cancel-login|logout|models)$/.exec(path);
     const accountAssignment = /^\/api\/agents\/([^/]+)\/account$/.exec(path);
-    if (path === '/api/provider-accounts/save' || path === '/api/provider-accounts/probe-models' || accountRoute || accountAssignment || anthropicRoute) {
+    if (path === '/api/provider-accounts/save' || path === '/api/provider-accounts/probe-models' || accountRoute || accountAssignment || anthropicRoute || ollamaRoute) {
       if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
       try {
         const result = path === '/api/provider-accounts/probe-models'
           ? await deps.providerAccounts.probeModels(body)
+          : ollamaRoute
+          ? await deps.providerAccounts.ollamaAction(decodeURIComponent(ollamaRoute[1]!), ollamaRoute[2] as 'connect' | 'poll' | 'disconnect', body, session.id)
           : anthropicRoute
           ? await deps.providerAccounts.anthropicAction(decodeURIComponent(anthropicRoute[1]!), anthropicRoute[2] as 'login' | 'complete-login' | 'cancel-login' | 'logout', body, session.id)
           : accountAssignment

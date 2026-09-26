@@ -31,7 +31,7 @@ it('protects provider reads and credential writes with existing owner session, o
 });
 
 it('protects named account creation and assignments and retires global credential writes', async () => {
-  const manager = { anthropicAction: vi.fn(async () => ({ completed: true })), models: vi.fn(async () => ({ models: [], truncated: false })), probeModels: vi.fn(async () => ({ models: [], truncated: false })), view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
+  const manager = { ollamaAction: vi.fn(async () => ({ state: 'pending', verificationUrl: 'https://ollama.com/connect?name=x&key=y' })), anthropicAction: vi.fn(async () => ({ completed: true })), models: vi.fn(async () => ({ models: [], truncated: false })), probeModels: vi.fn(async () => ({ models: [], truncated: false })), view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
   const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerAccounts: manager as unknown as ProviderAccounts });
@@ -42,7 +42,7 @@ it('protects named account creation and assignments and retires global credentia
   const cookies = session.headers.getSetCookie().map(c => c.split(';')[0]!);
   const csrf = cookies.find(c => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
   const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' };
-  for (const route of ['/api/provider-accounts/one/anthropic/login', '/api/provider-accounts/one/anthropic/complete-login', '/api/provider-accounts/one/anthropic/cancel-login', '/api/provider-accounts/one/anthropic/logout', '/api/provider-accounts/one/models', '/api/provider-accounts/probe-models', '/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
+  for (const route of ['/api/provider-accounts/one/ollama/connect', '/api/provider-accounts/one/ollama/poll', '/api/provider-accounts/one/ollama/disconnect', '/api/provider-accounts/one/anthropic/login', '/api/provider-accounts/one/anthropic/complete-login', '/api/provider-accounts/one/anthropic/cancel-login', '/api/provider-accounts/one/anthropic/logout', '/api/provider-accounts/one/models', '/api/provider-accounts/probe-models', '/api/provider-accounts/save', '/api/provider-accounts/one/remove', '/api/provider-accounts/one/test', '/api/agents/ledger/account', '/api/provider-accounts/one/login', '/api/provider-accounts/one/cancel-login', '/api/provider-accounts/one/logout']) {
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
     expect((await fetch(`${origin}${route}`, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: '{}' })).status).toBe(403);
   }
@@ -51,6 +51,12 @@ it('protects named account creation and assignments and retires global credentia
   expect(manager.models).not.toHaveBeenCalled();
   expect(manager.probeModels).not.toHaveBeenCalled();
   expect(manager.anthropicAction).not.toHaveBeenCalled();
+  expect(manager.ollamaAction).not.toHaveBeenCalled();
+  for (const action of ['connect', 'poll', 'disconnect']) {
+    const answered = await fetch(`${origin}/api/provider-accounts/one/ollama/${action}`, { method: 'POST', headers, body: JSON.stringify({ revision: 2, attemptId: 'attempt' }) });
+    expect(answered.status).toBe(200); expect(answered.headers.get('cache-control')).toBe('no-store');
+    expect(manager.ollamaAction).toHaveBeenLastCalledWith('one', action, { revision: 2, attemptId: 'attempt' }, expect.any(String));
+  }
   const completeBody = { revision: 2, attemptId: 'attempt', code: 'fixture-secret#state' };
   const completed = await fetch(`${origin}/api/provider-accounts/one/anthropic/complete-login`, { method: 'POST', headers, body: JSON.stringify(completeBody) });
   expect(completed.status).toBe(200); expect(completed.headers.get('cache-control')).toBe('no-store');

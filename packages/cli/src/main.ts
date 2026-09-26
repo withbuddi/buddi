@@ -15,7 +15,7 @@
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { compareVersions, createPool, timezoneFromEnv } from '@buddi/core';
+import { compareVersions, createPool, createVault, timezoneFromEnv } from '@buddi/core';
 import {
   createWiringAsync,
   currentVersion,
@@ -42,6 +42,8 @@ import {
   runRemindersCli,
   runServe,
   supervisorCall,
+  readOllamaDevices,
+  connectedLine,
 } from '@buddi/gateway';
 import { parseArgs, UsageError, type Command, type ServiceAction } from './args.js';
 import {
@@ -452,6 +454,15 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
           [mission],
         );
         return rows[0] ? new Date(rows[0].created_at) : null;
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    },
+    ollama: async () => {
+      const pool = createPool(env.DATABASE_URL as string);
+      try {
+        const devices = await readOllamaDevices(pool, createVault({ env }));
+        return devices.map((device) => ({ label: device.label, line: connectedLine(device) }));
       } finally {
         await pool.end().catch(() => {});
       }

@@ -1,3 +1,4 @@
+import { createPublicKey, verify } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { resolveProvider, type ProviderRef } from '@buddi/core';
 import {
@@ -15,6 +16,7 @@ import {
   mapFinishReason,
   parseToolArguments,
 } from './openai.js';
+import { generateOllamaDeviceKey } from './ollama-signing.js';
 
 const openAiRef: ProviderRef = {
   kind: 'openai',
@@ -55,6 +57,31 @@ it('supports a compatible local endpoint, custom model and no-key auth without l
   expect(init.headers.authorization).toBeUndefined();
   expect(JSON.parse(init.body)).toMatchObject({ model: 'local-custom', max_tokens: 100 });
   expect(JSON.parse(init.body)).not.toHaveProperty('max_completion_tokens');
+});
+
+it('signs each attempt with an Ollama device key instead of a bearer token', async () => {
+  const { privateKey, publicKey } = generateOllamaDeviceKey();
+  let calls = 0;
+  const fetchMock = vi.fn(async (_url: string, _init: any) => (calls++ === 0 ? jsonResponse(503, { error: { message: 'busy' } }) : jsonResponse(200, okBody({ model: 'gpt-oss:120b' }))));
+  let clock = 1_790_000_000_000;
+  const provider = createOpenAiProvider(
+    { kind: 'openai', compatible: true, credentialKind: 'api-key', secret: '', baseUrl: 'https://ollama.com/v1', model: 'gpt-oss:120b', deviceKey: privateKey },
+    { fetch: fetchMock, sleep: noSleep, now: () => (clock += 5_000) },
+  );
+  await provider.complete({ system: '', messages: [], tools: [], maxTokens: 100 });
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  const [first, second] = fetchMock.mock.calls.map(([url, init]) => ({ url, init }));
+  for (const call of [first!, second!]) {
+    expect(call.url).toMatch(/^https:\/\/ollama\.com\/v1\/chat\/completions\?ts=\d+$/);
+    const [blob, signature] = String(call.init.headers.authorization).split(':');
+    expect(`ssh-ed25519 ${blob}`).toBe(publicKey);
+    const challenge = `POST,${new URL(call.url).pathname}${new URL(call.url).search}`;
+    expect(verify(null, Buffer.from(challenge), createPublicKey(privateKey), Buffer.from(signature!, 'base64'))).toBe(true);
+    expect(call.init.headers.authorization).not.toMatch(/^Bearer/);
+    expect(JSON.stringify(call.init)).not.toContain('PRIVATE KEY');
+  }
+  // A fresh timestamp per attempt, so a retry is never a replay of an old signature.
+  expect(first!.url).not.toBe(second!.url);
 });
 
 it('forwards cancellation to the transport and never retries an aborted request', async () => {

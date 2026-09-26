@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { ResolvedProvider } from '@buddi/core';
 import { listProviderModels, modelOptions } from './provider-models.js';
+import { generateOllamaDeviceKey } from './ollama-signing.js';
 import type { HttpTransport } from './transport.js';
 const provider: ResolvedProvider = { kind: 'openai', baseUrl: 'https://example.test/api/v1', secret: 'fixture-secret', credentialKind: 'api-key', model: 'gpt-test' };
 const response = (data: unknown, status = 200) => ({ ok: status === 200, status, json: async () => data }) as Awaited<ReturnType<HttpTransport>>;
@@ -63,4 +64,14 @@ it('tags what an Ollama host says can think, and leaves other hosts untagged', a
   const plain = await listProviderModels(other, transport);
   expect(plain.models.every((m) => m.thinks === undefined)).toBe(true);
   expect(calls.some((u) => u.endsWith('/api/show'))).toBe(false);
+});
+it('signs the model list for an Ollama device key and sends no bearer token', async () => {
+  const { privateKey, publicKey } = generateOllamaDeviceKey();
+  const transport = vi.fn<HttpTransport>().mockResolvedValue(response({ data: [{ id: 'gpt-oss:120b' }] }));
+  await listProviderModels({ kind: 'openai', compatible: true, baseUrl: 'https://ollama.com/v1', secret: '', credentialKind: 'api-key', model: 'gpt-oss:120b', deviceKey: privateKey }, transport);
+  const [url, init] = transport.mock.calls[0]!;
+  expect(url).toMatch(/^https:\/\/ollama\.com\/v1\/models\?ts=\d+$/);
+  const authorization = (init.headers as Record<string, string>).authorization!;
+  expect(`ssh-ed25519 ${authorization.split(':')[0]}`).toBe(publicKey);
+  expect(authorization).not.toMatch(/^Bearer/);
 });

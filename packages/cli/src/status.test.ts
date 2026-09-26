@@ -92,3 +92,16 @@ describe('renderStatus', () => {
     expect(text).toContain('Nothing needs you.');
   });
 });
+
+describe('Ollama Cloud with a device key', () => {
+  it('says who the device is connected as, and asks nothing without the database', async () => {
+    const report = await collectStatus(sources({ ollama: async () => [{ label: 'Ollama Cloud', line: 'connected as amen, device buddi on studio' }] }));
+    expect(report.ollama).toEqual([{ label: 'Ollama Cloud', line: 'connected as amen, device buddi on studio' }]);
+    expect(renderStatus(report)).toContain('Ollama Cloud: connected as amen, device buddi on studio.');
+    const down = await collectStatus(sources({
+      probeDatabase: async () => { throw new Error('down'); },
+      ollama: async () => { throw new Error('should not be asked'); },
+    }));
+    expect(down.ollama).toEqual([]);
+  });
+});

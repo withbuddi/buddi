@@ -1,5 +1,6 @@
 import type { ResolvedProvider } from '@buddi/core';
 import { defaultHttpTransport, type HttpTransport } from './transport.js';
+import { signOllamaRequest } from './ollama-signing.js';
 
 export interface AccountModel {
   id: string;
@@ -45,7 +46,10 @@ export async function listProviderModels(provider: ResolvedProvider, transport: 
     const url = new URL(endpoint);
     if (anthropic) url.searchParams.set('limit', '100');
     if (cursor) url.searchParams.set(anthropic ? 'after_id' : 'after', cursor);
-    const response = await transport(url.toString(), { method: 'GET', headers, signal, maxBytes: 2 * 1024 * 1024 });
+    const signed = provider.deviceKey ? signOllamaRequest('GET', url.toString(), provider.deviceKey) : null;
+    const response = await transport(signed?.url ?? url.toString(), {
+      method: 'GET', headers: signed ? { ...headers, authorization: signed.authorization } : headers, signal, maxBytes: 2 * 1024 * 1024,
+    });
     if (!response.ok) throw Object.assign(new Error('Could not retrieve the provider model list.'), { status: response.status });
     const data = await response.json();
     if (!data || !Array.isArray(data.data)) throw new Error('Invalid provider model list.');
@@ -79,9 +83,10 @@ async function withCapabilities(
   if (root === provider.baseUrl.replace(/\/+$/, '')) return models;
   const tagged = await Promise.all(models.map(async (model) => {
     try {
-      const response = await transport(`${root}/api/show`, {
+      const signed = provider.deviceKey ? signOllamaRequest('POST', `${root}/api/show`, provider.deviceKey) : null;
+      const response = await transport(signed?.url ?? `${root}/api/show`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        headers: { 'content-type': 'application/json', accept: 'application/json', ...(signed ? { authorization: signed.authorization } : {}) },
         body: JSON.stringify({ model: model.id }),
         signal,
         maxBytes: 4 * 1024 * 1024,
