@@ -101,6 +101,7 @@ describe('goal.metrics', () => {
     expect(result.metrics).toEqual([
       {
         id: 'finance.total_debt',
+        source: 'plugin',
         plugin: 'finance',
         description: debt.description,
         unit: 'currency',
@@ -342,6 +343,31 @@ describe('the cards', () => {
       TZ,
     );
     expect(stale).toContain('today (reading as of 2026-09-18) to');
+  });
+
+  it('names the owner as the source when the owner reports the number', () => {
+    const preview = renderGoalSet(
+      {
+        ...envelope,
+        title: '288 to 220 by December',
+        metric: 'owner.weight',
+        target: { kind: 'absolute', value: 220 },
+        baseline: { value: 288, currency: null, asOf: envelope.baseline.asOf, readingAsOf: null },
+        deadline: '2026-12-31T14:00:00.000Z',
+        milestones: [260],
+        owner: {
+          metric: { slug: 'weight', label: 'Weight', unit: 'number', direction: 'down', unitLabel: 'lb' },
+          isNew: true,
+          baselineTold: true,
+        },
+      },
+      { unit: 'number', label: 'lb' },
+      'down',
+      TZ,
+    );
+    expect(preview).toContain('From 288 lb today to 220 lb by 2026-12-31');
+    expect(preview).toContain('Measured by you, when you tell buddi (a new metric, owner.weight), until 2026-12-31.');
+    expect(preview).toContain('Milestones you will hear about, once each: 260 lb.');
   });
 
   it('renders the day in the owner‘s zone, not UTC', () => {

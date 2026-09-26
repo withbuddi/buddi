@@ -12,9 +12,25 @@ import {
   targetValue,
   type Goal,
   type GoalCheck,
+  isOwnerMetric,
+  ownerMetricSource,
   type MetricDirection,
+  type MetricSource,
   type MetricUnit,
+  type OwnerMetricSource,
 } from '@buddi/core';
+
+/**
+ * The metric source every goal surface reads, with the owner's metrics in it.
+ *
+ * A source that already answers them (one `createGoalManifest` built) is used
+ * as it is, so the tools, the watcher and the page share one cache.
+ */
+export function asOwnerSource(source: MetricSource): OwnerMetricSource {
+  return typeof (source as Partial<OwnerMetricSource>).refresh === 'function'
+    ? (source as OwnerMetricSource)
+    : ownerMetricSource(source);
+}
 
 /**
  * The watcher's id. Core's own, like the goals it reads.
@@ -37,6 +53,30 @@ export function goalKeyPrefix(goalId: string): string {
 }
 
 /**
+ * A metric's unit, as the words for its numbers need it: the enum every
+ * surface formats, and — for a metric the owner reports — the free word after
+ * the number ("lb", "kg"). A plain `MetricUnit` is the same thing with no word.
+ */
+export type ValueUnit = MetricUnit | { unit: MetricUnit; label: string | null };
+
+/** A metric's unit as its numbers are printed, or `number` for a metric nobody installed. */
+export function valueUnitOf(source: MetricSource, metric: string): ValueUnit {
+  const found = source.metric(metric);
+  if (found === undefined) return 'number';
+  return isOwnerMetric(found) && found.unitLabel ? { unit: found.unit, label: found.unitLabel } : found.unit;
+}
+
+/** The enum, whichever shape the unit came in. */
+export function baseUnit(unit: ValueUnit): MetricUnit {
+  return typeof unit === 'string' ? unit : unit.unit;
+}
+
+/** The owner's word for the unit, or null. */
+export function unitLabelOf(unit: ValueUnit): string | null {
+  return typeof unit === 'string' ? null : unit.label;
+}
+
+/**
  * A metric's number, in its own unit. Already formatted, like a Home stat.
  *
  * A `currency` metric that answered no currency prints the bare number. The
@@ -46,10 +86,16 @@ export function goalKeyPrefix(goalId: string): string {
  */
 export function formatValue(
   value: number | null,
-  unit: MetricUnit,
+  valueUnit: ValueUnit,
   currency?: string | null,
 ): string {
   if (value === null || !Number.isFinite(value)) return 'not measured';
+  const label = unitLabelOf(valueUnit);
+  const bare = formatBare(value, baseUnit(valueUnit), currency);
+  return label === null ? bare : `${bare} ${label}`;
+}
+
+function formatBare(value: number, unit: MetricUnit, currency?: string | null): string {
   if (unit === 'currency') {
     if (!currency) return new Intl.NumberFormat('en-US').format(round(value, 2));
     try {
@@ -82,7 +128,7 @@ function round(value: number, places: number): number {
  */
 export function formatPace(
   pace: number | null,
-  unit: MetricUnit,
+  unit: ValueUnit,
   direction: MetricDirection,
   currency?: string | null,
 ): string {
@@ -93,7 +139,7 @@ export function formatPace(
 /** One goal, on one line: what `goal.list` prints and what a wake carries. */
 export function goalLine(
   goal: Goal,
-  unit: MetricUnit,
+  unit: ValueUnit,
   last: GoalCheck | null,
   timezone: string,
 ): string {
@@ -114,7 +160,7 @@ export function goalLine(
 /** The last four checks, oldest first, one line each. Evidence, not prose. */
 export function checkLines(
   checks: readonly GoalCheck[],
-  unit: MetricUnit,
+  unit: ValueUnit,
   timezone: string,
   currency: string | null = null,
 ): string[] {

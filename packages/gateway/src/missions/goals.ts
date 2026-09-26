@@ -57,6 +57,21 @@ import {
   standingOf,
   targetValue,
   updateGoal,
+  METRIC_DIRECTIONS,
+  METRIC_UNITS,
+  MAX_OWNER_LABEL,
+  MAX_OWNER_UNIT_LABEL,
+  OWNER_SOURCE,
+  createOwnerMetric,
+  getOwnerMetric,
+  isOwnerMetric,
+  ownerMetricId,
+  ownerSlugOf,
+  recordOwnerValue,
+  refuseOwnerSlug,
+  type OwnerMetric,
+  type OwnerMetricSource,
+  type OwnerValueSource,
   type Finding,
   type GoalStanding,
   type GoalVerdict,
@@ -74,7 +89,19 @@ import {
   type ToolDefinition,
 } from '@buddi/core';
 import { z } from 'zod';
-import { GOALS_SENTINEL_ID, checkLines, formatPace, formatValue, goalKey, goalLine } from './goals-format.js';
+import {
+  GOALS_SENTINEL_ID,
+  asOwnerSource,
+  baseUnit,
+  checkLines,
+  formatPace,
+  formatValue,
+  goalKey,
+  goalLine,
+  unitLabelOf,
+  valueUnitOf,
+  type ValueUnit,
+} from './goals-format.js';
 import {
   CHART_CHECKS,
   chartOf,
@@ -142,6 +169,25 @@ export const GOAL_WAKE_INSTRUCTION =
 
 export { checkLines, formatPace, formatValue, goalLine } from './goals-format.js';
 
+export { asOwnerSource } from './goals-format.js';
+
+/** Where a value was said, from the surface the run answers on. */
+export function valueSourceOf(ctx: CoreToolContext): OwnerValueSource {
+  const surface = ctx.surface?.id;
+  if (surface === 'telegram') return 'telegram';
+  if (surface === 'web' || surface === 'cli') return 'chat';
+  return 'api';
+}
+
+/** What an owner metric is, as `goal.set` names one it has never seen. */
+export interface OwnerMetricDefinition {
+  slug: string;
+  label: string;
+  unit: MetricUnit;
+  direction: MetricDirection;
+  unitLabel: string | null;
+}
+
 /** What a goal envelope says will happen. Hashed before the owner sees it. */
 export interface GoalSetEnvelope {
   tool: 'goal.set';
@@ -172,6 +218,12 @@ export interface GoalSetEnvelope {
   deadline: string;
   cadence: GoalCadence;
   milestones: number[];
+  /**
+   * For a metric the owner reports: its definition (created on execute when it
+   * is new) and whether the baseline is a number the owner just said, which
+   * execute then records as the metric's first value.
+   */
+  owner?: { metric: OwnerMetricDefinition; isNew: boolean; baselineTold: boolean };
 }
 
 /**
@@ -184,7 +236,7 @@ export interface GoalSetEnvelope {
  */
 export function renderGoalSet(
   envelope: GoalSetEnvelope,
-  unit: MetricUnit,
+  unit: ValueUnit,
   direction: MetricDirection,
   timezone: string,
 ): string {
@@ -215,9 +267,13 @@ export function renderGoalSet(
       `${formatValue(targetValue(asGoal), unit, currency)} by ${localDateString(asGoal.deadline, timezone)}: ` +
       `${formatPace(pace, unit, direction, currency)}, checked ${envelope.cadence}, held by @${envelope.agentId}`,
     '',
-    `Measured by ${envelope.metric}${
-      Object.keys(envelope.params).length === 0 ? '' : ` ${JSON.stringify(envelope.params)}`
-    }, every ${envelope.cadence === 'daily' ? 'day' : 'week'}, until ${localDateString(asGoal.deadline, timezone)}.`,
+    envelope.owner !== undefined
+      ? `Measured by you, when you tell buddi${
+          envelope.owner.isNew ? ` (a new metric, ${envelope.metric})` : ''
+        }, until ${localDateString(asGoal.deadline, timezone)}.`
+      : `Measured by ${envelope.metric}${
+          Object.keys(envelope.params).length === 0 ? '' : ` ${JSON.stringify(envelope.params)}`
+        }, every ${envelope.cadence === 'daily' ? 'day' : 'week'}, until ${localDateString(asGoal.deadline, timezone)}.`,
   ];
   if (envelope.milestones.length > 0) {
     lines.push(
@@ -252,7 +308,7 @@ export interface GoalUpdateEnvelope {
 /** The card: one line per field that actually changes, before → after. */
 export function renderGoalUpdate(
   envelope: GoalUpdateEnvelope,
-  unit: MetricUnit,
+  unit: ValueUnit,
   timezone: string,
   baseline: number,
   currency: string | null = null,
@@ -304,6 +360,28 @@ const targetInput = z
   })
   .strict();
 
+/** A metric the owner will report, named the first time a goal needs it. */
+const ownerMetricInput = z
+  .object({
+    slug: z
+      .string()
+      .min(1)
+      .max(40)
+      .describe('A short kebab name, unique here: "weight", "resting-heart-rate". The metric becomes owner.<slug>.'),
+    label: z.string().min(1).max(MAX_OWNER_LABEL).describe('What it is, in the owner\'s words: "Weight".'),
+    unit: z
+      .enum(METRIC_UNITS)
+      .describe('How the number is formatted. Weight is "number" with a unitLabel; a count of runs is "count".'),
+    direction: z.enum(METRIC_DIRECTIONS).describe('Which way is better: "down" for weight to lose, "up" for runs.'),
+    unitLabel: z
+      .string()
+      .min(1)
+      .max(MAX_OWNER_UNIT_LABEL)
+      .optional()
+      .describe('The word after the number, when there is one: "lb", "kg", "km".'),
+  })
+  .strict();
+
 const setInput = z
   .object({
     title: z
@@ -312,9 +390,20 @@ const setInput = z
       .max(MAX_GOAL_TITLE)
       .describe('A short name the owner will recognise on a card months from now: "Debt down by 40k".'),
     metric: z
-      .string()
-      .min(1)
-      .describe('The namespaced metric to watch, exactly as goal.metrics lists it: "finance.total_debt".'),
+      .union([z.string().min(1), z.object({ owner: ownerMetricInput }).strict()])
+      .describe(
+        'The metric to watch: an id exactly as goal.metrics lists it ("finance.total_debt", "owner.weight"), ' +
+          'or, when no metric measures what the owner named, {"owner": {slug, label, unit, direction, unitLabel?}} ' +
+          'to create one the owner reports. Never create an owner metric for something a plugin already measures.',
+      ),
+    baseline: z
+      .object({ value: z.number().finite().describe('The number the owner said: "I\'m 288" is 288.') })
+      .strict()
+      .optional()
+      .describe(
+        'Only for a metric the owner reports: where they are today, from the sentence that set the goal, so ' +
+          'the goal starts measured. A plugin metric is measured instead.',
+      ),
     params: z
       .record(z.unknown())
       .optional()
@@ -411,6 +500,8 @@ export interface GoalStatusGoal {
   metric: string;
   params: Record<string, unknown>;
   unit: MetricUnit;
+  /** The owner's word after the number ("lb"), for a metric they report. */
+  unitLabel: string | null;
   target: GoalTarget;
   targetValue: number;
   baseline: { value: number; asOf: string };
@@ -452,9 +543,15 @@ export interface GoalStatusResult {
  * `MetricSource` so a suite can hand it one in-memory metric and exercise the
  * whole surface without building a plugin.
  */
-export function createGoalManifest(source: MetricSource): PluginManifest {
+export function createGoalManifest(base: MetricSource): PluginManifest {
+  /*
+   * The plugin metrics and the owner's, behind one `metric(id)`. Every tool
+   * refreshes its owner half first — one small `select` — so a metric another
+   * conversation created a minute ago is known here.
+   */
+  const source = asOwnerSource(base);
   /** The unit a goal's numbers are rendered in, or a safe default. */
-  const unitOf = (metric: string): MetricUnit => source.metric(metric)?.unit ?? 'number';
+  const unitOf = (metric: string): ValueUnit => valueUnitOf(source, metric);
   /** Which way is better, for a goal whose plugin may have been uninstalled. */
   const directionOf = (metric: string): MetricDirection => source.metric(metric)?.direction ?? 'down';
 
@@ -479,7 +576,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     goal: { target: GoalTarget; baseline: { value: number; asOf: Date } },
     milestones: readonly number[],
     direction: MetricDirection,
-    unit: MetricUnit,
+    unit: ValueUnit,
     currency: string | null,
   ): Refusal | null {
     const target = targetValue(goal);
@@ -516,15 +613,122 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     return null;
   }
 
+  /** The metric a `goal.set` names, resolved: an installed one, or an owner definition. */
+  interface ResolvedMetric {
+    id: string;
+    unit: ValueUnit;
+    direction: MetricDirection;
+    /** Set when the metric is the owner's, new or not. */
+    owner: { metric: OwnerMetricDefinition; isNew: boolean } | null;
+  }
+
+  function definitionOf(metric: OwnerMetric): OwnerMetricDefinition {
+    return {
+      slug: metric.slug,
+      label: metric.label,
+      unit: metric.unit,
+      direction: metric.direction,
+      unitLabel: metric.unitLabel,
+    };
+  }
+
+  /**
+   * Which metric this is, or why there is none.
+   *
+   * A string names an installed metric (a plugin's, or an owner metric that
+   * already exists). An `{ owner }` definition names one to create — or one
+   * that exists already, in which case it has to agree about the unit and the
+   * direction: two goals reading one series in opposite directions is a
+   * contradiction, not a second opinion.
+   */
+  async function resolveMetric(
+    input: z.infer<typeof setInput>,
+    ctx: CoreToolContext,
+  ): Promise<{ ok: true; metric: ResolvedMetric } | Refusal> {
+    if (typeof input.metric === 'string') {
+      const found = source.metric(input.metric);
+      if (found === undefined) {
+        return refusal(
+          'unknown-metric',
+          `no metric "${input.metric}" is installed here. Call goal.metrics and name one of those, or pass ` +
+            '{"owner": {...}} for a number the owner will report; a goal without a metric is a reminder.',
+        );
+      }
+      if (isOwnerMetric(found)) {
+        const slug = ownerSlugOf(found.id) as string;
+        return {
+          ok: true,
+          metric: {
+            id: found.id,
+            unit: valueUnitOf(source, found.id),
+            direction: found.direction,
+            owner: {
+              metric: { slug, label: found.label, unit: found.unit, direction: found.direction, unitLabel: found.unitLabel },
+              isNew: false,
+            },
+          },
+        };
+      }
+      return { ok: true, metric: { id: found.id, unit: found.unit, direction: found.direction, owner: null } };
+    }
+    const def = input.metric.owner;
+    const badSlug = refuseOwnerSlug(def.slug);
+    if (badSlug !== null) return refusal('invalid-metric', badSlug);
+    const wanted: OwnerMetricDefinition = {
+      slug: def.slug,
+      label: def.label.trim(),
+      unit: def.unit,
+      direction: def.direction,
+      unitLabel: def.unitLabel?.trim() || null,
+    };
+    const existing = await getOwnerMetric(ctx.db, def.slug);
+    if (existing !== null) {
+      if (
+        existing.unit !== wanted.unit ||
+        existing.direction !== wanted.direction ||
+        (existing.unitLabel ?? null) !== wanted.unitLabel
+      ) {
+        return refusal(
+          'metric-differs',
+          `owner.${def.slug} already exists as ${existing.unit}${
+            existing.unitLabel ? ` (${existing.unitLabel})` : ''
+          }, better ${existing.direction}. Name it as "owner.${def.slug}" to use it, or choose another slug.`,
+        );
+      }
+      return {
+        ok: true,
+        metric: {
+          id: existing.id,
+          unit: existing.unitLabel ? { unit: existing.unit, label: existing.unitLabel } : existing.unit,
+          direction: existing.direction,
+          owner: { metric: definitionOf(existing), isNew: false },
+        },
+      };
+    }
+    return {
+      ok: true,
+      metric: {
+        id: ownerMetricId(def.slug),
+        unit: wanted.unitLabel ? { unit: wanted.unit, label: wanted.unitLabel } : wanted.unit,
+        direction: wanted.direction,
+        owner: { metric: wanted, isNew: true },
+      },
+    };
+  }
+
   /**
    * Everything `goal.set` refuses before an approval exists, in one place.
    *
    * Read twice on purpose: by `describe`, so the call never becomes a card,
    * and again by `execute`, because the approval was recorded minutes or hours
    * ago and "a delegate may not" is a fact about the run that is executing. It
-   * only reads the arguments and the context, so both readings agree.
+   * only reads the arguments, the context and the metric definitions, so both
+   * readings agree.
    */
-  function refuseSet(input: z.infer<typeof setInput>, ctx: CoreToolContext): Refusal | null {
+  async function refuseSet(
+    input: z.infer<typeof setInput>,
+    ctx: CoreToolContext,
+  ): Promise<{ ok: true; metric: ResolvedMetric; params: Record<string, unknown> } | Refusal> {
     if (!ctx.agentId) {
       return refusal(
         'no-agent',
@@ -538,16 +742,25 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
           'be woken about it. Report back instead, and let the agent that asked you propose it.',
       );
     }
-    const metric = source.metric(input.metric);
-    if (metric === undefined) {
-      return refusal(
-        'unknown-metric',
-        `no metric "${input.metric}" is installed here. Call goal.metrics and name one of those; a goal ` +
-          'without a metric is a reminder.',
-      );
+    const resolved = await resolveMetric(input, ctx);
+    if (!resolved.ok) return resolved;
+    const metric = resolved.metric;
+    let params: Record<string, unknown> = {};
+    if (metric.owner !== null) {
+      if (input.params !== undefined && Object.keys(input.params).length > 0) {
+        return refusal('invalid-params', `${metric.id} is a number the owner reports; it takes no parameters.`);
+      }
+    } else {
+      if (input.baseline !== undefined) {
+        return refusal(
+          'baseline-measured',
+          `${metric.id} is measured by its plugin, so the baseline is measured too; leave baseline out.`,
+        );
+      }
+      const checked = checkMetricParams(source.metric(metric.id) as NonNullable<ReturnType<typeof source.metric>>, input.params);
+      if (!checked.ok) return refusal('invalid-params', checked.message);
+      params = checked.params;
     }
-    const params = checkMetricParams(metric, input.params);
-    if (!params.ok) return refusal('invalid-params', params.message);
     const when = parseReminderWhen(input.deadline, ctx.timezone);
     if (!when.ok) return refusal('invalid-deadline', when.message);
     const aheadMs = when.at.getTime() - ctx.now().getTime();
@@ -565,31 +778,40 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
           'hold a plan to.',
       );
     }
-    return null;
+    return { ok: true, metric, params };
   }
 
-  /** The envelope, from the arguments and one measurement. */
+  /** The envelope, from the arguments, the resolved metric and one measurement. */
   function envelopeOf(
     input: z.infer<typeof setInput>,
     ctx: CoreToolContext,
+    metric: ResolvedMetric,
+    params: Record<string, unknown>,
     baseline: GoalSetEnvelope['baseline'],
   ): GoalSetEnvelope {
     const when = parseReminderWhen(input.deadline, ctx.timezone);
-    const metric = source.metric(input.metric);
-    const params = metric === undefined ? { ok: false as const } : checkMetricParams(metric, input.params);
     return {
       tool: 'goal.set',
       agentId: ctx.agentId ?? '',
       title: input.title.trim(),
-      metric: input.metric,
+      metric: metric.id,
       // What the schema *made of* the input — defaults applied, unknown keys
       // already refused — so the goal row and every later measurement agree.
-      params: params.ok ? params.params : (input.params ?? {}),
+      params,
       target: { kind: input.target.kind, value: input.target.value },
       baseline,
       deadline: (when.ok ? when.at : new Date(0)).toISOString(),
       cadence: input.cadence,
       milestones: input.milestones ?? [],
+      ...(metric.owner === null
+        ? {}
+        : {
+            owner: {
+              metric: metric.owner.metric,
+              isNew: metric.owner.isNew,
+              baselineTold: input.baseline !== undefined,
+            },
+          }),
     };
   }
 
@@ -606,24 +828,53 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     };
   }
 
+  /**
+   * The approved envelope's word on whether the owner metric was new.
+   *
+   * "New" is a fact about the moment the card was drawn: by the time the
+   * executor re-describes, another approval may have created the slug, and a
+   * card that said "a new metric" must not be voided for that — the definition
+   * already had to agree for the second goal to get this far.
+   */
+  function approvedIsNew(ctx: CoreToolContext, metric: ResolvedMetric): ResolvedMetric {
+    const envelope = (ctx.approvedEffect?.envelope ?? null) as GoalSetEnvelope | null;
+    if (metric.owner === null || envelope?.owner === undefined) return metric;
+    return { ...metric, owner: { ...metric.owner, isNew: envelope.owner.isNew === true } };
+  }
+
   const metrics: ToolDefinition<Record<string, never>, unknown> = {
     name: 'goal.metrics',
     description:
       'Every number this installation can actually measure, with what it means, which way is better and the ' +
-      'narrowing it takes. A goal watches one of these — name one from here when you propose a goal, and if ' +
-      'the list is empty then nothing installed here can be measured and a goal is the wrong tool.',
+      'narrowing it takes. A goal watches one of these — name one from here when you propose a goal. Source ' +
+      '"plugin" is measured by a plugin; source "owner" is a number the owner reports with goal.record. When ' +
+      'nothing here measures what the owner named, goal.set can create an owner metric.',
     tier: 'auto',
     input: z.object({}).strict(),
-    async execute() {
+    async execute(_input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       return {
-        metrics: source.metrics().map((metric) => ({
-          id: metric.id,
-          plugin: metric.plugin,
-          description: metric.description,
-          unit: metric.unit,
-          direction: metric.direction,
-          ...(metricParamsSchema(metric) === undefined ? {} : { params: metricParamsSchema(metric) }),
-        })),
+        metrics: source.metrics().map((metric) =>
+          isOwnerMetric(metric)
+            ? {
+                id: metric.id,
+                source: OWNER_SOURCE,
+                description: metric.description,
+                label: metric.label,
+                unit: metric.unit,
+                ...(metric.unitLabel === null ? {} : { unitLabel: metric.unitLabel }),
+                direction: metric.direction,
+              }
+            : {
+                id: metric.id,
+                source: 'plugin',
+                plugin: metric.plugin,
+                description: metric.description,
+                unit: metric.unit,
+                direction: metric.direction,
+                ...(metricParamsSchema(metric) === undefined ? {} : { params: metricParamsSchema(metric) }),
+              },
+        ),
       };
     },
   };
@@ -637,7 +888,8 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       'deadline gets close. The owner sees the whole shape before they say yes: where the number is today, ' +
       'where it has to get to, by when, what that is per week, and that it is you who will be speaking about ' +
       `it. At most ${MAX_OPEN_GOALS} open goals in an installation. Use it for something measurable that ` +
-      'runs for weeks; for one future nudge use reminder.set.',
+      'runs for weeks; for one future nudge use reminder.set. When no plugin measures the number (a weight, ' +
+      'a time), create an owner metric with {"owner": {...}} and pass the baseline the owner said.',
     tier: 'gated',
     input: setInput,
     /*
@@ -650,8 +902,10 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
      * the owner is never shown a card for a goal that could not exist.
      */
     async describe(input, ctx: CoreToolContext) {
-      const no = refuseSet(input, ctx);
-      if (no !== null) throw new Error(no.message);
+      await source.refresh(ctx.db);
+      const checked = await refuseSet(input, ctx);
+      if (!checked.ok) throw new Error(checked.message);
+      const metric = approvedIsNew(ctx, checked.metric);
       /*
        * Measure **once**, on the first description. The executor re-describes
        * before it dispatches and compares envelope hashes, so a second
@@ -660,51 +914,68 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
        * hopeless for an unread count, and `email.inbox_unread` is one of the
        * metrics this exists for. At re-description the approved envelope is on
        * the context, so the number the owner saw is the number that executes.
+       *
+       * A number the owner just said is the baseline as it is: there is
+       * nothing to measure, and it is the one sentence the goal came from.
        */
       const baseline =
         approvedBaseline(ctx) ??
-        (await (async (): Promise<GoalSetEnvelope['baseline']> => {
-          const measured = await measureMetricResult(source, input.metric, input.params ?? {}, ctx);
-          if (!measured.ok) {
-            /*
-             * The card is never shown for a metric nobody can read. Approving
-             * "from ? today to 47,400" is approving nothing, and the baseline
-             * is the one number the whole goal is relative to.
-             */
-            throw new Error(
-              `${input.metric} cannot be measured right now, so there is no baseline to set a goal against: ` +
-                `${measured.note ?? 'no reason given'}. Fix that first — a goal needs a number to start from.`,
-            );
-          }
-          return {
-            value: measured.reading.value,
-            currency: measured.reading.currency ?? null,
-            asOf: ctx.now().toISOString(),
-            readingAsOf: measured.reading.asOf?.toISOString() ?? null,
-          };
-        })());
+        (input.baseline !== undefined && metric.owner !== null
+          ? { value: input.baseline.value, currency: null, asOf: ctx.now().toISOString(), readingAsOf: null }
+          : await (async (): Promise<GoalSetEnvelope['baseline']> => {
+              const measured =
+                metric.owner !== null && metric.owner.isNew
+                  ? { ok: false as const, note: 'the owner has told buddi no value yet' }
+                  : await measureMetricResult(
+                      source,
+                      metric.id,
+                      metric.owner !== null ? { cadence: input.cadence } : checked.params,
+                      ctx,
+                    );
+              if (!measured.ok) {
+                /*
+                 * The card is never shown for a metric nobody can read.
+                 * Approving "from ? today to 47,400" is approving nothing, and
+                 * the baseline is the one number the whole goal is relative to.
+                 */
+                throw new Error(
+                  metric.owner !== null
+                    ? `${metric.id} has no recent value, so there is no baseline to set a goal against. Ask the ` +
+                        'owner where they are today and pass it as baseline: {"value": ...}.'
+                    : `${metric.id} cannot be measured right now, so there is no baseline to set a goal against: ` +
+                        `${measured.note ?? 'no reason given'}. Fix that first — a goal needs a number to start from.`,
+                );
+              }
+              return {
+                value: measured.reading.value,
+                currency: measured.reading.currency ?? null,
+                asOf: ctx.now().toISOString(),
+                readingAsOf: measured.reading.asOf?.toISOString() ?? null,
+              };
+            })());
 
-      const envelope = envelopeOf(input, ctx, baseline);
-      const direction = directionOf(input.metric);
+      const envelope = envelopeOf(input, ctx, metric, checked.params, baseline);
       const wrongWay = refuseDirection(
         { target: envelope.target, baseline: { value: baseline.value, asOf: new Date(baseline.asOf) } },
         envelope.milestones,
-        direction,
-        unitOf(input.metric),
+        metric.direction,
+        metric.unit,
         baseline.currency,
       );
       if (wrongWay !== null) throw new Error(wrongWay.message);
       return {
         envelope,
-        preview: renderGoalSet(envelope, unitOf(input.metric), direction, ctx.timezone),
+        preview: renderGoalSet(envelope, metric.unit, metric.direction, ctx.timezone),
       };
     },
     async execute(input, ctx: CoreToolContext) {
       // Only `executeApproved` reaches this. The checks run again anyway: the
       // approval was recorded minutes or hours ago, and "a delegate may not"
       // is a fact about the run that is executing, not about the one that asked.
-      const no = refuseSet(input, ctx);
-      if (no !== null) throw new Error(no.message);
+      await source.refresh(ctx.db);
+      const checked = await refuseSet(input, ctx);
+      if (!checked.ok) throw new Error(checked.message);
+      const metric = approvedIsNew(ctx, checked.metric);
       /*
        * The baseline is the approval's: it is the number the owner saw, and a
        * goal measured against a different one is a different goal. Everything
@@ -716,7 +987,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       if (baseline === null) {
         throw new Error('the effect no longer matches the approved preview; propose it again');
       }
-      const envelope = envelopeOf(input, ctx, baseline);
+      const envelope = envelopeOf(input, ctx, metric, checked.params, baseline);
       assertApprovedEffect(ctx, envelope);
 
       const created = await createGoal(ctx.db, {
@@ -733,6 +1004,27 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       });
       if (!created.ok) return { ok: false, reason: created.reason, message: created.message };
 
+      /*
+       * The owner metric is created only now that the goal exists — a goal the
+       * budget refused leaves no definition behind — and a baseline the owner
+       * said is the metric's first value, so the next thing they tell buddi is
+       * measured against it.
+       */
+      if (envelope.owner !== undefined) {
+        const owned = await createOwnerMetric(ctx.db, envelope.owner.metric);
+        source.remember(owned);
+        if (envelope.owner.baselineTold) {
+          await recordOwnerValue(ctx.db, {
+            slug: owned.slug,
+            value: envelope.baseline.value,
+            at: new Date(envelope.baseline.asOf),
+            note: 'baseline, said when the goal was set',
+            source: valueSourceOf(ctx),
+            conversationId: ctx.conversationId ?? null,
+          });
+        }
+      }
+
       // The baseline is also the first check: a goal's history starts where
       // the owner was told it starts, not at the first sentinel tick.
       await recordCheck(ctx.db, {
@@ -741,12 +1033,15 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
         asOf: envelope.baseline.readingAsOf === null ? null : new Date(envelope.baseline.readingAsOf),
         value: envelope.baseline.value,
         currency: envelope.baseline.currency,
-        note: 'baseline, measured when the goal was set',
+        note:
+          envelope.owner?.baselineTold === true
+            ? 'baseline, said when the goal was set'
+            : 'baseline, measured when the goal was set',
         paceNeeded: paceNeeded(created.goal, envelope.baseline.value, ctx.now()),
       });
       return {
         ok: true,
-        goal: renderGoal(created.goal, unitOf(envelope.metric), ctx.timezone, unchecked(created.goal, ctx.now()), [], ctx.now()),
+        goal: renderGoal(created.goal, metric.unit, ctx.timezone, unchecked(created.goal, ctx.now()), [], ctx.now()),
       };
     },
   };
@@ -850,6 +1145,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     // any action exists, and the owner is never asked about a change nobody
     // is allowed to make.
     async describe(input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
@@ -868,6 +1164,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       };
     },
     async execute(input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) throw new Error(mine.message);
       const goal = mine.goal;
@@ -912,6 +1209,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     tier: 'auto',
     input: closeInput,
     async execute(input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const mine = await holderOf(input.id, ctx);
       if (!mine.ok) return mine;
       /*
@@ -955,7 +1253,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
    */
   function renderGoal(
     goal: Goal,
-    unit: MetricUnit,
+    unit: ValueUnit,
     timezone: string,
     standing: GoalStanding,
     checks: GoalCheck[],
@@ -973,7 +1271,8 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
       agentId: goal.agentId,
       metric: goal.metric,
       params: goal.params,
-      unit,
+      unit: baseUnit(unit),
+      unitLabel: unitLabelOf(unit),
       target: goal.target,
       targetValue: targetValue(goal),
       baseline: { value: goal.baseline.value, asOf: goal.baseline.asOf.toISOString() },
@@ -1021,6 +1320,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     tier: 'auto',
     input: statusInput,
     async execute(input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const goals =
         input.id === undefined
           ? await listGoals(ctx.db, { agentId: ctx.agentId ?? '', limit: 50 })
@@ -1087,6 +1387,7 @@ export function createGoalManifest(source: MetricSource): PluginManifest {
     tier: 'auto',
     input: z.object({}).strict(),
     async execute(_input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       const out = [];
       for (const goal of goals) {
@@ -1146,7 +1447,8 @@ export function cadenceDue(cadence: GoalCadence, lastAt: Date | null, now: Date)
  * and a settled goal is no longer open, so every key under it stops being
  * returned on the next tick and resolves. The wake it raised has already gone.
  */
-export function createGoalsSentinel(source: MetricSource): Sentinel {
+export function createGoalsSentinel(base: MetricSource): Sentinel {
+  const source = asOwnerSource(base);
   return {
     id: GOALS_SENTINEL_ID,
     description:
@@ -1155,12 +1457,14 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
     async run(ctx: CoreSentinelContext): Promise<Finding[]> {
       const now = ctx.now();
       const findings: Finding[] = [];
+      await source.refresh(ctx.db);
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
 
       for (const goal of goals) {
         const metric = source.metric(goal.metric);
-        const unit = metric?.unit ?? 'number';
+        const unit = valueUnitOf(source, goal.metric);
         const direction = metric?.direction ?? 'down';
+        const owned = isOwnerMetric(metric);
         const currency = goal.currency;
 
         /*
@@ -1183,7 +1487,14 @@ export function createGoalsSentinel(source: MetricSource): Sentinel {
         const deadlineUnmeasured =
           pastDeadline && (lastAt === null || lastAt.getTime() < goal.deadline.getTime());
         if (deadlineUnmeasured || cadenceDue(goal.cadence, lastAt, now)) {
-          const reading = await measureMetricResult(source, goal.metric, goal.params, goalToolContext(goal, ctx));
+          // An owner metric is read against *this goal's* cadence: "older than
+          // two cadences" is two weeks for a weekly goal, two days for a daily one.
+          const reading = await measureMetricResult(
+            source,
+            goal.metric,
+            owned ? { ...goal.params, cadence: goal.cadence } : goal.params,
+            goalToolContext(goal, ctx),
+          );
           const value = reading.ok ? reading.reading.value : null;
           /*
            * The arithmetic of the row about to be written, over the same

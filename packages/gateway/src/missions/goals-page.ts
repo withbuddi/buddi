@@ -50,7 +50,15 @@ import {
   type ViewDescriptor,
 } from '@buddi/core';
 import { z } from 'zod';
-import { GOALS_SENTINEL_ID, formatPace, formatValue, goalKeyPrefix } from './goals-format.js';
+import {
+  GOALS_SENTINEL_ID,
+  asOwnerSource,
+  formatPace,
+  formatValue,
+  goalKeyPrefix,
+  valueUnitOf,
+  type ValueUnit,
+} from './goals-format.js';
 
 /** The page parameter the chosen goal's id is bound to: `#/p/goal/goals/<id>`. */
 const GOAL = 'goal';
@@ -151,7 +159,7 @@ export function standingTone(
  */
 export function goalSub(
   goal: Goal,
-  unit: MetricUnit,
+  unit: ValueUnit,
   direction: MetricDirection,
   standing: GoalStanding,
   lastLookFailed: boolean,
@@ -177,13 +185,15 @@ export function goalSub(
  * and "you have no goals" is a sentence the page does not need a card for. A
  * goal that has been met and closed is history, and history lives on the page.
  */
-export function createGoalHome(source: MetricSource): HomeContribution {
+export function createGoalHome(base: MetricSource): HomeContribution {
+  const source = asOwnerSource(base);
   return {
     id: 'goal.goals',
     title: 'Goals',
     async produce(ctx: CoreToolContext): Promise<HomeBlock | null> {
       const goals = await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS });
       if (goals.length === 0) return null;
+      await source.refresh(ctx.db);
       const now = ctx.now();
       // One statement for every goal's checks, not two per goal: Home draws
       // every open goal, and a round trip each was a dozen on every load.
@@ -191,7 +201,7 @@ export function createGoalHome(source: MetricSource): HomeContribution {
       const rows: HomeRow[] = [];
       let offTrack = 0;
       for (const goal of goals) {
-        const unit = source.metric(goal.metric)?.unit ?? 'number';
+        const unit = valueUnitOf(source, goal.metric);
         const direction = source.metric(goal.metric)?.direction ?? 'down';
         const { measured, lastLookFailed } = byGoal.get(goal.id) ?? { measured: [], lastLookFailed: false };
         const standing = standingOf(goal, direction, measured, now);
@@ -256,14 +266,16 @@ interface GoalListRow {
  * (`readOnlyPool`), so "a page cannot write" is enforced by Postgres rather
  * than promised here.
  */
-export function createGoalQueries(source: MetricSource): PageQuery[] {
-  const unitOf = (metric: string): MetricUnit => source.metric(metric)?.unit ?? 'number';
+export function createGoalQueries(base: MetricSource): PageQuery[] {
+  const source = asOwnerSource(base);
+  const unitOf = (metric: string): ValueUnit => valueUnitOf(source, metric);
   const directionOf = (metric: string): MetricDirection => source.metric(metric)?.direction ?? 'down';
 
   const goals: PageQuery = {
     name: 'goals',
     params: z.object({}),
     async produce(_params, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
       const all = await listGoals(ctx.db, { limit: MAX_GOALS_LISTED });
       const now = ctx.now();
       // One statement for every goal's checks, not two per goal: this list is
@@ -318,6 +330,7 @@ export function createGoalQueries(source: MetricSource): PageQuery[] {
       // The owner asked for this one, so the refusal is an *answer* — a 400
       // carrying this sentence — rather than a defect with a generic 502.
       if (goal === null) throw new QueryRefusal('No goal here has that id.');
+      await source.refresh(ctx.db);
 
       const unit = unitOf(goal.metric);
       const direction = directionOf(goal.metric);
@@ -782,7 +795,7 @@ export interface GoalChart {
  */
 export function chartOf(
   goal: Goal,
-  unit: MetricUnit,
+  unit: ValueUnit,
   direction: MetricDirection,
   checks: readonly GoalCheck[],
   timezone: string,
