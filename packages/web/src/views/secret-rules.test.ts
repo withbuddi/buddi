@@ -180,3 +180,33 @@ describe('a browser.field target', () => {
     expect(parseTargetInput('browser.field', 'not a site at all').ok).toBe(false);
   });
 });
+
+describe('a wildcard origin', () => {
+  it('takes *.wikimedia.org with or without its scheme and stores the https pattern', () => {
+    expect(parseTargetInput('browser.field', '*.wikimedia.org')).toEqual({ ok: true, target: 'https://*.wikimedia.org' });
+    expect(parseTargetInput('browser.field', ' https://*.WikiMedia.org/ ')).toEqual({ ok: true, target: 'https://*.wikimedia.org' });
+    expect(parseTargetInput('browser.field', 'http://*.corp.test:8443')).toEqual({ ok: true, target: 'http://*.corp.test:8443' });
+    expect(parseTargetInput('browser.form.data', '*.wikimedia.org card-number')).toEqual({ ok: true, target: { origin: 'https://*.wikimedia.org', field: 'card-number' } });
+    expect(targetPlaceholder('browser.field')).toContain('*.wikimedia.org');
+  });
+
+  it('refuses a * anywhere but the leftmost part, in one sentence', () => {
+    for (const text of ['*', 'auth.*.org', 'https://*wikimedia.org', 'en.wikipedia.org/*', '*.*.wikimedia.org']) {
+      expect(parseTargetInput('browser.field', text)).toEqual({ ok: false, error: 'A wildcard may only stand for the leftmost part of a site, like *.wikimedia.org.' });
+    }
+    expect(parseTargetInput('browser.form.data', 'auth.*.org card-number')).toEqual({ ok: false, error: 'A wildcard may only stand for the leftmost part of a site, like *.wikimedia.org.' });
+  });
+
+  it('refuses a public suffix, naming what it would match', () => {
+    expect(parseTargetInput('browser.field', '*.com')).toEqual({ ok: false, error: 'That is a public suffix; *.com would match every site.' });
+    expect(parseTargetInput('browser.field', 'https://*.co.uk')).toEqual({ ok: false, error: 'That is a public suffix; *.co.uk would match every site.' });
+    for (const text of ['*.github.io', '*.pages.dev', '*.vercel.app', '*.herokuapp.com']) {
+      expect(parseTargetInput('browser.field', text)).toMatchObject({ ok: false, error: expect.stringContaining('public suffix') });
+    }
+  });
+
+  it("normalises a form data binding's origin the way a field binding's is, and refuses one that is not a site", () => {
+    expect(parseTargetInput('browser.form.data', 'localhost:8443 card-number')).toEqual({ ok: true, target: { origin: 'https://localhost:8443', field: 'card-number' } });
+    expect(parseTargetInput('browser.form.data', 'not a site card-number')).toMatchObject({ ok: false });
+  });
+});

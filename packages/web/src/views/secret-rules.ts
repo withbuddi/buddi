@@ -12,6 +12,10 @@
  * the two-part kinds. Anything else passes through as it was typed.
  */
 import type { SecretRule } from '../api';
+// The browser plugin's own rule for a wildcard origin and its public-suffix
+// list: pure files with no dependencies, read here so the form refuses
+// exactly what the destination would.
+import { isOriginPattern, parseOriginPattern } from '../../../tools/browser/src/origin-pattern';
 
 /** Strictest first, the same order core's `SECRET_RULES` keeps. */
 export const SECRET_RULES: readonly SecretRule[] = ['every-time', 'first-time', 'pre-approved'];
@@ -51,7 +55,7 @@ export const UNBOUND_LINE = 'Stored, not usable until it has a binding.';
  * the parts separated by one.
  */
 export function targetPlaceholder(kind: string): string {
-  if (kind === 'browser.field') return 'the origin of the site that holds the field, e.g. https://en.wikipedia.org';
+  if (kind === 'browser.field') return 'the origin of the site that holds the field, e.g. https://en.wikipedia.org or *.wikimedia.org';
   if (kind === 'browser.form.data') return 'the origin, then the field name — e.g. https://localhost:8443 card-number';
   if (kind === 'browser.native.type') return 'the app’s bundle id, e.g. com.bank.app';
   if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
@@ -69,6 +73,38 @@ const TWO_PART_KINDS: Record<string, { hint: string; build: (first: string, seco
 
 /** What one text input stands for: `{ ok, target }` or why not. */
 export type TargetParse = { ok: true; target: unknown } | { ok: false; error: string };
+
+/** The one sentence for each way a wildcard can be wrong. */
+export const WILDCARD_PLACEMENT = 'A wildcard may only stand for the leftmost part of a site, like *.wikimedia.org.';
+const publicSuffixSentence = (pattern: string) => `That is a public suffix; ${pattern} would match every site.`;
+const ORIGIN_EXAMPLE = 'Give the site as an origin, like https://en.wikipedia.org.';
+
+/**
+ * A browser binding's origin, the way the destination compares it: scheme,
+ * lower-cased host, port. A bare host is what people type; https is what
+ * they mean. `*.wikimedia.org` is a wildcard origin — `*.` for the leftmost
+ * labels only, never on a public suffix.
+ */
+function originInput(raw: string): TargetParse {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  if (isOriginPattern(raw)) {
+    const parsed = parseOriginPattern(withScheme);
+    if (parsed.ok) return { ok: true, target: parsed.value.pattern };
+    if (parsed.reason === 'placement') return { ok: false, error: WILDCARD_PLACEMENT };
+    if (parsed.reason === 'public-suffix') {
+      const typed = withScheme.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/[/?#:].*$/, '').toLowerCase();
+      return { ok: false, error: publicSuffixSentence(typed) };
+    }
+    return { ok: false, error: ORIGIN_EXAMPLE };
+  }
+  try {
+    const url = new URL(withScheme);
+    if (url.origin === 'null' || (url.protocol !== 'https:' && url.protocol !== 'http:')) throw new Error('not an origin');
+    return { ok: true, target: url.origin };
+  } catch {
+    return { ok: false, error: ORIGIN_EXAMPLE };
+  }
+}
 
 /** The last whitespace-separated token, and everything before it: the second part of a two-part target never holds a space. */
 function lastTwoParts(text: string): [string, string] | null {
@@ -98,23 +134,17 @@ export function parseTargetInput(kind: string, text: string): TargetParse {
       return { ok: false, error: 'That opens like JSON but does not parse.' };
     }
   }
-  if (kind === 'browser.field') {
-    // An origin, the way the binding compares it: scheme, lower-cased host,
-    // port. A bare host is what people type; https is what they mean.
-    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
-    try {
-      const url = new URL(withScheme);
-      if (url.origin === 'null' || (url.protocol !== 'https:' && url.protocol !== 'http:')) throw new Error('not an origin');
-      return { ok: true, target: url.origin };
-    } catch {
-      return { ok: false, error: 'Give the site as an origin, like https://en.wikipedia.org.' };
-    }
-  }
+  if (kind === 'browser.field') return originInput(raw);
   if (kind === 'browser.native.type' || isAccountKind(kind)) return { ok: true, target: raw };
   const two = TWO_PART_KINDS[kind];
   if (two === undefined) return { ok: true, target: raw };
   const parts = lastTwoParts(raw);
   if (parts === null) return { ok: false, error: `${kind} needs both: ${two.hint}.` };
+  if (kind === 'browser.form.data') {
+    const origin = originInput(parts[0]);
+    if (!origin.ok) return origin;
+    return { ok: true, target: two.build(origin.target as string, parts[1]) };
+  }
   return { ok: true, target: two.build(parts[0], parts[1]) };
 }
 

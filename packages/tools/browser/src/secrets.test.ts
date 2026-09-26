@@ -11,6 +11,8 @@ import { resetSecretDestinations, secretDestination, secretDestinations, ToolReg
 import { createBrowserManifest } from './index.js';
 import { checkSecretOrigin, canonicalOrigin, fieldDestination, FIELD_KIND, fieldOrigin, formDataDestination, FORM_KIND, nativeTypeDestination, NATIVE_KIND, fieldBoundTo, secretKindFor, secretsForAgent } from './secrets.js';
 import { BrowserPreconditionError } from './types.js';
+import { originMatchesPattern, parseOriginPattern } from './origin-pattern.js';
+import { isPublicSuffix } from './public-suffixes.js';
 
 describe('the manifest', () => {
   it('declares the secrets use, the two secret tools and the three destinations, and registers them all', () => {
@@ -151,6 +153,70 @@ describe('the destinations check the backend-reported target, never a looser one
     expect(fieldBoundTo(bindings, 'https://en.wikipedia.org')).toBe(false);
     expect(fieldBoundTo(bindings, 'https://gov.test')).toBe(false);
     expect(fieldBoundTo([], 'https://auth.wikimedia.org')).toBe(false);
+  });
+});
+
+describe('a wildcard origin', () => {
+  it('parses to scheme, fixed suffix and port, and nothing looser', () => {
+    expect(parseOriginPattern('https://*.wikimedia.org')).toEqual({ ok: true, value: { pattern: 'https://*.wikimedia.org', protocol: 'https:', suffix: 'wikimedia.org', port: '' } });
+    expect(parseOriginPattern('HTTPS://*.WikiMedia.org/w/index.php')).toMatchObject({ ok: true, value: { pattern: 'https://*.wikimedia.org' } });
+    expect(parseOriginPattern('https://*.wikimedia.org:443')).toMatchObject({ ok: true, value: { pattern: 'https://*.wikimedia.org' } });
+    expect(parseOriginPattern('https://*.corp.test:8443')).toMatchObject({ ok: true, value: { pattern: 'https://*.corp.test:8443', port: '8443' } });
+    expect(parseOriginPattern('http://*.corp.test')).toMatchObject({ ok: true, value: { protocol: 'http:' } });
+  });
+
+  it('refuses a * anywhere but the first label', () => {
+    for (const text of ['https://*', 'https://auth.*.org', 'https://*wikimedia.org', 'https://*.*.wikimedia.org', 'https://wiki*.org', 'https://en.wikipedia.org/*', 'https://**.wikimedia.org']) {
+      expect(parseOriginPattern(text)).toEqual({ ok: false, reason: 'placement' });
+    }
+    for (const text of ['ftp://*.wikimedia.org', '*.wikimedia.org', 'https://*.1.2.3', 'https://user@*.wikimedia.org']) {
+      expect(parseOriginPattern(text).ok).toBe(false);
+    }
+  });
+
+  it('refuses a public suffix, ICANN or private, and any single label', () => {
+    for (const suffix of ['com', 'uk', 'co.uk', 'com.au', 'co.jp', 'github.io', 'pages.dev', 'vercel.app', 'netlify.app', 'herokuapp.com', 'cloudfront.net', 'amazonaws.com', 'localhost', 'anything.ck']) {
+      expect(isPublicSuffix(suffix)).toBe(true);
+      expect(parseOriginPattern(`https://*.${suffix}`)).toEqual({ ok: false, reason: 'public-suffix' });
+    }
+    expect(isPublicSuffix('wikimedia.org')).toBe(false);
+    expect(isPublicSuffix('bbc.co.uk')).toBe(false);
+    expect(parseOriginPattern('https://*.bbc.co.uk').ok).toBe(true);
+    expect(parseOriginPattern('https://*.owner.github.io').ok).toBe(true);
+  });
+
+  it('matches one or more labels before the suffix, on the same scheme and port', () => {
+    expect(originMatchesPattern('https://auth.wikimedia.org', 'https://*.wikimedia.org')).toBe(true);
+    expect(originMatchesPattern('https://a.b.wikimedia.org', 'https://*.wikimedia.org')).toBe(true);
+    expect(originMatchesPattern('https://wikimedia.org', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('https://auth.wikimedia.org.evil.test', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('https://authwikimedia.org', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('https://en.wikipedia.org', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('http://auth.wikimedia.org', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('https://auth.wikimedia.org:8443', 'https://*.wikimedia.org')).toBe(false);
+    expect(originMatchesPattern('https://a.corp.test:8443', 'https://*.corp.test:8443')).toBe(true);
+    expect(originMatchesPattern('https://a.corp.test', 'https://*.corp.test:8443')).toBe(false);
+    expect(originMatchesPattern('https://x.com', 'https://*.com')).toBe(false);
+  });
+
+  it('binds browser.field and form data through the pattern, and the card names the real origin', () => {
+    const pattern = 'https://*.wikimedia.org';
+    expect(check(fieldDestination)('https://auth.wikimedia.org', pattern)).toBe(true);
+    expect(check(fieldDestination)({ origin: 'https://auth.wikimedia.org', field: 'Username' }, pattern)).toBe(true);
+    expect(check(fieldDestination)('https://auth.wikimedia.org.evil.test', pattern)).toBe(false);
+    expect(check(fieldDestination)('https://x.com', 'https://*.com')).toBe(false);
+    // The live side is never a pattern: a target holding a * matches nothing.
+    expect(check(fieldDestination)(pattern, pattern)).toBe(false);
+    expect(fieldBoundTo([{ kind: FIELD_KIND, target: pattern }], 'https://auth.wikimedia.org')).toBe(true);
+    expect(fieldDestination.describe('https://auth.wikimedia.org')).toBe('the page at https://auth.wikimedia.org');
+    expect(fieldDestination.describe({ origin: 'https://auth.wikimedia.org', field: 'Username' })).toBe('the Username field on https://auth.wikimedia.org');
+
+    const bound = { origin: pattern, field: 'card number' };
+    expect(check(formDataDestination)({ origin: 'https://pay.wikimedia.org', field: 'card number' }, bound)).toBe(true);
+    expect(check(formDataDestination)({ origin: 'https://pay.wikimedia.org', field: 'tax number' }, bound)).toBe(false);
+    expect(check(formDataDestination)(bound, bound)).toBe(false);
+    expect(formDataDestination.describe({ origin: 'https://pay.wikimedia.org', field: 'card number' })).toBe('the field "card number" on https://pay.wikimedia.org');
+    expect(canonicalOrigin(pattern)).toBeUndefined();
   });
 });
 

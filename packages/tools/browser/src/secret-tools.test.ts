@@ -134,6 +134,17 @@ describe('secret.fill', () => {
     expect(password.calls[0]).toEqual({ name: 'Wikipedia_Username', kind: FIELD_KIND, target: 'https://auth.wikimedia.org' });
   });
 
+  it('under a wildcard binding, sends and names the real origin the field sits on, never the pattern', async () => {
+    const bound: SecretListing[] = [{ name: 'Wikipedia_Username', totp: false, lastUse: null,
+      bindings: [{ kind: FIELD_KIND, target: 'https://*.wikimedia.org', rule: 'pre-approved', firstApprovedAt: null, heldByPlugin: false }] }];
+    const run = await setup({ listing: bound, driver: driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: false, name: 'Username' })) }) });
+    await expect(run.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(run.secrets) as never)).resolves.toEqual({ filled: true });
+    expect(run.calls).toEqual([{ name: 'Wikipedia_Username', kind: FIELD_KIND, target: { origin: 'https://auth.wikimedia.org', field: 'Username' } }]);
+    expect(fieldDestination.checkTarget(run.calls[0]!.target, 'https://*.wikimedia.org', host())).toBe(true);
+    expect(fieldDestination.describe(run.calls[0]!.target)).toBe('the Username field on https://auth.wikimedia.org');
+    expect(run.driver.secretFillField).toHaveBeenCalledWith('o1', 'e3', VALUE, 'https://auth.wikimedia.org');
+  });
+
   it('passes a pending card through without dispatching anything, and the refusal as a refusal', async () => {
     const pending = await setup({ outcome: { pending: 'action-9' } });
     const result = await pending.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(pending.secrets) as never);

@@ -22,6 +22,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- A browser binding for a secret can name a wildcard origin, like `*.wikimedia.org`, so one binding covers a site's sign-in host and its pages. `*.` stands for the leftmost part only and may not sit on a public suffix such as `*.com` or `*.github.io`; the card and the use log still name the real site. A form data binding's origin is read the same way as a field binding's.
 - A secret's browser binding takes the site as you type it: a bare host becomes its https origin, a full address is cut to its origin, and anything else is refused with an example.
 - On Telegram a browser screenshot's caption no longer counts steps; the count appears only when five or fewer are left.
 - Signing in with Claude from the first run starts the account on the model catalogue's default for Claude, rather than a fixed Sonnet 5; Sonnet 5 is used only when the catalogue names none.

@@ -55,11 +55,11 @@ and in that one `deliver` call, and nowhere else.
 
 | Kind | Registered by | Target | Loosest rule |
 | --- | --- | --- | --- |
-| `browser.field` | browser (extension and Playwright backends) | exact origin (scheme, host, port) | pre-approved |
+| `browser.field` | browser (extension and Playwright backends) | exact origin (scheme, host, port), or a wildcard origin | pre-approved |
 | `http.header` | core's `http` area | exact host and header name, HTTPS only | pre-approved |
 | `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved per workspace |
 | `browser.native.type` | browser (macOS accessibility) | the app's bundle id | every time |
-| `browser.form.data` | browser | exact origin and field | every time, every use logged |
+| `browser.form.data` | browser | exact or wildcard origin, and field | every time, every use logged |
 | `<plugin>.account` | the plugin that owns the account | its account id | pre-approved |
 
 - **Browser field fill.** The agent calls `secret.fill { name, ref }`. The
@@ -78,6 +78,17 @@ and in that one `deliver` call, and nowhere else.
   `fill`. The result says "filled". `secret.list` tells the agent which
   names it may use and where each may go (kinds and targets, never a
   value), so it never has to ask the owner for a name.
+- **Wildcard origins.** A site that signs in on a sister host (Wikipedia's
+  page is `en.wikipedia.org`, its sign-in `auth.wikimedia.org`) is one
+  binding, not two: a `browser.field` or `browser.form.data` origin may be
+  `https://*.wikimedia.org`. The scheme is exact, the port is exact when
+  given, and `*.` stands for one or more labels at the left of a fixed
+  suffix, so it matches `auth.wikimedia.org` and `a.b.wikimedia.org` but not
+  `wikimedia.org` itself. A `*` anywhere else, a bare `*`, and `*.` on a
+  public suffix (`*.com`, `*.co.uk`, `*.github.io`, `*.pages.dev`) are
+  refused. The browser plugin bundles a short list of public suffixes taken
+  from the Public Suffix List and never fetches it. The card, the use log
+  and `describe` name the real origin the field sits on, never the pattern.
 - **HTTP request header.** A plugin passes `auth: { secret: name }` to
   `ctx.buddi.http.request`; core inserts the header after the host check.
   For API tokens.
@@ -246,7 +257,11 @@ one reads back.
   destination with the origin the backend reports for the field's own
   frame. A look-alike host, one spelled in punycode, or the right site in a
   frame on the wrong one is refused before any card. The card shows the
-  checked origin, so the owner is never the check.
+  checked origin, so the owner is never the check. A wildcard binding
+  (§3) keeps this: its suffix is fixed and never a public suffix, so
+  `https://*.wikimedia.org` matches only hosts that end in `.wikimedia.org`,
+  which only Wikimedia can create. It widens the binding to every host the
+  owner of that suffix runs, which the owner chose by typing the pattern.
 - **A prompt-injected agent filling into the wrong field.** The field must
   be on the bound origin; a password field takes only a secret bound to
   that origin; a use outside a binding is refused. A secret bound to an

@@ -9,7 +9,10 @@
  * one thing a phishing page controls (§8). `checkTarget` compares that live
  * value against the binding in the exact canonical form `canonicalOrigin`
  * produces, so a look-alike host, a punycode spelling or the right site in a
- * frame on the wrong one is refused before any card is drawn.
+ * frame on the wrong one is refused before any card is drawn. A binding may
+ * instead name a wildcard origin, `https://*.wikimedia.org` (origin-pattern.ts):
+ * the suffix stays fixed, and the use, the card and the log still carry the
+ * real origin the field sits on, never the pattern.
  *
  * `deliver` parks the value against the use id and nothing else: the tool that
  * asked takes it the same turn and hands it straight to the driver, which is
@@ -17,6 +20,7 @@
  * owner-secrets.md §3). There is no read path and no log line carries one.
  */
 import type { SecretDestination } from '@buddi/core/plugin';
+import { isOriginPattern, originMatchesPattern, parseOriginPattern } from './origin-pattern.js';
 import { BrowserPreconditionError } from './types.js';
 
 /** The owner's password, TOTP code or sign-in name, into a field of one bound origin. */
@@ -47,6 +51,8 @@ export function canonicalOrigin(url: string | null | undefined): string | undefi
   let parsed: URL;
   try { parsed = new URL(url); } catch { return undefined; }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
+  // A `*` is a pattern's, never a real host's (origin-pattern.ts).
+  if (parsed.hostname.includes('*')) return undefined;
   return parsed.origin;
 }
 
@@ -75,21 +81,33 @@ export function checkSecretOrigin(url: string | null | undefined, expectedOrigin
   return origin;
 }
 
-/** Two origins bind to each other only when both are canonical and equal. */
-function sameOrigin(a: unknown, b: unknown): boolean {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const left = canonicalOrigin(a);
-  return left !== undefined && left === canonicalOrigin(b);
+/**
+ * A real origin binds to a bound one when both are canonical and equal, or
+ * when the bound one is a wildcard origin the real one sits under. The real
+ * side is never a pattern.
+ */
+function originBinds(real: unknown, bound: unknown): boolean {
+  if (typeof real !== 'string' || typeof bound !== 'string') return false;
+  const left = canonicalOrigin(real);
+  if (left === undefined) return false;
+  if (isOriginPattern(bound)) return originMatchesPattern(left, bound);
+  return left === canonicalOrigin(bound);
+}
+
+/** A bound origin as a binding may hold it: a canonical origin, or a valid wildcard origin. */
+function boundOrigin(origin: string): boolean {
+  return isOriginPattern(origin) ? parseOriginPattern(origin).ok : canonicalOrigin(origin) !== undefined;
 }
 
 /** The form.data target: exact origin and field name, plain JSON for the row. */
 export interface FormTarget { origin: string; field: string }
 
-function formTarget(target: unknown): FormTarget | undefined {
+/** A form.data target; `bound` lets the origin be a wildcard, which only a binding may be. */
+function formTarget(target: unknown, bound = false): FormTarget | undefined {
   if (!target || typeof target !== 'object' || Array.isArray(target)) return undefined;
   const { origin, field } = target as Record<string, unknown>;
   if (typeof origin !== 'string' || typeof field !== 'string') return undefined;
-  if (canonicalOrigin(origin) === undefined) return undefined;
+  if (!(bound ? boundOrigin(origin) : canonicalOrigin(origin) !== undefined)) return undefined;
   return { origin, field };
 }
 
@@ -99,7 +117,7 @@ function formTarget(target: unknown): FormTarget | undefined {
  * never carries a value.
  */
 export function fieldBoundTo(bindings: ReadonlyArray<{ kind: string; target: unknown }>, origin: string): boolean {
-  return bindings.some((binding) => binding.kind === FIELD_KIND && sameOrigin(binding.target, origin));
+  return bindings.some((binding) => binding.kind === FIELD_KIND && originBinds(origin, binding.target));
 }
 
 /**
@@ -161,11 +179,11 @@ function fieldTargetOrigin(target: unknown): string | undefined {
   return typeof origin === 'string' && typeof field === 'string' ? origin : undefined;
 }
 
-/** `browser.field`: the owner's secret into a field of one exact origin. */
+/** `browser.field`: the owner's secret into a field of one exact origin, or of any origin under a wildcard one. */
 export const fieldDestination: SecretDestination = {
   kind: FIELD_KIND,
   maxRule: 'pre-approved',
-  checkTarget: (target, bound) => typeof bound === 'string' && sameOrigin(fieldTargetOrigin(target), bound),
+  checkTarget: (target, bound) => typeof bound === 'string' && originBinds(fieldTargetOrigin(target), bound),
   describe(target) {
     if (typeof target === 'string') return `the page at ${target}`;
     const asked = formTarget(target);
@@ -183,9 +201,9 @@ export const formDataDestination: SecretDestination = {
   maxRule: 'every-time',
   checkTarget(target, bound) {
     const asked = formTarget(target);
-    const owned = formTarget(bound);
+    const owned = formTarget(bound, true);
     if (asked === undefined || owned === undefined) return false;
-    if (!sameOrigin(asked.origin, owned.origin)) return false;
+    if (!originBinds(asked.origin, owned.origin)) return false;
     return asked.field === owned.field;
   },
   describe(target) {
