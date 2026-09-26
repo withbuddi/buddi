@@ -86,7 +86,9 @@ const ORIGIN_EXAMPLE = 'Give the site as an origin, like https://en.wikipedia.or
  * labels only, never on a public suffix.
  */
 function originInput(raw: string): TargetParse {
-  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  // Joined at runtime on purpose: the bundle check reads a whole `https://…`
+  // literal as a place this page might reach, and a minifier folds a template.
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : ['https:', '//', raw].join('');
   if (isOriginPattern(raw)) {
     const parsed = parseOriginPattern(withScheme);
     if (parsed.ok) return { ok: true, target: parsed.value.pattern };

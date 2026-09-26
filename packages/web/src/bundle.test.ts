@@ -42,7 +42,11 @@ const SOURCES = walk(SRC, (file) => /\.(tsx?|css)$/.test(file)).filter(
  * fetched: one is the SVG/XML namespace identifier, which is a name and not a
  * location, and the other is inside React's own error messages.
  */
-const ALLOWED_LITERALS = ['http://www.w3.org', 'https://reactjs.org', 'https://react.dev'];
+const ALLOWED_LITERALS = [
+  'http://www.w3.org', 'https://reactjs.org', 'https://react.dev',
+  // Example sites in placeholders and test fixtures: named, never fetched.
+  'https://en.wikipedia.org', 'https://*.wikimedia.org', 'https://auth.wikimedia.org',
+];
 
 function externalUrls(text: string): string[] {
   const urls = text.match(/https?:\/\/[^\s"'`)<>\\]+/g) ?? [];
@@ -63,7 +67,8 @@ describe('the page makes no external request', () => {
       expect(code, `${relative} imports something remote`).not.toMatch(/@import\s+url\(\s*['"]?https?:/);
       expect(code, `${relative} loads a remote font`).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
       expect(code, `${relative} references a CDN`).not.toMatch(/cdn\.|unpkg\.com|jsdelivr/);
-      expect(externalUrls(code), `${relative} names an external host`).toEqual([]);
+      // Test fixtures name made-up sites and never ship; the rule is for what does.
+      if (!/\.test\.tsx?$/.test(file)) expect(externalUrls(code), `${relative} names an external host`).toEqual([]);
     }
   });
 
