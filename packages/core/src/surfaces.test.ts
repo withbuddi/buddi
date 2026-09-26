@@ -27,8 +27,8 @@ describe('surfaceSection', () => {
     for (const profile of SURFACE_PROFILES) {
       const section = surfaceSection(profile);
       expect(section.startsWith(`${SURFACE_SECTION_HEADING}\n`)).toBe(true);
-      // Eight facts, eight sentences. A ninth line would be prose nothing reads.
-      expect(bullets(profile)).toHaveLength(8);
+      // Eight facts, eight sentences; the phone surface adds its one reading fact.
+      expect(bullets(profile)).toHaveLength(profile.reading === 'phone' ? 9 : 8);
       expect(bullets(profile).every((line) => line.startsWith('- '))).toBe(true);
     }
   });
@@ -97,6 +97,7 @@ describe('surfaceSection', () => {
       buttons: false,
       canvas: false,
       interactive: false,
+      reading: 'screen',
     };
     expect(bullets(invented)).toHaveLength(8);
     expect(surfaceSection(invented)).toContain('You are answering on the smoke signal.');
@@ -110,5 +111,12 @@ describe('surfaceSection', () => {
       'web',
       'scheduled',
     ]);
+  });
+
+  it('tells only the phone surface that the owner reads between other things', () => {
+    const phone = surfaceSection(TELEGRAM_SURFACE);
+    expect(phone).toContain('reads this on a phone');
+    expect(surfaceSection(CLI_SURFACE)).not.toContain('phone');
+    expect(surfaceSection(WEB_SURFACE)).not.toContain('phone');
   });
 });

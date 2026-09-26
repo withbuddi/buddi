@@ -170,6 +170,8 @@ export const HELP = [
   '',
   'Send a statement, a receipt photo or a CSV and tell me what to do with it.',
   '',
+  'Answers here are kept short, because you read them on a phone. Ask for more and you get more.',
+  '',
   'Just write your question. Commands:',
   '/agents — list the agents you can talk to, and tap one to switch',
   '/use <handle> — switch to an agent, e.g. /use @ledger',

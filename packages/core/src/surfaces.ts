@@ -49,6 +49,8 @@ export interface SurfaceProfile {
   canvas: boolean;
   /** Is a person there *right now* to answer a question? */
   interactive: boolean;
+  /** Where the owner reads: a phone between other things, or a screen they sat down at. */
+  reading: 'phone' | 'screen';
 }
 
 /** Telegram: plain text, a hard message cap, buttons, a person reading. */
@@ -63,6 +65,7 @@ export const TELEGRAM_SURFACE: SurfaceProfile = {
   buttons: true,
   canvas: false,
   interactive: true,
+  reading: 'phone',
 };
 
 /** `buddi chat`: markdown is rendered, nothing to tap, no canvas. */
@@ -76,6 +79,7 @@ export const CLI_SURFACE: SurfaceProfile = {
   buttons: false,
   canvas: false,
   interactive: true,
+  reading: 'screen',
 };
 
 /** The dashboard: the only surface with a canvas. */
@@ -89,6 +93,7 @@ export const WEB_SURFACE: SurfaceProfile = {
   buttons: true,
   canvas: true,
   interactive: true,
+  reading: 'screen',
 };
 
 /**
@@ -107,6 +112,7 @@ export const SCHEDULED_SURFACE: SurfaceProfile = {
   buttons: false,
   canvas: false,
   interactive: false,
+  reading: 'screen',
 };
 
 /** Every profile this repository ships, for tests and for enumeration. */
@@ -152,6 +158,9 @@ export function surfaceSection(profile: SurfaceProfile): string {
     profile.interactive
       ? '- The owner is here now and can answer you.'
       : '- Nobody is here: this text is delivered as a notification and cannot be answered.',
+    ...(profile.reading === 'phone'
+      ? ['- The owner reads this on a phone, between other things: lead with the point, keep to a few short sentences, and offer detail rather than giving it.']
+      : []),
   ];
   return `${SURFACE_SECTION_HEADING}\n${lines.join('\n')}`;
 }

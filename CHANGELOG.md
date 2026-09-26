@@ -30,6 +30,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- On Telegram the agents are told the owner reads on a phone and keep answers short, leading with the point; `/help` says so, and asking for more gets more.
 - When the keychain is locked for a terminal session, the vault's sentence names the command that unlocks it.
 - `buddi version` prints the real version: the installed one, or in a source checkout the version and its commit.
 - A command that does not apply to a packaged install, like `buddi init` or `buddi db up`, says what to do instead and exits 2, instead of "checkout-oriented command not yet supported". Exit codes are the same everywhere: 0 done, 1 failed, 2 not typed right, 3 needs something first.

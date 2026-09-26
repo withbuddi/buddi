@@ -284,6 +284,10 @@ of somebody's agent.
 An agent's Setup tab offers the four as chips under Access, says which agent holds each one
 now, and keeps any other role in a line of text below them.
 
+## What the agent is told about the surface
+
+Every run gets a paragraph of facts about where the owner is (`packages/core/src/surfaces.ts`): whether markdown renders, whether tables do, the message cap, whether files and buttons exist, whether a canvas is there, whether anyone can answer. The rules follow from the facts; the paragraph states no rule. One fact is about reading: on Telegram, "the owner reads this on a phone, between other things: lead with the point, keep to a few short sentences, and offer detail rather than giving it." The dashboard and the terminal carry no such line. The bot's `/help` says the same to the owner, so nothing about how buddi speaks on the phone is calibrated out of sight.
+
 ## Conversations, questions and offered actions
 
 A conversation is the unit of context, and it ends by itself
