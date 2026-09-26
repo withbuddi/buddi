@@ -216,12 +216,12 @@ describe('host browser authority and lifecycle', () => {
     const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
     const result = await service.execute(click, ctx);
     expect(result).toMatchObject({ completed: true, observed: false, state: 'running' });
-    expect((result as { message: string }).message).toBe('Action completed, but observation failed: The page has not answered after three tries. Wait a few seconds and observe again. The page has not answered yet. Wait a few seconds and observe again. Do not repeat the action; its effect may already have happened.');
+    expect((result as { message: string }).message).toBe('Action completed, but observation failed: The page has not answered after three tries. Wait a few seconds and observe again. Do not repeat the action; its effect may already have happened.');
     expect(service.status().state).toBe('running');
     await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
     expect(driver.perform).toHaveBeenCalledTimes(2);
   });
-  it.each(['The tab closed while it was loading.', 'That tab is gone. Observe again to continue in a new one.', 'Target page, context or browser has been closed'])('pauses when the screen is gone: %s', async (cause) => {
+  it.each(['The tab closed while it was loading.', 'Target page, context or browser has been closed'])('pauses when the screen is gone: %s', async (cause) => {
     const { service, driver, ctx } = await setup();
     await service.execute(navigate, ctx);
     vi.mocked(driver.observe).mockRejectedValue(new Error(cause));

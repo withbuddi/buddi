@@ -34,6 +34,8 @@ export function browserWaitMessage(_surface?: SurfaceProfile): string {
 
 /** An observation failure that no waiting fixes: the tab or window it was reading is gone. */
 const SCREEN_GONE = /\b(tab|window)\b[^.]*\b(closed|gone)\b|has been closed|target closed/i;
+/** A gone tab the driver can replace by itself ("observe again to continue in a new one") is not a screen lost. */
+const SCREEN_REPLACEABLE = /observe again to continue in a new one/i;
 /** Consecutive observation failures on one session before control pauses. */
 const MAX_OBSERVATION_FAILURES = 3;
 
@@ -291,8 +293,9 @@ export class BrowserService {
         controller.signal.throwIfAborted();
         const cause = error instanceof Error ? error.message : String(error);
         const paused = this.#observationFailed(cause);
-        const recovery = paused ? browserPausedMessage(ctx.surface) : browserWaitMessage(ctx.surface);
-        this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause.replace(/\.$/, '')}. ${recovery}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
+        // The extension's final error already says to wait and observe again; do not say it twice.
+        const recovery = paused ? browserPausedMessage(ctx.surface) : /observe again\.?$/i.test(cause.trim()) ? '' : browserWaitMessage(ctx.surface);
+        this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause.replace(/\.$/, '')}.${recovery ? ` ${recovery}` : ''}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
         const result = { completed: command.action !== 'observe', observed: false, error: cause,
           state: this.#state, recovery, message: this.#message, notice: UNTRUSTED };
         if (command.action === 'observe') throw new ObservationFailure(JSON.stringify(result));
@@ -329,7 +332,7 @@ export class BrowserService {
     this.#observation = undefined;
     this.#picture = undefined;
     this.#needsObservation = true;
-    const paused = ++this.#observationFailures >= MAX_OBSERVATION_FAILURES || SCREEN_GONE.test(cause);
+    const paused = ++this.#observationFailures >= MAX_OBSERVATION_FAILURES || (SCREEN_GONE.test(cause) && !SCREEN_REPLACEABLE.test(cause));
     this.#state = paused ? 'paused' : 'running';
     return paused;
   }
