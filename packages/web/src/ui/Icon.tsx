@@ -4,8 +4,7 @@
  * Every glyph the shell, the composer, the thread and the canvas draw, copied
  * path for path from where each was drawn inline: the same grid, the same
  * stroke, the same size on the page, so moving them here changes no pixel.
- * Round caps and joins, `currentColor`, no fills — except the settings
- * sliders' knobs, which are punched out in the surface colour.
+ * Round caps and joins, `currentColor`, no fills.
  *
  * The design system's `assets/icons/*.svg` and its `Icon` are the same set;
  * a glyph that is not here is drawn in the same hand (20px grid for a place,
@@ -24,7 +23,8 @@ const GLYPHS = {
   chat: [20, 1.6, <><path d="M17 10.6a4.9 4.9 0 0 1-4.9 4.9H7.8L3.6 18l.9-3A4.9 4.9 0 0 1 3 11V8.2A4.9 4.9 0 0 1 7.9 3.3h4.2A4.9 4.9 0 0 1 17 8.2Z" /><path d="M7 8.3h6M7 11.3h3.6" /></>],
   agents: [20, 1.6, <><circle cx="7.5" cy="7" r="2.8" /><path d="M2.8 16.2a4.7 4.7 0 0 1 9.4 0" /><circle cx="14" cy="7.8" r="2.2" /><path d="M13.2 12.5a3.9 3.9 0 0 1 4.3 3.7" /></>],
   activity: [20, 1.6, <path d="M2.8 10.5h3.4l2-5.2 3.4 9.8 2.2-4.6h3.4" />],
-  settings: [20, 1.6, <><path d="M3 5.5h14M3 10h14M3 14.5h14" /><circle cx="7.5" cy="5.5" r="1.7" fill="var(--surface)" /><circle cx="12.5" cy="10" r="1.7" fill="var(--surface)" /><circle cx="6.5" cy="14.5" r="1.7" fill="var(--surface)" /></>],
+  // The gear is Lucide's, on its 24 grid drawn at 20: stroke 1.9 there is the set's 1.6 on the page.
+  settings: [24, 1.9, <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></>, 20],
   // Two sheets, the front one with a folded corner.
   files: [20, 1.6, <><path d="M7.5 2.8h5.2L16.5 6.6v8.6a1.2 1.2 0 0 1-1.2 1.2H7.5a1.2 1.2 0 0 1-1.2-1.2V4a1.2 1.2 0 0 1 1.2-1.2z" /><path d="M12.7 2.8v3.8h3.8" /><path d="M4.4 6.2v9.4a1.6 1.6 0 0 0 1.6 1.6h6.6" /></>],
   // An envelope, the flap drawn as the fold.
