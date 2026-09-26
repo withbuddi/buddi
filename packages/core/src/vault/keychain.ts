@@ -69,7 +69,7 @@ export interface KeychainVaultOptions {
 function failed(action: string, name: string, res: RunResult): Error {
   if (LOCKED_CODES.has(res.code)) {
     return new VaultLockedError(
-      `the keychain refused to ${action} ${name} (security exit ${res.code}) — unlock the login keychain and try again`,
+      `the keychain refused to ${action} ${name} (security exit ${res.code}) — unlock it with: security unlock-keychain ~/Library/Keychains/login.keychain-db, then try again`,
     );
   }
   // `stderr` from `security` names the service and account, never the value.
