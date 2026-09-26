@@ -487,6 +487,11 @@ export class ProviderAccounts {
   async #usableSecret(row: Row, signal?: AbortSignal): Promise<string | null> {
     if (row.auth !== 'anthropic-oauth') {
       if (row.auth === 'none' || row.secretRef === null) return this.#secret(row);
+      // A legacy account names buddi's own key (`CLAUDE_CODE_OAUTH_TOKEN`,
+      // `OPENAI_API_KEY`), which is not an owner secret and never will be until
+      // the owner replaces it. Asking owner secrets for it would only write a
+      // refusal to the use log on every reload; the raw vault answers directly.
+      if (row.legacyEnv !== null) return this.#secret(row);
       /*
        * The run path reads the credential through the owner secrets area
        * (owner-secrets §7): the binding found and the rule applied, the use

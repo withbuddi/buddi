@@ -37,6 +37,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A model account imported from an environment variable no longer writes a refused use to the Keys and secrets log on every reload: its key answers from the vault directly, as the docs say.
 - When you are looking at the tab an agent wants to act or fill in, the agent now asks you once to switch to another tab or window, instead of failing twice and retrying.
 - `secret.fill` fills a username. A secret bound to a site as a browser field now goes into any field on that site, not only a password field, and the card names the field.
 - The first assistant is granted `secret.*`, so it can fill a sign-in from Keys and secrets; the browser's notice tells every agent that is how a stored password goes in. Existing assistants get the family from their Setup tab.
