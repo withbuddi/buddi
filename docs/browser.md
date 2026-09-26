@@ -84,13 +84,30 @@ tabs remain open. Already dispatched actions cannot be undone. Do not use the
 same mouse/keyboard while the agent is driving. A focus change causes refusal,
 not automatic refocusing; use takeover, then resume in the intended app.
 
-An observation or screenshot failure preserves the helper's actual error and
-pauses control instead of returning a successful empty observation. The agent
-cannot retry or click blindly while paused. Inspect the reported cause and the
-selected window, use **Resume access**, then request a fresh observation. Resume
-clears old screenshots and target evidence. Release remains available. If input
-already completed before capture failed, the result explicitly preserves that
-fact: do not repeat the input just to recover a screenshot.
+An observation or screenshot failure preserves the helper's actual error instead
+of returning a successful empty observation. Most of these are a page still
+loading or busy, so control stays with the agent: the result says "The page has
+not answered yet. Wait a few seconds and observe again.", and the next action
+must be a fresh observation, never a click on old evidence. If input already
+completed before capture failed, the result explicitly preserves that fact: do
+not repeat the input just to recover a screenshot. In your own Chrome, the
+extension itself injects its page script again and reads the page up to three
+more times, after 0.5, 1 and 2 seconds, before it reports that the page has not
+answered.
+
+Control pauses when:
+
+- the tab or window the agent was reading is gone (closed by you, or by the page);
+- observation fails three times in a row in the same session;
+- a click, fill, select or press itself failed part-way, since it may have half
+  happened;
+- targeting fails three times in a row;
+- you take over.
+
+The agent cannot retry or click while paused. Inspect the reported cause and the
+selected window, use **Resume access** (or send `/browser resume` on Telegram),
+then request a fresh observation. Resume clears old screenshots and target
+evidence. Release remains available.
 
 Automatic **size-based transcript rollover** in Telegram and the dashboard
 continues the same agent's existing computer/browser task. The surface moves the

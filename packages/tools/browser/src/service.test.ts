@@ -202,11 +202,34 @@ describe('host browser authority and lifecycle', () => {
   it('treats observation loss after a successful action as completed, not retryable', async () => {
     const { service, driver, ctx } = await setup();
     vi.mocked(driver.observe).mockRejectedValue(new Error('page vanished'));
-    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, observed: false, message: expect.stringContaining('Do not repeat') });
+    await expect(service.execute(navigate, ctx)).resolves.toMatchObject({ completed: true, observed: false, state: 'running',
+      recovery: 'The page has not answered yet. Wait a few seconds and observe again.', message: expect.stringContaining('Do not repeat') });
     expect(driver.perform).toHaveBeenCalledTimes(1);
-    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false, message: expect.stringContaining('page vanished') });
-    await expect(service.execute(navigate, ctx)).rejects.toThrow('human control');
+    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false, message: expect.stringContaining('page vanished') });
+    await expect(service.execute(navigate, ctx)).rejects.toThrow('fresh observation');
     expect(driver.perform).toHaveBeenCalledTimes(1);
+  });
+  it('keeps control after a click whose observation failed, and says not to repeat the click', async () => {
+    const { service, driver, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.observe).mockRejectedValue(new BrowserPreconditionError('The page has not answered after three tries. Wait a few seconds and observe again.'));
+    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
+    const result = await service.execute(click, ctx);
+    expect(result).toMatchObject({ completed: true, observed: false, state: 'running' });
+    expect((result as { message: string }).message).toBe('Action completed, but observation failed: The page has not answered after three tries. Wait a few seconds and observe again. The page has not answered yet. Wait a few seconds and observe again. Do not repeat the action; its effect may already have happened.');
+    expect(service.status().state).toBe('running');
+    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
+    expect(driver.perform).toHaveBeenCalledTimes(2);
+  });
+  it.each(['The tab closed while it was loading.', 'That tab is gone. Observe again to continue in a new one.', 'Target page, context or browser has been closed'])('pauses when the screen is gone: %s', async (cause) => {
+    const { service, driver, ctx } = await setup();
+    await service.execute(navigate, ctx);
+    vi.mocked(driver.observe).mockRejectedValue(new Error(cause));
+    const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
+    const failed = await registry.invoke('browser.act', observe, ctx);
+    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ state: 'paused', recovery: browserPausedMessage(undefined) });
+    expect(service.status().state).toBe('paused');
+    await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
   });
   it.each(['observe', 'screenshot'] as const)('surfaces %s failure as a failed observation, clears evidence and stops blind retries', async (method) => {
     const { service, driver, ctx } = await setup();
@@ -215,13 +238,22 @@ describe('host browser authority and lifecycle', () => {
     const registry = new ToolRegistry(); registry.register(createBrowserManifest(service));
     const failed = await registry.invoke('browser.act', observe, ctx);
     expect(failed).toMatchObject({ ok: false, reason: 'tool-error', message: expect.stringContaining('no longer in front') });
-    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ completed: false, observed: false, state: 'paused' });
-    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
+    // Once is a page to wait for: control stays, and the next step is a fresh look.
+    if (!failed.ok) expect(JSON.parse(failed.message)).toMatchObject({ completed: false, observed: false, state: 'running',
+      recovery: 'The page has not answered yet. Wait a few seconds and observe again.' });
+    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false });
     expect(service.status().page).toBeUndefined();
     expect(service.screenshot()).toBeUndefined();
     expect(driver.observe).toHaveBeenCalledTimes(2); // No hidden recovery retry.
+    await expect(service.execute(commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } }), ctx)).rejects.toThrow('fresh observation');
+    // Three in a row is not a slow page any more.
+    await expect(service.execute(observe, ctx)).rejects.toThrow('no longer in front');
+    expect(service.status().state).toBe('running');
+    const third = await registry.invoke('browser.act', observe, ctx);
+    if (!third.ok) expect(JSON.parse(third.message)).toMatchObject({ state: 'paused', recovery: browserPausedMessage(undefined) });
+    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
     await expect(service.execute(observe, ctx)).rejects.toThrow('human control');
-    expect(driver.perform).toHaveBeenCalledTimes(2);
+    expect(driver.perform).toHaveBeenCalledTimes(4);
 
     vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
     vi.mocked(driver.screenshot).mockResolvedValue(Buffer.from('new screenshot'));
@@ -247,8 +279,9 @@ describe('host browser authority and lifecycle', () => {
     vi.mocked(driver.observe).mockRejectedValue(new Error('Cannot uniquely identify the focused native window'));
     const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
     await expect(service.execute(click, ctx)).rejects.toThrow('Cannot uniquely identify');
-    expect(service.status()).toMatchObject({ state: 'paused', hasScreenshot: false });
+    expect(service.status()).toMatchObject({ state: 'running', hasScreenshot: false });
     expect(service.status().page).toBeUndefined();
+    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation');
   });
   it('pauses after an uncertain submission and does not retry it', async () => {
     const { service, driver, ctx } = await setup();

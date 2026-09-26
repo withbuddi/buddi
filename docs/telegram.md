@@ -79,7 +79,7 @@ gives you. Then pair your phone in any of three places:
 | `/where` | The dashboard address when your phone can reach it; otherwise says it is on this computer only. |
 | `/browser` | Where the screen stands; `stop`, `resume` or `release` it. |
 
-Asking for a web page from the phone works best when the agents have a browser of their own (Settings → Computer & browser, "the agents' own browser"): it never hands a page back to you. Your own Chrome through the extension pauses when a page does not confirm it loaded, and then `/browser resume` gives control back.
+Asking for a web page from the phone works best when the agents have a browser of their own (Settings → Computer & browser, "the agents' own browser"): it never hands a page back to you. In your own Chrome through the extension, a slow page makes the agent wait and look again; control pauses only when the tab closes or the page fails to answer three times in a row, and then `/browser resume` gives control back.
 | `/host`, `/hoststop`, `/hostrevoke` | Host execution permissions and running commands. |
 | `/devices` | The devices paired to this installation. |
 | `/reset` | Starts a fresh conversation with the active agent. |

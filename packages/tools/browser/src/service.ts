@@ -16,12 +16,26 @@ import { BrowserPreconditionError, UNTRUSTED } from './types.js';
  * same chat; everywhere else it is the dashboard's own Settings page, which is
  * where the Stop button lives.
  */
-/** Said when a page would not confirm it loaded and control paused. The way back depends on where the owner is. */
+/** Said when control paused: the tab or window is gone, or the page kept failing to answer. The way back depends on where the owner is. */
 export function browserPausedMessage(surface?: SurfaceProfile): string {
   return surface?.id === 'telegram'
-    ? 'Control is paused: the page did not confirm it loaded. Send /browser resume here, then ask again for a fresh look.'
+    ? 'Control is paused: the page closed or stopped answering. Send /browser resume here, then ask again for a fresh look.'
     : 'Control is paused. Ask the owner to inspect the selected app/window and the reported cause, then use Resume access and ask for a fresh observation.';
 }
+
+/**
+ * Said when an observation did not answer and control stays with the agent.
+ * A slow page is something the model can wait out itself, so there is nothing
+ * for the owner to do and the wording is the same on every surface.
+ */
+export function browserWaitMessage(_surface?: SurfaceProfile): string {
+  return 'The page has not answered yet. Wait a few seconds and observe again.';
+}
+
+/** An observation failure that no waiting fixes: the tab or window it was reading is gone. */
+const SCREEN_GONE = /\b(tab|window)\b[^.]*\b(closed|gone)\b|has been closed|target closed/i;
+/** Consecutive observation failures on one session before control pauses. */
+const MAX_OBSERVATION_FAILURES = 3;
 
 export function browserStoppedMessage(surface?: SurfaceProfile): string {
   return surface?.id === 'telegram'
@@ -136,6 +150,7 @@ export class BrowserService {
   #lastAction?: string;
   #message?: string;
   #preconditionFailures = 0;
+  #observationFailures = 0;
   #needsObservation = false;
   #spent = new Set<string>();
   #controlTail: Promise<unknown> = Promise.resolve();
@@ -271,17 +286,15 @@ export class BrowserService {
         this.#observation = observation;
         this.#picture = picture;
         this.#needsObservation = false;
+        this.#observationFailures = 0;
       } catch (error) {
         controller.signal.throwIfAborted();
-        this.#observation = undefined;
-        this.#picture = undefined;
-        this.#needsObservation = true;
-        this.#state = 'paused';
         const cause = error instanceof Error ? error.message : String(error);
-        const recovery = browserPausedMessage(ctx.surface);
-        this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause}. ${recovery}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
+        const paused = this.#observationFailed(cause);
+        const recovery = paused ? browserPausedMessage(ctx.surface) : browserWaitMessage(ctx.surface);
+        this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause.replace(/\.$/, '')}. ${recovery}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
         const result = { completed: command.action !== 'observe', observed: false, error: cause,
-          state: 'paused', recovery, message: this.#message, notice: UNTRUSTED };
+          state: this.#state, recovery, message: this.#message, notice: UNTRUSTED };
         if (command.action === 'observe') throw new ObservationFailure(JSON.stringify(result));
         return result;
       }
@@ -303,6 +316,22 @@ export class BrowserService {
       if (this.#controller === controller) this.#controller = undefined;
       this.#busy = false;
     }
+  }
+
+  /**
+   * An observation that did not come back. Usually a page still loading or
+   * busy, which the agent can wait out and observe again, so control stays
+   * with it and the next action must be a fresh observation. Control pauses
+   * only when the tab or window is gone, or on the third failure in a row.
+   * Returns whether it paused.
+   */
+  #observationFailed(cause: string): boolean {
+    this.#observation = undefined;
+    this.#picture = undefined;
+    this.#needsObservation = true;
+    const paused = ++this.#observationFailures >= MAX_OBSERVATION_FAILURES || SCREEN_GONE.test(cause);
+    this.#state = paused ? 'paused' : 'running';
+    return paused;
   }
 
   /**
@@ -341,16 +370,17 @@ export class BrowserService {
       controller.signal.throwIfAborted();
       this.#observation = observation;
       this.#picture = picture;
+      this.#observationFailures = 0;
     } catch (observationError) {
       controller.signal.throwIfAborted();
-      this.#observation = undefined;
-      this.#picture = undefined;
-      this.#needsObservation = true;
-      this.#state = 'paused';
-      this.#message += ` Recovery observation failed: ${observationError instanceof Error ? observationError.message : String(observationError)}. Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.`;
+      const cause = observationError instanceof Error ? observationError.message : String(observationError);
+      const targeting = this.#state === 'paused';
+      const paused = this.#observationFailed(cause) || targeting;
+      if (paused) this.#state = 'paused';
+      this.#message += ` Recovery observation failed: ${cause.replace(/\.$/, '')}. ${paused ? 'Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.' : browserWaitMessage()}`;
     }
     throw new BrowserPreconditionError(JSON.stringify({ error: this.#message, dispatched: false,
-      recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
+      recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : this.#needsObservation ? browserWaitMessage() : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
       observation: this.#observation }));
   }
 
@@ -541,6 +571,7 @@ export class BrowserService {
     this.#lastAction = undefined;
     this.#message = undefined;
     this.#preconditionFailures = 0;
+    this.#observationFailures = 0;
     await this.driver.close();
   }
 
@@ -586,6 +617,7 @@ export class BrowserService {
         this.driver.resume?.();
         this.#handless = false;
         this.#preconditionFailures = 0;
+        this.#observationFailures = 0;
         this.#observation = undefined;
         this.#picture = undefined;
         this.#needsObservation = !!this.#session;
