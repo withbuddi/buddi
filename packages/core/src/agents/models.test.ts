@@ -36,7 +36,7 @@ describe('modelCatalogue', () => {
 
   it('reports the default model and where it came from', () => {
     const builtIn = modelCatalogue({})[0];
-    expect(builtIn?.defaultModel).toBe('claude-opus-5-5');
+    expect(builtIn?.defaultModel).toBe('claude-sonnet-5');
     expect(builtIn?.defaultFrom).toBe('built-in default');
 
     const pinned = modelCatalogue({ BUDDI_MODEL: 'claude-opus-5' })[0];

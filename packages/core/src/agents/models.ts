@@ -37,9 +37,9 @@ export interface KnownModel {
  */
 export const KNOWN_MODELS: Record<ProviderKind, readonly KnownModel[]> = {
   anthropic: [
-    { id: 'claude-opus-5-5', note: 'the default: long-running agent work, medium effort' },
+    { id: 'claude-sonnet-5', note: 'the default: fast, a million tokens of context, half the price of Opus' },
+    { id: 'claude-opus-5-5', note: 'for long, hard work worth twice the price' },
     { id: 'claude-fable-5-1', note: 'most capable; slowest and dearest' },
-    { id: 'claude-sonnet-5', note: 'fast, half the price of the default' },
     { id: 'claude-haiku-4-5', note: 'fastest and cheapest; short tasks' },
   ],
   openai: [

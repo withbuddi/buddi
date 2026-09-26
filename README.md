@@ -144,7 +144,7 @@ handle: ledger
 name: Ledger
 description: Tracks my accounts and answers "can I afford this?".
 provider: anthropic
-model: claude-opus-5-5
+model: claude-sonnet-5
 tools: [finance.*, memory.*, reminder.*]
 ---
 

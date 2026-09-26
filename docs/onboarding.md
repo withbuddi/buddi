@@ -93,7 +93,7 @@ carries the binary, it becomes card 2, "ChatGPT — I pay for ChatGPT", with
 After any card is completed, buddi tests it with one small call and answers in
 the thread:
 
-> B: That works. Your assistant will think with **claude-opus-5-5**.
+> B: That works. Your assistant will think with **claude-sonnet-5**.
 
 A failure stays in the thread in plain words ("That key was refused. Check it
 and paste it again.") with the field still open. The chosen model is the

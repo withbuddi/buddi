@@ -10,7 +10,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
-- The default Claude model is Opus 5.5 (`claude-opus-5-5`), the one Anthropic now recommends for most work; Sonnet 5 stays in the list as the fast, cheaper choice, and Fable 5.1 joins it. The context table knows Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens.
+- The model list knows Claude Opus 5.5 (`claude-opus-5-5`, $4 and $20 a million tokens) and Fable 5.1; Sonnet 5 stays the default, at half the price. The context table knows Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens.
 - Signing in with Claude from the first run opens the consent page itself; the button stays for a browser that blocks the window.
 - Signing in with a Claude or ChatGPT subscription is offered by default; `BUDDI_SUBSCRIPTION_SIGNINS=off` hides both. The setup wizard shows the Claude card first, with a line on the plan's monthly Agent SDK credits. `buddi doctor` says whether the sign-ins are offered or hidden.
 

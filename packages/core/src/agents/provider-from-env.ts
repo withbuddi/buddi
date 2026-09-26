@@ -27,7 +27,7 @@ import {
 } from '../provider.js';
 
 /** Model used when neither the agent file nor the environment pins one. */
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MODEL = 'claude-sonnet-5';
 
 /** The same, for the second adapter. Kept separate on purpose (see above). */
 export const DEFAULT_OPENAI_MODEL = 'gpt-5';
