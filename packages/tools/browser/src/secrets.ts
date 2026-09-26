@@ -116,6 +116,25 @@ export function secretKindFor(totp: boolean, password: boolean, fieldBound = fal
   return totp || password || fieldBound ? FIELD_KIND : FORM_KIND;
 }
 
+/** One secret as an agent may see it: its name, whether it is a TOTP seed, and where it may go. Never a value. */
+export interface SecretForAgent {
+  name: string;
+  totp: boolean;
+  bindings: Array<{ kind: string; target: unknown }>;
+}
+
+/**
+ * What `secret.list` answers: each field copied by name, so nothing the
+ * listing ever grows (last use, rules, approvals) reaches a model by accident.
+ */
+export function secretsForAgent(listing: ReadonlyArray<{ name: string; totp: boolean; bindings: ReadonlyArray<{ kind: string; target: unknown }> }>): SecretForAgent[] {
+  return listing.map((secret) => ({
+    name: secret.name,
+    totp: secret.totp === true,
+    bindings: secret.bindings.map((binding) => ({ kind: binding.kind, target: binding.target })),
+  }));
+}
+
 /** Values delivered and not yet taken, by use id — `email`'s credentials pattern. */
 const handed = new Map<string, string>();
 

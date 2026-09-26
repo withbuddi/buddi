@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { BrowserController } from './service.js';
 import type { SecretFillInput, SecretTypeInput } from './service.js';
 import { HostController } from './controller.js';
-import { fieldDestination, formDataDestination, nativeTypeDestination } from './secrets.js';
+import { fieldDestination, formDataDestination, nativeTypeDestination, secretsForAgent } from './secrets.js';
 import { commandSchema, UNTRUSTED } from './types.js';
 import type { ExtensionBridge } from './extension.js';
 import type { GuardedLookup } from './proxy.js';
@@ -71,6 +71,13 @@ export function createBrowserManifest(given?: BrowserController): PluginManifest
     tools: [
       { name: 'browser.status', tier: 'auto', description: 'Read computer/browser mode, owner-allowed apps, permissions and this conversation’s controlling task. In own-browser mode, `browser` says which browser is installed and, in `browser.message`, what the owner must do when none is. Does not open an app.',
         input: z.object({}).strict(), execute: async (_input, ctx) => service().status({ agentId: ctx.agentId, conversationId: ctx.conversationId }) },
+      { name: 'secret.list', tier: 'auto', input: z.object({}).strict(),
+        description: "The owner's secrets this browser may fill, by name, with where each may go. Never a value.",
+        execute: async (_input, ctx) => {
+          const secrets = ctx.buddi?.secrets;
+          if (secrets === undefined) throw new Error('This plugin has no secrets area; the owner updates the browser plugin to one that declares it.');
+          return secretsForAgent(await secrets.list());
+        } },
       { name: 'secret.fill', tier: 'auto', sequential: true, input: secretFillInput,
         description: `Fill one field with the owner's own secret, by name, without ever seeing the value. Input { name, ref, observation }: copy observation.id and a ref from the latest result exactly like browser.act; works in Playwright and extension mode. The backend reads which page the field really sits on and the owner's binding must name that exact origin — a look-alike site is refused before anything is asked. A password field takes only a secret bound to the page; a visible field (a username) takes one too when the owner bound it to that page, and otherwise fills as form data, which asks the owner every time; a TOTP secret's current code fills any field. The result is {filled:true} — the value never appears anywhere — or {pending:true,actionId} when the owner has a decision card: tell the owner and wait. Observe again after a fill.`,
         execute: (input: SecretFillInput, ctx) => service().secretFill(input, ctx) },

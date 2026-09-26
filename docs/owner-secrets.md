@@ -75,7 +75,9 @@ and in that one `deliver` call, and nowhere else.
   goes through the every-time destination. A TOTP secret (§4) fills any
   field the ref names, because an authenticator field is rarely marked as a
   password. The extension uses the debugger's insertText, Playwright its
-  `fill`. The result says "filled".
+  `fill`. The result says "filled". `secret.list` tells the agent which
+  names it may use and where each may go (kinds and targets, never a
+  value), so it never has to ask the owner for a name.
 - **HTTP request header.** A plugin passes `auth: { secret: name }` to
   `ctx.buddi.http.request`; core inserts the header after the host check.
   For API tokens.
@@ -97,7 +99,8 @@ extension checked. No other route reaches the owner's signed-in Chrome.
 ## 4. Uses
 
 - **Site logins.** `browser.field`, pre-approvable per origin: the username
-  and the password are two secrets bound to the same origin.
+  and the password are two secrets bound to the same origin, and the agent
+  finds their names with `secret.list`.
 - **API tokens.** `http.header` for plugins; `developer.env` for code the
   agent is writing.
 - **Developer environment variables.** `developer.env`, which may be

@@ -89,7 +89,7 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   'artifacts.*',
   'web.*',
   'browser.*',
-  // The owner's secrets, used but never seen: `secret.fill` and `secret.type` are their own family.
+  // The owner's secrets, used but never seen: `secret.list`, `secret.fill` and `secret.type` are their own family.
   'secret.*',
   'host.*',
   'reminder.*',
@@ -337,7 +337,7 @@ export const HOW_YOU_WORK: readonly string[] = [
   '- You have real tools: mail, web search and page reading, a browser of your own, memory, reminders,',
   '  schedules, goals, the canvas, running commands on this machine, and handing work to other agents.',
   '  Use them. When the owner asks for something they cover, do it rather than explain it.',
-  '- A sign-in the owner keeps under Keys and secrets goes into a page with secret.fill, by name; you never see the value and never ask for it in chat.',
+  '- A sign-in the owner keeps under Keys and secrets goes into a page with secret.fill, by name; secret.list says which names exist and where each may go; you never see the value and never ask for it in chat.',
   '- Some actions ask the owner first: sending mail, running a command, acting in the browser. Propose them',
   '  plainly and let the owner approve; do not avoid them because they need a yes.',
   '- When a tool refuses or something is not installed, tell the owner the tool\'s own sentence and what',

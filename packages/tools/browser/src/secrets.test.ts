@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { BuddiHost, SecretDestination } from '@buddi/core/plugin';
 import { resetSecretDestinations, secretDestination, secretDestinations, ToolRegistry } from '@buddi/core/testing';
 import { createBrowserManifest } from './index.js';
-import { checkSecretOrigin, canonicalOrigin, fieldDestination, FIELD_KIND, fieldOrigin, formDataDestination, FORM_KIND, nativeTypeDestination, NATIVE_KIND, fieldBoundTo, secretKindFor } from './secrets.js';
+import { checkSecretOrigin, canonicalOrigin, fieldDestination, FIELD_KIND, fieldOrigin, formDataDestination, FORM_KIND, nativeTypeDestination, NATIVE_KIND, fieldBoundTo, secretKindFor, secretsForAgent } from './secrets.js';
 import { BrowserPreconditionError } from './types.js';
 
 describe('the manifest', () => {
@@ -26,6 +26,8 @@ describe('the manifest', () => {
     const names = registry.list().map((tool) => tool.name);
     expect(names).toContain('secret.fill');
     expect(names).toContain('secret.type');
+    expect(names).toContain('secret.list');
+    expect(registry.list().find((tool) => tool.name === 'secret.list')?.tier).toBe('auto');
     expect(names).toContain('browser.act');
     expect(registry.list().find((tool) => tool.name === 'secret.fill')?.inputSchema.type).toBe('object');
     // The registration is core's own: each kind lands in the table under this plugin's name.
@@ -35,6 +37,27 @@ describe('the manifest', () => {
       expect(secretDestination(kind)?.checkTarget).toBeTypeOf('function');
     }
     expect(secretDestinations().filter((d) => d.plugin === 'browser')).toHaveLength(3);
+  });
+});
+
+describe('secret.list', () => {
+  const listing = [{
+    name: 'Wikipedia_Username', totp: false,
+    bindings: [{ kind: FIELD_KIND, target: 'https://auth.wikimedia.org', rule: 'pre-approved' as const, firstApprovedAt: '2026-09-26T10:00:00Z', heldByPlugin: false }],
+    lastUse: { at: '2026-09-26T10:00:00Z', kind: FIELD_KIND, target: 'https://auth.wikimedia.org', agentId: 'concierge', outcome: 'delivered' as const },
+  }];
+
+  it('answers names, the TOTP flag and each binding\'s kind and target, and nothing else', async () => {
+    const tool = createBrowserManifest().tools.find((entry) => entry.name === 'secret.list')!;
+    const ctx = { buddi: { secrets: { list: async () => listing } } } as never;
+    const out = await tool.execute({}, ctx) as unknown[];
+    expect(out).toEqual([{ name: 'Wikipedia_Username', totp: false, bindings: [{ kind: FIELD_KIND, target: 'https://auth.wikimedia.org' }] }]);
+    for (const secret of out as Array<Record<string, unknown>>) {
+      expect(Object.keys(secret).sort()).toEqual(['bindings', 'name', 'totp']);
+      for (const binding of secret.bindings as Array<Record<string, unknown>>) expect(Object.keys(binding).sort()).toEqual(['kind', 'target']);
+    }
+    // Even a listing that somehow carried a value would not pass one on.
+    expect(secretsForAgent([{ ...listing[0]!, value: 'hunter2' } as never])[0]).not.toHaveProperty('value');
   });
 });
 
