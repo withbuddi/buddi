@@ -23,6 +23,8 @@ import type { ProviderAccountsAccess } from '../provider-accounts.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from './build.js';
 import type { BuddiHost } from './types.js';
 import { BlockedError } from '../plugin/url.js';
+import { clearChannels, deliverTo, listChannels } from '../notifications/channels.js';
+import type { RegisterHost } from './types.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -94,17 +96,75 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.2');
+    expect(host.version).toBe('1.3');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
     }
-    for (const area of ['http', 'accounts', 'files', 'memory', 'proposals', 'schedule', 'secrets'] as const) {
+    for (const area of ['http', 'accounts', 'files', 'memory', 'proposals', 'schedule', 'secrets', 'channels'] as const) {
       expect(host[area], area).toBeUndefined();
     }
     expect(host.owner.id).toBe('owner');
     expect(host.owner.notify).toBeUndefined();
     expect(host.clock.today()).toBe('2026-09-23');
+  });
+
+  it('lets a plugin that declared owner:channel add a channel from its register hook, in its own namespace', async () => {
+    clearChannels();
+    try {
+      let seen: RegisterHost | undefined;
+      const handed: unknown[] = [];
+      const registry = new ToolRegistry();
+      registry.register(plugin('pager', {
+        uses: ['owner:channel'],
+        register(host) {
+          seen = host;
+          expect(() => host.channels!.register({ kind: 'telegram.chat' } as never)).toThrow(/own namespace/);
+          expect(() => host.channels!.register({ kind: 'pager.' } as never)).toThrow(/own namespace/);
+          host.channels!.register({
+            kind: 'pager.beep',
+            can: { offers: false, attachments: false, markdown: false },
+            async describe(buddi) {
+              const { rows } = await buddi.db.query<{ on: boolean }>('select true as on');
+              return rows[0]?.on ? { label: 'Pager', where: buddi.plugin } : null;
+            },
+            async deliver(message, buddi) {
+              handed.push(message);
+              return message.title === 'no' ? { refused: 'The pager is off.' } : { id: `${buddi.plugin}:${message.id}` };
+            },
+          });
+        },
+      }));
+      expect(seen?.channels).toBeDefined();
+      // Without a pool from the composition root the channel is not there.
+      expect(await listChannels()).toEqual([]);
+
+      configurePluginHost({ db: pool, publicOrigin: 'https://buddi.example.test/' });
+      expect(await listChannels()).toEqual([
+        { kind: 'pager.beep', label: 'Pager', where: 'pager', can: { offers: false, attachments: false, markdown: false } },
+      ]);
+      const offer = { id: 'o1', label: 'Look', prompt: 'secret prompt' } as never;
+      expect(await deliverTo('pager.beep', {
+        id: 'n1', kind: 'approval', urgency: 'now', title: 'Hi', text: 'there',
+        link: { route: '#/chat/a/b' }, offers: [offer], actionId: 'a1',
+      })).toEqual({ ok: true, id: 'pager:n1' });
+      expect(handed[0]).toEqual({
+        id: 'n1', kind: 'approval', urgency: 'now', title: 'Hi', text: 'there',
+        link: { route: '#/chat/a/b', url: 'https://buddi.example.test/#/chat/a/b' },
+        offers: [{ label: 'Look' }],
+      });
+      expect(await deliverTo('pager.beep', { id: 'n2', kind: 'recap', urgency: 'now', title: 'no' }))
+        .toEqual({ ok: false, error: 'The pager is off.' });
+
+      // Undeclared: no area, at register or on a call.
+      let undeclared: RegisterHost | undefined;
+      registry.register(plugin('quiet', { register(host) { undeclared = host; } }));
+      expect(undeclared?.channels).toBeUndefined();
+      expect((await hostOf(registry, 'quiet.host')).channels).toBeUndefined();
+      expect((await hostOf(registry, 'pager.host')).channels).toBeDefined();
+    } finally {
+      clearChannels();
+    }
   });
 
   it('lets a plugin that declared owner:notify tell the owner, as itself and never as core', async () => {

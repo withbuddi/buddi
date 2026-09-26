@@ -141,7 +141,7 @@ async function sendClaimed(
   settings: NotificationSettings,
   now: Date,
 ): Promise<{ state: NotificationState; channel: string | null; error: string | null }> {
-  const kind = channelFor(settings, row.kind);
+  const kind = await channelFor(settings, row.kind);
   if (kind === 'off') {
     await db.query(
       `update core.owner_notifications set state = 'stored', updated_at = $2 where id = $1 and state = 'sending'`,
@@ -323,7 +323,7 @@ export async function notificationsTick(db: Queryable, deps: NotifyDeps, now: Da
   );
   if (today.length > 0) {
     const rows = today.map(toNotification).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const kind = channelFor(settings);
+    const kind = await channelFor(settings);
     const message: DeliverableMessage = {
       id: `today:${localDateString(now, timezone)}`,
       kind: 'recap',

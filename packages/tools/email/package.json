@@ -16,7 +16,8 @@
       "files",
       "proposals",
       "schedule",
-      "secrets"
+      "secrets",
+      "owner:channel"
     ],
     "hostApi": "^1.0"
   },

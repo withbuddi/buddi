@@ -669,10 +669,7 @@ export async function main(): Promise<void> {
         return dashboardRouteUrl({ host, port }, route);
       },
     });
-    if (localChannel) {
-      registerChannel(localChannel);
-      console.log(`  notifications: ${localChannel.describe().where}`);
-    }
+    if (localChannel) registerChannel(localChannel);
     let starting: Promise<{ botUsername: string | null }> | undefined;
     const startTelegramNow = async (): Promise<{ botUsername: string | null; refused?: string }> => {
       // The whole point of recovery is that nothing this installation was told

@@ -57,6 +57,8 @@ export interface BuddiHost {
   schedule?: ScheduleArea;
   /** Declared as `secrets`. */
   secrets?: SecretsArea;
+  /** Declared as `owner:channel`. Since 1.3. */
+  channels?: ChannelsArea;
 }
 
 /* ------------------------------------------------------------------ *
@@ -148,7 +150,7 @@ export interface DirArea {
  * no call — the version, the plugin's name and its directory — for a plugin
  * that fixes something (a profile's place) before any context exists.
  */
-export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir'>;
+export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir' | 'channels'>;
 
 /** The owner's decisions about this plugin's own tools. */
 export interface ApprovalsArea {
@@ -402,4 +404,52 @@ export interface SecretsArea {
   rebind(name: string, bindings: SecretBinding[]): Promise<boolean>;
   /** Owner only. Delete a secret bound only to this plugin's kinds, value and all. */
   delete(name: string): Promise<boolean>;
+}
+
+/* ------------------------------------------------------------------ *
+ * Channels (docs/notifications.md)
+ * ------------------------------------------------------------------ */
+
+/**
+ * A way to reach the owner that this plugin carries: its mail account, a
+ * chat of its own. Declared as `owner:channel`. The owner picks it in
+ * Settings → Notifications like any channel; a plugin never picks where a
+ * message goes, only what carrying one means.
+ */
+export interface ChannelsArea {
+  /**
+   * Add one of this plugin's channels, kind `<plugin>.<what>`. Registering the
+   * same kind again replaces it; the returned function removes it. A plugin's
+   * channel is never the default over Telegram or this machine's.
+   */
+  register(channel: PluginChannel): () => void;
+}
+
+/** A plugin's channel. Both calls are handed this plugin's host. */
+export interface PluginChannel {
+  /** `<plugin>.<what>`, like `email.self`. */
+  kind: string;
+  /**
+   * What Settings shows: a label and where it goes. Null when there is
+   * nothing to carry a message now (no account): the channel is then neither
+   * listed nor picked.
+   */
+  describe(buddi: BuddiHost): Promise<{ label: string; where?: string } | null>;
+  can: { offers: boolean; attachments: boolean; markdown: boolean };
+  /** Carry one message. `{ refused }` says why it did not; the sentence is kept on the message. */
+  deliver(message: PluginChannelMessage, buddi: BuddiHost): Promise<{ id: string } | { refused: string }>;
+}
+
+/** What a plugin's channel is handed: the message as stored, never an approval's id or an offer's prompt. */
+export interface PluginChannelMessage {
+  /** The notification's id; `today:<date>` for the end-of-day message; `test:<ms>` for "Send a test". */
+  id: string;
+  kind: string;
+  urgency: 'now' | 'today' | 'digest';
+  title: string;
+  text?: string;
+  /** A dashboard route, and its full URL when the dashboard has a public origin. */
+  link?: { route: string; url?: string };
+  /** The offers' labels, for a channel that can only list them. */
+  offers?: { label: string }[];
 }

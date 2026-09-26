@@ -382,6 +382,14 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   pool.on('error', (err) => {
     console.error(`database: ${describeDatabaseError(err, databaseUrl)}`);
   });
+  // A plugin's channel (docs/notifications.md) is called by core's routing,
+  // outside any context: its host is built over this pool, in the owner's
+  // zone, with links on the dashboard's public origin when there is one.
+  configurePluginHost({
+    db: pool,
+    timezone,
+    ...(env.BUDDI_WEB_PUBLIC_ORIGIN?.trim() ? { publicOrigin: env.BUDDI_WEB_PUBLIC_ORIGIN.trim() } : {}),
+  });
   /*
    * The output scrubber's source, once per process (docs/owner-secrets.md
    * §5): every owner secret by name, buddi's own keys under theirs. Set here,

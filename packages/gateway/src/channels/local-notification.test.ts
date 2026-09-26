@@ -73,7 +73,7 @@ describe('local.notification on macOS', () => {
       which: on('osascript', 'terminal-notifier'),
       dashboardUrl: (route) => `http://127.0.0.1:7777/${route}`,
     })!;
-    expect(channel.describe().where).toBe('shows on this Mac; a click opens the dashboard');
+    expect((await channel.describe())?.where).toBe('shows on this Mac; a click opens the dashboard');
     await channel.deliver(message({ link: { route: '#/chat/scout/c1' } }));
     expect(calls[0]).toEqual({
       file: '/bin/terminal-notifier',

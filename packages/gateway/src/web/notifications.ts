@@ -55,7 +55,7 @@ export async function notificationSettingsRoute(
     if (!parsed.ok) return { status: 400, body: { error: parsed.message } };
     await writeNotificationSettings(pool, parsed.settings);
   }
-  return { status: 200, body: { settings: await readNotificationSettings(pool), channels: listChannels() } };
+  return { status: 200, body: { settings: await readNotificationSettings(pool), channels: await listChannels() } };
 }
 
 export async function presenceRoute(pool: Queryable, body: Record<string, unknown>, now: Date): Promise<NotificationsRouteReply> {
@@ -76,7 +76,7 @@ export const TEST_MESSAGE_TITLE = 'A test from buddi. This is where your message
 export async function testChannelRoute(body: Record<string, unknown>, now: Date): Promise<NotificationsRouteReply> {
   const channel = typeof body.channel === 'string' ? body.channel.trim() : '';
   if (!channel) return { status: 400, body: { error: '`channel` must name a channel.' } };
-  if (!listChannels().some((c) => c.kind === channel)) return { status: 404, body: { error: 'There is no such channel.' } };
+  if (!(await listChannels()).some((c) => c.kind === channel)) return { status: 404, body: { error: 'There is no such channel.' } };
   const sent = await deliverTo(channel, { id: `test:${now.getTime()}`, kind: 'recap', urgency: 'now', title: TEST_MESSAGE_TITLE });
   return sent.ok
     ? { status: 200, body: { ok: true } }

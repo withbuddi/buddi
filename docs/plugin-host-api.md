@@ -70,7 +70,7 @@ Core itself runs plugins on `CoreToolContext`, `CoreSourceContext` and
 `CoreSentinelContext`, which `/plugin` never exports; tests import
 `@buddi/core/testing`.
 
-A manifest may carry a `register({ version, plugin, dir })` hook. It runs once
+A manifest may carry a `register({ version, plugin, dir, channels? })` hook. It runs once
 at `register()`, for a plugin that fixes something before any context exists;
 `dir.legacyPath` names `<data>/<plugin>`, which browser and host used before
 the host gave them a directory.
@@ -78,21 +78,21 @@ the host gave them a directory.
 ## 4. The areas
 
 Six are always present because they reach nothing beyond the plugin
-itself. Seven must be declared (§5), and one member of an always-present
+itself. Eight must be declared (§5), and one member of an always-present
 area, `owner.notify`, must be declared too.
 
 ### 4.1 Always present
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.1'; see §7
+  readonly version: string;            // '1.3'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
   approvals: ApprovalsArea; pages: PagesArea;
   http?: HttpArea; accounts?: AccountsArea; files?: FilesArea;
   memory?: MemoryArea; proposals?: ProposalsArea; schedule?: ScheduleArea;
-  secrets?: SecretsArea;
+  secrets?: SecretsArea; channels?: ChannelsArea;
 }
 ```
 
@@ -134,6 +134,25 @@ plugin's name is on the row. A plugin picks an urgency (`now`, `today`,
 cannot send anything through a channel the owner did not choose. Offers and
 approval cards are core's and do not pass through. A `dedupeKey` collapses
 only with the plugin's own messages.
+
+**owner:channel.** `ctx.buddi.channels.register({ kind, describe(buddi),
+can, deliver(message, buddi) }): () => void` (1.3) adds a way to reach the
+owner that the plugin carries, kind `<plugin>.<what>`, listed in Settings →
+Notifications beside Telegram and the system notification
+([notifications.md](notifications.md)). The area is also on the `register`
+hook's host, which is where a channel is normally registered. Core calls
+`describe` and `deliver` from its routing, outside any context, so each is
+handed the plugin's host built over the pool the composition root gave
+(`configurePluginHost({ db })`); a process that gave none has no plugin
+channels. `describe` answers `{ label, where? }`, or null when there is
+nothing to carry a message now (no account), and the channel is then neither
+listed nor picked. `deliver` gets the stored message: title, text, `link: {
+route, url? }` (`url` only with a public origin), offers as labels; never an
+approval's action id or an offer's prompt. It answers `{ id }` or `{ refused:
+sentence }`, kept on the notification. A plugin's channel is never the default
+over core's, and the owner still picks where each kind goes: the plugin
+carries, it never routes. The email plugin's mail to yourself is the first
+([email.md](email.md)).
 
 **http.** `request(req: HttpRequest): Promise<HttpResponse>` on the shared
 transport. Every plugin's requests pass the address guard: `checkUrl` in front
@@ -217,7 +236,7 @@ password), the one stated exception to "never held". The product is
 ## 5. Permissions
 
 The manifest carries `uses: ('http' | 'accounts' | 'files' | 'files:library'
-| 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify')[]`. Because the staged
+| 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify' | 'owner:channel')[]`. Because the staged
 install screen may not import anything, the same list goes in
 `package.json` as `buddi.uses`; at load the two must match or the plugin
 does not register, as `network` is compared with `buddi.md`.
@@ -227,7 +246,7 @@ timers and the hosts, one plain line each: "sends web requests", "uses a
 model account you pick", "reads every file in your Files library",
 "reads and writes memory as the agent that calls it", "proposes rules",
 "starts agent runs by itself", "fills secrets you bind to it", "can send
-you messages when you are away". An area
+you messages when you are away", "adds a way for buddi to reach you". An area
 not declared is absent from `ctx.buddi`, so a call to it is a type error
 and, at runtime, `undefined`. Adding an area in an upgrade is shown as a
 change on the upgrade card.
@@ -283,7 +302,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.2`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.3`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

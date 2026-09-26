@@ -587,6 +587,29 @@ two runs drafting on one thread at once. So:
   drawn as a critical notice saying the message may already be on the wire and
   the mailbox needs checking. Hiding that is how the same letter goes out twice.
 
+### Mail to yourself
+
+The plugin carries one notification channel, `email.self`
+([notifications.md](notifications.md)): with an account set up, Settings →
+Notifications lists "Mail to yourself" with the account's address, and a
+message sent there is a plain-text mail from that account to that same
+address. The subject is the title after "buddi: "; the body is the text, the
+dashboard link when there is a public origin, and any offers as lines ending
+"Reply on the dashboard to act.". With several accounts, the first one
+enabled is used. It declares `owner:channel` and registers from its
+`register` hook.
+
+It is the one send with no approval card, and one rule makes that safe: **the
+recipient is always and only the account's own address.** The envelope is
+built from the account row alone (`selfEnvelope` in `src/channel.ts`), and
+`assertOwnAddressOnly` checks it again right before it goes on the wire: one
+recipient, in `To`, the account's address, and `From` the same. Nothing in
+the message can add or change a recipient; an alias does not count as the
+own address. Anything for anyone else is `email.send`, with its card. At
+most one such mail a minute is sent; more are refused with a sentence, which
+the notification keeps as its error, as it keeps a failed send's reason. No
+account, or none in this process, and the channel is not there.
+
 ## 9. Search
 
 `email.search` takes a phrase, filters, or both, and needs at

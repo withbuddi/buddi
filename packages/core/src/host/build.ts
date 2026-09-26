@@ -28,12 +28,14 @@ import {
   type EnvLike,
 } from '../artifacts/store.js';
 import { proposePolicy } from '../learning/policies.js';
+import { registerChannel } from '../notifications/channels.js';
 import { notifyOwner } from '../notifications/notify.js';
+import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
 import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
-import { localDateString } from '../time.js';
+import { localDateString, timezoneFromEnv } from '../time.js';
 import { createHttpArea, registerHttpHeaderDestination, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
 import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
@@ -53,6 +55,9 @@ import type { CoreSourceContext, CoreToolContext, PluginManifest, ToolContext } 
 import type {
   AccountsArea,
   BuddiHost,
+  ChannelsArea,
+  PluginChannelMessage,
+  RegisterHost,
   DbArea,
   DirArea,
   EnqueueRunInput,
@@ -115,6 +120,15 @@ export interface PluginHostServices {
    * the composition root. The `secrets` area reads it; no plugin is handed it.
    */
   vault?: Vault;
+  /**
+   * The pool a plugin's channel is handed its host over (`channels`): a
+   * channel is called by core's routing, outside any context.
+   */
+  db?: Pool;
+  /** The owner's zone for that host. `BUDDI_TZ` when absent. */
+  timezone?: string;
+  /** The dashboard's public origin, when there is one: a channel's links become URLs on it. */
+  publicOrigin?: string;
 }
 
 let services: PluginHostServices = {};
@@ -364,6 +378,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   if (declared.has('proposals')) host.proposals = proposalsArea(binding, facts);
   if (declared.has('schedule')) host.schedule = scheduleArea(facts);
   if (declared.has('secrets')) host.secrets = secretsArea(binding, facts, host);
+  if (declared.has('owner:channel')) host.channels = channelsArea(binding);
   if (declared.has('owner:notify')) {
     // The kind is always `plugin` and the plugin's name is on the row: a
     // plugin picks an urgency, never a channel (docs/notifications.md,
@@ -391,6 +406,81 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   // `memory` is a type only (docs/plugin-host-api.md §4.2): a plugin that declares it gets
   // nothing yet, and a call is `undefined`.
   return host;
+}
+
+/**
+ * What a manifest's `register` hook is handed: the version, the name, the
+ * directory, and `channels` when the plugin declares `owner:channel`.
+ */
+export function registerHostOf(binding: HostBinding): RegisterHost {
+  return {
+    version: HOST_API_VERSION,
+    plugin: binding.plugin,
+    dir: pluginDir(binding.plugin),
+    ...(binding.uses.includes('owner:channel') ? { channels: channelsArea(binding) } : {}),
+  };
+}
+
+/**
+ * `channels` (docs/notifications.md): a plugin's channel, registered with
+ * core's registry under the plugin's own namespace and below core's own
+ * channels in the default order. Core calls it outside any context, so each
+ * call is handed a host built over the pool the composition root gave; in a
+ * process that gave none, the channel is not there.
+ *
+ * What crosses is the stored message, minus what is core's: an approval's
+ * action id and an offer's prompt stay here, so a plugin's channel can list
+ * offers and never take one.
+ */
+function channelsArea(binding: HostBinding): ChannelsArea {
+  const { plugin } = binding;
+  const standalone = () => {
+    const db = services.db;
+    if (db === undefined) return undefined;
+    const env = services.env ?? process.env;
+    return createPluginHost(binding, {
+      db,
+      now: () => new Date(),
+      timezone: services.timezone ?? timezoneFromEnv(env as NodeJS.ProcessEnv),
+    });
+  };
+  return {
+    register(channel) {
+      if (!channel.kind.startsWith(`${plugin}.`) || channel.kind.length <= plugin.length + 1) {
+        throw new Error(`${plugin} may register a channel only in its own namespace (${plugin}.<what>), not ${channel.kind}`);
+      }
+      return registerChannel({
+        kind: channel.kind,
+        can: { ...channel.can },
+        priority: 100,
+        async describe() {
+          const host = standalone();
+          return host === undefined ? null : channel.describe(host);
+        },
+        async deliver(message) {
+          const host = standalone();
+          if (host === undefined) return { refused: 'This process has no database for plugins.' };
+          const answer = await channel.deliver(toPluginChannelMessage(message), host);
+          return 'id' in answer ? { id: String(answer.id) } : { refused: String(answer.refused) };
+        },
+      });
+    },
+  };
+}
+
+function toPluginChannelMessage(message: DeliverableMessage): PluginChannelMessage {
+  const origin = services.publicOrigin?.replace(/\/$/, '');
+  return {
+    id: message.id,
+    kind: message.kind,
+    urgency: message.urgency,
+    title: message.title,
+    ...(message.text ? { text: message.text } : {}),
+    ...(message.link
+      ? { link: { route: message.link.route, ...(origin ? { url: `${origin}/${message.link.route.replace(/^\//, '')}` } : {}) } }
+      : {}),
+    ...(message.offers && message.offers.length > 0 ? { offers: message.offers.map((o) => ({ label: o.label })) } : {}),
+  };
 }
 
 /**

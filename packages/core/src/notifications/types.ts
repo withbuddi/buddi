@@ -75,7 +75,12 @@ export interface DeliverableMessage extends OwnerMessage {
 export interface OwnerChannel {
   /** `telegram.chat`, `local.notification`, `email.self`, `<plugin>.<what>`. Never `dashboard`. */
   kind: string;
-  describe(): { label: string; where?: string };
+  /**
+   * What Settings shows. Null, or a promise of null, when the channel has
+   * nothing to carry a message through now (a plugin's with no account): it
+   * is then neither listed nor picked.
+   */
+  describe(): ChannelDescription | null | Promise<ChannelDescription | null>;
   can: { offers: boolean; attachments: boolean; markdown: boolean };
   /**
    * Which channel is the default when the owner picked none: the lowest
@@ -88,6 +93,12 @@ export interface OwnerChannel {
    * `error` says.
    */
   deliver(message: DeliverableMessage): Promise<ChannelAnswer>;
+}
+
+/** A channel as Settings names it: "Telegram, @your_bot". */
+export interface ChannelDescription {
+  label: string;
+  where?: string;
 }
 
 /** What a channel's `deliver` answers. */

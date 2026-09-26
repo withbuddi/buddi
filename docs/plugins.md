@@ -276,7 +276,7 @@ three modes and what each refuses.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;   // '1.0' — see §1.7
+  readonly version: string;   // '1.3' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
@@ -293,6 +293,7 @@ interface BuddiHost {
   proposals?: ProposalsArea;  // declared as `proposals`
   schedule?: ScheduleArea;    // declared as `schedule`
   secrets?: SecretsArea;      // declared as `secrets`
+  channels?: ChannelsArea;    // declared as `owner:channel`
 }
 ```
 
@@ -384,6 +385,7 @@ the timers and the hosts:
 | `schedule` | starts agent runs by itself |
 | `secrets` | fills secrets you bind to it |
 | `owner:notify` | can send you messages when you are away |
+| `owner:channel` | adds a way for buddi to reach you |
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
@@ -394,12 +396,13 @@ template, memory and browser reach nothing beyond themselves.
 ### 1.4 The register hook
 
 ```ts
-  register?(host: RegisterHost): void;   // RegisterHost = { version, plugin, dir }
+  register?(host: RegisterHost): void;   // RegisterHost = { version, plugin, dir, channels? }
 ```
 
 Called once by `register()`, after every check on the manifest has passed, with
 the parts of the host that need no call: the version, your name and your
-directory. It is for a plugin that has to fix something before any context
+directory, and `channels` when you declare `owner:channel`, so a channel is
+registered once, before any context exists. It is for a plugin that has to fix something before any context
 exists — the browser plugin learns where the owner's profile lives here, and
 resolves its controller. Nothing is awaited, and there is no database or clock
 in it: anything that needs those waits for a call.
@@ -2776,7 +2779,7 @@ version each arrived in — is §9b.
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
@@ -3047,7 +3050,7 @@ you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.0`, so every member is too; the next minor's additions are the first rows
+`1.3`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3071,6 +3074,7 @@ that say otherwise.
 | `proposals` | `ProposalsArea` | no | 1.0 | Declared as `proposals`. |
 | `schedule` | `ScheduleArea` | no | 1.0 | Declared as `schedule`. |
 | `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. The owner's secrets, used and never read (§6). |
+| `channels` | `ChannelsArea` | no | 1.3 | Declared as `owner:channel`. A way to reach the owner that you carry, listed in Settings → Notifications. Also on the `register` hook's host. |
 
 #### `OwnerArea`
 
@@ -3175,3 +3179,9 @@ that say otherwise.
 | `rename` | `(name, to) => Promise<boolean>` | yes | 1.0 | Owner only. A secret bound only to your kinds. |
 | `rebind` | `(name, bindings) => Promise<boolean>` | yes | 1.0 | Owner only. Replace its bindings, your kinds only. |
 | `delete` | `(name) => Promise<boolean>` | yes | 1.0 | Owner only. The rows and the value. |
+
+#### `ChannelsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `register` | `(channel: PluginChannel) => () => void` | yes | 1.3 | Add a channel of yours, kind `<plugin>.<what>`: `{ kind, describe(buddi), can, deliver(message, buddi) }`. `describe` answers `{ label, where? }`, or null when there is nothing to carry a message now, and the channel is then not listed. `deliver` gets the stored message (title, text, `link: { route, url? }` with `url` on the public origin, offers as labels only, never an approval's id) and answers `{ id }` or `{ refused: sentence }`. Both are handed your host, built over core's pool, since core calls them outside any context. Never the default over Telegram or the system notification. Registering the kind again replaces it; the function removes it. See [notifications.md](notifications.md). |

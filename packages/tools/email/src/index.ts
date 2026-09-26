@@ -36,6 +36,7 @@ import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
 import { mailAgents } from './agent.js';
 import type { EnvLike } from './config.js';
 import { accountDestination } from './credentials.js';
+import { createSelfChannel } from './channel.js';
 import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
@@ -146,8 +147,15 @@ export function createEmailManifest(
     // (with the reminders it checks a stated date against).
     // And each mailbox's password, an owner secret bound to its login: the
     // one destination this plugin registers (`credentials.ts`).
-    uses: ['files', 'proposals', 'schedule', 'secrets'],
+    // And one way to reach the owner: mail from their own account to that
+    // same address, never anywhere else (`channel.ts`).
+    uses: ['files', 'proposals', 'schedule', 'secrets', 'owner:channel'],
     destinations: [accountDestination],
+    register(host) {
+      host.channels?.register(
+        createSelfChannel({ send: opts.send ?? smtpFactory, ...(opts.env ? { env: opts.env } : {}) }),
+      );
+    },
   };
 }
 
@@ -397,6 +405,16 @@ export {
   type EnvLike,
 } from './config.js';
 export { ACCOUNT_KIND, accountDestination, mailboxAuth } from './credentials.js';
+export {
+  assertOwnAddressOnly,
+  createSelfChannel,
+  selfBody,
+  selfEnvelope,
+  OFFERS_LINE,
+  SELF_CHANNEL_KIND,
+  SELF_MAIL_EVERY_MS,
+  type SelfChannelOptions,
+} from './channel.js';
 export {
   createDateStatedSentinel,
   createWaitingOnMeSentinel,

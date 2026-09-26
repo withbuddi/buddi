@@ -56,6 +56,6 @@ describe('@buddi/core/plugin', () => {
     for (const name of ['localDateString', 'sha256Of', 'pageFile', 'QueryRefusal', 'parseViewDescriptors', 'checkUrl']) {
       expect(typeof (entry as Record<string, unknown>)[name], name).toBe('function');
     }
-    expect(entry.HOST_API_VERSION).toBe('1.2');
+    expect(entry.HOST_API_VERSION).toBe('1.3');
   });
 });

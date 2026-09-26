@@ -4,7 +4,7 @@ What buddi tells you without being asked, when it tells you, and where.
 
 A **surface** is where you talk to buddi: the dashboard, the Telegram chat.
 A **channel** is how buddi reaches you when you are not looking: a
-Telegram message, a notification on this computer. Telegram is both. Core decides what reaches you and when;
+Telegram message, a notification on this computer, a mail to yourself. Telegram is both. Core decides what reaches you and when;
 a channel only carries it.
 
 ## What reaches you
@@ -84,6 +84,7 @@ is a complete answer.
 | --- | --- | --- | --- |
 | Telegram | `telegram.chat` | The message as text, with offers as buttons. An approval is the card with its Approve and Reject buttons, the same one a run in the chat gets. | The title and text, to Telegram. |
 | System notification | `local.notification` | The title and the first 200 characters of the text, on the computer buddi runs on. | Nothing. |
+| Mail to yourself | `email.self` | A plain-text mail from your mail account to its own address: the title as the subject, the text, the link on your public origin, offers as lines. At most one a minute. | The title and text, to your mail server. |
 
 - **Telegram** is registered when the bot is running.
 - **System notification** is registered at boot where there is something to
@@ -95,10 +96,19 @@ is a complete answer.
   set for the service. Anywhere else, no channel. A command that fails or
   takes more than 5 seconds is refused, with the first line it printed as
   the reason.
+- **Mail to yourself** is the email plugin's, there while it has an account.
+  The recipient is always and only that account's own address
+  ([email.md](email.md), "Mail to yourself").
+
+A plugin adds a channel with `ctx.buddi.channels.register`, declared as
+`owner:channel` ([plugin-host-api.md](plugin-host-api.md) §4.2); it carries
+messages, the owner still picks where each kind goes.
 
 With no default picked, messages go to Telegram, then the system
 notification, then a plugin's channel. A channel is registered with
-`registerChannel({ kind, describe, can, priority?, deliver })`; `deliver`
+`registerChannel({ kind, describe, can, priority?, deliver })`; `describe`
+may answer null (or a promise of it) when there is nothing to carry a message
+now, and the channel is then not listed or picked; `deliver`
 answers `{ id }`, `'refused'` or `{ refused: reason }`, or throws.
 
 ## The record
@@ -139,7 +149,7 @@ notificationsTick(pool, deps, now)   // the gateway runs it every 60 s
 markSeen(pool, id), markActed(pool, id), listNotifications(pool, { limit })
 listDigestNotifications(pool, since)
 presenceTouch(pool, surface, now, 'active' | 'away'), ownerPresent(pool, now)
-registerChannel(channel), deliverTo(kind, message)
+registerChannel(channel), listChannels(), deliverTo(kind, message)
 ```
 
 For a plugin, `ctx.buddi.owner.notify({ urgency, title, text?, link?,
