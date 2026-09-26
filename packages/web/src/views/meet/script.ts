@@ -74,7 +74,8 @@ export const SCRIPT = {
       },
       key: { title: 'A key from Anthropic or OpenAI', line: 'I have an API key' },
       ollama: { title: 'Ollama', line: 'Free, on this computer' },
-      service: { title: 'Ollama Cloud, or another service', line: 'I have an address and a key' },
+      cloud: { title: 'Ollama Cloud, one tap', line: 'Free to start, no key' },
+      service: { title: 'Another service, or Ollama Cloud with a key', line: 'I have an address and a key' },
     },
     claude: {
       start: 'Sign in with Claude',
@@ -82,6 +83,14 @@ export const SCRIPT = {
       paste: 'Paste what Claude gave you',
       finish: 'Done',
       waiting: 'Sign in, then paste the code Claude shows you.',
+    },
+    /** Ollama Cloud with a device key: the owner presses Connect on ollama.com, buddi notices. */
+    cloud: {
+      /** What the account is called, in Settings and in the answer bubble. */
+      label: 'Ollama Cloud',
+      waiting: 'Press Connect on the ollama.com page. Sign in there first if it asks. I will notice.',
+      open: 'Open the ollama.com page',
+      again: 'Try again',
     },
     key: {
       field: 'Your key',
@@ -104,12 +113,15 @@ export const SCRIPT = {
       ask: 'Which one should it think with?',
       label: 'The model',
       submit: 'Use this one',
+      /** Under "That works", for a brain with several models to pick from. */
+      change: 'Think with another',
     },
     /** Said while an answer is being saved and tried, until the verdict. */
     checking: {
       key: 'Checking that key…',
       service: 'Asking the service…',
       ollama: 'Asking Ollama…',
+      cloud: 'Asking Ollama Cloud…',
       claude: 'Checking with Claude…',
     },
     back: 'Back',

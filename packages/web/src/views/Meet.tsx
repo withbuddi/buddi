@@ -30,6 +30,7 @@ import {
 import { createPortal } from 'react-dom';
 import {
   ApiError,
+  OLLAMA_CLOUD_MODEL,
   api,
   chatApi,
   type BackupJob,
@@ -868,6 +869,7 @@ function Question(props: QuestionProps): JSX.Element | null {
             <Answered text={SCRIPT.brain.answer(answers.brain?.label ?? '')} onChange={onChange} />
             <Buddi>
               <Said>{SCRIPT.brain.works(answers.brain?.model ?? '')}</Said>
+              <CloudModels {...props} />
             </Buddi>
           </>
         )}
@@ -1000,7 +1002,7 @@ function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: Questio
  * 3. The brain
  * ------------------------------------------------------------------ */
 
-type Card = 'claude' | 'key' | 'ollama' | 'service';
+type Card = 'claude' | 'key' | 'ollama' | 'cloud' | 'service';
 
 function BrainAsk(props: QuestionProps): JSX.Element {
   const { accounts, answers, onSettled, onReload } = props;
@@ -1015,6 +1017,8 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     label: string;
   } | null>(null);
   const claudeOffered = accounts?.anthropicOAuthEnabled === true;
+  /** The ollama.com window, opened inside the tap so no popup blocker stops it. */
+  const [consent, setConsent] = useState<Window | null>(null);
 
   // The Ollama card has to know before it is opened whether Ollama is there:
   // that is the difference between "Found it" and "Install it". The gateway
@@ -1152,6 +1156,21 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   if (card === 'ollama') {
     return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onOffer={offer} />;
   }
+  if (card === 'cloud') {
+    return (
+      <OllamaCloudCard
+        busy={busy}
+        consent={consent}
+        onBack={() => {
+          consent?.close();
+          setConsent(null);
+          setCard(null);
+        }}
+        onConnected={bind}
+        {...props}
+      />
+    );
+  }
   if (card === 'claude') {
     return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} onConnected={bind} {...props} />;
   }
@@ -1166,6 +1185,14 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         card={SCRIPT.brain.cards.ollama}
         note={ollama === null ? SCRIPT.brain.ollama.looking : ollama.running ? SCRIPT.brain.ollama.found : SCRIPT.brain.ollama.missing}
         onPick={() => setCard('ollama')}
+      />
+      <BrainCard
+        mark={<CloudMark />}
+        card={SCRIPT.brain.cards.cloud}
+        onPick={() => {
+          setConsent(typeof window.open === 'function' ? window.open('', '_blank') : null);
+          setCard('cloud');
+        }}
       />
       <BrainCard mark={<CloudMark />} card={SCRIPT.brain.cards.service} onPick={() => setCard('service')} />
     </div>
@@ -1570,6 +1597,229 @@ function ServiceCard({
         </Field>
       </Ask>
     </>
+  );
+}
+
+/** How often the one-tap card asks whether Connect was pressed. */
+export const OLLAMA_POLL_MS = 2_000;
+
+/**
+ * Ollama Cloud, one tap: buddi makes a key, the owner presses Connect on
+ * ollama.com, and the card notices. No key is typed or shown.
+ *
+ * The window was opened by the tap on the card; it is pointed at the connect
+ * page as soon as the server names it. The link stays for a browser that
+ * refused the window anyway.
+ */
+function OllamaCloudCard({
+  busy,
+  consent,
+  onBack,
+  onConnected,
+  accounts,
+}: {
+  busy: boolean;
+  consent: Window | null;
+  onBack: () => void;
+  onConnected: (brain: BrainAnswer) => Promise<string | null>;
+} & QuestionProps): JSX.Element {
+  const [working, setWorking] = useState(true);
+  const [trouble, setTrouble] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState<{ id: string; attemptId: string; url: string } | null>(null);
+  const [round, setRound] = useState(0);
+  const started = useRef(-1);
+  /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
+  const retried = useRef<Window | null>(null);
+  const label = SCRIPT.brain.cloud.label;
+
+  // Start once per round: the account (reused when there is one), then the key.
+  useEffect(() => {
+    if (started.current === round) return;
+    started.current = round;
+    setWorking(true);
+    setTrouble(null);
+    const opened = round === 0 ? consent : retried.current;
+    void (async () => {
+      try {
+        const existing = (accounts?.accounts ?? []).find((account) => account.auth === 'device-key');
+        const saved = existing
+          ? { id: existing.id }
+          : await api.saveProviderAccount({
+              label,
+              kind: 'openai-compatible',
+              auth: 'device-key',
+              // The server pins the address; this page names no outside host.
+              baseUrl: '',
+              defaultModel: OLLAMA_CLOUD_MODEL,
+              enabled: true,
+            });
+        const row = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id)!;
+        const connect = await api.ollamaConnect(row.id, row.revision);
+        setAttempt({ id: row.id, attemptId: connect.attemptId, url: connect.verificationUrl });
+        if (opened) opened.location.href = connect.verificationUrl;
+      } catch (err) {
+        opened?.close();
+        setTrouble(err instanceof ApiError ? err.message : String(err));
+      } finally {
+        setWorking(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [round]);
+
+  // Ask every two seconds until ollama.com says who the key belongs to.
+  useEffect(() => {
+    if (!attempt) return undefined;
+    let stopped = false;
+    let asking = false;
+    const ask = async (): Promise<void> => {
+      if (stopped || asking) return;
+      asking = true;
+      try {
+        const answer = await api.ollamaPoll(attempt.id, attempt.attemptId);
+        if (stopped) return;
+        if (answer.state === 'waiting') return;
+        stopped = true;
+        setAttempt(null);
+        if (answer.state === 'failed') {
+          setTrouble(answer.message);
+          return;
+        }
+        setWorking(true);
+        setTrouble(await adopt(attempt.id));
+        setWorking(false);
+      } catch {
+        /* Not answering for a moment; ask again on the next tick. */
+      } finally {
+        asking = false;
+      }
+    };
+    const timer = window.setInterval(() => void ask(), OLLAMA_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attempt]);
+
+  /** Connected: settle on a model ollama.com offers, try it once, and move the assistant onto it. */
+  const adopt = async (id: string): Promise<string | null> => {
+    try {
+      const offered = (await api.accountModels(id).catch(() => ({ models: [] as Array<{ id: string }> }))).models.map((model) => model.id);
+      const model = offered.length === 0 || offered.includes(OLLAMA_CLOUD_MODEL) ? OLLAMA_CLOUD_MODEL : offered[0]!;
+      const row = (await api.providerAccounts()).accounts.find((account) => account.id === id);
+      if (row && row.defaultModel !== model) {
+        await api.saveProviderAccount({
+          id: row.id, revision: row.revision, label: row.label, kind: row.kind, auth: row.auth,
+          baseUrl: row.baseUrl, defaultModel: model, enabled: row.enabled,
+        });
+      }
+      const verdict = await api.testProviderAccount(id);
+      if (verdict.state !== 'connected') return verdict.message;
+      return await onConnected({ accountId: id, label, model });
+    } catch (err) {
+      return err instanceof ApiError ? err.message : String(err);
+    }
+  };
+
+  return (
+    <>
+      {working || busy ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.cloud} />
+        </Buddi>
+      ) : trouble ? (
+        <Buddi>
+          <Said>{trouble}</Said>
+        </Buddi>
+      ) : attempt ? (
+        <Buddi>
+          <Said>{SCRIPT.brain.cloud.waiting}</Said>
+        </Buddi>
+      ) : null}
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={working || busy} />
+            {attempt ? (
+              <ButtonLink variant="accent" href={attempt.url} target="_blank" rel="noreferrer">
+                {SCRIPT.brain.cloud.open}
+              </ButtonLink>
+            ) : trouble ? (
+              <Button variant="accent" disabled={working || busy} onClick={() => {
+                retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
+                setRound((n) => n + 1);
+              }}>
+                {SCRIPT.brain.cloud.again}
+              </Button>
+            ) : null}
+          </>
+        }
+      />
+    </>
+  );
+}
+
+/**
+ * The model list under "That works", for the one-tap Ollama Cloud brain: its
+ * free tier serves several, and the first one chosen for the owner is only a
+ * start.
+ */
+function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps): JSX.Element | null {
+  const brain = answers.brain;
+  const account = brain ? (accounts?.accounts ?? []).find((row) => row.id === brain.accountId) : undefined;
+  const [models, setModels] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const cloud = account?.auth === 'device-key';
+  useEffect(() => {
+    if (!cloud || !account) return;
+    let cancelled = false;
+    api
+      .accountModels(account.id)
+      .then((listed) => {
+        if (!cancelled) setModels(listed.models.map((model) => model.id));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cloud, account?.id]);
+  if (!cloud || !account || !brain || models.length < 2) return null;
+  const choose = (model: string): void => {
+    if (model === brain.model || saving) return;
+    setSaving(true);
+    onTrouble(null);
+    void (async () => {
+      try {
+        // The account's default is what a new assistant is made with; the
+        // binding is what an existing one answers on. Both move together.
+        await api.saveProviderAccount({
+          id: account.id, revision: account.revision, label: account.label, kind: account.kind, auth: account.auth,
+          baseUrl: account.baseUrl, defaultModel: model, enabled: account.enabled,
+        });
+        if (answers.assistant) await api.bindBrain({ accountId: account.id, model });
+        onSettled({ ...answers, brain: { ...brain, model } });
+      } catch (err) {
+        onTrouble(err instanceof ApiError ? err.message : String(err));
+      } finally {
+        setSaving(false);
+      }
+    })();
+  };
+  // In the thread, under the sentence it changes: the dock belongs to the
+  // question being answered now.
+  return (
+    <Said>
+      <Field label={SCRIPT.brain.model.change}>
+        <select value={brain.model} disabled={saving} onChange={(event) => choose(event.target.value)}>
+          {(models.includes(brain.model) ? models : [brain.model, ...models]).map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </Said>
   );
 }
 

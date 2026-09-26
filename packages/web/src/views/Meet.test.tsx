@@ -36,6 +36,9 @@ vi.mock('../api', async (load) => {
       providerAccounts: vi.fn(),
       providers: vi.fn(),
       anthropicAccountAction: vi.fn(),
+      ollamaConnect: vi.fn(),
+      ollamaPoll: vi.fn(),
+      accountModels: vi.fn(),
       saveProviderAccount: vi.fn(),
       testProviderAccount: vi.fn(),
       probeModels: vi.fn(),
@@ -260,6 +263,66 @@ describe('the questions', () => {
     render(meet());
     expect(await screen.findByText(SCRIPT.brain.ollama.found)).toBeInTheDocument();
   });
+
+  it('offers Ollama Cloud in one tap right after Ollama on this computer, and keeps the key card', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    render(meet());
+    await screen.findByText(SCRIPT.brain.cards.cloud.title);
+    const titles = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button').map((card) => card.textContent ?? '');
+    const local = titles.findIndex((text) => text.includes(SCRIPT.brain.cards.ollama.line) || text.includes(SCRIPT.brain.ollama.missing));
+    expect(titles[local + 1]).toContain(SCRIPT.brain.cards.cloud.title);
+    expect(titles[local + 1]).toContain(SCRIPT.brain.cards.cloud.line);
+    expect(titles[local + 2]).toContain('Another service, or Ollama Cloud with a key');
+  });
+
+  it('connects Ollama Cloud: the window opens in the tap, follows the connect page, and the model can change after', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    const cloudRow = { id: 'cloud', label: 'Ollama Cloud', auth: 'device-key', baseUrl: 'https://ollama.com/v1', defaultModel: 'gpt-oss:120b', configured: false };
+    let saved = false;
+    vi.mocked(api.providerAccounts).mockImplementation(async () => (saved ? accounts([cloudRow]) : accounts()));
+    vi.mocked(api.saveProviderAccount).mockImplementation(async () => {
+      saved = true;
+      return { id: 'cloud' };
+    });
+    vi.mocked(api.ollamaConnect).mockResolvedValue({ state: 'pending', attemptId: 'try-1', verificationUrl: 'connect-page', deviceName: 'buddi on studio', expiresAt: '' });
+    vi.mocked(api.ollamaPoll).mockResolvedValue({ state: 'connected', username: 'amen', deviceName: 'buddi on studio' });
+    vi.mocked(api.accountModels).mockResolvedValue({ models: [{ id: 'gpt-oss:120b', name: 'gpt-oss:120b', isDefault: false }, { id: 'glm-5.3', name: 'glm-5.3', isDefault: false }], truncated: false });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    const opened = { location: { href: '' }, close: vi.fn() };
+    const open = vi.spyOn(window, 'open').mockReturnValue(opened as unknown as Window);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.cloud.title));
+    // Inside the tap, before any request: that is what gets past a popup blocker.
+    expect(open).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(opened.location.href).toBe('connect-page'));
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ kind: 'openai-compatible', auth: 'device-key', baseUrl: '', defaultModel: 'gpt-oss:120b' });
+    expect(api.ollamaConnect).toHaveBeenCalledWith('cloud', 1);
+    expect(await screen.findByText(SCRIPT.brain.cloud.waiting)).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.brain.works('gpt-oss:120b'), undefined, { timeout: 4_000 })).toBeInTheDocument();
+    expect(api.ollamaPoll).toHaveBeenCalledWith('cloud', 'try-1');
+    expect(api.testProviderAccount).toHaveBeenCalledWith('cloud');
+
+    // The list to change it, under the sentence it changes.
+    const other = await screen.findByLabelText(SCRIPT.brain.model.change);
+    fireEvent.change(other, { target: { value: 'glm-5.3' } });
+    await waitFor(() => expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'cloud', defaultModel: 'glm-5.3' }));
+    expect(await screen.findByText(SCRIPT.brain.works('glm-5.3'))).toBeInTheDocument();
+  }, 10_000);
+
+  it('says what went wrong when ollama.com refuses, and offers to try again', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{ id: 'cloud', label: 'Ollama Cloud', auth: 'device-key', configured: false }]));
+    vi.mocked(api.ollamaConnect).mockResolvedValue({ state: 'pending', attemptId: 'try-1', verificationUrl: 'connect-page', deviceName: 'buddi on studio', expiresAt: '' });
+    vi.mocked(api.ollamaPoll).mockResolvedValue({ state: 'failed', message: 'ollama.com refused this device key.' });
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.cloud.title));
+    expect(await screen.findByText('ollama.com refused this device key.', undefined, { timeout: 4_000 })).toBeInTheDocument();
+    // The account was already there: reused, not made twice.
+    expect(api.saveProviderAccount).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.cloud.again }));
+    await waitFor(() => expect(api.ollamaConnect).toHaveBeenCalledTimes(2));
+  }, 10_000);
 
   it('opens the other-service card with the address the server offered', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));

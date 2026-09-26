@@ -7,8 +7,8 @@
  * that used to be three paragraphs per card sit under "Details" where they
  * can be read once.
  */
-import { useEffect, useState } from 'react';
-import { api, type ProviderAccount, type SaveProviderAccount } from '../api';
+import { useEffect, useRef, useState } from 'react';
+import { OLLAMA_CLOUD_MODEL, api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
@@ -130,6 +130,7 @@ export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'>): string 
   if (a.kind === 'codex') return 'ChatGPT subscription';
   if (a.kind === 'anthropic') return a.auth === 'anthropic-oauth' ? 'Claude subscription' : a.auth === 'legacy-subscription-token' ? 'Claude setup token' : 'Anthropic API';
   if (a.kind === 'openai') return 'OpenAI API';
+  if (a.auth === 'device-key') return 'Ollama Cloud';
   return 'OpenAI-compatible';
 }
 
@@ -193,6 +194,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
       {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this Claude account.</Notice>}
       {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}
       {a.kind === 'codex' && <CodexLogin account={a} busy={busy} run={run} />}
+      {a.auth === 'device-key' && <OllamaLogin account={a} busy={busy} run={run} />}
       <Toolbar>
         <Button disabled={busy || a.removalPending} onClick={() => setEditing(true)}>Edit account</Button>
         <Button disabled={busy || a.removalPending} onClick={() => void run(() => api.saveProviderAccount({ ...accountSettings(a), enabled: !a.enabled }), a.enabled ? 'Account disabled. Subsequent model calls will stop; already-sent requests cannot be recalled.' : 'Account enabled.')}>{a.enabled ? 'Disable' : 'Enable'}</Button>
@@ -231,6 +233,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           ) : (
             <p>Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
           )}
+          {a.auth === 'device-key' && <p>Ollama Cloud with a device key: buddi made a key pair and keeps it in the vault; ollama.com only ever saw the public half and this computer’s name. Each request to ollama.com is signed with the key, and nothing else is sent with it. Disconnect removes the key from buddi; remove the device from your ollama.com settings as well.</p>}
           {a.auth === 'anthropic-oauth' && <p>Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Uses your plan’s monthly Agent SDK credits; after them, an API key. Remaining credits are unknown here.</p>}
           <p>Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry.</p>
         </div>
@@ -283,16 +286,17 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
           <input autoFocus required maxLength={100} value={label} onChange={e => setLabel(e.target.value)} placeholder="Anthropic — Personal" />
         </Field>
         <Field label="Provider">
-          <select disabled={!!a} value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : kind} onChange={e => {
+          <select disabled={!!a} value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : auth === 'device-key' ? 'ollama-cloud' : kind} onChange={e => {
             if (e.target.value === 'anthropic-oauth') { changeKind('anthropic'); setAuth('anthropic-oauth'); }
             else changeKind(e.target.value as ProviderAccount['kind']);
           }}>
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint</option>
+            {a?.auth === 'device-key' && <option value="ollama-cloud">Ollama Cloud</option>}
             {(anthropicOAuthEnabled || a?.auth === 'anthropic-oauth') && <option value="anthropic-oauth">Claude subscription</option>}
             {(codexEnabled || a?.kind === 'codex') && <option value="codex">ChatGPT subscription through Codex</option>}
           </select>
         </Field>
-        {kind === 'openai-compatible' && <>
+        {kind === 'openai-compatible' && auth !== 'device-key' && <>
           <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
             <input required type="url" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
           </Field>
@@ -326,6 +330,63 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
       {incomplete && <p className="muted">Enter an account name and default model to enable Save account. The example name is a placeholder.</p>}
     </form>
   );
+}
+
+/** What the Settings card says after Disconnect: the key is gone here, the device is still listed there. */
+export const OLLAMA_DISCONNECTED = 'Disconnected. The key is gone from buddi; the device stays listed on ollama.com until you remove it in your ollama.com settings.';
+
+/**
+ * Ollama Cloud with a device key: Connect opens ollama.com in a window made
+ * inside the click, and this card asks every two seconds whether the owner
+ * pressed Connect there.
+ */
+function OllamaLogin({ account: a, busy, run }: { account: ProviderAccount; busy: boolean; run: Run }): JSX.Element {
+  const pending = a.login?.state === 'pending' && a.login.attemptId ? a.login : null;
+  // The page re-renders on every reload; the poll must not restart with it.
+  const runRef = useRef(run);
+  runRef.current = run;
+  useEffect(() => {
+    if (!pending?.attemptId) return undefined;
+    let stopped = false;
+    let asking = false;
+    const timer = setInterval(() => {
+      if (stopped || asking) return;
+      asking = true;
+      api.ollamaPoll(a.id, pending.attemptId!)
+        .then((answer) => {
+          if (stopped || answer.state === 'waiting') return;
+          stopped = true;
+          if (answer.state === 'connected') void runRef.current(async () => undefined, `Connected as ${answer.username}, device ${answer.deviceName}.`);
+          else void runRef.current(async () => { throw new Error(answer.message); }, '');
+        })
+        .catch(() => { /* not answering for a moment; the next tick asks again */ })
+        .finally(() => { asking = false; });
+    }, 2_000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [a.id, pending?.attemptId]);
+  const connect = (): void => {
+    // Opened here, inside the click, so no popup blocker stops it.
+    const opened = typeof window.open === 'function' ? window.open('', '_blank') : null;
+    void run(async () => {
+      try {
+        const started = await api.ollamaConnect(a.id, a.revision);
+        if (opened) opened.location.href = started.verificationUrl;
+        return started;
+      } catch (error) { opened?.close(); throw error; }
+    }, 'Press Connect on the ollama.com page. This card notices on its own.');
+  };
+  const device = a.device;
+  return <>
+    {device && <p className="muted" role="status">{device.connectedAt ? `Connected as ${device.username ?? 'an ollama.com account'}, device ${device.deviceName}.` : `Not connected yet. Device ${device.deviceName}.`}</p>}
+    <Toolbar>
+      <Button disabled={busy || !a.enabled || a.removalPending || !!pending} onClick={connect}>{a.configured ? 'Reconnect Ollama' : 'Connect Ollama'}</Button>
+      <Button disabled={busy || !device || a.removalPending} onClick={() => void run(() => api.ollamaDisconnect(a.id, a.revision), OLLAMA_DISCONNECTED)}>Disconnect</Button>
+    </Toolbar>
+    {pending && <Notice tone="accent" role="status">
+      <p><a href={pending.verificationUrl} target="_blank" rel="noreferrer">Open the ollama.com page</a> and press Connect. Sign in there first if it asks.</p>
+      <p className="muted">buddi stops waiting at {pending.expiresAt && new Date(pending.expiresAt).toLocaleTimeString()}.</p>
+    </Notice>}
+  </>;
 }
 
 function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAccount; enabled: boolean; busy: boolean; run: Run }) {
@@ -369,6 +430,7 @@ export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAcco
   const base = kind === 'codex' ? 'ChatGPT subscription'
     : kind === 'anthropic' ? (auth === 'anthropic-oauth' ? 'Claude subscription' : 'Anthropic API')
     : kind === 'openai' ? 'OpenAI API'
+    : auth === 'device-key' ? 'Ollama Cloud'
     : 'Local endpoint';
   const names = new Set(taken.map((t) => t.trim().toLowerCase()));
   if (!names.has(base.toLowerCase())) return base;
@@ -395,10 +457,17 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
   const [model, setModel] = useState('');
   const [customModel, setCustomModel] = useState(false);
 
-  const choose = (nextKind: ProviderAccount['kind'], nextAuth: ProviderAccount['auth']) => {
+  const [cloud, setCloud] = useState(false);
+  const choose = (nextKind: ProviderAccount['kind'], nextAuth: ProviderAccount['auth'], nextCloud = false) => {
     setKind(nextKind); setAuth(nextAuth); setSecret(''); setProbe(null); setProbeError(''); setModel(''); setCustomModel(false);
-    setBaseUrl(nextKind === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
-    if (!labelTouched) setLabel(suggestedLabel(nextKind, nextAuth, taken));
+    setCloud(nextCloud);
+    setBaseUrl(nextCloud ? '' : nextKind === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
+    if (!labelTouched) setLabel(nextCloud ? suggestedLabel(nextKind, 'device-key', taken) : suggestedLabel(nextKind, nextAuth, taken));
+  };
+  /** Ollama Cloud with a key rather than a device: the address comes from the gateway, which names it. */
+  const useKey = (on: boolean) => {
+    choose('openai-compatible', on ? 'api-key' : 'device-key', true);
+    if (on) void api.ollama().then((probed) => setBaseUrl(probed.cloudBaseUrl)).catch(() => {});
   };
   const saved = savedId ? accounts.find((a) => a.id === savedId) : undefined;
   if (savedId) {
@@ -406,8 +475,8 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     return <ModelStep account={saved} busy={busy} run={run} anthropicOAuthEnabled={anthropicOAuthEnabled} onDone={() => onDone(saved.id)} />;
   }
 
-  const endpoint = kind === 'openai-compatible';
-  const subscription = kind === 'codex' || auth === 'anthropic-oauth';
+  const endpoint = kind === 'openai-compatible' && auth !== 'device-key';
+  const subscription = kind === 'codex' || auth === 'anthropic-oauth' || auth === 'device-key';
   const canProbe = !subscription && (auth === 'none' || secret.trim() !== '') && (!endpoint || baseUrl.trim() !== '');
   const loadModels = async (): Promise<void> => {
     setProbing(true); setProbeError('');
@@ -425,7 +494,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
-      const defaultModel = chosen || STARTING_MODEL[kind] || 'claude-sonnet-5';
+      const defaultModel = chosen || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
       void (async () => {
         let created: { id: string } | undefined;
         const ok = await run(async () => {
@@ -440,11 +509,14 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     }}>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
         <Field label="Provider">
-          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : kind} onChange={e => {
+          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : cloud ? 'ollama-cloud' : kind} onChange={e => {
             if (e.target.value === 'anthropic-oauth') choose('anthropic', 'anthropic-oauth');
+            else if (e.target.value === 'ollama-cloud') choose('openai-compatible', 'device-key', true);
             else { const k = e.target.value as ProviderAccount['kind']; choose(k, k === 'codex' ? 'chatgpt' : 'api-key'); }
           }}>
-            <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
+            <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option>
+            <option value="ollama-cloud">Ollama Cloud</option>
+            <option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
             {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription</option>}
             {codexEnabled && <option value="codex">ChatGPT subscription through Codex</option>}
           </select>
@@ -452,6 +524,12 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
         <Field label="Account name" hint="Proposed from the provider. Change it to anything you will recognise.">
           <input autoFocus required maxLength={100} value={label} onChange={e => { setLabel(e.target.value); setLabelTouched(true); }} placeholder="Anthropic — Personal" />
         </Field>
+        {cloud && (
+          <label className="ui-row">
+            <input type="checkbox" checked={auth === 'api-key'} onChange={e => useKey(e.target.checked)} />
+            <span>Use a key instead</span>
+          </label>
+        )}
         {endpoint && <>
           <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
             <input required type="url" value={baseUrl} onChange={e => { setBaseUrl(e.target.value); setProbe(null); }} />
@@ -468,7 +546,9 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           </Field>
         )}
         {subscription ? (
-          <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a device code, and pick a model then.' : 'You will connect your Claude subscription on the next step, in your browser, and pick a model then.'}</p>
+          <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a device code, and pick a model then.'
+            : auth === 'device-key' ? 'You will connect on the next step: ollama.com opens, you press Connect, and no key is typed. Free to start.'
+            : 'You will connect your Claude subscription on the next step, in your browser, and pick a model then.'}</p>
         ) : (
           <div className="ui-field">
             <span className="ui-field-label">Model</span>
@@ -513,6 +593,7 @@ function ModelStep({ account: a, busy, run, anthropicOAuthEnabled, onDone }: { a
       <Notice tone="good">Saved “{a.label}”.</Notice>
       {a.auth === 'anthropic-oauth' && !connected ? <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} /> : null}
       {a.kind === 'codex' && !connected ? <CodexLogin account={a} busy={busy} run={run} /> : null}
+      {a.auth === 'device-key' && !connected ? <OllamaLogin account={a} busy={busy} run={run} /> : null}
       {connected ? (
         <>
           <p className="ui-page-lede">Pick the model this account offers by default. An agent can still choose another when you assign it.</p>

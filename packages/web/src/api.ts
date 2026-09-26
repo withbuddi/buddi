@@ -558,6 +558,12 @@ export interface OnboardingView {
   needs: { owner: boolean; model: boolean; agent: boolean };
 }
 
+/**
+ * The Ollama Cloud model a new device-key account thinks with, when ollama.com
+ * still offers it; otherwise the first it lists. A model name, not an address.
+ */
+export const OLLAMA_CLOUD_MODEL = 'gpt-oss:120b';
+
 /** What the gateway found when it asked Ollama, here, a second ago. */
 export interface OllamaProbe {
   running: boolean;
@@ -808,7 +814,7 @@ export interface AgentFileEdit {
 
 export interface ProviderAccount {
   id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
-  auth: 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth'; baseUrl: string;
+  auth: 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth' | 'device-key'; baseUrl: string;
   defaultModel: string; enabled: boolean; revision: number; configured: boolean;
   /** The owner's context-window override, in tokens, or null for automatic. */
   contextWindowTokens?: number | null;
@@ -818,8 +824,17 @@ export interface ProviderAccount {
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
   reconnectRequired?: boolean;
-  login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string } | null;
+  login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string; deviceName?: string } | null;
+  /** Ollama Cloud with a device key: which device, and which ollama.com account it is connected to. */
+  device?: OllamaDevice | null;
 }
+export interface OllamaDevice { deviceName: string; username: string | null; connectedAt: string | null }
+/** One poll of an Ollama connect attempt. */
+export type OllamaPoll =
+  | { state: 'connected'; username: string; deviceName: string }
+  | { state: 'waiting'; expiresAt: string }
+  | { state: 'failed'; message: string };
+export interface OllamaConnect { state: 'pending'; attemptId: string; verificationUrl: string; deviceName: string; expiresAt: string }
 export interface ProviderAccountsView {
   codexEnabled?: boolean;
   anthropicOAuthEnabled?: boolean;
@@ -1406,6 +1421,10 @@ export const api = {
   testProviderAccount: (id: string) => post<{ state: string; message: string }>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),
   codexAccountAction: (id: string, action: 'login' | 'cancel-login' | 'logout', revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/${action}`, { revision }),
+  /** Ollama Cloud with a device key: start a connection, ask once whether it went through, or remove the key. */
+  ollamaConnect: (id: string, revision: number) => post<OllamaConnect>(`/provider-accounts/${encodeURIComponent(id)}/ollama/connect`, { revision }),
+  ollamaPoll: (id: string, attemptId: string) => post<OllamaPoll>(`/provider-accounts/${encodeURIComponent(id)}/ollama/poll`, { attemptId }),
+  ollamaDisconnect: (id: string, revision: number) => post<{ removed: true; note: string }>(`/provider-accounts/${encodeURIComponent(id)}/ollama/disconnect`, { revision }),
   anthropicAccountAction: (id: string, action: 'login' | 'complete-login' | 'cancel-login' | 'logout', revision: number, input?: { attemptId: string; code: string }) => post(`/provider-accounts/${encodeURIComponent(id)}/anthropic/${action}`, { revision, ...input }),
   assignProviderAccount: (agent: string, accountId: string, model: string) => post<{ changed: string[]; note: string }>(`/agents/${encodeURIComponent(agent)}/account`, { accountId, model }),
   configureProvider: (kind: string, body: { credentialKind: string; defaultModel: string }) => post<ProvidersView>(`/providers/${encodeURIComponent(kind)}/settings`, body),

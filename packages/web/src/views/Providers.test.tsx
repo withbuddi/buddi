@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), probeModels: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), probeModels: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn(), ollamaConnect: vi.fn(), ollamaPoll: vi.fn(), ollamaDisconnect: vi.fn(), ollama: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
@@ -179,3 +179,52 @@ it('loads models from an endpoint before saving, and saves the picked one', asyn
   fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
   await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'openai-compatible', auth: 'none', defaultModel: 'llama3', label: 'Local endpoint' })));
 });
+it('adds Ollama Cloud with a device key by default, or a key when asked', async () => {
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'ollama-cloud' } });
+  expect(screen.getByLabelText('Account name')).toHaveValue('Ollama Cloud');
+  expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('API base URL')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Use a key instead')).not.toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({ kind: 'openai-compatible', auth: 'device-key', baseUrl: '', defaultModel: 'gpt-oss:120b', label: 'Ollama Cloud' })));
+  expect(api.saveProviderAccount).not.toHaveBeenCalledWith(expect.objectContaining({ secret: expect.anything() }));
+});
+it('switches Ollama Cloud to a key, with the address the gateway names', async () => {
+  vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'd', baseUrl: 'b', cloudBaseUrl: 'http://localhost/cloud-fixture/v1' });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'ollama-cloud' } });
+  fireEvent.click(screen.getByLabelText('Use a key instead'));
+  expect(await screen.findByDisplayValue('http://localhost/cloud-fixture/v1')).toBeInTheDocument();
+  expect(screen.getByLabelText('API key')).toBeInTheDocument();
+});
+it('connects Ollama from the account card: window in the click, poll, connected-as line, disconnect', async () => {
+  const cloud = { ...view.accounts[0]!, id: 'cloud', label: 'Ollama Cloud', kind: 'openai-compatible' as const, auth: 'device-key' as const, baseUrl: 'https://ollama.com/v1', configured: false, device: null };
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [cloud] });
+  vi.mocked(api.ollamaConnect).mockResolvedValue({ state: 'pending', attemptId: 'try', verificationUrl: 'http://localhost/connect-fixture', deviceName: 'buddi on studio', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+  const opened = { location: { href: '' }, close: vi.fn() };
+  const open = vi.spyOn(window, 'open').mockReturnValue(opened as unknown as Window);
+  render(<Providers />);
+  expect(await screen.findByText('Ollama Cloud', { selector: '.accounts-row-sub' , exact: false })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Ollama' }));
+  expect(open).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(opened.location.href).toBe('http://localhost/connect-fixture'));
+  expect(api.ollamaConnect).toHaveBeenCalledWith('cloud', 1);
+
+  // The server now says the attempt is pending; the card polls it.
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...cloud, revision: 2, device: { deviceName: 'buddi on studio', username: null, connectedAt: null },
+    login: { state: 'pending', attemptId: 'try', verificationUrl: 'http://localhost/connect-fixture', expiresAt: new Date(Date.now() + 60_000).toISOString() } }] });
+  vi.mocked(api.ollamaPoll).mockResolvedValue({ state: 'connected', username: 'amen', deviceName: 'buddi on studio' });
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+  expect(await screen.findByRole('link', { name: 'Open the ollama.com page' })).toHaveAttribute('rel', 'noreferrer');
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...cloud, revision: 2, configured: true, device: { deviceName: 'buddi on studio', username: 'amen', connectedAt: '2026-09-26T10:00:00Z' } }] });
+  expect(await screen.findByText('Connected as amen, device buddi on studio.', undefined, { timeout: 4_000 })).toBeInTheDocument();
+  expect(api.ollamaPoll).toHaveBeenCalledWith('cloud', 'try');
+
+  vi.mocked(api.ollamaDisconnect).mockResolvedValue({ removed: true, note: 'x' });
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+  await waitFor(() => expect(api.ollamaDisconnect).toHaveBeenCalledWith('cloud', 2));
+  expect(await screen.findByText(/stays listed on ollama.com/)).toBeInTheDocument();
+}, 10_000);
