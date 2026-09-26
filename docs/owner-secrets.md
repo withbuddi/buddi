@@ -65,13 +65,17 @@ and in that one `deliver` call, and nowhere else.
 - **Browser field fill.** The agent calls `secret.fill { name, ref }`. The
   backend reports the origin of the frame holding the field, not the top
   page and not the agent's claim. The tool reads the field the ref names and
-  asks for the kind that field is: a password-marked field is
-  `browser.field`, anything else is `browser.form.data`, so a password cannot
-  land in a visible field and a card number always goes through the
-  every-time destination. A TOTP secret (§4) fills any field the ref names,
-  because an authenticator field is rarely marked as a password. The
-  extension uses the debugger's insertText, Playwright its `fill`. The result
-  says "filled".
+  picks the kind from the field and from what the owner bound. A
+  password-marked field is `browser.field`. A visible field is
+  `browser.field` too when the owner bound the secret as `browser.field` to
+  that field's origin, so a username goes in beside its password, and the
+  card names the field ("the Username field on https://auth.wikimedia.org").
+  Any other visible field is `browser.form.data`. So a password field never
+  takes a form-data-only secret, and a card number bound as form data always
+  goes through the every-time destination. A TOTP secret (§4) fills any
+  field the ref names, because an authenticator field is rarely marked as a
+  password. The extension uses the debugger's insertText, Playwright its
+  `fill`. The result says "filled".
 - **HTTP request header.** A plugin passes `auth: { secret: name }` to
   `ctx.buddi.http.request`; core inserts the header after the host check.
   For API tokens.
@@ -92,7 +96,8 @@ extension checked. No other route reaches the owner's signed-in Chrome.
 
 ## 4. Uses
 
-- **Site logins.** `browser.field`, pre-approvable per origin.
+- **Site logins.** `browser.field`, pre-approvable per origin: the username
+  and the password are two secrets bound to the same origin.
 - **API tokens.** `http.header` for plugins; `developer.env` for code the
   agent is writing.
 - **Developer environment variables.** `developer.env`, which may be
@@ -240,8 +245,10 @@ one reads back.
   frame on the wrong one is refused before any card. The card shows the
   checked origin, so the owner is never the check.
 - **A prompt-injected agent filling into the wrong field.** The field must
-  be on the bound origin; a password goes only into a password field; a
-  use outside a binding is refused. For kinds where a field could echo
+  be on the bound origin; a password field takes only a secret bound to
+  that origin; a use outside a binding is refused. A secret bound to an
+  origin may go into a visible field there, which the site itself controls;
+  what the page echoes back is scrubbed (§5). For kinds where a field could echo
   the value (native typing, form data), every use is a card showing the
   field.
 - **A process echoing its environment.** Output scrubbing (§5) replaces the

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { BuddiHost, SecretDestination } from '@buddi/core/plugin';
 import { resetSecretDestinations, secretDestination, secretDestinations, ToolRegistry } from '@buddi/core/testing';
 import { createBrowserManifest } from './index.js';
-import { checkSecretOrigin, canonicalOrigin, fieldDestination, FIELD_KIND, fieldOrigin, formDataDestination, FORM_KIND, nativeTypeDestination, NATIVE_KIND, secretKindFor } from './secrets.js';
+import { checkSecretOrigin, canonicalOrigin, fieldDestination, FIELD_KIND, fieldOrigin, formDataDestination, FORM_KIND, nativeTypeDestination, NATIVE_KIND, fieldBoundTo, secretKindFor } from './secrets.js';
 import { BrowserPreconditionError } from './types.js';
 
 describe('the manifest', () => {
@@ -84,6 +84,15 @@ describe('the destinations check the backend-reported target, never a looser one
     expect(fieldDestination.describe('https://www.pnc.com')).toContain('https://www.pnc.com');
   });
 
+  it('takes a visible field on the bound origin as a browser.field target, compared by origin alone, and names the field', () => {
+    const username = { origin: 'https://auth.wikimedia.org', field: 'Username' };
+    expect(check(fieldDestination)(username, 'https://auth.wikimedia.org')).toBe(true);
+    expect(check(fieldDestination)({ ...username, origin: 'https://auth.wikimedia.org.evil.test' }, 'https://auth.wikimedia.org')).toBe(false);
+    expect(check(fieldDestination)({ origin: 'https://auth.wikimedia.org' }, 'https://auth.wikimedia.org')).toBe(false);
+    expect(check(fieldDestination)(username, username)).toBe(false);
+    expect(fieldDestination.describe(username)).toBe('the Username field on https://auth.wikimedia.org');
+  });
+
   it('binds browser.form.data to origin and field name, and to nothing else', () => {
     const target = { origin: 'https://gov.test', field: 'card number' };
     expect(check(formDataDestination)({ ...target }, target)).toBe(true);
@@ -110,6 +119,15 @@ describe('the destinations check the backend-reported target, never a looser one
     expect(secretKindFor(true, false)).toBe(FIELD_KIND);
     expect(secretKindFor(true, true)).toBe(FIELD_KIND);
     expect(secretKindFor(false, false)).toBe(FORM_KIND);
+    expect(secretKindFor(false, false, true)).toBe(FIELD_KIND);
+  });
+
+  it('counts a browser.field binding only on the field\'s own origin', () => {
+    const bindings = [{ kind: FIELD_KIND, target: 'https://auth.wikimedia.org' }, { kind: FORM_KIND, target: { origin: 'https://gov.test', field: 'x' } }];
+    expect(fieldBoundTo(bindings, 'https://auth.wikimedia.org')).toBe(true);
+    expect(fieldBoundTo(bindings, 'https://en.wikipedia.org')).toBe(false);
+    expect(fieldBoundTo(bindings, 'https://gov.test')).toBe(false);
+    expect(fieldBoundTo([], 'https://auth.wikimedia.org')).toBe(false);
   });
 });
 

@@ -19,7 +19,7 @@
 import type { SecretDestination } from '@buddi/core/plugin';
 import { BrowserPreconditionError } from './types.js';
 
-/** The owner's password or TOTP code, into a field the page marks as a password (or an OTP field). */
+/** The owner's password, TOTP code or sign-in name, into a field of one bound origin. */
 export const FIELD_KIND = 'browser.field';
 /** Card, account and tax numbers, into a named field on a bound origin — every use a card. */
 export const FORM_KIND = 'browser.form.data';
@@ -94,14 +94,26 @@ function formTarget(target: unknown): FormTarget | undefined {
 }
 
 /**
- * Which destination one fill takes: a TOTP code goes into `browser.field`
- * whatever the field is (OTP fields are text), a password into `browser.field`,
- * and anything else is form data (§4). The caller learns `totp` from
- * `ctx.buddi.secrets.list()` — names and flags only, there is no read path —
- * and `password` from the backend.
+ * Whether the owner bound this secret as `browser.field` to the origin the
+ * field sits on. Names, kinds and targets only — `ctx.buddi.secrets.list()`
+ * never carries a value.
  */
-export function secretKindFor(totp: boolean, password: boolean): typeof FIELD_KIND | typeof FORM_KIND {
-  return totp || password ? FIELD_KIND : FORM_KIND;
+export function fieldBoundTo(bindings: ReadonlyArray<{ kind: string; target: unknown }>, origin: string): boolean {
+  return bindings.some((binding) => binding.kind === FIELD_KIND && sameOrigin(binding.target, origin));
+}
+
+/**
+ * Which destination one fill takes (§3): a TOTP code goes into `browser.field`
+ * whatever the field is (OTP fields are text), and so does a password. A
+ * visible field takes `browser.field` too when the owner bound the secret as
+ * `browser.field` to that field's origin — a username is always a visible
+ * field — and anything else is form data, which is a card every time. So a
+ * password field never takes a form-data-only secret, and a card number bound
+ * as form data never skips its card. The caller learns `totp` and the bindings
+ * from `ctx.buddi.secrets.list()` and `password` from the backend.
+ */
+export function secretKindFor(totp: boolean, password: boolean, fieldBound = false): typeof FIELD_KIND | typeof FORM_KIND {
+  return totp || password || fieldBound ? FIELD_KIND : FORM_KIND;
 }
 
 /** Values delivered and not yet taken, by use id — `email`'s credentials pattern. */
@@ -118,12 +130,28 @@ function deliver(value: string, _target: unknown, { use }: { use: string }): voi
   handed.set(use, value);
 }
 
-/** `browser.field`: the owner's secret into one field of one exact origin. */
+/**
+ * A `browser.field` use's target: the origin, or for a visible field the
+ * origin and the field's name, so the card says exactly where it goes. The
+ * binding is always the origin alone.
+ */
+function fieldTargetOrigin(target: unknown): string | undefined {
+  if (typeof target === 'string') return target;
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return undefined;
+  const { origin, field } = target as Record<string, unknown>;
+  return typeof origin === 'string' && typeof field === 'string' ? origin : undefined;
+}
+
+/** `browser.field`: the owner's secret into a field of one exact origin. */
 export const fieldDestination: SecretDestination = {
   kind: FIELD_KIND,
   maxRule: 'pre-approved',
-  checkTarget: (target, bound) => typeof target === 'string' && typeof bound === 'string' && sameOrigin(target, bound),
-  describe: (target) => `the page at ${String(target)}`,
+  checkTarget: (target, bound) => typeof bound === 'string' && sameOrigin(fieldTargetOrigin(target), bound),
+  describe(target) {
+    if (typeof target === 'string') return `the page at ${target}`;
+    const asked = formTarget(target);
+    return asked === undefined ? 'a page field' : `the ${asked.field} field on ${asked.origin}`;
+  },
   deliver,
 };
 

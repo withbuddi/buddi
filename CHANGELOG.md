@@ -36,6 +36,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- `secret.fill` fills a username. A secret bound to a site as a browser field now goes into any field on that site, not only a password field, and the card names the field.
 - The first assistant is granted `secret.*`, so it can fill a sign-in from Keys and secrets; the browser's notice tells every agent that is how a stored password goes in. Existing assistants get the family from their Setup tab.
 - Settings → Keys and secrets saves again: the page's writes now run as the owner, so `secrets.put` and its siblings are no longer refused as unknown tools.
 - In your own Chrome, an observation that finds the page not ready (a heavy page like cnn.com, or a tab the page script missed) injects the script again and reads the page up to three more times, after 0.5, 1 and 2 seconds, before it says "The page has not answered after three tries. Wait a few seconds and observe again."

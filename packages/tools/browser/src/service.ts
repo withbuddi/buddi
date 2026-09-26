@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import type { SurfaceProfile, ToolContext } from '@buddi/core/plugin';
-import { FORM_KIND, NATIVE_KIND, secretKindFor, takeDelivered } from './secrets.js';
+import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED } from './types.js';
 
@@ -482,11 +482,16 @@ export class BrowserService {
       if (secret === undefined) {
         throw new BrowserPreconditionError(`There is no secret named "${input.name}" bound to this browser's destinations. The owner keeps one in Settings, under Keys and secrets.`);
       }
-      const kind = secretKindFor(secret.totp, facts.password);
+      // A visible field on an origin the owner bound as browser.field takes
+      // that binding; the card then names the field (§3).
+      const visibleField = !secret.totp && !facts.password && fieldBoundTo(secret.bindings, facts.origin);
+      const kind = secretKindFor(secret.totp, facts.password, visibleField);
       if (kind === FORM_KIND && facts.name.trim() === '') {
         throw new BrowserPreconditionError('That field has no name the page gives it, so it cannot be a form-field destination. Observe again, or ask the owner to bind the secret to the page instead.');
       }
-      const outcome = await secrets.use(input.name, kind, kind === FORM_KIND ? { origin: facts.origin, field: facts.name } : facts.origin);
+      const named = { origin: facts.origin, field: facts.name };
+      const target = kind === FORM_KIND || (visibleField && facts.name.trim() !== '') ? named : facts.origin;
+      const outcome = await secrets.use(input.name, kind, target);
       if ('pending' in outcome) {
         return { pending: true, actionId: outcome.pending, message: 'The owner has a decision card for this use. Nothing was filled; ask again once it is decided.' };
       }

@@ -108,6 +108,32 @@ describe('secret.fill', () => {
     expect(otp.calls[0]).toMatchObject({ kind: FIELD_KIND, target: 'https://bank.test' });
   });
 
+  it('fills a visible field as browser.field when the owner bound the secret to that origin, naming the field', async () => {
+    const bound: SecretListing[] = [{ name: 'Wikipedia_Username', totp: false, lastUse: null,
+      bindings: [{ kind: FIELD_KIND, target: 'https://auth.wikimedia.org', rule: 'pre-approved', firstApprovedAt: null, heldByPlugin: false }] }];
+    const username = () => driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: false, name: 'Username' })) });
+    const visible = await setup({ listing: bound, driver: username() });
+    await expect(visible.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(visible.secrets) as never)).resolves.toEqual({ filled: true });
+    expect(visible.calls).toEqual([{ name: 'Wikipedia_Username', kind: FIELD_KIND, target: { origin: 'https://auth.wikimedia.org', field: 'Username' } }]);
+    expect(visible.driver.secretFillField).toHaveBeenCalledWith('o1', 'e3', VALUE, 'https://auth.wikimedia.org');
+    expect(fieldDestination.describe(visible.calls[0]!.target)).toBe('the Username field on https://auth.wikimedia.org');
+
+    // Bound elsewhere: the field binding does not cover it, so it stays form data.
+    const elsewhere = await setup({ listing: bound, driver: driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://evil.test', password: false, name: 'Username' })) }) });
+    await elsewhere.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(elsewhere.secrets) as never);
+    expect(elsewhere.calls[0]).toMatchObject({ kind: FORM_KIND, target: { origin: 'https://evil.test', field: 'Username' } });
+
+    // No field binding at all: form data, as before.
+    const unbound = await setup({ listing: [{ name: 'Wikipedia_Username', totp: false, lastUse: null, bindings: [] }], driver: username() });
+    await unbound.service.secretFill({ name: 'Wikipedia_Username', ref: 'e3', observation: 'o1' }, ctx(unbound.secrets) as never);
+    expect(unbound.calls[0]).toMatchObject({ kind: FORM_KIND });
+
+    // A password field keeps its plain origin target.
+    const password = await setup({ listing: bound, driver: driver({ secretFieldInfo: vi.fn(async () => ({ origin: 'https://auth.wikimedia.org', password: true, name: 'Password' })) }) });
+    await password.service.secretFill({ name: 'Wikipedia_Username', ref: 'e4', observation: 'o1' }, ctx(password.secrets) as never);
+    expect(password.calls[0]).toEqual({ name: 'Wikipedia_Username', kind: FIELD_KIND, target: 'https://auth.wikimedia.org' });
+  });
+
   it('passes a pending card through without dispatching anything, and the refusal as a refusal', async () => {
     const pending = await setup({ outcome: { pending: 'action-9' } });
     const result = await pending.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(pending.secrets) as never);
