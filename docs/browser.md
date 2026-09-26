@@ -1,12 +1,12 @@
 ---
 title: "Computer and browser control"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Computer and browser control
 
-## Default: the agents' own browser (2026-09-24)
+## Default: the agents' own browser
 
 A new installation starts in **Give agents their own browser** (Playwright) on
 every platform. **Use my apps** (native computer control) is offered only on
@@ -14,11 +14,10 @@ macOS and is an explicit owner choice. An existing `settings.json` keeps its
 stored mode; on a non-macOS host a stored Computer choice runs and reads as
 Playwright, and the file is left as written.
 
-## Native computer control (2026-09-18, default until 2026-09-24)
+## Native computer control
 
-The owner clarified that the original OS-first design is the requirement.
-**Computer** was the default mode until 2026-09-24. The earlier headed Playwright driver is
-preserved as an explicit **Browser automation** option. Buddi never silently
+**Use my apps** (Computer mode) drives your own apps on macOS. The headed
+Playwright driver is available as an explicit **Browser automation** option. Buddi never silently
 switches modes when permissions, accessibility or a website fail.
 
 The existing `browser.status` / `browser.act` grants and `#/browser` route are
@@ -595,18 +594,3 @@ To revoke a specific agent, remove its browser grants and reload/restart. To
 clear saved logins, first stop browser access and stop the service, then move the
 dedicated `browser/profile` directory to a private backup location. Do not touch
 your everyday Chrome profile. Keeping the moved directory permits recovery.
-
-## Verification
-
-The opt-in integration suite opens a local booking fixture, fills and submits
-it once, checks its receipt, verifies persistent login and blocked destinations,
-then repeats the booking through the actual agent loop with a scripted provider.
-It does not call a paid model, contact Telegram, send mail or make a real booking.
-
-```sh
-BUDDI_BROWSER_TEST=1 BUDDI_BROWSER_HEADED=1 pnpm --filter @buddi/tool-browser test
-```
-
-Without `BUDDI_BROWSER_HEADED=1`, the opt-in browser fixture runs headless for CI.
-Production launch remains headed. The local-address exception exists only as an
-injected test policy; no environment variable enables it in production.

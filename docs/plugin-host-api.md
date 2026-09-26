@@ -1,7 +1,7 @@
 ---
 title: The plugin host API
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # The plugin host API
@@ -193,7 +193,7 @@ exists. Scope: a plugin sees files it saved and files handed into a
 conversation its tool is running in. A manifest that declares
 `files:library` sees every file, and the install card says so in those
 words; a personal assistant that reads everything should say so. Files saved
-before the host existed are attributed (migration 042) to the plugin their
+before the host existed are attributed to the plugin their
 provenance names.
 
 **memory.** `recall(query, opts?): Promise<MemoryNote[]>` and

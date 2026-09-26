@@ -1,18 +1,17 @@
 ---
 title: "Install: one command, then the dashboard"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Install: one command, then the dashboard
 
-Someone who is not a developer but can type `npm` should get from nothing to a
-working buddi, with their first agent answering in the browser, in ten minutes
-and without reading a terminal. The developer path — `git clone`, Docker
-Desktop, `.env`, `buddi init` and a handful of CLI commands — stays for
-developers; owners get the package, and the dashboard is the surface that owns
-onboarding, upgrades and plugins. Most of this page is built; §12 says exactly
-what is and what is not, and §13 is for developers working on the package.
+Someone who is not a developer but can type `npm` gets from nothing to a
+working buddi, with their first agent answering in the browser, in about ten
+minutes and without reading a terminal. Owners install the package, and the
+dashboard is the surface that owns onboarding, upgrades and plugins. A source
+checkout is for developers working on buddi itself (§13). §12 says what of this
+page is built and what is not.
 
 This is not a desktop app. A packaged app (Electron or Tauri, DMG or MSI) is a
 thin shell over everything below and is deferred until the install described
@@ -42,8 +41,8 @@ Telegram, plugins — happens in the wizard (§5). The terminal prints one line
 per step and the URL; it asks nothing. Every later `buddi` with no arguments
 opens the dashboard.
 
-`buddi init`, `buddi doctor`, `buddi service`, `buddi vault`, `buddi upgrade`
-remain as they are for developers and for a headless machine. The wizard calls
+`buddi doctor`, `buddi service`, `buddi vault` and `buddi upgrade` also work
+from a terminal, for a headless machine. The wizard calls
 the same functions through the API; there is one implementation of each step.
 
 ---
@@ -52,7 +51,7 @@ the same functions through the API; there is one implementation of each step.
 
 `buddi` becomes one published npm package that carries the CLI, the gateway,
 core, runtime, the built dashboard and the built-in tools. The monorepo stays;
-publishing is a bundling step (`pnpm -r build`, then a single package assembled
+publishing is a bundling step (build, then a single package assembled
 from `packages/*/dist` with its runtime dependencies), not a restructuring.
 `@buddi/core` is published alongside it, unbundled, because plugins import it
 (§7).
@@ -222,7 +221,7 @@ tool call — is the wrong shape for the owner acting directly from their own
 dashboard. It takes the id of the account the thread just tested, so the
 assistant is bound to the brain the owner chose.
 
-Developer install (`git clone`, `buddi init`) ends by opening the same route.
+A source checkout's setup ends by opening the same route (§13).
 
 ---
 
@@ -247,9 +246,9 @@ while the gateway is down. Maintenance therefore never needs the gateway:
   socket. There is no second web surface to log in to.
 - `buddi upgrade`, `buddi backup restore` and `buddi migrate` talk to the
   supervisor over that socket: "stop the gateway, keep the database", do the
-  work, "start the gateway". With no supervisor running (a headless developer
-  checkout, or the service not installed) they start Postgres themselves for
-  the duration and stop it after, as `buddi init` does today.
+  work, "start the gateway". With no supervisor running (the service not
+  installed, or a source checkout) they start Postgres themselves for the
+  duration and stop it after.
 - The Start, Stop and Restart switches live in the dashboard, in Settings →
   System, and act through the supervisor rather than the gateway — so a
   restart leaves the database up. They are there only while the gateway is up
@@ -547,9 +546,9 @@ job does not exist yet (§12).
 5. `buddi plugins install <published plugin>` shows the plan, waits for
    approval, registers the plugin, and its tools appear in the agents'
    tool lists; uninstall removes them and `--purge` drops the schema.
-6. A developer checkout with Docker keeps working with `buddi init`
-   unchanged, ending in the same wizard at step 3.
-7. `pnpm test` still passes `generic-install` with zero plugins, and the
+6. A source checkout with Docker keeps its own setup, ending in the same
+   wizard at step 3.
+7. The `generic-install` check still passes with zero plugins, and the
    new CI job passes on the three platforms.
 8. A scheduled backup lands encrypted in a synced folder; on a clean machine
    the wizard's "I have a backup" restores it from that folder with the
@@ -570,8 +569,6 @@ job does not exist yet (§12).
 ---
 
 ## 12. What of this is built
-
-Checked against the code on 2026-09-21.
 
 Built:
 
@@ -596,8 +593,7 @@ Built:
 Not built:
 
 6. **Linux and Windows.** Linux: the file vault, the bundled Postgres and the
-   systemd user unit (`packages/install/src/launcher.ts`, built 2026-09-24
-   for the trial on the home server) — no Secret Service backend, by choice.
+   systemd user unit (`packages/install/src/launcher.ts`) — no Secret Service backend, by choice.
    Windows: the data-directory layout knows it
    (`packages/install/src/environment.ts`) and nothing else does — no
    Credential Manager vault, no Task Scheduler unit. The repository carries
@@ -614,6 +610,13 @@ signing, auto-update and a tray. It is not on this list.
 ---
 
 ## 13. For developers: the package, built and tried
+
+### A source checkout
+
+A checkout of the repository is the developer path: `git clone`, Docker
+Desktop for its Postgres container, then `buddi init`, which writes `.env`,
+starts the database, migrates, installs the service and ends in the same
+wizard as a packaged install. It is safe to run again.
 
 ### Where the code lives
 

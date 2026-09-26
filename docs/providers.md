@@ -30,7 +30,7 @@ Supported connections:
   not loaded into the server.
 - [Claude subscription sign-in](anthropic-oauth.md), with browser consent,
   code paste, and coordinated vault-backed token refresh. Uses the plan's
-  monthly Agent SDK credits; after them, an API key. Requires migration 020.
+  monthly Agent SDK credits; after them, an API key.
 - [ChatGPT subscription through Codex](codex-accounts.md), with native device
   sign-in. Requires the pinned Codex client on the host.
 
@@ -52,12 +52,12 @@ is used for.
 host vault. The UI never reads back saved values and never stores keys in browser
 storage. Newly entered password fields are cleared on submission, including failures.
 
-On first boot after migration 018, the gateway atomically imports three legacy account
-slots and pins every installed agent to its previously selected credential and model.
+On its first start after the model accounts feature arrived, buddi imported the keys it
+found in the environment and the vault as accounts (three legacy slots), and pinned every installed agent to its previously selected credential and model.
 It references existing vault entries without copying values into SQL. Existing removal
 markers remain disabled. An explicitly selected missing API key stays missing; it does
 not switch to a subscription token. Missing slots can be filled later or removed when
-unassigned. A migration marker prevents restarts from reimporting or rebinding accounts.
+unassigned. A marker prevents restarts from reimporting or rebinding accounts.
 
 An imported account may read its explicitly named legacy environment variable if the
 vault entry is absent. Replacing its credential creates an account-specific vault entry
@@ -65,12 +65,12 @@ and permanently removes that environment fallback for the account. The old legac
 vault entry is retained on replacement for compatibility/recovery, but the account no
 longer uses it. Newly created accounts never read ambient environment credentials.
 
-Once migrated, account/model bindings in Postgres override agent-file provider/model
+Once imported, account/model bindings in Postgres override agent-file provider/model
 fields. Files still own persona, tools, language and turn budget. Newly installed agents
 must be assigned an account; there is no silent default or cross-account fallback.
 
 macOS uses Keychain by default. Windows/Linux use the AES-256-GCM file vault with
-`BUDDI_VAULT_KEY` outside Postgres. A packaged install creates the key on its first run; in a source checkout, `buddi init` does.
+`BUDDI_VAULT_KEY` outside Postgres. A packaged install creates the key on its first run (a source checkout: `buddi init`).
 Database backups alone cannot restore credentials; preserve the vault and its master
 key separately. A locked vault fails closed.
 

@@ -1,7 +1,7 @@
 ---
 title: "Operations — backup, restore, and where your data actually lives"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Operations — backup, restore, and where your data actually lives
@@ -36,22 +36,23 @@ Four places, and only two of them are in a backup. There are **two kinds of
 installation** and they keep their data in different places, so every row below
 answers twice:
 
-- a **developer checkout** — `git clone`, Docker Desktop, `buddi db up`;
 - a **packaged install** — `npm install -g @withbuddi/buddi`, where the supervisor owns a
   bundled Postgres and everything sits under one data directory, `<data>`:
   `~/Library/Application Support/buddi` on macOS,
   `${XDG_DATA_HOME:-~/.local/share}/buddi` on Linux, `%LOCALAPPDATA%\buddi` on
   Windows, or wherever `BUDDI_DATA_DIR` points
-  (`packages/install/src/environment.ts`).
+  (`packages/install/src/environment.ts`);
+- a **developer checkout** — `git clone`, Docker Desktop, and the Postgres
+  container the checkout runs.
 
-| What | Developer checkout | Packaged install | In a backup? |
+| What | Packaged install | Developer checkout | In a backup? |
 | --- | --- | --- | --- |
-| The database | Docker **named volume** `buddi-pgdata`, mounted at `/var/lib/postgresql/data` in the `buddi-postgres` container | `<data>/postgres` — a cluster the supervisor runs with the bundled binaries it keeps in `<data>/runtime` (`packages/install/src/postgres.ts`, `packages/core/src/postgres/cluster.ts`) | Yes — as `COPY` text, one file per table, never as data-directory files |
-| Artifact files | `<data dir>/artifacts/<yyyy>/<mm>/<sha256>.<ext>` — `data/` at the repo root unless `BUDDI_DATA_DIR` says otherwise | `<data>/artifacts/…`, same layout | Yes (skippable) |
-| Your private agents and skills | `private/agents` + `private/skills` at the repo root, or `~/.buddi/agents` + `~/.buddi/skills`, or wherever `BUDDI_AGENTS_DIR` / `BUDDI_SKILLS_DIR` point. `buddi doctor` prints the resolved paths in the `config` row | `<data>/agents` + `<data>/skills` | Yes |
-| Secrets | The **macOS keychain** (service `buddi`), or the encrypted file vault at `~/.buddi/vault.json`, or `.env` on a day-1 installation | The same keychain, or the file vault whose key is in `<data>/.env` | **No. Never.** |
-| The backups themselves | `<data dir>/backups` | `<data>/backups` | They are the backup |
-| The agents' Chromium, when buddi fetched it | Playwright's own cache (`~/.cache/ms-playwright` on Linux, `~/Library/Caches/ms-playwright` on macOS) | `<data>/browser/engines`. An install that already had Chromium in Playwright's cache before this location existed keeps using the cache; `buddi browser install` moves it here. `buddi browser` says where it is | No. `buddi browser install` fetches it again |
+| The database | `<data>/postgres` — a cluster the supervisor runs with the bundled binaries it keeps in `<data>/runtime` (`packages/install/src/postgres.ts`, `packages/core/src/postgres/cluster.ts`) | Docker **named volume** `buddi-pgdata`, mounted at `/var/lib/postgresql/data` in the `buddi-postgres` container | Yes — as `COPY` text, one file per table, never as data-directory files |
+| Artifact files | `<data>/artifacts/<yyyy>/<mm>/<sha256>.<ext>` | the same layout under `<data dir>/artifacts/` — `data/` at the repo root unless `BUDDI_DATA_DIR` says otherwise | Yes (skippable) |
+| Your private agents and skills | `<data>/agents` + `<data>/skills` | `private/agents` + `private/skills` at the repo root, or `~/.buddi/agents` + `~/.buddi/skills`, or wherever `BUDDI_AGENTS_DIR` / `BUDDI_SKILLS_DIR` point. `buddi doctor` prints the resolved paths in the `config` row | Yes |
+| Secrets | The **macOS keychain** (service `buddi`), or the file vault whose key is in `<data>/vault-key` | The same keychain, or the encrypted file vault at `~/.buddi/vault.json`, or `.env` on a day-1 installation | **No. Never.** |
+| The backups themselves | `<data>/backups` | `<data dir>/backups` | They are the backup |
+| The agents' Chromium, when buddi fetched it | `<data>/browser/engines`. An install that already had Chromium in Playwright's cache before this location existed keeps using the cache; `buddi browser install` moves it here. `buddi browser` says where it is | Playwright's own cache (`~/.cache/ms-playwright` on Linux, `~/Library/Caches/ms-playwright` on macOS) | No. `buddi browser install` fetches it again |
 
 ### Where the database listens, and what protects it
 
@@ -77,9 +78,9 @@ Never bind it to `0.0.0.0` on a network you do not control: a café, an office
 LAN, a hotel, a conference. There is no configuration elsewhere in buddi that
 makes that safe.
 
-The **password** is 32 random URL-safe characters (192 bits), generated once by
-`buddi init` — or by the first `buddi db up` — and kept in the OS keychain under
-`BUDDI_DB_PASSWORD`. It is never written to a file. `DATABASE_URL` is assembled
+The **password** is 32 random URL-safe characters (192 bits), generated once — by a
+packaged install's first run (a source checkout: `buddi init` or the first
+`buddi db up`) — and kept in the vault under `BUDDI_DB_PASSWORD`. It is never written to a file. `DATABASE_URL` is assembled
 from it in memory at startup, in this precedence:
 
 1. an explicit `DATABASE_URL` in the environment or in `.env` — the escape hatch
@@ -95,7 +96,7 @@ exits 1. It fails when the published port is bound to anything but a loopback
 address, and when the password is the literal `buddi` or is missing from the
 vault while compose expects it. The message names the fix.
 
-### Migrating an installation that predates this
+### Migrating a source checkout that predates this
 
 ```sh
 buddi db secure        # rotate, store, rewrite .env — idempotent
@@ -147,17 +148,18 @@ key in `<data>/vault-key` (mode `0600`) beside the data; a checkout keeps it in
 directory, so what the vault protects is the file at rest and against another
 account on the machine — not against someone who already has this account.
 
-`buddi init` generates that key if there is none and writes it into `.env`, at
-mode `600`, in the line `.env.example` already reserves for it. It is the
-**only** command that ever mints one. Nothing else does — not `buddi db up`,
-not the background service — because a key generated by a second process would
-seal secrets the first one cannot open, and the result would look like a
-corrupt vault rather than like a mistake. Every other command that finds the
-vault locked says which file, which variable, and to run `buddi init`.
+A packaged install generates that key on its first run, if there is none, and
+writes it to `<data>/vault-key` at mode `600` (a source checkout: `buddi init`,
+which writes it into `.env`). That first run is the **only** thing that ever
+mints one. Nothing else does — not the background service, not a later
+command — because a key generated by a second process would seal secrets the
+first one cannot open, and the result would look like a corrupt vault rather
+than like a mistake. Every other command that finds the vault locked says which
+file and which variable to fix.
 
 Two consequences worth reading once:
 
-- **That line in `.env` is the only copy.** It is not in the database, it is
+- **That key is the only copy** (`<data>/vault-key`, or the line in a checkout's `.env`). It is not in the database, it is
   not in a backup (it is scrubbed by shape — see below — precisely because it
   is the key to everything else), and it is not in git. Copy it somewhere you
   would keep a recovery code.
@@ -536,8 +538,8 @@ Settings → Backup; the terminal path below is the same engine.
 buddi status         # says whether the database is reachable
 ```
 
-In a source checkout, start its Postgres container with `buddi db up` first. A
-packaged install's supervisor runs its own database.
+A packaged install's supervisor runs its own database. (A source checkout
+starts its Postgres container with `buddi db up` first.)
 
 ### 2. Verify the archive before you commit to it
 
@@ -831,7 +833,17 @@ out. When one is, Settings → System → Version shows what changes in it befor
 you upgrade: the release's section of `CHANGELOG.md`, carried in the same small
 answer as the version number, so no second request.
 
-So the migration is no longer the step you can silently skip. Two are:
+In a packaged install, upgrade from Settings → System → Version, or run
+`buddi upgrade` in a terminal. Either way the supervisor takes a backup, stops
+the gateway, installs the new version from npm, and hands over to it; the new
+code migrates and starts. If a step fails, the gateway is deliberately left
+down and `buddi doctor` names the archive taken first and the two commands that
+put you back.
+
+### In a source checkout
+
+A checkout builds its own code, so the migration is no longer the step you can
+silently skip. Two are:
 
 | Skip | What you get |
 | --- | --- |
@@ -905,9 +917,9 @@ in place is migrated with everything else. Installing a newer version of one is
 `buddi plugins install <dir>`, which reads what it contributes before it
 changes anything.
 
-### Mail search (migration 012)
+### Mail search
 
-The email plugin's `012_search.sql` is the one migration in this repo that
+The email plugin's mail search migration is the one migration that
 needs more than the schema it owns, so it is worth knowing about before an
 upgrade rather than during one.
 

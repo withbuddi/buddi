@@ -94,7 +94,7 @@ agree with it on unit, unit label and direction, or the call is refused before
 a card: two goals reading one series in opposite directions is a
 contradiction.
 
-**The tables** (migration 044):
+**The tables**:
 
 ```sql
 core.owner_metrics (slug primary key, label, unit, unit_label, direction, created_at)
@@ -164,7 +164,7 @@ interface Goal {
 ```
 
 Tables in core: `core.goals`, `core.goal_checks (goal_id, at, value, note,
-onTrack boolean, paceNeeded numeric, projected numeric)`, migration 037.
+onTrack boolean, paceNeeded numeric, projected numeric)`.
 
 `core.goals` also carries `currency`, taken from the first reading:
 a card rendering a target or a milestone has no check in its hand, and a euro
@@ -193,7 +193,7 @@ is one the sentinel never even walks.
 "Run three times a week" is a second target shape on the same series:
 `target: { kind: 'frequency', count, per: 'week' | 'month' }`, stored as
 `target_kind = 'frequency'`, `target_value = count` and `target_per`
-(migration 045; a level goal's `target_per` is null, a frequency goal's never
+(a level goal's `target_per` is null, a frequency goal's never
 is). A value is one occurrence ("ran today" records 1), whatever number it
 carries. A frequency goal needs an owner metric — only those have values to
 count — and starts with nothing counted: its baseline is 0 and `goal.set`

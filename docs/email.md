@@ -1,7 +1,7 @@
 ---
 title: "Email: accounts, threads, policies, watchers"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Email: accounts, threads, policies, watchers
@@ -625,8 +625,8 @@ the owner at once.
   the body. pg_trgm's `%` similarity operator is not used: it would quietly turn the search into a fuzzy word
   match, and an agent looking for `@acme.` in an address would stop finding it.
 - **The text search is a UNION, not an `OR`.** One arm is
-  `subject ilike … or from_addr ilike …`, which the trigram GIN indexes from
-  `012_search.sql` can serve as a BitmapOr; the other is `body_text ilike …`,
+  `subject ilike … or from_addr ilike …`, which the trigram GIN indexes of
+  mail search can serve as a BitmapOr; the other is `body_text ilike …`,
   which is a scan. They have to be separate queries: Postgres can only serve an
   `OR` from indexes when **every** arm has one, so the obvious three-column
   disjunction would touch neither index and the two GINs would be write
@@ -687,10 +687,10 @@ the tool share **one query builder**
 the same question get the same answer. Each result links to the conversation
 it is in.
 
-Operational note: `012_search.sql` creates the `pg_trgm` extension (which needs
+Operational note: mail search creates the `pg_trgm` extension (which needs
 CREATE on the database — pg_trgm is trusted, so not superuser) and builds two
 GIN indexes under an exclusive lock on `email.messages`. See
-docs/operations.md, "Mail search (migration 012)".
+docs/operations.md, "Mail search".
 
 ## 10. Attachments
 
