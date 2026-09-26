@@ -36,6 +36,10 @@ export function browserWaitMessage(_surface?: SurfaceProfile): string {
 const SCREEN_GONE = /\b(tab|window)\b[^.]*\b(closed|gone)\b|has been closed|target closed/i;
 /** A gone tab the driver can replace by itself ("observe again to continue in a new one") is not a screen lost. */
 const SCREEN_REPLACEABLE = /observe again to continue in a new one/i;
+/** The extension's refusal to act in the tab the owner is viewing (extension commands.ts, `WATCHED`). */
+const OWNER_WATCHING = /You are looking at this tab/i;
+/** What the model is told instead: one ask of the owner, not a retry. */
+export const OWNER_WATCHING_MESSAGE = 'The owner is looking at that tab. Ask them to switch to another tab or window, then try once more.';
 /** Consecutive observation failures on one session before control pauses. */
 const MAX_OBSERVATION_FAILURES = 3;
 
@@ -362,6 +366,16 @@ export class BrowserService {
    * than on the stale arguments. Nothing was dispatched for any of these.
    */
   async #precondition(controller: AbortController, error: BrowserPreconditionError): Promise<never> {
+    if (OWNER_WATCHING.test(error.message)) {
+      // Not a targeting failure and nothing waiting fixes: only the owner
+      // moving to another tab does. No pause and no count; the next action
+      // must observe first, so the model asks once instead of retrying.
+      this.#message = OWNER_WATCHING_MESSAGE;
+      this.#state = 'running';
+      this.#needsObservation = true;
+      throw new BrowserPreconditionError(JSON.stringify({ error: OWNER_WATCHING_MESSAGE, dispatched: false,
+        recovery: 'Ask the owner now and wait for their answer. Do not retry by yourself.' }));
+    }
     this.#message = error.message;
     this.#state = ++this.#preconditionFailures >= 3 ? 'paused' : 'running';
     if (this.#state === 'paused') this.#message += ' Repeated targeting failures: ask the owner to inspect and resume. No input was dispatched.';

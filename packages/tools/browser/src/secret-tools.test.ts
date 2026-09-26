@@ -159,6 +159,16 @@ describe('secret.fill', () => {
     expect(stale.driver.secretFillField).not.toHaveBeenCalled();
   });
 
+  it('asks for the owner to switch tabs when they are looking at the one to fill, before any card', async () => {
+    const watched = await setup({
+      driver: driver({ secretFieldInfo: vi.fn(async () => { throw new BrowserPreconditionError('You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.'); }) }),
+    });
+    const error = await watched.service.secretFill({ name: 'PNC password', ref: 'e7', observation: 'o1' }, ctx(watched.secrets) as never).catch((e: unknown) => e);
+    expect(JSON.parse((error as Error).message)).toMatchObject({ dispatched: false, error: 'The owner is looking at that tab. Ask them to switch to another tab or window, then try once more.' });
+    expect(watched.calls).toEqual([]);
+    expect(watched.service.status().state).toBe('running');
+  });
+
   it('refuses a secret the browser destinations have never heard of, before any card', async () => {
     const unknown = await setup({ listing: [] });
     const error = await unknown.service.secretFill({ name: 'Other secret', ref: 'e7', observation: 'o1' }, ctx(unknown.secrets) as never).catch((e: unknown) => e);

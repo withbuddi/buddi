@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
-import { browserPausedMessage, browserStoppedMessage, BrowserService } from './service.js';
+import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';
 
@@ -50,6 +50,25 @@ describe('host browser authority and lifecycle', () => {
     await service.control('release');
     expect(service.status()).toMatchObject({ state: 'idle', hasScreenshot: false });
     expect(service.status().message).toBeUndefined(); expect(service.status().lastAction).toBeUndefined();
+  });
+  it('tells the model to ask the owner once when they are looking at the tab, without pausing or inviting a retry', async () => {
+    const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
+    const watched = 'You are looking at this tab. buddi only acts in background tabs; observe again to continue in a new one.';
+    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError(watched));
+    vi.mocked(driver.observe).mockClear();
+    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } });
+    const error = await service.execute(click, ctx).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BrowserPreconditionError);
+    const result = JSON.parse((error as Error).message);
+    expect(result).toMatchObject({ error: OWNER_WATCHING_MESSAGE, dispatched: false });
+    expect(result.error).toBe('The owner is looking at that tab. Ask them to switch to another tab or window, then try once more.');
+    expect((error as Error).message).not.toContain('observe again');
+    expect(driver.observe).not.toHaveBeenCalled();
+    expect(service.status().state).toBe('running');
+    // The model cannot retry by itself: the next action must be a fresh look.
+    await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation is required');
+    await service.execute(observe, ctx);
+    await expect(service.execute(click, ctx)).resolves.toMatchObject({ completed: true });
   });
   it('bounds repeated targeting failures and permits close without stale evidence', async () => {
     const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
