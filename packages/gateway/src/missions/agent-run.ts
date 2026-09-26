@@ -278,7 +278,16 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
     let chatId: string | undefined;
     try {
       jobContext.signal?.throwIfAborted();
-      chatId = await deps.deliver(text, offers);
+      chatId = await deps.deliver(text, offers, {
+        agentId: payload.agentId,
+        origin: job.dedupKey?.startsWith('reminder:')
+          ? 'reminder'
+          : payload.conversationHint?.startsWith(OFFER_HINT_PREFIX)
+            ? 'offer'
+            : 'source',
+        ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
+        ...(job.dedupKey?.startsWith('reminder:') ? { dedupeKey: job.dedupKey } : {}),
+      });
     } catch (err) {
       // Nobody to tell is not a reason to retry the model. The run happened,
       // the decision stands, and the skip is recorded on the job's result.

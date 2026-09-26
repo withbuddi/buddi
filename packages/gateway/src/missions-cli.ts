@@ -19,6 +19,7 @@ import {
   listMissions,
   listOccurrences,
   nextAfter,
+  registerChannel,
   renderOffers,
   setMissionEnabled,
   toOccurrence,
@@ -37,7 +38,8 @@ import {
 import { createMissionExecutor } from './missions/execute.js';
 import { missionOwnerAgent } from './missions/reminders.js';
 import { createDigestPrepare, recapMissionId, timezoneFromEnv } from './missions/recap.js';
-import { notifyOwner } from './telegram/notify.js';
+import { ownerDeliver } from './owner-notify.js';
+import { createTelegramChannel } from './telegram/channel.js';
 
 const USAGE = `buddi missions — scheduled missions
 
@@ -359,6 +361,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return;
     }
 
+    if (process.env.TELEGRAM_BOT_TOKEN?.trim()) registerChannel(createTelegramChannel({ pool, env: process.env }));
     const occurrence = await insertOccurrence(pool, mission.id, revision, now(), 'claimed');
     const execute = createMissionExecutor({
       pool,
@@ -368,7 +371,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       ctx: wiring.ctx,
       env: process.env,
       now,
-      deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
+      // Through the owner's notifications like any report; strict, so a
+      // message no channel took is printed as a skipped delivery. This
+      // process registers Telegram's text path itself: it is not `serve`.
+      deliver: ownerDeliver(pool, { now, timezone: timezoneFromEnv(), strict: true }),
       requireDelivery: false,
       prepare: createDigestPrepare(pool, { now }),
       onToolCall: (name, input) => console.error(`⚙ ${name} ${JSON.stringify(input)}`),
@@ -386,7 +392,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // the owner reads the offers as words rather than losing them entirely.
       console.log(renderOffers(CLI_SURFACE, result.text, result.offers ?? []).text);
       const outcome = result.delivered
-        ? `delivered to chat ${result.chatId}`
+        ? `delivered (${result.chatId})`
         : result.skipped
           ? `delivery skipped: ${result.skipped}`
           : `nothing delivered (${result.decision}${result.reason ? `: ${result.reason}` : ''})`;

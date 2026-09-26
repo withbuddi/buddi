@@ -38,6 +38,7 @@ import {
   getQuestion,
   TELEGRAM_SURFACE,
   touchSurfaceIdentity,
+  presenceTouch,
   type Offer,
   type Question,
   type Queryable,
@@ -1669,6 +1670,10 @@ export class TelegramSurface {
   /** `last_seen_at`, at most once per identity per `TOUCH_INTERVAL_MS`. */
   async #touch(userId: string, label: string | null): Promise<void> {
     const at = this.#now();
+    // Presence, unthrottled: the owner is here now, and "now" is what decides
+    // whether a notification is shown or sent (docs/notifications.md).
+    await presenceTouch(this.#opts.pool, SURFACE, new Date(at)).catch((err: unknown) =>
+      this.#log(`telegram: presence failed: ${message(err)}`));
     const last = this.#lastTouch.get(userId);
     if (last !== undefined && at - last < TOUCH_INTERVAL_MS) return;
     this.#lastTouch.set(userId, at);

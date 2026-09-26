@@ -77,7 +77,22 @@ export const SCHEDULED_RUN_SUFFIX = [
  * surface — `renderOffers` reads the profile and decides between controls and
  * words — so this signature says nothing about buttons and never has to.
  */
-export type Deliver = (text: string, offers?: readonly Offer[]) => Promise<string>;
+export type Deliver = (text: string, offers?: readonly Offer[], context?: DeliverContext) => Promise<string>;
+
+/**
+ * What the run knows about the message it is sending, so the owner's
+ * notifications can say what kind of thing it is and collapse a repeat
+ * (docs/notifications.md). A delivery that has no use for it ignores it.
+ */
+export interface DeliverContext {
+  agentId?: string;
+  /** Where the run came from: a scheduled mission, a watcher's wake, a reminder, a source, a tapped offer. */
+  origin: 'mission' | 'wake' | 'reminder' | 'source' | 'offer';
+  /** What the run said with `mission.report`. */
+  urgency?: 'urgent' | 'normal';
+  /** "This thing, again": a finding's key, a reminder's. */
+  dedupeKey?: string;
+}
 
 /**
  * Context a mission's prompt picks up just before it runs, and what to commit
@@ -383,7 +398,12 @@ export function createMissionExecutor(
     let chatId: string | undefined;
     try {
       control?.signal?.throwIfAborted();
-      chatId = await deps.deliver(text, offers);
+      chatId = await deps.deliver(text, offers, {
+        agentId: mission.agentId,
+        origin: finding ? 'wake' : 'mission',
+        ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
+        ...(finding ? { dedupeKey: `finding:${finding.key}` } : {}),
+      });
     } catch (err) {
       if (!requireDelivery && err instanceof OwnerNotPairedError) {
         log(`mission ${mission.id}: delivery skipped — ${err.message}`);

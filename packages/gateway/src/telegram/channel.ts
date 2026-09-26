@@ -1,0 +1,58 @@
+/**
+ * Telegram as a channel: how core's `notifyOwner` reaches the owner's phone
+ * (docs/notifications.md).
+ *
+ * The surface registers this when it starts. A message is the text it always
+ * was, with offers as buttons through `renderOffers`; an approval is the card,
+ * with its bound callbacks, exactly as the approval path posted it before
+ * notifications existed.
+ */
+import { getAction, type ActionRecord, type OwnerChannel, type Queryable } from '@buddi/core';
+import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
+
+/** The one message text a channel with no title field sends. */
+export function ownerMessageText(message: { title: string; text?: string }): string {
+  const text = message.text?.trim();
+  return text ? `${message.title}\n\n${text}` : message.title;
+}
+
+export interface TelegramChannelOptions {
+  pool: Queryable;
+  env?: NodeJS.ProcessEnv;
+  /** Read at each delivery: the surface may start after the channel is registered. */
+  botUsername?: () => string | null | undefined;
+  /** The running surface's approval cards, when there is one. */
+  approvals?: () => { request(chatId: string, action: ActionRecord): Promise<unknown> } | undefined;
+  /** Injected in tests; otherwise the text path is `notifyOwner` over the Bot API. */
+  sendText?: typeof notifyOwner;
+}
+
+export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChannel {
+  const sendText = opts.sendText ?? notifyOwner;
+  return {
+    kind: 'telegram.chat',
+    describe() {
+      const bot = opts.botUsername?.();
+      return { label: 'Telegram', ...(bot ? { where: `@${bot}` } : {}) };
+    },
+    can: { offers: true, attachments: false, markdown: false },
+    async deliver(message) {
+      const approvals = opts.approvals?.();
+      if (message.kind === 'approval' && message.actionId && approvals) {
+        const action = await getAction(opts.pool, message.actionId);
+        if (action) {
+          const chatId = await ownerChatId(opts.pool);
+          if (!chatId) throw new OwnerNotPairedError();
+          await approvals.request(chatId, action);
+          return { id: chatId };
+        }
+      }
+      const chatId = await sendText(ownerMessageText(message), {
+        pool: opts.pool,
+        env: opts.env ?? process.env,
+        ...(message.offers && message.offers.length > 0 ? { offers: message.offers } : {}),
+      });
+      return { id: chatId };
+    },
+  };
+}

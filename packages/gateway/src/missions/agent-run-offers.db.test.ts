@@ -137,6 +137,7 @@ suite('an offer taken away from its thread (postgres)', () => {
 
     const registry = createToolRegistry();
     const delivered: string[] = [];
+    const contexts: unknown[] = [];
     const handle = createAgentRunHandler({
       pool,
       registry,
@@ -144,8 +145,9 @@ suite('an offer taken away from its thread (postgres)', () => {
       provider: reportingProvider(opts.text),
       ctx,
       now: () => NOW,
-      deliver: async (text) => {
+      deliver: async (text, _offers, context) => {
         delivered.push(text);
+        contexts.push(context);
         return 'chat';
       },
       log: () => {},
@@ -155,15 +157,17 @@ suite('an offer taken away from its thread (postgres)', () => {
       decision: string;
       delivered: boolean;
     };
-    return { offer: offer!, outcome, delivered };
+    return { offer: offer!, outcome, delivered, contexts };
   };
 
   it('runs in the offer’s own conversation and writes the report into it', async () => {
     const conversationId = await createConversation(pool, MISSION_AGENT);
-    const { outcome, delivered } = await runTakenOffer({
+    const { outcome, delivered, contexts } = await runTakenOffer({
       conversationId,
       text: 'Sent. Dorothée has the reply.',
     });
+    // The owner's notifications are told where the run came from.
+    expect(contexts).toEqual([expect.objectContaining({ agentId: MISSION_AGENT, origin: 'offer' })]);
 
     // The run stays where the offer was made — not in a conversation of its own.
     expect(outcome).toMatchObject({ conversationId, decision: 'report', delivered: true });

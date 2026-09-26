@@ -25,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 import {
   configurePluginHost,
   createVault,
+  notificationsTick,
+  registerChannel,
   type Vault,
   collectSources,
   countJobsByState,
@@ -93,7 +95,8 @@ import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
 import { seedOwnerFromEnv } from './owner-seed.js';
 import { delegateAllowlist } from './agents/delegation.js';
-import { notifyOwner, ownerChatId } from './telegram/notify.js';
+import { createTelegramChannel } from './telegram/channel.js';
+import { notifyApproval, ownerDeliver, ownerText } from './owner-notify.js';
 import { describePaired, startTelegram, type TelegramDeps } from './telegram/main.js';
 
 /**
@@ -162,6 +165,8 @@ export const REMINDER_TICK_MS = 60_000;
  * speak, it only notices — the aggregation window inside it decides that.
  */
 export const DEAD_LETTER_TICK_MS = 60_000;
+/** How often held and shown notifications are looked at: escalations, quiet hours, the end of the day. */
+export const NOTIFICATIONS_TICK_MS = 60_000;
 
 /** The scheduler's kind: run one occurrence of a scheduled mission. */
 export const MISSION_JOB_KIND = 'mission-run';
@@ -640,6 +645,19 @@ export async function main(): Promise<void> {
      * when it runs, so they all see the surface the moment it exists.
      */
     let telegram = !recovering && process.env.TELEGRAM_BOT_TOKEN?.trim() ? await startTelegram(telegramOptions) : undefined;
+    // Telegram as a channel (docs/notifications.md): registered once the
+    // surface runs, whether at boot or from the dashboard later. Reads the
+    // binding at each delivery, so the approval card is the running surface's.
+    let telegramChannel: (() => void) | undefined;
+    const registerTelegramChannel = (): void => {
+      telegramChannel ??= registerChannel(createTelegramChannel({
+        pool,
+        env: process.env,
+        botUsername: () => telegram?.botUsername,
+        approvals: () => telegram?.approvals,
+      }));
+    };
+    if (telegram) registerTelegramChannel();
     let starting: Promise<{ botUsername: string | null }> | undefined;
     const startTelegramNow = async (): Promise<{ botUsername: string | null; refused?: string }> => {
       // The whole point of recovery is that nothing this installation was told
@@ -657,6 +675,7 @@ export async function main(): Promise<void> {
       starting ??= (async () => {
         const handle = await startTelegram(telegramOptions);
         telegram = handle;
+        registerTelegramChannel();
         console.log(`  telegram: @${handle.botUsername ?? '(unknown)'} started from the dashboard`);
         return { botUsername: handle.botUsername ?? null };
       })().finally(() => { starting = undefined; });
@@ -666,15 +685,12 @@ export async function main(): Promise<void> {
     // An unattended run has no chat of its own. When one proposes a gated
     // effect, the request is posted to the paired owner chat on its behalf —
     // same preview, same buttons, same bound action as an interactive turn.
+    const notifyDeps = { now, timezone: wiring.timezone, log: logErr };
     const askApproval = async (action: ActionRecord): Promise<void> => {
-      const chatId = await ownerChatId(pool);
-      if (!chatId || !telegram) {
-        console.error(
-          `approval ${action.id} (${action.tool}) is waiting in the dashboard; ${!telegram ? 'Telegram is not configured' : 'no owner chat is paired'}`,
-        );
-        return;
+      const result = await notifyApproval(pool, notifyDeps, action);
+      if (result.state === 'failed') {
+        console.error(`approval ${action.id} (${action.tool}) is waiting in the dashboard; ${result.error ?? 'no channel'}`);
       }
-      await telegram.approvals.request(chatId, action);
     };
 
     // The first-run arc is the only mission that speaks without being asked
@@ -685,7 +701,7 @@ export async function main(): Promise<void> {
     const execute = withNudgeBudget(
       createMissionExecutor({
         ...missionDeps,
-        deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
+        deliver: ownerDeliver(pool, notifyDeps),
         // Two, composed: the weekly digest on the recap, and the conversation
         // a mail watcher's finding is about on a wake run (docs/email.md §7).
         prepare: composePrepare(createDigestPrepare(pool, { now }), createMailWatcherPrepare(pool)),
@@ -694,7 +710,7 @@ export async function main(): Promise<void> {
       {
         pool,
         now,
-        deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
+        deliver: ownerText(pool, notifyDeps, { kind: 'recap' }),
         log: logErr,
       },
     );
@@ -869,7 +885,7 @@ export async function main(): Promise<void> {
           now,
           manifests: () => wiring.registry.manifests(),
           proposalsUrl: dashboardRouteUrl(webConfig(process.env), '#/settings/proposals'),
-          deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
+          deliver: ownerText(pool, notifyDeps, { kind: 'recap', link: '#/settings/proposals' }),
           log: logOut,
         }) }),
         // A source's run. Same lease, same retries, same suspension on an
@@ -882,7 +898,7 @@ export async function main(): Promise<void> {
           providerFor: wiring.providerFor,
           ctx: wiring.ctx,
           now,
-          deliver: (text, offers) => notifyOwner(text, { pool, env: process.env, ...(offers ? { offers } : {}) }),
+          deliver: ownerDeliver(pool, notifyDeps),
           askApproval,
         }),
       },
@@ -933,7 +949,7 @@ export async function main(): Promise<void> {
       pool,
       now,
       timezone: wiring.timezone,
-      deliver: (text: string) => notifyOwner(text, { pool, env: process.env }),
+      deliver: ownerText(pool, notifyDeps, { kind: 'failure', dedupeKey: 'dead-letter', link: '#/activity' }),
       log: logErr,
     });
     const deadLetterLoop = recovering ? idle.loop : startLoop({
@@ -943,6 +959,21 @@ export async function main(): Promise<void> {
       run: async () => {
         const outcome = await deadLetterTick();
         if (outcome.reported) console.error('dead-letter: told the owner about a wave of dead jobs');
+      },
+      log: logErr,
+    });
+
+    // Notifications that were shown or held and whose moment came: an unseen
+    // one escalates, quiet hours end, the day ends (docs/notifications.md).
+    const notificationsLoop = recovering ? idle.loop : startLoop({
+      name: 'notifications',
+      everyMs: NOTIFICATIONS_TICK_MS,
+      abortAfterMs: NOTIFICATIONS_TICK_MS * 2,
+      run: async () => {
+        const outcome = await notificationsTick(pool, notifyDeps, now());
+        if (outcome.escalated + outcome.endOfDay > 0) {
+          console.log(`notifications: ${outcome.escalated} escalated, ${outcome.endOfDay} in the end-of-day message`);
+        }
       },
       log: logErr,
     });
@@ -1046,7 +1077,7 @@ export async function main(): Promise<void> {
         );
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
-          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); proposalLoop.stop();
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop();
           await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
           throw err;
         }
@@ -1071,7 +1102,7 @@ export async function main(): Promise<void> {
     console.log(`  scheduler: tick ${TICK_MS / 1000}s, stale claims released after ${STALE_CLAIM_MS / 60_000}m`);
     console.log(
       `  loops: sentinels every ${SENTINEL_TICK_MS / 1000}s, sources every ${SOURCE_TICK_MS / 1000}s, ` +
-        `reminders every ${REMINDER_TICK_MS / 1000}s ` +
+        `reminders every ${REMINDER_TICK_MS / 1000}s, notifications every ${NOTIFICATIONS_TICK_MS / 1000}s ` +
         `(independent of the scheduler; source poll deadline ${sourcePollTimeoutMs / 1000}s)`,
     );
     const jobCounts = await countJobsByState(pool);
@@ -1125,7 +1156,9 @@ export async function main(): Promise<void> {
       sourceLoop.stop();
       reminderLoop.stop();
       deadLetterLoop.stop();
+      notificationsLoop.stop();
       proposalLoop.stop();
+      telegramChannel?.();
       closingDashboard = dashboard?.close();
       closingDashboard?.catch(() => {});
       void browserHost(process.env).shutdown();

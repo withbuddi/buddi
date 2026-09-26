@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Everything buddi tells you unasked, from approvals and watcher alarms to reminders, reports and failed jobs, is now kept as one list of notifications, with where each went, when, and whether you saw it.
+- Items that can wait for the end of the day go out together at 18:00 your time, as one message with a line each.
 - A plugin can send you a message through `ctx.buddi.owner.notify` once it declares `owner:notify`. The install card says "can send you messages when you are away", the message carries the plugin's name, and your settings choose where it goes, never the plugin. The host API is now 1.2.
 - A camera button in the composer snaps one picture of another tab in your browser and attaches it to the message. The browser's own chooser picks the tab; nothing is recorded.
 - The menu under your initial at the foot of the rail names the running buddi version, and the newer one when the daily check found it.
@@ -14,6 +16,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Without Telegram, an approval or a report no longer fails to send: it is kept for the dashboard, and the list says there was no channel to reach you.
+- The same alert firing more than three times in an hour waits for the end-of-day message instead, and says so once.
 - The Settings entry in the rail is a gear, the sign everyone knows, instead of three sliders.
 - An agent's Setup tab is three shorter pages: Identity, Brain and Access. Each saves its own fields, and the address keeps the page you are on.
 - The dashboard's type is DM Sans, with DM Mono for code, shipped inside the package. It loads no font from the internet, as before.

@@ -41,6 +41,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
+import { listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './notifications.js';
 import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
@@ -1170,6 +1171,10 @@ export function createWebApp(deps: WebServerDeps): Server {
               schedule: await readDigestSchedule(deps.pool, now, deps.timezone),
             },
           });
+        case '/api/notifications':
+          return reply(res, await listNotificationsRoute(deps.pool, q.get('limit')));
+        case '/api/notifications/settings':
+          return reply(res, await notificationSettingsRoute(deps.pool, 'GET'));
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -1637,7 +1642,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale'];
+      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/notifications/settings'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
       try {
@@ -1696,6 +1701,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         });
       }
       if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'PUT', put));
+      if (path === '/api/notifications/settings') return reply(res, await notificationSettingsRoute(deps.pool, 'PUT', put));
       return reply(res, path === '/api/backups/schedule'
         ? await scheduleRoute(backupDeps(), 'PUT', put)
         : await passphraseRoute(backupDeps(), 'PUT', put));
@@ -1892,6 +1898,10 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (err instanceof BodyTooLargeError) return sendJson(res, 413, { error: err.message });
       return sendJson(res, 400, { error: 'request body must be JSON' });
     }
+
+    if (path === '/api/presence') return reply(res, await presenceRoute(deps.pool, body, deps.now()));
+    const seen = /^\/api\/notifications\/([^/]+)\/seen$/.exec(path);
+    if (seen) return reply(res, await markSeenRoute(deps.pool, decodeURIComponent(seen[1] as string), deps.now()));
 
     const approval = /^\/api\/approvals\/([^/]+)\/(approve|reject)$/.exec(path);
     if (approval) {
