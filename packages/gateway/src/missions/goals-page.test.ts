@@ -60,11 +60,12 @@ describe('the Goals page, as a contribution', () => {
     expect(registry.pageTools('goal')).toEqual(['goal.owner_close']);
     const listed = new Set(registry.list().map((tool) => tool.name));
     expect(listed.has('goal.owner_close')).toBe(false);
-    // The rest of the family is exactly as step 1 left it.
+    // The rest of the family: step 1's six, and `goal.record` for the owner's numbers.
     expect([...listed].filter((name) => name.startsWith('goal.')).sort()).toEqual([
       'goal.close',
       'goal.list',
       'goal.metrics',
+      'goal.record',
       'goal.set',
       'goal.status',
       'goal.update',

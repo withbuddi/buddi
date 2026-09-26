@@ -26,6 +26,8 @@ export interface FindingPayload {
   detail: string;
   agentId?: string | null;
   data?: unknown;
+  /** How the agent's line reaches the owner, when not `now` (`Finding.notify`). */
+  notify?: { urgency?: 'today'; dedupeKey?: string };
 }
 
 /** Read a finding out of an occurrence payload, or null if it carries none. */
@@ -35,6 +37,18 @@ export function findingOf(payload: unknown): FindingPayload | null {
   if (finding === null || typeof finding !== 'object') return null;
   const f = finding as Partial<FindingPayload>;
   if (typeof f.key !== 'string' || typeof f.title !== 'string') return null;
+  // Only the one lowering there is, and a key of a sane size: anything else in
+  // a payload is ignored rather than trusted.
+  const raw = (f.notify ?? null) as { urgency?: unknown; dedupeKey?: unknown } | null;
+  const notify: FindingPayload['notify'] =
+    raw !== null && typeof raw === 'object'
+      ? {
+          ...(raw.urgency === 'today' ? { urgency: 'today' as const } : {}),
+          ...(typeof raw.dedupeKey === 'string' && raw.dedupeKey.length > 0 && raw.dedupeKey.length <= 200
+            ? { dedupeKey: raw.dedupeKey }
+            : {}),
+        }
+      : undefined;
   return {
     key: f.key,
     sentinelId: typeof f.sentinelId === 'string' ? f.sentinelId : 'unknown',
@@ -43,6 +57,7 @@ export function findingOf(payload: unknown): FindingPayload | null {
     detail: typeof f.detail === 'string' ? f.detail : '',
     agentId: typeof f.agentId === 'string' ? f.agentId : null,
     data: f.data ?? null,
+    ...(notify !== undefined && Object.keys(notify).length > 0 ? { notify } : {}),
   };
 }
 

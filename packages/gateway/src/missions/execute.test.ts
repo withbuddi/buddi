@@ -573,6 +573,47 @@ describe('a sentinel wake', () => {
     expect(first[0]?.text).toContain('core.goals');
   });
 
+  it('delivers the line as the finding asks: end of the day, under its own dedupe key', async () => {
+    const { deps: d } = deps();
+    const contexts: unknown[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'normal', text: 'You have not told me your weight this week.' }),
+      deliver: async (_text, _offers, context) => {
+        contexts.push(context);
+        return 'chat-42';
+      },
+    });
+    const staleOccurrence: Occurrence = {
+      ...goalOccurrence,
+      id: 'occ-stale',
+      payload: {
+        finding: {
+          ...(goalOccurrence.payload as { finding: Record<string, unknown> }).finding,
+          key: 'goal.g-1.stale.2026-09-29',
+          severity: 'info',
+          notify: { urgency: 'today', dedupeKey: 'goal:g-1:stale:2026-09-29' },
+        },
+      },
+    };
+    await execute(staleOccurrence, wakeMission);
+    expect(contexts[0]).toMatchObject({ origin: 'wake', notifyUrgency: 'today', dedupeKey: 'goal:g-1:stale:2026-09-29' });
+
+    // And a finding that asks for nothing is `now`, keyed by the finding, as before.
+    contexts.length = 0;
+    const again = createMissionExecutor({
+      ...deps().deps,
+      provider: decidingProvider('mission.report', { urgency: 'urgent', text: 'It is off track.' }),
+      deliver: async (_text, _offers, context) => {
+        contexts.push(context);
+        return 'chat-42';
+      },
+    });
+    await again(goalOccurrence, wakeMission);
+    expect(contexts[0]).toMatchObject({ dedupeKey: 'finding:goal.g-1.off-track' });
+    expect(contexts[0]).not.toHaveProperty('notifyUrgency');
+  });
+
   it('hands the finding to the agent as part of the prompt', async () => {
     const { db, deps: d } = deps();
     const execute = createMissionExecutor({

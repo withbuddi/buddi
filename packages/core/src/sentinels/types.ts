@@ -55,6 +55,16 @@ export interface Finding {
    * `info` that simply waits for the recap.
    */
   wake?: boolean;
+  /**
+   * How the agent's line reaches the owner, when a wake is not news for now.
+   *
+   * A wake's report goes out as `now` by default. `urgency: 'today'` holds it
+   * for the end of the owner's day instead — for a nudge that matters but not
+   * this minute ("you have not told me your weight this week"). `dedupeKey`
+   * is the notification's "this thing, again"; it defaults to
+   * `finding:<key>`. Never raises an urgency: there is no `now` here.
+   */
+  notify?: { urgency?: 'today'; dedupeKey?: string };
   /** Structured evidence handed to that agent verbatim. */
   data?: unknown;
 }

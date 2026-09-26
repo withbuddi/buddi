@@ -7,6 +7,8 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - A goal can watch a number you report yourself, like your weight. When no plugin measures it, the agent creates the metric as it proposes the goal and takes the number you just said as the start; the card says "measured by you, when you tell buddi", and `goal.metrics` lists these metrics with the source `owner`.
+- `goal.record` writes down a number you tell any agent ("285 this morning", "ran today"), names the goal or the metric rather than whose goal it is, and answers with where the goal stands in one sentence. A number more than half away from the last one, or of the other sign, is asked about before it is kept.
+- When a week (or a day, for a daily goal) passes without you telling buddi the number, the goal's agent says so once, in the end-of-day message: "You have not told me your weight this week." A watcher finding can ask for this with `notify: { urgency: 'today' }`.
 - Settings → Notifications has a Telegram panel: save or replace the bot token, see the phones you paired and unpair one, and pair another with the same QR code first run shows. Telegram appears in "Where buddi reaches you" as soon as the bot starts, without a restart.
 
 ### Changed

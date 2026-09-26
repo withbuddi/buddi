@@ -63,11 +63,14 @@ import {
   MAX_OWNER_UNIT_LABEL,
   OWNER_SOURCE,
   createOwnerMetric,
+  cadenceMs,
   getOwnerMetric,
   isOwnerMetric,
+  latestOwnerValue,
   ownerMetricId,
   ownerSlugOf,
   recordOwnerValue,
+  refuseOutsideBand,
   refuseOwnerSlug,
   type OwnerMetric,
   type OwnerMetricSource,
@@ -467,6 +470,37 @@ const statusInput = z
       .describe('One goal, by id — any goal, whoever holds it. Leave it out for all of your own.'),
   })
   .strict();
+
+const recordInput = z
+  .object({
+    goal: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('The goal the number is for, by id. Name this or metric, not both.'),
+    metric: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Or the metric the owner reports: "owner.weight", or just "weight".'),
+    value: z.number().finite().describe('The number the owner said. An occurrence ("ran today") is 1.'),
+    asOf: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "When it was true, in the owner's timezone: 2026-09-26 or 2026-09-26T07:30. Leave it out for now.",
+      ),
+    note: z.string().max(280).optional().describe('A few words the owner added: "after the holidays".'),
+    confirmed: z
+      .boolean()
+      .optional()
+      .describe('Set only after the owner confirmed a value this tool refused as far from the last one.'),
+  })
+  .strict();
+
+/** A conversation id is a uuid; anything else is not provenance worth keeping. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A refusal a goal tool hands back instead of asking the owner anything. */
 type Refusal = { ok: false; reason: string; message: string };
@@ -1378,6 +1412,150 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
     },
   };
 
+  /**
+   * Where a goal stands, in one sentence: what `goal.record` answers with.
+   *
+   * Read off `standingOf` like every other surface, with the value just said
+   * stood in front of the measured checks — it is not a check yet, and the
+   * owner wants to know what it means now, not after the next tick.
+   */
+  function paceSentence(goal: Goal, standing: GoalStanding, timezone: string): string {
+    const unit = unitOf(goal.metric);
+    const direction = directionOf(goal.metric);
+    const value = standing.latest?.value ?? null;
+    const target = formatValue(targetValue(goal), unit, goal.currency);
+    const by = localDateString(goal.deadline, timezone);
+    const pct = standing.progress === null ? '' : `, ${Math.round(standing.progress * 100)}% of the way`;
+    const pace =
+      standing.paceNeeded === null
+        ? 'the deadline has passed'
+        : `${formatPace(standing.paceNeeded, unit, direction, goal.currency)} from here reaches ${target} by ${by}`;
+    return `${goal.title}: ${formatValue(value, unit, goal.currency)} now${pct}; ${pace}.`;
+  }
+
+  const record: ToolDefinition<z.infer<typeof recordInput>, unknown> = {
+    name: 'goal.record',
+    description:
+      'Write down a number the owner just told you for a metric they report ("285 this morning", "ran today" ' +
+      'is 1). Name the goal or the metric, not whose goal it is — any agent may record, so the owner can say it ' +
+      'to whoever is listening. Answers with where the goal stands now, in one sentence you can repeat. A value ' +
+      'far from the last one is refused with a sentence: ask the owner, then record again with confirmed: true.',
+    tier: 'auto',
+    input: recordInput,
+    async execute(input, ctx: CoreToolContext) {
+      await source.refresh(ctx.db);
+      if ((input.goal === undefined) === (input.metric === undefined)) {
+        return refusal('name-one', 'name the goal or the metric, exactly one of them');
+      }
+      /*
+       * Which series. A goal names its metric; a metric may be named as
+       * `owner.weight` or just `weight`. Either way it has to be one the owner
+       * reports: a plugin's number is measured, and typing over it would be a
+       * second, disagreeing history.
+       */
+      let goals: Goal[] = [];
+      let metricId: string;
+      if (input.goal !== undefined) {
+        const goal = await getGoal(ctx.db, input.goal).catch(() => null);
+        if (goal === null) return refusal('not-found', `no goal ${input.goal}`);
+        metricId = goal.metric;
+        goals = [goal];
+      } else {
+        const raw = (input.metric as string).trim();
+        metricId = raw.includes('.') ? raw : ownerMetricId(raw);
+      }
+      const metric = source.metric(metricId);
+      if (!isOwnerMetric(metric)) {
+        return refusal(
+          'not-owner-metric',
+          metric === undefined
+            ? `no metric "${metricId}" is kept here. goal.metrics lists the ones the owner reports (source "owner").`
+            : `${metricId} is measured by ${metric.plugin}; there is nothing to record by hand.`,
+        );
+      }
+      const slug = ownerSlugOf(metric.id) as string;
+      if (input.goal === undefined) {
+        goals = (await listGoals(ctx.db, { openOnly: true, limit: MAX_OPEN_GOALS })).filter(
+          (goal) => goal.metric === metric.id,
+        );
+      }
+
+      const now = ctx.now();
+      let asOf = now;
+      if (input.asOf !== undefined) {
+        const when = parseReminderWhen(input.asOf, ctx.timezone);
+        if (!when.ok) return refusal('invalid-as-of', when.message);
+        asOf = when.at;
+        // "This morning" written as today's date lands at 09:00; before nine
+        // that is a few hours ahead of the clock, and it still means today.
+        if (asOf.getTime() > now.getTime()) {
+          if (localDateString(asOf, ctx.timezone) !== localDateString(now, ctx.timezone)) {
+            return refusal('as-of-future', `${input.asOf} has not happened yet; a value is true of now or of the past`);
+          }
+          asOf = now;
+        }
+      }
+
+      const unit = unitOf(metric.id);
+      if (input.confirmed !== true) {
+        const last = await latestOwnerValue(ctx.db, slug);
+        const outside = refuseOutsideBand(last?.value ?? null, input.value, (n) => formatValue(n, unit, null));
+        if (outside !== null) return refusal('confirm', outside);
+      }
+
+      const conversationId =
+        ctx.conversationId !== undefined && UUID.test(ctx.conversationId) ? ctx.conversationId : null;
+      const saved = await recordOwnerValue(ctx.db, {
+        slug,
+        value: input.value,
+        at: now,
+        asOf,
+        note: input.note ?? null,
+        source: valueSourceOf(ctx),
+        conversationId,
+      });
+
+      const lines: string[] = [];
+      for (const goal of goals) {
+        if (goal.state !== 'open') continue;
+        const pending: GoalCheck = {
+          id: '',
+          goalId: goal.id,
+          at: now,
+          asOf,
+          value: input.value,
+          currency: null,
+          note: null,
+          onTrack: null,
+          paceNeeded: null,
+          projected: null,
+        };
+        const standing = standingOf(
+          goal,
+          directionOf(goal.metric),
+          [pending, ...(await measuredChecks(ctx.db, goal.id, STANDING_CHECKS))],
+          now,
+        );
+        lines.push(paceSentence(goal, standing, ctx.timezone));
+      }
+      return {
+        ok: true,
+        recorded: {
+          metric: metric.id,
+          value: saved.value,
+          valueFormatted: formatValue(saved.value, unit, null),
+          asOf: saved.asOf.toISOString(),
+          source: saved.source,
+        },
+        // One sentence per open goal on this metric; usually exactly one.
+        pace:
+          lines.length === 0
+            ? `Recorded ${formatValue(saved.value, unit, null)}; no open goal watches ${metric.id}.`
+            : lines.join(' '),
+      };
+    },
+  };
+
   const list: ToolDefinition<Record<string, never>, unknown> = {
     name: 'goal.list',
     description:
@@ -1412,7 +1590,7 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
     // core concept and this manifest only exposes it to a model.
     schema: 'core',
     migrationsDir: '',
-    tools: [metrics, set, update, close, status, list, createGoalOwnerClose()],
+    tools: [metrics, set, update, close, status, list, record, createGoalOwnerClose()],
     sentinels: [createGoalsSentinel(source)],
     // Where a goal shows (§7): a block on Home, a rail page, and one way of
     // drawing `goal.status` on the canvas. All three are in `goals-page.ts`;
@@ -1432,6 +1610,23 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
 export function cadenceDue(cadence: GoalCadence, lastAt: Date | null, now: Date): boolean {
   if (lastAt === null) return true;
   return now.getTime() - lastAt.getTime() >= (cadence === 'daily' ? DAILY_DUE_MS : WEEKLY_DUE_MS);
+}
+
+/**
+ * Which cadence window an owner metric has gone quiet into, or null.
+ *
+ * Windows are counted from `since` — the newest value, or when the goal was
+ * set — one cadence at a time: a weekly goal last told on a Monday morning is
+ * stale from the next Monday morning, and again from the one after. The label
+ * is the owner's day the window began, which is what the finding key and the
+ * notification's dedupe key carry, so each window is said at most once.
+ */
+export function staleWindow(since: Date, now: Date, cadence: GoalCadence, timezone: string): string | null {
+  const length = cadenceMs(cadence);
+  const elapsed = now.getTime() - since.getTime();
+  if (elapsed < length) return null;
+  const start = new Date(since.getTime() + Math.floor(elapsed / length) * length);
+  return localDateString(start, timezone);
 }
 
 /**
@@ -1497,6 +1692,22 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
           );
           const value = reading.ok ? reading.reading.value : null;
           /*
+           * An owner metric is only news when the owner said something new.
+           * Re-recording last week's number under this week's date would draw
+           * a flat line the owner never reported and bend the projection
+           * toward it, so a cadence with no new value records nothing — the
+           * staleness finding below is what says so. The deadline still gets
+           * its row, so the verdict is about a number taken at or after it.
+           */
+          const lastSeen = checks[0] === undefined ? null : (checks[0].asOf ?? checks[0].at);
+          const nothingNew =
+            owned &&
+            !deadlineUnmeasured &&
+            reading.ok &&
+            lastSeen !== null &&
+            (reading.reading.asOf?.getTime() ?? 0) <= lastSeen.getTime();
+          if (!nothingNew) {
+          /*
            * The arithmetic of the row about to be written, over the same
            * window every other surface reads — with this tick's number stood
            * in front of it, because it is not a row yet. `standingOf` is what
@@ -1532,6 +1743,7 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
             projected: prospective.projected,
           });
           checks = await recentChecks(ctx.db, goal.id, 4);
+          }
         }
 
         /*
@@ -1685,6 +1897,39 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
          *    in a row, and fire on day four of an outage saying a number that
          *    existed yesterday has been missing for months.
          */
+        if (owned) {
+          /*
+           * 6'. For a number the owner reports, silence is not an outage: it is
+           *     a week nobody said anything. Counted from the newest value (or
+           *     from when the goal was set, if that is later), once per cadence
+           *     that passes: the key and the notification's dedupe key carry
+           *     the window, so it is said at most once in it, and the line
+           *     waits for the end of the day — never `now`. "Not measurable"
+           *     is not raised as well; it would be the same silence twice.
+           */
+          const slug = ownerSlugOf(goal.metric) as string;
+          const newest = await latestOwnerValue(ctx.db, slug);
+          const since = new Date(Math.max(newest?.asOf.getTime() ?? 0, goal.baseline.asOf.getTime()));
+          const window = staleWindow(since, now, goal.cadence, ctx.timezone);
+          if (window !== null) {
+            const label = isOwnerMetric(metric) ? metric.label.toLowerCase() : goal.metric;
+            const period = goal.cadence === 'daily' ? 'today' : 'this week';
+            findings.push({
+              ...base,
+              key: goalKey(goal.id, `stale.${window}`),
+              severity: 'info',
+              wake: true,
+              notify: { urgency: 'today', dedupeKey: `goal:${goal.id}:stale:${window}` },
+              title: `Not told ${period}: ${goal.title}`,
+              detail: detail(
+                `The owner has not told buddi their ${label} since ${localDateString(since, ctx.timezone)}. ` +
+                  `Say one line and nothing more, like "You have not told me your ${label} ${period}." ` +
+                  'When they answer, record it with goal.record.',
+              ),
+            });
+          }
+          continue;
+        }
         const lastMeasuredAt = latest?.at ?? goal.baseline.asOf;
         if (now.getTime() - lastMeasuredAt.getTime() >= NOT_MEASURABLE_MS) {
           findings.push({

@@ -381,6 +381,7 @@ async function enqueueWake(
       detail: finding.detail,
       agentId: finding.agentId ?? null,
       data: finding.data ?? null,
+      ...(finding.notify === undefined ? {} : { notify: finding.notify }),
     },
   };
 

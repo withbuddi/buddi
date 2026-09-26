@@ -56,13 +56,14 @@ function answer(result: NotifyResult, strict: boolean | undefined): string {
 
 /**
  * A mission's `deliver`: its report as a notification. Every report is `now`,
- * as every report was sent at once before; `mission.silent` never reaches this.
+ * as every report was sent at once before — unless the finding that woke the
+ * run asked for `today` (`Finding.notify`); `mission.silent` never reaches this.
  */
 export function ownerDeliver(pool: Queryable, opts: OwnerNotifyOptions): Deliver {
   return async (text: string, offers?: readonly Offer[], context?: DeliverContext) => {
     const result = await notifyOwner(pool, opts, {
       kind: kindOfOrigin(context?.origin),
-      urgency: 'now',
+      urgency: context?.notifyUrgency ?? 'now',
       ...splitOwnerText(text),
       ...(offers && offers.length > 0 ? { offers } : {}),
       ...(context?.agentId ? { agentId: context.agentId } : {}),

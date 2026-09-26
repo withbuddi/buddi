@@ -92,6 +92,11 @@ export interface DeliverContext {
   urgency?: 'urgent' | 'normal';
   /** "This thing, again": a finding's key, a reminder's. */
   dedupeKey?: string;
+  /**
+   * The finding asked for its line to wait for the end of the day
+   * (`Finding.notify`). Absent is the default, `now`.
+   */
+  notifyUrgency?: 'today';
   /** The conversation the run wrote in, so a line on Home can open it. */
   conversationId?: string;
 }
@@ -405,7 +410,8 @@ export function createMissionExecutor(
         conversationId,
         origin: finding ? 'wake' : 'mission',
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
-        ...(finding ? { dedupeKey: `finding:${finding.key}` } : {}),
+        ...(finding ? { dedupeKey: finding.notify?.dedupeKey ?? `finding:${finding.key}` } : {}),
+        ...(finding?.notify?.urgency === 'today' ? { notifyUrgency: 'today' as const } : {}),
       });
     } catch (err) {
       if (!requireDelivery && err instanceof OwnerNotPairedError) {

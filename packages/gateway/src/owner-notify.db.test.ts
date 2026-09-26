@@ -120,6 +120,22 @@ suite('reaching the owner from the gateway', () => {
     ]);
   });
 
+  it('holds a wake line for the end of the day when its finding asked for today', async () => {
+    const { texts } = telegram();
+    const deliver = ownerDeliver(pool, deps);
+    await deliver('You have not told me your weight this week.', undefined, {
+      agentId: 'coach',
+      origin: 'wake',
+      dedupeKey: 'goal:g-1:stale:2026-09-29',
+      notifyUrgency: 'today',
+    });
+    expect(texts).toHaveLength(0);
+    const rows = await listNotifications(pool);
+    expect(rows.map((r) => [r.kind, r.urgency, r.state, r.dedupeKey])).toEqual([
+      ['watcher', 'today', 'held', 'goal:g-1:stale:2026-09-29'],
+    ]);
+  });
+
   it('describes Telegram with the bot it runs as', () => {
     const channel = createTelegramChannel({ pool, botUsername: () => 'buddi_test_bot' });
     expect(channel.describe()).toEqual({ label: 'Telegram', where: '@buddi_test_bot' });

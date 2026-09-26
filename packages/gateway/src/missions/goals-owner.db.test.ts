@@ -23,6 +23,8 @@ import {
   ownerValues,
   recentChecks,
   runMigrations,
+  runSentinels,
+  TELEGRAM_SURFACE,
   SENTINEL_WAKE_MISSION_ID,
   upsertMission,
   type CoreToolContext,
@@ -32,7 +34,7 @@ import {
 import { testDatabaseUrl } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createGoalManifest } from './goals.js';
+import { GOALS_SENTINEL_ID, createGoalManifest, goalKey, staleWindow } from './goals.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -231,5 +233,130 @@ suite('goals the owner measures (postgres)', () => {
     expect(
       await refused({ ...base, metric: { owner: { ...weightDef, direction: 'up' } }, baseline: { value: 200 } }),
     ).toMatch(/owner\.weight already exists as number \(lb\), better down/);
+  });
+
+  /* ---------------- goal.record ---------------- */
+
+  /** Record through the registry, as an agent on a surface would. */
+  async function record(input: Record<string, unknown>, over: Partial<CoreToolContext> = {}) {
+    const answer = await registry.invoke('goal.record', input, agentCtx(over));
+    if (!answer.ok) throw new Error(`goal.record: ${JSON.stringify(answer)}`);
+    return answer.output as { ok: boolean; reason?: string; message?: string; pace?: string };
+  }
+
+  it('lands a value said to any agent on the goal that watches it, and answers with the pace', async () => {
+    await weightGoal();
+    now = new Date(T0.getTime() + 7 * DAY);
+    const answer = await record(
+      { metric: 'weight', value: 285, note: 'after the holidays' },
+      { agentId: 'concierge', surface: TELEGRAM_SURFACE, conversationId: '0b7c7a8e-1a51-4bd7-9f7c-3a1d2f4e5a6b' },
+    );
+    expect(answer.ok).toBe(true);
+    expect(answer.pace).toMatch(/^288 to 220 by December: 285 lb now, 4% of the way; [\d.]+ lb a week down from here reaches 220 lb by 2026-12-31\.$/);
+    expect(await latestOwnerValue(pool, 'weight')).toMatchObject({
+      value: 285,
+      source: 'telegram',
+      note: 'after the holidays',
+      conversationId: '0b7c7a8e-1a51-4bd7-9f7c-3a1d2f4e5a6b',
+    });
+  });
+
+  it('refuses a value far from the last one until the owner confirms it', async () => {
+    await weightGoal();
+    const [goal] = await listGoals(pool, {});
+    const answer = await record({ goal: goal?.id, value: 28.5 });
+    expect(answer).toMatchObject({ ok: false, reason: 'confirm' });
+    expect(answer.message).toMatch(/28\.5 lb is a long way from the last value, 288 lb/);
+    expect(await ownerValues(pool, 'weight')).toHaveLength(1);
+
+    const confirmed = await record({ goal: goal?.id, value: 150, confirmed: true });
+    expect(confirmed.ok).toBe(true);
+    expect(await latestOwnerValue(pool, 'weight')).toMatchObject({ value: 150 });
+  });
+
+  it('refuses a number a plugin measures, a date that has not happened, and naming both', async () => {
+    await weightGoal();
+    expect(await record({ metric: 'test.debt', value: 90 })).toMatchObject({ reason: 'not-owner-metric' });
+    expect(await record({ metric: 'weight', value: 287, asOf: '2027-01-02' })).toMatchObject({ reason: 'as-of-future' });
+    const [goal] = await listGoals(pool, {});
+    expect(await record({ goal: goal?.id, metric: 'weight', value: 287 })).toMatchObject({ reason: 'name-one' });
+    // "This morning", written as today's date before nine, is still today.
+    now = new Date('2026-09-22T11:00:00Z');
+    expect((await record({ metric: 'weight', value: 287, asOf: '2026-09-22' })).ok).toBe(true);
+  });
+
+  /* ---------------- the watcher ---------------- */
+
+  const tick = (at: Date) => runSentinels(pool, registry.manifests(), at, TZ, () => undefined, 'owner');
+
+  /** The wake occurrences, oldest first. */
+  async function wakes(): Promise<Array<{ key: string; notify?: { urgency?: string; dedupeKey?: string } }>> {
+    const { rows } = await pool.query<{ payload: { finding: { key: string; notify?: { urgency?: string; dedupeKey?: string } } } }>(
+      `select payload from core.occurrences where mission_id = $1 order by scheduled_at`,
+      [SENTINEL_WAKE_MISSION_ID],
+    );
+    return rows.map((row) => row.payload.finding);
+  }
+
+  it('checks a new value within the hour, and records nothing for a cadence the owner said nothing in', async () => {
+    await weightGoal();
+    const [goal] = await listGoals(pool, {});
+    const id = goal?.id as string;
+    // A week on, nothing new: the cadence is due but there is nothing to check.
+    await tick(new Date(T0.getTime() + 7 * DAY));
+    expect(await recentChecks(pool, id, 10)).toHaveLength(1);
+    // The owner says a number; the next tick takes it.
+    now = new Date(T0.getTime() + 8 * DAY);
+    await record({ metric: 'weight', value: 285 });
+    await tick(new Date(T0.getTime() + 8 * DAY + 3_600_000));
+    const checks = await recentChecks(pool, id, 10);
+    expect(checks.map((c) => c.value)).toEqual([285, 288]);
+    // And no second check inside the same week, however many values arrive.
+    now = new Date(T0.getTime() + 9 * DAY);
+    await record({ metric: 'weight', value: 284 });
+    await tick(new Date(T0.getTime() + 9 * DAY + 3_600_000));
+    expect(await recentChecks(pool, id, 10)).toHaveLength(2);
+  });
+
+  it('says "not told this week" once per cadence, as today, and never as not measurable', async () => {
+    await weightGoal();
+    const [goal] = await listGoals(pool, {});
+    const id = goal?.id as string;
+
+    await tick(new Date(T0.getTime() + 6 * DAY));
+    expect(await wakes()).toHaveLength(0);
+
+    // A week with nothing said: one wake, carrying the end-of-day urgency.
+    const window1 = staleWindow(T0, new Date(T0.getTime() + 7 * DAY + 3_600_000), 'weekly', TZ) as string;
+    expect(window1).toBe('2026-09-29');
+    for (let h = 1; h <= 30; h += 1) await tick(new Date(T0.getTime() + 7 * DAY + h * 3_600_000));
+    expect(await wakes()).toEqual([
+      expect.objectContaining({
+        key: goalKey(id, 'stale.2026-09-29'),
+        notify: { urgency: 'today', dedupeKey: `goal:${id}:stale:2026-09-29` },
+      }),
+    ]);
+
+    // The owner answers: the finding resolves and nothing else is said.
+    now = new Date(T0.getTime() + 9 * DAY);
+    await record({ metric: 'weight', value: 286 });
+    await tick(new Date(T0.getTime() + 9 * DAY + 3_600_000));
+    const { rows } = await pool.query(
+      `select key, resolved_at from core.sentinel_findings where sentinel_id = $1 order by first_seen_at`,
+      [GOALS_SENTINEL_ID],
+    );
+    expect(rows.map((r) => [r.key, r.resolved_at !== null])).toEqual([[goalKey(id, 'stale.2026-09-29'), true]]);
+
+    // Two more silent weeks: one wake each, in their own windows, and no
+    // "not measurable" ever — for the owner's number that is the same silence.
+    for (let d = 10; d <= 24; d += 1) await tick(new Date(T0.getTime() + d * DAY));
+    const keys = (await wakes()).map((w) => w.key);
+    expect(keys).toEqual([
+      goalKey(id, 'stale.2026-09-29'),
+      goalKey(id, 'stale.2026-10-08'),
+      goalKey(id, 'stale.2026-10-15'),
+    ]);
+    const { rows: all } = await pool.query(`select key from core.sentinel_findings where key like $1`, [`goal.${id}.not-measurable`]);
+    expect(all).toHaveLength(0);
   });
 });
