@@ -91,7 +91,7 @@ try {
   const entry = path.join(testRoot, 'node_modules/buddi/packages/install/dist/launcher.js');
   const cli = async args => (await exec(process.execPath, [entry, ...args], { env, cwd: testRoot, timeout: 150_000 })).stdout;
   const start = await cli(startArgs);
-  const status = JSON.parse(await cli(['service', 'status'])); pid = status.supervisorPid;
+  const status = JSON.parse(await cli(['service', 'status', '--json'])); pid = status.supervisorPid;
   assert.equal(status.database, 'running'); assert.equal(status.gateway, 'running');
   const require = createRequire(path.join(testRoot, 'node_modules/buddi/package.json'));
   const core = await import(require.resolve('@buddi/core'));
@@ -217,22 +217,22 @@ try {
   assert.equal(afterSkip.state, 'skipped');
   assert.equal(afterSkip.needs.agent, false, 'the agent it wrote counts as the owner\'s own');
   const again = await cli(startArgs); assert.match(again, /Dashboard:/);
-  const repeated = JSON.parse(await cli(['service', 'status']));
+  const repeated = JSON.parse(await cli(['service', 'status', '--json']));
   assert.equal(repeated.supervisorPid, pid); assert.equal(repeated.databasePid, status.databasePid);
-  const stopped = JSON.parse(await cli(['service', 'stop']));
+  const stopped = JSON.parse(await cli(['service', 'stop', '--json']));
   assert.equal(stopped.gateway, 'stopped'); assert.equal(stopped.databasePid, status.databasePid);
   // A different application at the persisted dashboard port must not look ready.
   const impostor = createHttpServer((_req, res) => { res.writeHead(401); res.end(); });
   await new Promise((resolve, reject) => { impostor.once('error', reject); impostor.listen(initialState.webPort, '127.0.0.1', resolve); });
   try {
     assert.equal(await dashboardReady(initialState.webPort, await vault.get('BUDDI_WEB_TOKEN')), false);
-    const conflicting = JSON.parse(await cli(['service', 'start']));
+    const conflicting = JSON.parse(await cli(['service', 'start', '--json']));
     for (let i = 0; i < 100; i++) {
       try { process.kill(conflicting.gatewayPid, 0); } catch { break; }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.throws(() => process.kill(conflicting.gatewayPid, 0), /ESRCH/, 'required dashboard bind failure terminates the gateway');
-    await cli(['service', 'stop']);
+    await cli(['service', 'stop', '--json']);
   } finally { await new Promise(resolve => impostor.close(resolve)); }
   // The supervisor is controlled over an owner-only socket, and the dashboard
   // is its second client: the same switches, behind the session and CSRF gate.
@@ -245,7 +245,7 @@ try {
   assert.equal((await fetch(new URL('/api/service', live))).status, 401, 'the service view needs a session');
   const liveLogin = await fetch(live, { redirect: 'manual' }); assert.equal(liveLogin.status, 302);
   const liveCookie = liveLogin.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
-  const cliStatus = JSON.parse(await cli(['service', 'status']));
+  const cliStatus = JSON.parse(await cli(['service', 'status', '--json']));
   const viewed = await fetch(new URL('/api/service', live), { headers: { cookie: liveCookie } });
   assert.equal(viewed.status, 200);
   const view = await viewed.json();
@@ -264,7 +264,7 @@ try {
   let restarted;
   for (let i = 0; i < 100; i++) {
     await new Promise(resolve => setTimeout(resolve, 200));
-    restarted = JSON.parse(await cli(['service', 'status']));
+    restarted = JSON.parse(await cli(['service', 'status', '--json']));
     if (restarted.gateway === 'running' && restarted.gatewayPid !== cliStatus.gatewayPid) break;
   }
   assert.equal(restarted.gateway, 'running');
@@ -275,7 +275,7 @@ try {
   let recovered;
   for (let i = 0; i < 100; i++) {
     await new Promise(resolve => setTimeout(resolve, 500));
-    recovered = JSON.parse(await cli(['service', 'status']));
+    recovered = JSON.parse(await cli(['service', 'status', '--json']));
     if (recovered.gateway === 'running' && recovered.gatewayPid !== restarted.gatewayPid) break;
   }
   assert.equal(recovered.gateway, 'running'); assert.notEqual(recovered.gatewayPid, restarted.gatewayPid);
@@ -285,7 +285,7 @@ try {
   process.kill(pid, 'SIGKILL');
   await new Promise(resolve => setTimeout(resolve, 2500));
   await cli(startArgs);
-  const successor = JSON.parse(await cli(['service', 'status'])); pid = successor.supervisorPid;
+  const successor = JSON.parse(await cli(['service', 'status', '--json'])); pid = successor.supervisorPid;
   assert.notEqual(successor.supervisorPid, recovered.supervisorPid);
   assert.equal(recovered.database, 'running'); assert.equal(successor.database, 'running');
   assert.notEqual(successor.databasePid, recovered.databasePid, 'a leftover postmaster is restarted, not adopted');
@@ -304,7 +304,7 @@ try {
     assert.throws(() => process.kill(pid, 0), /ESRCH/, 'database failure stops supervisor');
     assert.throws(() => process.kill(successor.gatewayPid, 0), /ESRCH/, 'database failure stops gateway');
     await cli(startArgs);
-    pid = JSON.parse(await cli(['service', 'status'])).supervisorPid;
+    pid = JSON.parse(await cli(['service', 'status', '--json'])).supervisorPid;
   } else {
     // Reload a currently loaded job, not just the missing-job bootstrap path.
     const plist = path.join(os.homedir(), 'Library/LaunchAgents', `${label}.plist`);
@@ -315,7 +315,7 @@ try {
     for (let i = 0; i < 200; i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
       try {
-        replacement = JSON.parse(await cli(['service', 'status']));
+        replacement = JSON.parse(await cli(['service', 'status', '--json']));
         if (replacement.supervisorPid !== pid) break;
       } catch { /* launchd is replacing the old process */ }
     }
@@ -340,7 +340,7 @@ try {
   await vault.set('BUDDI_DB_PASSWORD', rotated);
   connection.password = rotated;
   await cli(startArgs);
-  const rebooted = JSON.parse(await cli(['service', 'status'])); pid = rebooted.supervisorPid;
+  const rebooted = JSON.parse(await cli(['service', 'status', '--json'])); pid = rebooted.supervisorPid;
   assert.equal(rebooted.phase, 'ready');
   assert.equal((await readFile(path.join(data, 'postgres/PG_VERSION'), 'utf8')).trim(), '18');
   const preserved = new Client(connection);
@@ -794,13 +794,13 @@ try {
   });
   /** Restart the gateway through the supervisor, and wait for the new one. */
   const restartGateway = async () => {
-    const before = JSON.parse(await cli(['service', 'status'])).gatewayPid;
+    const before = JSON.parse(await cli(['service', 'status', '--json'])).gatewayPid;
     const asked = await socketCall(socketA, '/restart', 'POST');
     assert.equal(asked.status, 202, 'the supervisor accepts a restart on its control socket');
     let after;
     for (let i = 0; i < 300; i++) {
       await new Promise(resolve => setTimeout(resolve, 200));
-      after = JSON.parse(await cli(['service', 'status']));
+      after = JSON.parse(await cli(['service', 'status', '--json']));
       if (after.gateway === 'running' && after.gatewayPid !== before) break;
     }
     assert.equal(after.gateway, 'running', 'the gateway came back after the restart');

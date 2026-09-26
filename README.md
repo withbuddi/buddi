@@ -250,22 +250,14 @@ Most of this is on the dashboard. From a terminal:
 | Command | What it does |
 | --- | --- |
 | `buddi` | open the dashboard (the first run sets everything up) |
-| `buddi doctor` | check every moving part and say what is wrong |
-| `buddi service status` | is the background service running? `restart`, `logs`, `stop` too |
-| `buddi dashboard` | a five-minute sign-in link to the dashboard |
-| `buddi upgrade` | back up, install the new version, migrate, restart |
-| `buddi backup create --encrypt` | one archive now, sealed with your passphrase |
-| `buddi browser install` | download Chromium for the agents' browser |
-| `buddi agents` | every agent, its engine, and whether it can run |
+| `buddi status` | one screen: service, database, agents, what needs you |
+| `buddi ask "…"` | one question, one answer, then exit; `--json` for scripts |
 | `buddi chat` | talk to the default agent in the terminal |
-| `buddi ask "…"` | one question, one answer, then exit |
-| `buddi telegram pair` | a QR code that pairs a phone |
-| `buddi reminders` | what the agents have put on the clock |
-| `buddi plugins list` | what is installed |
-| `buddi mcp` | buddi as an MCP server, for Claude Code |
+| `buddi upgrade` | back up, install the new version, migrate, restart |
+| `buddi backup create` | one archive of everything, now |
 
-`buddi help` prints them all. `buddi status` is `buddi doctor` under another
-name.
+`buddi help` lists every command, and `buddi help <command>` explains one.
+The whole tree is in [docs/cli.md](docs/cli.md).
 
 ---
 

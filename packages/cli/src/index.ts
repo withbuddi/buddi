@@ -1,5 +1,7 @@
 // @buddi/cli — the single global `buddi` binary. The executable is ./main.ts.
 export * from './args.js';
+export * from './commands.js';
+export * from './status.js';
 export * from './db-cmd.js';
 export * from './doctor.js';
 export * from './env-file.js';
@@ -8,4 +10,4 @@ export * from './proc.js';
 export * from './service/index.js';
 export * from './telegram-cmd.js';
 export * from './vault-cmd.js';
-export { dispatch, doctor, main, migrate } from './main.js';
+export { dispatch, doctor, exitCodeForError, main, migrate } from './main.js';

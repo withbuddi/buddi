@@ -80,6 +80,48 @@ async function control(ctx: InstallContext, action = 'status'): Promise<Supervis
   return await ask<SupervisorStatus>(ctx, action === 'status' ? 'GET' : 'POST', `/${action}`);
 }
 
+/** The supervisor's status as the sentence `buddi service status` prints. */
+export function serviceLine(status: SupervisorStatus): string {
+  const gateway = status.gateway === 'running'
+    ? `The service is running${status.gatewayPid ? ` (gateway pid ${status.gatewayPid})` : ''}.`
+    : `The service is up, but the gateway is ${status.gateway}.`;
+  const database = status.database === 'external' ? ' The database is your own.' : ` The database is ${status.database}.`;
+  return `${gateway}${database}${status.upgrading ? ' An upgrade is running.' : ''}`;
+}
+
+/**
+ * `buddi backup create`, in a packaged installation: the supervisor's backup,
+ * the same one the dashboard's button takes, sealed with the passphrase in the
+ * vault. The supervisor owns the database, so it is the one to dump it.
+ */
+async function backupThroughSupervisor(ctx: InstallContext, rest: string[]): Promise<number> {
+  const unsupported = rest.find(arg => arg === '--out' || arg === '--no-artifacts');
+  if (unsupported !== undefined) {
+    console.error(`buddi: ${unsupported} is for a source checkout. A packaged backup goes to ${path.join(ctx.data, 'backups')} with everything in it.`);
+    return 2;
+  }
+  const { job } = await ask<{ job: { id: string } }>(ctx, 'POST', '/backup', {});
+  console.log('Backing up. buddi keeps running while it does.');
+  let last = '';
+  for (;;) {
+    const state = await ask<{ phase: string; detail?: string; error?: string; finishedAt?: string; report?: unknown }>(ctx, 'GET', `/jobs/${job.id}`);
+    if (state.phase !== last) {
+      last = state.phase;
+      console.log(`  ${state.phase}${state.detail === undefined ? '' : ` — ${state.detail}`}`);
+    }
+    if (state.finishedAt !== undefined) {
+      if (state.phase === 'done') {
+        const name = (state.report as { archive?: string } | undefined)?.archive;
+        console.log(name ? `Wrote ${path.join(ctx.data, 'backups', name)}.` : `The backup is in ${path.join(ctx.data, 'backups')}.`);
+        return 0;
+      }
+      console.error(`buddi: the backup did not finish: ${state.error ?? 'no reason given'}`);
+      return 1;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 /**
  * `buddi upgrade`, in a packaged installation: ask the supervisor, then watch.
  *
@@ -308,10 +350,36 @@ async function run(): Promise<void> {
     finally { process.removeListener('disconnect', parentGone); if (process.connected) process.disconnect(); }
     return;
   }
-  if (args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1] as string)) {
-    console.log(JSON.stringify(await control(ctx, args[1]), null, 2)); return;
+  // Help is the command table's, whatever the command: `buddi service status --help`.
+  const wantsHelp = args.some(arg => arg === '--help' || arg === '-h') || args[0] === 'help';
+  const serviceJson = args.slice(2).every(arg => arg === '--json') && (args.includes('--json') || process.env.BUDDI_JSON === '1');
+  if (!wantsHelp && args[0] === 'service' && ['status', 'start', 'stop', 'restart'].includes(args[1] as string) && args.slice(2).every(arg => arg === '--json')) {
+    let status: SupervisorStatus;
+    try { status = await control(ctx, args[1]); }
+    catch (error) {
+      if (args[1] !== 'status') throw error;
+      console.log(serviceJson ? JSON.stringify({ running: false }) : 'The service is not running. Run buddi to start it.');
+      process.exitCode = 1;
+      return;
+    }
+    // `--json`: the supervisor's own answer, for scripts (and the release smoke).
+    console.log(serviceJson ? JSON.stringify(status, null, 2) : serviceLine(status));
+    if (status.gateway !== 'running' && args[1] !== 'stop') process.exitCode = 1;
+    return;
   }
-  if (args[0] === 'doctor') {
+  if (!wantsHelp && args[0] === 'service' && args[1] === 'logs' && args.length === 2) {
+    // The packaged service is the supervisor and its gateway child; both log here.
+    const logs = ['supervisor.log', 'gateway.log'].map(name => path.join(ctx.data, 'logs', name)).filter(file => existsSync(file));
+    if (logs.length === 0) { console.error(`buddi: no log yet in ${path.join(ctx.data, 'logs')}. Run buddi to start the service.`); process.exitCode = 1; return; }
+    console.log(`tail -F ${logs.join(' ')}  (Ctrl-C to stop)`);
+    await new Promise<void>(resolve => {
+      const child = spawn('tail', ['-n', '80', '-F', ...logs], { stdio: 'inherit' });
+      child.once('exit', () => resolve());
+      child.once('error', err => { console.error(`buddi: could not follow the log: ${err.message}`); resolve(); });
+    });
+    return;
+  }
+  if (!wantsHelp && args[0] === 'doctor') {
     console.log(`Data: ${ctx.data}`);
     // What the vault is and what it protects, said the same way everywhere
     // (install.md §4): the keychain on a Mac, the file beside its key elsewhere.
@@ -331,7 +399,7 @@ async function run(): Promise<void> {
     for (const line of upgradeDoctorLines(versionView(state), ctx.state?.phase)) console.log(line);
     console.log(`Logs: ${path.join(ctx.data, 'logs')}`); return;
   }
-  if (args[0] === 'version' || args[0] === '--version' || args[0] === '-v') {
+  if (!wantsHelp && (args[0] === 'version' || args[0] === '--version' || args[0] === '-v')) {
     let view: VersionView | undefined;
     try { view = await ask<VersionView>(ctx, 'GET', '/version'); }
     catch { view = versionView(await readUpgradeState(ctx.data, await installedVersion(root))); }
@@ -340,7 +408,7 @@ async function run(): Promise<void> {
     else if (view.latest !== undefined) console.log('This is the latest version.');
     return;
   }
-  if (args[0] === 'upgrade') {
+  if (!wantsHelp && args[0] === 'upgrade') {
     // The checkout's `--no-backup` has no meaning here: the archive is the way
     // back from a migration, and this path migrates under code it just installed.
     if (args.includes('--no-backup')) throw new Error('A packaged upgrade always takes a backup first; it is the way back. Run buddi upgrade.');
@@ -440,15 +508,21 @@ async function run(): Promise<void> {
     if (!args.includes('--no-open') && process.platform === 'darwin') await exec('open', [url], { env: nativeEnvironment(ctx.env) });
     return;
   }
-  if (args[0] === 'backup' && args[1] === 'restore') {
+  if (!wantsHelp && args[0] === 'backup' && (args[1] === 'restore' || args[1] === 'create')) {
     // The supervisor if there is one, the engine below if there is not. See
-    // `restoreThroughSupervisor`; this is the command the recovery sentence
+    // `restoreThroughSupervisor`; restore is the command the recovery sentence
     // in upgrade.ts tells an owner to run.
     const supervised = await control(ctx).then(() => true, () => false);
-    if (supervised) { process.exitCode = await restoreThroughSupervisor(ctx, args.slice(2)); return; }
-  } else if (['init', 'db', 'backup', 'migrate', 'serve'].includes(args[0] as string) || args[0] === 'service') {
-    throw new Error('This checkout-oriented command is not yet supported in packaged installs. Run buddi; use service status|start|stop|restart for the gateway.');
+    if (supervised) {
+      process.exitCode = args[1] === 'restore'
+        ? await restoreThroughSupervisor(ctx, args.slice(2))
+        : await backupThroughSupervisor(ctx, args.slice(2));
+      return;
+    }
   }
+  // Everything else is the command table's: a command that does not apply to
+  // a packaged install (`init`, `db`, `migrate`, `serve`, `service install`)
+  // answers there with what to do instead.
   if (ctx.state?.database === 'managed') {
     const core = await import('@buddi/core');
     await core.hydrateDatabaseUrl(ctx.env);

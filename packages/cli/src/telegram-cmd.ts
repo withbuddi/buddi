@@ -14,10 +14,11 @@ import { createPool, localDateTimeString, timezoneFromEnv } from '@buddi/core';
 import { createPairingCode, listDevices, unpairDevice } from '@buddi/gateway';
 import qrcode from 'qrcode-terminal';
 import type { TelegramAction } from './args.js';
+import { bold as boldOn, colorOn, dim as dimOn } from './style.js';
 
-const ESC = '\u001b[';
-const dim = (s: string): string => `${ESC}2m${s}${ESC}0m`;
-const bold = (s: string): string => `${ESC}1m${s}${ESC}0m`;
+const color = colorOn();
+const dim = (s: string): string => dimOn(s, color);
+const bold = (s: string): string => boldOn(s, color);
 
 /** How long a pairing code is worth anything. Short: it is shown, then used. */
 export const PAIRING_TTL_MINUTES = 10;
@@ -63,15 +64,20 @@ export async function runTelegram(
   action: TelegramAction,
   deviceId: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  json = false,
 ): Promise<number> {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
-    console.error('DATABASE_URL is not set — run `buddi init`');
-    return 1;
+    console.error('DATABASE_URL is not set, so there is no database to read.');
+    return 3;
   }
   const pool = createPool(databaseUrl);
   try {
     if (action === 'pair') {
+      if ((env.TELEGRAM_BOT_TOKEN ?? '').trim() === '') {
+        console.error('No Telegram bot is configured. Set its token with buddi vault set TELEGRAM_BOT_TOKEN, then pair again.');
+        return 3;
+      }
       const { code, deepLink, expiresAt } = await createPairingCode(pool, {
         ttlMinutes: PAIRING_TTL_MINUTES,
         env,
@@ -92,6 +98,24 @@ export async function runTelegram(
 
     if (action === 'devices') {
       const devices = await listDevices(pool);
+      if (json) {
+        console.log(
+          JSON.stringify(
+            devices.map((d) => ({
+              id: d.id,
+              surface: d.surface,
+              label: d.label,
+              externalUserId: d.externalUserId,
+              externalChatId: d.externalChatId,
+              pairedAt: d.pairedAt?.toISOString() ?? null,
+              lastSeenAt: d.lastSeenAt?.toISOString() ?? null,
+            })),
+            null,
+            2,
+          ),
+        );
+        return 0;
+      }
       if (devices.length === 0) {
         console.log('no paired devices — run `buddi telegram pair`');
         return 0;

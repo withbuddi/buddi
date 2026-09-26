@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { parseArgs, UsageError } from '../args.js';
+import { COMMANDS } from '../commands.js';
 import { checkBackups } from '../doctor.js';
 import {
   BACKUP_PASSPHRASE_KEY,
@@ -127,9 +128,15 @@ describe('buddi backup — argument parsing', () => {
     expect(() => parse('backup schedule nightly')).toThrow(/unknown backup schedule action/);
   });
 
-  it('is in the usage text, so `buddi help` mentions backups at all', () => {
-    const usage = (parseArgs([]) as { kind: string }).kind;
-    expect(usage).toBe('help');
+  it('is in the command table, so `buddi help` lists backups', () => {
+    expect(COMMANDS.filter((e) => e.name.startsWith('backup ')).map((e) => e.name)).toEqual([
+      'backup create',
+      'backup list',
+      'backup verify',
+      'backup restore',
+      'backup prune',
+      'backup schedule',
+    ]);
   });
 });
 

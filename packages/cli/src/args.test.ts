@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { parseArgs, UsageError } from './args.js';
 
 describe('parseArgs', () => {
-  it('treats no arguments as help', () => {
-    expect(parseArgs([])).toEqual({ kind: 'help' });
+  it('opens the dashboard with no arguments, and prints help when asked', () => {
+    expect(parseArgs([])).toEqual({ kind: 'dashboard', action: 'open' });
     expect(parseArgs(['--help'])).toEqual({ kind: 'help' });
     expect(parseArgs(['help'])).toEqual({ kind: 'help' });
+    expect(parseArgs(['help', 'backup', 'create'])).toEqual({ kind: 'help', topic: ['backup', 'create'] });
   });
 
   it('hands chat, ask and agents to the gateway CLI with the command word intact', () => {
@@ -144,7 +145,7 @@ describe('parseArgs', () => {
   });
 
   it('rejects an unknown command rather than guessing one', () => {
-    expect(() => parseArgs(['chatt'])).toThrow(/unknown command: chatt/);
+    expect(() => parseArgs(['chatt'])).toThrow(/buddi chatt is not a command/);
     expect(() => parseArgs(['serve', '--port', '3000'])).toThrow(/takes no arguments/);
   });
 });
@@ -186,9 +187,10 @@ describe('buddi db', () => {
 });
 
 describe('buddi status', () => {
-  it('is the doctor under the name a person reaches for', () => {
-    expect(parseArgs(['status'])).toEqual({ kind: 'doctor' });
+  it('is its own one-screen report, and doctor stays the deep check', () => {
+    expect(parseArgs(['status'])).toEqual({ kind: 'status' });
     expect(parseArgs(['doctor'])).toEqual({ kind: 'doctor' });
+    expect(() => parseArgs(['status', 'now'])).toThrow(/takes no arguments/);
   });
 });
 

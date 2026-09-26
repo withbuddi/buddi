@@ -63,6 +63,8 @@ export interface BackupCommand {
   /** `verify|restore --passphrase "<words>"`. */
   passphrase?: string | undefined;
   scheduleAction?: ScheduleAction | undefined;
+  /** `list --json`. */
+  json?: boolean;
 }
 
 /** What opened (or will open) an encrypted archive, and where it came from. */
@@ -187,7 +189,10 @@ export function describeManifest(manifest: BackupManifest): string[] {
 }
 
 async function create(command: BackupCommand, env: NodeJS.ProcessEnv): Promise<number> {
-  if (!env.DATABASE_URL) throw new Error('DATABASE_URL is not set — run `buddi init`');
+  if (!env.DATABASE_URL) {
+    console.error('DATABASE_URL is not set, so there is no database to back up.');
+    return 3;
+  }
   const opts: CreateOptions = {
     ...installationOptions(env),
     ...(command.out === undefined ? {} : { backupsDir: path.resolve(command.out) }),
@@ -259,9 +264,22 @@ export async function promptLine(question: string): Promise<string> {
   }
 }
 
-async function list(env: NodeJS.ProcessEnv): Promise<number> {
+async function list(env: NodeJS.ProcessEnv, json = false): Promise<number> {
   void env;
   const archives = await listArchives(BACKUP_DIR);
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          dir: BACKUP_DIR,
+          archives: archives.map((a) => ({ name: a.name, bytes: a.bytes, at: new Date(a.at).toISOString() })),
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
   if (archives.length === 0) {
     console.log(`no backups in ${BACKUP_DIR} — run \`buddi backup create\``);
     return 0;
@@ -425,7 +443,7 @@ export async function runBackup(
     case 'create':
       return create(command, env);
     case 'list':
-      return list(env);
+      return list(env, command.json === true);
     case 'verify':
       return verify(command, env);
     case 'restore':

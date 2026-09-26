@@ -1,37 +1,27 @@
 /**
- * Every `buddi …` the README prints must be a command this binary has.
+ * The README and `docs/cli.md` against the command table.
  *
  * A README is documentation nobody compiles, so it rots in one direction only:
  * a command is renamed, and the front page keeps telling strangers to type the
- * old one. This test closes that loop against `USAGE` — the same text `buddi
- * help` prints — so the front page cannot outlive the CLI.
- *
- * Both directions are checked: every command the README prints exists, and every
- * command group `buddi help` prints is named somewhere in the README. Only the
- * *group* in the second direction — a README is allowed to be shorter than
- * `--help` about flags, never about whole features.
+ * old one. Every `buddi …` it prints must be in the table `buddi help` is drawn
+ * from, and it must link the reference page, which is rendered from that same
+ * table and checked here word for word.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { USAGE } from './args.js';
+import { COMMANDS, renderReference } from './commands.js';
 import { REPO_ROOT } from './paths.js';
 
 const README = path.join(REPO_ROOT, 'README.md');
+const REFERENCE = path.join(REPO_ROOT, 'docs', 'cli.md');
 
 /**
- * The words that can follow `buddi` in a command: lowercase verbs, and the two
- * long flags that *are* the command (`--help`, `--version`). Placeholders
+ * The words that can follow `buddi` in a command: lowercase verbs. Placeholders
  * (`<id>`), quoted questions and option values are not commands and stop the
  * scan.
  */
 const WORD = /^[a-z][a-z0-9-]*$/;
-
-/**
- * Commands `parseArgs` accepts that `USAGE` does not print, because a usage
- * text that lists itself is noise. They are still real commands.
- */
-const UNPRINTED = ['help', 'version'];
 
 /**
  * Fence languages whose contents are shell. A ```markdown block is an *example
@@ -40,34 +30,15 @@ const UNPRINTED = ['help', 'version'];
  */
 const SHELL_FENCES = new Set(['', 'sh', 'bash', 'zsh', 'shell', 'console', 'text']);
 
-/**
- * Every command path `USAGE` documents, as space-joined words: `agents`,
- * `agents set`, `db up`, `backup schedule install`.
- *
- * `a|b` alternatives are expanded — `buddi db down|status` documents both — and
- * a line carrying two commands (`buddi jobs retry <id> | buddi jobs cancel
- * <id>`) is split on `buddi` first.
- */
-export function commandsInUsage(usage: string): Set<string> {
-  const paths = new Set<string>(UNPRINTED);
-  for (const line of usage.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('buddi ')) continue;
-    for (const clause of trimmed.split(/\s\|\s(?=buddi\s)/)) {
-      const words = clause.trim().split(/\s+/).slice(1);
-      // `[a, b|c]` → the cross product of the alternative lists, so every
-      // spelling the line documents is registered.
-      let prefixes: string[] = [];
-      for (const word of words) {
-        const alternatives = word.split('|').filter((w) => WORD.test(w));
-        if (alternatives.length === 0) break;
-        prefixes =
-          prefixes.length === 0
-            ? alternatives
-            : prefixes.flatMap((p) => alternatives.map((a) => `${p} ${a}`));
-        for (const p of prefixes) paths.add(p);
-      }
-    }
+/** Words the parser takes that are not rows of the table. */
+const UNTABLED = ['help'];
+
+/** Every command path the table documents, as space-joined words, prefixes included. */
+export function commandsInTable(): Set<string> {
+  const paths = new Set<string>(UNTABLED);
+  for (const entry of COMMANDS) {
+    const words = entry.name.split(' ').filter((w) => w !== '');
+    for (let n = 1; n <= words.length; n += 1) paths.add(words.slice(0, n).join(' '));
   }
   return paths;
 }
@@ -130,28 +101,13 @@ function known(command: string, usage: Set<string>): boolean {
   return false;
 }
 
-describe('commandsInUsage', () => {
-  const usage = commandsInUsage(USAGE);
-
-  it('expands alternatives on one line', () => {
-    expect(usage.has('db up')).toBe(true);
-    expect(usage.has('db down')).toBe(true);
-    expect(usage.has('db status')).toBe(true);
-  });
-
-  it('splits a line that documents two commands', () => {
-    expect(usage.has('jobs retry')).toBe(true);
-    expect(usage.has('jobs cancel')).toBe(true);
-  });
-
-  it('registers the bare command as well as its verbs', () => {
-    expect(usage.has('agents')).toBe(true);
-    expect(usage.has('agents set')).toBe(true);
-  });
-
-  it('stops at a placeholder rather than treating it as a verb', () => {
-    expect(usage.has('telegram unpair')).toBe(true);
-    expect([...usage].some((c) => c.includes('<'))).toBe(false);
+describe('commandsInTable', () => {
+  it('registers every command and the groups above them', () => {
+    const table = commandsInTable();
+    expect(table.has('backup create')).toBe(true);
+    expect(table.has('backup')).toBe(true);
+    expect(table.has('agents')).toBe(true);
+    expect([...table].some((c) => c.includes('<'))).toBe(false);
   });
 });
 
@@ -180,11 +136,11 @@ describe('commandsInReadme', () => {
 
 describe('README.md', () => {
   const markdown = readFileSync(README, 'utf8');
-  const usage = commandsInUsage(USAGE);
+  const table = commandsInTable();
 
   it('prints no command this binary does not have', () => {
     const offenders = commandsInReadme(markdown)
-      .filter((f) => !known(f.command, usage))
+      .filter((f) => !known(f.command, table))
       .map((f) => `  buddi ${f.command}\n      in: ${f.line}`);
     expect(
       offenders.join('\n'),
@@ -192,14 +148,19 @@ describe('README.md', () => {
     ).toBe('');
   });
 
-  it('documents every top-level command group', () => {
-    const groups = new Set(
-      [...usage].map((c) => c.split(' ')[0] as string).filter((c) => !UNPRINTED.includes(c)),
-    );
-    const mentioned = new Set(commandsInReadme(markdown).map((f) => f.command.split(' ')[0]));
-    const missing = [...groups].filter((g) => !mentioned.has(g)).sort();
-    expect(missing.join(', '), 'commands "buddi help" documents that README.md never names:').toBe(
-      '',
+  it('links the reference page, which has every command', () => {
+    expect(markdown).toContain('docs/cli.md');
+  });
+});
+
+describe('docs/cli.md', () => {
+  it('is what the command table renders (run pnpm docs:cli)', () => {
+    const page = readFileSync(REFERENCE, 'utf8');
+    const match = /^---\n([\s\S]*?)\n---\n\n?/.exec(page);
+    expect(match, 'docs/cli.md has no frontmatter: run pnpm docs:cli').not.toBeNull();
+    expect(match?.[1]).toMatch(/^status: reference$/m);
+    expect(page.slice(match?.[0].length ?? 0), 'docs/cli.md is behind the command table: run pnpm docs:cli').toBe(
+      renderReference(COMMANDS),
     );
   });
 });

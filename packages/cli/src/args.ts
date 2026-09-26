@@ -68,8 +68,11 @@ export const JOB_STATE_NAMES = [
 export type JobStateName = (typeof JOB_STATE_NAMES)[number];
 
 export type Command =
-  | { kind: 'help' }
+  /** `buddi help [command…]`; `topic` is the words after it. */
+  | { kind: 'help'; topic?: string[] }
   | { kind: 'version' }
+  /** One screen of how this installation is. */
+  | { kind: 'status' }
   | { kind: 'serve' }
   /** Delegated verbatim to the gateway's chat CLI, command word included. */
   | { kind: 'chat-cli'; argv: string[] }
@@ -147,10 +150,17 @@ const CHAT_COMMANDS = new Set(['chat', 'ask', 'agents']);
 export function parseArgs(argv: string[]): Command {
   const [head, ...rest] = argv;
 
-  if (head === undefined || head === 'help' || head === '--help' || head === '-h') {
-    return { kind: 'help' };
+  // The bare command opens the dashboard, in a checkout as in a packaged
+  // install (where the launcher answers it before this parser runs).
+  if (head === undefined) return { kind: 'dashboard', action: 'open' };
+  if (head === 'help' || head === '--help' || head === '-h') {
+    const topic = rest.filter((word) => !word.startsWith('-'));
+    return topic.length > 0 ? { kind: 'help', topic } : { kind: 'help' };
   }
-  if (head === '--version' || head === '-v' || head === 'version') return { kind: 'version' };
+  if (head === '--version' || head === '-v' || head === 'version') {
+    if (rest.length > 0) throw new UsageError(`buddi version takes no arguments (got ${rest[0]})`);
+    return { kind: 'version' };
+  }
 
   if (CHAT_COMMANDS.has(head)) return { kind: 'chat-cli', argv };
   if (head === 'serve') {
@@ -161,7 +171,10 @@ export function parseArgs(argv: string[]): Command {
   if (head === 'plugins') return { kind: 'plugins', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'nudges') return { kind: 'nudges', argv: rest };
-  if (head === 'migrate') return { kind: 'migrate' };
+  if (head === 'migrate') {
+    if (rest.length > 0) throw new UsageError(`buddi migrate takes no arguments (got ${rest[0]})`);
+    return { kind: 'migrate' };
+  }
   if (head === 'init') {
     let yes = false;
     for (const arg of rest) {
@@ -170,9 +183,14 @@ export function parseArgs(argv: string[]): Command {
     }
     return { kind: 'init', yes };
   }
-  // `status` is what a person types when they want to know if it works; it is
-  // the doctor under another name rather than a second, thinner report.
-  if (head === 'doctor' || head === 'status') return { kind: 'doctor' };
+  if (head === 'status') {
+    if (rest.length > 0) throw new UsageError(`buddi status takes no arguments (got ${rest[0]})`);
+    return { kind: 'status' };
+  }
+  if (head === 'doctor') {
+    if (rest.length > 0) throw new UsageError(`buddi doctor takes no arguments (got ${rest[0]})`);
+    return { kind: 'doctor' };
+  }
 
   if (head === 'upgrade') {
     let backup = true;
@@ -290,7 +308,7 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'telegram', action: action as TelegramAction };
   }
 
-  throw new UsageError(`unknown command: ${head} (run "buddi help")`);
+  throw new UsageError(`buddi ${head} is not a command.`);
 }
 
 /**
@@ -471,85 +489,3 @@ function parseBackup(rest: string[]): Command {
   }
   return command;
 }
-
-export const USAGE = `buddi — your personal agents, one command
-
-  buddi init                 set this machine up (interactive, idempotent)
-  buddi init --yes           the same, asking nothing: for scripts and CI
-  buddi doctor               check every moving part and say what is wrong
-  buddi status               the same report, under the name you reached for
-  buddi upgrade              after a git pull: back up, build, migrate, restart
-  buddi upgrade --no-backup  the same, without the archive it takes first
-
-  buddi db up                start the postgres container (after a reboot)
-  buddi db down|status
-  buddi db secure            give the database a generated password, kept in the vault
-
-  buddi chat                 talk to the default agent
-  buddi chat --agent <handle>  ... to a specific agent, by @handle or id
-  buddi chat --resume <id> | --last
-  buddi ask "<question>"     one turn, then exit
-  buddi agents               every agent, its engine and whether it can run
-  buddi agents show <handle>   one agent in full: tools, skills, engine, last run
-  buddi agents set <handle> [--provider p] [--model m] [--max-turns n]
-  buddi agents models        the model catalogue, and what this machine can reach
-  buddi agents test <handle> one cheap live turn on that agent's provider
-  buddi agents migrate       move agents/ and skills/ into your private directory
-
-  buddi serve                run the Telegram surface + scheduler in this shell
-  buddi service install      run it in the background, at login
-  buddi service start|stop   load/unload it without touching the plist
-  buddi service uninstall|status|logs|restart
-
-  buddi dashboard            open the local dashboard (a five-minute link)
-  buddi dashboard --token    print just the five-minute ticket
-  buddi dashboard --off      how to turn the dashboard off
-  buddi dashboard --install-app   a double-clickable "Buddi Dashboard" in ~/Applications
-  buddi dashboard --uninstall-app remove it
-  buddi mcp                  buddi as an MCP server over stdio:
-                             claude mcp add buddi -- buddi mcp
-
-  buddi browser [status]     which browser the agents' own browser uses here
-  buddi browser install      download Playwright's Chromium for it (about 150 MB)
-
-  buddi telegram pair        a QR code + deep link that pairs a device
-  buddi telegram devices     every paired device
-  buddi telegram unpair <id>
-
-  buddi pause                stop claiming work (running jobs finish)
-  buddi resume               start claiming again
-  buddi jobs [--state <s>] [--kind <k>] [--limit <n>]
-  buddi jobs retry <id> | buddi jobs cancel <id>
-  buddi jobs retry --all [--kind <k>]   run every dead job again
-
-  buddi backup create        one archive: database, private agents, artifacts
-  buddi backup create --out <dir> --no-artifacts
-  buddi backup create --encrypt   the .age form, passphrase from the vault
-  buddi backup list          every archive, newest first
-  buddi backup verify <archive> [--passphrase "<words>"]
-  buddi backup restore <archive> [--into <db>] [--yes] [--force]
-                             [--passphrase "<words>"]  .age: vault, then a prompt
-                             --into restores the database only; --files adds
-                             agents, skills and artifacts
-  buddi backup prune [--keep n]   default keep ${DEFAULT_KEEP}
-  buddi backup schedule install|uninstall|status   nightly at 03:30, prune included
-
-  buddi vault set <NAME>      keep a secret in the OS keychain (prompts, hidden)
-  buddi vault get <NAME>|delete <NAME>|list
-  buddi vault import-env      move .env secrets into the keychain
-
-  buddi missions list|add-defaults|add-friday-recap|run-now <id>|enable <id>|disable <id>
-  buddi reminders [--agent <id>] [--all]      one-off nudges the agents set
-  buddi reminders cancel <id>
-  buddi nudges status|stop|resume             the first-run arc and its budget
-  buddi plugins init <name> [--dir <path>]  scaffold a new plugin you can build and install
-  buddi plugins dev <dir>                   watch its dist and restart: plugins load at start
-  buddi plugins list|info <name>            what is installed, and what each one brought
-  buddi plugins install <spec> [--yes]      a directory, a .tgz, or an npm package
-                                            --yes on a .tgz or an npm package also needs
-                                            --integrity <hash>; without it: exit 3, staged
-  buddi plugins update <name> [--yes]       stage the next version and approve it
-  buddi plugins uninstall <name> [--yes]    remove it; its database schema is kept
-  buddi migrate              apply core + plugin migrations
-
-In chat: /quit to exit, /tools to list tools, /id to print the conversation id.`;

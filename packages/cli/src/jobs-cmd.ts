@@ -28,7 +28,7 @@ import type { Pool } from 'pg';
 async function withPool<T>(fn: (pool: Pool) => Promise<T>, onMissing: T): Promise<T> {
   const url = process.env.DATABASE_URL;
   if (!url) {
-    console.error('DATABASE_URL is not set — run `buddi init`');
+    console.error('DATABASE_URL is not set, so there is no database to read.');
     return onMissing;
   }
   const pool = createPool(url);
@@ -52,7 +52,7 @@ export async function pause(): Promise<number> {
     console.log(`  ${counts.pending} pending, ${counts.leased} still running, ${counts.suspended} suspended`);
     console.log('  resume with `buddi resume`');
     return 0;
-  }, 1);
+  }, 3);
 }
 
 export async function resume(): Promise<number> {
@@ -63,7 +63,7 @@ export async function resume(): Promise<number> {
     console.log(was ? 'buddi is running again.' : 'buddi was not paused.');
     console.log(`  ${counts.pending} job(s) waiting to be claimed`);
     return 0;
-  }, 1);
+  }, 3);
 }
 
 /** `2026-09-13 14:05` in the local zone — job listings are read, not parsed. */
@@ -97,6 +97,24 @@ export interface ListJobsOptions {
   state?: JobState;
   kind?: string;
   limit?: number;
+  /** One object on stdout instead of the listing. */
+  json?: boolean;
+}
+
+/** One job as `buddi jobs --json` prints it. */
+export function jobJson(job: Job): Record<string, unknown> {
+  return {
+    id: job.id,
+    state: job.state,
+    kind: job.kind,
+    attempts: job.attempts,
+    maxAttempts: job.maxAttempts,
+    createdAt: job.createdAt.toISOString(),
+    runAfter: job.runAfter.toISOString(),
+    leaseOwner: job.leaseOwner ?? null,
+    suspendedReason: job.suspendedReason ?? null,
+    lastError: job.lastError ?? null,
+  };
 }
 
 export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
@@ -109,6 +127,10 @@ export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
       limit: opts.limit ?? 20,
     });
 
+    if (opts.json) {
+      console.log(JSON.stringify({ paused, counts, jobs: jobs.map(jobJson) }, null, 2));
+      return 0;
+    }
     console.log(
       `queue: ${Object.entries(counts)
         .map(([state, n]) => `${n} ${state}`)
@@ -132,7 +154,7 @@ export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
     console.log('\n  buddi jobs retry <id> | buddi jobs cancel <id>');
     if (counts.failed > 0) console.log('  buddi jobs retry --all   run every dead job again');
     return 0;
-  }, 1);
+  }, 3);
 }
 
 /** Ids may be given by their printed prefix; an ambiguous prefix is refused. */
@@ -169,7 +191,7 @@ export async function jobsRetry(idOrPrefix: string): Promise<number> {
     }
     console.log(`job ${job.id} (${job.kind}) is pending again, attempts reset.`);
     return 0;
-  }, 1);
+  }, 3);
 }
 
 export async function jobsCancel(idOrPrefix: string): Promise<number> {
@@ -184,7 +206,7 @@ export async function jobsCancel(idOrPrefix: string): Promise<number> {
     }
     console.log(`job ${job.id} (${job.kind}) cancelled.`);
     return 0;
-  }, 1);
+  }, 3);
 }
 
 
@@ -223,5 +245,5 @@ export async function jobsRetryAll(opts: RetryAllOptions = {}): Promise<number> 
     );
     console.log('  they run as soon as a worker picks them up — `buddi jobs` to watch.');
     return 0;
-  }, 1);
+  }, 3);
 }
