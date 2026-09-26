@@ -7,9 +7,12 @@
  * registry, no clock of its own.
  */
 import {
+  addDays,
+  frequencyWords,
   localDateString,
   progress,
   targetValue,
+  type FrequencyStanding,
   type Goal,
   type GoalCheck,
   isOwnerMetric,
@@ -136,6 +139,29 @@ export function formatPace(
   return `${formatValue(Math.abs(pace), unit, currency)} a week ${direction}`;
 }
 
+/**
+ * Where a frequency goal stands, in words: "2 of 3 this week, 1 to go by
+ * 2026-09-27; 4 weeks in a row". Past the deadline, the tally of windows.
+ */
+export function frequencyNow(goal: Goal, standing: FrequencyStanding): string {
+  if (goal.target.kind !== 'frequency') return '';
+  const { count, per } = goal.target;
+  const streak = standing.streak > 0 ? `; ${standing.streak} ${per}${standing.streak === 1 ? '' : 's'} in a row` : '';
+  const current = standing.current;
+  if (current === null) {
+    // Partial windows that closed short are not windows the goal had.
+    const closed = standing.windows.filter((w) => w.state !== 'partial').length;
+    return `${standing.met} of ${closed} ${per}s met${streak}`;
+  }
+  const lastDay = addDays(current.end, -1);
+  const toGo = standing.toGo ?? 0;
+  return (
+    `${current.count} of ${count} this ${per}` +
+    (toGo > 0 ? `, ${toGo} to go by ${lastDay}` : ', done') +
+    streak
+  );
+}
+
 /** One goal, on one line: what `goal.list` prints and what a wake carries. */
 export function goalLine(
   goal: Goal,
@@ -146,6 +172,13 @@ export function goalLine(
   // The goal's own currency, not the last check's: an unmeasured check carries
   // none, and a line that loses its currency the week the bank is down is a
   // line that prints a different number than the week before.
+  if (goal.target.kind === 'frequency') {
+    // A frequency goal's last check carries its tally as the note.
+    return (
+      `${goal.title} — ${frequencyWords(goal.target)} until ${localDateString(goal.deadline, timezone)}` +
+      `${last?.note ? ` (${last.note})` : ''}, checked ${goal.cadence}, held by @${goal.agentId}`
+    );
+  }
   const currency = goal.currency ?? last?.currency ?? null;
   const at = last?.value ?? null;
   const pct = at === null ? null : progress(goal, at);

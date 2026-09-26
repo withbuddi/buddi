@@ -20,6 +20,12 @@
  * a second, slower, unrecorded check happening whenever a tab is open.
  */
 import {
+  frequencyStandingOf,
+  ownerSlugOf,
+  ownerValues,
+  type FrequencyStanding,
+  type OwnerMetricValue,
+  type Queryable,
   MAX_OPEN_GOALS,
   QueryRefusal,
   STANDING_CHECKS,
@@ -80,6 +86,41 @@ export const MAX_GOALS_LISTED = 200;
 export const PAGE_CHECKS = 24;
 export const CHART_CHECKS = 500;
 export const MAX_FINDINGS = 20;
+
+/** The owner values a surface reads for one series: the newest this many. */
+export const OWNER_VALUES = 500;
+
+/**
+ * What a frequency goal's windows are counted over: every value since it was
+ * set, up to this many — three years of a few a day. A window must never read
+ * short because its values fell off the end of a read.
+ */
+export const FREQUENCY_VALUES = 5000;
+
+/**
+ * The values of the owner metric a goal watches, newest first, or none for a
+ * plugin metric. Read from the day before the goal was set, so a frequency
+ * goal's first window has everything it can count; capped, like every read.
+ */
+export async function goalOwnerValues(db: Queryable, goal: Goal, sinceSet = false): Promise<OwnerMetricValue[]> {
+  const slug = ownerSlugOf(goal.metric);
+  if (slug === null) return [];
+  return ownerValues(db, slug, {
+    ...(sinceSet ? { since: new Date(goal.baseline.asOf.getTime() - 24 * 60 * 60_000) } : {}),
+    limit: sinceSet ? FREQUENCY_VALUES : OWNER_VALUES,
+  });
+}
+
+/** A frequency goal's windows, from the owner's values. Null for any other goal. */
+export async function frequencyOf(
+  db: Queryable,
+  goal: Goal,
+  now: Date,
+  timezone: string,
+): Promise<FrequencyStanding | null> {
+  if (goal.target.kind !== 'frequency') return null;
+  return frequencyStandingOf(goal, await goalOwnerValues(db, goal, true), now, timezone);
+}
 
 /** The states that are no longer running, in the order they are listed. */
 const FINISHED = ['met', 'missed', 'closed'] as const;

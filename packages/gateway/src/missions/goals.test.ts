@@ -370,6 +370,32 @@ describe('the cards', () => {
     expect(preview).toContain('Milestones you will hear about, once each: 260 lb.');
   });
 
+  it('says a frequency goal as a count per window, and its milestones as streaks', () => {
+    const preview = renderGoalSet(
+      {
+        ...envelope,
+        title: 'Run three times a week',
+        metric: 'owner.runs',
+        target: { kind: 'frequency', count: 3, per: 'week' },
+        baseline: { value: 0, currency: null, asOf: envelope.baseline.asOf, readingAsOf: null },
+        deadline: '2026-12-31T14:00:00.000Z',
+        milestones: [4, 8],
+        owner: {
+          metric: { slug: 'runs', label: 'Runs', unit: 'count', direction: 'up', unitLabel: null },
+          isNew: false,
+          baselineTold: false,
+        },
+      },
+      'count',
+      'up',
+      TZ,
+    );
+    expect(preview).toContain('3 times a week until 2026-12-31, checked weekly, held by @ledger');
+    expect(preview).toContain('Measured by you, when you tell buddi, until 2026-12-31.');
+    expect(preview).toContain('Milestones you will hear about, once each: 4 weeks in a row, 8 weeks in a row.');
+    expect(preview).not.toContain('From');
+  });
+
   it('renders the day in the owner‘s zone, not UTC', () => {
     // 01:00 UTC on the 23rd is still the 22nd in New York.
     const preview = renderGoalSet(

@@ -42,8 +42,21 @@ export type GoalState = (typeof GOAL_STATES)[number];
 export const GOAL_CADENCES = ['daily', 'weekly'] as const;
 export type GoalCadence = (typeof GOAL_CADENCES)[number];
 
-/** Either a number to land on, or a move from the baseline. */
-export type GoalTarget = { kind: 'absolute'; value: number } | { kind: 'delta'; value: number };
+/** The window a frequency goal counts in. Weeks start on Monday, in the owner's zone. */
+export const FREQUENCY_PERS = ['week', 'month'] as const;
+export type FrequencyPer = (typeof FREQUENCY_PERS)[number];
+
+/** The most occurrences a frequency goal can ask for in one window. */
+export const MAX_FREQUENCY_COUNT = 100;
+
+/** A level target: a number to land on, or a move from the baseline. */
+export type LevelTarget = { kind: 'absolute'; value: number } | { kind: 'delta'; value: number };
+
+/** A frequency target: this many values in every week, or every month. */
+export type FrequencyTarget = { kind: 'frequency'; count: number; per: FrequencyPer };
+
+/** Either a number to land on, a move from the baseline, or a count per window. */
+export type GoalTarget = LevelTarget | FrequencyTarget;
 
 export interface Goal {
   id: string;
@@ -101,8 +114,9 @@ export type GoalRow = {
   agent_id: string;
   metric: string;
   params: unknown;
-  target_kind: 'absolute' | 'delta';
+  target_kind: 'absolute' | 'delta' | 'frequency';
   target_value: string | number;
+  target_per: FrequencyPer | null;
   baseline_value: string | number;
   baseline_as_of: Date;
   deadline: Date;
@@ -130,7 +144,7 @@ export type GoalCheckRow = {
 };
 
 export const GOAL_COLUMNS =
-  'id, title, agent_id, metric, params, target_kind, target_value, baseline_value, baseline_as_of, ' +
+  'id, title, agent_id, metric, params, target_kind, target_value, target_per, baseline_value, baseline_as_of, ' +
   'deadline, cadence, currency, milestones, state, closed_at, closed_note, created_at, updated_at';
 
 export const GOAL_CHECK_COLUMNS =
@@ -155,7 +169,10 @@ export function toGoal(row: GoalRow): Goal {
     agentId: row.agent_id,
     metric: row.metric,
     params: (row.params ?? {}) as Record<string, unknown>,
-    target: { kind: row.target_kind, value: num(row.target_value) ?? 0 },
+    target:
+      row.target_kind === 'frequency'
+        ? { kind: 'frequency', count: num(row.target_value) ?? 0, per: row.target_per ?? 'week' }
+        : { kind: row.target_kind, value: num(row.target_value) ?? 0 },
     baseline: { value: num(row.baseline_value) ?? 0, asOf: row.baseline_as_of },
     deadline: row.deadline,
     cadence: row.cadence,

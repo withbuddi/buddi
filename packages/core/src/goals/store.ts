@@ -86,9 +86,9 @@ export async function createGoal(
     const inserted = await client.query(
       `insert into core.goals
          (title, agent_id, metric, params, target_kind, target_value,
-          baseline_value, baseline_as_of, deadline, cadence, currency, milestones)
+          baseline_value, baseline_as_of, deadline, cadence, currency, milestones, target_per)
        select $1::text, $2::text, $3::text, $4::jsonb, $5::text, $6::numeric,
-              $7::numeric, $8::timestamptz, $9::timestamptz, $10::text, $11::text, $12::jsonb
+              $7::numeric, $8::timestamptz, $9::timestamptz, $10::text, $11::text, $12::jsonb, $14::text
        where (select count(*) from core.goals where state = 'open') < $13
        returning ${GOAL_COLUMNS}`,
       [
@@ -97,7 +97,7 @@ export async function createGoal(
         input.metric,
         JSON.stringify(input.params ?? {}),
         input.target.kind,
-        input.target.value,
+        targetNumber(input.target),
         input.baseline.value,
         input.baseline.asOf.toISOString(),
         input.deadline.toISOString(),
@@ -105,6 +105,7 @@ export async function createGoal(
         input.currency ?? null,
         JSON.stringify(input.milestones ?? []),
         MAX_OPEN_GOALS,
+        input.target.kind === 'frequency' ? input.target.per : null,
       ],
     );
     return inserted.rows;
@@ -113,6 +114,11 @@ export async function createGoal(
   if (rows.length > 0) return { ok: true, goal: toGoal(rows[0] as GoalRow) };
   // Nothing inserted: the only WHERE clause is the budget.
   return { ok: false, reason: 'too-many', message: TOO_MANY_GOALS };
+}
+
+/** The number a target stores in `target_value`: the value, or a frequency's count. */
+function targetNumber(target: GoalTarget): number {
+  return target.kind === 'frequency' ? target.count : target.value;
 }
 
 /** One transaction, committed on return and rolled back on any throw. */
@@ -200,6 +206,7 @@ export async function updateGoal(
     `update core.goals set
        target_kind = coalesce($2::text, target_kind),
        target_value = coalesce($3::numeric, target_value),
+       target_per = case when $2::text is null then target_per else $9::text end,
        deadline = coalesce($4::timestamptz, deadline),
        cadence = coalesce($5::text, cadence),
        milestones = coalesce($6::jsonb, milestones),
@@ -209,12 +216,13 @@ export async function updateGoal(
     [
       id,
       input.target?.kind ?? null,
-      input.target?.value ?? null,
+      input.target === undefined ? null : targetNumber(input.target),
       input.deadline?.toISOString() ?? null,
       input.cadence ?? null,
       input.milestones === undefined ? null : JSON.stringify(input.milestones),
       now.toISOString(),
       input.expectedUpdatedAt.toISOString(),
+      input.target?.kind === 'frequency' ? input.target.per : null,
     ],
   );
   if (rows.length > 0) return { ok: true, goal: toGoal(rows[0] as GoalRow) };

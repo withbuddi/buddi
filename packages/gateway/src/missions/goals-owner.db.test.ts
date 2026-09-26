@@ -269,6 +269,7 @@ suite('goals the owner measures (postgres)', () => {
     expect(answer.message).toMatch(/28\.5 lb is a long way from the last value, 288 lb/);
     expect(await ownerValues(pool, 'weight')).toHaveLength(1);
 
+    now = new Date(T0.getTime() + 3_600_000);
     const confirmed = await record({ goal: goal?.id, value: 150, confirmed: true });
     expect(confirmed.ok).toBe(true);
     expect(await latestOwnerValue(pool, 'weight')).toMatchObject({ value: 150 });
@@ -358,5 +359,108 @@ suite('goals the owner measures (postgres)', () => {
     ]);
     const { rows: all } = await pool.query(`select key from core.sentinel_findings where key like $1`, [`goal.${id}.not-measurable`]);
     expect(all).toHaveLength(0);
+  });
+
+  /* ---------------- frequency goals ---------------- */
+
+  const runsDef = { slug: 'runs', label: 'Runs', unit: 'count', direction: 'up' } as const;
+
+  /** Run twice a week until Sunday 1 November; a streak of two is a milestone. */
+  const runGoal = () =>
+    setGoal({
+      title: 'Run twice a week',
+      metric: { owner: runsDef },
+      target: { kind: 'frequency', count: 2, per: 'week' },
+      deadline: '2026-11-01',
+      cadence: 'weekly',
+      milestones: [2],
+    });
+
+  /** 10:00 in New York on a local day. */
+  const localTen = (day: string) => new Date(`${day}T14:00:00Z`);
+
+  it('sets a frequency goal on an owner metric, and refuses one a plugin would measure', async () => {
+    const { preview } = await runGoal();
+    expect(preview).toContain('twice a week until 2026-11-01, checked weekly, held by @coach');
+    expect(preview).toContain('Milestones you will hear about, once each: 2 weeks in a row.');
+    const [goal] = await listGoals(pool, {});
+    expect(goal).toMatchObject({ target: { kind: 'frequency', count: 2, per: 'week' }, baseline: { value: 0 } });
+    expect(await ownerValues(pool, 'runs')).toHaveLength(0);
+
+    const base = { title: 'x', deadline: '2026-11-01', cadence: 'weekly' };
+    expect(
+      await refused({ ...base, metric: 'test.debt', target: { kind: 'frequency', count: 2, per: 'week' } }),
+    ).toMatch(/counts the times the owner tells buddi/);
+    expect(
+      await refused({ ...base, metric: 'owner.runs', target: { kind: 'frequency', count: 2, per: 'week' }, milestones: [4, 2] }),
+    ).toMatch(/not a streak/);
+
+    // A goal keeps its shape: a frequency goal is not turned into a level one.
+    const answer = await registry.invoke(
+      'goal.update',
+      { id: goal?.id, target: { kind: 'absolute', value: 3 } },
+      agentCtx(),
+    );
+    expect(JSON.stringify(answer)).toMatch(/is a frequency goal and stays one/);
+  });
+
+  it('counts runs in Monday weeks, says a short week once, a streak once, and settles by the windows', async () => {
+    await runGoal();
+    const [goal] = await listGoals(pool, {});
+    const id = goal?.id as string;
+    const runs = new Set([
+      '2026-09-24', // the week it was set: partial, not a gap
+      '2026-09-29', '2026-10-01', // met
+      '2026-10-05', '2026-10-07', // met: two in a row
+      '2026-10-14', // short
+      '2026-10-20', '2026-10-22', // met
+      '2026-10-26', '2026-10-30', // met
+    ]);
+    let lastAnswer = '';
+    for (let day = new Date('2026-09-23T12:00:00Z'); day <= new Date('2026-11-02T12:00:00Z'); day = new Date(day.getTime() + DAY)) {
+      const local = day.toISOString().slice(0, 10);
+      if (runs.has(local)) {
+        now = new Date(`${local}T12:00:00Z`);
+        lastAnswer = (await record({ metric: 'runs', value: 1 })).pace ?? '';
+      }
+      await tick(localTen(local));
+    }
+    // The last run: this week is done, and the streak restarted after the short week.
+    expect(lastAnswer).toBe('Run twice a week: 2 of 2 this week, done; 1 week in a row.');
+
+    const keys = (await wakes()).map((w) => w.key);
+    expect(keys).toEqual([
+      goalKey(id, 'milestone.2'),
+      goalKey(id, 'short.2026-10-12'),
+      goalKey(id, 'target-reached'),
+    ]);
+    const [settled] = await listGoals(pool, {});
+    expect(settled?.state).toBe('met');
+  });
+
+  it('answers goal.status with the windows and the newest values', async () => {
+    await runGoal();
+    const [goal] = await listGoals(pool, {});
+    for (const day of ['2026-09-29', '2026-10-01', '2026-10-06']) {
+      now = new Date(`${day}T12:00:00Z`);
+      await record({ goal: goal?.id, value: 1 });
+    }
+    now = new Date('2026-10-07T12:00:00Z');
+    const answer = await registry.invoke('goal.status', { id: goal?.id }, agentCtx());
+    if (!answer.ok) throw new Error('goal.status');
+    const [shown] = (answer.output as { goals: Array<Record<string, unknown>> }).goals;
+    expect(shown).toMatchObject({
+      value: 1,
+      valueFormatted: '1 of 2 this week, 1 to go by 2026-10-11; 1 week in a row',
+      verdict: 'on-track',
+      streak: 1,
+      paceNeededInWords: '1 more this week',
+    });
+    expect((shown?.windows as Array<{ start: string; state: string }>).map((w) => [w.start, w.state])).toEqual([
+      ['2026-09-21', 'partial'],
+      ['2026-09-28', 'met'],
+      ['2026-10-05', 'open'],
+    ]);
+    expect((shown?.values as unknown[]).length).toBe(3);
   });
 });

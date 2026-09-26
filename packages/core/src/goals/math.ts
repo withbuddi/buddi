@@ -17,14 +17,27 @@ import type { MetricDirection } from '../metrics.js';
 
 const WEEK_MS = 7 * 24 * 60 * 60_000;
 
-/** What the goal actually has to reach: a delta is a move from the baseline. */
+/**
+ * What the goal actually has to reach: a delta is a move from the baseline.
+ * For a frequency goal it is the count per window — the only number it has.
+ */
 export function targetValue(goal: Pick<Goal, 'target' | 'baseline'>): number {
-  return goal.target.kind === 'absolute' ? goal.target.value : goal.baseline.value + goal.target.value;
+  switch (goal.target.kind) {
+    case 'absolute':
+      return goal.target.value;
+    case 'delta':
+      return goal.baseline.value + goal.target.value;
+    case 'frequency':
+      return goal.target.count;
+  }
 }
 
-/** A milestone on the target's own scale becomes a value to compare against. */
+/**
+ * A milestone on the target's own scale becomes a value to compare against.
+ * A frequency goal's milestones are streaks, and a streak is its own value.
+ */
 export function milestoneValue(goal: Pick<Goal, 'target' | 'baseline'>, milestone: number): number {
-  return goal.target.kind === 'absolute' ? milestone : goal.baseline.value + milestone;
+  return goal.target.kind === 'delta' ? goal.baseline.value + milestone : milestone;
 }
 
 /**

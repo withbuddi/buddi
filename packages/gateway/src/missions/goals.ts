@@ -57,6 +57,11 @@ import {
   standingOf,
   targetValue,
   updateGoal,
+  FREQUENCY_PERS,
+  MAX_FREQUENCY_COUNT,
+  frequencySettles,
+  frequencyWords,
+  type FrequencyStanding,
   METRIC_DIRECTIONS,
   METRIC_UNITS,
   MAX_OWNER_LABEL,
@@ -75,6 +80,7 @@ import {
   type OwnerMetric,
   type OwnerMetricSource,
   type OwnerValueSource,
+  type OwnerMetricValue,
   type Finding,
   type GoalStanding,
   type GoalVerdict,
@@ -95,6 +101,7 @@ import { z } from 'zod';
 import {
   GOALS_SENTINEL_ID,
   asOwnerSource,
+  frequencyNow,
   baseUnit,
   checkLines,
   formatPace,
@@ -111,6 +118,8 @@ import {
   createGoalHome,
   createGoalOwnerClose,
   createGoalQueries,
+  frequencyOf,
+  goalOwnerValues,
   goalViews,
   goalsPage,
   type GoalChart,
@@ -263,6 +272,37 @@ export function renderGoalSet(
     readingAsOf !== null && setAt.getTime() - readingAsOf.getTime() > 24 * 60 * 60_000
       ? ` (reading as of ${localDateString(readingAsOf, timezone)})`
       : '';
+  const measuredBy =
+    envelope.owner !== undefined
+      ? `Measured by you, when you tell buddi${
+          envelope.owner.isNew ? ` (a new metric, ${envelope.metric})` : ''
+        }, until ${localDateString(asGoal.deadline, timezone)}.`
+      : `Measured by ${envelope.metric}${
+          Object.keys(envelope.params).length === 0 ? '' : ` ${JSON.stringify(envelope.params)}`
+        }, every ${envelope.cadence === 'daily' ? 'day' : 'week'}, until ${localDateString(asGoal.deadline, timezone)}.`;
+  if (envelope.target.kind === 'frequency') {
+    /*
+     * "3 times a week until 2026-12-31": a count per window has no "from"
+     * and no pace per week — the window is the pace. Milestones are streaks.
+     */
+    const per = envelope.target.per;
+    const lines = [
+      `${envelope.title}`,
+      '',
+      `${frequencyWords(envelope.target)} until ${localDateString(asGoal.deadline, timezone)}, ` +
+        `checked ${envelope.cadence}, held by @${envelope.agentId}`,
+      '',
+      measuredBy,
+    ];
+    if (envelope.milestones.length > 0) {
+      lines.push(
+        `Milestones you will hear about, once each: ${envelope.milestones
+          .map((m) => `${m} ${per}s in a row`)
+          .join(', ')}.`,
+      );
+    }
+    return lines.join('\n');
+  }
   const lines = [
     `${envelope.title}`,
     '',
@@ -270,13 +310,7 @@ export function renderGoalSet(
       `${formatValue(targetValue(asGoal), unit, currency)} by ${localDateString(asGoal.deadline, timezone)}: ` +
       `${formatPace(pace, unit, direction, currency)}, checked ${envelope.cadence}, held by @${envelope.agentId}`,
     '',
-    envelope.owner !== undefined
-      ? `Measured by you, when you tell buddi${
-          envelope.owner.isNew ? ` (a new metric, ${envelope.metric})` : ''
-        }, until ${localDateString(asGoal.deadline, timezone)}.`
-      : `Measured by ${envelope.metric}${
-          Object.keys(envelope.params).length === 0 ? '' : ` ${JSON.stringify(envelope.params)}`
-        }, every ${envelope.cadence === 'daily' ? 'day' : 'week'}, until ${localDateString(asGoal.deadline, timezone)}.`,
+    measuredBy,
   ];
   if (envelope.milestones.length > 0) {
     lines.push(
@@ -317,10 +351,12 @@ export function renderGoalUpdate(
   currency: string | null = null,
 ): string {
   const value = (target: GoalTarget): string =>
-    formatValue(targetValue({ target, baseline: { value: baseline, asOf: new Date(0) } }), unit, currency);
+    target.kind === 'frequency'
+      ? frequencyWords(target)
+      : formatValue(targetValue({ target, baseline: { value: baseline, asOf: new Date(0) } }), unit, currency);
   const { before, after } = envelope;
   const rows: string[] = [];
-  if (before.target.kind !== after.target.kind || before.target.value !== after.target.value) {
+  if (JSON.stringify(before.target) !== JSON.stringify(after.target)) {
     rows.push(`Target:    ${value(before.target)} → ${value(after.target)}`);
   }
   if (before.deadline !== after.deadline) {
@@ -348,7 +384,7 @@ export function renderGoalUpdate(
  * Inputs
  * ------------------------------------------------------------------ */
 
-const targetInput = z
+const levelTargetInput = z
   .object({
     kind: z
       .enum(['absolute', 'delta'])
@@ -362,6 +398,23 @@ const targetInput = z
       .describe('The number. For a delta it carries its own sign: -40000 to come down by 40,000.'),
   })
   .strict();
+
+const frequencyTargetInput = z
+  .object({
+    kind: z
+      .literal('frequency')
+      .describe('"run three times a week": how many values the owner reports in every week or month.'),
+    count: z.number().int().min(1).max(MAX_FREQUENCY_COUNT).describe('How many times in each window: 3.'),
+    per: z.enum(FREQUENCY_PERS).describe('The window: a week (Monday to Sunday) or a calendar month.'),
+  })
+  .strict();
+
+/**
+ * A level target, or a frequency. A frequency goal counts the values of a
+ * metric the owner reports; "finish X by Friday" is neither — that is a
+ * reminder or a mission.
+ */
+const targetInput = z.union([levelTargetInput, frequencyTargetInput]);
 
 /** A metric the owner will report, named the first time a goal needs it. */
 const ownerMetricInput = z
@@ -431,7 +484,8 @@ const setInput = z
       .optional()
       .describe(
         'Numbers on the same scale as the target — deltas when the target is a delta — that you want to say ' +
-          'something about when they are crossed. Each fires once, ever.',
+          'something about when they are crossed. For a frequency goal they are streaks: [4, 8] is four and ' +
+          'eight windows met in a row. Each fires once, ever.',
       ),
   })
   .strict();
@@ -507,6 +561,25 @@ type Refusal = { ok: false; reason: string; message: string };
 
 const refusal = (reason: string, message: string): Refusal => ({ ok: false, reason, message });
 
+/**
+ * A frequency goal's milestones are streaks — windows met in a row — so they
+ * are whole numbers from 1 up, listed in the order they will be reached.
+ */
+function refuseStreaks(milestones: readonly number[]): Refusal | null {
+  let previous = 0;
+  for (const milestone of milestones) {
+    if (!Number.isInteger(milestone) || milestone <= previous) {
+      return refusal(
+        'wrong-direction',
+        `the milestone ${milestone} is not a streak: a frequency goal's milestones are windows met in a row, ` +
+          'whole numbers from 1 up, listed from the smallest ([4, 8]).',
+      );
+    }
+    previous = milestone;
+  }
+  return null;
+}
+
 /** One check, as `goal.status` prints it. */
 export interface GoalStatusCheck {
   at: string;
@@ -557,7 +630,16 @@ export interface GoalStatusGoal {
   verdict: GoalVerdict;
   line: string;
   checks: GoalStatusCheck[];
+  /** For an owner metric: the newest values the owner told buddi, newest first. */
+  values?: Array<{ asOf: string; value: number; valueFormatted: string; note: string | null; source: string }>;
+  /** For a frequency goal: windows met in a row, and the newest windows, oldest first. */
+  streak?: number;
+  windows?: Array<{ start: string; end: string; count: number; state: 'met' | 'short' | 'partial' | 'open' }>;
 }
+
+/** How many owner values and frequency windows `goal.status` prints. */
+export const STATUS_VALUES = 10;
+export const STATUS_WINDOWS = 12;
 
 /** What `goal.status` returns: the goals, and the chart when there is one. */
 export interface GoalStatusResult {
@@ -795,6 +877,24 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
       if (!checked.ok) return refusal('invalid-params', checked.message);
       params = checked.params;
     }
+    if (input.target.kind === 'frequency') {
+      /*
+       * A frequency goal counts values, and only the owner's metrics have
+       * values to count: a plugin's number is a level, read when buddi looks.
+       */
+      if (metric.owner === null) {
+        return refusal(
+          'frequency-needs-owner',
+          `a frequency goal counts the times the owner tells buddi, and ${metric.id} is measured by a plugin. ` +
+            'Use an owner metric ({"owner": {...}}) for something the owner does, or a level target for this one.',
+        );
+      }
+      if (input.baseline !== undefined) {
+        return refusal('baseline-frequency', 'a frequency goal starts with nothing counted; leave baseline out.');
+      }
+      const streaks = refuseStreaks(input.milestones ?? []);
+      if (streaks !== null) return streaks;
+    }
     const when = parseReminderWhen(input.deadline, ctx.timezone);
     if (!when.ok) return refusal('invalid-deadline', when.message);
     const aheadMs = when.at.getTime() - ctx.now().getTime();
@@ -832,7 +932,10 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
       // What the schema *made of* the input — defaults applied, unknown keys
       // already refused — so the goal row and every later measurement agree.
       params,
-      target: { kind: input.target.kind, value: input.target.value },
+      target:
+        input.target.kind === 'frequency'
+          ? { kind: 'frequency', count: input.target.count, per: input.target.per }
+          : { kind: input.target.kind, value: input.target.value },
       baseline,
       deadline: (when.ok ? when.at : new Date(0)).toISOString(),
       cadence: input.cadence,
@@ -954,7 +1057,10 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
        */
       const baseline =
         approvedBaseline(ctx) ??
-        (input.baseline !== undefined && metric.owner !== null
+        // A frequency goal starts with nothing counted: there is no level to measure.
+        (input.target.kind === 'frequency'
+          ? { value: 0, currency: null, asOf: ctx.now().toISOString(), readingAsOf: null }
+          : input.baseline !== undefined && metric.owner !== null
           ? { value: input.baseline.value, currency: null, asOf: ctx.now().toISOString(), readingAsOf: null }
           : await (async (): Promise<GoalSetEnvelope['baseline']> => {
               const measured =
@@ -989,7 +1095,7 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
             })());
 
       const envelope = envelopeOf(input, ctx, metric, checked.params, baseline);
-      const wrongWay = refuseDirection(
+      const wrongWay = envelope.target.kind === 'frequency' ? null : refuseDirection(
         { target: envelope.target, baseline: { value: baseline.value, asOf: new Date(baseline.asOf) } },
         envelope.milestones,
         metric.direction,
@@ -1068,10 +1174,13 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
         value: envelope.baseline.value,
         currency: envelope.baseline.currency,
         note:
-          envelope.owner?.baselineTold === true
-            ? 'baseline, said when the goal was set'
-            : 'baseline, measured when the goal was set',
-        paceNeeded: paceNeeded(created.goal, envelope.baseline.value, ctx.now()),
+          envelope.target.kind === 'frequency'
+            ? 'set; nothing counted yet'
+            : envelope.owner?.baselineTold === true
+              ? 'baseline, said when the goal was set'
+              : 'baseline, measured when the goal was set',
+        paceNeeded:
+          envelope.target.kind === 'frequency' ? null : paceNeeded(created.goal, envelope.baseline.value, ctx.now()),
       });
       return {
         ok: true,
@@ -1155,6 +1264,20 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
       }
     }
     const after = afterOf(input, goal, ctx);
+    /*
+     * A goal keeps its shape. A level goal's baseline is a number and a
+     * frequency goal's is nothing counted; turning one into the other would
+     * judge months of history against a baseline that never meant that.
+     */
+    if ((goal.target.kind === 'frequency') !== (after.target.kind === 'frequency')) {
+      return refusal(
+        'shape',
+        goal.target.kind === 'frequency'
+          ? 'this is a frequency goal and stays one; a level target is a new goal.'
+          : 'this goal aims at a level and stays one; a frequency is a new goal on an owner metric.',
+      );
+    }
+    if (after.target.kind === 'frequency') return refuseStreaks(after.milestones);
     // Same rule as `goal.set`: an update that puts the target on the wrong
     // side of the baseline would settle the goal `met` on the next tick.
     return refuseDirection(
@@ -1293,13 +1416,58 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
     checks: GoalCheck[],
     /** The run's clock. Never `new Date()`: `goal.status` is read under one. */
     now: Date,
+    /** For a goal on an owner metric: its newest values, and a frequency goal's windows. */
+    owner: { values: OwnerMetricValue[]; frequency: FrequencyStanding | null } | null = null,
   ): GoalStatusGoal {
     const currency = goal.currency;
     const latest = standing.latest;
     const value = latest?.value ?? null;
     const projected = standing.projected;
     void now;
+    const ownerFields =
+      owner === null
+        ? {}
+        : {
+            values: owner.values.slice(0, STATUS_VALUES).map((v) => ({
+              asOf: v.asOf.toISOString(),
+              value: v.value,
+              valueFormatted: formatValue(v.value, unit, null),
+              note: v.note,
+              source: v.source,
+            })),
+          };
+    const frequency = owner?.frequency ?? null;
+    if (goal.target.kind === 'frequency' && frequency !== null) {
+      /*
+       * A frequency goal's numbers are windows, not a level: the value is the
+       * count so far in this window, the pace is what is left to do in it,
+       * and the verdict is the last window that closed.
+       */
+      const last = frequency.lastClosed;
+      const onTrackNow = last === null || last.state === 'partial' ? null : last.state === 'met';
+      return {
+        ...renderGoal({ ...goal }, unit, timezone, standing, checks, now),
+        ...ownerFields,
+        value: frequency.current?.count ?? null,
+        valueFormatted: frequencyNow(goal, frequency),
+        progress: null,
+        paceNeeded: frequency.toGo,
+        paceNeededInWords:
+          frequency.toGo === null ? null : frequency.toGo === 0 ? 'done this ' + goal.target.per : `${frequency.toGo} more this ${goal.target.per}`,
+        projected: null,
+        onTrack: onTrackNow,
+        verdict: onTrackNow === null ? 'no-projection' : onTrackNow ? 'on-track' : 'off-track',
+        streak: frequency.streak,
+        windows: frequency.windows.slice(-STATUS_WINDOWS).map((w) => ({
+          start: w.start,
+          end: w.end,
+          count: w.count,
+          state: w.state,
+        })),
+      };
+    }
     return {
+      ...ownerFields,
       id: goal.id,
       title: goal.title,
       agentId: goal.agentId,
@@ -1391,7 +1559,23 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
           await measuredChecks(ctx.db, goal.id, STANDING_CHECKS),
           ctx.now(),
         );
-        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, standing, printed, ctx.now()));
+        const owned = isOwnerMetric(source.metric(goal.metric)) || ownerSlugOf(goal.metric) !== null;
+        out.push(
+          renderGoal(
+            goal,
+            unitOf(goal.metric),
+            ctx.timezone,
+            standing,
+            printed,
+            ctx.now(),
+            owned
+              ? {
+                  values: await goalOwnerValues(ctx.db, goal),
+                  frequency: await frequencyOf(ctx.db, goal, ctx.now(), ctx.timezone),
+                }
+              : null,
+          ),
+        );
         if (goals.length === 1) {
           /*
            * The chart is the goal's *history*, not its last four looks: a
@@ -1518,6 +1702,12 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
       const lines: string[] = [];
       for (const goal of goals) {
         if (goal.state !== 'open') continue;
+        const frequency = await frequencyOf(ctx.db, goal, now, ctx.timezone);
+        if (frequency !== null) {
+          // The value is saved, so the windows already count it.
+          lines.push(`${goal.title}: ${frequencyNow(goal, frequency)}.`);
+          continue;
+        }
         const pending: GoalCheck = {
           id: '',
           goalId: goal.id,
@@ -1644,6 +1834,140 @@ export function staleWindow(since: Date, now: Date, cadence: GoalCadence, timezo
  */
 export function createGoalsSentinel(base: MetricSource): Sentinel {
   const source = asOwnerSource(base);
+
+  /**
+   * One tick of a frequency goal: its windows, a check on its cadence, and
+   * the three things worth saying — a window that closed short, a streak
+   * milestone, the deadline.
+   *
+   * Each is keyed so it is said once. The short window's key carries the
+   * window, and it is returned only while that window is the newest closed
+   * one; a streak milestone is returned while the window that reached it is
+   * the newest closed one, and never again once raised for another. There is
+   * no staleness line: a week with nothing said is a short week, not silence.
+   */
+  async function frequencyTick(goal: Goal, ctx: CoreSentinelContext, now: Date): Promise<Finding[]> {
+    if (goal.target.kind !== 'frequency') return [];
+    const { count, per } = goal.target;
+    const unit = valueUnitOf(source, goal.metric);
+    const standing = (await frequencyOf(ctx.db, goal, now, ctx.timezone)) as FrequencyStanding;
+    const lastClosed = standing.lastClosed;
+    const verdictOf = (w: typeof lastClosed): boolean | null =>
+      w === null || w.state === 'partial' ? null : w.state === 'met';
+
+    let checks = await recentChecks(ctx.db, goal.id, 4);
+    const lastAt = checks[0]?.at ?? null;
+    const pastDeadline = now.getTime() >= goal.deadline.getTime();
+    const deadlineUnmeasured = pastDeadline && (lastAt === null || lastAt.getTime() < goal.deadline.getTime());
+    if (deadlineUnmeasured || cadenceDue(goal.cadence, lastAt, now)) {
+      // The record of the tally as it stood: the count this window, the
+      // verdict of the last closed one, what is left to do.
+      await recordCheck(ctx.db, {
+        goalId: goal.id,
+        at: now,
+        value: standing.current?.count ?? lastClosed?.count ?? 0,
+        note: frequencyNow(goal, standing),
+        onTrack: verdictOf(lastClosed),
+        paceNeeded: standing.toGo,
+      });
+      checks = await recentChecks(ctx.db, goal.id, 4);
+    }
+
+    const recent = standing.windows.slice(-6);
+    const detail = (lead: string): string =>
+      [
+        lead,
+        '',
+        goalLine(goal, unit, checks[0] ?? null, ctx.timezone),
+        '',
+        `The last ${recent.length} ${per}s:`,
+        ...recent.map((w) => `  ${per} of ${w.start}: ${w.count} of ${count} · ${w.state}`),
+        '',
+        GOAL_WAKE_INSTRUCTION,
+      ].join('\n');
+    const data = {
+      goalId: goal.id,
+      metric: goal.metric,
+      target: { count, per },
+      deadline: goal.deadline.toISOString(),
+      streak: standing.streak,
+      windows: recent.map((w) => ({ start: w.start, count: w.count, state: w.state })),
+    };
+    const base = { agentId: goal.agentId, data };
+    const out: Finding[] = [];
+
+    // The deadline: settled by the windows, met when more met than fell short.
+    if (pastDeadline) {
+      const verdict = frequencySettles(standing);
+      await settleGoal(
+        ctx.db,
+        goal.id,
+        verdict,
+        verdict === 'met' ? 'more windows met the count than fell short' : 'more windows fell short than met the count',
+        now,
+      );
+      out.push(
+        verdict === 'met'
+          ? {
+              ...base,
+              key: goalKey(goal.id, 'target-reached'),
+              severity: 'info',
+              wake: true,
+              title: `Goal reached: ${goal.title}`,
+              detail: detail(`${standing.met} ${per}s met the count and ${standing.short} fell short.`),
+            }
+          : {
+              ...base,
+              key: goalKey(goal.id, 'deadline-passed'),
+              severity: 'urgent',
+              title: `Goal deadline passed: ${goal.title}`,
+              detail: detail(
+                `The deadline was ${localDateString(goal.deadline, ctx.timezone)}: ${standing.met} ${per}s met ` +
+                  `the count and ${standing.short} fell short.`,
+              ),
+            },
+      );
+      return out;
+    }
+
+    // Drift: the newest closed window fell short. Said once, for that window.
+    if (lastClosed?.state === 'short') {
+      out.push({
+        ...base,
+        key: goalKey(goal.id, `short.${lastClosed.start}`),
+        severity: 'info',
+        wake: true,
+        title: `Short last ${per}: ${goal.title}`,
+        detail: detail(`${lastClosed.count} of ${count} in the ${per} of ${lastClosed.start}.`),
+      });
+    }
+
+    // Streaks: each milestone once, ever, for the window that reached it.
+    if (lastClosed?.state === 'met' && goal.milestones.length > 0) {
+      const { rows } = await ctx.db.query(
+        `select key, data->>'window' as window from core.sentinel_findings
+          where sentinel_id = $1 and key like $2`,
+        [GOALS_SENTINEL_ID, `goal.${goal.id}.milestone.%`],
+      );
+      const raisedFor = new Map((rows as Array<{ key: string; window: string | null }>).map((r) => [r.key, r.window]));
+      for (const milestone of goal.milestones) {
+        if (standing.streak < milestone) continue;
+        const key = goalKey(goal.id, `milestone.${milestone}`);
+        if (raisedFor.has(key) && raisedFor.get(key) !== lastClosed.start) continue;
+        out.push({
+          ...base,
+          data: { ...data, window: lastClosed.start },
+          key,
+          severity: 'info',
+          wake: true,
+          title: `Milestone on ${goal.title}`,
+          detail: detail(`${milestone} ${per}s in a row at ${frequencyWords(goal.target)}.`),
+        });
+      }
+    }
+    return out;
+  }
+
   return {
     id: GOALS_SENTINEL_ID,
     description:
@@ -1660,6 +1984,10 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
         const unit = valueUnitOf(source, goal.metric);
         const direction = metric?.direction ?? 'down';
         const owned = isOwnerMetric(metric);
+        if (goal.target.kind === 'frequency') {
+          findings.push(...(await frequencyTick(goal, ctx, now)));
+          continue;
+        }
         const currency = goal.currency;
 
         /*

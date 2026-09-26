@@ -444,7 +444,7 @@ suite('goals (postgres)', () => {
 
     const after = await getGoal(pool, id);
     expect(after?.cadence).toBe('weekly');
-    expect(after?.target.value).toBe(25);
+    expect(after?.target).toMatchObject({ value: 25 });
 
     // The store's own guard, for the window the re-description cannot cover:
     // the same write, with the version the card was drawn from.
