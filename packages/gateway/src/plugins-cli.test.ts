@@ -125,3 +125,10 @@ describe('--yes and the hash it has to carry', () => {
     ).toBe(false);
   });
 });
+
+describe('buddi plugins list --json', () => {
+  it('is read on list, and refused elsewhere', () => {
+    expect(parsePluginsArgs(['list', '--json']).json).toBe(true);
+    expect(() => parsePluginsArgs(['info', 'finance', '--json'])).toThrow(/--json only applies to list/);
+  });
+});

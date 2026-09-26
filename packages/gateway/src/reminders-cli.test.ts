@@ -50,3 +50,10 @@ describe('formatReminder', () => {
     expect(line).toContain('check the card payment');
   });
 });
+
+describe('buddi reminders --json', () => {
+  it('is a listing option', () => {
+    expect(parseRemindersArgs(['--json'])).toEqual({ action: 'list', all: false, json: true });
+    expect(parseRemindersArgs(['--all', '--json'])).toEqual({ action: 'list', all: true, json: true });
+  });
+});

@@ -4,6 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   HISTORY_LIMIT,
+  approvalResumeFrom,
+  approvalStopText,
   completerFor,
   historyFile,
   loadHistory,
@@ -155,5 +157,46 @@ describe('paging', () => {
   it('never pages into a pipe', () => {
     const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n');
     expect(shouldPage(long, pipe, 24)).toBe(false);
+  });
+});
+
+describe('buddi ask, for scripts', () => {
+  it('reads --json, --file (more than once) and --wait', () => {
+    expect(parseArgs(['ask', 'sum it', '--json', '--file', 'a.pdf', '--file', 'b.csv', '--wait', '30'])).toEqual({
+      command: 'ask',
+      question: 'sum it',
+      last: false,
+      json: true,
+      files: ['a.pdf', 'b.csv'],
+      waitSeconds: 30,
+    });
+  });
+
+  it('keeps those flags to ask', () => {
+    expect(() => parseArgs(['chat', '--json'])).toThrow(/unknown option: --json/);
+    expect(() => parseArgs(['ask', 'q', '--wait', 'soon'])).toThrow(/--wait needs a number of seconds/);
+    expect(() => parseArgs(['ask', 'q', '--file'])).toThrow(/--file needs a path/);
+  });
+
+  it('says where to approve and how to finish', () => {
+    expect(approvalStopText('act-1', 'conv-1')).toBe(
+      'This run is waiting for your approval (action act-1).\n' +
+        'Approve it on the dashboard or Telegram, then run buddi ask again with --resume conv-1',
+    );
+  });
+
+  it('wakes the run with what the decided action returned', () => {
+    const base = { id: 'act-1', tool: 'mail.send' } as Parameters<typeof approvalResumeFrom>[0];
+    expect(approvalResumeFrom({ ...base, state: 'succeeded', outcome: { attempt: 1, result: { sent: true } } })).toEqual({
+      actionId: 'act-1',
+      tool: 'mail.send',
+      state: 'succeeded',
+      result: { sent: true },
+    });
+    expect(approvalResumeFrom({ ...base, state: 'rejected', outcome: null })).toEqual({
+      actionId: 'act-1',
+      tool: 'mail.send',
+      state: 'rejected',
+    });
   });
 });

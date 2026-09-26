@@ -17,13 +17,13 @@ import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 
 export const USAGE = `buddi reminders — one-off nudges the agents set
 
-  buddi reminders                 every pending reminder, soonest first
+  buddi reminders [--json]        every pending reminder, soonest first
   buddi reminders --agent <id>    just that agent's
   buddi reminders --all           include fired, cancelled and expired ones
   buddi reminders cancel <id>     cancel a pending one`;
 
 export type RemindersCommand =
-  | { action: 'list'; agentId?: string; all: boolean }
+  | { action: 'list'; agentId?: string; all: boolean; json?: boolean }
   | { action: 'cancel'; id: string }
   | { action: 'help' };
 
@@ -40,11 +40,18 @@ export function parseRemindersArgs(argv: string[]): RemindersCommand {
   }
 
   const argv2 = head === undefined ? [] : argv;
-  const command: { action: 'list'; agentId?: string; all: boolean } = { action: 'list', all: false };
+  const command: { action: 'list'; agentId?: string; all: boolean; json?: boolean } = {
+    action: 'list',
+    all: false,
+  };
   for (let i = 0; i < argv2.length; i += 1) {
     const arg = argv2[i] as string;
     if (arg === '--all') {
       command.all = true;
+      continue;
+    }
+    if (arg === '--json') {
+      command.json = true;
       continue;
     }
     if (arg === '--agent') {
@@ -75,13 +82,30 @@ export function formatReminder(reminder: Reminder, timezone: string): string {
 export async function listCommand(
   pool: Pool,
   timezone: string,
-  opts: { agentId?: string; all: boolean },
+  opts: { agentId?: string; all: boolean; json?: boolean },
 ): Promise<void> {
   const reminders = await listReminders(pool, {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.all ? {} : { state: 'pending' as const }),
     limit: 200,
   });
+  if (opts.json) {
+    console.log(
+      JSON.stringify(
+        reminders.map((r) => ({
+          id: r.id,
+          state: r.state,
+          dueAt: r.dueAt.toISOString(),
+          agentId: r.agentId,
+          text: r.text,
+          ...(r.cancelReason ? { cancelReason: r.cancelReason } : {}),
+        })),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   if (reminders.length === 0) {
     console.log(
       opts.all ? 'no reminders' : 'no pending reminders (buddi reminders --all for the history)',
@@ -114,6 +138,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       await listCommand(pool, timezone, {
         ...(command.agentId ? { agentId: command.agentId } : {}),
         all: command.all,
+        ...(command.json ? { json: true } : {}),
       });
       return;
     }

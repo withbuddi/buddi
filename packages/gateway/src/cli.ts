@@ -24,13 +24,18 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline/promises';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
+  getAction,
   resolveDataDir,
   CLI_SURFACE,
+  TERMINAL_STATES,
   UnknownAgentError,
+  type ActionRecord,
   type CatalogAgent,
 } from '@buddi/core';
+import type { ApprovalResume, AttachmentRef } from '@buddi/runtime';
 import { failedTurnReply } from './surfaces/failure.js';
 import { createConversation, createProvider, runAgent } from '@buddi/runtime';
 import { nativeSearchRecorder } from '@buddi/tool-web';
@@ -47,6 +52,7 @@ import { ChatSession, QUIET_UNAVAILABLE_TEXT } from './chat/session.js';
 import { Spinner, silentSpinner } from './chat/spinner.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 import { describeDatabaseError } from './db-ready.js';
+import { attachFile } from './chat/attach.js';
 import { createInlineMissionRunner } from './missions/inline.js';
 import { createEngagementHooks } from './missions/engagement.js';
 import { recapMissionId } from './missions/recap.js';
@@ -63,12 +69,13 @@ const USAGE = `buddi — your personal agents
   buddi ask "<question>"     one turn, then exit
   buddi ask "<question>" --agent <handle>
   buddi ask "<question>" --resume <id>
+  buddi ask "<question>" --file <path> --wait <seconds> --json
   buddi agents               every agent, its engine and whether it can run
   buddi agents show <handle> | set <handle> [--provider p] [--model m]
   buddi agents models | test <handle>
 
 In chat: /help lists every command. Exit codes for ask: 0 answered, 1 failed,
-2 stopped awaiting your approval.`;
+2 usage, 3 stopped awaiting your approval (or no database, or no such agent).`;
 
 export type ParsedArgs = {
   command: 'chat' | 'ask' | 'agents' | 'help';
@@ -79,7 +86,24 @@ export type ParsedArgs = {
   last: boolean;
   /** `--quiet`: suppress the per-run footer. Absent means "show it". */
   quiet?: boolean;
+  /** `ask --json`: one object on stdout instead of the answer's text. */
+  json?: boolean;
+  /** `ask --file <path>`, repeatable: stored in the library, sent with the question. */
+  files?: string[];
+  /** `ask --wait <seconds>`: how long to wait for an approval given elsewhere. */
+  waitSeconds?: number;
 };
+
+/** An approval the run stopped on, polled every this often under `--wait`. */
+export const WAIT_POLL_MS = 2_000;
+
+/** What `ask` says when it stops for an approval. */
+export function approvalStopText(actionId: string, conversationId: string): string {
+  return (
+    `This run is waiting for your approval (action ${actionId}).\n` +
+    `Approve it on the dashboard or Telegram, then run buddi ask again with --resume ${conversationId}`
+  );
+}
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const [raw, ...rest] = argv;
@@ -103,6 +127,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       parsed.last = true;
     } else if (arg === '--quiet' || arg === '-q') {
       parsed.quiet = true;
+    } else if (arg === '--json' && command === 'ask') {
+      parsed.json = true;
+    } else if (arg === '--file' && command === 'ask') {
+      const value = rest[++i];
+      if (!value) throw new Error('--file needs a path');
+      parsed.files = [...(parsed.files ?? []), value];
+    } else if (arg === '--wait' && command === 'ask') {
+      const value = Number(rest[++i]);
+      if (!Number.isFinite(value) || value <= 0) throw new Error('--wait needs a number of seconds');
+      parsed.waitSeconds = value;
     } else if (arg.startsWith('--')) {
       throw new Error(`unknown option: ${arg}`);
     } else if (parsed.question === undefined) {
@@ -275,7 +309,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     args = parseArgs(argv);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    process.exit(2);
   }
   if (args.command === 'help') {
     console.log(USAGE);
@@ -286,9 +320,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   const style = styleFor(process.env, process.stdout);
 
-  if (args.command === 'ask' && !args.question) {
+  // A script pipes its question in: `echo "…" | buddi ask`.
+  if (args.command === 'ask' && !args.question && process.stdin.isTTY !== true) {
+    const piped = (await readStdin()).trim();
+    if (piped !== '') args.question = piped;
+  }
+  // With no question, `--resume` finishes a run that stopped for an approval.
+  if (args.command === 'ask' && !args.question && !args.resume) {
     console.error('buddi ask needs a question: buddi ask "can I afford a bike?"');
-    process.exit(1);
+    process.exit(2);
   }
 
   /*
@@ -302,9 +342,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     wiring = await createWiringAsync(process.env);
   } catch (err) {
     // A person is waiting at a prompt: fail fast, with the sentence that says
-    // what to do about it.
+    // what to do about it. No database is something to fix first: 3.
     console.error(describeDatabaseError(err, process.env.DATABASE_URL));
-    process.exit(1);
+    process.exit(3);
   }
   const { pool, registry, catalog, now, timezone, ctx } = wiring;
 
@@ -317,7 +357,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     if (err instanceof UnknownAgentError) {
       console.error(err.message);
       console.error(`agents live in ${AGENTS_DIR}; run "buddi agents" to list them`);
-      process.exit(1);
+      process.exit(3);
     }
     throw err;
   }
@@ -326,8 +366,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   // The *selected* agent's provider, not the process's: an agent pinned to
   // another provider is run on that provider or not at all.
   if (!selected.available) {
-    console.error(`@${selected.handle} cannot run: ${selected.unavailableReason}. Configure its account in dashboard Providers.`);
-    process.exit(1);
+    console.error(`@${selected.handle} cannot run: ${String(selected.unavailableReason).replace(/\.$/, '')}. Configure its account in dashboard Providers.`);
+    process.exit(3);
   }
   // The cause chain of every failed attempt, on stderr. At a terminal that is
   // where an operator looks, and it is the only record `buddi chat` keeps.
@@ -356,11 +396,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
     if (args.command === 'ask') {
       if (!conversationId) conversationId = await createConversation(pool, agent.id);
-      await ask(args.question as string, conversationId, {
+      await ask(args.question, conversationId, {
         agent: selected,
         wiring,
         provider,
         memoryPreamble,
+        json: args.json === true,
+        files: args.files ?? [],
+        waitSeconds: args.waitSeconds,
       });
       return;
     }
@@ -376,26 +419,162 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
  * ask — one turn, for a script
  * ------------------------------------------------------------------ */
 
+/** All of stdin, for a question piped in. */
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** How a decided action wakes the run that stopped on it. */
+export function approvalResumeFrom(action: ActionRecord): ApprovalResume {
+  const outcome = (action.outcome ?? {}) as { result?: unknown; error?: unknown };
+  return {
+    actionId: action.id,
+    tool: action.tool,
+    state: action.state,
+    ...(outcome.result === undefined ? {} : { result: outcome.result }),
+    ...(typeof outcome.error === 'string' ? { error: outcome.error } : {}),
+  };
+}
+
 /**
- * Unchanged in shape since the first version: the answer on stdout, everything
- * else on stderr, no spinner and no ANSI. The only addition is the exit code,
- * so a script can tell "answered" from "waiting for you".
+ * The action a conversation's last run stopped on, once it is decided and not
+ * yet taken up again. Only actions that belong to no queue job: those the
+ * queue wakes on its own.
+ */
+async function decidedButNotResumed(
+  pool: Wiring['pool'],
+  conversationId: string,
+): Promise<{ action: ActionRecord; decided: boolean } | undefined> {
+  const { rows } = await pool.query(
+    `select a.id from core.actions a
+      where a.conversation_id = $1 and a.job_id is null
+        and not exists (
+          select 1 from core.events e
+           where e.kind = 'run.resumed' and e.conversation_id = a.conversation_id
+             and e.payload->>'actionId' = a.id::text)
+      order by a.created_at desc
+      limit 1`,
+    [conversationId],
+  );
+  const id = rows[0]?.id as string | undefined;
+  if (!id) return undefined;
+  const action = await getAction(pool, id);
+  if (!action) return undefined;
+  return { action, decided: TERMINAL_STATES.includes(action.state) };
+}
+
+/** Poll an action until it is decided, or the time is up. */
+async function waitForDecision(
+  pool: Wiring['pool'],
+  actionId: string,
+  seconds: number,
+): Promise<ActionRecord | undefined> {
+  const deadline = Date.now() + seconds * 1000;
+  for (;;) {
+    const action = await getAction(pool, actionId);
+    if (action && TERMINAL_STATES.includes(action.state)) return action;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_MS, Math.max(0, deadline - Date.now()))));
+  }
+}
+
+/**
+ * `ask` — one turn, for a script.
+ *
+ * The answer on stdout (or one JSON object with `--json`), everything else on
+ * stderr, no spinner and no ANSI. Exit 0 answered, 1 failed, 3 stopped for an
+ * approval: with `--wait` the run waits for a decision made elsewhere and
+ * finishes; without it, the sentence says how to finish it later.
  */
 async function ask(
-  question: string,
+  question: string | undefined,
   conversationId: string,
   deps: {
     agent: CatalogAgent;
     wiring: Wiring;
     provider: ReturnType<typeof createProvider>;
     memoryPreamble: (agentId: string) => Promise<string>;
+    json: boolean;
+    files: readonly string[];
+    waitSeconds: number | undefined;
   },
 ): Promise<void> {
   const { wiring } = deps;
-  console.error(`conversation: ${conversationId}`);
-  let result: Awaited<ReturnType<typeof runAgent>>;
-  try {
-    result = await runAgent({
+  const runId = randomUUID();
+  const startedAt = new Date();
+  if (!deps.json) console.error(`conversation: ${conversationId}`);
+
+  const store = createCoreArtifactStore({ pool: wiring.pool, env: process.env });
+  const attachments: AttachmentRef[] = [];
+  for (const file of deps.files) {
+    try {
+      const saved = await attachFile(path.resolve(file), {
+        store,
+        readFile: (candidate) => readFile(candidate),
+        createdBy: wiring.ctx.ownerId,
+      });
+      attachments.push({
+        artifactId: saved.artifactId,
+        mime: saved.mime,
+        kind: saved.kind,
+        filename: saved.filename,
+        sizeBytes: saved.sizeBytes,
+      });
+    } catch (err) {
+      console.error(`Could not attach ${file}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  // No question: finish the run this conversation stopped on, if it can be.
+  let resume: ApprovalResume | undefined;
+  if (question === undefined) {
+    const found = await decidedButNotResumed(wiring.pool, conversationId);
+    if (!found) {
+      console.error('Nothing in that conversation is waiting to be finished. Ask a question: buddi ask "…" --resume <id>.');
+      process.exitCode = 2;
+      return;
+    }
+    let action: ActionRecord | undefined = found.action;
+    if (!found.decided) {
+      action = deps.waitSeconds === undefined ? undefined : await waitForDecision(wiring.pool, found.action.id, deps.waitSeconds);
+      if (!action) {
+        report({ text: '', pendingActionId: found.action.id });
+        return;
+      }
+    }
+    resume = approvalResumeFrom(action);
+  }
+
+  function report(result: { text: string; pendingActionId?: string }, artifacts: Array<{ id: string; filename: string | null }> = []): void {
+    if (deps.json) {
+      console.log(
+        JSON.stringify(
+          {
+            text: result.text,
+            runId,
+            conversationId,
+            artifacts,
+            ...(result.pendingActionId ? { pendingActionId: result.pendingActionId } : {}),
+          },
+          null,
+          2,
+        ),
+      );
+    } else if (result.text !== '') {
+      console.log(result.text);
+    }
+    if (result.pendingActionId) {
+      console.error(`\n${approvalStopText(result.pendingActionId, conversationId)}`);
+      process.exitCode = 3;
+    }
+  }
+
+  const run = (turn: { userMessage: string; attachments?: AttachmentRef[] } | { resume: ApprovalResume }) =>
+    runAgent({
       agent: deps.agent.definition(wiring.now(), wiring.timezone),
       provider: deps.provider,
       registry: wiring.registry,
@@ -405,13 +584,30 @@ async function ask(
       // does; see @buddi/tool-web's native.ts.
       onNativeSearch: nativeSearchRecorder(wiring.pool),
       conversationId,
-      userMessage: question,
+      runId,
+      ...turn,
+      loadArtifact: (id: string) => store.load(id),
       surface: CLI_SURFACE,
       memoryPreamble: deps.memoryPreamble,
       onToolCall: (name, input) => {
-        console.error(`⚙ ${name} ${JSON.stringify(input)}`);
+        if (!deps.json) console.error(`⚙ ${name} ${JSON.stringify(input)}`);
       },
     });
+
+  let result: Awaited<ReturnType<typeof runAgent>>;
+  try {
+    result = await run(
+      resume
+        ? { resume }
+        : { userMessage: question as string, ...(attachments.length > 0 ? { attachments } : {}) },
+    );
+    // `--wait`: the owner decides on another surface, and this run finishes.
+    while (result.stopped === 'awaiting-approval' && result.pendingActionId && deps.waitSeconds !== undefined) {
+      if (!deps.json) console.error(`waiting up to ${deps.waitSeconds}s for your decision on action ${result.pendingActionId}`);
+      const decided = await waitForDecision(wiring.pool, result.pendingActionId, deps.waitSeconds);
+      if (!decided) break;
+      result = await run({ resume: approvalResumeFrom(decided) });
+    }
   } catch (err) {
     // A script still deserves the human sentence: `fetch failed` on stderr and
     // an exit code is not a diagnosis. The cause chain goes with it, because
@@ -433,17 +629,25 @@ async function ask(
     process.exitCode = 1;
     return;
   }
+
+  // What the run made: files an agent saved in this conversation since it began.
+  const { rows } = await wiring.pool.query(
+    `select id, filename from core.artifacts
+      where conversation_id = $1 and created_at >= $2 and created_by <> $3 and deleted_at is null
+      order by created_at`,
+    [conversationId, startedAt, wiring.ctx.ownerId],
+  );
+  const made = (rows as Array<{ id: string; filename: string | null }>).map((r) => ({ id: String(r.id), filename: r.filename }));
+
   // Safety net, not the mechanism: tool names are internal and nothing asks the
   // model to print one. This catches the answer of a model that did anyway.
-  console.log(stripToolNames(result.text));
-
-  if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
-    console.error(
-      `\nthis run is waiting for your approval (action ${result.pendingActionId}).\n` +
-        'Decide it with: buddi chat, then /approvals',
-    );
-    process.exitCode = 2;
-  }
+  report(
+    {
+      text: stripToolNames(result.text),
+      ...(result.stopped === 'awaiting-approval' && result.pendingActionId ? { pendingActionId: result.pendingActionId } : {}),
+    },
+    made,
+  );
 }
 
 /* ------------------------------------------------------------------ *

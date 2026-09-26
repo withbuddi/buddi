@@ -45,8 +45,8 @@ import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 
 export const USAGE = `buddi agents — which engine each agent runs on
 
-  buddi agents                       every agent: provider, model, credential, availability
-  buddi agents show <handle>         one agent in full, wiring and last run included
+  buddi agents [--json]              every agent: provider, model, credential, availability
+  buddi agents show <handle> [--json]  one agent in full, wiring and last run included
   buddi agents set <handle> [options]
       --account <id>                named account (from dashboard Providers)
       --provider anthropic|openai    where this agent's conversations go
@@ -69,10 +69,10 @@ export type Language = (typeof LANGUAGES)[number];
 
 export type AgentsCommand =
   | { action: 'help' }
-  | { action: 'list' }
-  | { action: 'show'; handle: string }
+  | { action: 'list'; json?: boolean }
+  | { action: 'show'; handle: string; json?: boolean }
   | { action: 'set'; handle: string; change: EnginePatch & { accountId?: string } }
-  | { action: 'models'; provider?: ProviderKind }
+  | { action: 'models'; provider?: ProviderKind; json?: boolean }
   | { action: 'test'; handle: string; prompt: string }
   | { action: 'migrate'; dryRun: boolean };
 
@@ -93,6 +93,16 @@ export function parseAgentsArgs(argv: string[]): AgentsCommand {
 
   if (head === 'help' || head === '--help' || head === '-h') return { action: 'help' };
   if (head === undefined) return { action: 'list' };
+  // `buddi agents`, `buddi agents list`, and either with `--json`.
+  if (head === 'list' || head === '--json') {
+    const words = head === 'list' ? rest : argv;
+    let json = false;
+    for (const arg of words) {
+      if (arg === '--json') json = true;
+      else throw new Error(`unknown option for buddi agents: ${arg}`);
+    }
+    return json ? { action: 'list', json: true } : { action: 'list' };
+  }
 
   if (head === 'migrate') {
     let dryRun = false;
@@ -107,9 +117,13 @@ export function parseAgentsArgs(argv: string[]): AgentsCommand {
   }
 
   if (head === 'models') {
-    const command: { action: 'models'; provider?: ProviderKind } = { action: 'models' };
+    const command: { action: 'models'; provider?: ProviderKind; json?: boolean } = { action: 'models' };
     for (let i = 0; i < rest.length; i += 1) {
       const arg = rest[i] as string;
+      if (arg === '--json') {
+        command.json = true;
+        continue;
+      }
       if (arg === '--provider' || arg === '-p') {
         command.provider = providerValue(rest[i + 1], arg);
         i += 1;
@@ -128,8 +142,10 @@ export function parseAgentsArgs(argv: string[]): AgentsCommand {
     const args = rest.slice(1);
 
     if (head === 'show') {
-      if (args.length > 0) throw new Error(`unexpected argument: ${args[0]}`);
-      return { action: 'show', handle };
+      const json = args.includes('--json');
+      const extra = args.find((arg) => arg !== '--json');
+      if (extra !== undefined) throw new Error(`unexpected argument: ${extra}`);
+      return json ? { action: 'show', handle, json: true } : { action: 'show', handle };
     }
 
     if (head === 'test') {
@@ -329,13 +345,13 @@ function resolveOrExit(env: NodeJS.ProcessEnv, handle: string): CatalogAgent {
     if (err instanceof UnknownAgentError) {
       console.error(err.message);
       console.error(`agents live in ${AGENTS_DIR}; run "buddi agents" to list them`);
-      process.exit(1);
+      process.exit(3);
     }
     throw err;
   }
 }
 
-function listCommand(env: NodeJS.ProcessEnv, style: TerminalStyle): void {
+function listCommand(env: NodeJS.ProcessEnv, style: TerminalStyle, json = false): void {
   const catalog = catalogFor(env);
   const lines = catalog
     .list()
@@ -343,6 +359,10 @@ function listCommand(env: NodeJS.ProcessEnv, style: TerminalStyle): void {
       const agent = catalog.get(summary.id);
       return agent ? [agentLine(agent)] : [];
     });
+  if (json) {
+    console.log(JSON.stringify(lines, null, 2));
+    return;
+  }
   console.log(renderAgentLines(lines, style));
 }
 
@@ -353,10 +373,33 @@ function listCommand(env: NodeJS.ProcessEnv, style: TerminalStyle): void {
  * down (an agent file is a file), so a missing or unreachable database costs
  * one line of the report rather than the command.
  */
+export interface LastRun {
+  at: string;
+  provider: string;
+  model: string;
+  servedModel?: string;
+  credentialKind: string;
+  turns: number | null;
+  stopped: string | null;
+  input: number;
+  output: number;
+  webSearches: number;
+}
+
+/** The last run as the one line `show` prints. */
+export function lastRunLine(run: LastRun): string {
+  const served = run.servedModel ? ` (served ${run.servedModel})` : '';
+  return (
+    `${run.at} — ${run.provider} · ${run.model}${served} · ${run.credentialKind} · ` +
+    `${run.turns ?? '?'} turns, ${run.stopped ?? '?'}, in ${run.input} / out ${run.output}` +
+    `${run.webSearches ? `, ${run.webSearches} provider web search${run.webSearches === 1 ? '' : 'es'}` : ''}`
+  );
+}
+
 async function lastRunSnapshot(
   env: NodeJS.ProcessEnv,
   agentId: string,
-): Promise<string | undefined> {
+): Promise<LastRun | undefined> {
   const url = env.DATABASE_URL;
   if (!url || url.trim() === '') return undefined;
   const pool = createPool(url);
@@ -374,14 +417,18 @@ async function lastRunSnapshot(
     if (!row) return undefined;
     const p = (row.payload ?? {}) as Record<string, unknown>;
     const usage = (p.usage ?? {}) as { input?: number; output?: number; webSearches?: number };
-    const served = p.servedModel ? ` (served ${String(p.servedModel)})` : '';
-    return (
-      `${new Date(row.created_at).toISOString()} — ${String(p.provider ?? '?')} · ` +
-      `${String(p.model ?? '?')}${served} · ${String(p.credentialKind ?? '?')} · ` +
-      `${String(p.turns ?? '?')} turns, ${String(p.stopped ?? '?')}, ` +
-      `in ${usage.input ?? 0} / out ${usage.output ?? 0}` +
-      `${usage.webSearches ? `, ${usage.webSearches} provider web search${usage.webSearches === 1 ? '' : 'es'}` : ''}`
-    );
+    return {
+      at: new Date(row.created_at).toISOString(),
+      provider: String(p.provider ?? '?'),
+      model: String(p.model ?? '?'),
+      ...(p.servedModel ? { servedModel: String(p.servedModel) } : {}),
+      credentialKind: String(p.credentialKind ?? '?'),
+      turns: typeof p.turns === 'number' ? p.turns : null,
+      stopped: typeof p.stopped === 'string' ? p.stopped : null,
+      input: usage.input ?? 0,
+      output: usage.output ?? 0,
+      webSearches: usage.webSearches ?? 0,
+    };
   } catch {
     return undefined;
   } finally {
@@ -393,10 +440,43 @@ async function showCommand(
   env: NodeJS.ProcessEnv,
   style: TerminalStyle,
   handle: string,
+  json = false,
 ): Promise<void> {
   const agent = resolveOrExit(env, handle);
   const caps = providerCapabilities(agent.provider.kind);
   const roles = rolesOf(agent as { roles?: readonly string[] });
+  if (json) {
+    const lastRun = await lastRunSnapshot(env, agent.id);
+    console.log(
+      JSON.stringify(
+        {
+          handle: agent.handle,
+          id: agent.id,
+          name: agent.name,
+          description: agent.description,
+          isDefault: agent.isDefault,
+          source: (agent as { source?: string }).source ?? 'private',
+          file: agent.file,
+          provider: agent.provider.kind,
+          model: agent.model,
+          ...(agent.provider.accountId !== undefined ? { accountId: agent.provider.accountId } : {}),
+          credential: { kind: agent.provider.credential.kind, env: agent.provider.credential.env },
+          available: agent.availability.ok,
+          ...(agent.availability.ok ? {} : { unavailableReason: agent.availability.problem.message }),
+          maxTurns: agent.maxTurns,
+          language: agent.language,
+          roles,
+          tools: agent.tools,
+          skills: agent.skills.map((s) => ({ name: s.name, provenance: s.provenance })),
+          capabilities: caps,
+          lastRun: lastRun ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   const out = (label: string, value: string): void => {
     console.log(`  ${dim(label.padEnd(14), style.color)}${value}`);
   };
@@ -447,7 +527,7 @@ async function showCommand(
 
   const snapshot = await lastRunSnapshot(env, agent.id);
   console.log(`\n  ${dim('last run', style.color)}`);
-  console.log(`    ${snapshot ?? 'no run recorded for this agent yet'}`);
+  console.log(`    ${snapshot ? lastRunLine(snapshot) : 'no run recorded for this agent yet'}`);
 }
 
 /**
@@ -513,8 +593,9 @@ function setCommand(
   });
 }
 
-function modelsCommand(env: NodeJS.ProcessEnv, provider?: ProviderKind): void {
-  console.log(renderModelCatalogue(modelCatalogue(env, provider)));
+function modelsCommand(env: NodeJS.ProcessEnv, provider?: ProviderKind, json = false): void {
+  const groups = modelCatalogue(env, provider);
+  console.log(json ? JSON.stringify(groups, null, 2) : renderModelCatalogue(groups));
 }
 
 /**
@@ -642,10 +723,10 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
       console.log(USAGE);
       return 0;
     case 'list':
-      listCommand(process.env, style);
+      listCommand(process.env, style, command.json === true);
       return 0;
     case 'show':
-      await showCommand(process.env, style, command.handle);
+      await showCommand(process.env, style, command.handle, command.json === true);
       return 0;
     case 'set':
       if (wiring?.providerAccounts) {
@@ -665,13 +746,21 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
       }
       return setCommand(process.env, style, command.handle, command.change);
     case 'models':
-      modelsCommand(process.env, command.provider);
+      modelsCommand(process.env, command.provider, command.json === true);
       return 0;
     case 'test':
       return await testCommand(process.env, style, command.handle, command.prompt, wiring);
     case 'migrate':
       return migrateCommand(process.env, command.dryRun);
   }
+  } catch (err) {
+    // A handle that names nobody is something the owner has to supply: 3.
+    if (err instanceof UnknownAgentError) {
+      console.error(err.message);
+      console.error(`agents live in ${AGENTS_DIR}; run "buddi agents" to list them`);
+      return 3;
+    }
+    throw err;
   } finally { await wiring?.pool.end(); }
   return 0;
 }

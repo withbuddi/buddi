@@ -44,7 +44,7 @@ import { createLocalNotificationChannel } from './channels/local-notification.js
 
 const USAGE = `buddi missions — scheduled missions
 
-  buddi missions list                     every mission, its schedule and next run
+  buddi missions list [--json]            every mission, its schedule and next run
   buddi missions add-defaults             register every mission the installed plugins suggest
   buddi missions add-recap                register (or refresh) the recap mission
   buddi missions add-friday-recap         the same, under its older name
@@ -69,6 +69,8 @@ export type ParsedMissionsArgs = {
   command: MissionsCommand;
   missionId?: string;
   inline: boolean;
+  /** `list --json`. */
+  json?: boolean;
 };
 
 /**
@@ -94,6 +96,10 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
       parsed.inline = true;
       continue;
     }
+    if (arg === '--json') {
+      parsed.json = true;
+      continue;
+    }
     if (arg.startsWith('--')) throw new Error(`unknown option: ${arg}`);
     if (parsed.missionId !== undefined) {
       throw new Error(`unexpected argument: ${arg}`);
@@ -108,6 +114,9 @@ export function parseMissionsArgs(argv: string[]): ParsedMissionsArgs {
   }
   if (parsed.inline && command !== 'run-now') {
     throw new Error('--inline only applies to run-now');
+  }
+  if (parsed.json && command !== 'list') {
+    throw new Error('--json only applies to list');
   }
   return parsed;
 }
@@ -185,8 +194,35 @@ export async function lastNotification(
   };
 }
 
-async function commandList(pool: Pool, now: Date): Promise<void> {
+async function commandList(pool: Pool, now: Date, json = false): Promise<void> {
   const missions = await listMissions(pool);
+  if (json) {
+    const rows = [];
+    for (const mission of missions) {
+      const spec = await getActiveSchedule(pool, mission.id);
+      const last = (await listOccurrences(pool, mission.id, 1))[0];
+      const notification = await lastNotification(pool, mission.id);
+      const next = spec && mission.enabled ? nextAfter(spec.cron, now, spec.timezone) : null;
+      rows.push({
+        id: mission.id,
+        name: mission.name,
+        agentId: mission.agentId,
+        enabled: mission.enabled,
+        alwaysDeliver: mission.alwaysDeliver,
+        proposedBy: missionOwnerAgent(mission.id) ?? null,
+        schedule: spec
+          ? { cron: spec.cron, timezone: spec.timezone, revision: spec.revision, misfirePolicy: spec.misfirePolicy }
+          : null,
+        nextRunAt: next ? next.toISOString() : null,
+        lastOccurrence: last
+          ? { scheduledAt: last.scheduledAt.toISOString(), state: last.state, error: last.error ?? null }
+          : null,
+        lastNotification: notification ? { ...notification, at: notification.at.toISOString() } : null,
+      });
+    }
+    console.log(JSON.stringify(rows, null, 2));
+    return;
+  }
   if (missions.length === 0) {
     console.log('no missions registered (buddi missions add-defaults)');
     return;
@@ -313,14 +349,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   try {
     wiring = await createWiringAsync(process.env);
   } catch (err) {
+    // No database to read missions from: something the owner has to start.
     console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    process.exit(3);
   }
   const { pool, now } = wiring;
 
   try {
     if (args.command === 'list') {
-      await commandList(pool, now());
+      await commandList(pool, now(), args.json === true);
       return;
     }
     if (args.command === 'add-recap' || args.command === 'add-friday-recap') {

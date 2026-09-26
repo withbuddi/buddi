@@ -18,6 +18,10 @@ export * from './web/index.js';
 export { startTelegram, describePaired } from './telegram/main.js';
 export { bindPlatformTools } from './agents/platform.js';
 export { MCP_REQUEST_KINDS, throughMcp } from './mcp/requests.js';
+// What `buddi status` and `buddi version` read: the same sources the dashboard does.
+export { currentVersion, readUpgradeFile, type UpgradeFile } from './web/version.js';
+export { supervisorCall, type SupervisorReply } from './web/service.js';
+export { readAgentAttention, type AgentAttention, type AttentionSnapshot } from './web/attention.js';
 
 // The one outbound HTTP transport (packages/runtime/src/transport.ts), re-exported
 // because the CLI depends on the gateway and not on the runtime — and every

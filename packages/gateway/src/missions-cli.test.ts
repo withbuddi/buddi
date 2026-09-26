@@ -216,3 +216,10 @@ describe('a wake payload', () => {
     expect(findingOf({ finding: { title: 'no key' } })).toBeNull();
   });
 });
+
+describe('buddi missions list --json', () => {
+  it('is read on list, and refused elsewhere', () => {
+    expect(parseMissionsArgs(['list', '--json'])).toEqual({ command: 'list', inline: false, json: true });
+    expect(() => parseMissionsArgs(['enable', 'x', '--json'])).toThrow(/--json only applies to list/);
+  });
+});

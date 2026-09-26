@@ -138,7 +138,8 @@ export async function probeDatabase(
 }
 
 /**
- * The CLI's version: probe, or print one line and exit 1.
+ * The CLI's version: probe, or print one line and exit 3 — the code for
+ * "needs something first", here a database.
  *
  * Returns the exit code rather than calling `process.exit`, so the dispatcher
  * stays the only thing in the binary that ends the process.
@@ -152,7 +153,7 @@ export async function requireDatabase(
     return 0;
   } catch (err) {
     log(describeDatabaseError(err, databaseUrl));
-    return 1;
+    return 3;
   }
 }
 

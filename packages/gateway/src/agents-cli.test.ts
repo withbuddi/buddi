@@ -266,3 +266,17 @@ describe('buddi agents set', () => {
     expect(after).toContain('model: gpt-5');
   });
 });
+
+describe('buddi agents --json', () => {
+  it('lists with list, --json or both', () => {
+    expect(parseAgentsArgs(['list'])).toEqual({ action: 'list' });
+    expect(parseAgentsArgs(['--json'])).toEqual({ action: 'list', json: true });
+    expect(parseAgentsArgs(['list', '--json'])).toEqual({ action: 'list', json: true });
+    expect(() => parseAgentsArgs(['list', '--all'])).toThrow(/unknown option/);
+  });
+
+  it('shows and lists models as JSON', () => {
+    expect(parseAgentsArgs(['show', 'ledger', '--json'])).toEqual({ action: 'show', handle: 'ledger', json: true });
+    expect(parseAgentsArgs(['models', '--json'])).toEqual({ action: 'models', json: true });
+  });
+});

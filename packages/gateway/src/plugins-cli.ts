@@ -75,7 +75,7 @@ export const USAGE = `buddi plugins — what this installation has installed
                                           directory that already exists.
   buddi plugins dev <dir>                 watch <dir>/dist and, when it changes, restart the
                                           service (or say to restart buddi): plugins load at start
-  buddi plugins list                      what is installed, its version, and whether it is healthy
+  buddi plugins list [--json]             what is installed, its version, and whether it is healthy
   buddi plugins info <name>               what it is, what it brought, and what it proposes
   buddi plugins install <spec>            STAGE it and read what it claims (imports nothing)
   buddi plugins install <spec> --yes --integrity <hash>
@@ -116,6 +116,8 @@ export interface ParsedPluginsArgs {
   detachAgents: boolean;
   purge: boolean;
   acknowledgeDrift: boolean;
+  /** `list --json`. */
+  json?: boolean;
   /** Passed back at approval. Absent means "the hash this run just showed me". */
   integrity?: string;
   /** The plugin's own name, typed back, for `--purge`. */
@@ -127,7 +129,7 @@ export interface ParsedPluginsArgs {
 }
 
 const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir'] as const;
-const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift'] as const;
+const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift', '--json'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
   const [head, ...rest] = argv;
@@ -157,6 +159,7 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     detachAgents: flags.has('--detach-agents'),
     purge: flags.has('--purge'),
     acknowledgeDrift: flags.has('--acknowledge-drift'),
+    ...(flags.has('--json') ? { json: true } : {}),
     ...(values.has('--integrity') ? { integrity: values.get('--integrity') as string } : {}),
     ...(values.has('--confirm') ? { confirm: values.get('--confirm') as string } : {}),
     ...(values.has('--version') ? { version: values.get('--version') as string } : {}),
@@ -164,6 +167,7 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     ...(values.has('--dir') ? { dir: values.get('--dir') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
+  if (flags.has('--json') && head !== 'list') throw new Error('buddi plugins: --json only applies to list');
   if (head === 'list') return { command: 'list', ...base };
   if (head === 'staged') return { command: 'staged', ...base };
   if (['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'uninstall'].includes(head)) {
@@ -247,7 +251,7 @@ export function renderRows(rows: readonly PluginRow[]): string {
     .join('\n');
 }
 
-async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv): Promise<number> {
+async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json = false): Promise<number> {
   const file = recordFile(env);
   const plugins = await loadInstalledPlugins(env);
   const rows: PluginRow[] = [];
@@ -299,6 +303,10 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv): Prom
       health: 'fail',
       detail: `installed but did not load: ${problem.message}`,
     });
+  }
+  if (json) {
+    console.log(JSON.stringify(rows, null, 2));
+    return plugins.problems.length > 0 ? 1 : 0;
   }
   console.log(`buddi plugins — record: ${file}\n`);
   console.log(renderRows(rows));
@@ -834,7 +842,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     }
   }
   try {
-    if (args.command === 'list') return await commandList(pool, process.env);
+    if (args.command === 'list') return await commandList(pool, process.env, args.json === true);
     if (args.command === 'staged') return commandStaged(process.env);
     if (args.command === 'info') return await commandInfo(args.target as string, pool, process.env);
     if (args.command === 'install') {
