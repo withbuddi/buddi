@@ -61,7 +61,8 @@ type Entry = readonly [prefix: string, tokens: number];
 const ANTHROPIC: readonly Entry[] = [
   // Claude 5 family.
   ['claude-opus-5', 200_000],
-  ['claude-sonnet-5', 200_000],
+  // Sonnet 5 carries the million-token window by default; Opus and Haiku 5 do not.
+  ['claude-sonnet-5', 1_000_000],
   ['claude-haiku-5', 200_000],
   // Claude 4.x.
   ['claude-opus-4', 200_000],

@@ -1588,6 +1588,10 @@ function ClaudeCard({
   const start = (): void => {
     setWorking(true);
     setTrouble(null);
+    // Opened here, inside the click, so no popup blocker stops it; it is
+    // pointed at the consent page the moment the server names it. The button
+    // below stays for a browser that refused the window anyway.
+    const consent = typeof window.open === 'function' ? window.open('', '_blank') : null;
     void (async () => {
       try {
         const existing = (accounts?.accounts ?? []).find((account) => account.auth === 'anthropic-oauth');
@@ -1613,7 +1617,10 @@ function ClaudeCard({
           url: login.verificationUrl ?? '',
           attemptId: login.attemptId ?? '',
         });
+        if (consent && login.verificationUrl) consent.location.href = login.verificationUrl;
+        else consent?.close();
       } catch (err) {
+        consent?.close();
         setTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {
         setWorking(false);

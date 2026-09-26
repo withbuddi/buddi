@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Signing in with Claude from the first run opens the consent page itself; the button stays for a browser that blocks the window.
 - Signing in with a Claude or ChatGPT subscription is offered by default; `BUDDI_SUBSCRIPTION_SIGNINS=off` hides both. The setup wizard shows the Claude card first, with a line on the plan's monthly Agent SDK credits. `buddi doctor` says whether the sign-ins are offered or hidden.
 
 ### Deprecated
@@ -60,6 +61,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Claude Sonnet 5 is known to hold a million-token context, so its transcript budget and the account page's "Context window" say so.
 - A line under "Needs you" on Home leaves when you click it, link or not, and a reminder's or a mission's line opens the conversation that wrote it.
 - An answer whose reasoning ends in a lone `</think>`, as Ollama Cloud sends for glm and qwen, keeps that reasoning as thinking instead of printing it as the reply.
 - `buddi status` and `buddi agents` read the provider keys from the vault the way the service does, instead of saying a key is not set when it lives in the keychain.

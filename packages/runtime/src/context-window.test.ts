@@ -22,7 +22,7 @@ import {
 describe('the window of a model we bind', () => {
   it('knows the Claude 5 family and 4.x', () => {
     expect(contextWindowTokens('claude-opus-5', 'anthropic')).toBe(200_000);
-    expect(contextWindowTokens('claude-sonnet-5', 'anthropic')).toBe(200_000);
+    expect(contextWindowTokens('claude-sonnet-5', 'anthropic')).toBe(1_000_000);
     expect(contextWindowTokens('claude-haiku-5', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-sonnet-4-5-20250929', 'anthropic')).toBe(200_000);
     expect(contextWindowTokens('claude-opus-4-1', 'anthropic')).toBe(200_000);
@@ -48,7 +48,7 @@ describe('the window of a model we bind', () => {
   });
 
   it('reads the name when the host is not said, and ignores routing prefixes', () => {
-    expect(contextWindowTokens('us.anthropic.claude-sonnet-5')).toBe(200_000);
+    expect(contextWindowTokens('us.anthropic.claude-sonnet-5')).toBe(1_000_000);
     expect(contextWindowTokens('openai/gpt-5')).toBe(400_000);
   });
 
