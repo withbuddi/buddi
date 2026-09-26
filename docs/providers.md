@@ -33,6 +33,9 @@ Supported connections:
   monthly Agent SDK credits; after them, an API key.
 - [ChatGPT subscription through Codex](codex-accounts.md), with native device
   sign-in. Requires the pinned Codex client on the host.
+- [Ollama Cloud with a device key](#ollama-cloud-with-a-device-key): no key to
+  paste; you press Connect on ollama.com once. Ollama Cloud with an API key is
+  an OpenAI-compatible account at `https://ollama.com/v1`.
 
 Both sign-ins are offered by default. `BUDDI_SUBSCRIPTION_SIGNINS=off` hides
 both: the account kinds are refused and the wizard and Settings do not offer
@@ -44,6 +47,47 @@ built-in table of model windows for that endpoint, which is the only truth
 available for a locally served model whose window is whatever `num_ctx` the
 host was started with. [conversations.md](conversations.md) is what the number
 is used for.
+
+## Ollama Cloud with a device key
+
+**What it is.** The way `ollama login` connects a computer to your ollama.com
+account, done by buddi: buddi makes its own key pair, you approve it on
+ollama.com, and every request buddi sends to ollama.com is signed with that
+key. There is no key to copy, paste or leak, and the free tier works.
+
+**Set it up.** In first run, tap **Ollama Cloud, one tap**
+([onboarding.md](onboarding.md)). In Settings → Model accounts, add an account,
+pick **Ollama Cloud**, save, and press **Connect Ollama**. Either way a window
+opens on ollama.com's connect page with the device named "buddi on <this
+computer>"; sign in there if it asks and press Connect. buddi checks every two
+seconds and says "connected as <your ollama.com name>" the moment it goes
+through. The attempt lasts 15 minutes; after that, connect again. **Use a key
+instead** in the same form makes an ordinary keyed account for ollama.com.
+
+**What buddi keeps.** The key pair, the device name, when it connected and
+your ollama.com user name, as one entry in the vault under the account's own
+name. Postgres holds only that the account signs in with a device key
+(`auth = 'device-key'`, always at `https://ollama.com/v1`). The private key is
+never shown, never sent to the page, and never signs a request to any other
+host. `buddi status` and the account card show "connected as <name>, device
+<device name>".
+
+**What leaves this computer.** To ollama.com, once: the public key and the
+device name, in the connect page's address. Then, on each request: the
+signature and the public key it verifies against, beside the agent's prompt,
+as with any Ollama Cloud account. On Disconnect, one signed request naming the
+public key. Nothing else.
+
+**Disconnect.** **Disconnect** on the account first asks ollama.com to forget
+the device (a signed `DELETE /api/user/keys/<key>`, as `ollama signout` does),
+then removes the key from the vault either way; runs using it stop at their
+next model call. The card says whether ollama.com confirmed it; if not, the
+device may still be listed in your ollama.com settings, and you can remove it
+there. **Reconnect Ollama** makes a new key and replaces the old one.
+
+How it signs: each request carries `?ts=<unix seconds>` and `Authorization:
+<public key>:<signature>`, the ed25519 signature of `<METHOD>,<path>?<query>`,
+exactly as the ollama client does it.
 
 ## Storage and migration
 
@@ -109,6 +153,13 @@ Owner-only routes inherit session, Origin, CSRF, body-size and no-store protecti
 - `POST /api/provider-accounts/:id/test`
 - `POST /api/provider-accounts/:id/remove` with the displayed `revision`
 - `POST /api/agents/:id/account` with `accountId` and `model`
+- `POST /api/provider-accounts/:id/ollama/connect` with the displayed `revision`:
+  a new device key into the vault, and the connect page's address back
+- `POST /api/provider-accounts/:id/ollama/poll` with the `attemptId`: one
+  signed request to ollama.com, answered `connected`, `waiting` or `failed`
+- `POST /api/provider-accounts/:id/ollama/disconnect` with the displayed
+  `revision`: ollama.com asked to forget the device, then the key removed from
+  the vault
 
 Edits also require the displayed account revision to prevent stale overwrites. Global
 provider/credential mutation endpoints return 410 when account management is active.

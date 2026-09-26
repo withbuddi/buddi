@@ -80,8 +80,15 @@ Inline: cards, two per row, each with a logo, a title and one line. Order:
 3. **Ollama** — "Free, on this computer". If Ollama answers on its default
    port, the card says "Found it, running now" and one tap connects. If not, it
    says "Install Ollama, then come back" with the download link, and polls.
-4. **Ollama Cloud, or another service** — "I have an address and a key".
-   Address and key, for OpenAI-compatible endpoints.
+4. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
+   window on ollama.com's connect page, with this computer named "buddi on
+   <this computer>"; the owner signs in there if asked and presses Connect.
+   The card checks every two seconds, then says which model the assistant
+   will think with (`gpt-oss:120b` while ollama.com offers it) and shows the
+   model list under that line to pick another. No key is typed or shown
+   ([providers.md](providers.md#ollama-cloud-with-a-device-key)).
+5. **Another service, or Ollama Cloud with a key** — "I have an address and a
+   key". Address and key, for OpenAI-compatible endpoints.
 
 ChatGPT subscriptions are not offered here. The adapter ships, but it drives
 the `codex` binary (pinned at `codex-cli 0.155.0`), which neither the release
