@@ -10,6 +10,10 @@ What changes in buddi from one release to the next, newest first.
 - An Ollama Cloud account can connect with a device key instead of a pasted key, the way `ollama login` does: buddi makes a key pair in the vault, you press Connect on ollama.com, and each request is signed with the key. `buddi status` and the account say "connected as <your ollama.com name>, device buddi on <this computer>". Disconnecting removes the key from buddi; the device stays listed on ollama.com until you remove it there.
 - First run offers "Ollama Cloud, one tap" (free to start, no key) right after Ollama on this computer: tap it, press Connect on the ollama.com page that opens, and buddi says which model your assistant will think with, with the list to pick another. The address-and-key card is now "Another service, or Ollama Cloud with a key". In Settings → Model accounts, a new Ollama Cloud account connects the same way, with "Use a key instead" for a key.
 
+### Fixed
+
+- Asking an agent for a colleague that is not on its delegate list now gets a clear answer: the refusal names who it may ask and says the colleague can be added on its Access page, and the agent is told to say that rather than improvise or try another colleague to find out. An allowed colleague's handle, like `@art`, now works where its id was needed.
+
 ## 0.1.0-pre.19 — 2026-09-26
 
 ### Added

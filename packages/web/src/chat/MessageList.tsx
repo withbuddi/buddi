@@ -335,9 +335,12 @@ export interface Refusal {
   message: string;
 }
 
-/** `(allowed: ledger, postman)` out of a refusal, when it carries one. */
+/**
+ * Who the caller may ask, out of a refusal: `@buddi may delegate to @ledger,
+ * @postman; …`, or the older `(allowed: ledger, postman)`.
+ */
 export function allowedIn(message: string): string | null {
-  return /\(allowed: ([^)]*)\)/.exec(message)?.[1]?.trim() || null;
+  return (/ may delegate to ([^;]*);/.exec(message) ?? /\(allowed: ([^)]*)\)/.exec(message))?.[1]?.trim() || null;
 }
 
 /**

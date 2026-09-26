@@ -206,6 +206,13 @@ Around the contract:
   mail to `create_agent`. The shipped `agent-father` holds them and claims
   `maker`. After an approved write the catalog is rebuilt and swapped in, so
   the new agent answers everywhere without a restart.
+- **Delegation.** `agent.delegate` asks a colleague a question in a fresh
+  conversation of its own. Who an agent may ask is `delegates.json` next to its
+  file, read at every call; the Access tab shows and edits that same file, and
+  the agent's prompt lists it by id and handle. A call to anyone else is refused
+  with the list: "@buddi may delegate to @dev, @ledger; @art is not on its
+  list. The owner adds it on @buddi's Access page." An allowed colleague's
+  handle is taken for its id.
 - **Skills** are knowledge and procedures, in markdown. A skill never grants a
   tool or lowers a tier; a skill file with a `tools` or `tier` key fails the
   load. `agents/<id>/skills/*.md` are private to that agent and always loaded;

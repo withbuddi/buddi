@@ -619,6 +619,12 @@ export function generatedSection(
           ? `- You may not delegate to anyone: ${DELEGATE_TOOL_NAME} will refuse every id. Answer with what you have, or tell the owner who they should ask.`
           : `- Colleagues you may ask with ${DELEGATE_TOOL_NAME}, by the id to pass as \`agent\` (these ids only — never guess one):`,
         ...capped(delegates, (d) => `  - \`${d.id}\` (@${d.handle}) — ${d.name}: ${oneLine(d.description)}${unavailableMark(d)}`),
+        /*
+         * What to say about everyone else. Without it a model asked for a
+         * colleague off its list improvises ("not one I'm wired to call"),
+         * or spends a real run on another colleague to find out.
+         */
+        `- A colleague not listed here is not on your delegate list. If the owner asks for one, say "@name is not on my delegate list; you can add it on my Access page." Do not call ${DELEGATE_TOOL_NAME} to test.`,
       );
     }
   }

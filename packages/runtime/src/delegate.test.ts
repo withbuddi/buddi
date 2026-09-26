@@ -260,10 +260,30 @@ describe('agent.delegate', () => {
     const out = await registry.invoke(DELEGATE_TOOL, task, ctx);
 
     expect(out).toMatchObject({ ok: false, reason: 'tool-error' });
-    expect(out.ok === false && out.message).toContain('may not delegate to "credit-coach"');
-    expect(out.ok === false && out.message).toContain('allowed: none');
+    expect(out.ok === false && out.message).toBe(
+      "delegation refused: @finance-advisor may not delegate to anyone; @credo is not on its list. The owner adds it on @finance-advisor's Access page.",
+    );
     expect(db.conversations).toEqual([]);
     expect(db.kinds()).toEqual([]);
+  });
+
+  it('names who is on the list, who is not, and where the owner adds one', async () => {
+    const { registry, ctx, db } = harness({ allow: { concierge: ['credit-coach'] } });
+    const out = await registry.invoke(DELEGATE_TOOL, { ...task, agent: 'art' }, { ...ctx, agentId: 'concierge' });
+    expect(out.ok === false && out.message).toBe(
+      "delegation refused: @buddi may delegate to @credo; @art is not on its list. The owner adds it on @buddi's Access page.",
+    );
+    expect(db.conversations).toEqual([]);
+  });
+
+  it("takes an allowed colleague's handle for its id, and no other handle", async () => {
+    const { registry, ctx, captured } = harness({ allow: { 'finance-advisor': ['credit-coach'] } });
+    const out = await registry.invoke(DELEGATE_TOOL, { ...task, agent: '@credo' }, ctx);
+    expect(out.ok).toBe(true);
+    expect(captured[0]?.agent.id).toBe('credit-coach');
+
+    const other = await registry.invoke(DELEGATE_TOOL, { ...task, agent: 'buddi' }, ctx);
+    expect(other.ok === false && other.message).toContain('@buddi is not on its list');
   });
 
   it('refuses when the caller has no allowlist file at all', async () => {

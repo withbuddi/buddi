@@ -12,7 +12,7 @@ import * as Tooltip from '@radix-ui/react-tooltip';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MessageList } from './MessageList';
+import { MessageList, allowedIn } from './MessageList';
 import type { ChatMessage } from './types';
 
 afterEach(cleanup);
@@ -133,5 +133,13 @@ describe('a turn that was refused four delegations', () => {
     expect(screen.getByText('Orchard · Forecast')).toBeInTheDocument();
     expect(screen.getByText('Shed · Inventory')).toBeInTheDocument();
     expect(screen.getAllByText('Agent · Delegate')).toHaveLength(2);
+  });
+});
+
+describe('a refusal naming the delegate list', () => {
+  it('reads who the agent may ask', () => {
+    expect(allowedIn("delegation refused: @buddi may delegate to @ledger, @scout; @art is not on its list. The owner adds it on @buddi's Access page.")).toBe('@ledger, @scout');
+    expect(allowedIn("delegation refused: @buddi may not delegate to anyone; @art is not on its list. The owner adds it on @buddi's Access page.")).toBeNull();
+    expect(allowedIn('delegation refused: "ada" may not delegate to "x" (allowed: a, b)')).toBe('a, b');
   });
 });

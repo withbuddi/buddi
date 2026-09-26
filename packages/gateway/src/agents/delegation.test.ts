@@ -117,7 +117,9 @@ describe('the agent plugin', () => {
       { agent: 'concierge', task: 'anything' },
       ctx,
     );
-    expect(out.ok === false && out.message).toContain('may not delegate to "concierge"');
+    expect(out.ok === false && out.message).toBe(
+      "delegation refused: @finance-advisor may delegate to @credit-coach; @concierge is not on its list. The owner adds it on @finance-advisor's Access page.",
+    );
   });
 });
 
@@ -162,6 +164,10 @@ describe('the delegate roster in an agent\'s context', () => {
     // Only the allowlist. A colleague it may not ask is on the roster as
     // somebody to name, never as somebody to hand work to.
     expect(prompt).not.toContain('`postman` (@postman)');
+    // And what to say about the rest, instead of improvising or probing.
+    expect(prompt).toContain('A colleague not listed here is not on your delegate list');
+    expect(prompt).toContain('you can add it on my Access page');
+    expect(prompt).toContain('Do not call agent.delegate to test.');
   });
 
   /*

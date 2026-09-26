@@ -259,6 +259,36 @@ export async function delegationOutput(pool: Queryable, run: DelegationRun): Pro
   return { ...base, status: 'no-answer', note };
 }
 
+/**
+ * Who the caller asked for, as the caller may have written it: a catalog id,
+ * or an allowed colleague's handle, with or without its `@`. A handle is
+ * resolved only to an agent already on the list, so it never widens it.
+ */
+function resolveAllowed(wanted: string, allowed: readonly string[], catalog: DelegateCatalog | null): string | null {
+  const name = wanted.trim().replace(/^@/, '');
+  if (allowed.includes(name)) return name;
+  if (!catalog) return null;
+  const lower = name.toLowerCase();
+  return allowed.find((id) => catalog.get(id)?.handle.toLowerCase() === lower) ?? null;
+}
+
+/**
+ * The refusal for a colleague not on the caller's list, in the words the
+ * owner can act on: who is on it, who is not, and where the list changes.
+ */
+export function notOnListRefusal(from: string, wanted: string, allowed: readonly string[], catalog: DelegateCatalog | null): string {
+  const handle = (id: string): string => {
+    const bare = id.trim().replace(/^@/, '');
+    const agent = catalog?.get(bare) ?? null;
+    return `@${agent?.handle ?? bare}`;
+  };
+  const self = handle(from);
+  const who = allowed.length === 0
+    ? `${self} may not delegate to anyone`
+    : `${self} may delegate to ${allowed.map(handle).join(', ')}`;
+  return `delegation refused: ${who}; ${handle(wanted)} is not on its list. The owner adds it on ${self}'s Access page.`;
+}
+
 /** The gate text the loop answers a gated call with. See `awaitingApprovalText`. */
 const GATE = /^awaiting owner approval \(action ([0-9a-f-]{36})\)/;
 
@@ -346,18 +376,19 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       }
 
       const allowed = deps.allowlistFor(from);
-      if (!allowed.includes(input.agent)) {
-        throw new Error(
-          `delegation refused: "${from}" may not delegate to "${input.agent}" ` +
-            `(allowed: ${allowed.join(', ') || 'none'})`,
-        );
+      // Read for handles only: an unbound catalog still refuses, below.
+      let known: DelegateCatalog | null = null;
+      try { known = deps.catalog(); } catch { /* the refusal names ids instead */ }
+      const wanted = resolveAllowed(input.agent, allowed, known);
+      if (wanted === null) {
+        throw new Error(notOnListRefusal(from, input.agent, allowed, known));
       }
 
-      const catalog = deps.catalog();
-      const target = catalog.get(input.agent);
+      const catalog = known ?? deps.catalog();
+      const target = catalog.get(wanted);
       if (!target) {
         throw new Error(
-          `delegation refused: unknown agent "${input.agent}" ` +
+          `delegation refused: unknown agent "${wanted}" ` +
             `(installed: ${catalog.list().map((a) => a.id).join(', ') || 'none'})`,
         );
       }
