@@ -21,6 +21,7 @@
  */
 import {
   frequencyStandingOf,
+  frequencyWords,
   ownerSlugOf,
   ownerValues,
   type FrequencyStanding,
@@ -59,6 +60,7 @@ import { z } from 'zod';
 import {
   GOALS_SENTINEL_ID,
   asOwnerSource,
+  frequencyNow,
   formatPace,
   formatValue,
   goalKeyPrefix,
@@ -216,6 +218,60 @@ export function goalSub(
 }
 
 /* ------------------------------------------------------------------ *
+ * The words for a frequency goal
+ *
+ * A frequency goal has no level, no projection and no pace per week: it has
+ * windows. Its verdict is the newest window that closed — met is on track, a
+ * short one is off — and it is loud only after two whole windows short in a
+ * row, the same "twice running" every other goal interrupts at.
+ * ------------------------------------------------------------------ */
+
+/** The whole windows that closed, newest last: partial ones are not windows the goal had. */
+function wholeClosed(standing: FrequencyStanding) {
+  return standing.windows.filter((w) => w.closed && w.state !== 'partial');
+}
+
+export function frequencyVerdict(standing: FrequencyStanding): GoalStanding['verdict'] {
+  const last = wholeClosed(standing).at(-1);
+  if (last === undefined) return 'no-projection';
+  return last.state === 'met' ? 'on-track' : 'off-track';
+}
+
+export function frequencyWord(goal: Goal, standing: FrequencyStanding): string {
+  const per = goal.target.kind === 'frequency' ? goal.target.per : 'week';
+  switch (frequencyVerdict(standing)) {
+    case 'on-track':
+      return 'on track';
+    case 'off-track':
+      return `short last ${per}`;
+    default:
+      return `no whole ${per} yet`;
+  }
+}
+
+export function frequencyTone(standing: FrequencyStanding): 'good' | 'critical' | 'neutral' {
+  const closed = wholeClosed(standing);
+  const last = closed.at(-1);
+  if (last === undefined) return 'neutral';
+  if (last.state === 'met') return 'good';
+  return closed.at(-2)?.state === 'short' ? 'critical' : 'neutral';
+}
+
+/** The line under a frequency goal: the tally, then the verdict. */
+export function frequencySub(goal: Goal, standing: FrequencyStanding): string {
+  return `${frequencyNow(goal, standing)} · ${frequencyWord(goal, standing)}`;
+}
+
+/** The short figure beside it: this window's count against the target. */
+export function frequencyFigure(goal: Goal, standing: FrequencyStanding): string {
+  if (goal.target.kind !== 'frequency') return '';
+  const current = standing.current;
+  return current === null
+    ? `${standing.met} ${goal.target.per}s met`
+    : `${current.count} of ${goal.target.count}`;
+}
+
+/* ------------------------------------------------------------------ *
  * Home
  * ------------------------------------------------------------------ */
 
@@ -242,6 +298,18 @@ export function createGoalHome(base: MetricSource): HomeContribution {
       const rows: HomeRow[] = [];
       let offTrack = 0;
       for (const goal of goals) {
+        const frequency = await frequencyOf(ctx.db, goal, now, ctx.timezone);
+        if (frequency !== null) {
+          const tone = frequencyTone(frequency);
+          if (frequencyVerdict(frequency) === 'off-track') offTrack += 1;
+          rows.push({
+            title: goal.title,
+            sub: frequencySub(goal, frequency),
+            side: frequencyFigure(goal, frequency),
+            ...(tone === 'neutral' ? {} : { tone }),
+          });
+          continue;
+        }
         const unit = valueUnitOf(source, goal.metric);
         const direction = source.metric(goal.metric)?.direction ?? 'down';
         const { measured, lastLookFailed } = byGoal.get(goal.id) ?? { measured: [], lastLookFailed: false };
@@ -325,6 +393,23 @@ export function createGoalQueries(base: MetricSource): PageQuery[] {
       const byGoal = await standingChecks(ctx.db, all.map((goal) => goal.id), STANDING_CHECKS);
       const rows: GoalListRow[] = [];
       for (const goal of all) {
+        const settledTone =
+          goal.state === 'met' ? 'good' : goal.state === 'missed' ? 'critical' : goal.state !== 'open' ? 'neutral' : null;
+        const frequency = await frequencyOf(ctx.db, goal, now, ctx.timezone);
+        if (frequency !== null) {
+          rows.push({
+            id: goal.id,
+            title: goal.title,
+            sub: frequencySub(goal, frequency),
+            value: frequencyFigure(goal, frequency),
+            group: goal.state === 'open' ? 'open' : 'done',
+            state: goal.state,
+            verdict: frequencyVerdict(frequency),
+            tone: settledTone ?? frequencyTone(frequency),
+            holder: goal.agentId,
+          });
+          continue;
+        }
         const unit = unitOf(goal.metric);
         const direction = directionOf(goal.metric);
         const { measured, lastLookFailed } = byGoal.get(goal.id) ?? { measured: [], lastLookFailed: false };
@@ -402,8 +487,94 @@ export function createGoalQueries(base: MetricSource): PageQuery[] {
       const pace = standing.paceNeeded;
 
       const findings = await goalFindings(ctx, goal.id);
+      /*
+       * What the owner told buddi, for a goal on a metric they report: the
+       * values themselves, newest first — the series the goal is judged on,
+       * not the looks buddi took at it.
+       */
+      const owned = ownerSlugOf(goal.metric) !== null;
+      const told = owned ? await goalOwnerValues(ctx.db, goal) : [];
+      const frequency = await frequencyOf(ctx.db, goal, ctx.now(), ctx.timezone);
+      const ownerRows = {
+        shape: goal.target.kind === 'frequency' ? 'frequency' : 'level',
+        owned,
+        values: told.slice(0, PAGE_CHECKS).map((v) => ({
+          key: v.id,
+          asOf: v.asOf.toISOString(),
+          value: formatValue(v.value, unit, null),
+          source: v.source,
+          note: v.note ?? '',
+        })),
+        valuesNote:
+          told.length > PAGE_CHECKS ? `The newest ${PAGE_CHECKS} of ${told.length}, newest first.` : 'Newest first.',
+        windows: (frequency?.windows ?? [])
+          .slice()
+          .reverse()
+          .slice(0, PAGE_CHECKS)
+          .map((w) => ({
+            key: w.start,
+            label: `${goal.target.kind === 'frequency' && goal.target.per === 'month' ? 'Month' : 'Week'} of ${w.start}`,
+            count: `${w.count} of ${targetValue(goal)}`,
+            state: w.state,
+            tone: w.state === 'met' ? 'good' : w.state === 'short' ? 'critical' : 'neutral',
+          })),
+      };
+
+      if (frequency !== null && goal.target.kind === 'frequency') {
+        const per = goal.target.per;
+        const reached = new Map(findings.map((f) => [f.key, f.when] as const));
+        const closed = frequency.windows.filter((w) => w.closed && w.state !== 'partial').length;
+        return {
+          id: goal.id,
+          title: goal.title,
+          holder: `@${goal.agentId}`,
+          agentId: goal.agentId,
+          metric: goal.metric,
+          state: goal.state,
+          standing: frequencyWord(goal, frequency),
+          verdict: frequencyVerdict(frequency),
+          standingTone: frequencyTone(frequency),
+          sub: frequencySub(goal, frequency),
+          closedNote: goal.closedNote,
+          // The stats keep their places; each says what it means for a count per window.
+          baseline: `set ${localDateString(goal.baseline.asOf, ctx.timezone)}`,
+          now: frequencyNow(goal, frequency),
+          target: frequencyWords(goal.target),
+          pace:
+            frequency.toGo === null ? 'no time left' : frequency.toGo === 0 ? `done this ${per}` : `${frequency.toGo} more this ${per}`,
+          projection: `${frequency.met} of ${closed} ${per}s met`,
+          deadline: localDateString(goal.deadline, ctx.timezone),
+          cadence: goal.cadence,
+          checksShown: checks.length,
+          checksNote:
+            history.length > PAGE_CHECKS ? `The newest ${PAGE_CHECKS} of ${history.length}, newest first.` : 'Newest first.',
+          checks: checks.map((check) => ({
+            key: check.id,
+            at: check.at.toISOString(),
+            asOf: '',
+            value: check.note ?? String(check.value ?? ''),
+            onTrack: check.onTrack === null ? 'no projection' : check.onTrack ? 'on track' : 'off track',
+            onTrackTone: check.onTrack === null ? 'neutral' : check.onTrack ? 'good' : 'critical',
+            note: '',
+          })),
+          // Streaks: reached when the watcher said so, or while the streak holds.
+          milestones: goal.milestones.map((milestone) => {
+            const when = reached.get(`goal.${goal.id}.milestone.${milestone}`);
+            const crossed = when !== undefined || frequency.streak >= milestone;
+            return {
+              key: String(milestone),
+              label: `${milestone} ${per}s in a row`,
+              crossed: !crossed ? 'not yet' : when === undefined ? 'reached' : `reached ${when}`,
+              crossedTone: crossed ? 'good' : 'neutral',
+            };
+          }),
+          findings,
+          ...ownerRows,
+        };
+      }
 
       return {
+        ...ownerRows,
         id: goal.id,
         title: goal.title,
         holder: `@${goal.agentId}`,
@@ -672,6 +843,54 @@ export const goalsPage: PageDescriptor = {
               ],
             },
             {
+              /*
+               * The owner's own series, and a frequency goal's windows. Wrapped
+               * in a titleless detail because `when` reads the data a component
+               * is handed, and inside a list-detail's detail that is the page's
+               * own — the detail is what puts the goal in front of them, so a
+               * plugin goal shows neither.
+               */
+              kind: 'detail',
+              query: goalRef(),
+              fields: [],
+              body: [
+                {
+                  kind: 'list',
+                  when: { path: 'shape', equals: 'frequency' },
+                  title: 'Windows',
+                  note: 'Each window met or short. The first and the last are partial when the goal did not have all of them.',
+                  query: goalRef(),
+                  rows: 'windows',
+                  key: 'key',
+                  item: {
+                    title: { path: 'label' },
+                    sub: { path: 'count' },
+                    pill: {
+                      value: { path: 'state' },
+                      tone: { path: 'tone' },
+                      labels: { met: 'Met', short: 'Short', partial: 'Partial', open: 'Under way' },
+                    },
+                  },
+                  empty: 'No window has started yet.',
+                },
+                {
+                  kind: 'table',
+                  when: { path: 'owned', equals: true },
+                  title: 'What you told buddi',
+                  note: `The numbers this goal is judged on, as you said them, the newest ${PAGE_CHECKS} first.`,
+                  query: goalRef(),
+                  rows: 'values',
+                  columns: [
+                    { key: 'asOf', label: 'True of', type: 'date' },
+                    { key: 'value', label: 'Value' },
+                    { key: 'source', label: 'Said on' },
+                    { key: 'note', label: 'Note' },
+                  ],
+                  empty: 'You have not told buddi a number for this yet.',
+                },
+              ],
+            },
+            {
               kind: 'table',
               title: 'Checks',
               note:
@@ -840,8 +1059,38 @@ export function chartOf(
   direction: MetricDirection,
   checks: readonly GoalCheck[],
   timezone: string,
+  /**
+   * For a goal on an owner metric: the values the owner told buddi, which are
+   * the series itself — drawn as they were said, not as buddi looked at them —
+   * and, for a frequency goal, its windows, which are what it is judged on.
+   */
+  owner: { values: readonly OwnerMetricValue[]; frequency: FrequencyStanding | null } | null = null,
 ): GoalChart {
-  const ascending = [...checks]
+  if (owner?.frequency && goal.target.kind === 'frequency') {
+    // One point per window, its count; the target is the count per window.
+    return {
+      label: `${goal.title} — ${frequencyWords(goal.target)} until ${localDateString(goal.deadline, timezone)}`,
+      target: goal.target.count,
+      points: owner.frequency.windows.map((w) => ({ at: `${w.start}T12:00:00.000Z`, value: w.count })),
+      events: [{ at: goal.deadline.toISOString(), label: 'Deadline' }],
+    };
+  }
+  const series: GoalCheck[] =
+    owner !== null && owner.values.length > 0
+      ? owner.values.slice(0, CHART_CHECKS).map((v) => ({
+          id: v.id,
+          goalId: goal.id,
+          at: v.asOf,
+          asOf: v.asOf,
+          value: v.value,
+          currency: null,
+          note: v.note,
+          onTrack: null,
+          paceNeeded: null,
+          projected: null,
+        }))
+      : [...checks];
+  const ascending = series
     .filter((check) => check.value !== null)
     .sort((a, b) => a.at.getTime() - b.at.getTime());
   const events: Array<{ at: string; label: string }> = [];

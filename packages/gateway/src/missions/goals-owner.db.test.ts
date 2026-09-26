@@ -27,7 +27,9 @@ import {
   TELEGRAM_SURFACE,
   SENTINEL_WAKE_MISSION_ID,
   upsertMission,
+  pageQueryContext,
   type CoreToolContext,
+  type HomeBlock,
   type MetricDefinition,
   type PluginManifest,
 } from '@buddi/core';
@@ -167,7 +169,8 @@ suite('goals the owner measures (postgres)', () => {
       agentCtx(),
     );
     if (proposed.ok || proposed.reason !== 'approval-required') throw new Error('expected a card');
-    expect(proposed.preview).toContain('From 288 lb today to 220 lb by 2026-12-31');
+    // The §8 example, word for word.
+    expect(proposed.preview).toContain('From 288 lb today to 220 lb by 2026-12-31: 4.76 lb a week down, checked weekly');
     expect(proposed.preview).toContain('Measured by you, when you tell buddi');
     // A card is not a goal: nothing about the metric is written yet.
     expect(await getOwnerMetric(pool, 'weight')).toBeNull();
@@ -462,5 +465,82 @@ suite('goals the owner measures (postgres)', () => {
       ['2026-10-05', 'open'],
     ]);
     expect((shown?.values as unknown[]).length).toBe(3);
+  });
+
+  /* ---------------- where it shows ---------------- */
+
+  /** One page query, through the read-only context the route builds. */
+  async function read(name: string, params: unknown = {}): Promise<any> {
+    const q = registry.queries().find((one) => one.plugin === 'goal' && one.name === name);
+    if (!q) throw new Error(`no query ${name}`);
+    return q.produce(q.params.parse(params), pageQueryContext(ctx));
+  }
+
+  async function home(): Promise<HomeBlock | null> {
+    const block = registry.home().find((b) => b.id === 'goal.goals');
+    if (!block) throw new Error('no home block');
+    return block.produce(pageQueryContext(ctx));
+  }
+
+  it('shows an owner metric’s own values on the page, and draws them on the canvas with the target', async () => {
+    await weightGoal();
+    const [goal] = await listGoals(pool, {});
+    now = new Date(T0.getTime() + 7 * DAY);
+    await record({ metric: 'weight', value: 285, asOf: '2026-09-29' });
+
+    const detail = await read('goal', { id: goal?.id });
+    expect(detail).toMatchObject({ shape: 'level', owned: true, baseline: '288 lb on 2026-09-22', target: '220 lb' });
+    expect(detail.values.map((v: { value: string; source: string }) => [v.value, v.source])).toEqual([
+      ['285 lb', 'api'],
+      ['288 lb', 'api'],
+    ]);
+    expect(detail.windows).toEqual([]);
+
+    const status = await registry.invoke('goal.status', { id: goal?.id }, agentCtx());
+    if (!status.ok) throw new Error('goal.status');
+    const chart = (status.output as { chart: { points: Array<{ value: number }>; target: number } }).chart;
+    expect(chart.points.map((p) => p.value)).toEqual([288, 285]);
+    expect(chart.target).toBe(220);
+  });
+
+  it('shows a frequency goal as windows met or short, on the page, the list, Home and the canvas', async () => {
+    await runGoal();
+    const [goal] = await listGoals(pool, {});
+    for (const day of ['2026-09-29', '2026-10-01', '2026-10-06']) {
+      now = new Date(`${day}T12:00:00Z`);
+      await record({ goal: goal?.id, value: 1 });
+    }
+    now = new Date('2026-10-13T12:00:00Z');
+
+    const detail = await read('goal', { id: goal?.id });
+    expect(detail).toMatchObject({
+      shape: 'frequency',
+      target: 'twice a week',
+      now: '0 of 2 this week, 2 to go by 2026-10-18',
+      standing: 'short last week',
+      verdict: 'off-track',
+      projection: '1 of 2 weeks met',
+    });
+    expect(detail.windows.map((w: { label: string; count: string; state: string }) => [w.label, w.count, w.state])).toEqual([
+      ['Week of 2026-10-12', '0 of 2', 'open'],
+      ['Week of 2026-10-05', '1 of 2', 'short'],
+      ['Week of 2026-09-28', '2 of 2', 'met'],
+      ['Week of 2026-09-21', '0 of 2', 'partial'],
+    ]);
+    expect(detail.milestones).toEqual([
+      { key: '2', label: '2 weeks in a row', crossed: 'not yet', crossedTone: 'neutral' },
+    ]);
+
+    const list = await read('goals');
+    expect(list.goals[0]).toMatchObject({ value: '0 of 2', verdict: 'off-track', tone: 'neutral' });
+    const block = await home();
+    expect(block?.rows?.[0]).toMatchObject({ side: '0 of 2', sub: '0 of 2 this week, 2 to go by 2026-10-18 · short last week' });
+
+    const status = await registry.invoke('goal.status', { id: goal?.id }, agentCtx());
+    if (!status.ok) throw new Error('goal.status');
+    const chart = (status.output as { chart: { points: Array<{ value: number }>; target: number; label: string } }).chart;
+    expect(chart.points.map((p) => p.value)).toEqual([0, 2, 1, 0]);
+    expect(chart.target).toBe(2);
+    expect(chart.label).toBe('Run twice a week — twice a week until 2026-11-01');
   });
 });

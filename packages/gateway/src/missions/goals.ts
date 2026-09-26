@@ -1559,23 +1559,14 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
           await measuredChecks(ctx.db, goal.id, STANDING_CHECKS),
           ctx.now(),
         );
-        const owned = isOwnerMetric(source.metric(goal.metric)) || ownerSlugOf(goal.metric) !== null;
-        out.push(
-          renderGoal(
-            goal,
-            unitOf(goal.metric),
-            ctx.timezone,
-            standing,
-            printed,
-            ctx.now(),
-            owned
-              ? {
-                  values: await goalOwnerValues(ctx.db, goal),
-                  frequency: await frequencyOf(ctx.db, goal, ctx.now(), ctx.timezone),
-                }
-              : null,
-          ),
-        );
+        const ownerInfo =
+          ownerSlugOf(goal.metric) !== null
+            ? {
+                values: await goalOwnerValues(ctx.db, goal),
+                frequency: await frequencyOf(ctx.db, goal, ctx.now(), ctx.timezone),
+              }
+            : null;
+        out.push(renderGoal(goal, unitOf(goal.metric), ctx.timezone, standing, printed, ctx.now(), ownerInfo));
         if (goals.length === 1) {
           /*
            * The chart is the goal's *history*, not its last four looks: a
@@ -1589,6 +1580,7 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
             directionOf(goal.metric),
             await recentChecks(ctx.db, goal.id, CHART_CHECKS),
             ctx.timezone,
+            ownerInfo,
           );
         }
       }

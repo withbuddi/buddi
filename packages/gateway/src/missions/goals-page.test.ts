@@ -105,9 +105,9 @@ describe('the Goals page, as a contribution', () => {
 
   it('refuses a write through a tool this manifest does not contribute', () => {
     const broken = copy(goalsPage);
-    const form = ((broken.body[1] as { body: unknown[] }).body[0] as { detail: unknown[] }).detail[5] as {
-      submit: { tool: string };
-    };
+    const form = ((broken.body[1] as { body: unknown[] }).body[0] as { detail: Array<{ kind: string }> }).detail.find(
+      (piece) => piece.kind === 'form',
+    ) as unknown as { submit: { tool: string } };
     form.submit.tool = 'goal.owner_delete';
     const registry = new ToolRegistry();
     registry.register(metricPlugin);

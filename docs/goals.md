@@ -1,7 +1,7 @@
 ---
 title: "Goals: a target with a clock, that buddi keeps"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Goals: a target with a clock, that buddi keeps
@@ -10,7 +10,9 @@ A core feature, agent-neutral: any agent with a metric can hold a goal. The
 metrics come from plugins: finance declares `finance.total_debt`,
 `finance.card_balance` and `finance.cash_available`; email
 `email.waiting_on_me` and `email.inbox_unread`; developer
-`developer.failing_tests`. None of them knows about goals.
+`developer.failing_tests`. None of them knows about goals. A number no plugin
+measures — a weight, a time, how often the owner runs — is a metric the owner
+reports (§3a), kept by core.
 
 ## 1. Why
 
@@ -74,6 +76,67 @@ made-up number. The registry validates metrics at `register()`, exposes
 `metrics()`, and lists them to agents through `goal.metrics` so an agent can
 name one when it proposes a goal.
 
+## 3a. Metrics the owner reports
+
+A metric is a named series with a source. A plugin is one source; the owner is
+the other. "288 pounds to 220 by the end of the year" has no plugin behind it:
+the owner is the sensor. Sources, in priority order: a plugin (if finance
+measures debt, buddi never asks the owner to type it), then the owner. A
+connection (a scale, Strava) will be plugin-shaped when it comes.
+
+**The definition.** `goal.set` accepts `metric: { owner: { slug, label, unit,
+direction, unitLabel? } }` in place of a metric id. The goal's `metric` is
+`owner.<slug>`. The slug is kebab (`weight`, `resting-heart-rate`), at most 40
+characters, unique per installation. `unit` is the same enum a plugin metric
+uses; `unitLabel` is a free word printed after the number (`lb`, `kg`, `km`),
+so weight does not grow the enum. A definition naming a slug that exists must
+agree with it on unit, unit label and direction, or the call is refused before
+a card: two goals reading one series in opposite directions is a
+contradiction.
+
+**The tables** (migration 044):
+
+```sql
+core.owner_metrics (slug primary key, label, unit, unit_label, direction, created_at)
+core.owner_metric_values (id, slug → owner_metrics, at, as_of, value, note,
+                          source: 'chat' | 'telegram' | 'api', conversation_id)
+```
+
+`at` is when buddi wrote the value down; `as_of` is when it was true ("285
+this morning", said at noon). Values are appended and never rewritten: a
+correction is a newer value. `source` is the surface the run answered on —
+`chat` for the dashboard and the terminal, `telegram`, and `api` for anything
+else, including the executor that runs an approved `goal.set`.
+
+**Creation.** The definition and the first value are written by `goal.set`'s
+`execute`, after `createGoal` succeeded: a card is not a goal, and a goal the
+budget refused leaves nothing behind.
+
+**The baseline.** `goal.set` with an owner metric takes `baseline: { value }`
+from the sentence that set it ("I'm 288"), so the goal starts measured; that
+value is also the metric's first value. With no baseline, the metric's newest
+value is measured like any metric; a new metric with no baseline is refused
+("ask the owner where they are today"). A plugin metric refuses `baseline`: it
+is measured.
+
+**Measure.** `ownerMetricSource(registry)` (`packages/core/src/goals/owner.ts`)
+answers the plugin metrics and every owner metric behind one `metric(id)`, so
+every goal surface keeps asking one question. Owner metrics live in a table
+and `metric()` is synchronous, so the source keeps a cache that each entry
+point — every tool, the watcher, Home, both page queries — refreshes with one
+`select`. An owner metric's `measure()` returns the newest value with its
+`as_of`, or `null` when there is none or it is older than two of the goal's
+cadences (the goal passes `cadence` as the metric's one parameter; weekly when
+absent). An id under `owner.` is always the owner's: a plugin cannot shadow
+one.
+
+**The sane band.** `goal.record` refuses a value more than 50 % away from the
+last one, or on the other side of zero, with a sentence asking the agent to
+confirm with the owner; it is kept only when the call is repeated with
+`confirmed: true`. A last value of zero has no percentage, so only the sign
+rule applies to it. A typo ("28.5" for 285) must not become the number a goal
+is judged by.
+
 ## 4. The goal
 
 ```ts
@@ -83,8 +146,11 @@ interface Goal {
   agentId: string;               // holder
   metric: string;                // 'finance.total_debt'
   params: Record<string, unknown>;
-  /** Either an absolute target or a delta from the baseline. */
-  target: { kind: 'absolute'; value: number } | { kind: 'delta'; value: number };
+  /** An absolute target, a delta from the baseline, or a count per window (§4a). */
+  target:
+    | { kind: 'absolute'; value: number }
+    | { kind: 'delta'; value: number }
+    | { kind: 'frequency'; count: number; per: 'week' | 'month' };
   baseline: { value: number; asOf: Date };   // measured when the goal is set
   deadline: Date;
   /** How often core checks. Daily is the floor. */
@@ -122,24 +188,82 @@ The 12-goal budget is a count in the INSERT's own WHERE clause taken under
 two racing statements both see eleven and both commit, and a thirteenth goal
 is one the sentinel never even walks.
 
+## 4a. Frequency goals
+
+"Run three times a week" is a second target shape on the same series:
+`target: { kind: 'frequency', count, per: 'week' | 'month' }`, stored as
+`target_kind = 'frequency'`, `target_value = count` and `target_per`
+(migration 045; a level goal's `target_per` is null, a frequency goal's never
+is). A value is one occurrence ("ran today" records 1), whatever number it
+carries. A frequency goal needs an owner metric — only those have values to
+count — and starts with nothing counted: its baseline is 0 and `goal.set`
+refuses a `baseline`.
+
+**Windows** are calendar weeks, Monday to Sunday, or calendar months, in the
+owner's timezone, from the one the goal was set in to the one holding the
+deadline. A value counts in the window its `as_of` falls in on the owner's
+clock, from the day the goal was set to the deadline's day. The arithmetic is
+`frequencyStandingOf` (`packages/core/src/goals/frequency.ts`), pure, over the
+owner's values (at most `FREQUENCY_VALUES`, 5,000, since the goal was set).
+Each window is `met` (the count reached, closed or not), `open` (the current
+one, short of it so far), `short` (closed below the count) or `partial`: the
+window the goal was set in and the one the deadline cuts short, when they
+closed below the count. A partial window is never a gap — a goal set on a
+Friday is not a week missed — and a partial window that met the count is met.
+
+- **Pace** is occurrences so far against the current window: "2 of 3 this
+  week, 1 to go by 2026-10-04".
+- **Drift** is a window that closed short.
+- **Milestones are streaks**: `milestones: [4, 8]` is four and eight windows
+  met in a row, whole numbers listed smallest first. The streak counts closed
+  windows back from the newest, skipping partial ones.
+- **The deadline** settles the goal `met` when more closed windows met the
+  count than fell short, `missed` otherwise. There is no early `met`.
+
+`goal.update` keeps a goal's shape: a level goal cannot become a frequency
+goal, nor the reverse, because the baseline means something different in
+each. The card says "3 times a week until 2026-12-31, checked weekly, held by
+@coach". "Finish X by Friday" is not a goal: it is a reminder or a mission, and
+the agent should say so.
+
 ## 5. Tools
 
 - `goal.metrics` (auto): the metrics this installation can measure, with
-  units and directions.
+  units and directions, each with its `source`: `plugin` (with the plugin and
+  its params) or `owner` (with its label and unit label).
 - `goal.set` (gated): title, metric (+params), target, deadline, cadence,
   milestones. `describe` measures the baseline and renders the card: "From
   X today to Y by <date>: Z per week, checked weekly, held by @ledger". The
   agent proposing it must be the holder (an agent cannot give another agent
-  a goal).
+  a goal). `metric` may be an owner definition and `baseline: { value }` the
+  number the owner said (§3a); `target` may be a frequency (§4a). The card
+  names the source: "Measured by you, when you tell buddi" for an owner metric
+  ("(a new metric, owner.weight)" when this card creates it), "Measured by
+  finance.total_debt" for a plugin's.
 - `goal.update` (gated): target, deadline, cadence, milestones; the card
   shows before/after.
 - `goal.close` (auto): with a note; also how "met" and "missed" become final
   when the owner agrees.
 - `goal.status` (auto): a goal or all of the agent's goals, with the last
-  check, the pace needed and the projection.
+  check, the pace needed and the projection. For a goal on an owner metric it
+  adds `values`, the newest ten the owner told buddi; for a frequency goal
+  `windows` (the newest twelve, oldest first), `streak`, and the tally as the
+  value ("1 of 2 this week, 1 to go by 2026-10-11").
 - `goal.list` (auto): every open goal, any holder (read).
+- `goal.record` (auto): `{ goal | metric, value, asOf?, note?, confirmed? }`
+  appends one value to an owner metric and answers with where each open goal
+  on it stands, in one sentence: "288 to 220 by December: 285 lb now, 4% of
+  the way; 4.89 lb a week down from here reaches 220 lb by 2026-12-31." It names
+  the goal or the metric (`owner.weight` or `weight`), never the agent, so "285
+  this morning" said to whichever agent is listening on Telegram lands on the
+  weight goal. `asOf` is an ISO date or datetime in the owner's zone; a date
+  later than today is refused, and today's date before nine means now. A plugin
+  metric is refused: its number is measured. `confirmed` answers the sane band
+  (§3a).
 
-An agent that is not the holder gets `goal.list`/`goal.status` only.
+An agent that is not the holder gets `goal.list`, `goal.status` and
+`goal.record` only: recording a number is the owner speaking, whoever relays
+it.
 
 The tools live in `packages/gateway/src/missions/goals.ts`, beside the reminder
 and schedule manifests, for the same reason they do: nothing there owns a
@@ -232,6 +356,42 @@ counted from the last check that carried a number over the whole history, not
 over the last four rows, which would collapse onto the baseline the moment four
 looks failed in a row.
 
+**Owner metrics.** A cadence with nothing new said records no check:
+re-recording last week's number under this week's date would draw a flat line
+the owner never reported and bend the projection toward it. A new value is
+checked on the first tick after it arrives once the cadence is due, so a weekly
+goal takes at most one check a week however often the owner speaks; a value
+older than two cadences is a check with no number ("not measured since …").
+The deadline still gets its check. "Not measurable for 7 days" is not raised
+for an owner metric; staleness replaces it.
+
+**Staleness.** When a cadence passes with no value — counted from the newest
+value, or from when the goal was set if that is later — the watcher raises
+`goal.<id>.stale.<day>`: `info`, `wake: true`, and `notify: { urgency:
+'today', dedupeKey: 'goal:<id>:stale:<day>' }`, where `<day>` is the owner's
+day that cadence window began (`staleWindow`). The holder is woken once and
+says one line — "You have not told me your weight this week." — which goes out
+through `notifyOwner` as a `watcher` notification held for the end of the day:
+never `now`, never twice in a window (the key and the dedupe key both carry
+it). A value resolves the finding; the next silent window is a new key and one
+more line. `Finding.notify` is the plugin contract's way to ask for this
+([plugins.md](plugins.md), Finding): the mission executor carries it to
+`ownerDeliver`, which otherwise sends a wake's report `now`.
+
+**Frequency goals.** The watcher counts windows (§4a) instead of measuring. On
+its cadence it records a check whose value is the current window's count, whose
+note is the tally ("2 of 3 this week; 4 weeks in a row") and whose `on_track`
+is the newest closed window's verdict. Three events, each said once:
+
+| Event | Severity | Wakes the holder? |
+| --- | --- | --- |
+| A window closed short (`goal.<id>.short.<start>`) | info | yes, once, while it is the newest closed window |
+| A streak milestone (`goal.<id>.milestone.<n>`) | info | yes, once ever: returned while the window that reached it is the newest closed one, never for another |
+| Deadline passed | info (met) or urgent (missed) | yes; settled by the windows |
+
+A frequency goal has no staleness line: a week with nothing said is a short
+week, not silence.
+
 **A known gap.** The sentinel settles `met`/`missed` in the same tick it returns
 the finding, and the finding is only written after the loop. A throw later in
 that loop — a failed `recordCheck` on another goal — loses the wake while the
@@ -250,7 +410,10 @@ write to move inside the per-goal step, which is a change to core's
   note, and a link to the holder's chat. Built as a core page with the
   plugin-pages components (core is allowed what plugins are).
 - **The holder's chat**: `goal.set`'s card, and `goal.status` drawn with a
-  view descriptor (`keyvalue` plus a `timeseries` of the checks).
+  view descriptor (`keyvalue` plus a `timeseries` of the checks). For an owner
+  metric the timeseries is the owner's values, as they were said, with the
+  target line; for a frequency goal it is one point per window, its count,
+  with the count per window as the target line.
 - **Telegram**: the wakes reach it like any finding.
 
 The first three are contributed from
@@ -332,6 +495,26 @@ Eight rules, each one a thing the engine decides rather than a choice:
    with `mission.report` goes wherever its surface sends it. The test is
    `goals.db.test.ts`, "reaches Telegram the way any finding does".
 
+**Goals the owner measures, on the page.** A goal on an owner metric adds
+"What you told buddi", a table of its values (newest `PAGE_CHECKS` first: true
+of, value, where it was said, note). A frequency goal adds "Windows", a list
+of its windows newest first, each "Week of <date>, 2 of 3" with a pill: Met,
+Short, Partial or Under way. Its stats keep their places and say what they
+mean for a count per window (Now "2 of 3 this week, 1 to go by …", Target "3
+times a week", At this pace "4 of 5 weeks met"), its milestones are streaks
+("4 weeks in a row", reached on the day the watcher said so), and its row on
+the list and on Home is the tally and the verdict ("short last week"), loud
+after two whole weeks short running. Both sections sit in a titleless `detail`
+over the goal query, because `when` reads the data a component is handed and
+inside a list-detail's detail that is the page's own.
+
+The series is a table and the windows a list, not a chart: page descriptors
+have no chart component, by design ([plugin-pages.md](plugin-pages.md) §4,
+"charts are canvas views"). The points and the target line are drawn on the
+canvas, by `goal.status`. A frequency goal's windows are read per goal
+(`frequencyOf`, one statement each), not in the one statement Home and the list
+use for checks.
+
 The Goals page is a **rail** page, so it introduces no new place: the table in
 `docs/plugins.md` §2.5a holds and `plugin-places.test.ts` still holds.
 Its one write is `goal.owner_close` — the same store call `goal.close` makes,
@@ -360,6 +543,19 @@ the projection lands short, the second miss wakes the advisor, which reads
 the cards and the statement dates, and answers with what changed and one
 recommendation, or proposes `goal.update`. At −10k the advisor says so, once.
 
+"I'm 288, I want to be at 220 by December," on 22 September. No plugin measures weight, so the
+concierge proposes `goal.set` with `metric: { owner: { slug: 'weight', label:
+'Weight', unit: 'number', direction: 'down', unitLabel: 'lb' } }`, `baseline:
+{ value: 288 }`, an absolute target of 220, deadline 2026-12-31, weekly,
+milestones at 260 and 240. The card says "From 288 lb today to 220 lb by
+2026-12-31: 4.76 lb a week down, checked weekly, held by @concierge" and
+"Measured by you, when you tell buddi (a new metric, owner.weight)". The owner
+approves; `owner.weight` and its first value exist from then. A week later the
+owner says "285 this morning" to whichever agent is on Telegram, which calls
+`goal.record { metric: 'weight', value: 285 }` and repeats the sentence it
+answers. A week with nothing said is one end-of-day line, "You have not told me
+your weight this week." At 260 the concierge says so, once.
+
 The email plugin declares `email.waiting_on_me`; the developer plugin
 `developer.failing_tests` for a workspace; none of them knows about goals.
 
@@ -370,7 +566,8 @@ only ever climb whatever the owner read, and a goal on it would be settled
 
 ## 9. What it is not
 
-Not a task list, not habits with streaks (a goal has a metric or it is a
+Not a task list, not a habit tracker (a frequency goal counts what the owner
+reports, with streaks as milestones; anything without a metric is a
 reminder), not a plan document (the agent's plan lives in its memory and
 skills), not a forecast engine (linear projection over four points,
 stated as such).
@@ -385,3 +582,8 @@ stated as such).
 3. A delegate cannot set a goal; a non-holder cannot update or close one.
 4. Every metric measures under the read-only pool.
 5. A 13th open goal is refused with the sentence.
+6. The weight example in §8: the metric and its first value exist only once
+   the card is approved, a value said to another agent lands on the goal, and
+   a silent week is one end-of-day line, never two.
+7. A frequency goal counts Monday weeks in the owner's zone, says a short week
+   once and a streak once, and settles by its windows at the deadline.
