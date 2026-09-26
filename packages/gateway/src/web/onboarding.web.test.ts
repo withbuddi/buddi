@@ -666,6 +666,8 @@ it('grants the first agent the built-in families, web and browser included', asy
   const file = readFileSync((await json(created)).file, 'utf8');
   expect(file).toMatch(/web\.\*/);
   expect(file).toMatch(/browser\.\*/);
+  // A mailed one-time code is read from the inbox before the owner is asked.
+  expect(file).toContain("A one-time code a site just mailed is read from the owner's inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.");
 });
 
 /*

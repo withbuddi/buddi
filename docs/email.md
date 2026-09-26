@@ -615,6 +615,12 @@ account, or none in this process, and the channel is not there.
 `email.search` takes a phrase, filters, or both, and needs at
 least one of the two.
 
+A one-time code a site just mailed is found with `from` (the site's domain)
+and `since` (today): the agent takes the newest message dated in the last ten
+minutes, and never stores or reuses the code. New mail arrives on the next
+poll, up to five minutes late, so the agent searches again rather than asking
+the owner at once.
+
 - `query` is a case-insensitive **substring** of the subject, the sender or
   the body. pg_trgm's `%` similarity operator is not used: it would quietly turn the search into a fuzzy word
   match, and an agent looking for `@acme.` in an address would stop finding it.

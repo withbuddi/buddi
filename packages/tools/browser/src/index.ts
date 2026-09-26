@@ -116,5 +116,5 @@ export { HostController } from './controller.js';
 export { ComputerDriver, NativeComputerBridge, settingsSchema } from './computer.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
 export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionResult } from './extension.js';
-export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, observedLine, BrowserPreconditionError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';
+export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';
 export type { BrowserCommand, BrowserDriver, BrowserHand, HandFrame, HandFrameMetadata, HandInput, HandQuality, Observation, ObservedTarget } from './types.js';

@@ -89,6 +89,13 @@ Every observation carries `observedAt`, and the result opens with "Observed
 a click that submits or navigates, it observes once more before concluding,
 and judges from the newest observation only.
 
+When a site mails a one-time code, an agent that has the email tools reads it
+from the owner's inbox before asking the owner: the newest message from that
+site, arrived in the last ten minutes. The code is never stored and never
+reused. The agent types it with `browser.act`, so it appears in that call's
+input in the transcript; the scrubber only knows values saved under Keys and
+secrets.
+
 An observation or screenshot failure preserves the helper's actual error instead
 of returning a successful empty observation. Most of these are a page still
 loading or busy, so control stays with the agent: the result says "The page has

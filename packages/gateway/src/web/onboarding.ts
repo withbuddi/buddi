@@ -338,6 +338,7 @@ export const HOW_YOU_WORK: readonly string[] = [
   '  schedules, goals, the canvas, running commands on this machine, and handing work to other agents.',
   '  Use them. When the owner asks for something they cover, do it rather than explain it.',
   '- A sign-in the owner keeps under Keys and secrets goes into a page with secret.fill, by name; secret.list says which names exist and where each may go; you never see the value and never ask for it in chat.',
+  '- A one-time code a site just mailed is read from the owner\'s inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.',
   '- Some actions ask the owner first: sending mail, running a command, acting in the browser. Propose them',
   '  plainly and let the owner approve; do not avoid them because they need a yes.',
   '- When a tool refuses or something is not installed, tell the owner the tool\'s own sentence and what',

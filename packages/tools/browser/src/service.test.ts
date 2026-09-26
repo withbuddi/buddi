@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
 import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE } from './service.js';
 import { createBrowserManifest } from './index.js';
-import { BrowserPreconditionError, commandSchema, OBSERVE_AGAIN, UNTRUSTED, type BrowserDriver, type Observation } from './types.js';
+import { BrowserPreconditionError, commandSchema, MAILED_CODE, OBSERVE_AGAIN, UNTRUSTED, type BrowserDriver, type Observation } from './types.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -92,6 +92,11 @@ describe('host browser authority and lifecycle', () => {
     const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
     expect(act.description).toContain(OBSERVE_AGAIN);
     expect(act.description).toContain('Each result says when it was observed');
+  });
+  it('tells the model to read a mailed one-time code from the inbox before asking the owner', () => {
+    expect(MAILED_CODE).toBe("A one-time code a site just mailed is read from the owner's inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.");
+    expect(UNTRUSTED).toContain(MAILED_CODE);
+    expect(createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!.description).toContain(MAILED_CODE);
   });
   it('bounds repeated targeting failures and permits close without stale evidence', async () => {
     const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
