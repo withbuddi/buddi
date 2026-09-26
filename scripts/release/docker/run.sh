@@ -17,8 +17,10 @@ DATA=/home/node/.local/share/buddi
 # The gateway's port inside the container. A fresh container has nothing on
 # 4317, so `freePort(4317)` takes it, and the origin the browser sends then
 # matches the gateway's own. See the assertion below.
-INTERNAL=4317
 HOST_PORT=${BUDDI_TRIAL_PORT:-4317}
+# The gateway inside listens on the same number the host publishes, so the
+# browser's Origin and the gateway's agree whatever port you pick.
+INTERNAL=$HOST_PORT
 
 if [ "${1:-}" = "--reset" ]; then
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -38,25 +40,8 @@ fi
 # The trial is only worth doing if the browser can send the origin the gateway
 # expects, and that means the same port on both sides.
 if nc -z 127.0.0.1 "$HOST_PORT" >/dev/null 2>&1; then
-  # Say *who* holds it. "Something is on 4317" sends the owner hunting; a
-  # leftover test fixture and their own running buddi need different answers,
-  # and the difference is one line of lsof.
-  HOLDER=$(lsof -nP -iTCP:"$HOST_PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 { print "  " $1 " (pid " $2 ")" }' | sort -u)
-  cat >&2 <<EOF
-Port $HOST_PORT is already listening on this machine — most likely your own
-Buddi installation, which uses 4317 too.
-
-Held by:
-${HOLDER:-  (could not tell: lsof said nothing)}
-
-The dashboard refuses writes whose Origin is not its own, and the browser's
-origin is http://127.0.0.1:<host port> while the gateway's is
-http://127.0.0.1:$INTERNAL. So a different host port gets you a dashboard you
-can read and a wizard you cannot complete.
-
-To try the wizard for real, stop your local Buddi and run this again. To look
-around read-only, pick another port: BUDDI_TRIAL_PORT=4318 $0
-EOF
+  echo "Port $HOST_PORT is already listening on this machine (your own buddi, most likely)." >&2
+  echo "Pick another: BUDDI_TRIAL_PORT=4319 $0" >&2
   exit 1
 fi
 
@@ -65,6 +50,7 @@ docker run -d --name "$CONTAINER" \
   -p "127.0.0.1:$HOST_PORT:$INTERNAL" \
   -v "$VOLUME:$DATA" \
   -e BUDDI_VAULT=file \
+  -e BUDDI_WEB_PORT="$INTERNAL" \
   "$IMAGE" >/dev/null
 # Removing the container kills the supervisor where it stands, and a Postgres
 # killed that way leaves its pid file behind. Ask it to stop first and give it
