@@ -7,11 +7,17 @@ unbuilt specs are kept outside this repository.
 
 - [Install](install.md), [first run](onboarding.md),
   [operations](operations.md): backup, restore, and where your data lives.
-- [The command line](cli.md): every `buddi` command, its flags and exit codes.
 - [Provider accounts](providers.md), [Claude subscription sign-in](anthropic-oauth.md),
   [ChatGPT subscription through Codex](codex-accounts.md).
-- [Using buddi from Claude Code](mcp.md) (`buddi mcp`).
+
+## Where you talk to buddi
+
+- [The dashboard](dashboard.md): the page in your browser, place by place.
 - [Telegram](telegram.md): pairing, what arrives on your phone, the commands.
+- [The command line](cli.md): every `buddi` command, its flags and exit codes.
+- [Using buddi from Claude Code](mcp.md) (`buddi mcp`).
+- [Notifications](notifications.md): how buddi reaches you when you are not
+  looking.
 
 ## What agents do
 
@@ -23,7 +29,6 @@ unbuilt specs are kept outside this repository.
 - [Goals](goals.md): a target with a clock.
 - [Learning](learning.md): buddi proposes, the owner keeps.
 - [Owner secrets](owner-secrets.md): used, never seen.
-- [Notifications](notifications.md): what reaches you, when, and where.
 - [The developer plugin](developer.md): an agent that works in a workspace.
 - [Built-in system context](system-context.md).
 

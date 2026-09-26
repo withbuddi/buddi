@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- [docs/dashboard.md](docs/dashboard.md): the dashboard place by place, with one thing to try in each. The docs index has a new group, "Where you talk to buddi": the dashboard, Telegram (now with example exchanges), the command line (now opening with what it is for and five examples), Claude Code and notifications.
 - `secret.list` tells an agent which of your secrets the browser may fill, by name, and where each may go, so it no longer asks you for the names. It never returns a value.
 - A goal can watch a number you report yourself, like your weight. When no plugin measures it, the agent creates the metric as it proposes the goal and takes the number you just said as the start; the card says "measured by you, when you tell buddi", and `goal.metrics` lists these metrics with the source `owner`.
 - `goal.record` writes down a number you tell any agent ("285 this morning", "ran today"), names the goal or the metric rather than whose goal it is, and answers with where the goal stands in one sentence. A number more than half away from the last one, or of the other sign, is asked about before it is kept.

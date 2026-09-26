@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # The buddi command line
@@ -13,6 +13,27 @@ and `buddi <command> --help` print one command with an example and its exit code
 
 This page is generated from the command table (`packages/cli/src/commands.ts`) by
 `pnpm docs:cli`; a test fails when the two differ.
+
+## What it is for
+
+`buddi` runs your agents and keeps them running: it starts the service, checks on it,
+backs it up and upgrades it. It is also a way to talk to your agents without the
+dashboard, from a terminal or a script, and to pair the phone you reach them from.
+
+## Examples
+
+- `buddi status`: a few short sentences: the version, whether the service is running
+  and the database reachable, which agents can run, what needs you, and whether a
+  newer buddi is out.
+- `buddi ask "Any reminder today?" --json`: one object with the answer in `text`, the
+  `runId` and `conversationId`, and any files the run saved in `artifacts`.
+- `buddi chat --agent @ledger`: a conversation in the terminal. It opens with the
+  agent's name, the conversation id, its provider and model, and
+  `/help for commands, /quit to leave`.
+- `buddi backup create`: the path of the archive it wrote, its size and how long it
+  took, what is inside, and the `buddi backup verify` line to check it.
+- `buddi telegram pair`: a QR code, the link to open on the phone and a code, valid
+  for ten minutes.
 
 ## Exit codes and output
 

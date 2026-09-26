@@ -79,7 +79,6 @@ gives you. Then pair your phone in any of three places:
 | `/where` | The dashboard address when your phone can reach it; otherwise says it is on this computer only. |
 | `/browser` | Where the screen stands; `stop`, `resume` or `release` it. |
 
-Asking for a web page from the phone works best when the agents have a browser of their own (Settings → Computer & browser, "the agents' own browser"): it never hands a page back to you. In your own Chrome through the extension, a slow page makes the agent wait and look again; control pauses only when the tab closes or the page fails to answer three times in a row, and then `/browser resume` gives control back.
 | `/host`, `/hoststop`, `/hostrevoke` | Host execution permissions and running commands. |
 | `/devices` | The devices paired to this installation. |
 | `/reset` | Starts a fresh conversation with the active agent. |
@@ -87,6 +86,89 @@ Asking for a web page from the phone works best when the agents have a browser o
 | `/help` | The list above. |
 
 The menu shows these to paired chats only; `/use` names the active agent.
+
+Asking for a web page from the phone works best when the agents have a
+browser of their own (Settings → Computer & browser, "the agents' own
+browser"): it never hands a page back to you. In your own Chrome through the
+extension, a slow page makes the agent wait and look again; control pauses
+only when the tab closes or the page fails to answer three times in a row,
+and then `/browser resume` gives control back.
+
+## Examples
+
+What the chat looks like, with an agent called ledger. Buttons are in
+brackets.
+
+**A question.** The answer replaces the "Working on it" line as it is
+written.
+
+```text
+You:    What did I spend on food last month?
+ledger: ⏳ Working on it…
+        (the same message, a moment later)
+ledger: $612 on food in August, $80 more than July. Most of the
+        difference is restaurants. Want the list?
+```
+
+**A file coming back.** After the answer, a picture arrives as a photo with
+its name as the caption; anything else as a document under its own name.
+
+```text
+You:    Send me August as a spreadsheet.
+ledger: Here it is: every August transaction, one row each.
+        [document] august-2026.csv
+```
+
+**An approval card.** The tool, the preview it drew, who asked and when the
+request lapses. Only the buttons decide it.
+
+```text
+ledger: Approval needed — email.send
+
+        To: landlord@example.com
+        Subject: September rent
+
+        Asked by ledger. Expires 2026-09-27.
+        Action 3f1c…
+        [✅ Approve] [✖ Reject]
+```
+
+Once decided, the same message reads "Approved and done — email.send" (or
+"Rejected — email.send") and loses its buttons.
+
+**`/goals`.** Read only, one line per open goal.
+
+```text
+You:    /goals
+buddi:  Your goals:
+        Pay off the card: $1,240, on track
+        Gym twice a week: 1 of 2 this week, behind
+```
+
+**A reminder arriving.** When a reminder is due, the agent that set it first
+checks it still matters, then writes one short message. A reminder about
+something already done is not sent.
+
+```text
+ledger: The card payment is due tomorrow.
+
+        $1,240 on the Visa. Your checking account covers it.
+```
+
+**A proposal card.** It waits for the end of your day, then arrives with
+Keep and Discard.
+
+```text
+ledger: ledger proposes a skill: monthly-close
+
+        When: the owner asks to close a month
+
+        You asked for the same three checks at the end of July and August.
+
+        Kept, it becomes a skill ledger follows next time.
+        The whole of it is on the dashboard, under Proposals.
+        [Keep] [Discard]
+```
 
 ## Short answers
 
