@@ -37,7 +37,9 @@ import {
   type BrowserLaunchCheck,
   type OllamaProbe,
   type ProviderAccountsView,
+  type VersionView,
 } from '../api';
+import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
@@ -520,6 +522,9 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * deliberate, because a jump is what a chat does and reduced motion is
    * honoured by the browser rather than by us.
    */
+  // The running version, quietly under the tagline: the one place an owner
+  // reads it before the dashboard exists.
+  const version = useAsync<VersionView>(() => api.version().catch(() => ({ current: '' } as VersionView)), []);
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = scroller.current;
@@ -558,6 +563,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
           <span className="meet-head-who">
             <span className="meet-head-name">buddi</span>
             <span className="meet-head-line">{platform === undefined || platform === 'darwin' ? SCRIPT.tagline : SCRIPT.taglineElsewhere}</span>
+            {version.data?.current ? <span className="meet-head-version mono">buddi {version.data.current}</span> : null}
           </span>
         </header>
 

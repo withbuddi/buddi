@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- The first-run page shows the running buddi version under its title.
+
 ## 0.1.0-pre.19 — 2026-09-26
 
 ### Added
