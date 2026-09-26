@@ -84,6 +84,11 @@ tabs remain open. Already dispatched actions cannot be undone. Do not use the
 same mouse/keyboard while the agent is driving. A focus change causes refusal,
 not automatic refocusing; use takeover, then resume in the intended app.
 
+Every observation carries `observedAt`, and the result opens with "Observed
+12:04:35 UTC.", so the agent can tell the newest page from an older one. After
+a click that submits or navigates, it observes once more before concluding,
+and judges from the newest observation only.
+
 An observation or screenshot failure preserves the helper's actual error instead
 of returning a successful empty observation. Most of these are a page still
 loading or busy, so control stays with the agent: the result says "The page has

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
 import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE } from './service.js';
 import { createBrowserManifest } from './index.js';
-import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';
+import { BrowserPreconditionError, commandSchema, OBSERVE_AGAIN, UNTRUSTED, type BrowserDriver, type Observation } from './types.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
@@ -69,6 +69,29 @@ describe('host browser authority and lifecycle', () => {
     await expect(service.execute(click, ctx)).rejects.toThrow('fresh observation is required');
     await service.execute(observe, ctx);
     await expect(service.execute(click, ctx)).resolves.toMatchObject({ completed: true });
+  });
+  it('stamps every observation with when it was taken, and says so, so old evidence reads as old', async () => {
+    let now = Date.parse('2026-09-26T12:04:35.250Z');
+    const { service, driver, ctx } = await setup({ now: () => now });
+    const first = await service.execute(navigate, ctx) as { observation: Observation; message: string; notice: string };
+    expect(first.observation.observedAt).toBe('2026-09-26T12:04:35.250Z');
+    expect(first.message).toBe('Observed 12:04:35 UTC.');
+    expect(first.notice).toBe(UNTRUSTED);
+    expect(UNTRUSTED).toContain('After a click that submits or navigates, observe once more before concluding; judge from the newest observation only.');
+    expect(service.status().page?.observedAt).toBe('2026-09-26T12:04:35.250Z');
+
+    // A recovery observation carries its own, newer stamp.
+    now += 7_000;
+    vi.mocked(driver.perform).mockRejectedValueOnce(new BrowserPreconditionError('Target is ambiguous'));
+    vi.mocked(driver.observe).mockResolvedValue({ ...observation, id: 'fresh' });
+    const error = await service.execute(commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'e1' } }), ctx).catch((e: unknown) => e);
+    const recovery = JSON.parse((error as Error).message);
+    expect(recovery).toMatchObject({ dispatched: false, message: 'Observed 12:04:42 UTC.', observation: { id: 'fresh', observedAt: '2026-09-26T12:04:42.250Z' } });
+  });
+  it('tells the model in browser.act to observe once more before concluding', () => {
+    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
+    expect(act.description).toContain(OBSERVE_AGAIN);
+    expect(act.description).toContain('Each result says when it was observed');
   });
   it('bounds repeated targeting failures and permits close without stale evidence', async () => {
     const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);

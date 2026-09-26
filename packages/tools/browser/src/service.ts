@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
-import { BrowserPreconditionError, UNTRUSTED } from './types.js';
+import { BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 
 /**
  * "The owner stopped the browser", said where the owner can undo it.
@@ -169,6 +169,10 @@ export class BrowserService {
     allowOpen?: boolean;
   } = {}) {}
   #now(): number { return this.options.now?.() ?? Date.now(); }
+  /** When buddi took this observation, so the model can tell the newest from an older one. */
+  #stamp(observation: Observation): Observation {
+    return { ...observation, observedAt: new Date(this.#now()).toISOString() };
+  }
 
   async enable(): Promise<void> {
     if (this.#enabled) return;
@@ -289,7 +293,7 @@ export class BrowserService {
         const observation = await this.driver.observe();
         const picture = await this.driver.screenshot();
         controller.signal.throwIfAborted();
-        this.#observation = observation;
+        this.#observation = this.#stamp(observation);
         this.#picture = picture;
         this.#needsObservation = false;
         this.#observationFailures = 0;
@@ -306,7 +310,8 @@ export class BrowserService {
         return result;
       }
       controller.signal.throwIfAborted();
-      return { completed: true, notice: UNTRUSTED, observation: this.#observation, message: this.#message };
+      const observed = observedLine(this.#observation!.observedAt!);
+      return { completed: true, notice: UNTRUSTED, observation: this.#observation, message: this.#message ? `${observed} ${this.#message}` : observed };
     } catch (error) {
       if (error instanceof ObservationFailure) throw error;
       if (!controller.signal.aborted && error instanceof BrowserPreconditionError) {
@@ -385,7 +390,7 @@ export class BrowserService {
       const observation = await this.driver.observe();
       const picture = await this.driver.screenshot();
       controller.signal.throwIfAborted();
-      this.#observation = observation;
+      this.#observation = this.#stamp(observation);
       this.#picture = picture;
       this.#observationFailures = 0;
     } catch (observationError) {
@@ -397,6 +402,7 @@ export class BrowserService {
       this.#message += ` Recovery observation failed: ${cause.replace(/\.$/, '')}. ${paused ? 'Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.' : browserWaitMessage()}`;
     }
     throw new BrowserPreconditionError(JSON.stringify({ error: this.#message, dispatched: false,
+      ...(this.#observation?.observedAt ? { message: observedLine(this.#observation.observedAt) } : {}),
       recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : this.#needsObservation ? browserWaitMessage() : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
       observation: this.#observation }));
   }
