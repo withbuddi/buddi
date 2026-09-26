@@ -57,8 +57,9 @@ wizard offers to fetch Chromium (about 150 MB), or you can run
 `buddi browser install` at any time.
 
 **Telegram.** The wizard can pair your phone: you ask @BotFather for a bot,
-paste the token, and scan the QR code it draws. `buddi telegram pair` does the
-same from a terminal.
+paste the token, and scan the QR code it draws. Skipped it, or want a second
+phone? Settings → Notifications has the same steps, and lists the phones you
+paired. `buddi telegram pair` does the same from a terminal.
 
 **On Linux.** There is no OS keychain, so secrets go in an encrypted file vault
 in the data directory, opened by a key stored beside it (`vault-key`, mode

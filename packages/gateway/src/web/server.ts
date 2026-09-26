@@ -69,8 +69,11 @@ import {
 import {
   TelegramWebError,
   saveTelegramToken,
+  telegramBot,
+  telegramDevices,
   telegramPairing,
   telegramStatus,
+  unpairTelegramDevice,
   type TelegramControl,
   type TelegramWebDeps,
 } from './telegram.js';
@@ -1301,6 +1304,11 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, await probeOllama());
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
+        // Settings → Notifications: which bot, and which phones talk to it.
+        case '/api/telegram/bot':
+          return sendJson(res, 200, await telegramBot(telegramDeps()));
+        case '/api/telegram/devices':
+          return sendJson(res, 200, await telegramDevices(telegramDeps()));
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
           return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
@@ -1608,6 +1616,18 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (path === '/api/extension/pair') {
         const forgotten = await extension.unpair();
         return sendJson(res, forgotten.status, forgotten.body);
+      }
+      // A phone the owner no longer wants talking to their agents. Same as
+      // `buddi telegram unpair <id>`, and as immediate.
+      const phoneGone = /^\/api\/telegram\/devices\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
+      if (phoneGone) {
+        try {
+          await unpairTelegramDevice(telegramDeps(), phoneGone[1]!);
+          return sendEmpty(res, 204);
+        } catch (error) {
+          if (error instanceof TelegramWebError) return sendJson(res, error.status, { error: error.message });
+          throw error;
+        }
       }
       /*
        * A group the owner is done with leaves the rail and takes no new

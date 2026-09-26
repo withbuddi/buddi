@@ -36,7 +36,6 @@ import {
   type BrowserInstallProgress,
   type BrowserLaunchCheck,
   type OllamaProbe,
-  type PairingOffer,
   type ProviderAccountsView,
 } from '../api';
 import { MessageList } from '../chat/MessageList';
@@ -66,7 +65,7 @@ import {
   type MeetAnswers,
   type QuestionId,
 } from './meet/machine';
-import { qrSvgDataUrl } from './meet/qr';
+import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
 
 /** How long a scripted bubble "types" before it lands. */
 const TYPING_MS = 550;
@@ -93,9 +92,6 @@ const POLL_MS = 1_500;
 
 /** How long the finished board waits before leaving for the dashboard itself. */
 export const LEAVE_MS = 3_000;
-
-/** The longest the thread watches for a phone before offering a fresh code. */
-export const PAIRING_WATCH_MS = 10 * 60_000;
 
 /**
  * A field that opens is a field the owner is being asked to fill in.
@@ -2277,18 +2273,8 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [offer, setOffer] = useState<PairingOffer | null>(null);
-  const [square, setSquare] = useState<string | null>(null);
-  const [paired, setPaired] = useState(false);
-  /** The code stopped being valid, so watching for it stopped too. */
-  const [stale, setStale] = useState(false);
-
-  const ask = async (): Promise<void> => {
-    const pairing = await api.telegramPairing();
-    setOffer(pairing);
-    setStale(false);
-    setSquare(await qrSvgDataUrl(pairing.link).catch(() => ''));
-  };
+  // First run asks whether any phone is paired: this is the first one.
+  const { offer, square, paired, stale, ask } = useTelegramPairing(() => api.telegram().then((status) => status.paired), onPaired);
 
   const save = (): void => {
     if (token.trim() === '' || saving) return;
@@ -2318,37 +2304,6 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
     void ask().catch((err: unknown) => setNote(err instanceof ApiError ? err.message : String(err)));
   };
 
-  /*
-   * Watch for the phone — until the code stops being worth watching.
-   *
-   * A code expires, and a page left open overnight asking every two seconds
-   * whether a dead code was used is a page doing nothing, loudly. The code's
-   * own expiry decides, capped at ten minutes, and then buddi offers a new one.
-   */
-  useEffect(() => {
-    if (!offer || paired || stale) return undefined;
-    let cancelled = false;
-    const until = Math.min(Date.parse(offer.expiresAt) || Date.now() + PAIRING_WATCH_MS, Date.now() + PAIRING_WATCH_MS);
-    const timer = window.setInterval(() => {
-      if (Date.now() >= until) {
-        setStale(true);
-        return;
-      }
-      api
-        .telegram()
-        .then((status) => {
-          if (cancelled || !status.paired) return;
-          setPaired(true);
-          onPaired();
-        })
-        .catch(() => {});
-    }, 2_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [offer, paired, stale]);
-
   if (paired) {
     return (
       <Buddi>
@@ -2377,14 +2332,7 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
             </>
           }
         >
-          {stale ? null : (
-            <div className="meet-pair">
-              {square ? <img className="meet-qr" src={square} alt={offer.link} /> : null}
-              <a className="meet-link" href={offer.link} target="_blank" rel="noreferrer">
-                {offer.link}
-              </a>
-            </div>
-          )}
+          {stale ? null : <PairingSquare offer={offer} square={square} />}
         </Ask>
       </>
     );

@@ -14,7 +14,8 @@
  * back as `/start <code>`.
  */
 import { createVault, type Queryable, type Vault } from '@buddi/core';
-import { createPairingCode, createPairingCodeFor, listDevices } from '../telegram/pairing.js';
+import { TelegramApi, type FetchLike } from '../telegram/api.js';
+import { createPairingCode, createPairingCodeFor, listDevices, unpairDevice } from '../telegram/pairing.js';
 
 /** What a running process can do to its own Telegram surface. */
 export interface TelegramControl {
@@ -44,6 +45,8 @@ export interface TelegramWebDeps {
   telegram?: TelegramControl | undefined;
   /** Injected by tests; the machine's own vault otherwise. */
   vault?: Vault | undefined;
+  /** Injected by tests: how `getMe` reaches Telegram when no surface is up. */
+  fetch?: FetchLike | undefined;
 }
 
 export class TelegramWebError extends Error {
@@ -154,4 +157,78 @@ export async function telegramPairing(deps: TelegramWebDeps): Promise<PairingOff
   } catch (error) {
     throw new TelegramWebError(502, `Telegram did not answer: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings → Notifications: the bot, the phones, and letting one go
+ * ------------------------------------------------------------------ */
+
+export interface TelegramBot {
+  /** A token is known to this installation. */
+  configured: boolean;
+  /** The surface is up in this process. */
+  running: boolean;
+  /** The bot's @username, without the @; null when there is no token or Telegram did not say. */
+  username: string | null;
+}
+
+/**
+ * Which bot this installation talks through.
+ *
+ * The running surface knows its own name. Without one (a token kept for the
+ * next start, a surface that failed), Telegram is asked once; a Telegram that
+ * does not answer is a name the page leaves out, never an error.
+ */
+export async function telegramBot(deps: TelegramWebDeps): Promise<TelegramBot> {
+  const token = (deps.env.TELEGRAM_BOT_TOKEN ?? '').trim();
+  const running = deps.telegram?.running() ?? false;
+  if (token === '') return { configured: false, running, username: null };
+  let username = deps.telegram?.botUsername?.() ?? null;
+  if (!username) {
+    try {
+      const me = await new TelegramApi({ token, ...(deps.fetch ? { fetch: deps.fetch } : {}) }).getMe();
+      username = me.username ?? null;
+    } catch {
+      username = null;
+    }
+  }
+  return { configured: true, running, username };
+}
+
+/** One paired phone, as the settings page lists it. */
+export interface TelegramDevice {
+  id: string;
+  /** The Telegram name it paired with, when there was one. */
+  name: string | null;
+  /** The Telegram user id, for a device with no name. */
+  userId: string;
+  pairedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+/** The paired Telegram devices, oldest first — the list `buddi telegram devices` prints. */
+export async function telegramDevices(deps: TelegramWebDeps): Promise<{ devices: TelegramDevice[] }> {
+  const devices = await listDevices(deps.pool);
+  return {
+    devices: devices
+      .filter((device) => device.surface === 'telegram')
+      .map((device) => ({
+        id: device.id,
+        name: device.label,
+        userId: device.externalUserId,
+        pairedAt: device.pairedAt?.toISOString() ?? null,
+        lastSeenAt: device.lastSeenAt?.toISOString() ?? null,
+      })),
+  };
+}
+
+/**
+ * Unpair one Telegram device. Takes effect at once: the surface reads who may
+ * talk from the table on every message. Only a Telegram device goes this way;
+ * any other id is "no such device".
+ */
+export async function unpairTelegramDevice(deps: TelegramWebDeps, id: string): Promise<void> {
+  const { devices } = await telegramDevices(deps);
+  if (!devices.some((device) => device.id === id)) throw new TelegramWebError(404, 'No phone with that id is paired.');
+  if (!(await unpairDevice(deps.pool, id))) throw new TelegramWebError(404, 'No phone with that id is paired.');
 }

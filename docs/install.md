@@ -196,8 +196,11 @@ running on *this* machine — the page never reaches `localhost:11434` itself)
 and `POST /api/telegram/token` and `/api/telegram/pairing`, which is Telegram
 without a terminal: the token BotFather gave the owner goes into the vault, the
 surface starts in the running gateway when the process can start it, and the
-pairing code comes back as a link the thread draws as a QR code. All of them
-are behind the dashboard's ordinary session, Origin and CSRF gate.
+pairing code comes back as a link the thread draws as a QR code. Settings →
+Notifications uses the same two, plus `GET /api/telegram/bot`,
+`GET /api/telegram/devices` and `DELETE /api/telegram/devices/:id`
+([notifications.md](notifications.md), "Telegram"). All of them are behind the
+dashboard's ordinary session, Origin and CSRF gate.
 A step carries what its name cannot — the account the owner chose, and the
 conversation the handover opened — and `GET /api/onboarding` answers with both
 under `details`. That is what a reload mid-handover reads: the assistant is

@@ -78,6 +78,25 @@ is a complete answer.
 | Quiet hours | none | Start and end on your clock, like `22:00` and `07:00`. |
 | End of day | `18:00` | When the day's held items go out. |
 
+## Telegram
+
+Settings → Notifications starts with Telegram, for an owner who skipped it in
+the first-run thread or wants to pair a second phone.
+
+- **The bot.** With no token, paste the one @BotFather gave you and save it.
+  It goes into the vault and the bot starts in the running buddi, so Telegram
+  appears under "Where buddi reaches you" without a restart. With a token, the
+  bot's @username and a "Replace token" link.
+- **Your devices.** Each paired phone with its Telegram name (or user id),
+  when it paired and when it last spoke. "Unpair" asks once more in place;
+  the phone stops reaching your agents at once.
+- **Pair a device.** "Pair a phone" draws the QR code and the link, the same
+  one first run shows, with a Copy button and the time the code expires. The
+  page watches for a new phone and says "Paired." when one arrives; after the
+  code runs out it offers a new one.
+
+`buddi telegram pair | devices | unpair <id>` does the same from a terminal.
+
 ## Channels
 
 | Channel | Kind | What it sends | What leaves the machine |
@@ -166,4 +185,7 @@ The dashboard's endpoints:
 | `GET /api/notifications/settings` | `{ settings, channels }`. |
 | `PUT /api/notifications/settings` | The whole value replaced; 400 with a sentence when it cannot be. |
 | `POST /api/notifications/test` `{ channel }` | `{ ok: true }` once that channel took one line; 404 for a channel that is not there, 502 with a sentence when it refused. Not recorded. |
+| `GET /api/telegram/bot` | `{ configured, running, username }`. The running bot's name, else Telegram is asked; null when it does not answer. |
+| `GET /api/telegram/devices` | `{ devices: [{ id, name, userId, pairedAt, lastSeenAt }] }`, the paired Telegram phones, oldest first. |
+| `DELETE /api/telegram/devices/:id` | 204 once unpaired; 404 for an id that is not a paired Telegram phone. |
 | `POST /api/presence` `{ state: 'active' \| 'away' }` | `{ ok: true }`. The page sends `active` when it loads or comes back in front and every 30 seconds while it stays there, and `away` on blur or hide; at most one a second. |

@@ -639,6 +639,21 @@ export interface PairingOffer {
   link: string;
   expiresAt: string;
 }
+/** The bot this installation talks through. */
+export interface TelegramBot {
+  configured: boolean;
+  running: boolean;
+  /** Without the @; null when there is no token or Telegram did not say. */
+  username: string | null;
+}
+/** One paired phone. */
+export interface TelegramDevice {
+  id: string;
+  name: string | null;
+  userId: string;
+  pairedAt: string | null;
+  lastSeenAt: string | null;
+}
 
 /** What writing the first agent answers with: the row, as /api/agents shapes it. */
 export interface CreatedAgent {
@@ -1564,6 +1579,10 @@ export const api = {
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
   telegramPairing: () => post<PairingOffer>('/telegram/pairing'),
+  /* ---- …and from Settings → Notifications ---- */
+  telegramBot: () => get<TelegramBot>('/telegram/bot'),
+  telegramDevices: () => get<{ devices: TelegramDevice[] }>('/telegram/devices'),
+  unpairTelegramDevice: (id: string) => del<null>(`/telegram/devices/${encodeURIComponent(id)}`),
   /* ---- notifications, and whether the owner is here ---- */
   notifications: (limit = 20) => get<{ notifications: NotificationRow[] }>('/notifications', { limit }),
   notificationSeen: (id: string) => post<{ ok: true }>(`/notifications/${encodeURIComponent(id)}/seen`),

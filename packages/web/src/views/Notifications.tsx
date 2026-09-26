@@ -4,8 +4,11 @@
  * Where buddi reaches you when you are not looking, which kinds go where,
  * the hours it keeps quiet, and the last twenty things it told you. The first
  * three save together; the list below is the record, read only.
+ *
+ * Above them, Telegram itself: the bot, the phones paired with it, and
+ * pairing another — what the first-run thread offers, for later.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ApiError,
   NOTIFICATION_KINDS,
@@ -15,8 +18,9 @@ import {
   type NotificationRow,
   type NotificationSettings,
 } from '../api';
-import { fmtTime } from '../format';
+import { fmtRelative, fmtTime } from '../format';
 import { Button, Empty, ErrorBanner, Field, List, ListRow, Notice, Section, Stack, useAsync } from '../ui';
+import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
 
 /** Approvals and questions are what the owner asked for by starting the run: never off. */
 const ALWAYS_REACH: ReadonlySet<NotificationKind> = new Set(['approval', 'question']);
@@ -61,6 +65,8 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
 
   return (
     <Stack gap="lg">
+      <TelegramPanel timezone={timezone} onChange={view.reload} />
+
       <Section
         title="Notifications"
         aside="What buddi tells you when you are not looking at this page."
@@ -167,6 +173,205 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
         )}
       </Section>
     </Stack>
+  );
+}
+
+/**
+ * Settings → Notifications → Telegram: the bot, the phones, pairing another.
+ *
+ * `onChange` is told whenever the bot or the phones change, so the channel
+ * list below picks up Telegram the moment it can reach the owner.
+ */
+function TelegramPanel({ timezone, onChange }: { timezone: string; onChange: () => void }): JSX.Element {
+  const bot = useAsync(() => api.telegramBot(), []);
+  const devices = useAsync(() => api.telegramDevices(), []);
+  const [replacing, setReplacing] = useState(false);
+  const [token, setToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
+  /** The phones paired when the code was asked for: a new one is one not in here. */
+  const known = useRef<ReadonlySet<string>>(new Set());
+
+  const pairing = useTelegramPairing(
+    () => api.telegramDevices().then((list) => list.devices.some((device) => !known.current.has(device.id))),
+    () => {
+      devices.reload();
+      onChange();
+    },
+  );
+
+  const configured = bot.data?.configured ?? false;
+  const showField = !configured || replacing;
+
+  const save = (): void => {
+    if (token.trim() === '' || saving) return;
+    setSaving(true);
+    setNote(null);
+    // A running bot keeps its token until buddi starts again.
+    const swapped = replacing && (bot.data?.running ?? false);
+    api
+      .saveTelegramToken(token.trim())
+      .then((saved) => {
+        setToken('');
+        setReplacing(false);
+        setNote(
+          saved.restartNeeded
+            ? { ok: false, text: saved.note ?? 'Saved. It will be ready the next time buddi starts.' }
+            : swapped
+              ? { ok: true, text: 'Saved. The new bot takes over the next time buddi starts.' }
+              : { ok: true, text: 'Saved.' },
+        );
+        bot.reload();
+        onChange();
+      })
+      .catch((error: unknown) => setNote({ ok: false, text: error instanceof ApiError ? error.message : String(error) }))
+      .finally(() => setSaving(false));
+  };
+
+  const pair = (): void => {
+    setPairError(null);
+    known.current = new Set((devices.data?.devices ?? []).map((device) => device.id));
+    void pairing.ask().catch((error: unknown) => setPairError(error instanceof ApiError ? error.message : String(error)));
+  };
+
+  const { offer, square, paired, stale } = pairing;
+
+  return (
+    <Section title="Telegram" aside="Talk to buddi from your phone." panel>
+      <Stack divided>
+        <Section
+          title="The bot"
+          foot={showField ? (
+            <>
+              {replacing ? <Button variant="ghost" onClick={() => { setReplacing(false); setToken(''); }}>Cancel</Button> : null}
+              <Button variant="accent" disabled={saving || token.trim() === ''} onClick={save}>Save token</Button>
+            </>
+          ) : undefined}
+        >
+          <Stack gap="sm">
+            <ErrorBanner message={bot.error} />
+            {!bot.data && !bot.error ? (
+              <Empty>Loading…</Empty>
+            ) : configured && !replacing ? (
+              <div className="nt-channel">
+                <span className="pref-label">{bot.data?.username ? `Bot: @${bot.data.username}` : 'A bot token is saved.'}</span>
+                <Button variant="ghost" size="sm" onClick={() => { setReplacing(true); setNote(null); }}>Replace token</Button>
+              </div>
+            ) : null}
+            {showField ? (
+              <>
+                <p className="ui-card-meta">Ask @BotFather for a bot and paste its token here.</p>
+                <Field label="Bot token" grow>
+                  <input
+                    type="password"
+                    value={token}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setToken(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        save();
+                      }
+                    }}
+                  />
+                </Field>
+              </>
+            ) : null}
+            {note ? <Notice tone={note.ok ? 'good' : 'warning'} role="status">{note.text}</Notice> : null}
+          </Stack>
+        </Section>
+
+        <Section title="Your devices">
+          <ErrorBanner message={devices.error} />
+          {!devices.data ? (
+            devices.error ? null : <Empty>Loading…</Empty>
+          ) : devices.data.devices.length === 0 ? (
+            <p className="ui-card-meta">No phone is paired yet.</p>
+          ) : (
+            <List>
+              {devices.data.devices.map((device) => (
+                <ListRow
+                  key={device.id}
+                  title={device.name ?? `Telegram user ${device.userId}`}
+                  sub={`Paired ${fmtTime(device.pairedAt, timezone)} · ${device.lastSeenAt ? `last spoke ${fmtRelative(device.lastSeenAt)}` : 'has not spoken yet'}`}
+                  side={<UnpairButton id={device.id} onGone={() => { devices.reload(); onChange(); }} />}
+                />
+              ))}
+            </List>
+          )}
+        </Section>
+
+        <Section
+          title="Pair a device"
+          foot={configured && (!offer || paired) ? (
+            <Button variant={offer ? undefined : 'accent'} onClick={pair}>Pair a phone</Button>
+          ) : configured && stale ? (
+            <Button variant="accent" onClick={pair}>New code</Button>
+          ) : undefined}
+        >
+          <Stack gap="sm">
+            <ErrorBanner message={pairError} />
+            {!configured ? (
+              <p className="ui-card-meta">Save a bot token first.</p>
+            ) : paired ? (
+              <Notice tone="good" role="status">Paired.</Notice>
+            ) : offer && stale ? (
+              <p className="ui-card-meta">That code has run out.</p>
+            ) : offer ? (
+              <>
+                <p className="ui-card-meta">Open this on your phone, then send /start to the bot.</p>
+                <PairingSquare offer={offer} square={square}>
+                  <CopyButton text={offer.link} />
+                </PairingSquare>
+                <p className="ui-field-hint">The code works until {fmtTime(offer.expiresAt, timezone)}.</p>
+              </>
+            ) : (
+              <p className="ui-card-meta">Pair another phone, or the first one if you skipped it.</p>
+            )}
+          </Stack>
+        </Section>
+      </Stack>
+    </Section>
+  );
+}
+
+/** "Unpair", then asked once more in place, then gone. */
+function UnpairButton({ id, onGone }: { id: string; onGone: () => void }): JSX.Element {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!asking) return <Button size="sm" onClick={() => setAsking(true)}>Unpair</Button>;
+  const unpair = (): void => {
+    setBusy(true);
+    setFailed(null);
+    api
+      .unpairTelegramDevice(id)
+      .then(onGone)
+      .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <span className="nt-channel">
+      <span className="ui-field-hint" role={failed ? 'alert' : undefined}>{failed ?? 'It will no longer reach your agents.'}</span>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>Keep</Button>
+      <Button size="sm" variant="danger" disabled={busy} onClick={unpair}>Unpair</Button>
+    </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }): JSX.Element {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (): void => {
+    if (!navigator.clipboard?.writeText) { setCopied('Select the link to copy it.'); return; }
+    void navigator.clipboard.writeText(text).then(() => setCopied('Copied.'), () => setCopied('Select the link to copy it.'));
+  };
+  return (
+    <span className="nt-channel">
+      <Button size="sm" onClick={copy}>Copy</Button>
+      {copied ? <span className="ui-field-hint" role="status">{copied}</span> : null}
+    </span>
   );
 }
 
