@@ -259,7 +259,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
   const [kind, setKind] = useState<ProviderAccount['kind']>(a?.kind ?? 'anthropic');
   const [auth, setAuth] = useState<ProviderAccount['auth']>(a?.auth ?? 'api-key');
   const [baseUrl, setBaseUrl] = useState(a?.baseUrl ?? '');
-  const [model, setModel] = useState(a?.defaultModel ?? 'claude-sonnet-5');
+  const [model, setModel] = useState(a?.defaultModel ?? 'claude-opus-5-5');
   const [secret, setSecret] = useState('');
   // Blank means "whatever the model is known to hold". Only somebody serving
   // a model themselves, at a window of their own choosing, needs this.
@@ -267,7 +267,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
   const changeKind = (value: ProviderAccount['kind']) => {
     setKind(value); setAuth(value === 'codex' ? 'chatgpt' : 'api-key'); setSecret('');
     setBaseUrl(value === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
-    setModel(value === 'anthropic' ? 'claude-sonnet-5' : value === 'openai' ? 'gpt-5' : '');
+    setModel(value === 'anthropic' ? 'claude-opus-5-5' : value === 'openai' ? 'gpt-5' : '');
   };
   const incomplete = !label.trim() || !model.trim();
   return (
@@ -362,7 +362,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
  * subscription can be connected. The default model is chosen from a real
  * list, not typed from memory before there is anything to check it against.
  */
-const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5' };
+const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-opus-5-5', openai: 'gpt-5', codex: 'gpt-5' };
 
 /** The name the form proposes for a provider, before the owner touches it. */
 export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAccount['auth'], taken: string[]): string {
@@ -425,7 +425,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
-      const defaultModel = chosen || STARTING_MODEL[kind] || 'claude-sonnet-5';
+      const defaultModel = chosen || STARTING_MODEL[kind] || 'claude-opus-5-5';
       void (async () => {
         let created: { id: string } | undefined;
         const ok = await run(async () => {

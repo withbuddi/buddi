@@ -1321,7 +1321,7 @@ function KeyCard({
     void (async () => {
       // The model list first, so the default buddi names is one this key can
       // actually reach rather than one this page believes in.
-      let defaultModel = kind === 'anthropic' ? 'claude-sonnet-5' : 'gpt-5';
+      let defaultModel = kind === 'anthropic' ? 'claude-opus-5-5' : 'gpt-5';
       try {
         const probed = await api.probeModels({ kind, auth: 'api-key', secret: value });
         // Only a model the provider itself flags as the default displaces the
@@ -1583,7 +1583,8 @@ function ClaudeCard({
   const [trouble, setTrouble] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<{ id: string; revision: number; url: string; attemptId: string } | null>(null);
   const [code, setCode] = useState('');
-  const model = 'claude-sonnet-5';
+  // The catalogue's default for a new Claude account; the model list after the sign-in is where it changes.
+  const model = 'claude-opus-5-5';
 
   const start = (): void => {
     setWorking(true);

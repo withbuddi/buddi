@@ -284,7 +284,7 @@ export class ProviderAccounts {
     const input = parsed.data;
     if (input.auth === 'none' && input.kind !== 'openai-compatible') throw new ProviderAccountError(400, 'This provider requires an API key.');
     if (input.auth === 'api-key' && !input.secret) throw new ProviderAccountError(400, 'Enter the API key first.');
-    const placeholder = input.kind === 'anthropic' ? 'claude-sonnet-5' : input.kind === 'openai' ? 'gpt-5' : 'probe';
+    const placeholder = input.kind === 'anthropic' ? 'claude-opus-5-5' : input.kind === 'openai' ? 'gpt-5' : 'probe';
     const row: ProviderAccount = { id: 'probe', label: 'probe', kind: input.kind, auth: input.auth, baseUrl: input.baseUrl ?? '', defaultModel: placeholder, enabled: true, revision: 0 };
     try {
       return await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, placeholder, input.secret ?? null));

@@ -19,6 +19,7 @@ import type { Usage } from '@buddi/runtime';
 export const PRICES: readonly { prefix: string; input: number; output: number }[] = [
   { prefix: 'claude-fable-5', input: 10, output: 50 },
   { prefix: 'claude-mythos-5', input: 10, output: 50 },
+  { prefix: 'claude-opus-5-5', input: 4, output: 20 },
   { prefix: 'claude-opus-5', input: 5, output: 25 },
   { prefix: 'claude-opus-4-8', input: 5, output: 25 },
   { prefix: 'claude-opus-4-7', input: 5, output: 25 },

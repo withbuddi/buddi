@@ -928,9 +928,9 @@ describe('change', () => {
     fireEvent.change(screen.getByPlaceholderText(SCRIPT.brain.key.placeholder), { target: { value: 'sk-ant-new' } });
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
     // One call moves the assistant and anything following it.
-    await waitFor(() => expect(api.bindBrain).toHaveBeenCalledWith({ accountId: 'second', model: 'claude-sonnet-5' }));
+    await waitFor(() => expect(api.bindBrain).toHaveBeenCalledWith({ accountId: 'second', model: 'claude-opus-5-5' }));
     // And buddi names the model the assistant was actually moved onto.
-    expect(await screen.findByText(SCRIPT.brain.works('claude-sonnet-5'))).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.brain.works('claude-opus-5-5'))).toBeInTheDocument();
   });
 });
 

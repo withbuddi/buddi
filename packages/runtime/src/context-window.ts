@@ -59,9 +59,11 @@ export type ContextProvider = 'anthropic' | 'openai' | 'openai-compatible' | 'ol
 type Entry = readonly [prefix: string, tokens: number];
 
 const ANTHROPIC: readonly Entry[] = [
-  // Claude 5 family.
+  // Claude 5 family: Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens; Opus 5 did not.
+  ['claude-fable-5', 1_000_000],
+  ['claude-mythos-5', 1_000_000],
+  ['claude-opus-5-5', 1_000_000],
   ['claude-opus-5', 200_000],
-  // Sonnet 5 carries the million-token window by default; Opus and Haiku 5 do not.
   ['claude-sonnet-5', 1_000_000],
   ['claude-haiku-5', 200_000],
   // Claude 4.x.
