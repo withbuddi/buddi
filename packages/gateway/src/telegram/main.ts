@@ -32,7 +32,8 @@ import {
   conversationGroup,
   type ActionRecord,
 } from '@buddi/core';
-import { runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
+import { producedArtifactIds, runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
+import { canvasAfterCall, type CanvasView } from './outbound.js';
 import { nativeSearchRecorder } from '@buddi/tool-web';
 import { hostService } from '@buddi/tool-host';
 import { browserHost } from '../browser-host.js';
@@ -337,6 +338,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     });
   };
 
+  // Links in what the phone is sent only when the dashboard has an address a
+  // phone can open. A malformed origin is the dashboard's error to report.
+  let publicOrigin: string | undefined;
+  try {
+    publicOrigin = webConfig(env).publicOrigin;
+  } catch {
+    publicOrigin = undefined;
+  }
+
   // Files land in core's artifact store; the surface only hands bytes over and
   // asks for them back when a run needs to look at one.
   const artifacts = deps.artifacts ?? createCoreArtifactStore({ pool, env });
@@ -454,7 +464,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // The surface decided *which* agent this turn belongs to; resolving the id
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, systemSuffix, resume, approval, interjections }) => {
+    ...(publicOrigin ? { publicOrigin } : {}),
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -481,6 +492,16 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       // button in this conversation can still fire an hour and three subjects
       // later.
       await withdrawTurnOffers(pool, conversationId, new Date(now()), log);
+
+      // What this turn made besides its words, gathered as it goes: the files
+      // its tools saved (the list the dashboard shows under an answer) and
+      // the last view it drew. Both are sent after the text.
+      const produced: string[] = [];
+      let canvas: CanvasView | undefined;
+      // A tool call between two stretches of text is a paragraph break in the
+      // streamed answer, as it is in the final one.
+      let spoke = false;
+      let broke = false;
 
       const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
       const options: RunAgentOptions = {
@@ -520,11 +541,25 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
           // Held until the result comes back, so the caption can say what the
           // step was *for* rather than only naming its verb.
           if (name === BROWSER_ACT) photos.noteCall(conversationId, input);
+          canvas = canvasAfterCall(canvas, name, input);
+          broke = true;
           onToolCall?.(name, input);
         },
+        ...(onTextDelta
+          ? {
+              onDelta: (delta) => {
+                if (delta.kind !== 'text' || delta.text === '') return;
+                if (spoke && broke) onTextDelta('\n\n');
+                spoke = true;
+                broke = false;
+                onTextDelta(delta.text);
+              },
+            }
+          : {}),
         // Presentation only, and never awaited: the photo is queued on its own
         // tail, so Telegram can never slow a step down or fail one.
         onToolResult: (name, outcome) => {
+          if (outcome.ok) produced.push(...producedArtifactIds(outcome.output));
           if (name !== BROWSER_ACT) return;
           void photos.step({
             chatId,
@@ -581,6 +616,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       return {
         text: result.text,
         askedOwner: sink.asked !== undefined,
+        ...(produced.length > 0 ? { artifacts: [...new Set(produced)] } : {}),
+        ...(canvas ? { canvas } : {}),
         ...(stored.length > 0 ? { offers: stored } : {}),
         ...(question ? { question } : {}),
       };

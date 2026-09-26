@@ -1401,19 +1401,60 @@ describe('TelegramSurface progress bubble', () => {
     expect(sent.some((s) => s.method === 'deleteMessage')).toBe(false);
   });
 
-  it('deletes the placeholder and sends chunks for a long answer', async () => {
+  it('streams the answer into the placeholder, then lands the whole of it', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (req?: any) => {
+      req.onToolCall?.('finance.accounts');
+      req.onTextDelta?.('You have ');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      req.onTextDelta?.('$12 left');
+      return 'You have $12 left.';
+    });
+    const { surface, sent } = surfaceWith(db, run);
+    await surface.processUpdates([message(107, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+
+    const edits = sent.filter((s) => s.method === 'editMessageText');
+    expect(edits.every((e) => e.body.message_id === 100)).toBe(true);
+    expect(edits.map((e) => e.body.text)).toContain('You have ');
+    expect(edits.at(-1)?.body.text).toBe('You have $12 left.');
+    // One bubble: the placeholder, nothing else sent.
+    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(1);
+  });
+
+  it('sends a table the run drew after its text, as monospace HTML', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (_req?: any) => ({
+      text: 'Here it is.',
+      canvas: { renderer: 'table' as const, data: { columns: [{ label: 'A' }], rows: [['x']] } },
+    }));
+    const { surface, sent } = surfaceWith(db, run as never);
+    await surface.processUpdates([message(108, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+
+    const last = sent.at(-1);
+    expect(last?.method).toBe('sendMessage');
+    expect(last?.body.parse_mode).toBe('HTML');
+    expect(last?.body.text).toBe('<pre>A\n-\nx</pre>');
+    expect(sent.filter((s) => s.method === 'editMessageText').at(-1)?.body.text).toBe('Here it is.');
+  });
+
+  it('puts the first part of a long answer in the placeholder and sends the rest', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));
     const long = 'w'.repeat(9000);
     const { surface, sent } = surfaceWith(db, vi.fn(async (_req?: any) => long));
     await surface.processUpdates([message(105, OWNER, OWNER, 'hello')]);
     await surface.drain();
 
-    const deletes = sent.filter((s) => s.method === 'deleteMessage');
-    expect(deletes).toHaveLength(1);
-    expect(deletes[0]?.body.message_id).toBe(100);
-    expect(sent.filter((s) => s.method === 'editMessageText')).toHaveLength(0);
-    // placeholder + three chunks
-    expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(4);
+    expect(sent.some((s) => s.method === 'deleteMessage')).toBe(false);
+    const edits = sent.filter((s) => s.method === 'editMessageText');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.body.message_id).toBe(100);
+    expect(edits[0]?.body.text).toHaveLength(4096);
+    // placeholder + the two parts past Telegram's 4,096
+    const sends = sent.filter((s) => s.method === 'sendMessage');
+    expect(sends).toHaveLength(3);
+    expect(sends.slice(1).map((s) => s.body.text.length)).toEqual([4096, 808]);
   });
 
   it('falls back to sendMessage when the final edit fails', async () => {

@@ -48,6 +48,12 @@ export const ATTACHMENT_RECENCY_MS = 30 * 60_000;
 export interface ArtifactStore {
   save(input: SaveArtifactInput): Promise<ArtifactRow>;
   load(id: string): Promise<LoadedArtifact | null>;
+  /**
+   * The record without the bytes: its name, type and size, so a file a run
+   * saved can be refused for size before it is read into memory. Optional:
+   * a store without it simply sends no files back.
+   */
+  describe?(id: string): Promise<ArtifactRow | null>;
 }
 
 /** What the runtime wants back for a multimodal content block. */
@@ -75,6 +81,7 @@ export function createCoreArtifactStore(deps: CoreArtifactStoreDeps): ArtifactSt
   const pool = deps.pool as unknown as Pool;
   return {
     save: (input) => saveArtifact(pool, input, deps.env),
+    describe: (id) => getArtifact(pool, id),
     async load(id) {
       const row = await getArtifact(pool, id);
       if (!row) return null;

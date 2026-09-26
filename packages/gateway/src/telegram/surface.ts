@@ -76,9 +76,27 @@ import {
   type BrowserCommandWord,
 } from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
+import {
+  BURST_GAP_MS,
+  StreamedAnswer,
+  sendBurst,
+  sendRunExtras,
+  toPlainText,
+  type CanvasView,
+} from './outbound.js';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 
 export const SURFACE = 'telegram';
+
+// Moved to `outbound.ts`, where every send lives; still importable from here.
+export {
+  BURST_GAP_MS,
+  MAX_BURST_MESSAGES,
+  TOOL_NAMESPACES,
+  splitIntoMessages,
+  stripToolNames,
+  toPlainText,
+} from './outbound.js';
 
 /** The bubble posted when the agent that is working is not known by name. */
 export const PLACEHOLDER_TEXT = '⏳ Working on it…';
@@ -204,38 +222,9 @@ export const HELP = [
  * onboarding is `pending`, the default agent is run with `FIRST_RUN_SUFFIX` and
  * conducts the interview in its own words, using the `owner.*` tools.
  *
- * What is left in code is only the *shape* of the delivery, below.
+ * What is left in code is only the *shape* of the delivery, which lives in
+ * `outbound.ts` with every other send.
  */
-
-/** How many messages one first-run answer may be broken into. */
-export const MAX_BURST_MESSAGES = 3;
-
-/** The pause between them: long enough to read as typing, short enough to wait. */
-export const BURST_GAP_MS = 600;
-
-/**
- * Break an answer into the messages it should arrive as.
- *
- * A paragraph break is the agent saying "and then this" — in a chat that is a
- * second message, not a blank line inside one bubble. So up to
- * `MAX_BURST_MESSAGES` paragraphs become that many sends, with a typing
- * indicator in between.
- *
- * The cap is a cap, not a truncation: an answer with *more* paragraphs than
- * that is sent whole. Breaking a six-paragraph explanation into three bubbles
- * and a blob would read worse than either, and a first run should never be
- * six paragraphs anyway — the skill says two short messages, maximum.
- */
-export function splitIntoMessages(text: string, max = MAX_BURST_MESSAGES): string[] {
-  const body = text.trim();
-  if (body === '') return [];
-  const paragraphs = body
-    .split(/\n\s*\n/)
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
-  if (paragraphs.length <= 1 || paragraphs.length > max) return [body];
-  return paragraphs;
-}
 
 /**
  * A file arrived in a build with no artifact store wired up. Not an error the
@@ -526,6 +515,12 @@ export interface RunRequest {
    */
   systemSuffix?: string;
   /**
+   * The answer as the model writes it, piece by piece. The surface streams it
+   * into the placeholder; purely presentational, like `onToolCall`, and the
+   * run's returned text is still the answer that lands last.
+   */
+  onTextDelta?: (text: string) => void;
+  /**
    * Where this run hears about a message the owner sends while it works. The
    * runtime drains it between tool calls; a runner that ignores it simply
    * answers the first message, which is what this surface did before.
@@ -560,9 +555,29 @@ export interface RunReply {
   offers?: readonly Offer[];
   /** A durable question whose options this surface may draw as buttons. */
   question?: Question;
+  /**
+   * The artifact ids of the files this turn saved — the same list the
+   * dashboard shows under the answer. Sent after the text.
+   */
+  artifacts?: readonly string[];
+  /** What the turn left on the canvas, if it drew anything. */
+  canvas?: CanvasView;
 }
 
-type RenderedTurn = RenderedOffers & { question?: Question };
+type RenderedTurn = RenderedOffers & {
+  question?: Question;
+  artifacts?: readonly string[];
+  canvas?: CanvasView;
+};
+
+/** The extras a reply carries past its text, copied onto the drawn turn. */
+function extrasOf(produced: string | RunReply): Pick<RenderedTurn, 'artifacts' | 'canvas'> {
+  if (typeof produced === 'string') return {};
+  return {
+    ...(produced.artifacts && produced.artifacts.length > 0 ? { artifacts: produced.artifacts } : {}),
+    ...(produced.canvas ? { canvas: produced.canvas } : {}),
+  };
+}
 
 /** The text of a reply, whichever shape the runner returned. */
 export function replyText(reply: string | RunReply): string {
@@ -652,239 +667,14 @@ export interface TelegramSurfaceOptions {
   now?: () => number;
   /** The owner's timezone, for every date this surface renders. */
   timezone?: string;
-}
-
-/* ------------------------------------------------------------------ *
- * Plain text safety net
- * ------------------------------------------------------------------ */
-
-/*
- * We never send `parse_mode`, so any markdown a model emits is shown to the
- * owner literally: `**Status — 2026-09-13**`, backticks, pipe tables. The
- * prompt asks for plain text; this is the deterministic net under that ask.
- *
- * It is pure and conservative: markers are only removed when they actually
- * wrap a span, so arithmetic (`2 * 3`) and identifiers (`snake_case`) survive
- * untouched, and no digit, currency symbol or word is ever rewritten.
- */
-
-/** A ``` fence line, with or without a language tag. */
-const FENCE_RE = /^\s*```[A-Za-z0-9_+-]*\s*$/;
-
-/** `# Heading` → `Heading`. Only at the start of a line, marker plus space. */
-const HEADING_RE = /^(\s*)#{1,6}[ \t]+(?=\S)/;
-
-/** `[label](url)` → `label (url)`. */
-const LINK_RE = /\[([^\]\n]*)\]\(([^()\s]*)\)/g;
-
-/** `` `code` `` → `code`. Single backticks only; the span may not be empty. */
-const INLINE_CODE_RE = /`([^`\n]+)`/g;
-
-/** `**bold**` — both markers must hug non-space, so `a ** b` is left alone. */
-const BOLD_STAR_RE = /\*\*(?=\S)([^*\n]+?)(?<=\S)\*\*/g;
-
-/** `__bold__` — word characters on either side mean it is an identifier. */
-const BOLD_UNDER_RE = /(^|[^\w])__(?=\S)([^_\n]+?)(?<=\S)__(?!\w)/g;
-
-/** `*italic*` — a lone `*` (as in `2 * 3`) never matches: it wraps nothing. */
-const ITALIC_STAR_RE = /\*(?=\S)([^*\n]+?)(?<=\S)\*/g;
-
-/** `_italic_` — `snake_case` keeps its underscores: they sit inside a word. */
-const ITALIC_UNDER_RE = /(^|[^\w])_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)/g;
-
-/** `|---|:--:|` and friends: a table rule carries no content. */
-function isTableSeparatorRow(cells: readonly string[]): boolean {
-  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
-}
-
-/** `| a | b |` → `a — b`; the separator row is dropped by the caller. */
-function tableCells(line: string): string[] | undefined {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('|') || trimmed.length < 2) return undefined;
-  const inner = trimmed.replace(/^\|/, '').replace(/\|$/, '');
-  if (!inner.includes('|') && inner.trim() === '') return undefined;
-  return inner.split('|').map((cell) => cell.trim());
-}
-
-/** Marker removal inside one line of prose. Never applied to fenced code. */
-function stripInline(line: string): string {
-  return line
-    .replace(LINK_RE, (whole, label: string, url: string) => {
-      const text = label.trim();
-      if (url === '') return text;
-      return text === '' ? url : `${text} (${url})`;
-    })
-    .replace(INLINE_CODE_RE, '$1')
-    .replace(BOLD_STAR_RE, '$1')
-    .replace(BOLD_UNDER_RE, '$1$2')
-    .replace(ITALIC_STAR_RE, '$1')
-    .replace(ITALIC_UNDER_RE, '$1$2');
-}
-
-/* ------------------------------------------------------------------ *
- * Tool names never reach the owner
- * ------------------------------------------------------------------ */
-
-/**
- * The namespaces the runtime registers tools under. Tool names are internal
- * plumbing: the owner is told what happened, never which function did it.
- * The personas say so, and this pass is the deterministic net under that ask
- * for the turns where the model slips anyway.
- *
- * The surface is constructed without a registry to read, so this is the one
- * place the namespaces live. A new namespace belongs here the day its tools
- * are registered.
- */
-export const TOOL_NAMESPACES = [
-  'finance',
-  'memory',
-  'artifacts',
-  'email',
-  'agent',
-  'mission',
-  'reminder',
-  'schedule',
-] as const;
-
-/**
- * Tool names that carry no underscore. A dotted pair counts as a tool only
- * when the namespace is known *and* the second half is snake_case or one of
- * these — "has a dot" is never the rule, so `gmail.com`, `shotcrisp.app`,
- * `Statement.pdf`, `v1.2.3` and an email address are all left alone.
- */
-const TOOL_WORDS = [
-  'summary',
-  'balance',
-  'delegate',
-  'report',
-  'silent',
-  'status',
-  'search',
-  'send',
-  'list',
-  'add',
-  'set',
-  'get',
-  'cancel',
-  'snooze',
-  'purge',
-  'remember',
-  'recall',
-  'forget',
-  'note',
-  'read',
-  'text',
-  'describe',
-  'reconcile',
-] as const;
-
-const NAMESPACE_ALT = TOOL_NAMESPACES.join('|');
-
-/**
- * `finance.set_liability`, `agent.delegate`. The guards on either side keep
- * the match off anything that merely contains a dot: a longer hostname
- * (`mail.finance.summary.io`), a path segment, an address local part. A dot
- * that ends a sentence is not a continuation, so a mention may close one.
- */
-const TOOL_REF_SRC =
-  `(?<![\\w./@-])(?:${NAMESPACE_ALT})\\.` +
-  `(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|${TOOL_WORDS.join('|')})(?![\\w@/-])(?!\\.[A-Za-z0-9])`;
-
-/** `(finance.set_liability)`, `(via agent.delegate)` — the whole aside goes. */
-const TOOL_PAREN_RE = new RegExp(
-  `[ \\t]*\\((?:\\s*(?:via|see|using|through|with|by)\\s+)?${TOOL_REF_SRC}` +
-    `(?:[ \\t]*(?:,|and|\\+|&)[ \\t]*${TOOL_REF_SRC})*[ \\t]*\\)`,
-  'gi',
-);
-
-/** `` `finance.x` ``, `'finance.x'`, `"finance.x"` — the quotes leave with it. */
-const TOOL_QUOTED_RE = new RegExp(`[\`'"“‘]${TOOL_REF_SRC}[\`'"”’]`, 'gi');
-
-/** A bare mention, with the connector that introduced it when there is one. */
-const TOOL_BARE_RE = new RegExp(
-  `(?:[ \\t]+(?:via|using|through|by calling)[ \\t]+)?${TOOL_REF_SRC}`,
-  'gi',
-);
-
-/**
- * Spacing and punctuation left dangling by a removal: `stored , and` or
- * `on the calendar .`. Applied only to a line something was actually removed
- * from, so prose that mentions no tool is returned byte for byte.
- */
-function tidyAfterRemoval(cleaned: string, indent: string): string {
-  const body = cleaned
-    .replace(/\(\s*\)/g, '')
-    .replace(/\[\s*\]/g, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\([ \t]+/g, '(')
-    .replace(/[ \t]+([,.;:!?)])/g, '$1')
-    .replace(/,(?:[ \t]*,)+/g, ',')
-    .replace(/,[ \t]*([.;:!?])/g, '$1')
-    .replace(/([.;:!?])[ \t]*,/g, '$1')
-    .trim();
-  if (body === '') return '';
-  // All that survived is punctuation: the mention *was* the sentence. Drop
-  // the remains and leave every other line of the answer untouched.
-  return /^[,.;:!?—-]+$/.test(body) ? '' : `${indent}${body}`;
-}
-
-/** One line of prose, minus any tool reference and the mess it leaves. */
-function stripToolNamesFromLine(line: string): string {
-  const cleaned = line
-    .replace(TOOL_PAREN_RE, '')
-    .replace(TOOL_QUOTED_RE, '')
-    .replace(TOOL_BARE_RE, '');
-  if (cleaned === line) return line;
-  return tidyAfterRemoval(cleaned, /^[ \t]*/.exec(line)?.[0] ?? '');
-}
-
-/**
- * Remove internal tool names from an agent answer. Pure, idempotent, and
- * conservative: a line with no tool reference in it is returned unchanged.
- *
- * Exported on its own so every surface that renders an answer — Telegram
- * through `toPlainText`, the CLI directly — applies the same rule.
- */
-export function stripToolNames(text: string): string {
-  if (text === '') return '';
-  return text.split('\n').map(stripToolNamesFromLine).join('\n');
-}
-
-/**
- * Render agent-authored markdown as the plain text Telegram will display
- * verbatim. Pure: same input, same output, no clock and no I/O.
- *
- * Applied to final agent and mission answers only. Progress lines and the
- * surface's own copy (`/help`, `/agents`) are already plain by construction.
- */
-export function toPlainText(text: string): string {
-  if (text === '') return '';
-  const lines = text.split('\n');
-  const out: string[] = [];
-  let inFence = false;
-
-  for (const line of lines) {
-    if (FENCE_RE.test(line)) {
-      // Drop the fence, keep whatever it wrapped.
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) {
-      out.push(line);
-      continue;
-    }
-
-    const cells = tableCells(line);
-    if (cells) {
-      if (isTableSeparatorRow(cells)) continue;
-      out.push(stripToolNamesFromLine(stripInline(cells.join(' — '))));
-      continue;
-    }
-
-    out.push(stripToolNamesFromLine(stripInline(line.replace(HEADING_RE, '$1'))));
-  }
-
-  return out.join('\n').replace(/\n{3,}/g, '\n\n');
+  /** Minimum gap between two edits of a streamed answer. Default 1.5s. */
+  streamIntervalMs?: number;
+  /**
+   * The dashboard's public origin (`BUDDI_WEB_PUBLIC_ORIGIN`), when one is
+   * configured. Absent: the dashboard is on this computer only, and no link
+   * a phone could not open is ever sent.
+   */
+  publicOrigin?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -901,6 +691,7 @@ export function toPlainText(text: string): string {
  */
 export class ProgressBubble {
   readonly #labels: string[] = [];
+  #silent = false;
   #calls = 0;
   #chain: Promise<void> = Promise.resolve();
   #lastEditAt = 0;
@@ -923,7 +714,7 @@ export class ProgressBubble {
     this.#calls += 1;
     const label = toolLabel(name);
     if (!this.#labels.includes(label)) this.#labels.push(label);
-    if (this.messageId === undefined) return;
+    if (this.messageId === undefined || this.#silent) return;
 
     const at = this.now();
     if (this.#lastEditAt !== 0 && at - this.#lastEditAt < this.intervalMs) return;
@@ -949,6 +740,14 @@ export class ProgressBubble {
    */
   get toolCalls(): number {
     return this.#calls;
+  }
+
+  /**
+   * Stop editing: the answer is streaming into this message now, and a
+   * progress line written over it would take the owner's text away.
+   */
+  silence(): void {
+    this.#silent = true;
   }
 
   /** Wait for in-flight edits, so the final answer is the last write. */
@@ -2010,27 +1809,8 @@ export class TelegramSurface {
     }
   }
 
-  /**
-   * Send one answer as up to three messages, typing between them.
-   *
-   * The pause is the whole point: three bubbles posted in the same millisecond
-   * are one block with extra steps. `splitIntoMessages` decides how many there
-   * are; this only paces them.
-   */
   async #sendBurst(chatId: string, reply: string): Promise<void> {
-    const parts = splitIntoMessages(reply);
-    if (parts.length === 0) {
-      await this.#opts.api.sendMessage(chatId, '(no reply)');
-      return;
-    }
-    const gap = this.#opts.burstGapMs ?? BURST_GAP_MS;
-    for (const [index, part] of parts.entries()) {
-      if (index > 0) {
-        await this.#opts.api.sendChatAction(chatId).catch(() => {});
-        await sleep(gap);
-      }
-      await this.#opts.api.sendMessage(chatId, part);
-    }
+    await sendBurst(this.#opts.api, chatId, reply, this.#opts.burstGapMs ?? BURST_GAP_MS);
   }
 
   /**
@@ -2144,7 +1924,7 @@ export class TelegramSurface {
     try {
       await this.#withBubble(
         chatId,
-        async (progress) => {
+        async (progress, stream) => {
           const produced = await this.#opts.run({
             conversationId,
             chatId,
@@ -2153,6 +1933,7 @@ export class TelegramSurface {
             interjections,
             ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
+            onTextDelta: (delta) => stream.push(delta),
           });
           const reply = replyText(produced);
           askedOwner = turnAskedOwner(
@@ -2175,6 +1956,7 @@ export class TelegramSurface {
             typeof produced === 'string' ? [] : (produced.offers ?? []),
             ),
             ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
+            ...extrasOf(produced),
           };
         },
         label,
@@ -2359,7 +2141,7 @@ export class TelegramSurface {
 
     await this.#withBubble(
       chatId,
-      async (progress) =>
+      async (progress, stream) =>
         this.#rendered(
           await this.#opts.run({
             conversationId,
@@ -2368,6 +2150,7 @@ export class TelegramSurface {
             text: caption,
             ...(turn.attachments.length ? { attachments: turn.attachments } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
+            onTextDelta: (delta) => stream.push(delta),
           }),
         ),
       handleLabel(agent.handle),
@@ -2790,7 +2573,7 @@ export class TelegramSurface {
    */
   async #withBubble(
     chatId: string,
-    produce: (progress: ProgressBubble) => Promise<string | RenderedTurn>,
+    produce: (progress: ProgressBubble, stream: StreamedAnswer) => Promise<string | RenderedTurn>,
     agentName?: string,
     placeholderOverride?: string,
     /**
@@ -2821,23 +2604,49 @@ export class TelegramSurface {
       this.#opts.now ?? (() => Date.now()),
       placeholder,
     );
+    // The answer, streamed into the same bubble while the model speaks. The
+    // first chunk silences the progress line; the final write is the answer.
+    const outbound = { api: this.#opts.api, log: this.#log };
+    const stream = new StreamedAnswer(outbound, chatId, placeholderId, {
+      now: this.#opts.now ?? (() => Date.now()),
+      ...(this.#opts.streamIntervalMs === undefined ? {} : { intervalMs: this.#opts.streamIntervalMs }),
+      // Typing is already on, from `#startTyping`.
+      typing: false,
+      takeOver: async () => {
+        progress.silence();
+        await progress.settle();
+      },
+    });
 
     try {
       // Safety net, not the mechanism: TELEGRAM_SURFACE already told the model
       // markdown does not render here, and we never send `parse_mode`. This
       // catches the answer of a model that ignored the profile.
-      const produced = await produce(progress);
+      const produced = await produce(progress, stream);
       const drawn: RenderedTurn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
       const reply = toPlainText(drawn.text);
       await progress.settle();
-      await this.#finish(
-        chatId,
-        placeholderId,
+      await stream.finish(
         reply,
         drawn.question && drawn.question.options.length > 0
           ? questionKeyboard(drawn.question)
           : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
       );
+      // Then what else the turn made: the view it drew, the files it saved.
+      if (drawn.artifacts || drawn.canvas) {
+        await sendRunExtras(
+          {
+            ...outbound,
+            ...(this.#opts.artifacts ? { artifacts: this.#opts.artifacts } : {}),
+            ...(this.#opts.publicOrigin ? { publicOrigin: this.#opts.publicOrigin } : {}),
+          },
+          chatId,
+          {
+            ...(drawn.artifacts ? { artifacts: drawn.artifacts } : {}),
+            ...(drawn.canvas ? { canvas: drawn.canvas } : {}),
+          },
+        );
+      }
     } catch (err) {
       // The raw error goes to the log with its whole cause chain; what reaches
       // the chat is written for a person, and carries the retry when offering
@@ -2859,9 +2668,7 @@ export class TelegramSurface {
         message: outcome.detail,
       });
       await progress.settle();
-      await this.#replace(
-        chatId,
-        placeholderId,
+      await stream.finish(
         toPlainText(outcome.rendered.text),
         outcome.rendered.controls.length === 0
           ? undefined
@@ -2870,50 +2677,6 @@ export class TelegramSurface {
     } finally {
       stopTyping();
     }
-  }
-
-  /**
-   * Land the answer in the placeholder when it fits — one bubble, no flicker —
-   * and otherwise drop the placeholder and send the chunks.
-   */
-  async #finish(
-    chatId: string,
-    placeholderId: number | undefined,
-    reply: string,
-    keyboard?: InlineKeyboardMarkup,
-  ): Promise<void> {
-    const text = reply.trim() === '' ? '(no reply)' : reply;
-    if (placeholderId !== undefined && text.length > MAX_MESSAGE_CHARS) {
-      await this.#opts.api.deleteMessage(chatId, placeholderId).catch((err) => {
-        this.#log(`telegram: placeholder delete failed: ${message(err)}`);
-      });
-      await this.#opts.api.sendMessage(chatId, text, keyboard ? { replyMarkup: keyboard } : {});
-      return;
-    }
-    await this.#replace(chatId, placeholderId, text, keyboard);
-  }
-
-  /** Edit the placeholder, falling back to a new message on any edit failure. */
-  async #replace(
-    chatId: string,
-    placeholderId: number | undefined,
-    text: string,
-    keyboard?: InlineKeyboardMarkup,
-  ): Promise<void> {
-    if (placeholderId !== undefined) {
-      try {
-        await this.#opts.api.editMessageText(
-          chatId,
-          placeholderId,
-          text,
-          keyboard ? { replyMarkup: keyboard } : {},
-        );
-        return;
-      } catch (err) {
-        this.#log(`telegram: final edit failed, sending instead: ${message(err)}`);
-      }
-    }
-    await this.#opts.api.sendMessage(chatId, text, keyboard ? { replyMarkup: keyboard } : {});
   }
 
   /**
@@ -2931,6 +2694,7 @@ export class TelegramSurface {
       typeof produced === 'string' ? [] : (produced.offers ?? []),
       ),
       ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
+      ...extrasOf(produced),
     };
   }
 

@@ -50,6 +50,18 @@ import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 /** Telegram rejects messages over 4096 characters; we split well below it. */
 export const MAX_MESSAGE_CHARS = 4000;
 
+/**
+ * Telegram's own hard limit on one message's text. `MAX_MESSAGE_CHARS` splits
+ * below it; a finished answer is split at this one.
+ */
+export const TELEGRAM_MAX_MESSAGE_CHARS = 4096;
+
+/** The largest file a bot may send. Their limit: above it, the owner is told. */
+export const MAX_SEND_BYTES = 50 * 1024 * 1024;
+
+/** The largest picture `sendPhoto` takes; a bigger one goes as a document. */
+export const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
 /** Telegram refuses to serve a bot any file larger than this. Their limit. */
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
@@ -210,9 +222,25 @@ export class TelegramApiError extends Error {
     readonly method: string,
     readonly status: number,
     readonly description: string,
+    /**
+     * Seconds Telegram asks us to wait, on a 429 (`parameters.retry_after`).
+     * Absent on every other failure.
+     */
+    readonly retryAfter?: number,
   ) {
     super(`telegram ${method} failed (${status}): ${description}`);
   }
+}
+
+/** The error Telegram answers when it wants us to slow down, or undefined. */
+function failure(method: string, status: number, parsed: any): TelegramApiError {
+  const retry = Number(parsed?.parameters?.retry_after);
+  return new TelegramApiError(
+    method,
+    status,
+    String(parsed?.description ?? 'unknown error'),
+    Number.isFinite(retry) && retry >= 0 ? retry : undefined,
+  );
 }
 
 /**
@@ -308,13 +336,7 @@ export class TelegramApi {
     } catch {
       throw new TelegramApiError(method, res.status, `unparseable response: ${raw.slice(0, 200)}`);
     }
-    if (!res.ok || parsed?.ok !== true) {
-      throw new TelegramApiError(
-        method,
-        res.status,
-        String(parsed?.description ?? 'unknown error'),
-      );
-    }
+    if (!res.ok || parsed?.ok !== true) throw failure(method, res.status, parsed);
     return parsed.result as T;
   }
 
@@ -365,17 +387,39 @@ export class TelegramApi {
   }
 
   /**
-   * Plain text only. The advisor's markdown (tables above all) renders badly on
+   * Plain text. The advisor's markdown (tables above all) renders badly on
    * Telegram, and any parse mode turns user-authored text into a parsing hazard
-   * — so no `parse_mode` is ever sent.
+   * — so no `parse_mode` is sent for anything an agent wrote.
+   *
+   * One exception, `parseMode: 'HTML'`: a table the outbound module drew as a
+   * `<pre>` block, every cell already escaped. It is one message, never split —
+   * a split would cut a tag in half — so a caller hands it only text that fits.
    */
   async sendMessage(
     chatId: string | number,
     text: string,
-    opts: { replyMarkup?: InlineKeyboardMarkup } = {},
+    opts: {
+      replyMarkup?: InlineKeyboardMarkup;
+      parseMode?: 'HTML';
+      /** Where a long text is split. Default `MAX_MESSAGE_CHARS`; never above Telegram's 4,096. */
+      splitAt?: number;
+    } = {},
   ): Promise<number | undefined> {
+    if (opts.parseMode) {
+      if (text.length > TELEGRAM_MAX_MESSAGE_CHARS) {
+        throw new Error(`sendMessage: HTML text is ${text.length} characters, over Telegram's ${TELEGRAM_MAX_MESSAGE_CHARS}`);
+      }
+      const result = await this.call<{ message_id?: number }>('sendMessage', {
+        chat_id: chatId,
+        text,
+        parse_mode: opts.parseMode,
+        disable_web_page_preview: true,
+        ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+      });
+      return typeof result?.message_id === 'number' ? result.message_id : undefined;
+    }
     let firstId: number | undefined;
-    const chunks = splitMessage(text);
+    const chunks = splitMessage(text, Math.min(opts.splitAt ?? MAX_MESSAGE_CHARS, TELEGRAM_MAX_MESSAGE_CHARS));
     for (const [index, chunk] of chunks.entries()) {
       // A keyboard belongs to the *last* chunk: it must sit under the whole
       // message the owner is being asked about, not under its first page.
@@ -395,17 +439,51 @@ export class TelegramApi {
   /**
    * Send a picture with a caption, and optionally a button under it.
    *
-   * The one call that uploads bytes, so the one call that is not JSON:
-   * `sendPhoto` takes multipart/form-data, assembled here by hand rather than
-   * through `FormData` so the body stays a `Buffer` and every existing
-   * `FetchLike` fake keeps working. The caption is plain text for the same
-   * reason `sendMessage` is — no `parse_mode` is ever sent — and Telegram caps
-   * it at 1024 characters, so it is cut here rather than rejected there.
+   * One of the calls that upload bytes, so not JSON: see `#upload`. The caption
+   * is plain text for the same reason `sendMessage` is — no `parse_mode` is
+   * ever sent — and Telegram caps it at 1024 characters, so it is cut here
+   * rather than rejected there.
    */
   async sendPhoto(
     chatId: string | number,
     photo: Buffer,
     opts: { caption?: string; filename?: string; contentType?: string; replyMarkup?: InlineKeyboardMarkup } = {},
+  ): Promise<number | undefined> {
+    return this.#upload('sendPhoto', 'photo', chatId, photo, {
+      ...opts,
+      filename: opts.filename ?? 'screenshot.jpg',
+      contentType: opts.contentType ?? 'image/jpeg',
+    });
+  }
+
+  /**
+   * Send any file as a document: Telegram shows its name and size and the
+   * owner taps to open it. The caller checks `MAX_SEND_BYTES` first and says
+   * so in words; Telegram's refusal would only say "Request Entity Too Large".
+   */
+  async sendDocument(
+    chatId: string | number,
+    document: Buffer,
+    opts: { filename: string; contentType?: string; caption?: string },
+  ): Promise<number | undefined> {
+    return this.#upload('sendDocument', 'document', chatId, document, {
+      ...opts,
+      contentType: opts.contentType ?? 'application/octet-stream',
+    });
+  }
+
+  /**
+   * multipart/form-data, assembled by hand rather than through `FormData` so
+   * the body stays a `Buffer` and every existing `FetchLike` fake keeps
+   * working. The filename is quoted, so a quote or a line break in it is
+   * replaced rather than allowed to end the header.
+   */
+  async #upload(
+    method: string,
+    fieldName: string,
+    chatId: string | number,
+    bytes: Buffer,
+    opts: { caption?: string; filename: string; contentType: string; replyMarkup?: InlineKeyboardMarkup },
   ): Promise<number | undefined> {
     const boundary = `buddi${randomUUID().replace(/-/g, '')}`;
     const parts: Buffer[] = [];
@@ -415,14 +493,15 @@ export class TelegramApi {
     field('chat_id', String(chatId));
     if (opts.caption) field('caption', opts.caption.slice(0, MAX_CAPTION_CHARS));
     if (opts.replyMarkup) field('reply_markup', JSON.stringify(opts.replyMarkup));
+    const filename = opts.filename.replace(/["\r\n\\]/g, '_');
     parts.push(Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="${opts.filename ?? 'screenshot.jpg'}"\r\n` +
-      `Content-Type: ${opts.contentType ?? 'image/jpeg'}\r\n\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+      `Content-Type: ${opts.contentType}\r\n\r\n`,
     ));
-    parts.push(photo);
+    parts.push(bytes);
     parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
 
-    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/sendPhoto`, {
+    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/${method}`, {
       method: 'POST',
       headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
       body: Buffer.concat(parts),
@@ -430,10 +509,8 @@ export class TelegramApi {
     const raw = await res.text();
     let parsed: any;
     try { parsed = raw === '' ? {} : JSON.parse(raw); }
-    catch { throw new TelegramApiError('sendPhoto', res.status, `unparseable response: ${raw.slice(0, 200)}`); }
-    if (!res.ok || parsed?.ok !== true) {
-      throw new TelegramApiError('sendPhoto', res.status, String(parsed?.description ?? 'unknown error'));
-    }
+    catch { throw new TelegramApiError(method, res.status, `unparseable response: ${raw.slice(0, 200)}`); }
+    if (!res.ok || parsed?.ok !== true) throw failure(method, res.status, parsed);
     const id = parsed.result?.message_id;
     return typeof id === 'number' ? id : undefined;
   }

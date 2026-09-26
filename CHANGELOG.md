@@ -12,9 +12,13 @@ What changes in buddi from one release to the next, newest first.
 - Frequency goals: "run three times a week". A goal can count how many times you tell buddi something in each week (Monday to Sunday, your timezone) or month. The card says "3 times a week"; a week that closes short is said once, a streak milestone ("4 weeks in a row") once, and at the deadline the goal is met when more weeks met the count than fell short.
 - The Goals page shows the numbers you told buddi for a goal you measure, and a frequency goal's weeks as met, short or partial. In chat, `goal.status` draws your own values, or the count for each week, against the target.
 - Settings → Notifications has a Telegram panel: save or replace the bot token, see the phones you paired and unpair one, and pair another with the same QR code first run shows. Telegram appears in "Where buddi reaches you" as soon as the bot starts, without a restart.
+- On Telegram, the files a run saved arrive after its answer: pictures as photos, everything else as documents under their own names. A file over Telegram's 50 MB limit is named in one sentence that points to the Files page.
+- On Telegram, a table an agent draws arrives as monospace text when it fits one message, and as a CSV named after the table when it does not. A chart or another view answers with one line, and the dashboard link when a public address is set.
+- On Telegram, the answer streams into one message as the model writes it, updated at most every 1.5 seconds; the last update is the whole answer.
 
 ### Changed
 
+- On Telegram, an answer longer than 4,096 characters keeps its first part in the message that said "Working on it" and sends the rest after it, split between paragraphs, instead of deleting that message.
 - The model list knows Claude Opus 5.5 (`claude-opus-5-5`, $4 and $20 a million tokens) and Fable 5.1; Sonnet 5 stays the default, at half the price. The context table knows Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens.
 - Signing in with Claude from the first run opens the consent page itself; the button stays for a browser that blocks the window.
 - Signing in with a Claude or ChatGPT subscription is offered by default; `BUDDI_SUBSCRIPTION_SIGNINS=off` hides both. The setup wizard shows the Claude card first, with a line on the plan's monthly Agent SDK credits. `buddi doctor` says whether the sign-ins are offered or hidden.
