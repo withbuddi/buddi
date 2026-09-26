@@ -177,6 +177,12 @@ entries. Do not introduce cross-context hash merging as part of this feature.
 When saving returns a deduplicated row, still record the current use and its
 provenance; do not overwrite the original creator with the latest agent.
 
+A file a colleague made through `agent.delegate` is used in two conversations:
+the colleague's, where it was saved, and the one that asked, where the runtime
+records it with the delegation's result, credited to the colleague. The Files
+page lists it once with both links, and the asking thread draws it under the
+asking agent's message and on the Delegation card.
+
 An output and an uploaded source in the same conversation are shown together
 under that conversation's files. This alone does not prove "created from".
 Only show a derivation link if the producing tool explicitly recorded it;

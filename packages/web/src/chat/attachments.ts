@@ -19,6 +19,34 @@ export type AttachmentBlock = Extract<ChatBlock, { type: 'attachment' }>;
 
 const PREVIEWABLE = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
+const ARTIFACT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The files a delegation's result names, as the tiles a message carries.
+ *
+ * The colleague made them in its own conversation, and the runtime records
+ * them as part of the asking turn too, so they are drawn under the asking
+ * agent's message like anything else it handed over. Only library ids become
+ * tiles; nothing a result says is used as a link.
+ */
+export function delegatedFiles(output: unknown): AttachmentBlock[] {
+  const list = output !== null && typeof output === 'object' ? (output as { artifacts?: unknown }).artifacts : null;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item): AttachmentBlock[] => {
+    if (item === null || typeof item !== 'object') return [];
+    const file = item as Record<string, unknown>;
+    if (typeof file.id !== 'string' || !ARTIFACT_ID.test(file.id)) return [];
+    return [{
+      type: 'attachment',
+      artifactId: file.id,
+      filename: typeof file.filename === 'string' ? file.filename : null,
+      mime: typeof file.mime === 'string' ? file.mime : 'application/octet-stream',
+      kind: typeof file.kind === 'string' ? file.kind : 'other',
+      sizeBytes: null,
+    }];
+  });
+}
+
 export function isPreviewable(mime: string): boolean {
   return PREVIEWABLE.has(mime.toLowerCase());
 }

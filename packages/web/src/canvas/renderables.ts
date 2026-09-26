@@ -39,6 +39,7 @@ import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
 import type { PreviewProps, Renderable, RendererName, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
+import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
 import { commandResult } from './command-result';
 
 /**
@@ -55,7 +56,7 @@ export interface DelegatePanelProps {
   agentId: string;
   runId: string | null;
   /** The delegation's own result, once the call has come back. */
-  result: { ok: boolean; text: string | null } | null;
+  result: { ok: boolean; text: string | null; files?: AttachmentBlock[] } | null;
   /**
    * Set while the colleague is paused on the owner, or carrying on after a
    * decision: the call has not come back. `approvalId` is the approval still
@@ -237,7 +238,11 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       if (delegate) {
         delegate.props = {
           ...(delegate.props as DelegatePanelProps),
-          result: { ok: block.ok, text: delegateText(block.ok ? block.output : block.error ?? block.output) },
+          result: {
+            ok: block.ok,
+            text: delegateText(block.ok ? block.output : block.error ?? block.output),
+            ...(block.ok && delegatedFiles(block.output).length > 0 ? { files: delegatedFiles(block.output) } : {}),
+          },
         } satisfies DelegatePanelProps;
         if (!block.ok) delegate.tone = 'critical';
         continue;

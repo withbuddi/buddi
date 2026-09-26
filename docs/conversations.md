@@ -150,7 +150,9 @@ made on Telegram is handed to the dashboard, as a group's is.
 
 A colleague that ends with no final words still returns something: its last
 message in its thread, the files it saved (library ids), its failed calls, and
-a `status` with a `note`.
+a `status` with a `note`. The files it saved are part of the asker's turn
+either way, after an approval as much as without one (see
+[files.md](files.md)).
 
 Where it lives: `packages/runtime/src/delegate.ts`,
 `packages/gateway/src/agents/delegation-chain.ts`,

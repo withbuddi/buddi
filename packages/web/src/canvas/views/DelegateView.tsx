@@ -20,6 +20,8 @@ import { chatApi } from '../../api';
 import { Markdown } from '../../chat/markdown';
 import { gistFor } from '../../chat/gist';
 import { ToolRow, Thought } from '../../chat/MessageList';
+import { FileTile } from '../../chat/FileTile';
+import { downloadUrl, isPreviewable, previewUrl, type AttachmentBlock } from '../../chat/attachments';
 import type { ChatAgent, ChatBlock, ChatConversation, ChatMessage } from '../../chat/types';
 import { chatRoute } from '../../routes';
 import { AgentAvatar, Button, useAsync } from '../../ui';
@@ -34,7 +36,7 @@ export interface DelegateViewProps {
   agentId: string;
   runId?: string | null;
   /** The delegation's own result, once the call has come back. */
-  result?: { ok: boolean; text: string | null } | null;
+  result?: { ok: boolean; text: string | null; files?: readonly AttachmentBlock[] } | null;
   /**
    * The call has not come back because the colleague is paused on the owner,
    * or carrying on after they decided. `approvalId` is the approval up now.
@@ -150,6 +152,23 @@ export function DelegateView({ conversationId, agentId, runId = null, result = n
         </div>
       ) : status === 'working' || status === 'waiting' ? (
         <p className="muted">{name} has not answered yet.</p>
+      ) : null}
+
+      {/* What the colleague made. It is in the asking conversation too, under
+          the reply, and on the Files page under both conversations. */}
+      {result?.files && result.files.length > 0 ? (
+        <div className="wb-msg-files" role="list" aria-label={`Files ${name} made`} data-testid="delegate-files">
+          {result.files.map((file) => (
+            <a role="listitem" key={file.artifactId} href={downloadUrl(file.artifactId)} download>
+              <FileTile
+                name={file.filename ?? 'Untitled file'}
+                mime={file.mime}
+                sizeBytes={file.sizeBytes}
+                thumbnail={isPreviewable(file.mime) ? previewUrl(file.artifactId) : null}
+              />
+            </a>
+          ))}
+        </div>
       ) : null}
 
       {/* The way out of the summary and into the thread itself. On the right,

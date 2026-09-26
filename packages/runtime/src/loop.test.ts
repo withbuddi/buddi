@@ -44,6 +44,8 @@ class FakeDb implements Queryable {
   events: EventRow[] = [];
   /** Every durable write, in the order it happened, so ordering can be asserted. */
   writes: string[] = [];
+  /** The library uses written with a message, by message role. */
+  uses: { role: string; uses: unknown }[] = [];
   #seq = 0;
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
@@ -55,6 +57,7 @@ class FakeDb implements Queryable {
     }
     if (text.startsWith('insert into core.messages') || text.startsWith('with turn as ( insert into core.messages')) {
       this.writes.push(`message:${params[1]}`);
+      if (text.startsWith('with turn as')) this.uses.push({ role: params[1], uses: JSON.parse(params[4]) });
       this.messages.push({
         id: ++this.#seq,
         conversation_id: params[0],
@@ -2332,5 +2335,83 @@ describe('provenance for a tool call', () => {
       conversationId: await createConversation(db, agent.id), userMessage: 'hello' });
     expect(seen).toEqual([{ runId: null, turn: 1, step: 1, sources: [], texts: [] }]);
     expect(asked).toEqual([{ agentId: 'finance', tools: ['page.probe'] }]);
+  });
+});
+
+describe("a colleague's files come back as the asking turn's own", () => {
+  const ART = 'ed8b3763-8859-42dc-b0ef-2dbf9b1952f5';
+  const answer = {
+    agent: 'illustrator', handle: 'art', name: 'Illustrator', conversationId: 'conv-art', runId: 'run-art',
+    text: 'Generated a clockwork butterfly.', status: 'answered',
+    attached: 'What @art made is attached to this turn: clockwork-butterfly.png (image). The owner sees it under your reply; do not tell them to ask @art for it.',
+    artifacts: [{ id: ART, filename: 'clockwork-butterfly.png', mime: 'image/png', kind: 'image' }],
+  };
+  const delegating = (execute = vi.fn(async () => answer)): ToolRegistry => {
+    const registry = new ToolRegistry();
+    registry.register({ name: 'agent', version: '1', schema: 'agent', migrationsDir: '', tools: [{
+      name: 'agent.delegate', description: 'ask a colleague', tier: 'auto', producesArtifacts: true,
+      input: z.object({ agent: z.string(), task: z.string() }), execute,
+      image: async () => ({ mime: 'image/png', data: 'butterfly-bytes' }),
+    }] });
+    return registry;
+  };
+  const concierge: AgentDefinition = { ...agent, id: 'concierge', tools: ['agent.delegate'] };
+
+  it('records the files as produced by the colleague, names them to the model, and shows it the picture', async () => {
+    const db = new FakeDb();
+    const provider = scriptedProvider([
+      { content: [{ type: 'tool_use', id: 'd1', name: 'agent.delegate', input: { agent: 'illustrator', task: 'a butterfly' } }], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Here it is.' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent: concierge, provider, registry: delegating(), ctx, pool: db, conversationId: 'probe', userMessage: 'draw me a butterfly' });
+
+    // The library's association, written with the tool result, credited to @art.
+    expect(db.uses).toContainEqual({ role: 'user', uses: [{ artifactId: ART, kind: 'produced', agentId: 'illustrator' }] });
+    // The model reads that the owner has it.
+    const sent = JSON.stringify(provider.calls[1]);
+    expect(sent).toContain('attached to this turn: clockwork-butterfly.png (image)');
+    // And sees it, once, never stored.
+    const last = provider.calls[1]!.messages.at(-1)!;
+    expect(last.content).toContainEqual({ type: 'image', mime: 'image/png', data: 'butterfly-bytes' });
+    expect(JSON.stringify(db.messages)).not.toContain('butterfly-bytes');
+  });
+
+  it('sends no picture to a model that does not take images', async () => {
+    const db = new FakeDb();
+    const provider = scriptedProvider([
+      { content: [{ type: 'tool_use', id: 'd1', name: 'agent.delegate', input: { agent: 'illustrator', task: 'a butterfly' } }], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'Here it is.' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    const blind = Object.assign(provider, { capabilities: { ...providerCapabilities('anthropic'), multimodalImage: false } });
+    await runAgent({ agent: concierge, provider: blind, registry: delegating(), ctx, pool: db, conversationId: 'probe', userMessage: 'draw' });
+    expect(JSON.stringify(provider.calls[1])).not.toContain('butterfly-bytes');
+    expect(db.uses).toContainEqual({ role: 'user', uses: [{ artifactId: ART, kind: 'produced', agentId: 'illustrator' }] });
+  });
+
+  it('does the same when the answer comes back after the owner approved the colleague', async () => {
+    const db = new FakeDb();
+    const provider = scriptedProvider([{ content: [{ type: 'text', text: 'Here it is.' }], stopReason: 'end_turn', usage, model: 'test' }]);
+    await runAgent({ agent: concierge, provider, registry: delegating(), ctx, pool: db, conversationId: 'probe',
+      resume: { actionId: ACTION_ID, tool: 'agent.delegate', state: 'succeeded', result: answer } });
+    expect(db.uses).toContainEqual({ role: 'user', uses: [{ artifactId: ART, kind: 'produced', agentId: 'illustrator' }] });
+    const opening = provider.calls[0]!.messages.at(-1)!;
+    expect(JSON.stringify(opening)).toContain('attached to this turn: clockwork-butterfly.png (image)');
+    expect(opening.content).toContainEqual({ type: 'image', mime: 'image/png', data: 'butterfly-bytes' });
+    expect(JSON.stringify(db.messages)).not.toContain('butterfly-bytes');
+  });
+
+  it("credits another tool's files to the agent that ran it, whatever its output says", async () => {
+    const db = new FakeDb();
+    const registry = new ToolRegistry();
+    registry.register({ name: 'image', version: '1', schema: 'image', migrationsDir: '', tools: [{
+      name: 'image.make', description: 'make', tier: 'auto', producesArtifacts: true, input: z.object({}),
+      execute: async () => ({ agent: 'somebody-else', artifacts: [{ id: ART }] }),
+    }] });
+    const provider = scriptedProvider([
+      { content: [{ type: 'tool_use', id: 'i1', name: 'image.make', input: {} }], stopReason: 'tool_use', usage, model: 'test' },
+      { content: [{ type: 'text', text: 'made' }], stopReason: 'end_turn', usage, model: 'test' },
+    ]);
+    await runAgent({ agent: { ...agent, tools: ['image.make'] }, provider, registry, ctx, pool: db, conversationId: 'probe', userMessage: 'make' });
+    expect(db.uses).toContainEqual({ role: 'user', uses: [{ artifactId: ART, kind: 'produced', agentId: 'finance' }] });
   });
 });

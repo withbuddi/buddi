@@ -212,7 +212,10 @@ Around the contract:
   the agent's prompt lists it by id and handle. A call to anyone else is refused
   with the list: "@buddi may delegate to @dev, @ledger; @art is not on its
   list. The owner adds it on @buddi's Access page." An allowed colleague's
-  handle is taken for its id.
+  handle is taken for its id. The files the colleague makes belong to the
+  asking turn too: they are recorded as used in the asking conversation,
+  credited to the colleague, the result tells the asking model they are
+  attached, and an image is shown to it when its model takes images.
 - **Skills** are knowledge and procedures, in markdown. A skill never grants a
   tool or lowers a tier; a skill file with a `tools` or `tier` key fails the
   load. `agents/<id>/skills/*.md` are private to that agent and always loaded;

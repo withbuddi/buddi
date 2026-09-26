@@ -9,7 +9,7 @@
  * Fail closed at startup: an agent naming a tool the registry does not have
  * throws before any provider call is made.
  */
-import { APPROVAL_RESUME_SPEAKER, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type CoreToolContext, type ToolRegistry } from '@buddi/core';
+import { APPROVAL_RESUME_SPEAKER, DELEGATE_TOOL_NAME, SYSTEM_TOOLS, collectUntrusted, ownerTurn, surfaceSection, type AgentDefinition, type SurfaceProfile, type CoreToolContext, type ToolRegistry } from '@buddi/core';
 import { primeSecretScrubber, scrubDeep, scrubText } from '@buddi/core';
 import type {
   CompletionRequest,
@@ -535,6 +535,20 @@ export function producedArtifactIds(output: unknown): string[] {
   return [...new Set(ids.filter(isId))];
 }
 
+/**
+ * Who made the files a tool result names. A delegation's files were made by
+ * the colleague, and they are credited to it in the asking conversation too;
+ * every other tool's files are this agent's. Read only off the delegation
+ * tool's own output, so no other tool can credit its files to somebody else.
+ */
+export function producedBy(tool: string, output: unknown, self: string): string {
+  if (tool === DELEGATE_TOOL_NAME && output && typeof output === 'object') {
+    const agent = (output as { agent?: unknown }).agent;
+    if (typeof agent === 'string' && agent.trim() !== '') return agent;
+  }
+  return self;
+}
+
 /** jsonb comes back parsed from `pg`; tolerate a string for other drivers. */
 function normalizeContent(raw: unknown): ContentBlock[] {
   const value = typeof raw === 'string' ? safeParse(raw) : raw;
@@ -634,13 +648,13 @@ export const IMAGE_REFUSED_TEXT = '(An image was here but this model does not ta
  * in place. A screenshot says the text observation is what the model saw.
  * Returns whether there was anything to replace.
  */
-function dropImages(messages: NeutralMessage[], screenshots: ReadonlySet<ContentBlock>): boolean {
+function dropImages(messages: NeutralMessage[], ephemeral: ReadonlySet<ContentBlock>, pictures: ReadonlySet<ContentBlock> = new Set()): boolean {
   let replaced = false;
   for (const message of messages) {
     if (!message.content.some((b) => b.type === 'image')) continue;
     replaced = true;
     message.content = message.content.map((b) => b.type !== 'image' ? b
-      : { type: 'text', text: screenshots.has(b) ? SCREENSHOT_REFUSED_TEXT : IMAGE_REFUSED_TEXT });
+      : { type: 'text', text: ephemeral.has(b) && !pictures.has(b) ? SCREENSHOT_REFUSED_TEXT : IMAGE_REFUSED_TEXT });
   }
   return replaced;
 }
@@ -929,7 +943,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
   // turn; when the tool saves files, they are recorded as produced here, the
   // same as an immediate result would have been.
   const resumedProduced: ArtifactUse[] = resume?.state === 'succeeded' && resume.tool && registry.lookup(resume.tool)?.producesArtifacts
-    ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: agent.id }))
+    ? producedArtifactIds(resume.result).map((id) => ({ artifactId: id, kind: 'produced' as const, agentId: producedBy(resume.tool!, resume.result, agent.id) }))
     : [];
   // A resumed run's opening turn is the decided approval coming back, not the
   // owner speaking: it is stamped as such so no transcript draws it as theirs.
@@ -954,12 +968,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     capabilities,
   ));
   const ephemeralImages = new Set<ContentBlock>();
+  /** The ephemeral images that are a file a colleague made, not a screenshot. */
+  const pictures = new Set<ContentBlock>();
   /**
    * The model turned images down: its provider kind takes them, this model
    * does not. Nothing more is sent as a picture for the rest of the run; the
    * tools' text observations carry on alone.
    */
   let imagesRefused = false;
+  /*
+   * A decided call coming back with a picture — a colleague's image, after
+   * the owner approved the tool that made it — is shown with the result, the
+   * same as an immediate one would have been: once, and never stored.
+   */
+  const opening = messages[messages.length - 1];
+  if (resume?.state === 'succeeded' && resume.tool && capabilities.multimodalImage && opening?.role === 'user' && !opts.openingPersisted) {
+    try {
+      const picture = await registry.image(resume.tool, resume.result, toolCtx);
+      if (picture) {
+        const block: ContentBlock = { type: 'image', ...picture };
+        ephemeralImages.add(block);
+        if (resume.tool === DELEGATE_TOOL_NAME) pictures.add(block);
+        opening.content = [...opening.content, block];
+      }
+    } catch { /* The result stands on its own; a picture that cannot be read costs the picture. */ }
+  }
 
   await appendEvent(
     pool,
@@ -1057,7 +1090,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       // the pictures become a line of text and the turn is sent once more.
       // Not an error for the owner; one event records it.
       const refused = err instanceof ProviderError && err.reason === 'images-unsupported';
-      if (!refused || imagesRefused || !dropImages(messages, ephemeralImages)) throw err;
+      if (!refused || imagesRefused || !dropImages(messages, ephemeralImages, pictures)) throw err;
       imagesRefused = true;
       await appendEvent(
         pool,
@@ -1209,7 +1242,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         // has each one recorded as produced here by this agent — with the
         // result row, in one statement. A tool that merely returns files does not.
         if (registry.lookup(call.name)?.producesArtifacts) {
-          for (const id of producedArtifactIds(outcome.output)) produced.push({ artifactId: id, kind: 'produced', agentId: agent.id });
+          const by = producedBy(call.name, outcome.output, agent.id);
+          for (const id of producedArtifactIds(outcome.output)) produced.push({ artifactId: id, kind: 'produced', agentId: by });
         }
         // The tool finished, but it left the run waiting on a decision the
         // owner has to make elsewhere: nothing more is dispatched this turn,
@@ -1232,7 +1266,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
         if (!ctx.signal?.aborted) {
           try {
             const picture = await registry.image(call.name, outcome.output, toolCtx);
-            if (picture && capabilities.multimodalImage && !imagesRefused) images.push({ type: 'image', ...picture });
+            if (picture && capabilities.multimodalImage && !imagesRefused) {
+              const block: ContentBlock = { type: 'image', ...picture };
+              if (call.name === DELEGATE_TOOL_NAME) pictures.add(block);
+              images.push(block);
+            }
           } catch { /* Observation loss must never turn a completed action into a retry. */ }
         }
       } else if (outcome.reason === 'approval-required') {

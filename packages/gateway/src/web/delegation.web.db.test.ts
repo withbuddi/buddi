@@ -25,8 +25,10 @@ import {
   completeOnboarding,
   createPool,
   ensureOwner,
+  getLibraryEntry,
   migrate,
   roleProblemMessage,
+  saveArtifact,
   ToolRegistry,
   type AgentCatalog,
   type PluginManifest,
@@ -100,6 +102,19 @@ const picManifest: PluginManifest = {
         return { picture: `pic-${drawn.length}` };
       },
     } as never,
+    {
+      name: 'pic.save',
+      description: 'Save a picture to the library.',
+      tier: 'auto',
+      producesArtifacts: true,
+      input: z.object({ name: z.string() }),
+      async execute(input: { name: string }, ctx: CoreToolContext) {
+        // A real PNG signature: the preview and the asker's eyes both check it.
+        const bytes = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+        const row = await saveArtifact(ctx.db, { bytes, mime: 'image/png', filename: input.name, createdBy: ctx.agentId ?? 'owner', conversationId: ctx.conversationId ?? null }, process.env);
+        return { artifacts: [{ id: row.id, filename: row.filename }] };
+      },
+    } as never,
   ],
 };
 
@@ -143,7 +158,7 @@ function agentOf(id: string, handle: string, name: string, tools: string[]): any
 
 const AGENTS = [
   agentOf('playground', 'playground', 'Playground', ['agent.delegate']),
-  agentOf('illustrator', 'art', 'Illustrator', ['pic.draw']),
+  agentOf('illustrator', 'art', 'Illustrator', ['pic.draw', 'pic.save']),
 ];
 
 const catalog = (): AgentCatalog => ({
@@ -328,6 +343,44 @@ suite('an approval inside a delegation', () => {
     expect(drawn).toEqual(['a fisherman', 'a boat']);
     const again = (await blocksOf(root)).find((b: any) => b.type === 'tool_result' && b.toolUseId === 'd2');
     expect(again).toMatchObject({ ok: true, output: { status: 'answered', text: 'Drew it: pic-2.' } });
+  });
+
+  it("a colleague's picture is the asker's too: in both conversations' files, under the reply, and shown to the asker", async () => {
+    const previous = process.env.BUDDI_DATA_DIR;
+    process.env.BUDDI_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'buddi-delegation-data-'));
+    try {
+      providers.playground!.script = [call('d1', 'agent.delegate', { agent: 'illustrator', task: 'draw a butterfly' }), say('Here it is.')];
+      providers.illustrator!.script = [call('s1', 'pic.save', { name: 'clockwork-butterfly.png' }), say('Saved clockwork-butterfly.png.')];
+      const { conversationId: root } = (await (await client.post('/api/chat/playground/messages', { text: 'a butterfly, please' })).json()) as any;
+      await settled(root);
+
+      const { rows: saved } = await pool.query(`select id, conversation_id from core.artifacts where filename = 'clockwork-butterfly.png'`);
+      expect(saved).toHaveLength(1);
+      const artifactId = String(saved[0].id);
+      const colleague = String(saved[0].conversation_id);
+
+      // One file, two conversations, both crediting @art.
+      const { rows: uses } = await pool.query(
+        `select conversation_id::text, kind, agent_id from core.artifact_uses where artifact_id = $1 order by created_at, conversation_id`, [artifactId]);
+      expect(uses).toEqual(expect.arrayContaining([
+        { conversation_id: colleague, kind: 'produced', agent_id: 'illustrator' },
+        { conversation_id: root, kind: 'produced', agent_id: 'illustrator' },
+      ]));
+      const entry = await getLibraryEntry(pool, artifactId, ['playground', 'illustrator']);
+      expect(entry?.contexts.map((c) => c.conversationId).sort()).toEqual([colleague, root].sort());
+
+      // The asker read that the owner has it, and saw it.
+      const asked = providers.playground!.seen.at(-1)!;
+      expect(JSON.stringify(asked.messages)).toContain('attached to this turn: clockwork-butterfly.png (image)');
+      expect(asked.messages.at(-1)!.content.some((b: any) => b.type === 'image' && b.mime === 'image/png')).toBe(true);
+
+      // The thread carries the file under the call, for the page to draw.
+      const result = (await blocksOf(root)).find((b: any) => b.type === 'tool_result' && b.toolUseId === 'd1');
+      expect(result.output.artifacts).toEqual([{ id: artifactId, filename: 'clockwork-butterfly.png', mime: 'image/png', kind: 'image' }]);
+    } finally {
+      if (previous === undefined) delete process.env.BUDDI_DATA_DIR;
+      else process.env.BUDDI_DATA_DIR = previous;
+    }
   });
 
   it('returns a rejection to the asker as a failure with the reason', async () => {

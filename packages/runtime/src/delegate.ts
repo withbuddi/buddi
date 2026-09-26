@@ -33,7 +33,9 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  getArtifact,
   listArtifacts,
+  readArtifactBytes,
   type AgentDefinition,
   type CoreToolContext,
   type ToolDefinition,
@@ -41,6 +43,7 @@ import {
 } from '@buddi/core';
 import type { RuntimeProvider } from './anthropic.js';
 import { createConversation, runAgent as defaultRunAgent, type Queryable, type RunResult } from './loop.js';
+import { base64Bytes, MAX_IMAGE_BYTES, type LoadArtifact } from './attachments.js';
 
 /** The tool name. Namespaced like every other tool; the plugin family is `agent`. */
 export const DELEGATE_TOOL = 'agent.delegate';
@@ -105,6 +108,11 @@ export interface DelegateDeps {
   /** A one-off instruction passed to the nested run, when the host has one. */
   systemSuffix?: string;
   memoryPreamble?: (agentId: string) => Promise<string>;
+  /**
+   * Bytes for a file the colleague made, so an image can be shown to the
+   * asking model. Defaults to the artifact store under the caller's `ctx.db`.
+   */
+  loadArtifact?: LoadArtifact;
 }
 
 export const delegateInput = z.object({
@@ -158,6 +166,12 @@ export interface DelegateOutput {
   status: DelegationStatus;
   /** What the caller should do with this, when `text` alone would mislead. */
   note?: string;
+  /**
+   * One sentence naming the files the colleague made, which the loop records
+   * as part of the asking turn: the owner sees them under the caller's reply,
+   * so the caller must not send them to the colleague to fetch.
+   */
+  attached?: string;
   /** Files the colleague saved in its conversation, by library id. */
   artifacts?: DelegatedArtifact[];
   /** The colleague's failed tool calls, newest last. */
@@ -234,7 +248,7 @@ export async function delegationOutput(pool: Queryable, run: DelegationRun): Pro
     conversationId,
     runId,
     text,
-    ...(artifacts.length > 0 ? { artifacts } : {}),
+    ...(artifacts.length > 0 ? { attached: attachedLine(artifacts, who), artifacts } : {}),
     ...(thread.errors.length > 0 ? { errors: thread.errors } : {}),
   };
   if (result.stopped === 'awaiting-approval' && result.pendingActionId) {
@@ -252,12 +266,27 @@ export async function delegationOutput(pool: Queryable, run: DelegationRun): Pro
     return { ...base, status: result.stopped === 'end_turn' ? 'answered' : 'stopped' };
   }
   const note = artifacts.length > 0
-    ? `${who} ended without writing an answer; what it made is under artifacts.`
+    ? `${who} ended without writing an answer; what it made is attached to this turn.`
     : thread.errors.length > 0
       ? `${who} ended without an answer; what failed is under errors. Tell the owner what failed; do not retry blindly.`
       : `${who} ended without an answer or a file (stopped: ${result.stopped}). Say so plainly; do not invent one.`;
   return { ...base, status: 'no-answer', note };
 }
+
+/**
+ * What the asking model is told about the colleague's files. They are part of
+ * its own turn by the time it reads this (the loop records them with the
+ * result), so the owner already has them: a caller that says "that image
+ * lives in @art's output" is describing a file the owner can see.
+ */
+export function attachedLine(artifacts: readonly DelegatedArtifact[], who: string): string {
+  const names = artifacts.map((a) => `${a.filename ?? 'an untitled file'} (${a.kind})`).join(', ');
+  return `What ${who} made is attached to this turn: ${names}. ` +
+    `The owner sees it under your reply; do not tell them to ask ${who} for it.`;
+}
+
+/** Images a model can be shown, the same list the preview route serves. */
+const PICTURE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 /**
  * Who the caller asked for, as the caller may have written it: a catalog id,
@@ -343,14 +372,37 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
     name: DELEGATE_TOOL,
     description:
       'Ask another of the owner\'s agents a question and get its answer back as text. ' +
-      'The colleague answers in its own fresh conversation with its own tools, and any files or images it made come back as `artifacts` you can attach or describe; it cannot ' +
-      'see this one. Use it when a question belongs to a specialist you are allowed to ask. ' +
+      'The colleague answers in its own fresh conversation with its own tools; it cannot see this one. ' +
+      'Any files or images it makes are attached to your turn: the owner sees them under your reply, ' +
+      'and you see an image yourself when your model takes images. ' +
+      'Use it when a question belongs to a specialist you are allowed to ask. ' +
       '`agent` is a catalog **id**, never a handle and never a guess: the ids you may pass are ' +
       'listed under "Colleagues you may ask" in your wiring section. ' +
       'Quote the answer back to the owner and attribute it by the handle the result ' +
       'carries, written with an @ — "@credo says: ...".',
     tier: 'auto',
+    // The colleague's files are recorded as part of the asking turn, credited
+    // to the colleague (the loop reads `agent` off this tool's output).
+    producesArtifacts: true,
     input: delegateInput,
+    /*
+     * The first picture the colleague made, shown to the asking model the way
+     * a screenshot is: once, with the result, never stored as base64. The
+     * loop decides whether this model takes images.
+     */
+    async image(output, ctx) {
+      const picture = (output?.artifacts ?? []).find((a) => a.kind === 'image' && PICTURE_MIMES.has(a.mime.toLowerCase()));
+      if (!picture) return undefined;
+      const load: LoadArtifact = deps.loadArtifact ?? (async (id) => {
+        const pool = (deps.pool ?? (ctx as unknown as CoreToolContext).db) as never;
+        const row = await getArtifact(pool, id);
+        if (!row) return null;
+        return { mime: row.mime, data: (await readArtifactBytes(process.env, row)).toString('base64') };
+      });
+      const loaded = await load(picture.id);
+      if (!loaded || !PICTURE_MIMES.has(loaded.mime.toLowerCase()) || base64Bytes(loaded.data) > MAX_IMAGE_BYTES) return undefined;
+      return { mime: loaded.mime, data: loaded.data };
+    },
     async execute(input, ctx: CoreToolContext): Promise<DelegateOutput> {
       const from = ctx.agentId;
       if (!from) {

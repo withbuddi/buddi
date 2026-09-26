@@ -6,6 +6,7 @@ import type { Queryable, RunAgentOptions } from './loop.js';
 import {
   createDelegateTool,
   delegationMessage,
+  delegationOutput,
   DELEGATE_TOOL,
   type DelegateAgent,
   type DelegateCatalog,
@@ -158,6 +159,8 @@ function harness(
   };
   return { db, registry, ctx, captured };
 }
+
+const ART = 'ed8b3763-8859-42dc-b0ef-2dbf9b1952f5';
 
 const task = { agent: 'credit-coach', task: 'Does paying 500 on the Quicksilver help?' };
 
@@ -492,6 +495,50 @@ describe('a delegation whose colleague ended without an answer', () => {
     });
     expect(String(output.note)).toContain('@credo ended without an answer; what failed is under errors');
     expect(suspended).toEqual([]);
+  });
+
+  it('names the files the colleague made as attached to the asking turn', async () => {
+    const pool: Queryable = {
+      async query(sql: string) {
+        if (/from core\.artifacts/.test(sql)) {
+          return { rows: [{ id: ART, kind: 'image', mime: 'image/png', filename: 'clockwork-butterfly.png', size_bytes: 10, sha256: 'x', storage_path: 'a/b', caption: null, created_at: new Date() }] };
+        }
+        return { rows: [] };
+      },
+    };
+    const output = await delegationOutput(pool, {
+      target: { id: 'illustrator', handle: 'art', name: 'Illustrator' },
+      conversationId: 'conv-art',
+      runId: 'run-art',
+      result: { text: 'Generated it.', stopped: 'end_turn' },
+    });
+    expect(output.artifacts).toEqual([{ id: ART, filename: 'clockwork-butterfly.png', mime: 'image/png', kind: 'image' }]);
+    expect(output.attached).toBe(
+      'What @art made is attached to this turn: clockwork-butterfly.png (image). The owner sees it under your reply; do not tell them to ask @art for it.',
+    );
+  });
+
+  it('shows the first picture the colleague made to the asking model, and nothing else', async () => {
+    const registry = new ToolRegistry();
+    const loaded: string[] = [];
+    const tool = createDelegateTool({
+      catalog: () => fakeCatalog(),
+      registry,
+      provider: () => provider,
+      allowlistFor: () => [],
+      loadArtifact: async (id) => { loaded.push(id); return { mime: 'image/png', data: 'cGljdHVyZQ==' }; },
+    });
+    registry.register({ name: 'agent', version: '0.1.0', schema: 'agent', migrationsDir: '', tools: [tool] });
+    const base = { agent: 'illustrator', handle: 'art', name: 'Illustrator', conversationId: 'c', runId: 'r', text: '', status: 'answered' as const };
+    const ctx = { ownerId: 'owner', now: () => new Date(), db: {} } as unknown as CoreToolContext;
+    const picture = await registry.image(DELEGATE_TOOL, { ...base, artifacts: [
+      { id: 'a1', filename: 'notes.csv', mime: 'text/csv', kind: 'other' },
+      { id: 'a2', filename: 'b.png', mime: 'image/png', kind: 'image' },
+    ] }, ctx);
+    expect(picture).toEqual({ mime: 'image/png', data: 'cGljdHVyZQ==' });
+    expect(loaded).toEqual(['a2']);
+    expect(await registry.image(DELEGATE_TOOL, { ...base, artifacts: [{ id: 'a1', filename: 'notes.csv', mime: 'text/csv', kind: 'other' }] }, ctx)).toBeUndefined();
+    expect(tool.producesArtifacts).toBe(true);
   });
 
   it("falls back to the colleague's last words in its thread when the run itself said nothing", async () => {

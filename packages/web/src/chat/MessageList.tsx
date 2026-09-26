@@ -16,7 +16,7 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
-import { isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
+import { delegatedFiles, isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { DiffLines } from '../canvas/views/DiffLines';
 import { FileTile } from './FileTile';
 import { gistFor } from './gist';
@@ -204,6 +204,7 @@ export function MessageList({
           );
         }
         const stop = stops.get(message.id) ?? null;
+        const carried = files(message, messages);
         return (
           <div key={message.id} className="wb-msg" data-role={mine || interjected ? 'user' : 'assistant'}>
             {interjected ? (
@@ -218,9 +219,9 @@ export function MessageList({
             ) : null}
             {/* The files a message carries sit together, before its words: the
                 thing you handed over, then what you said about it. */}
-            {files(message).length > 0 ? (
+            {carried.length > 0 ? (
               <div className="wb-msg-files" role="list" aria-label="Files sent with this message">
-                {files(message).map((block) => (
+                {carried.map((block) => (
                   <span role="listitem" key={block.artifactId}>
                     <FileTile
                       name={block.filename ?? 'Untitled file'}
@@ -475,8 +476,26 @@ function askedFor(message: ChatMessage): { handle: string; request: string } | n
   return { handle: match[1]!, request: match[2]!.trim() };
 }
 
-function files(message: ChatMessage): AttachmentBlock[] {
-  return (message.blocks ?? []).filter((block): block is AttachmentBlock => block.type === 'attachment');
+/**
+ * The files a message carries: what was attached to it, and what a colleague
+ * it asked made for it — a delegation's files belong to the asking turn.
+ */
+function files(message: ChatMessage, messages: ChatMessage[]): AttachmentBlock[] {
+  const out: AttachmentBlock[] = [];
+  const seen = new Set<string>();
+  const add = (block: AttachmentBlock): void => {
+    if (seen.has(block.artifactId)) return;
+    seen.add(block.artifactId);
+    out.push(block);
+  };
+  for (const block of message.blocks ?? []) {
+    if (block.type === 'attachment') add(block);
+    if (block.type === 'tool_use' && block.name === DELEGATE_TOOL) {
+      const result = findResult(messages, block.id);
+      if (result?.ok) delegatedFiles(result.output).forEach(add);
+    }
+  }
+  return out;
 }
 
 /**
