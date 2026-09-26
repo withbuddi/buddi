@@ -60,6 +60,8 @@ const LOAD_TIMEOUT = 30_000;
 /** How long a click or a key gets to turn into a navigation before we stop watching. */
 const SETTLE_MS = 600;
 const SETTLE_STEP_MS = 50;
+/** The waits before each retry when the page gave no observation: a heavy page, or a tab the content script missed. */
+const OBSERVE_RETRY_MS = [500, 1_000, 2_000];
 /** At most ten frames a second leave this browser, whatever Chrome paints. */
 const MIN_FRAME_MS = 100;
 /** The screencast's own bounds; the gateway asks within them and gets clamped if it does not. */
@@ -265,13 +267,15 @@ export class BrowserCommands implements Executor {
   #contentFile: string;
   #onFrame: (frame: FrameMessage) => void;
   #now: () => number;
+  #wait: (ms: number) => Promise<void>;
   /** How many things want the debugger on this tab. A screencast is one of them, and it outlives a command. */
   #attached = new Map<number, number>();
   #casts = new Map<string, Screencast>();
   #castsByTab = new Map<number, Screencast>();
 
-  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; now?: () => number } = {}) {
+  constructor(chrome: WorkerChrome, options: { uuid?: () => string; contentFile?: string; onFrame?: (frame: FrameMessage) => void; now?: () => number; wait?: (ms: number) => Promise<void> } = {}) {
     this.#chrome = chrome;
+    this.#wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.#onFrame = options.onFrame ?? (() => undefined);
     this.#now = options.now ?? (() => Date.now());
     chrome.debugger.onEvent.addListener((source, method, params) => this.#debuggerEvent(source, method, params));
@@ -510,6 +514,39 @@ export class BrowserCommands implements Executor {
     await this.#chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: [this.#contentFile] }).catch(() => undefined);
   }
 
+  /*
+   * Frame 0 is the main frame by frame id, not by arrival order: Chrome
+   * returns the frames in whatever order they answered, and reading a subframe
+   * as the page would put the model on the wrong document.
+   *
+   * A main frame with no answer is usually a page that is not ready yet: the
+   * content script did not land in a tab a navigation opened, or a heavy page
+   * kept its main thread busy. So inject again and read again, a few times
+   * with growing waits, before telling the model the page is not answering.
+   */
+  async #readFrames(tabId: number, cancel: Cancellation): Promise<{
+    frames: Array<{ frameId: number; result: FrameObservation | null }>;
+    top: { frameId: number; result: FrameObservation };
+  }> {
+    for (let attempt = 0; ; attempt += 1) {
+      await this.#inject(tabId);
+      const frames = await this.#chrome.scripting.executeScript<[], FrameObservation | null>({
+        target: { tabId, allFrames: true }, func: readObservation,
+      }).catch(() => [] as Array<{ frameId: number; result: FrameObservation | null }>);
+      const top = frames.find((frame) => frame.frameId === 0);
+      if (top?.result) return { frames, top: { frameId: top.frameId, result: top.result } };
+      const wait = OBSERVE_RETRY_MS[attempt];
+      if (wait === undefined) break;
+      await this.#wait(wait);
+      cancel.check();
+    }
+    const ready = await this.#chrome.scripting.executeScript<[], string>({
+      target: { tabId, frameIds: [0] }, func: readReadyState,
+    }).then((results) => results[0]?.result, () => undefined);
+    const state = typeof ready === 'string' && ready !== 'complete' ? ` The page is still ${ready}.` : '';
+    throw new PreconditionError(`The page has not answered after three tries.${state} Wait a few seconds and observe again.`);
+  }
+
   async #observe(sessionId: string, cancel: Cancellation): Promise<Observation> {
     const session = await this.#session(sessionId);
     const live = await this.#liveTabs(session);
@@ -517,19 +554,7 @@ export class BrowserCommands implements Executor {
     const tab = await this.#ownTab(session, key);
     const tabId = tab.id!;
     cancel.check();
-    await this.#inject(tabId);
-    const frames = await this.#chrome.scripting.executeScript<[], FrameObservation | null>({
-      target: { tabId, allFrames: true }, func: readObservation,
-    }).catch(() => [] as Array<{ frameId: number; result: FrameObservation | null }>);
-
-    /*
-     * Frame 0 is the main frame by frame id, not by arrival order: Chrome
-     * returns the frames in whatever order they answered, and reading a
-     * subframe as the page would put the model on the wrong document. With no
-     * main frame there is no observation to give.
-     */
-    const top = frames.find((frame) => frame.frameId === 0);
-    if (!top?.result) throw new PreconditionError('The page did not answer. Wait for it to finish loading and observe again.');
+    const { frames, top } = await this.#readFrames(tabId, cancel);
     const ordered = [top, ...frames.filter((frame) => frame.frameId !== 0)];
 
     const generation = session.generation + 1;
@@ -992,6 +1017,10 @@ export class BrowserCommands implements Executor {
  * `chrome.scripting.executeScript` serializes these, so they may not close over
  * anything in this module. Each one is self-contained on purpose.
  */
+
+function readReadyState(): string {
+  return document.readyState;
+}
 
 function readObservation(): FrameObservation | null {
   const api = (globalThis as unknown as Record<string, { observe(): FrameObservation } | undefined>)['__buddiBrowser'];

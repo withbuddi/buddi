@@ -32,6 +32,10 @@ What changes in buddi from one release to the next, newest first.
 
 - `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT` and `BUDDI_CODEX_EXPERIMENT` are no longer needed. For one release, setting either to `0` still hides that one sign-in, and `buddi doctor` names the new variable.
 
+### Fixed
+
+- In your own Chrome, an observation that finds the page not ready (a heavy page like cnn.com, or a tab the page script missed) injects the script again and reads the page up to three more times, after 0.5, 1 and 2 seconds, before it says "The page has not answered after three tries. Wait a few seconds and observe again."
+
 ## 0.1.0-pre.18 — 2026-09-26
 
 ### Added

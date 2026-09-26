@@ -45,6 +45,8 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
    */
   const field = { ok: true, reason: undefined as string | undefined, point: { x: 10, y: 20 },
     origin: 'https://example.test', password: false, name: 'Email' };
+  /* What the next reads of the page answer, in turn, before falling back to `frames`; and its load state. */
+  const page = { answers: [] as Array<Array<{ frameId: number; result: FrameResult | null }>>, readyState: 'complete' };
   let nextTabId = 100;
   const chrome = {
     storage: { local: { async get() { return {}; }, async set() {}, async remove() {} } },
@@ -65,8 +67,10 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     tabGroups: { async update() { return {}; }, async get() { return {}; } },
     windows: { async get(id: number) { const found = windows.get(id); if (!found) throw new Error('no such window'); return found; } },
     scripting: {
-      async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[] }) {
+      async executeScript(injection: { target: { frameIds?: number[]; allFrames?: boolean }; files?: string[]; func?: { name: string } }) {
         if (injection.files) { injected.push(injection.files.join(',')); return []; }
+        if (injection.func?.name === 'readReadyState') return [{ frameId: 0, result: page.readyState }];
+        if (injection.func?.name === 'readObservation' && page.answers.length > 0) return page.answers.shift()!;
         if (injection.target.frameIds) {
           located.push(String(injection.target.frameIds[0]));
           return [{ frameId: injection.target.frameIds[0]!, result: field }];
@@ -88,16 +92,17 @@ function fakeChrome(frames: Array<{ frameId: number; result: FrameResult | null 
     alarms: { create() {}, onAlarm: { addListener() {} } },
     runtime: { getManifest: () => ({ version: '0.1.0' }), onMessage: { addListener() {} }, async sendMessage() { return undefined; } },
   } as unknown as WorkerChrome;
-  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field };
+  return { chrome, located, dispatched, sent, attachments, events, detaches, injected, tabs, windows, failures, field, page };
 }
 
 const command = (name: Command['name'], args: Record<string, unknown> = {}, owner = false): Command => ({ id: 'c1', name, session: 's1', args, owner });
 
 async function opened(frames?: Array<{ frameId: number; result: FrameResult | null }>, options: { onFrame?: (frame: FrameMessage) => void; now?: () => number } = {}) {
   const fake = fakeChrome(frames);
-  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', ...options });
+  const waits: number[] = [];
+  const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', wait: async (ms) => { waits.push(ms); }, ...options });
   await commands.run(command('navigate', { url: 'https://example.test/' }));
-  return { ...fake, commands };
+  return { ...fake, commands, waits };
 }
 
 describe('observing', () => {
@@ -292,9 +297,43 @@ describe('what the page answers', () => {
     expect(observation!.targets![0]).toMatchObject({ ref: 'e1', name: 'Sign in' });
   });
 
-  it('has no observation to give when the main frame did not answer', async () => {
-    const { commands } = await opened([{ frameId: 9, result: structuredClone(PAGE) }]);
-    await expect(commands.run(command('observe'))).rejects.toThrow(/The page did not answer/);
+  it('has no observation to give when the main frame did not answer three more times', async () => {
+    const { commands, waits, injected } = await opened([{ frameId: 9, result: structuredClone(PAGE) }]);
+    await expect(commands.run(command('observe'))).rejects.toThrow(
+      new PreconditionError('The page has not answered after three tries. Wait a few seconds and observe again.'));
+    expect(waits).toEqual([500, 1_000, 2_000]);
+    expect(injected).toHaveLength(4);
+  });
+
+  it('says the page is still loading when it is', async () => {
+    const { commands, page } = await opened([{ frameId: 0, result: null }]);
+    page.readyState = 'loading';
+    await expect(commands.run(command('observe'))).rejects.toThrow(/after three tries\. The page is still loading\. Wait a few seconds/);
+  });
+
+  it('injects the page side again and reads the page once it answers', async () => {
+    const { commands, waits, injected, page } = await opened();
+    page.answers.push([{ frameId: 0, result: null }]);
+    const { observation } = await commands.run(command('observe'));
+    expect(observation!.url).toBe('https://example.test/');
+    expect(waits).toEqual([500]);
+    expect(injected).toEqual(['content.js', 'content.js']);
+  });
+
+  it('reads the page when it answers on a later try', async () => {
+    const { commands, waits, page } = await opened();
+    page.answers.push([], [{ frameId: 0, result: null }]);
+    const { observation } = await commands.run(command('observe'));
+    expect(observation!.targets).toHaveLength(4);
+    expect(waits).toEqual([500, 1_000]);
+  });
+
+  it('stops retrying when the command is cancelled', async () => {
+    const fake = fakeChrome([{ frameId: 0, result: null }]);
+    const cancel = new Cancellation();
+    const commands = new BrowserCommands(fake.chrome, { uuid: () => 'fixed-uuid-value', wait: async () => { cancel.cancel(); } });
+    await commands.run(command('navigate', { url: 'https://example.test/' }));
+    await expect(commands.run(command('observe'), cancel)).rejects.toBeInstanceOf(CancelledError);
   });
 
   it('strips the refs it had no room to number instead of leaving them in the tree', async () => {
