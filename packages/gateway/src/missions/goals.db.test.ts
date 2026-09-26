@@ -629,6 +629,12 @@ suite('goals (postgres)', () => {
     expect((await getFinding(pool, offTrack))?.severity).toBe('urgent');
     expect(await wakes()).toEqual([{ key: offTrack, agentId: HOLDER }]);
 
+    // Bound to the cadence: a weekly goal off track stays quiet for a week,
+    // not the urgent default of a day.
+    expect((await getFinding(pool, offTrack))?.cooldownUntil?.getTime()).toBe(T0.getTime() + 3 * WEEK);
+    await tick(new Date(T0.getTime() + 2 * WEEK + 25 * HOUR));
+    expect((await wakes()).filter((w) => w.key === offTrack)).toHaveLength(1);
+
     // Week 3: a big payment. Back on track, and the 80 milestone crossed.
     scripted = 60;
     await tick(new Date(T0.getTime() + 3 * WEEK));

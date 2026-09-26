@@ -34,6 +34,8 @@ vi.mock('../api', async (load) => {
       owner: vi.fn(),
       setOwner: vi.fn(),
       providerAccounts: vi.fn(),
+      providers: vi.fn(),
+      anthropicAccountAction: vi.fn(),
       saveProviderAccount: vi.fn(),
       testProviderAccount: vi.fn(),
       probeModels: vi.fn(),
@@ -114,7 +116,7 @@ function quiet(): void {
   // Another mode by default: the browser step settles with nothing to say.
   vi.mocked(api.browser).mockRejectedValue(new Error('not in this test'));
   vi.mocked(api.firstAgentPersona).mockResolvedValue({ id: 'ada', persona: 'Keep my books. Nothing else.', generated: true });
-  for (const call of [api.overview, api.conversations, chatApi.groups]) {
+  for (const call of [api.overview, api.conversations, chatApi.groups, api.providers]) {
     vi.mocked(call as () => Promise<unknown>).mockRejectedValue(new Error('not in this test'));
   }
   // No theatre in a test: the reduced-motion path renders every bubble at once.
@@ -222,6 +224,34 @@ describe('the questions', () => {
     expect(screen.getByText(SCRIPT.brain.cards.claude.know)).toBeInTheDocument();
     const cards = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button');
     expect(cards[0]).toHaveTextContent(SCRIPT.brain.cards.claude.title);
+  });
+
+  it("starts a Claude account on the catalogue's default model", async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: true }));
+    vi.mocked(api.providers).mockResolvedValue({
+      vault: { kind: 'file', locked: false, advice: '' },
+      providers: [{ kind: 'anthropic', defaultModel: 'claude-opus-5-5' }, { kind: 'openai', defaultModel: 'gpt-5' }],
+    } as never);
+    vi.mocked(api.saveProviderAccount).mockRejectedValue(new Error('stop here'));
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.claude.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.claude.start }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ auth: 'anthropic-oauth', defaultModel: 'claude-opus-5-5' });
+  });
+
+  it('falls back to Sonnet 5 for Claude when the catalogue names no default', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: true }));
+    vi.mocked(api.saveProviderAccount).mockRejectedValue(new Error('stop here'));
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.claude.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.claude.start }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'claude-sonnet-5' });
   });
 
   it('says Ollama is there when the machine says so, and offers it', async () => {

@@ -319,12 +319,17 @@ Findings, keyed per goal and per event so each is one fact that resolves:
 | Event | Severity | Wakes the holder? |
 | --- | --- | --- |
 | A milestone crossed | info | yes, once |
-| Off track for two consecutive checks | urgent | yes |
+| Off track for two consecutive checks | urgent | yes, then at most once per cadence while it stays off |
 | Back on track | info | no (digest) |
 | Not measurable for 7 days | info | yes, once |
 | Deadline in 7 days and not met | urgent | yes |
 | Deadline passed | urgent | yes; the goal becomes `missed` unless met |
 | Target reached | info | yes; the goal becomes `met` |
+
+An urgent finding speaks again every 24 hours while it stays true; the off-track
+one is bound to the goal's cadence instead (`Finding.cooldownMs`). The first
+drift wakes the holder at once, and the same drift wakes it again at most once
+a day for a daily goal and once a week for a weekly one.
 
 The wake prompt carries the goal, the last four checks and the instruction:
 verify with your own tools, then report or propose a change through

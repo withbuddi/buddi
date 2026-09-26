@@ -17,7 +17,7 @@ a channel only carries it.
 | `reminder` | A reminder an agent promised you came due. | `now` |
 | `failure` | Background jobs died and will not be retried. | `now` |
 | `recap` | A mission's report, the weekly recap, the learning digest, the answer to an action you tapped. | `now` |
-| `plugin` | A plugin that declared `owner:notify` has something to say. | its choice |
+| `plugin` | A plugin that declared `owner:notify` has something to say, or an agent proposed a skill, a rule or a change to its file (on Telegram, a card with Keep and Discard). | its choice; `today` for a proposal |
 
 A mission that decides to stay silent sends nothing and writes nothing here.
 

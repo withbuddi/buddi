@@ -1788,6 +1788,15 @@ export function createGoalManifest(base: MetricSource): PluginManifest {
  * The watcher
  * ------------------------------------------------------------------ */
 
+/**
+ * How long an off-track goal stays quiet after it woke its holder: one
+ * cadence. Whole days, not the four-hour-early "due" margin — the margin keeps
+ * checks from drifting; this keeps the same news from arriving twice a week.
+ */
+export function offTrackCooldownMs(cadence: GoalCadence): number {
+  return (cadence === 'daily' ? 1 : 7) * 24 * 60 * 60_000;
+}
+
 /** Is this goal's cadence due again? See `DAILY_DUE_MS` for the margin. */
 export function cadenceDue(cadence: GoalCadence, lastAt: Date | null, now: Date): boolean {
   if (lastAt === null) return true;
@@ -2190,6 +2199,10 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
             ...base,
             key: goalKey(goal.id, 'off-track'),
             severity: 'urgent',
+            // Bound to the goal's cadence: a weekly goal off track wakes its
+            // holder at most once a week for the same drift, a daily one once
+            // a day. The first time still wakes at once.
+            cooldownMs: offTrackCooldownMs(goal.cadence),
             title: `Off track: ${goal.title}`,
             detail: detail(
               `Two checks running, the pace of the last four lands at ` +

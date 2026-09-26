@@ -175,6 +175,20 @@ suite('sentinels (postgres)', () => {
       expect(await wakes()).toHaveLength(2);
     });
 
+    it("keeps a finding's own longer cooldown instead of the urgent day", async () => {
+      await wakeMission();
+      const week = 7 * 24 * 60 * 60_000;
+      const weekly = { ...urgent, cooldownMs: week };
+      const manifests = pluginWith(scripted('w', [[weekly]]));
+
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect((await getFinding(pool, urgent.key))?.cooldownUntil?.getTime()).toBe(T0.getTime() + week);
+      await runSentinels(pool, manifests, at(URGENT_COOLDOWN_MS + 1), 'UTC');
+      expect(await wakes()).toHaveLength(1);
+      await runSentinels(pool, manifests, at(week + 1), 'UTC');
+      expect(await wakes()).toHaveLength(2);
+    });
+
     it('does not fire — and does not burn its cooldown — with no wake mission', async () => {
       const manifests = pluginWith(scripted('w', [[urgent]]));
       const [outcome] = await runSentinels(pool, manifests, T0, 'UTC');

@@ -65,6 +65,13 @@ export interface Finding {
    * `finding:<key>`. Never raises an urgency: there is no `now` here.
    */
   notify?: { urgency?: 'today'; dedupeKey?: string };
+  /**
+   * How long this same fact stays quiet after it spoke, when the default is
+   * too eager: 24 hours for `urgent`, seven days for `info`. A weekly goal off
+   * track is news once a week, not every morning. Only ever lengthens the
+   * wait in practice; the first raise still speaks at once.
+   */
+  cooldownMs?: number;
   /** Structured evidence handed to that agent verbatim. */
   data?: unknown;
 }

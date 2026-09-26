@@ -331,7 +331,10 @@ async function upsertAndMaybeFire(
     return false;
   }
 
-  const cooldownMs = finding.severity === 'urgent' ? URGENT_COOLDOWN_MS : INFO_COOLDOWN_MS;
+  const cooldownMs =
+    typeof finding.cooldownMs === 'number' && Number.isFinite(finding.cooldownMs) && finding.cooldownMs > 0
+      ? finding.cooldownMs
+      : finding.severity === 'urgent' ? URGENT_COOLDOWN_MS : INFO_COOLDOWN_MS;
   await pool.query(
     `update core.sentinel_findings set cooldown_until = $2 where key = $1`,
     [finding.key, new Date(now.getTime() + cooldownMs).toISOString()],

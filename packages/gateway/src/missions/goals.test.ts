@@ -14,6 +14,7 @@ import {
   DAILY_DUE_MS,
   WEEKLY_DUE_MS,
   cadenceDue,
+  offTrackCooldownMs,
   createGoalManifest,
   formatPace,
   formatValue,
@@ -496,6 +497,13 @@ describe('formatValue', () => {
   for (const [name, args, expected] of cases) {
     it(name, () => expect(formatValue(...args)).toBe(expected));
   }
+});
+
+describe('offTrackCooldownMs', () => {
+  it('is one cadence: a day for a daily goal, a week for a weekly one', () => {
+    expect(offTrackCooldownMs('daily')).toBe(24 * 60 * 60_000);
+    expect(offTrackCooldownMs('weekly')).toBe(7 * 24 * 60 * 60_000);
+  });
 });
 
 describe('cadenceDue', () => {

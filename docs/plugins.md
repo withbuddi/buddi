@@ -830,6 +830,7 @@ export interface Finding {
   agentId?: string;        // who should speak about it; resolve it by role
   wake?: boolean;          // an INFO finding that wakes once instead of waiting
   notify?: { urgency?: 'today'; dedupeKey?: string }; // the agent's line waits for the end of the day
+  cooldownMs?: number;     // how long the same fact stays quiet after it spoke
   data?: unknown;          // structured evidence, handed over verbatim
 }
 
@@ -2926,6 +2927,7 @@ closed when it is absent rather than guess.
 | `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.buddi.owner.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
 | `wake` | `boolean` | no | An `info` finding that wakes its agent **once**, when it is first raised, instead of taking a digest line. For good news with a short shelf life — a milestone crossed, a target reached. Every later fire of that key behaves like any other `info`. Ignored on `urgent`, which already wakes. |
 | `notify` | `{ urgency?: 'today'; dedupeKey?: string }` | no | How the agent's line reaches the owner when the wake is not news for this minute. `urgency: 'today'` holds it for the end of the owner's day instead of sending it `now`; `dedupeKey` is the notification's "this thing, again" (default `finding:<key>`). It only ever lowers: there is no `now` here. Core's goal watcher uses it for "you have not told me your weight this week". |
+| `cooldownMs` | `number` | no | How long the same key stays quiet after it spoke, in place of the 24 h (`urgent`) or 7 days (`info`) default. The first raise still speaks at once. Core's goal watcher sets one cadence on "off track", so a weekly goal is news once a week. |
 | `data` | `unknown` | no | Structured evidence, handed to that agent verbatim. |
 
 ### Suggestions

@@ -16,10 +16,13 @@ What changes in buddi from one release to the next, newest first.
 - On Telegram, a table an agent draws arrives as monospace text when it fits one message, and as a CSV named after the table when it does not. A chart or another view answers with one line, and the dashboard link when a public address is set.
 - On Telegram, the answer streams into one message as the model writes it, updated at most every 1.5 seconds; the last update is the whole answer.
 - A new learning proposal (a skill, a rule for a plugin, a change to an agent's file) is a notification that waits for the end of your day and keeps quiet hours. On Telegram it arrives as a card with Keep and Discard; a tap decides it exactly as the Proposals page does, and a plain "yes" in the chat decides nothing.
+- [docs/telegram.md](docs/telegram.md): what the Telegram surface is and is not, pairing, what arrives on the phone, what you can send, the commands, the limits and what leaves this computer.
 - Three read-only Telegram commands: `/missions` lists the next five scheduled missions with their times and agents, `/goals` each open goal with its number and whether it is on track, behind or ahead, and `/where` the dashboard address when your phone can reach it.
 
 ### Changed
 
+- Signing in with Claude from the first run starts the account on the model catalogue's default for Claude, rather than a fixed Sonnet 5; Sonnet 5 is used only when the catalogue names none.
+- A goal that stays off track wakes its agent at most once per cadence for the same drift: once a week for a weekly goal, once a day for a daily one. The first drift still wakes it at once. A watcher's finding can set its own `cooldownMs`.
 - On Telegram, an answer longer than 4,096 characters keeps its first part in the message that said "Working on it" and sends the rest after it, split between paragraphs, instead of deleting that message.
 - The model list knows Claude Opus 5.5 (`claude-opus-5-5`, $4 and $20 a million tokens) and Fable 5.1; Sonnet 5 stays the default, at half the price. The context table knows Fable 5.1, Opus 5.5 and Sonnet 5 hold a million tokens.
 - Signing in with Claude from the first run opens the consent page itself; the button stays for a browser that blocks the window.

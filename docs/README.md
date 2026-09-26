@@ -11,6 +11,7 @@ unbuilt specs are kept outside this repository.
 - [Provider accounts](providers.md), [Claude subscription sign-in](anthropic-oauth.md),
   [ChatGPT subscription through Codex](codex-accounts.md).
 - [Using buddi from Claude Code](mcp.md) (`buddi mcp`).
+- [Telegram](telegram.md): pairing, what arrives on your phone, the commands.
 
 ## What agents do
 

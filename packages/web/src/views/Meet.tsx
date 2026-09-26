@@ -331,6 +331,8 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   const [answers, setAnswers] = useState<MeetAnswers>({});
   const [open, setOpen] = useState<QuestionId | null>(null);
   const [accounts, setAccounts] = useState<ProviderAccountsView | undefined>(undefined);
+  // The model catalogue's default for a Claude account, when the server names one.
+  const [claudeModel, setClaudeModel] = useState<string | undefined>(undefined);
   const [zones, setZones] = useState<string[]>([]);
   const [assistantAgent, setAssistantAgent] = useState<ChatAgent | null>(null);
   /** Anything that failed, said in the thread rather than in a banner. */
@@ -396,14 +398,17 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * assistant was moved onto a moment ago being the case that bites.
    */
   const load = useCallback(async (replay = true, restoredNow = false): Promise<void> => {
-    const [onboarding, owner, accountView, roster, browserView] = await Promise.all([
+    const [onboarding, owner, accountView, roster, browserView, providers] = await Promise.all([
       api.onboarding().catch(() => undefined),
       api.owner().catch(() => undefined),
       api.providerAccounts().catch(() => undefined),
       chatApi.agents().catch(() => undefined),
       api.browser().catch(() => undefined),
+      api.providers().catch(() => undefined),
     ]);
     setAccounts(accountView);
+    const anthropicDefault = providers?.providers.find((provider) => provider.kind === 'anthropic')?.defaultModel?.trim();
+    setClaudeModel(anthropicDefault ? anthropicDefault : undefined);
     setZones(owner?.zones ?? []);
     // The conversation the handover opened, if it already did. Held on the
     // record rather than in this component, because a reload is exactly when
@@ -586,6 +591,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                   openNow={open === id}
                   answers={answers}
                   accounts={accounts}
+                  claudeModel={claudeModel}
                   zones={zones}
                   browserZone={browserZone}
                   assistantAgent={assistantAgent}
@@ -799,6 +805,8 @@ interface QuestionProps {
   openNow: boolean;
   answers: MeetAnswers;
   accounts: ProviderAccountsView | undefined;
+  /** The catalogue's default model for a new Claude account, when the server named one. */
+  claudeModel?: string | undefined;
   zones: string[];
   browserZone: string;
   assistantAgent: ChatAgent | null;
@@ -1559,6 +1567,9 @@ function ServiceCard({
   );
 }
 
+/** The Claude model a new account starts on when the catalogue names no default. */
+export const CLAUDE_FALLBACK_MODEL = 'claude-sonnet-5';
+
 /**
  * Claude, through the sign-in this installation already has.
  *
@@ -1572,6 +1583,7 @@ function ClaudeCard({
   onBack,
   onConnected,
   accounts,
+  claudeModel,
 }: {
   busy: boolean;
   problem: string | null;
@@ -1583,8 +1595,10 @@ function ClaudeCard({
   const [trouble, setTrouble] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<{ id: string; revision: number; url: string; attemptId: string } | null>(null);
   const [code, setCode] = useState('');
-  // The catalogue's default for a new Claude account; the model list after the sign-in is where it changes.
-  const model = 'claude-sonnet-5';
+  // The catalogue's default for a new Claude account, as the server's model
+  // list names it; the constant only when it named none. The model list after
+  // the sign-in is where it changes.
+  const model = claudeModel ?? CLAUDE_FALLBACK_MODEL;
 
   const start = (): void => {
     setWorking(true);
