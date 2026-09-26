@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
-import { browserStoppedMessage, BrowserService } from './service.js';
+import { browserPausedMessage, browserStoppedMessage, BrowserService } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, type BrowserDriver, type Observation } from './types.js';
 
@@ -296,5 +296,7 @@ describe('the stopped refusal says where the owner can undo it', () => {
     // command nobody can type is worse than a page anybody can open.
     await expect(service.execute(navigate, ctx)).rejects.toThrow('Settings page');
     expect(browserStoppedMessage(TELEGRAM_SURFACE)).toContain('/browser resume');
+    expect(browserPausedMessage(TELEGRAM_SURFACE)).toContain('/browser resume');
+    expect(browserPausedMessage(undefined)).toContain('Resume access');
   });
 });

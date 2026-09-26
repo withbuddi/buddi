@@ -16,6 +16,13 @@ import { BrowserPreconditionError, UNTRUSTED } from './types.js';
  * same chat; everywhere else it is the dashboard's own Settings page, which is
  * where the Stop button lives.
  */
+/** Said when a page would not confirm it loaded and control paused. The way back depends on where the owner is. */
+export function browserPausedMessage(surface?: SurfaceProfile): string {
+  return surface?.id === 'telegram'
+    ? 'Control is paused: the page did not confirm it loaded. Send /browser resume here, then ask again for a fresh look.'
+    : 'Control is paused. Ask the owner to inspect the selected app/window and the reported cause, then use Resume access and ask for a fresh observation.';
+}
+
 export function browserStoppedMessage(surface?: SurfaceProfile): string {
   return surface?.id === 'telegram'
     ? 'The owner stopped the browser. Only the owner can enable it again — send /browser resume here.'
@@ -271,7 +278,7 @@ export class BrowserService {
         this.#needsObservation = true;
         this.#state = 'paused';
         const cause = error instanceof Error ? error.message : String(error);
-        const recovery = 'Control is paused. Ask the owner to inspect the selected app/window and the reported cause, then use Resume access and ask for a fresh observation. Do not retry while paused or guess targets. This is an observation failure, not an ownership conflict.';
+        const recovery = browserPausedMessage(ctx.surface);
         this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause}. ${recovery}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
         const result = { completed: command.action !== 'observe', observed: false, error: cause,
           state: 'paused', recovery, message: this.#message, notice: UNTRUSTED };

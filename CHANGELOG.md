@@ -76,6 +76,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- When the browser pauses because a page would not confirm it loaded, the sentence on Telegram says to send /browser resume, not to tap a dashboard button.
 - A line under "Needs you" on Home leaves when you click it, link or not, and a reminder's or a mission's line opens the conversation that wrote it.
 - An answer whose reasoning ends in a lone `</think>`, as Ollama Cloud sends for glm and qwen, keeps that reasoning as thinking instead of printing it as the reply.
 - `buddi status` and `buddi agents` read the provider keys from the vault the way the service does, instead of saying a key is not set when it lives in the keychain.
