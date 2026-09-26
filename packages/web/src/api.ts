@@ -1424,7 +1424,7 @@ export const api = {
   /** Ollama Cloud with a device key: start a connection, ask once whether it went through, or remove the key. */
   ollamaConnect: (id: string, revision: number) => post<OllamaConnect>(`/provider-accounts/${encodeURIComponent(id)}/ollama/connect`, { revision }),
   ollamaPoll: (id: string, attemptId: string) => post<OllamaPoll>(`/provider-accounts/${encodeURIComponent(id)}/ollama/poll`, { attemptId }),
-  ollamaDisconnect: (id: string, revision: number) => post<{ removed: true; note: string }>(`/provider-accounts/${encodeURIComponent(id)}/ollama/disconnect`, { revision }),
+  ollamaDisconnect: (id: string, revision: number) => post<{ removed: true; unpaired: boolean; note: string }>(`/provider-accounts/${encodeURIComponent(id)}/ollama/disconnect`, { revision }),
   anthropicAccountAction: (id: string, action: 'login' | 'complete-login' | 'cancel-login' | 'logout', revision: number, input?: { attemptId: string; code: string }) => post(`/provider-accounts/${encodeURIComponent(id)}/anthropic/${action}`, { revision, ...input }),
   assignProviderAccount: (agent: string, accountId: string, model: string) => post<{ changed: string[]; note: string }>(`/agents/${encodeURIComponent(agent)}/account`, { accountId, model }),
   configureProvider: (kind: string, body: { credentialKind: string; defaultModel: string }) => post<ProvidersView>(`/providers/${encodeURIComponent(kind)}/settings`, body),

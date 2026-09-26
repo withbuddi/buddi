@@ -38,6 +38,10 @@ it('puts a key pair in the vault, returns only the connect URL, and connects on 
   const key = await s.accounts.credential('OLLAMA_DEVICE_1');
   expect(verify(null, Buffer.from('x'), createPublicKey(key), Buffer.alloc(64))).toBe(false); // a real ed25519 key
   expect(s.accounts.view('acct', 2, 'owner')).toBeNull(); // the attempt is over
+
+  const forget = vi.spyOn(s.accounts.protocol, 'forget').mockResolvedValue(true);
+  expect(await s.accounts.unpair('OLLAMA_DEVICE_1')).toBe(true);
+  expect(forget).toHaveBeenCalledWith(stored.privateKey);
 });
 
 it('waits, then expires after 15 minutes; refuses another session or a stale attempt', async () => {

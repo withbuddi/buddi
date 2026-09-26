@@ -62,15 +62,30 @@ function transport(status: number, data: unknown) {
 }
 
 it('reads connected, waiting and failed from one signed /api/me', async () => {
-  const connected = transport(200, { Name: 'amen', Email: 'x@example.com' });
+  const connected = transport(200, { ID: '5d2c8f0e-1111-4222-8333-944455556666', Name: 'amen', Email: 'x@example.com' });
   expect(await new OllamaConnectProtocol(connected, () => TS).whoami(VECTOR_PEM)).toEqual({ state: 'connected', username: 'amen' });
   const [url, init] = connected.mock.calls[0]!;
   expect(url).toBe('https://ollama.com/api/me?ts=1790000000');
   expect(init.method).toBe('POST');
   expect(init.headers).toMatchObject({ authorization: VECTOR_ME });
   expect(JSON.stringify(init)).not.toContain('PRIVATE KEY');
-  expect(await new OllamaConnectProtocol(transport(200, { Name: '' })).whoami(VECTOR_PEM)).toEqual({ state: 'waiting' });
+  // An unpaired key is not a 401: 200 with the all-zero user ID and empty fields.
+  expect(await new OllamaConnectProtocol(transport(200, { ID: '00000000-0000-0000-0000-000000000000', Name: '' })).whoami(VECTOR_PEM)).toEqual({ state: 'waiting' });
+  expect(await new OllamaConnectProtocol(transport(200, { Name: 'amen' })).whoami(VECTOR_PEM)).toEqual({ state: 'waiting' });
+  expect(await new OllamaConnectProtocol(transport(200, { ID: '5d2c8f0e-1111-4222-8333-944455556666', Name: '' })).whoami(VECTOR_PEM)).toEqual({ state: 'connected', username: '' });
   expect(await new OllamaConnectProtocol(transport(502, {})).whoami(VECTOR_PEM)).toEqual({ state: 'waiting' });
   expect(await new OllamaConnectProtocol(vi.fn<HttpTransport>().mockRejectedValue(new Error('offline'))).whoami(VECTOR_PEM)).toEqual({ state: 'waiting' });
   expect((await new OllamaConnectProtocol(transport(401, { error: 'invalid credentials' })).whoami(VECTOR_PEM)).state).toBe('failed');
+});
+
+it('un-pairs with a signed DELETE of the encoded key line, best effort', async () => {
+  const ok = transport(200, null);
+  expect(await new OllamaConnectProtocol(ok, () => TS).forget(VECTOR_PEM)).toBe(true);
+  const [url, init] = ok.mock.calls[0]!;
+  expect(url).toBe(`https://ollama.com/api/user/keys/${VECTOR_KEY_PARAM}?ts=1790000000`);
+  expect(init.method).toBe('DELETE');
+  const [, signature] = String((init.headers as Record<string, string>).authorization).split(':');
+  expect(verify(null, Buffer.from(`DELETE,/api/user/keys/${VECTOR_KEY_PARAM}?ts=1790000000`), createPublicKey(VECTOR_PEM), Buffer.from(signature!, 'base64'))).toBe(true);
+  expect(await new OllamaConnectProtocol(transport(401, {})).forget(VECTOR_PEM)).toBe(false);
+  expect(await new OllamaConnectProtocol(vi.fn<HttpTransport>().mockRejectedValue(new Error('offline'))).forget(VECTOR_PEM)).toBe(false);
 });

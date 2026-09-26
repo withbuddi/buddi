@@ -57,7 +57,7 @@ export function deviceView(device: OllamaDeviceEnvelope): OllamaDeviceView {
 /** "connected as amen, device buddi on studio": the line status and the card show. */
 export function connectedLine(device: OllamaDeviceView): string {
   return device.connectedAt
-    ? `connected as ${device.username ?? 'an ollama.com account'}, device ${device.deviceName}`
+    ? `connected as ${device.username || 'an ollama.com account'}, device ${device.deviceName}`
     : `not connected yet, device ${device.deviceName}`;
 }
 
@@ -142,6 +142,18 @@ export class OllamaAccounts {
     catch { throw new Error('The credential vault is unavailable or locked. Unlock it on the host and retry.'); }
     if (!raw) throw new Error('Connect this Ollama account first.');
     return readOllamaDevice(raw);
+  }
+
+  /**
+   * Ask ollama.com to forget this device before the key is dropped, as
+   * `ollama signout` does. Best effort: false when it could not be asked or
+   * said no, and the caller removes the key either way.
+   */
+  async unpair(ref: string): Promise<boolean> {
+    let device: OllamaDeviceEnvelope;
+    try { device = await this.#device(ref); } catch { return false; }
+    if (!device.connectedAt) return false;
+    return this.protocol.forget(device.privateKey);
   }
 
   /** The private key a run signs with, once the device is connected. */

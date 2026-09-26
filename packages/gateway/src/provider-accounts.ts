@@ -640,7 +640,9 @@ export class ProviderAccounts {
       if (row.revision !== body.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
       if (action === 'connect' && !row.enabled) throw new ProviderAccountError(409, 'Enable this account before connecting it.');
       this.ollama.forget(id);
+      let unpaired = false;
       if (action === 'disconnect') {
+        unpaired = await this.ollama.unpair(row.secretRef);
         try { await deleteAccountSecret(this.deps.pool as Pool, this.vault!, row.secretRef); }
         catch { throw new ProviderAccountError(409, 'Could not remove the Ollama device key. Unlock the vault and retry.'); }
       }
@@ -649,7 +651,9 @@ export class ProviderAccounts {
       this.#modelLists.delete(id); this.#tests.delete(id);
       if (action === 'disconnect') {
         await this.load();
-        return { removed: true, note: 'Disconnected. The key is gone from buddi; the device stays listed on ollama.com until you remove it in your ollama.com settings.' };
+        return { removed: true, unpaired, note: unpaired
+          ? 'Disconnected. The key is gone from buddi, and ollama.com no longer lists this device.'
+          : 'Disconnected. The key is gone from buddi. ollama.com did not confirm it forgot this device; if it is still listed in your ollama.com settings, remove it there.' };
       }
       let started;
       try { started = await this.ollama.start(id, row.revision + 1, owner, row.secretRef); }

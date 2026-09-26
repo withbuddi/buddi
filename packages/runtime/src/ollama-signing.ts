@@ -105,10 +105,13 @@ export type OllamaWhoami =
   | { state: 'waiting' }
   | { state: 'failed'; message: string };
 
+/** The user ID `/api/me` answers for a key nobody connected yet. */
+const NO_USER = '00000000-0000-0000-0000-000000000000';
+
 /**
- * One cheap signed request: `POST /api/me`. A connected key answers with the
- * account's name; a key nobody connected yet answers 200 with an empty name;
- * a bad signature answers 401.
+ * One cheap signed request: `POST /api/me`. A connected key answers with a
+ * real user ID and the account's name; a key nobody connected yet answers 200
+ * with the all-zero ID and empty fields; a bad signature answers 401.
  */
 export class OllamaConnectProtocol {
   constructor(readonly transport: HttpTransport = defaultHttpTransport, readonly now = Date.now) {}
@@ -129,9 +132,27 @@ export class OllamaConnectProtocol {
     let data: unknown;
     try { data = await res.json(); } catch { return { state: 'waiting' }; }
     const record = (data ?? {}) as Record<string, unknown>;
+    const id = typeof record.ID === 'string' ? record.ID : typeof record.id === 'string' ? record.id : '';
+    if (!id || id === NO_USER) return { state: 'waiting' };
     const name = typeof record.Name === 'string' ? record.Name : typeof record.name === 'string' ? record.name : '';
-    const username = name.trim().slice(0, 100);
-    if (!username || /[\x00-\x1f\x7f]/.test(username)) return { state: 'waiting' };
+    const username = name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 100);
     return { state: 'connected', username };
+  }
+
+  /**
+   * Ask ollama.com to forget this device: signed `DELETE /api/user/keys/<key>`,
+   * as `ollama signout` does. Best effort; true only when ollama.com said yes.
+   */
+  async forget(privateKeyPem: string): Promise<boolean> {
+    const key = Buffer.from(ollamaPublicKey(privateKeyPem)).toString('base64url');
+    const signed = signOllamaRequest('DELETE', `${OLLAMA_CLOUD_ORIGIN}/api/user/keys/${key}`, privateKeyPem, this.now());
+    try {
+      const res = await this.transport(signed.url, {
+        method: 'DELETE', headers: { authorization: signed.authorization }, signal: AbortSignal.timeout(10_000), maxBytes: 65536,
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 }

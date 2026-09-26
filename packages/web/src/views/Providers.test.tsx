@@ -223,8 +223,9 @@ it('connects Ollama from the account card: window in the click, poll, connected-
   expect(await screen.findByText('Connected as amen, device buddi on studio.', undefined, { timeout: 4_000 })).toBeInTheDocument();
   expect(api.ollamaPoll).toHaveBeenCalledWith('cloud', 'try');
 
-  vi.mocked(api.ollamaDisconnect).mockResolvedValue({ removed: true, note: 'x' });
+  vi.mocked(api.ollamaDisconnect).mockResolvedValue({ removed: true, unpaired: true, note: 'Disconnected. The key is gone from buddi, and ollama.com no longer lists this device.' });
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
   await waitFor(() => expect(api.ollamaDisconnect).toHaveBeenCalledWith('cloud', 2));
-  expect(await screen.findByText(/stays listed on ollama.com/)).toBeInTheDocument();
+  // The server's own sentence: whether ollama.com confirmed it forgot the device.
+  expect(await screen.findByText(/no longer lists this device/)).toBeInTheDocument();
 }, 10_000);

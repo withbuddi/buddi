@@ -233,7 +233,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           ) : (
             <p>Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
           )}
-          {a.auth === 'device-key' && <p>Ollama Cloud with a device key: buddi made a key pair and keeps it in the vault; ollama.com only ever saw the public half and this computer’s name. Each request to ollama.com is signed with the key, and nothing else is sent with it. Disconnect removes the key from buddi; remove the device from your ollama.com settings as well.</p>}
+          {a.auth === 'device-key' && <p>Ollama Cloud with a device key: buddi made a key pair and keeps it in the vault; ollama.com only ever saw the public half and this computer’s name. Each request to ollama.com is signed with the key, and nothing else is sent with it. Disconnect asks ollama.com to forget the device and removes the key from buddi either way.</p>}
           {a.auth === 'anthropic-oauth' && <p>Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Uses your plan’s monthly Agent SDK credits; after them, an API key. Remaining credits are unknown here.</p>}
           <p>Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry.</p>
         </div>
@@ -332,9 +332,6 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
   );
 }
 
-/** What the Settings card says after Disconnect: the key is gone here, the device is still listed there. */
-export const OLLAMA_DISCONNECTED = 'Disconnected. The key is gone from buddi; the device stays listed on ollama.com until you remove it in your ollama.com settings.';
-
 /**
  * Ollama Cloud with a device key: Connect opens ollama.com in a window made
  * inside the click, and this card asks every two seconds whether the owner
@@ -377,10 +374,10 @@ function OllamaLogin({ account: a, busy, run }: { account: ProviderAccount; busy
   };
   const device = a.device;
   return <>
-    {device && <p className="muted" role="status">{device.connectedAt ? `Connected as ${device.username ?? 'an ollama.com account'}, device ${device.deviceName}.` : `Not connected yet. Device ${device.deviceName}.`}</p>}
+    {device && <p className="muted" role="status">{device.connectedAt ? `Connected as ${device.username || 'an ollama.com account'}, device ${device.deviceName}.` : `Not connected yet. Device ${device.deviceName}.`}</p>}
     <Toolbar>
       <Button disabled={busy || !a.enabled || a.removalPending || !!pending} onClick={connect}>{a.configured ? 'Reconnect Ollama' : 'Connect Ollama'}</Button>
-      <Button disabled={busy || !device || a.removalPending} onClick={() => void run(() => api.ollamaDisconnect(a.id, a.revision), OLLAMA_DISCONNECTED)}>Disconnect</Button>
+      <Button disabled={busy || !device || a.removalPending} onClick={() => void run(async () => ({ warning: (await api.ollamaDisconnect(a.id, a.revision)).note }), 'Disconnected.')}>Disconnect</Button>
     </Toolbar>
     {pending && <Notice tone="accent" role="status">
       <p><a href={pending.verificationUrl} target="_blank" rel="noreferrer">Open the ollama.com page</a> and press Connect. Sign in there first if it asks.</p>

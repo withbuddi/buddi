@@ -75,11 +75,24 @@ suite('Ollama Cloud with a device key', () => {
     await f.service.ollamaAction(id, 'poll', { attemptId: started.attemptId }, 'owner');
     const ref = (await pool.query('select secret_ref from core.provider_accounts where id=$1', [id])).rows[0].secret_ref as string;
     expect(await f.vault.get(ref)).not.toBeNull();
-    const done = await f.service.ollamaAction(id, 'disconnect', { revision: 2 }, 'owner') as { note: string };
-    expect(done.note).toContain('stays listed on ollama.com');
+    // ollama.com is asked to forget the device first; the key goes either way.
+    const forget = vi.spyOn(f.service.ollama!.protocol, 'forget').mockResolvedValue(false);
+    const done = await f.service.ollamaAction(id, 'disconnect', { revision: 2 }, 'owner') as { note: string; unpaired: boolean };
+    expect(forget).toHaveBeenCalledWith(expect.stringContaining('PRIVATE KEY'));
+    expect(done).toMatchObject({ unpaired: false, note: expect.stringContaining('remove it there') });
     expect(await f.vault.get(ref)).toBeNull();
     expect(f.service.view().accounts[0]).toMatchObject({ configured: false, device: null, revision: 3 });
     await expect(f.service.test(id)).resolves.toMatchObject({ state: expect.not.stringMatching(/^connected$/) });
+  });
+
+  it('says so when ollama.com confirms it forgot the device', async () => {
+    const f = fixture(); await f.service.initialize();
+    const { id } = await f.service.save(cloud);
+    const started = await f.service.ollamaAction(id, 'connect', { revision: 1 }, 'owner') as { attemptId: string };
+    f.whoami.mockResolvedValue({ state: 'connected', username: 'amen' });
+    await f.service.ollamaAction(id, 'poll', { attemptId: started.attemptId }, 'owner');
+    vi.spyOn(f.service.ollama!.protocol, 'forget').mockResolvedValue(true);
+    expect(await f.service.ollamaAction(id, 'disconnect', { revision: 2 }, 'owner')).toMatchObject({ unpaired: true, note: expect.stringContaining('no longer lists this device') });
   });
 
   it('a reconnect or another session cannot finish an older attempt', async () => {
