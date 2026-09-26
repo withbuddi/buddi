@@ -34,6 +34,10 @@ import {
 } from '@buddi/core';
 import { producedArtifactIds, runAgent, type RunAgentOptions, type RuntimeProvider } from '@buddi/runtime';
 import { canvasAfterCall, type CanvasView } from './outbound.js';
+import { TelegramProposals, type DecideProposal } from './proposals.js';
+import { goalsText, missionsText, upcomingMissions } from './commands.js';
+import { goalDigest } from '../missions/goals-page.js';
+import { discardProposalFromWeb, keepProposalFromWeb } from '../web/proposals.js';
 import { nativeSearchRecorder } from '@buddi/tool-web';
 import { hostService } from '@buddi/tool-host';
 import { browserHost } from '../browser-host.js';
@@ -96,6 +100,9 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'reminders', description: 'What the agents put on the clock' },
   { command: 'quiet', description: 'Stop proactive messages for a while' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
+  { command: 'missions', description: 'The next five scheduled missions' },
+  { command: 'goals', description: 'Your goals and where they stand' },
+  { command: 'where', description: 'The dashboard address' },
   { command: 'browser', description: 'Where the screen stands; stop, resume or release it' },
   { command: 'host', description: 'Host execution permissions and running commands' },
   { command: 'hoststop', description: 'Interrupt all host commands' },
@@ -288,6 +295,8 @@ export interface TelegramHandle {
    * to the one action it authorizes.
    */
   approvals: TelegramApprovals;
+  /** The proposal cards, so the Telegram channel can draw one for a notification. */
+  proposals: TelegramProposals;
   /** Owner identities paired for this surface at startup. */
   paired: SurfaceIdentity[];
   /** The persisted polling offset as it stood at startup. */
@@ -394,6 +403,26 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     },
   });
 
+  // Proposals: Keep and Discard are the dashboard's own, so a skill kept here
+  // is written and reloaded exactly as one kept on Settings → Proposals.
+  const decideProposal: DecideProposal = async (id, verb) => {
+    const writeDeps = { pool, registry: deps.registry, ctx: deps.ctx, now, log };
+    const result = verb === 'keep'
+      ? await keepProposalFromWeb(writeDeps, id, undefined, {
+          catalog: deps.catalog,
+          reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+          env,
+        })
+      : await discardProposalFromWeb(writeDeps, id, undefined);
+    if (result.ok) {
+      const note = (result.body as { note?: unknown }).note;
+      return { ok: true, ...(typeof note === 'string' && note !== '' ? { note } : {}) };
+    }
+    const error = (result.body as { error?: unknown } | undefined)?.error;
+    return { ok: false, message: typeof error === 'string' ? error : 'That proposal could not be decided.' };
+  };
+  const proposals = new TelegramProposals({ api, pool, decide: decideProposal, log });
+
   // Rebound with this surface's name so a first run completed here is recorded
   // as having happened here.
   bindOwnerTools(deps.registry, { catalog: deps.catalog, surface: SURFACE });
@@ -445,6 +474,13 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         })()
       : { recapMissionId: deps.recapMissionId }),
     approvals,
+    proposals,
+    missions: async () =>
+      missionsText(
+        await upcomingMissions(pool, now(), (agentId) => deps.catalog.get(agentId)?.name ?? agentId),
+        deps.ctx.timezone,
+      ),
+    goals: async () => goalsText(await goalDigest(pool, deps.registry, now(), deps.ctx.timezone)),
     onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, browserHost(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
     browserControl: (command) => runBrowserCommand(browserHost(env), command),
     hostControl: async (ownerId, command) => {
@@ -667,6 +703,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     botUsername: me.username ?? undefined,
     botId: me.id,
     approvals,
+    proposals,
     paired,
     cursor,
     done,

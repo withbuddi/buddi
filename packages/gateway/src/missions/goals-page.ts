@@ -272,6 +272,97 @@ export function frequencyFigure(goal: Goal, standing: FrequencyStanding): string
 }
 
 /* ------------------------------------------------------------------ *
+ * The digest a phone reads (Telegram's /goals)
+ * ------------------------------------------------------------------ */
+
+/** One word for where a goal stands, the phone's vocabulary. */
+export type GoalDrift = 'on track' | 'behind' | 'ahead' | 'not measured';
+
+/** One open goal as `/goals` says it: its title, its number, one word. */
+export interface GoalDigestLine {
+  title: string;
+  /** The latest number, or this window's count against the target. */
+  figure: string;
+  drift: GoalDrift;
+}
+
+/** How far through its life a goal is, 0 to 1. */
+function elapsedShare(goal: Goal, now: Date): number {
+  const span = goal.deadline.getTime() - goal.baseline.asOf.getTime();
+  if (span <= 0) return 1;
+  return Math.min(1, Math.max(0, (now.getTime() - goal.baseline.asOf.getTime()) / span));
+}
+
+/**
+ * A level goal's word. Off track is "behind"; past the target already, or on
+ * track and well ahead of the calendar, is "ahead". With one number and no
+ * projection yet, the number against the calendar decides.
+ */
+export function levelDrift(standing: GoalStanding, elapsed: number): GoalDrift {
+  if (standing.latest === null || standing.progress === null) return 'not measured';
+  if (standing.progress >= 1) return 'ahead';
+  if (standing.verdict === 'off-track') return 'behind';
+  if (standing.verdict === 'on-track') return standing.progress > elapsed + 0.1 ? 'ahead' : 'on track';
+  return standing.progress >= elapsed ? 'on track' : 'behind';
+}
+
+/** A frequency goal's word: this window already met is "ahead"; the last whole one decides otherwise. */
+export function frequencyDrift(goal: Goal, standing: FrequencyStanding): GoalDrift {
+  if (goal.target.kind !== 'frequency') return 'not measured';
+  if (standing.current && standing.current.count >= goal.target.count) return 'ahead';
+  switch (frequencyVerdict(standing)) {
+    case 'on-track':
+      return 'on track';
+    case 'off-track':
+      return 'behind';
+    default:
+      return standing.current && standing.current.count > 0 ? 'on track' : 'not measured';
+  }
+}
+
+/**
+ * Every open goal, read the way Home reads them — the same checks, the same
+ * standing — and said in three parts. Read-only.
+ */
+export async function goalDigest(
+  db: Queryable,
+  base: MetricSource,
+  now: Date,
+  timezone: string,
+): Promise<GoalDigestLine[]> {
+  const goals = await listGoals(db, { openOnly: true, limit: MAX_OPEN_GOALS });
+  if (goals.length === 0) return [];
+  const source = asOwnerSource(base);
+  await source.refresh(db);
+  const byGoal = await standingChecks(db, goals.map((goal) => goal.id), STANDING_CHECKS);
+  const out: GoalDigestLine[] = [];
+  for (const goal of goals) {
+    const frequency = await frequencyOf(db, goal, now, timezone);
+    if (frequency !== null && goal.target.kind === 'frequency') {
+      const current = frequency.current;
+      out.push({
+        title: goal.title,
+        figure: current === null
+          ? `${frequency.met} ${goal.target.per}s met`
+          : `${current.count} of ${goal.target.count} this ${goal.target.per}`,
+        drift: frequencyDrift(goal, frequency),
+      });
+      continue;
+    }
+    const unit = valueUnitOf(source, goal.metric);
+    const direction = source.metric(goal.metric)?.direction ?? 'down';
+    const { measured } = byGoal.get(goal.id) ?? { measured: [] };
+    const standing = standingOf(goal, direction, measured, now);
+    out.push({
+      title: goal.title,
+      figure: standing.latest === null ? 'no number yet' : formatValue(standing.latest.value, unit, goal.currency),
+      drift: levelDrift(standing, elapsedShare(goal, now)),
+    });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Home
  * ------------------------------------------------------------------ */
 

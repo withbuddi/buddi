@@ -652,6 +652,10 @@ function surfaceWith(
     approvals?: ApprovalHooks;
     recapMissionId?: string | null;
     burstGapMs?: number;
+    missions?: () => Promise<string>;
+    goals?: () => Promise<string>;
+    publicOrigin?: string;
+    proposals?: { handleCallback(query: any): Promise<void> };
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -673,6 +677,10 @@ function surfaceWith(
     ...(extra.setChatMenu ? { setChatMenu: extra.setChatMenu } : {}),
     ...(extra.approvals ? { approvals: extra.approvals } : {}),
     ...(extra.burstGapMs === undefined ? {} : { burstGapMs: extra.burstGapMs }),
+    ...(extra.missions ? { missions: extra.missions } : {}),
+    ...(extra.goals ? { goals: extra.goals } : {}),
+    ...(extra.publicOrigin ? { publicOrigin: extra.publicOrigin } : {}),
+    ...(extra.proposals ? { proposals: extra.proposals } : {}),
   });
   return { surface, sent, run, api, store };
 }
@@ -3553,5 +3561,71 @@ describe('a turn that offers the owner something to do', () => {
     const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
     expect(final?.body.text).toBe('plain');
     expect('reply_markup' in (final?.body ?? {})).toBe(false);
+  });
+});
+
+
+describe('read-only commands: /missions, /goals, /where', () => {
+  it('answers /missions and /goals from their hooks, without a run', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (_req?: any) => 'reply');
+    const { surface, sent } = surfaceWith(db, run, {
+      missions: async () => 'Next missions:\nFri 26 Sep, 17:00: Weekly recap, by Ledger',
+      goals: async () => 'Your goals:\nPay off the card: $1,240, on track',
+    });
+    await surface.processUpdates([message(901, OWNER, OWNER, '/missions'), message(902, OWNER, OWNER, '/goals')]);
+    await surface.drain();
+    const texts = sent.filter((s) => s.method === 'sendMessage').map((s) => s.body.text);
+    expect(texts).toEqual([
+      'Next missions:\nFri 26 Sep, 17:00: Weekly recap, by Ledger',
+      'Your goals:\nPay off the card: $1,240, on track',
+    ]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('says where they are when the build cannot read them', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db);
+    await surface.processUpdates([message(903, OWNER, OWNER, '/missions'), message(904, OWNER, OWNER, '/goals')]);
+    await surface.drain();
+    const texts = sent.filter((s) => s.method === 'sendMessage').map((s) => s.body.text);
+    expect(texts).toEqual([telegramSurface.SCHEDULE_UNAVAILABLE_TEXT, telegramSurface.GOALS_UNAVAILABLE_TEXT]);
+  });
+
+  it('answers /where with the public origin, or says the dashboard is on this computer only', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const withOrigin = surfaceWith(db, undefined, { publicOrigin: 'https://buddi.example.ts.net' });
+    await withOrigin.surface.processUpdates([message(905, OWNER, OWNER, '/where')]);
+    await withOrigin.surface.drain();
+    expect(withOrigin.sent.at(-1)?.body.text).toBe('The dashboard: https://buddi.example.ts.net/');
+
+    const local = surfaceWith(alreadyGreeted(withOwner(new FakeDb())));
+    await local.surface.processUpdates([message(906, OWNER, OWNER, '/where')]);
+    await local.surface.drain();
+    expect(local.sent.at(-1)?.body.text).toBe('The dashboard is on this computer only: open buddi there.');
+  });
+
+  it('lists the three in /help', () => {
+    expect(HELP).toContain('/missions');
+    expect(HELP).toContain('/goals');
+    expect(HELP).toContain('/where');
+  });
+
+  it('routes a prp: tap to the proposal cards, and nowhere else', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const handled: any[] = [];
+    const approvals = { handleCallback: vi.fn(async () => {}), pending: async () => '' };
+    const { surface } = surfaceWith(db, undefined, {
+      approvals,
+      proposals: { handleCallback: async (q) => void handled.push(q) },
+    });
+    const data = 'prp:0f0e0d0c-0000-4000-8000-000000000001:keep';
+    expect(callbackKind(data)).toBe('proposal');
+    await surface.processUpdates([
+      { update_id: 907, callback_query: { id: 'cb1', from: { id: OWNER }, data, message: { message_id: 5, chat: { id: OWNER, type: 'private' } } } },
+    ]);
+    await surface.drain();
+    expect(handled).toHaveLength(1);
+    expect(approvals.handleCallback).not.toHaveBeenCalled();
   });
 });

@@ -330,6 +330,7 @@ export async function notificationsTick(db: Queryable, deps: NotifyDeps, now: Da
       urgency: 'today',
       title: `Today, ${rows.length} ${rows.length === 1 ? 'thing' : 'things'}:`,
       text: rows.map((r) => `- ${r.agentId ?? r.pluginId ?? 'buddi'}: ${r.title}`).join('\n'),
+      parts: rows.map(toDeliverable),
     };
     const answer = kind === null || kind === 'off' ? { ok: false as const, error: 'no channel' } : await deliverTo(kind, message);
     const ids = rows.map((r) => r.id);

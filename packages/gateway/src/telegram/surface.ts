@@ -76,6 +76,7 @@ import {
   type BrowserCommandWord,
 } from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
+import { whereText } from './commands.js';
 import {
   BURST_GAP_MS,
   StreamedAnswer,
@@ -87,6 +88,13 @@ import {
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 
 export const SURFACE = 'telegram';
+
+/** Proposal cards' callback prefix (`proposals.ts`); here so routing needs no import cycle. */
+export const PROPOSAL_CALLBACK_PREFIX = 'prp';
+
+/** `/missions` or `/goals` in a build that cannot read them. */
+export const SCHEDULE_UNAVAILABLE_TEXT = 'I cannot read the schedule from here; it is on the dashboard.';
+export const GOALS_UNAVAILABLE_TEXT = 'I cannot read the goals from here; they are on the dashboard.';
 
 // Moved to `outbound.ts`, where every send lives; still importable from here.
 export {
@@ -201,6 +209,9 @@ export const HELP = [
   '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
   '/approvals — anything waiting for your approval',
+  '/missions — the next five scheduled missions',
+  '/goals — each goal with its number and where it stands',
+  '/where — the dashboard address, when your phone can reach it',
   '/browser — where the screen stands; /browser stop, /browser resume, /browser release',
   '/host — host execution permissions and running commands',
   '/hoststop — interrupt all host commands',
@@ -638,6 +649,15 @@ export interface TelegramSurfaceOptions {
    */
   approvals?: ApprovalHooks;
   /**
+   * The proposal cards' taps. Structural, like `approvals`: the surface routes
+   * a `prp:` tap here and every decision is made inside, against core.
+   */
+  proposals?: { handleCallback(query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> };
+  /** `/missions`, already rendered. Absent: the command says where they are instead. */
+  missions?: () => Promise<string>;
+  /** `/goals`, already rendered. Absent: the command says where they are instead. */
+  goals?: () => Promise<string>;
+  /**
    * Re-publish this chat's command menu after `/use`, so the menu names the
    * agent now active. Cosmetic: a failure is logged, never surfaced.
    */
@@ -1068,7 +1088,7 @@ export const OFFER_TAKEN_TEXT = 'On it.';
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'proposal' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
   const raw = (data ?? '').trim();
@@ -1076,6 +1096,7 @@ export function callbackKind(data: string | undefined): CallbackKind {
   if (raw.startsWith(`${REMINDER_CALLBACK_PREFIX}:`)) return 'reminder';
   if (raw.startsWith(`${OFFER_CALLBACK_PREFIX}:`)) return 'offer';
   if (raw.startsWith(`${QUESTION_CALLBACK_PREFIX}:`)) return 'question';
+  if (raw.startsWith(`${PROPOSAL_CALLBACK_PREFIX}:`)) return 'proposal';
   return 'approval';
 }
 
@@ -1248,6 +1269,18 @@ export class TelegramSurface {
       }
       if (kind === 'question') {
         this.enqueue(chain, () => this.handleQuestionCallback(callback));
+        return;
+      }
+      if (kind === 'proposal') {
+        const proposals = this.#opts.proposals;
+        if (!proposals) {
+          this.#log('telegram: proposal callback ignored (no proposal cards wired)');
+          await this.#opts.api.answerCallbackQuery(callback.id).catch(() => {});
+          return;
+        }
+        // Authorization is the proposal handler's, which re-establishes the
+        // owner identity from core, as the approval handler does.
+        this.enqueue(chain, () => proposals.handleCallback(callback));
         return;
       }
       const approvals = this.#opts.approvals;
@@ -1658,6 +1691,22 @@ export class TelegramSurface {
     }
     if (command === '/reminders') {
       await this.handleReminders(chatId);
+      return;
+    }
+    // Read-only, all three: the phone says where things stand; changing them
+    // is the dashboard's.
+    if (command === '/missions') {
+      const missions = this.#opts.missions;
+      await this.#opts.api.sendMessage(chatId, missions ? await missions() : SCHEDULE_UNAVAILABLE_TEXT);
+      return;
+    }
+    if (command === '/goals') {
+      const goals = this.#opts.goals;
+      await this.#opts.api.sendMessage(chatId, goals ? await goals() : GOALS_UNAVAILABLE_TEXT);
+      return;
+    }
+    if (command === '/where') {
+      await this.#opts.api.sendMessage(chatId, whereText(this.#opts.publicOrigin));
       return;
     }
     // `/quiet 1w` — the argument is everything after the command word, so

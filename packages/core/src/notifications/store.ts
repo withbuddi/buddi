@@ -121,6 +121,18 @@ export async function markActed(db: Queryable, id: string, now: Date = new Date(
   return rows.length > 0;
 }
 
+/** Every row carrying this dedupe key is acted on: the thing it asked about was decided. */
+export async function markActedForKey(db: Queryable, key: string, now: Date = new Date()): Promise<number> {
+  if (key.trim() === '') return 0;
+  const { rows } = await db.query(
+    `update core.owner_notifications
+        set acted_at = coalesce(acted_at, $2), seen_at = coalesce(seen_at, $2), updated_at = $2
+      where dedupe_key = $1 and acted_at is null returning id`,
+    [key, now],
+  );
+  return rows.length;
+}
+
 /** Every row about this approval is acted on: the owner decided it, wherever. */
 export async function markActedForAction(db: Queryable, actionId: string, now: Date = new Date()): Promise<number> {
   if (!UUID.test(actionId)) return 0;

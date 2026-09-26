@@ -69,6 +69,12 @@ export interface OwnerNotification {
 export interface DeliverableMessage extends OwnerMessage {
   /** The row's id; `today:<date>` for the end-of-day message, which is many rows. */
   id: string;
+  /**
+   * The end-of-day message only: the rows it gathers, each as it would have
+   * been delivered alone. A channel that draws cards draws theirs after the
+   * one message (a proposal's Keep and Discard); any other ignores this.
+   */
+  parts?: DeliverableMessage[];
 }
 
 /** A way to reach the owner, registered by whoever owns the transport. */

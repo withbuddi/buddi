@@ -9,6 +9,7 @@
 import type { Queryable } from '../owner.js';
 import { primeSecretScrubber, scrubDeep } from '../secrets/scrub.js';
 import { proposalFingerprint } from './fingerprint.js';
+import { announceProposal, proposalDecided } from './announce.js';
 import {
   DISCARD_MEMORY_MS,
   PROPOSAL_FOLD_MS,
@@ -115,7 +116,12 @@ export async function createProposal(db: Queryable, input: CreateProposalInput):
       input.now,
     ],
   );
-  if (rows[0]) return { ok: true, proposal: toProposal(rows[0]) };
+  if (rows[0]) {
+    const proposal = toProposal(rows[0]);
+    // The owner hears about it, at the end of their day. Never fails this.
+    await announceProposal(db, proposal, input.now);
+    return { ok: true, proposal };
+  }
   // Lost a race with an identical proposal: that one is the card.
   const again = await db.query(`select ${COLUMNS} from core.proposals where fingerprint = $1 and state = 'open'`, [fingerprint]);
   const existing = toProposal(again.rows[0]);
@@ -175,7 +181,9 @@ export async function keepProposal(
       returning ${COLUMNS}`,
     [input.id, input.now, input.payload ? JSON.stringify(input.payload) : null],
   );
-  return rows[0] ? toProposal(rows[0]) : null;
+  if (!rows[0]) return null;
+  await proposalDecided(db, String(rows[0].id), input.now);
+  return toProposal(rows[0]);
 }
 
 export async function discardProposal(
@@ -190,7 +198,9 @@ export async function discardProposal(
       returning ${COLUMNS}`,
     [input.id, input.now, reason],
   );
-  return rows[0] ? toProposal(rows[0]) : null;
+  if (!rows[0]) return null;
+  await proposalDecided(db, String(rows[0].id), input.now);
+  return toProposal(rows[0]);
 }
 
 /**
