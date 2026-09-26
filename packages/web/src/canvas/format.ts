@@ -27,7 +27,7 @@ export function fmtValue(value: unknown, unit: Unit | ColumnType, currency: stri
       return Number.isInteger(amount) ? fmtNumber(amount) : trim(amount);
     }
     case 'date':
-      return fmtDay(String(value));
+      return fmtDate(String(value));
     default:
       if (typeof value === 'string') return value;
       if (typeof value === 'number') return fmtNumber(value);
@@ -48,6 +48,15 @@ export function fmtMoneyPrecise(amount: number, currency: string | null): string
   } catch {
     return amount.toFixed(2);
   }
+}
+
+/** A table cell: `2026-09-20` → `20 Sep 2026`, so two years in one column never read alike. */
+export function fmtDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return value;
+  const date = new Date(`${match[0]}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(date);
 }
 
 /** A short axis label: `2026-09-20` → `20 Sep`. Anything else is left alone. */

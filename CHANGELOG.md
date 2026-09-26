@@ -20,6 +20,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Tables on the canvas are compact: one line per row, smaller type, dates with their year, long cells cut with an ellipsis that shows the whole text on hover.
 - Without Telegram, an approval or a report no longer fails to send: it is kept for the dashboard, and the list says there was no channel to reach you.
 - The same alert firing more than three times in an hour waits for the end-of-day message instead, and says so once.
 - The Settings entry in the rail is a gear, the sign everyone knows, instead of three sliders.

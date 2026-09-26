@@ -1812,6 +1812,17 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 }
 
 .wb-canvas-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 22px 26px 44px; }
+/* Tables on the canvas are read, not filled in: one line per row, small
+   type, tight padding, a long cell cut with an ellipsis (its title has the
+   whole text), dates and money never wrapped. The wrap scrolls sideways when
+   the columns need more than the canvas has. */
+.wb-canvas .ui-table { font-size: var(--text-sm); }
+.wb-canvas .ui-table th, .wb-canvas .ui-table td { padding: 5px 10px; line-height: 1.35; vertical-align: baseline; white-space: nowrap; }
+.wb-canvas .ui-table td { max-width: 40ch; overflow: hidden; text-overflow: ellipsis; }
+.wb-canvas .ui-table th:first-child, .wb-canvas .ui-table td:first-child { padding-left: 4px; }
+.wb-canvas .ui-table th:last-child, .wb-canvas .ui-table td:last-child { padding-right: 4px; }
+.wb-canvas .ui-table td[data-type='currency'], .wb-canvas .ui-table td[data-type='number'], .wb-canvas .ui-table td[data-type='percent'] { font-variant-numeric: tabular-nums; }
+.wb-canvas .ui-table td[data-type='date'] { color: var(--text-muted); }
 .wb-canvas-body-empty { display: grid; place-items: center; padding: 24px; }
 
 /* ---- the empty canvas: what could be here, not an apology ---- */

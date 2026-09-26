@@ -38,7 +38,7 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
                 <thead>
                   <tr>
                     {props.columns.map((column) => (
-                      <th key={column.key} className={isNumeric(column.type) ? 'num' : undefined}>
+                      <th key={column.key} className={isNumeric(column.type) ? 'num' : undefined} data-type={column.type}>
                         {column.label}
                       </th>
                     ))}
@@ -65,7 +65,7 @@ export function Table({ props }: { props: TableProps }): JSX.Element {
 function Cell({ cell }: { cell: TableCell }): JSX.Element {
   const text = fmtValue(cell.value, cell.type, cell.currency);
   if (!cell.bar) {
-    return <td className={isNumeric(cell.type) ? 'num' : undefined}>{text}</td>;
+    return <td className={isNumeric(cell.type) ? 'num' : undefined} data-type={cell.type} title={text.length > 40 ? text : undefined}>{text}</td>;
   }
   return (
     <td className="num">
