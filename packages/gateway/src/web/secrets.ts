@@ -11,7 +11,7 @@
  * boundary — this route's body — into the tool that stores it.
  */
 import type { Pool } from 'pg';
-import { SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
+import { OWNER_AGENT_ID, SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
 
 export interface SecretsDeps {
   pool: Pool;
@@ -45,7 +45,8 @@ async function invoke(deps: SecretsDeps, tool: string, args: unknown, session: s
   if (writeRateLimited(session, now().getTime())) {
     return reply(429, { error: 'Too many writes from this page. Wait a moment and try again.' });
   }
-  const result = await deps.registry.invoke(tool, args ?? {}, { ...deps.ctx, db: deps.pool, now } as CoreToolContext);
+  // As the owner: an ownerOnly tool does not exist for any other caller, by design.
+  const result = await deps.registry.invoke(tool, args ?? {}, { ...deps.ctx, agentId: OWNER_AGENT_ID, db: deps.pool, now } as CoreToolContext);
   if (result.ok) return reply(200, { result: result.output });
   if (result.reason === 'invalid-args') return reply(400, { error: result.message });
   if (result.reason === 'unknown-tool') return reply(404, { error: result.message });
