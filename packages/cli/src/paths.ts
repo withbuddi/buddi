@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hydrateDatabaseUrl, type DatabaseUrlResolution } from '@buddi/core';
-import { loadPluginsOnce } from '@buddi/gateway';
+import { hydrateSecrets, loadPluginsOnce } from '@buddi/gateway';
 import { config as loadDotenv, parse as parseDotenv } from 'dotenv';
 
 /** `packages/cli/dist` at runtime, `packages/cli/src` under vitest. */
@@ -73,11 +73,14 @@ export function loadEnv(): void {
 }
 
 /**
- * `.env`, and then the one variable that is deliberately no longer in it.
+ * `.env`, and then what is deliberately no longer in it.
  *
- * `DATABASE_URL` is assembled from the vault at runtime rather than written
- * into `.env` with the password in clear, and reading the vault is a keychain
- * call. Every subcommand waits on this before it touches `process.env.DATABASE_URL`.
+ * Provider keys and `DATABASE_URL` live in the vault, not in `.env` in clear,
+ * and reading the vault is a keychain call. The CLI hydrates the same names
+ * the gateway does at boot (`hydrateSecrets`), so `buddi status` and
+ * `buddi agents` judge an agent by the key the vault holds rather than by an
+ * environment variable nobody sets any more. Every subcommand waits on this
+ * before it touches `process.env.DATABASE_URL`.
  */
 export async function loadEnvironment(
   env: NodeJS.ProcessEnv = process.env,
@@ -87,5 +90,12 @@ export async function loadEnvironment(
   // registry built before the record is read has none of their tools, and an
   // agent granted one of those tools then fails to load.
   await loadPluginsOnce(env);
-  return hydrateDatabaseUrl(env);
+  try {
+    const hydrated = await hydrateSecrets(env);
+    return { url: env.DATABASE_URL as string, source: hydrated.database.source, legacyPassword: hydrated.database.legacyPassword } as DatabaseUrlResolution;
+  } catch {
+    // A vault that cannot be read (locked keychain, no keychain at all) must
+    // not stop a command that only needs the connection string.
+    return hydrateDatabaseUrl(env);
+  }
 }

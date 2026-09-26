@@ -44,6 +44,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- `buddi status` and `buddi agents` read the provider keys from the vault the way the service does, instead of saying a key is not set when it lives in the keychain.
 - A tool call cut off by the reply length limit no longer sits at "Awaiting result" and stops the run. It shows as failed, the agent is told to send fewer items or pass a file, and it gets another turn to do so.
 - In the collapsed agent rail, the groups separator, the + button and a group's faces now sit on the rail's centre line.
 - Settings → Version now reads the running version from the installed package, which is named `@withbuddi/buddi`, instead of falling back to the core library's version.
