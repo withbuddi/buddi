@@ -8,6 +8,7 @@ import {
   checkPlugins,
   checkRecovery,
   checkTailscale,
+  checkSubscriptionSignIns,
   checkVault,
   collectChecks,
   exitCodeFor,
@@ -713,5 +714,26 @@ describe('the tailscale row', () => {
     });
     expect(row.status).toBe('ok');
     expect(row.detail).toContain('could not check');
+  });
+});
+
+describe('checkSubscriptionSignIns', () => {
+  it('says the sign-ins are offered, and how to hide them', () => {
+    expect(checkSubscriptionSignIns({ claude: true, codex: true, oldVars: [] })).toEqual({
+      status: 'ok',
+      detail: 'Claude and ChatGPT offered (BUDDI_SUBSCRIPTION_SIGNINS=off hides them)',
+    });
+    expect(checkSubscriptionSignIns({ claude: false, codex: false, oldVars: [] })).toEqual({
+      status: 'ok',
+      detail: 'both hidden (BUDDI_SUBSCRIPTION_SIGNINS=off)',
+    });
+  });
+
+  it('warns about an old experiment variable and names the new one', () => {
+    const result = checkSubscriptionSignIns({ claude: true, codex: false, oldVars: ['BUDDI_CODEX_EXPERIMENT'] });
+    expect(result.status).toBe('warn');
+    expect(result.detail).toBe(
+      'Claude offered, ChatGPT hidden; BUDDI_CODEX_EXPERIMENT is an old variable, use BUDDI_SUBSCRIPTION_SIGNINS=off instead',
+    );
   });
 });

@@ -8,6 +8,14 @@ What changes in buddi from one release to the next, newest first.
 
 - Settings → Notifications has a Telegram panel: save or replace the bot token, see the phones you paired and unpair one, and pair another with the same QR code first run shows. Telegram appears in "Where buddi reaches you" as soon as the bot starts, without a restart.
 
+### Changed
+
+- Signing in with a Claude or ChatGPT subscription is offered by default; `BUDDI_SUBSCRIPTION_SIGNINS=off` hides both. The setup wizard shows the Claude card first, with a line on the plan's monthly Agent SDK credits. `buddi doctor` says whether the sign-ins are offered or hidden.
+
+### Deprecated
+
+- `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT` and `BUDDI_CODEX_EXPERIMENT` are no longer needed. For one release, setting either to `0` still hides that one sign-in, and `buddi doctor` names the new variable.
+
 ## 0.1.0-pre.18 — 2026-09-26
 
 ### Added

@@ -205,8 +205,9 @@ describe('the questions', () => {
     expect(screen.getAllByRole('button', { name: SCRIPT.change }).length).toBeGreaterThan(0);
   });
 
-  it('resumes at the brain, and offers Claude only where that sign-in exists', async () => {
+  it('resumes at the brain, and offers Claude first unless the host hides that sign-in', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: false }));
     const page = render(meet());
     expect(await screen.findByText(SCRIPT.brain.ask)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.brain.cards.key.title)).toBeInTheDocument();
@@ -218,6 +219,9 @@ describe('the questions', () => {
     vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: true }));
     render(meet());
     expect(await screen.findByText(SCRIPT.brain.cards.claude.title)).toBeInTheDocument();
+    expect(screen.getByText(SCRIPT.brain.cards.claude.know)).toBeInTheDocument();
+    const cards = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button');
+    expect(cards[0]).toHaveTextContent(SCRIPT.brain.cards.claude.title);
   });
 
   it('says Ollama is there when the machine says so, and offers it', async () => {

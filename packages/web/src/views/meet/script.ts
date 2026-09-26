@@ -67,7 +67,11 @@ export const SCRIPT = {
   brain: {
     ask: 'Your assistant needs a brain: an AI it thinks with. Which of these do you already have?',
     cards: {
-      claude: { title: 'Claude', line: 'I pay for Claude' },
+      claude: {
+        title: 'Claude',
+        line: 'I pay for Claude',
+        know: "Uses your Claude plan's monthly Agent SDK credits; after them, an API key.",
+      },
       key: { title: 'A key from Anthropic or OpenAI', line: 'I have an API key' },
       ollama: { title: 'Ollama', line: 'Free, on this computer' },
       service: { title: 'Ollama Cloud, or another service', line: 'I have an address and a key' },

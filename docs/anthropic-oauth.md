@@ -1,28 +1,36 @@
 ---
-title: "Claude OAuth experiment"
+title: "Claude subscription sign-in"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
-# Claude OAuth experiment
+# Claude subscription sign-in
 
-Developed on `feature/anthropic-oauth`. The owner reported successful sign-in and
-assignment to Garage on 2026-09-19; the supplied Dashboard screenshot shows a
-successful Memory Recall tool call followed by an agent reply.
-This is a direct authorization-code + PKCE flow based on the sibling Vonzio and
-extension-ai-connect implementations, not a Claude Code runner or device grant.
-Upstream acceptance can change; a successful token exchange does not guarantee
-that inference will be accepted. No new request-disguise or restriction-bypass
-mechanisms were added to the existing Anthropic runtime.
+A model account that signs in with your paid Claude plan instead of an API key.
+You approve access in your browser, buddi keeps the tokens in its vault, and
+agents assigned to the account think on your plan. It is a direct
+authorization-code + PKCE flow, not a Claude Code runner or a device grant, and
+no request-disguise or restriction-bypass mechanism is involved.
 
-## Enable and use
+Since 15 June 2026 Anthropic gives paid Claude plans a separate monthly budget of
+Agent SDK credits for third-party agents such as buddi: Pro $20, Max 5x $100,
+Max 20x $200, Team and Enterprise $100–200 per seat. Credits do not roll over.
+When they are spent, further use needs API billing, so add an API key account
+for that. buddi cannot see how many credits remain.
 
-Apply core migration 020, set `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT=1` on the serving
-host and any standalone CLI processes using these accounts, build, and restart.
-The independent Codex experiment flag is unchanged.
+Tokens refresh before use. A refresh that fails asks you to reconnect the
+account; buddi does not retry a refresh token that may already be spent.
+
+The sign-in is offered by default, in the setup wizard and in Settings → Model
+accounts. `BUDDI_SUBSCRIPTION_SIGNINS=off` on the host hides it, together with
+the ChatGPT sign-in.
+
+## Use
+
+Needs core migration 020, which `buddi init` and upgrades apply.
 
 1. Open Provider accounts → Add account.
-2. Choose **Anthropic — Claude subscription (experimental)**. Give it a name and
+2. Choose **Claude subscription**. Give it a name and
    initial model, then save. It does not accept pasted API keys or setup tokens.
 3. Choose **Connect Claude**, open the consent link, and approve with the intended
    Claude account. Paste the entire returned `code#state` in the account card.
@@ -65,8 +73,9 @@ transient refresh failure therefore may require reconnect in this first version.
 
 Disconnect removes Buddi's credential, invalidates pending login attempts, and
 does not revoke the grant at Anthropic. Disable/removal coordinate with refresh;
-requests already dispatched cannot be recalled. Disabling the experiment prevents
-new login and credential use, but still allows local disconnect/removal.
+requests already dispatched cannot be recalled. Hiding the sign-in
+(`BUDDI_SUBSCRIPTION_SIGNINS=off`) prevents new login and credential use, but
+still allows local disconnect/removal.
 
 API keys and legacy setup tokens retain their existing behavior. No automatic
 fallback or conversion occurs. Agent permissions, tools, Codex, and memory are
@@ -87,8 +96,8 @@ instances racing to refresh, disconnect during rotation, and disabling pending
 login. Web tests cover controls, transient code clearing, and route protections.
 
 Build, typechecks, workspace tests, and the generic-install check passed before
-the owner test. Migration 020 and the experiment flag are enabled on the development
-host. The owner-reported Garage test verifies a live chat/tool round trip; live
+the owner test. On 2026-09-19 the owner signed in and assigned the account to
+Garage; a Memory Recall tool call and an agent reply followed. The owner-reported Garage test verifies a live chat/tool round trip; live
 model-list discovery for this new account and a real token refresh remain
 unverified. Refresh has mocked and database concurrency coverage, not live-expiry
 confirmation. There is no automatic paid verification request.

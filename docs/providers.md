@@ -1,7 +1,7 @@
 ---
 title: "Provider accounts"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Provider accounts
@@ -28,12 +28,15 @@ Supported connections:
   These are preserved, not promoted to refreshable OAuth connections. Token expiry and
   subscription renewal date are unknown. The extracted Chrome extension package is
   not loaded into the server.
-- [Experimental Claude OAuth accounts](anthropic-oauth.md), with browser consent,
-  code paste, and coordinated vault-backed token refresh. Requires migration 020
-  and `BUDDI_ANTHROPIC_OAUTH_EXPERIMENT=1`.
-- [Experimental Codex ChatGPT accounts](codex-accounts.md), with
-  native device sign-in. Requires the pinned Codex client and
-  `BUDDI_CODEX_EXPERIMENT=1`.
+- [Claude subscription sign-in](anthropic-oauth.md), with browser consent,
+  code paste, and coordinated vault-backed token refresh. Uses the plan's
+  monthly Agent SDK credits; after them, an API key. Requires migration 020.
+- [ChatGPT subscription through Codex](codex-accounts.md), with native device
+  sign-in. Requires the pinned Codex client on the host.
+
+Both sign-ins are offered by default. `BUDDI_SUBSCRIPTION_SIGNINS=off` hides
+both: the account kinds are refused and the wizard and Settings do not offer
+them. Anything else, unset included, leaves them on.
 
 **Context window.** Each account carries an optional "Context window" field,
 stored in `core.provider_accounts.context_window_tokens`. It overrides the
@@ -123,10 +126,9 @@ resolved server-side; agent tools never receive the credential envelopes.
 
 ## Subscription support: what "complete" means
 
-Subscription sign-in exists only behind flags — [Claude
-OAuth](anthropic-oauth.md) and [Codex ChatGPT accounts](codex-accounts.md).
-This is the checklist a subscription backend must pass before it is described
-as supported rather than experimental:
+Two subscription sign-ins exist — [Claude](anthropic-oauth.md) and
+[ChatGPT through Codex](codex-accounts.md) — and both are offered by default.
+This is the checklist a subscription backend is held to:
 
 - **Isolated identity.** A distinct account backend and auth identity, with
   isolated credentials and sessions. Signing in or out of one account must not

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # Architecture
@@ -750,8 +750,8 @@ budget. There is no cross-account fallback.
 A run pins its account and model. Before each model call the account's revision
 is checked and its credential read, so a disabled or edited account stops the
 next call; a changed assignment never redirects a run in flight.
-[providers.md](providers.md) has the detail, including experimental
-subscription accounts.
+[providers.md](providers.md) has the detail, including the Claude and
+ChatGPT subscription accounts.
 
 ### Provider invariants
 

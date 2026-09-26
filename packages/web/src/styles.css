@@ -2967,6 +2967,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .meet-card-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .meet-card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); line-height: 1.35; }
 .meet-card-line { font-size: var(--text-md); color: var(--text-muted); line-height: 1.5; }
+/* What the owner should know before choosing it: quieter than the line. */
+.meet-card-know { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.45; }
 
 /* ---- the assistant: its face, at the size of a face ---- */
 

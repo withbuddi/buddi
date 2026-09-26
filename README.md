@@ -343,8 +343,9 @@ buddi is a 0.1 pre-release. macOS is the reference platform. Linux works and
 is in trial: the file vault, the bundled Postgres and the systemd user unit
 are built, and fixes land as the trial finds them. Windows is not supported
 yet. Native computer control (operating your own apps) is macOS-only. Signing
-in with a Claude subscription and ChatGPT accounts through Codex are
-experiments, off unless enabled
+in with a Claude subscription (on the plan's monthly Agent SDK credits) or a
+ChatGPT subscription through Codex is offered by default;
+`BUDDI_SUBSCRIPTION_SIGNINS=off` hides both
 ([docs/anthropic-oauth.md](docs/anthropic-oauth.md),
 [docs/codex-accounts.md](docs/codex-accounts.md)). Host commands are approved,
 not sandboxed ([docs/host-execution.md](docs/host-execution.md)). Nothing an

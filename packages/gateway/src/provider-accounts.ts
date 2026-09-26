@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
+import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
 type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean };
@@ -109,11 +110,11 @@ export class ProviderAccounts {
         },
       ));
     }
-    if (deps.env.BUDDI_CODEX_EXPERIMENT === '1' && this.accountVault) this.codex = new CodexAccounts({ vault: this.accountVault });
+    if (subscriptionSignIns(deps.env).codex && this.accountVault) this.codex = new CodexAccounts({ vault: this.accountVault });
     if (this.accountVault) this.anthropic = new AnthropicAccounts(this.accountVault);
   }
 
-  get anthropicOAuthEnabled() { return this.deps.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT === '1' && !!this.anthropic; }
+  get anthropicOAuthEnabled() { return subscriptionSignIns(this.deps.env).claude && !!this.anthropic; }
 
   async initialize(): Promise<void> {
     // One atomic, restart-safe migration. Never rewrites private agent files or
@@ -196,8 +197,8 @@ export class ProviderAccounts {
       credential: { kind: row.auth === 'legacy-subscription-token' || row.auth === 'anthropic-oauth' ? 'subscription-token' : 'api-key', env: row.secretRef ?? 'NO_CREDENTIAL' },
     } as ProviderRef : { ...providerFromEnv(this.deps.env, agent.model, agent.provider), accountId: binding?.accountId ?? '' };
     const issue = !row ? 'Choose a provider account for this agent in Settings → Agents.'
-      : row.kind === 'codex' && !this.codex ? 'Codex experiment is not enabled in this process.'
-      : row.auth === 'anthropic-oauth' && !this.anthropicOAuthEnabled ? 'Claude OAuth experiment is not enabled in this process.'
+      : row.kind === 'codex' && !this.codex ? SIGNIN_HIDDEN.codex
+      : row.auth === 'anthropic-oauth' && !this.anthropicOAuthEnabled ? SIGNIN_HIDDEN.claude
       : !row.enabled ? `Provider account “${row.label}” is disabled.`
       : !this.#configured.get(row.id) ? `Provider account “${row.label}” needs a credential or vault access.`
       : accountModelProblem(row.kind, binding!.model);
@@ -247,7 +248,7 @@ export class ProviderAccounts {
       try {
         let value: AccountModels;
         if (row.kind === 'codex') {
-          if (!this.codex) throw new ProviderAccountError(409, 'Codex experiment is unavailable.');
+          if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
           const lease = await this.#codexAccess(row);
           try { value = await this.codex.models(lease.access); } finally { await lease.release(); }
         } else {
@@ -298,10 +299,11 @@ export class ProviderAccounts {
     if (!parsed.success) throw new ProviderAccountError(400, 'Invalid account settings.');
     const input = parsed.data;
     if ((input.kind === 'codex') !== (input.auth === 'chatgpt')) throw new ProviderAccountError(400, 'Codex accounts require ChatGPT subscription sign-in.');
-    if (input.kind === 'codex' && (!this.codex || input.secret)) throw new ProviderAccountError(400, 'Enable the Codex experiment on the host and use device sign-in, not a pasted token.');
+    if (input.kind === 'codex' && !this.codex) throw new ProviderAccountError(400, SIGNIN_HIDDEN.codex);
+    if (input.kind === 'codex' && input.secret) throw new ProviderAccountError(400, 'ChatGPT accounts use device sign-in, not a pasted token.');
     if (input.auth === 'anthropic-oauth' && (input.kind !== 'anthropic' || input.secret)) throw new ProviderAccountError(400, 'Claude OAuth requires an Anthropic account and browser sign-in, not a pasted token.');
     const old = input.id ? await this.#row(input.id) : undefined;
-    if (input.auth === 'anthropic-oauth' && !old && !this.anthropicOAuthEnabled) throw new ProviderAccountError(400, 'Enable the Claude OAuth experiment on the host first.');
+    if (input.auth === 'anthropic-oauth' && !old && !this.anthropicOAuthEnabled) throw new ProviderAccountError(400, SIGNIN_HIDDEN.claude);
     if (old?.deleting) throw new ProviderAccountError(409, 'Removal is pending. Unlock the vault and finish removing this account.');
     if (old && input.revision !== old.revision) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
     if (old && (old.kind !== input.kind || old.auth !== input.auth)) throw new ProviderAccountError(400, 'Create a separate account to change provider or authentication type.');
@@ -416,7 +418,7 @@ export class ProviderAccounts {
         const row = await this.#row(id);
         if (row.revision !== snapshot.revision) throw new ProviderAccountError(409, 'Provider account settings changed during this run. Send a new message to continue with the updated account.');
         if (row.kind === 'codex') {
-          if (!this.codex) throw new ProviderAccountError(409, 'Codex experiment is disabled on this process.');
+          if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
           const lease = await this.#codexCompletionAccess(row, request.signal);
           try { return await this.codex.complete(lease.access, ref.model, request); }
           finally { await lease.release(); }
@@ -468,7 +470,7 @@ export class ProviderAccounts {
       withCodexProfile: async (id, use, signal) => {
         const row = await this.#row(id);
         if (row.kind !== 'codex') throw new ProviderAccountError(400, 'This is not a Codex account.');
-        if (!this.codex) throw new ProviderAccountError(409, 'Codex experiment is not enabled in this process.');
+        if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
         if (!row.enabled || row.deleting) throw new ProviderAccountError(409, `Provider account “${row.label}” is disabled.`);
         const lease = await this.#codexCompletionAccess(row, signal);
         try { return await this.codex.withProfile(lease.access, use); }
@@ -515,7 +517,7 @@ export class ProviderAccounts {
       }
       throw new ProviderAccountError(409, result.refused);
     }
-    if (!this.anthropicOAuthEnabled) throw new ProviderAccountError(409, 'Claude OAuth experiment is disabled.');
+    if (!this.anthropicOAuthEnabled) throw new ProviderAccountError(409, SIGNIN_HIDDEN.claude);
     const lease = await this.#anthropicAccess(row, true, signal);
     try { return await this.anthropic!.credential(row.secretRef!); }
     catch (error) {
@@ -556,7 +558,7 @@ export class ProviderAccounts {
     return this.#serial(async () => {
       const row = await this.#row(id);
       if (!owner || row.auth !== 'anthropic-oauth' || row.revision !== body.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
-      if ((action === 'login' || action === 'complete-login') && !this.anthropicOAuthEnabled) throw new ProviderAccountError(409, 'Claude OAuth experiment is disabled.');
+      if ((action === 'login' || action === 'complete-login') && !this.anthropicOAuthEnabled) throw new ProviderAccountError(409, SIGNIN_HIDDEN.claude);
       const lease = await this.#anthropicAccess(row, action === 'login' || action === 'complete-login');
       try {
         if (action === 'complete-login') {
@@ -621,7 +623,7 @@ export class ProviderAccounts {
 
   codexAction(id: string, action: 'login' | 'cancel-login' | 'logout', revision: unknown) { return this.#serial(async () => {
     const row = await this.#row(id);
-    if (!this.codex || row.kind !== 'codex' || !row.secretRef) throw new ProviderAccountError(409, 'Codex experiment is unavailable.');
+    if (!this.codex || row.kind !== 'codex' || !row.secretRef) throw new ProviderAccountError(409, 'Codex account is unavailable.');
     if (revision !== row.revision) throw new ProviderAccountError(409, 'Account changed. Refresh before continuing.');
     if (action === 'cancel-login') { await this.#cancelCodex(id); return { cancelled: true }; }
     if (action === 'logout') {

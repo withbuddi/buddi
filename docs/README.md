@@ -8,8 +8,8 @@ unbuilt specs are kept outside this repository.
 - [Install](install.md), [first run](onboarding.md),
   [operations](operations.md): backup, restore, and where your data lives.
 - [The command line](cli.md): every `buddi` command, its flags and exit codes.
-- [Provider accounts](providers.md), [Claude OAuth experiment](anthropic-oauth.md),
-  [Codex ChatGPT accounts](codex-accounts.md) (behind `BUDDI_CODEX_EXPERIMENT`).
+- [Provider accounts](providers.md), [Claude subscription sign-in](anthropic-oauth.md),
+  [ChatGPT subscription through Codex](codex-accounts.md).
 - [Using buddi from Claude Code](mcp.md) (`buddi mcp`).
 
 ## What agents do

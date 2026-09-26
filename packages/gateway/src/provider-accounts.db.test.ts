@@ -36,10 +36,13 @@ suite('named provider accounts', () => {
     await f.service.anthropicAction(id, 'complete-login', { revision: 2, attemptId: login.attemptId, code }, 'owner');
     return id;
   }
-  it('gates Claude OAuth, rejects pasted credentials and wrong provider kinds', async () => {
+  it('offers Claude sign-in by default, rejects pasted credentials and wrong provider kinds', async () => {
     const f = fixture(); await f.service.initialize();
-    await expect(f.service.save(claudeSettings)).rejects.toThrow('experiment');
-    f.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT = '1';
+    f.env.BUDDI_SUBSCRIPTION_SIGNINS = 'off';
+    await expect(f.service.save(claudeSettings)).rejects.toThrow('turned off');
+    expect(f.service.view()).toMatchObject({ anthropicOAuthEnabled: false });
+    delete f.env.BUDDI_SUBSCRIPTION_SIGNINS;
+    expect(f.service.view()).toMatchObject({ anthropicOAuthEnabled: true, codexEnabled: true });
     await expect(f.service.save({ ...claudeSettings, secret: 'secret' })).rejects.toThrow('not a pasted token');
     await expect(f.service.save({ ...claudeSettings, kind: 'openai' })).rejects.toThrow('Anthropic account');
     const id = await connectClaude(f);
@@ -50,12 +53,13 @@ suite('named provider accounts', () => {
     expect(f.listModels).toHaveBeenCalledWith(expect.objectContaining({ secret: 'oauth-access', credentialKind: 'subscription-token' }));
     expect(f.test).toHaveBeenCalledWith(expect.objectContaining({ secret: 'oauth-access', credentialKind: 'subscription-token' }));
     f.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT = '0';
-    await expect(f.service.models(id, true)).rejects.toThrow('disabled');
+    await expect(f.service.models(id, true)).rejects.toThrow('turned off');
+    delete f.env.BUDDI_ANTHROPIC_OAUTH_EXPERIMENT;
     await f.service.anthropicAction(id, 'logout', { revision: 3 }, 'owner');
     expect(f.service.view().accounts.find(a => a.id === id)?.configured).toBe(false);
   });
   it('refreshes once across two service instances sharing the same vault and database', async () => {
-    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const f = fixture({}); await f.service.initialize();
     const id = await connectClaude(f, Date.now() + 1000);
     const other = new ProviderAccounts(f.service.deps); await other.initialize();
     let finish!: () => void;
@@ -73,7 +77,7 @@ suite('named provider accounts', () => {
     expect(f.listModels).toHaveBeenLastCalledWith(expect.objectContaining({ secret: 'new-access' }));
   });
   it('waits for refresh before disconnect and never resurrects the deleted credential', async () => {
-    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const f = fixture({}); await f.service.initialize();
     const id = await connectClaude(f, Date.now() + 1000);
     const other = new ProviderAccounts(f.service.deps); await other.initialize();
     let finish!: () => void;
@@ -89,7 +93,7 @@ suite('named provider accounts', () => {
     await expect(f.service.models(id, true)).rejects.toThrow('Connect this Claude');
   });
   it('invalidates pending sign-ins after disable or another process starts reconnect', async () => {
-    const f = fixture({ BUDDI_ANTHROPIC_OAUTH_EXPERIMENT: '1' }); await f.service.initialize();
+    const f = fixture({}); await f.service.initialize();
     const id = await connectClaude(f);
     const attempt = await f.service.anthropicAction(id, 'login', { revision: 3 }, 'owner') as { attemptId: string };
     const other = new ProviderAccounts(f.service.deps); await other.initialize();
@@ -135,7 +139,7 @@ suite('named provider accounts', () => {
     expect(f.listModels).toHaveBeenCalledTimes(1);
   });
   it('routes Codex discovery through its native account lease, never the API', async () => {
-    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    const f = fixture({}); await f.service.initialize();
     const a = await f.service.save(codexSettings);
     vi.spyOn(f.service.codex!, 'models').mockResolvedValue({ models: [{ id: 'gpt-test', name: 'Test', isDefault: true }], truncated: false });
     expect((await f.service.models(a.id)).models[0]?.isDefault).toBe(true);
@@ -146,9 +150,10 @@ suite('named provider accounts', () => {
     return { id: a.id, revision: a.revision, label: a.label, kind: a.kind, auth: a.auth, baseUrl: a.baseUrl, defaultModel: a.defaultModel, enabled: a.enabled };
   };
   it('gates native accounts and forbids pasted tokens or API fallback', async () => {
-    const disabled = fixture(); await disabled.service.initialize();
-    await expect(disabled.service.save(codexSettings)).rejects.toThrow('Enable the Codex experiment');
-    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    const disabled = fixture({ BUDDI_SUBSCRIPTION_SIGNINS: 'off' }); await disabled.service.initialize();
+    await expect(disabled.service.save(codexSettings)).rejects.toThrow('turned off');
+    expect(disabled.service.view()).toMatchObject({ codexEnabled: false, anthropicOAuthEnabled: false });
+    const f = fixture({}); await f.service.initialize();
     await expect(f.service.save({ ...codexSettings, secret: 'pasted-token' })).rejects.toThrow('device sign-in');
     await expect(f.service.save({ ...codexSettings, auth: 'api-key' })).rejects.toThrow('require ChatGPT');
     const account = await f.service.save(codexSettings);
@@ -157,12 +162,12 @@ suite('named provider accounts', () => {
     expect(f.test).not.toHaveBeenCalled();
   });
   it('serializes native credentials across processes and allows disabling and removal', async () => {
-    const f = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await f.service.initialize();
+    const f = fixture({}); await f.service.initialize();
     const account = await f.service.save(codexSettings);
     let finish!: () => void;
     vi.spyOn(f.service.codex!, 'login').mockResolvedValue({ view: { state: 'pending' }, finished: new Promise<void>(resolve => { finish = resolve; }) });
     await f.service.codexAction(account.id, 'login', 1);
-    const other = fixture({ BUDDI_CODEX_EXPERIMENT: '1' }); await other.service.initialize();
+    const other = fixture({}); await other.service.initialize();
     await expect(other.service.save({ ...metadata(other, account.id), enabled: false })).rejects.toThrow('busy');
     finish();
     await vi.waitFor(async () => {

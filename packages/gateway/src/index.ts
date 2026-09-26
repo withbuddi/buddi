@@ -8,6 +8,7 @@ export * from './telegram/approvals.js';
 export * from './telegram/notify.js';
 export * from './telegram/pairing.js';
 export * from './bootstrap.js';
+export * from './subscription-signins.js';
 export * from './db-ready.js';
 export * from './missions/execute.js';
 export * from './missions/defaults.js';

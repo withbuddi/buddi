@@ -93,6 +93,11 @@ export interface DoctorProbes {
    * proxy is actually published. Optional for the same reason `config` is.
    */
   tailscale?(): Promise<ProbeResult>;
+  /**
+   * Whether signing in with a Claude or ChatGPT subscription is offered.
+   * Optional for the same reason `config` is.
+   */
+  subscriptionSignIns?(): ProbeResult;
   timezone(): ProbeResult;
 }
 
@@ -135,6 +140,8 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // Never critical: with this off, or its proxy down, buddi is a dashboard on
   // loopback, which is what it is by default.
   { name: 'tailscale', critical: false, probe: 'tailscale' },
+  // Never critical: hidden sign-ins are an owner's choice, and API keys still work.
+  { name: 'subscription sign-ins', critical: false, probe: 'subscriptionSignIns' },
   { name: 'timezone', critical: false, probe: 'timezone' },
 ];
 
@@ -861,4 +868,27 @@ export function checkDatabaseExposure(facts: DatabaseExposureFacts): ProbeResult
     status: 'ok',
     detail: `${facts.published ?? 'not published'} (loopback only); password in the vault`,
   };
+}
+
+export interface SubscriptionSignInFacts {
+  claude: boolean;
+  codex: boolean;
+  /** Old experiment variables that are still set. */
+  oldVars: readonly string[];
+}
+
+/**
+ * Claude and ChatGPT subscription sign-ins: offered or hidden. An old
+ * experiment variable still set is a warning that names the new one.
+ */
+export function checkSubscriptionSignIns(facts: SubscriptionSignInFacts): ProbeResult {
+  const state = facts.claude && facts.codex ? 'Claude and ChatGPT offered'
+    : !facts.claude && !facts.codex ? 'both hidden'
+    : facts.claude ? 'Claude offered, ChatGPT hidden'
+    : 'ChatGPT offered, Claude hidden';
+  const how = facts.claude || facts.codex ? 'BUDDI_SUBSCRIPTION_SIGNINS=off hides them' : 'BUDDI_SUBSCRIPTION_SIGNINS=off';
+  if (facts.oldVars.length === 0) return { status: 'ok', detail: `${state} (${how})` };
+  const names = facts.oldVars.join(' and ');
+  const verb = facts.oldVars.length === 1 ? 'is an old variable' : 'are old variables';
+  return { status: 'warn', detail: `${state}; ${names} ${verb}, use BUDDI_SUBSCRIPTION_SIGNINS=off instead` };
 }

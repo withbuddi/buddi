@@ -1,16 +1,30 @@
 ---
-title: "Codex ChatGPT accounts"
+title: "ChatGPT subscription through Codex"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
-# Codex ChatGPT accounts
+# ChatGPT subscription through Codex
 
-Codex ChatGPT accounts are built and live behind `BUDDI_CODEX_EXPERIMENT=1`; they
-are off unless the flag is set. This page is the reference for what the adapter
-does, what it deliberately refuses, and what is still missing. Existing accounts
-and live bindings are unchanged by turning the flag on. See
-[providers.md](providers.md) for the account model all provider accounts share.
+A model account that runs on your paid ChatGPT plan. buddi drives OpenAI's Codex
+App Server (`codex-cli 0.155.0`, installed on the host) and signs in with Codex's
+own device flow: buddi shows a code, you approve it at OpenAI, and the
+credential goes into buddi's vault. Each completion starts a short-lived Codex
+child with that credential staged in a private temporary folder, and native
+Codex tools stay off; buddi's own tools do the work.
+
+Device sign-in has to be allowed on the ChatGPT side: it is the "device code
+sign-in for Codex" setting in your ChatGPT account. Model turns use your plan's
+Codex allowance; buddi cannot see how much is left.
+
+Codex refreshes the credential itself. A refresh that fails, or one interrupted
+by a crash, asks you to reconnect the account.
+
+The sign-in is offered by default in Settings → Model accounts; it is not in the
+setup wizard, because the packaged build does not ship the `codex` binary.
+`BUDDI_SUBSCRIPTION_SIGNINS=off` on the host hides it, together with the Claude
+sign-in. See [providers.md](providers.md) for the account model all provider
+accounts share.
 
 ## What is built
 
@@ -31,11 +45,11 @@ tool round trip pass against the actual binary.
 - Configured child environments exclude ambient provider keys and use a distinct
   native profile. This is not a proven operating-system sandbox.
 
-## Turning it on
+## Use
 
-Set `BUDDI_CODEX_EXPERIMENT=1` on the gateway/CLI host, apply core migration 019,
-build, and restart the service. The current development host has this enabled.
-In Settings → Model accounts, add **Codex — ChatGPT subscription (experimental)**, click
+Needs core migration 019, which `buddi init` and upgrades apply, and
+`codex-cli 0.155.0` on the host's `PATH`.
+In Settings → Model accounts, add **ChatGPT subscription through Codex**, click
 **Connect ChatGPT**, and complete the displayed device authorization yourself.
 Then assign the account/model to an agent and send a test chat. Existing accounts
 are never reassigned automatically. All surfaces use the same account resolver.

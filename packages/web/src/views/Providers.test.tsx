@@ -33,7 +33,7 @@ it('completes Claude consent from the account card, clears the code, and does no
   expect(screen.getByLabelText('Claude authorization code')).toHaveValue('');
   expect(JSON.stringify(localStorage)).not.toContain('fixture-secret');
 });
-it('shows Codex account creation only when the experiment is enabled', async () => {
+it('offers Codex account creation when the host allows it', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, codexEnabled: true });
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));

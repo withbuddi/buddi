@@ -1,7 +1,7 @@
 ---
 title: "First run: you meet buddi"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 
 # First run: you meet buddi
@@ -71,8 +71,9 @@ Saved through the existing owner profile.
 Inline: cards, two per row, each with a logo, a title and one line. Order:
 
 1. **Claude** — "I pay for Claude". Sign in with the existing Claude
-   subscription flow. Shown only when that flow is enabled in this build;
-   otherwise the card is absent, not disabled.
+   subscription flow. One more line under it: "Uses your Claude plan's monthly
+   Agent SDK credits; after them, an API key." Shown by default; absent, not
+   disabled, when the host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
 2. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
    pasted, provider detected from its prefix (`sk-ant-` is Anthropic, `sk-` is
    OpenAI), with a small "which?" toggle if detection is wrong.
@@ -82,8 +83,12 @@ Inline: cards, two per row, each with a logo, a title and one line. Order:
 4. **Ollama Cloud, or another service** — "I have an address and a key".
    Address and key, for OpenAI-compatible endpoints.
 
-ChatGPT subscriptions are not offered: the adapter they need is not in the
-packaged build. When it is, it becomes card 2 and "A key" moves down.
+ChatGPT subscriptions are not offered here. The adapter ships, but it drives
+the `codex` binary (pinned at `codex-cli 0.155.0`), which neither the release
+tarball nor the Docker image includes, so on a fresh install the card could
+only fail. The sign-in stays in Settings → Model accounts. When the build
+carries the binary, it becomes card 2, "ChatGPT — I pay for ChatGPT", with
+"Uses your ChatGPT plan through Codex.", and "A key" moves down.
 
 After any card is completed, buddi tests it with one small call and answers in
 the thread:

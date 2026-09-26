@@ -224,14 +224,14 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           {a.auth === 'legacy-subscription-token' && <p>Legacy subscription token: not refreshable, token expiry and subscription renewal date unknown.</p>}
           {a.kind === 'codex' ? (
             <>
-              <p>Experimental Codex App Server. Credentials stay in Buddi’s vault and are staged in a private temporary file during native sessions. Codex manages refresh. Subscription renewal date is unknown.</p>
+              <p>Runs through the Codex App Server. Credentials stay in Buddi’s vault and are staged in a private temporary file during native sessions. Codex manages refresh. Subscription renewal date is unknown.</p>
               <p>Native tool-step usage reporting is incomplete. Do not use Buddi’s token or API-cost estimates as subscription billing or remaining quota.</p>
               <p>After connecting, assign this account to an agent and send a test message. Model turns use your subscription allowance.</p>
             </>
           ) : (
             <p>Testing sends a small fixed prompt and may incur a charge. No conversation or files are sent. Configured does not mean verified.</p>
           )}
-          {a.auth === 'anthropic-oauth' && <p>Experimental Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Subscription renewal and remaining quota are unknown.</p>}
+          {a.auth === 'anthropic-oauth' && <p>Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Uses your plan’s monthly Agent SDK credits; after them, an API key. Remaining credits are unknown here.</p>}
           <p>Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry.</p>
         </div>
       </Details>
@@ -288,8 +288,8 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
             else changeKind(e.target.value as ProviderAccount['kind']);
           }}>
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint</option>
-            {(anthropicOAuthEnabled || a?.auth === 'anthropic-oauth') && <option value="anthropic-oauth">Claude subscription (experimental)</option>}
-            {(codexEnabled || a?.kind === 'codex') && <option value="codex">ChatGPT subscription via Codex (experimental)</option>}
+            {(anthropicOAuthEnabled || a?.auth === 'anthropic-oauth') && <option value="anthropic-oauth">Claude subscription</option>}
+            {(codexEnabled || a?.kind === 'codex') && <option value="codex">ChatGPT subscription through Codex</option>}
           </select>
         </Field>
         {kind === 'openai-compatible' && <>
@@ -332,7 +332,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
   const [code, setCode] = useState('');
   useEffect(() => { setCode(''); }, [a.login?.attemptId, a.login?.state]);
   return <>
-    {!enabled && <Notice tone="warning">Claude OAuth is disabled on this host.</Notice>}
+    {!enabled && <Notice tone="warning">Claude subscription sign-in is turned off on this host.</Notice>}
     <Toolbar>
       <Button disabled={busy || !enabled || !a.enabled || a.removalPending || a.login?.state === 'pending'} onClick={() => void run(() => api.anthropicAccountAction(a.id, 'login', a.revision), 'Open the Claude consent link below. Existing credentials remain until sign-in succeeds.')}>{a.configured ? 'Reconnect Claude' : 'Connect Claude'}</Button>
       {a.login?.state === 'pending' && <Button disabled={busy} onClick={() => { setCode(''); void run(() => api.anthropicAccountAction(a.id, 'cancel-login', a.revision), 'Claude sign-in cancelled.'); }}>Cancel sign-in</Button>}
@@ -445,8 +445,8 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
             else { const k = e.target.value as ProviderAccount['kind']; choose(k, k === 'codex' ? 'chatgpt' : 'api-key'); }
           }}>
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
-            {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription (experimental)</option>}
-            {codexEnabled && <option value="codex">ChatGPT subscription via Codex (experimental)</option>}
+            {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription</option>}
+            {codexEnabled && <option value="codex">ChatGPT subscription through Codex</option>}
           </select>
         </Field>
         <Field label="Account name" hint="Proposed from the provider. Change it to anything you will recognise.">

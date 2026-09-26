@@ -1166,7 +1166,7 @@ function BrainCard({
   onPick,
 }: {
   mark: ReactNode;
-  card: { title: string; line: string };
+  card: { title: string; line: string; know?: string };
   note?: string;
   onPick: () => void;
 }): JSX.Element {
@@ -1178,6 +1178,7 @@ function BrainCard({
       <span className="meet-card-words">
         <span className="meet-card-title">{card.title}</span>
         <span className="meet-card-line">{note ?? card.line}</span>
+        {card.know ? <span className="meet-card-know">{card.know}</span> : null}
       </span>
     </button>
   );

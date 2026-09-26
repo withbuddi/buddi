@@ -50,6 +50,7 @@ import {
   webUrl,
   isLoopback,
   WEB_ENABLED_VAR,
+  subscriptionSignIns,
   type HttpTransport,
 } from '@buddi/gateway';
 import {
@@ -71,6 +72,7 @@ import {
   checkEmail,
   checkRecovery,
   checkTailscale,
+  checkSubscriptionSignIns,
   checkNodeVersion,
   checkPlugins,
   checkVault,
@@ -773,6 +775,10 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         // restored, which is not in recovery.
         return checkRecovery({ active: false });
       }
+    },
+
+    subscriptionSignIns(): ProbeResult {
+      return checkSubscriptionSignIns(subscriptionSignIns(env));
     },
 
     timezone(): ProbeResult {
