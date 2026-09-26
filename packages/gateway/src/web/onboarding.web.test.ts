@@ -645,7 +645,7 @@ it('grants the first agent the built-in families, web and browser included', asy
   // Every entry resolves against what this build compiles in, so no family can
   // hold the first agent back as "needs a plugin".
   const tools = resolveToolNames(FIRST_AGENT_TOOLS, createToolRegistry({}), 'concierge');
-  for (const name of ['web.search', 'web.read', 'browser.status', 'browser.act', 'host.exec', 'email.send', 'agent.delegate', 'system.time']) {
+  for (const name of ['web.search', 'web.read', 'browser.status', 'browser.act', 'secret.fill', 'host.exec', 'email.send', 'agent.delegate', 'system.time']) {
     expect(tools).toContain(name);
   }
   expect(tools.filter((name) => name.startsWith('platform.')).sort()).toEqual(

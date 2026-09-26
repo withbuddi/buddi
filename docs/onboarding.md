@@ -154,7 +154,7 @@ everywhere; an emoji face is written into the agent file as before.
 
 The assistant is the concierge, so it is granted nearly everything built in
 (`FIRST_AGENT_TOOLS` in `packages/gateway/src/web/onboarding.ts`): `system.*`,
-`email.*`, `memory.*`, `artifacts.*`, `web.*`, `browser.*`, `host.*`,
+`email.*`, `memory.*`, `artifacts.*`, `web.*`, `browser.*`, `secret.*`, `host.*`,
 `reminder.*`, `schedule.*`, `goal.*`, `learning.*`, `canvas.*`,
 `agent.delegate`, the read-only platform tools and `owner.get_profile` /
 `owner.set_profile`. Asked for a screenshot of a site, it opens its own browser

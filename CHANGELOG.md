@@ -36,6 +36,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- The first assistant is granted `secret.*`, so it can fill a sign-in from Keys and secrets; the browser's notice tells every agent that is how a stored password goes in. Existing assistants get the family from their Setup tab.
 - Settings → Keys and secrets saves again: the page's writes now run as the owner, so `secrets.put` and its siblings are no longer refused as unknown tools.
 - In your own Chrome, an observation that finds the page not ready (a heavy page like cnn.com, or a tab the page script missed) injects the script again and reads the page up to three more times, after 0.5, 1 and 2 seconds, before it says "The page has not answered after three tries. Wait a few seconds and observe again."
 - A browser observation that does not answer, after navigating, observing or an input action, no longer pauses control. The agent is told "The page has not answered yet. Wait a few seconds and observe again." and must observe before it acts. Control pauses only when the tab or window is gone, after three failed observations in a row, or when you take over.
