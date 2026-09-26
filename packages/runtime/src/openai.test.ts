@@ -532,6 +532,16 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     ]);
   });
 
+  it('takes everything before a lone closing tag as thought, the way Ollama Cloud sends glm', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({ choices: [{ finish_reason: 'stop', message: { content: 'Let me check the mail first.</think>\n\nHi Doe, I am buddi.' } }] })));
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch });
+    const res = await provider.complete(request);
+    expect(res.content).toEqual([
+      { type: 'thinking', text: 'Let me check the mail first.' },
+      { type: 'text', text: 'Hi Doe, I am buddi.' },
+    ]);
+  });
+
   it('streams when asked, hands out each piece, and returns the assembled answer', async () => {
     const chunks = [
       { model: 'gemma4:12b', choices: [{ delta: { role: 'assistant', reasoning: 'think' } }] },

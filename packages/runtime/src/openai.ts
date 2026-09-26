@@ -351,10 +351,19 @@ const THOUGHT = /^\s*<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/i;
 /** The longest opening tag, for deciding whether a short head might become one. */
 const OPEN_THOUGHT = '<thinking>';
 
+/** A closing tag with no opening one: some hosts eat the `<think>` and leave the `</think>`. */
+const CLOSED_THOUGHT = /<\/(think|thinking)>/i;
+
 export function splitThought(content: string): { thought: string; text: string } {
   const match = THOUGHT.exec(content);
-  if (!match) return { thought: '', text: content };
-  return { thought: match[2] ?? '', text: content.slice(match[0].length).replace(/^\s+/, '') };
+  if (match) return { thought: match[2] ?? '', text: content.slice(match[0].length).replace(/^\s+/, '') };
+  // Ollama's cloud route, for one, strips the opening tag of glm and qwen
+  // answers and keeps the closing one, so the answer arrives as
+  // "…thought…</think>\n\nHello". Everything before that first closing tag
+  // is thought; the rule is the same as for a block that opened properly.
+  const closed = CLOSED_THOUGHT.exec(content);
+  if (!closed || closed.index === undefined) return { thought: '', text: content };
+  return { thought: content.slice(0, closed.index).trim(), text: content.slice(closed.index + closed[0].length).replace(/^\s+/, '') };
 }
 
 export function fromWireChoice(
@@ -655,6 +664,11 @@ class OpenAiStreamAssembly {
     const head = this.#content.replace(/^\s+/, '');
     if (head !== '' && head.length < OPEN_THOUGHT.length && OPEN_THOUGHT.startsWith(head.toLowerCase())) return;
     const split = splitThought(this.#content);
+    // A closing tag that arrives after its thought was already handed out as
+    // answer text (no opening tag to warn us) cannot take those words back on
+    // the wire; the stored message is split cleanly, and the answer restarts
+    // from its true beginning here.
+    if (split.thought !== '' && this.#saidText > split.text.length + this.#saidThought) this.#saidText = 0;
     if (split.thought.length > this.#saidThought) {
       this.onDelta({ kind: 'thinking', text: split.thought.slice(this.#saidThought) });
       this.#saidThought = split.thought.length;
