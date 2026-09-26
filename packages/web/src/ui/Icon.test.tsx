@@ -45,7 +45,7 @@ describe('Icon', () => {
     expect(frame!.getAttribute('stroke-width')).toBe('1.3');
   });
 
-  it('takes a size and a class, and the settings knobs stay punched out in the surface colour', () => {
+  it('takes a size and a class, and the gear keeps its grid while drawn at the rail size', () => {
     const { container } = render(
       <>
         <Icon name="chevron" className="wb-tool-chevron" />
@@ -57,11 +57,9 @@ describe('Icon', () => {
     expect(chevron!.getAttribute('class')).toBe('wb-tool-chevron');
     expect(mail!.getAttribute('width')).toBe('16');
     expect(mail!.getAttribute('viewBox')).toBe('0 0 20 20');
-    expect([...settings!.querySelectorAll('circle')].map((c) => c.getAttribute('fill'))).toEqual([
-      'var(--surface)',
-      'var(--surface)',
-      'var(--surface)',
-    ]);
+    expect(settings!.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(settings!.getAttribute('width')).toBe('20');
+    expect(settings!.querySelectorAll('circle')).toHaveLength(1);
   });
 
   it('has a mark for every canvas renderer', () => {
