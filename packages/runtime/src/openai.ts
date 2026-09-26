@@ -31,6 +31,7 @@ import { providerAuthHeaders, type ResolvedProvider } from '@buddi/core';
 import {
   OPENAI_TOOL_NAME_MAX,
   ProviderCapabilityError,
+  markCutOff,
   ProviderError,
   refusesImages,
   toolNameMap,
@@ -383,11 +384,12 @@ export function fromWireChoice(
     });
   }
   let stopReason = mapFinishReason(choice?.finish_reason);
-  // Some compatible hosts answer `stop` while still returning tool calls.
-  if (stopReason !== 'tool_use' && out.some((b) => b.type === 'tool_use')) {
+  // Some compatible hosts answer `stop` while still returning tool calls. A
+  // `length` stays what it is: the last call was cut off, see `markCutOff`.
+  if (stopReason !== 'tool_use' && stopReason !== 'max_tokens' && out.some((b) => b.type === 'tool_use')) {
     stopReason = 'tool_use';
   }
-  return { content: out, stopReason };
+  return { content: markCutOff(out, stopReason), stopReason };
 }
 
 /* ------------------------------------------------------------------ *

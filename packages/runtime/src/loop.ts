@@ -354,6 +354,16 @@ export function maxTurnsNotice(maxTurns: number): string {
 }
 
 /** The same courtesy for the other silent ending: one answer that ran too long. */
+/**
+ * What the model is told about a tool call the length limit cut off.
+ *
+ * Its arguments never finished, so it was not run. The sentence names the two
+ * ways out, because the usual cause is a call that carries its data inline:
+ * hundreds of rows typed as JSON will hit the same limit every time.
+ */
+export const CUT_OFF_CALL_TEXT =
+  'This call was cut off at the length limit before its arguments were complete. Send fewer items in one call, or pass a file instead of its contents.';
+
 export const MAX_TOKENS_NOTICE =
   'Stopped: the answer got too long and was cut off. Ask me to continue, or for a shorter version.';
 
@@ -1117,7 +1127,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     // content is already back on `messages`, provider blocks and all.
     if (res.stopReason === 'pause_turn') continue;
 
-    if (res.stopReason !== 'tool_use' || toolUses.length === 0) {
+    // A turn the length limit cut in the middle of a tool call is not an
+    // ending: the cut call is answered with an error below, and the model gets
+    // the next turn to react. `maxTurns` still bounds a model that keeps doing
+    // it. A turn cut in the middle of prose still stops here.
+    const cutOff = res.stopReason === 'max_tokens' && toolUses.some((call) => call.truncated === true);
+    if (!cutOff && (res.stopReason !== 'tool_use' || toolUses.length === 0)) {
       stopped = res.stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn';
       break;
     }
@@ -1128,6 +1143,17 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     const produced: ArtifactUse[] = [];
     let skipReason: string | undefined;
     for (const call of toolUses) {
+      if (call.truncated === true) {
+        // Never dispatched: its arguments are a prefix of what the model meant.
+        // Drawn and recorded as a failed call so no surface waits on it.
+        try {
+          opts.onToolCall?.(call.name, call.input);
+          opts.onToolResult?.(call.name, { ok: false, error: CUT_OFF_CALL_TEXT });
+        } catch { /* a surface's drawing never decides a run */ }
+        results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true, content: CUT_OFF_CALL_TEXT });
+        await appendEvent(pool, 'tool.result', { name: call.name, ok: false, reason: 'cut-off' }, conversationId);
+        continue;
+      }
       if (ctx.signal?.aborted || waitingForOwner || skipReason || pendingActionId) {
         results.push({ type: 'tool_result', tool_use_id: call.id, is_error: true,
           content: `not-executed: ${ctx.signal?.aborted ? 'the owner cancelled this run' : waitingForOwner ? 'waiting for the owner to answer the question; finish your reply and do not call more tools' : skipReason ?? 'waiting for owner approval'}` });

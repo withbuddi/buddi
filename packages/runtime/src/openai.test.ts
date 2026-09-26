@@ -165,6 +165,26 @@ describe('createOpenAiProvider — the wire', () => {
 });
 
 describe('createOpenAiProvider — tool calls', () => {
+  it('keeps a length stop and flags the tool call it cut off', async () => {
+    const { res } = await send(
+      { ...request, tools },
+      okBody({
+        choices: [{
+          finish_reason: 'length',
+          message: {
+            content: null,
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'finance_project_cashflow', arguments: '{"rows": [' } }],
+          },
+        }],
+      }),
+    );
+    expect(res.stopReason).toBe('max_tokens');
+    expect(res.content).toEqual([{
+      type: 'tool_use', id: 'call_1', name: 'finance.project_cashflow',
+      input: { [MALFORMED_ARGUMENTS_KEY]: '{"rows": [' }, truncated: true,
+    }]);
+  });
+
   it('encodes dotted tool names and decodes them back', async () => {
     const { sent, res } = await send(
       { ...request, tools },

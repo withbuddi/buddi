@@ -72,6 +72,13 @@ untrusted words; every copied message is redacted of anything
 credential-shaped and capped at 400 characters. Idle rollovers are unchanged.
 The rollover logs one line with the reason, both sizes and the limit applied.
 
+**A reply that hits the output limit.** A turn cut off in the middle of its
+text stops the run with "Stopped: the answer got too long and was cut off."
+A turn cut off in the middle of a tool call's arguments does not run the call:
+it gets a failed result telling the model to send fewer items or pass a file,
+and the model gets the next turn to try again, within the run's turn budget
+(`packages/runtime/src/loop.ts`, `CUT_OFF_CALL_TEXT`).
+
 ## Sending while the agent works
 
 The composer always sends. A message typed during a run is queued, shown in the

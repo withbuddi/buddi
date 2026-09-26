@@ -17,6 +17,7 @@ import {
   approvalOutcomeText,
   composeSystem,
   createConversation,
+  CUT_OFF_CALL_TEXT,
   isPreamble,
   joinSpoken,
   loadMessages,
@@ -1234,6 +1235,54 @@ describe('runAgent', () => {
     });
     expect(result.stopped).toBe('max_tokens');
     expect(result.turns).toBe(1);
+  });
+
+  /*
+   * A call the length limit cut off is not run and not left pending: the model
+   * is told, gets the next turn, and the run ends however that turn does.
+   */
+  it('answers a cut-off tool call with an error and lets the model react', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, 'finance');
+    const execute = vi.fn(async (input: { n: number }) => ({ doubled: input.n * 2 }));
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'demo', version: '0.0.1', schema: 'demo', migrationsDir: '/tmp/demo',
+      tools: [{ name: 'demo.double', description: 'Doubles a number.', tier: 'auto', input: z.object({ n: z.number() }), execute }],
+    });
+    const provider = scriptedProvider([
+      {
+        content: [
+          { type: 'text', text: 'Staging the rows.' },
+          { type: 'tool_use', id: 'tu_cut', name: 'demo.double', input: {}, truncated: true },
+        ],
+        stopReason: 'max_tokens',
+        usage,
+        model: 'claude-sonnet-5',
+      },
+      { content: [{ type: 'text', text: 'I will send them in smaller batches.' }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' },
+    ]);
+    const results: unknown[] = [];
+
+    const result = await runAgent({
+      agent, provider, registry, ctx, pool: db, conversationId,
+      userMessage: 'import the statement',
+      onToolResult: (_name, r) => results.push(r),
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.calls).toHaveLength(2);
+    const answer = provider.calls[1]!.messages.at(-1)!;
+    expect(answer.role).toBe('user');
+    expect(answer.content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tu_cut', is_error: true, content: CUT_OFF_CALL_TEXT },
+    ]);
+    expect(db.events.find((e) => e.kind === 'tool.result')?.payload).toEqual({ name: 'demo.double', ok: false, reason: 'cut-off' });
+    expect(db.eventKinds()).not.toContain('tool.called');
+    expect(results).toEqual([{ ok: false, error: CUT_OFF_CALL_TEXT }]);
+    expect(result.stopped).toBe('end_turn');
+    expect(result.turns).toBe(2);
+    expect(db.messages.flatMap((m) => m.content as { type: string; text?: string }[]).some((b) => b.text?.startsWith('Stopped:'))).toBe(false);
   });
 
   it('replays prior conversation history into the first provider call', async () => {

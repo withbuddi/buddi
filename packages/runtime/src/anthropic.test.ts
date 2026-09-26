@@ -276,6 +276,41 @@ describe('createAnthropicProvider — responses and errors', () => {
     expect((await provider.complete(request)).stopReason).toBe('max_tokens');
   });
 
+  it('flags a tool call the length limit cut off mid-arguments', async () => {
+    const frames = [
+      ['message_start', { type: 'message_start', message: { model: 'claude-sonnet-5-2', usage: { input_tokens: 9 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu_cut', name: 'finance_balance', input: {} } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"rows":[{"a":' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 16000 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ] as const;
+    const wire = frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      init.onChunk(wire, 200);
+      return new Response(wire, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete({ ...request, onDelta: () => {} });
+    expect(res.stopReason).toBe('max_tokens');
+    expect(res.content).toEqual([
+      { type: 'tool_use', id: 'tu_cut', name: 'finance.balance', input: {}, truncated: true },
+    ]);
+  });
+
+  it('leaves a finished tool call unflagged when prose after it was cut', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      stop_reason: 'max_tokens',
+      content: [
+        { type: 'tool_use', id: 'tu_1', name: 'finance_balance', input: { a: 1 } },
+        { type: 'text', text: 'and then' },
+      ],
+    })));
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete(request);
+    expect(res.content[0]).toEqual({ type: 'tool_use', id: 'tu_1', name: 'finance.balance', input: { a: 1 } });
+  });
+
   it('retries a 429 and then succeeds', async () => {
     const delays: number[] = [];
     const fetchMock = vi

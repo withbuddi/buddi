@@ -70,7 +70,12 @@ export const ANTHROPIC_VERSION = '2023-06-01';
  */
 export type ContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  /**
+   * `truncated` marks a call the provider stopped writing at the length limit:
+   * its arguments never finished, so `input` is not what the model meant. The
+   * loop answers it with an error instead of dispatching it. See `markCutOff`.
+   */
+  | { type: 'tool_use'; id: string; name: string; input: unknown; truncated?: true }
   | {
       type: 'tool_result';
       tool_use_id: string;
@@ -581,6 +586,23 @@ function fromWireBlocks(
   return { content: out, searches };
 }
 
+/**
+ * Flag the tool call the length limit cut off.
+ *
+ * A turn that stops at `max_tokens` with a `tool_use` as its last block
+ * stopped while writing that call's arguments: the streamed JSON did not
+ * parse (the adapter then carries `{}`), or it parsed from a prefix that is
+ * not what the model meant. Either way the call is incomplete, and running it
+ * would be an effect nobody asked for. Only the last block can be cut; a call
+ * before it was finished before the next one began.
+ */
+export function markCutOff(content: ContentBlock[], stopReason: StopReason): ContentBlock[] {
+  if (stopReason !== 'max_tokens') return content;
+  const last = content[content.length - 1];
+  if (last?.type !== 'tool_use') return content;
+  return [...content.slice(0, -1), { ...last, truncated: true }];
+}
+
 /** One `web_search_tool_result`, reduced to what the audit log stores. */
 function searchRecord(
   block: Record<string, unknown>,
@@ -799,9 +821,10 @@ export function createAnthropicProvider(
           const json = assembly ? assembly.finish() : ((await res.json()) as WireResponse);
           const parsed = fromWireBlocks(json.content, names);
           const webSearches = json.usage?.server_tool_use?.web_search_requests ?? 0;
+          const stopReason = mapStopReason(json.stop_reason);
           return {
-            content: parsed.content,
-            stopReason: mapStopReason(json.stop_reason),
+            content: markCutOff(parsed.content, stopReason),
+            stopReason,
             usage: {
               input: json.usage?.input_tokens ?? 0,
               output: json.usage?.output_tokens ?? 0,
