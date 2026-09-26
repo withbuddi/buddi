@@ -81,6 +81,8 @@ tag:
 npm install -g @withbuddi/buddi@next
 ```
 
+To remove it: `buddi uninstall`, then `npm uninstall -g @withbuddi/buddi`.
+
 The full install story, including what is not built yet, is
 [docs/install.md](docs/install.md).
 

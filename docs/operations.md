@@ -28,6 +28,12 @@ buddi backup verify <archive>    # prove it is good, without a database
 buddi backup list                # what you have
 ```
 
+To remove buddi from a machine, `buddi uninstall` lists what it will remove,
+asks, and takes one last backup that stays in `~/buddi-backups` before it
+removes the service, the data directory and the secrets.
+`--keep-data` keeps the data for a reinstall.
+[install.md](install.md) §11 has the details.
+
 ---
 
 ## Where your data actually lives

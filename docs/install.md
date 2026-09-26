@@ -10,7 +10,7 @@ Someone who is not a developer but can type `npm` gets from nothing to a
 working buddi, with their first agent answering in the browser, in about ten
 minutes and without reading a terminal. Owners install the package, and the
 dashboard is the surface that owns onboarding, upgrades and plugins. A source
-checkout is for developers working on buddi itself (§13). §12 says what of this
+checkout is for developers working on buddi itself (§14). §13 says what of this
 page is built and what is not.
 
 This is not a desktop app. A packaged app (Electron or Tauri, DMG or MSI) is a
@@ -221,7 +221,7 @@ tool call — is the wrong shape for the owner acting directly from their own
 dashboard. It takes the id of the account the thread just tested, so the
 assistant is bound to the brain the owner chose.
 
-A source checkout's setup ends by opening the same route (§13).
+A source checkout's setup ends by opening the same route (§14).
 
 ---
 
@@ -411,7 +411,7 @@ pruned there by the same retention. No credentials, no API, no network code.
 The Backup page validates that the folder exists and is writable, and shows the
 last copy's age. Restore from a folder is "pick the file".
 
-**Tier two: the provider's API.** Not built (§12). Google Drive and Dropbox,
+**Tier two: the provider's API.** Not built (§13). Google Drive and Dropbox,
 through OAuth in the browser: buddi opens the consent page, receives the
 redirect on loopback, and keeps the refresh token in the vault. Scope is the
 narrowest each offers: Drive's per-application folder (`drive.appdata` or
@@ -471,7 +471,7 @@ with a six-digit code in Computer & browser. Nothing about it is macOS-only.
   Playwright and "Your browser" — the Chrome extension in `<root>/extension`,
   loaded unpacked and paired from Settings — are untested there; computer
   control will not work, and says so. A Secret Service vault is not planned
-  while the file vault covers a headless host (§12).
+  while the file vault covers a headless host (§13).
 - **Windows** — *planned*. The target is the core loop, the dashboard, the
   bundled Postgres, Telegram, email, memory and web plugins. Host execution
   (`host.exec`) refuses on Windows and will stay refused until it is written
@@ -486,7 +486,7 @@ Anything platform-specific is to sit behind one function with a stated
 fallback, and `generic-install.test.ts` is to gain a run per platform in CI
 (macOS, Ubuntu, Windows runners) that installs the published package into a
 clean home, runs first-run headless, and asserts the gateway answers. That CI
-job does not exist yet (§12).
+job does not exist yet (§13).
 
 ---
 
@@ -532,7 +532,52 @@ job does not exist yet (§12).
 
 ---
 
-## 11. Acceptance
+## 11. Uninstall
+
+```sh
+buddi uninstall
+npm uninstall -g @withbuddi/buddi
+```
+
+`buddi uninstall` first prints everything it will remove, one line each, with
+the real paths on this machine, and removes nothing until you type `yes`
+(`--yes` skips the question):
+
+- the background service: the launchd agent or systemd user unit, stopped,
+  unloaded and its file deleted;
+- the data directory: the bundled Postgres (stopped through the supervisor
+  first), agents and skills, the files library, logs, backups and the fetched
+  Chromium;
+- the secrets: the keychain entries this installation keeps, listed by name,
+  never by value; on Linux, the file vault and its key;
+- the dashboard app in `~/Applications`, if `buddi dashboard --install-app`
+  made it;
+- the extension pairing record and the Telegram bot's command menu. The bot
+  itself is yours and stays.
+
+Before it removes anything it takes one last backup and moves it to
+`~/buddi-backups`, where it stays. The backup is locked with your passphrase,
+and the vault that keeps it is about to go, so the command prints the six
+words once. `--no-backup` skips the backup.
+
+`--keep-data` removes the service and the app and leaves the data directory
+untouched, together with the secrets that open its database, so a later
+`buddi` picks the same installation up again.
+
+A data directory that is not an installation (no `installation.json`, no
+`postgres` folder) is refused, not deleted: `BUDDI_DATA_DIR` pointed at the
+wrong folder never becomes a deleted folder. The command exits 1 when something
+it listed could not be removed, such as a locked keychain or a service that
+would not unload, after it has removed the rest. Its last line is the one that
+removes the package: `npm uninstall -g @withbuddi/buddi`.
+
+In a source checkout the same command removes the service and the keychain
+entries, stops the Docker Postgres (`docker compose down`, the volume stays),
+and leaves the repository, `.env` and the data folder alone.
+
+---
+
+## 12. Acceptance
 
 1. A clean macOS user account with Node 22: `npm install -g @withbuddi/buddi && buddi`
    opens the wizard within a minute; a pasted key and a first agent produce
@@ -568,7 +613,7 @@ job does not exist yet (§12).
 
 ---
 
-## 12. What of this is built
+## 13. What of this is built
 
 Built:
 
@@ -576,7 +621,7 @@ Built:
 2. **Bundled Postgres under the supervisor**, `buddi` first run, the data
    directory layout, and the maintenance path for upgrade and restore
    (`packages/install/src/{postgres,supervisor,launcher,environment}.ts`;
-   §13 has the map).
+   §14 has the map).
 3. **The wizard**, reusing the settings pages; `init` ends in it
    (`packages/cli/src/init.ts`, and [onboarding.md](onboarding.md)).
 4. **Encrypted backup to a folder**, restore with recovery mode, the Backup
@@ -609,7 +654,7 @@ signing, auto-update and a tray. It is not on this list.
 
 ---
 
-## 13. For developers: the package, built and tried
+## 14. For developers: the package, built and tried
 
 ### A source checkout
 
