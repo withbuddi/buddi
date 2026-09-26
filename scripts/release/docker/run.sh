@@ -51,6 +51,8 @@ docker run -d --name "$CONTAINER" \
   -v "$VOLUME:$DATA" \
   -e BUDDI_VAULT=file \
   -e BUDDI_WEB_PORT="$INTERNAL" \
+  ${BUDDI_ANTHROPIC_OAUTH_EXPERIMENT:+-e BUDDI_ANTHROPIC_OAUTH_EXPERIMENT="$BUDDI_ANTHROPIC_OAUTH_EXPERIMENT"} \
+  ${BUDDI_CODEX_EXPERIMENT:+-e BUDDI_CODEX_EXPERIMENT="$BUDDI_CODEX_EXPERIMENT"} \
   "$IMAGE" >/dev/null
 # Removing the container kills the supervisor where it stands, and a Postgres
 # killed that way leaves its pid file behind. Ask it to stop first and give it
