@@ -35,6 +35,8 @@ import {
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
+import { NotificationToasts, useToastQueue } from './shell/NotificationToasts';
+import { usePresence } from './shell/presence';
 import { GroupSheet } from './shell/GroupSheet';
 import { PluginPage } from './pages/PluginPage';
 import { usePluginPages, type PluginPages } from './pages/usePages';
@@ -261,12 +263,19 @@ export function App(): JSX.Element {
     [navigate, groupLocation?.groupId],
   );
 
+  /*
+   * Signed in is what the session check says. Presence and the toasts wait
+   * for it, and a 401 from either puts them back to sleep.
+   */
+  const [signedIn, setSignedIn] = useState(false);
   useEffect(() => {
     api
       .session()
-      .then((session) => setTimezone(session.timezone))
+      .then((session) => { setTimezone(session.timezone); setSignedIn(true); })
       .catch(() => {});
   }, []);
+  const toasts = useToastQueue(signedIn);
+  usePresence(signedIn, toasts.refresh, () => setSignedIn(false));
 
   useEffect(() => {
     const refresh = (): void => {
@@ -400,6 +409,7 @@ export function App(): JSX.Element {
           )}
         </div>
         </div>
+        <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />
         <Toast.Viewport className="ui-toasts" />
       </Toast.Provider>
     </Tooltip.Provider>

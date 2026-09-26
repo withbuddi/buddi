@@ -5,8 +5,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { api, type VersionView } from '../api';
-import { Home } from './Home';
+import { api, type NotificationRow, type VersionView } from '../api';
+import { Home, homeNotifications } from './Home';
 
 vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
@@ -25,6 +25,8 @@ vi.mock('../api', async (importOriginal) => {
       agentOffers: empty({ offers: [] }),
       owner: empty({}),
       version: vi.fn(),
+      notifications: vi.fn(async () => ({ notifications: [] })),
+      notificationSeen: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -81,5 +83,41 @@ describe('the upgrade notice', () => {
   it('says nothing before the version is known', async () => {
     await home(undefined);
     expect(screen.queryByText(/A newer buddi is ready/)).not.toBeInTheDocument();
+  });
+});
+
+function note(over: Partial<NotificationRow>): NotificationRow {
+  return {
+    id: 'n1', kind: 'watcher', urgency: 'now', title: 'A mail from the bank', text: null, link: '#/chat/finance',
+    agentId: null, pluginId: null, actionId: null, state: 'shown', dueAt: null, channel: 'dashboard',
+    createdAt: '2026-09-21T08:50:00Z', sentAt: null, seenAt: null, actedAt: null, error: null, ...over,
+  };
+}
+
+describe('what buddi kept for you, under "Needs you"', () => {
+  it('lists a watcher row and a held one, counts them in the greeting, and opening one marks it seen', async () => {
+    vi.mocked(api.notifications).mockResolvedValue({
+      notifications: [
+        note({}),
+        note({ id: 'n2', kind: 'recap', urgency: 'today', state: 'held', title: 'The weekly recap', seenAt: '2026-09-21T08:55:00Z', link: null }),
+        note({ id: 'n3', kind: 'approval', title: 'Send the invoice?' }),
+        note({ id: 'n4', title: 'Seen already', seenAt: '2026-09-21T08:55:00Z', state: 'sent', channel: 'telegram.chat' }),
+      ],
+    });
+    const navigate = vi.fn();
+    await home(null, navigate);
+    expect(screen.getByText('2 messages for you.')).toBeInTheDocument();
+    expect(screen.getByText('Needs you')).toBeInTheDocument();
+    expect(screen.getByText('The weekly recap')).toBeInTheDocument();
+    expect(screen.queryByText('Send the invoice?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Seen already')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: /A mail from the bank/ }));
+    expect(api.notificationSeen).toHaveBeenCalledWith('n1');
+    expect(navigate).toHaveBeenCalledWith('#/chat/finance');
+  });
+
+  it('leaves out a row about an approval Home already draws as a card', () => {
+    const rows = [note({ id: 'a', actionId: 'act-1', kind: 'failure' }), note({ id: 'b', actionId: 'act-2' }), note({ id: 'c', actedAt: '2026-09-21T08:56:00Z' })];
+    expect(homeNotifications(rows, [{ id: 'act-1' }]).map((row) => row.id)).toEqual(['b']);
   });
 });

@@ -7,7 +7,7 @@
  * the agent that runs it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
+import { api, type ApprovalRow, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -61,6 +61,7 @@ export function Home({
   const proposals = useAsync(() => api.proposals(), [], 60_000);
   const agentOffers = useAsync(() => api.agentOffers(), [], 60_000);
   const owner = useAsync(() => api.owner(), []);
+  const notifications = useAsync(() => api.notifications(20), [], 30_000);
   // The same order as the rail and the Agents page: front desk first, the maker last.
   const team = useMemo(() => orderAgents(agents, defaultAgentId ?? null), [agents, defaultAgentId]);
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
@@ -77,7 +78,8 @@ export function Home({
   const toSetUp: AgentOfferRow[] = (agentOffers.data?.offers ?? []).filter(
     (offer) => !pending.some((action) => isPendingAccept(action, offer.plugin, offer.agent)),
   );
-  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length;
+  const told = homeNotifications(notifications.data?.notifications ?? [], pending);
+  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
@@ -95,7 +97,7 @@ export function Home({
           <div className="home-hero-text">
             <p className="home-date">{fmtDay(data?.now, timezone)}</p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
-            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length)}</p>
+            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
           </div>
           <Mascot size="lg" />
         </header>
@@ -123,6 +125,25 @@ export function Home({
             {pending.map((action) => (
               <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} />
             ))}
+            {/* What buddi kept for the dashboard: a watcher's find, a reminder,
+                a report, held for today or not seen yet. Opening one is seeing it. */}
+            {told.length > 0 ? (
+              <Panel flush>
+                <List>
+                  {told.map((row) => (
+                    <ListRow
+                      key={row.id}
+                      href={row.link ?? undefined}
+                      onClick={row.link ? () => { void api.notificationSeen(row.id).catch(() => {}); navigate(row.link!); } : undefined}
+                      lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
+                      title={row.title}
+                      sub={row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind]}
+                      side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
+                    />
+                  ))}
+                </List>
+              </Panel>
+            ) : null}
             {failedJobs > 0 ? (
               <Notice tone="critical">
                 <a href={`${ACTIVITY_ROUTE}/jobs?state=failed`} onClick={go(`${ACTIVITY_ROUTE}/jobs?state=failed`)}>
@@ -291,6 +312,30 @@ export function Home({
       ) : null}
     </div>
     </>
+  );
+}
+
+/** The kinds Home lists from the notifications; approvals and questions have their own cards. */
+const HOME_KINDS: ReadonlySet<NotificationRow['kind']> = new Set(['watcher', 'reminder', 'failure', 'recap', 'plugin']);
+
+const KIND_WORDS: Record<NotificationRow['kind'], string> = {
+  approval: 'Approval', question: 'Question', watcher: 'Watcher', reminder: 'Reminder', failure: 'Failure', recap: 'Report', plugin: 'Plugin',
+};
+
+/**
+ * The notifications Home lists under "Needs you": the kinds that have no card
+ * of their own, not dealt with, and either not seen yet or held for today. A
+ * row about an approval already drawn as a card is left out.
+ */
+export function homeNotifications(rows: readonly NotificationRow[], pending: readonly Pick<ApprovalRow, 'id'>[]): NotificationRow[] {
+  const cards = new Set(pending.map((action) => action.id));
+  return rows.filter(
+    (row) =>
+      HOME_KINDS.has(row.kind) &&
+      row.actedAt === null &&
+      row.state !== 'stored' &&
+      (row.seenAt === null || row.state === 'held') &&
+      !(row.actionId && cards.has(row.actionId)),
   );
 }
 
@@ -467,7 +512,7 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
   );
 }
 
-export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0, agentsToSetUp = 0): string {
+export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0, agentsToSetUp = 0, messages = 0): string {
   if (needs === 0) return 'Nothing needs you. Your agents are on it.';
   const parts: string[] = [];
   if (approvals > 0) parts.push(`${approvals} approval${approvals === 1 ? '' : 's'} waiting`);
@@ -476,6 +521,7 @@ export function needsSentence(needs: number, approvals: number, failed: number, 
   if (paused) parts.push('the installation is paused');
   if (proposals > 0) parts.push(`${proposals} proposal${proposals === 1 ? '' : 's'} to review`);
   if (agentsToSetUp > 0) parts.push(`${agentsToSetUp === 1 ? 'an agent' : `${agentsToSetUp} agents`} to set up`);
+  if (messages > 0) parts.push(`${messages} message${messages === 1 ? '' : 's'} for you`);
   const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
   return `${capitalise(list)}.`;
 }

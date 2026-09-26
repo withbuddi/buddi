@@ -570,6 +570,57 @@ export interface OllamaProbe {
   cloudBaseUrl: string;
 }
 
+/* ---- notifications (docs/notifications.md) ---- */
+
+export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin'] as const;
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
+
+/** One row of `core.owner_notifications`, as `GET /api/notifications` answers it. */
+export interface NotificationRow {
+  id: string;
+  kind: NotificationKind;
+  urgency: 'now' | 'today' | 'digest';
+  title: string;
+  text: string | null;
+  /** A dashboard route. */
+  link: string | null;
+  agentId: string | null;
+  pluginId: string | null;
+  actionId: string | null;
+  state: 'shown' | 'held' | 'stored' | 'sending' | 'sent' | 'failed';
+  dueAt: string | null;
+  /** The channel kind it went to, `dashboard` when shown there, else null. */
+  channel: string | null;
+  createdAt: string;
+  sentAt: string | null;
+  seenAt: string | null;
+  actedAt: string | null;
+  error: string | null;
+}
+
+/** A way buddi reaches the owner, as the gateway registered it. */
+export interface NotificationChannel {
+  kind: string;
+  label: string;
+  where?: string;
+  can: { offers: boolean; attachments: boolean; markdown: boolean };
+}
+
+export interface NotificationSettings {
+  /** A channel kind, or null for the first one there is. */
+  defaultChannel: string | null;
+  /** kind → a channel kind or `off`; a kind left out takes the default. */
+  perKind: Partial<Record<NotificationKind, string>>;
+  quietStart: string | null;
+  quietEnd: string | null;
+  endOfDay: string;
+}
+
+export interface NotificationSettingsView {
+  settings: NotificationSettings;
+  channels: NotificationChannel[];
+}
+
 /** Telegram, as this installation stands: a token, a surface, a phone. */
 export interface TelegramStatus {
   configured: boolean;
@@ -1513,6 +1564,14 @@ export const api = {
   telegram: () => get<TelegramStatus>('/telegram'),
   saveTelegramToken: (token: string) => post<SavedTelegramToken>('/telegram/token', { token }),
   telegramPairing: () => post<PairingOffer>('/telegram/pairing'),
+  /* ---- notifications, and whether the owner is here ---- */
+  notifications: (limit = 20) => get<{ notifications: NotificationRow[] }>('/notifications', { limit }),
+  notificationSeen: (id: string) => post<{ ok: true }>(`/notifications/${encodeURIComponent(id)}/seen`),
+  notificationSettings: () => get<NotificationSettingsView>('/notifications/settings'),
+  saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),
+  testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
+  /** `active` while the page is in front, `away` when it leaves (docs/notifications.md). */
+  presence: (state: 'active' | 'away') => post<{ ok: true }>('/presence', { state }),
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
