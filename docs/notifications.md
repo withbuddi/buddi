@@ -1,3 +1,9 @@
+---
+title: "Notifications"
+status: reference
+updated: 2026-09-26
+---
+
 # Notifications
 
 What buddi tells you without being asked, when it tells you, and where.
