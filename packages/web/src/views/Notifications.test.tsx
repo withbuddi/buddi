@@ -153,7 +153,7 @@ describe('Settings → Notifications → Telegram', () => {
   });
 
   it('pairs a phone: the square, the link to copy, then Paired. when a new phone arrives', async () => {
-    const link = 'https://t.me/buddi_bot?start=ABC';
+    const link = 'tg://resolve?domain=buddi_bot&start=ABC';
     vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link, expiresAt: new Date(Date.now() + 600_000).toISOString() });
     await page();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' })); });
