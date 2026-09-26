@@ -135,7 +135,8 @@ export function stepCaption(input: {
   return [
     where.slice(0, MAX_TITLE),
     actionWords(input.call),
-    `Step ${input.steps} of ${input.maxSteps}`,
+    // The budget is said only when it is nearly spent: "1 of 80" is noise on a phone.
+    input.maxSteps - input.steps <= 5 ? `Step ${input.steps} of ${input.maxSteps}` : '',
     input.error ? `It failed: ${input.error.slice(0, MAX_REASON)}` : '',
     input.loopback ? LOOPBACK_CAPTION : '',
   ].filter(Boolean).join('\n');

@@ -124,7 +124,7 @@ describe('a photo per browser step', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.method).toBe('sendPhoto');
     expect(sent[0]!.photo!.toString()).toBe('JPEGBYTES');
-    expect(sent[0]!.body.caption).toBe(`Book a fixture\nClicked “Book now”\nStep 3 of 80\n${LOOPBACK_CAPTION}`);
+    expect(sent[0]!.body.caption).toBe(`Book a fixture\nClicked “Book now”\n${LOOPBACK_CAPTION}`);
     expect(JSON.parse(sent[0]!.body.reply_markup)).toEqual({
       inline_keyboard: [[{ text: TAKE_OVER_LABEL, url: `http://127.0.0.1:4317/#/chat/${AGENT}/${CONVERSATION}?tab=browser` }]],
     });
@@ -320,3 +320,12 @@ function fakeCatalog(): AgentCatalog {
     },
   };
 }
+
+describe('the step budget in a caption', () => {
+  it('is said only when five or fewer steps are left', () => {
+    const early = stepCaption({ title: 'A page', call: { action: 'observe' }, steps: 1, maxSteps: 80, loopback: false });
+    expect(early).not.toContain('Step');
+    const late = stepCaption({ title: 'A page', call: { action: 'observe' }, steps: 76, maxSteps: 80, loopback: false });
+    expect(late).toContain('Step 76 of 80');
+  });
+});
