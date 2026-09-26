@@ -67,6 +67,9 @@ export function ownerDeliver(pool: Queryable, opts: OwnerNotifyOptions): Deliver
       ...(offers && offers.length > 0 ? { offers } : {}),
       ...(context?.agentId ? { agentId: context.agentId } : {}),
       ...(context?.dedupeKey ? { dedupeKey: context.dedupeKey } : {}),
+      ...(context?.agentId && context.conversationId
+        ? { link: { route: `#/chat/${encodeURIComponent(context.agentId)}/${encodeURIComponent(context.conversationId)}` } }
+        : {}),
     });
     return answer(result, opts.strict);
   };

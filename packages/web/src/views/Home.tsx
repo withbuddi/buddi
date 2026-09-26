@@ -79,6 +79,7 @@ export function Home({
     (offer) => !pending.some((action) => isPendingAccept(action, offer.plugin, offer.agent)),
   );
   const told = homeNotifications(notifications.data?.notifications ?? [], pending);
+  const [seenHere, setSeenHere] = useState<Set<string>>(new Set());
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
@@ -130,11 +131,17 @@ export function Home({
             {told.length > 0 ? (
               <Panel flush>
                 <List>
-                  {told.map((row) => (
+                  {told.filter((row) => !seenHere.has(row.id)).map((row) => (
                     <ListRow
                       key={row.id}
                       href={row.link ?? undefined}
-                      onClick={row.link ? () => { void api.notificationSeen(row.id).catch(() => {}); navigate(row.link!); } : undefined}
+                      onClick={() => {
+                        // Opening is seeing it, and so is a click on a line with
+                        // nowhere to go: it leaves at once rather than on the next poll.
+                        setSeenHere((current) => new Set(current).add(row.id));
+                        void api.notificationSeen(row.id).catch(() => {});
+                        if (row.link) navigate(row.link);
+                      }}
                       lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
                       title={row.title}
                       sub={row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind]}

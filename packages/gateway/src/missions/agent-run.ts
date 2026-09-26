@@ -280,6 +280,7 @@ export function createAgentRunHandler(deps: AgentRunDeps): JobHandler {
       jobContext.signal?.throwIfAborted();
       chatId = await deps.deliver(text, offers, {
         agentId: payload.agentId,
+        conversationId,
         origin: job.dedupKey?.startsWith('reminder:')
           ? 'reminder'
           : payload.conversationHint?.startsWith(OFFER_HINT_PREFIX)

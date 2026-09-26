@@ -92,6 +92,8 @@ export interface DeliverContext {
   urgency?: 'urgent' | 'normal';
   /** "This thing, again": a finding's key, a reminder's. */
   dedupeKey?: string;
+  /** The conversation the run wrote in, so a line on Home can open it. */
+  conversationId?: string;
 }
 
 /**
@@ -400,6 +402,7 @@ export function createMissionExecutor(
       control?.signal?.throwIfAborted();
       chatId = await deps.deliver(text, offers, {
         agentId: mission.agentId,
+        conversationId,
         origin: finding ? 'wake' : 'mission',
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
         ...(finding ? { dedupeKey: `finding:${finding.key}` } : {}),
