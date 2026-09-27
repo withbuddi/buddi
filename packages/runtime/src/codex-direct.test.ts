@@ -181,6 +181,20 @@ describe('Codex model list', () => {
     expect(url).toBe('https://chatgpt.com/backend-api/codex/models?client_version=0.156.1');
     expect(init.headers).toMatchObject({ authorization: 'Bearer t', 'chatgpt-account-id': 'a' });
   });
+  it('carries the backend context window, clamped, and ignores odd values', async () => {
+    const send = get(200, { models: [
+      { slug: 'gpt-6-astra', visibility: 'list', priority: 1, context_window: 272000, max_context_window: 872000 },
+      { slug: 'huge', visibility: 'list', priority: 2, context_window: 9_000_000 },
+      { slug: 'tiny', visibility: 'list', priority: 3, context_window: 10 },
+      { slug: 'odd', visibility: 'list', priority: 4, context_window: '272000' },
+      { slug: 'frac', visibility: 'list', priority: 5, context_window: 1000.5 },
+    ] });
+    const out = await listCodexModels({ accessToken: 't', accountId: 'a', transport: send });
+    expect(out.models.map(m => [m.id, m.contextWindow])).toEqual([
+      ['gpt-6-astra', 272_000], ['huge', 2_000_000], ['tiny', 8_000], ['odd', undefined], ['frac', undefined],
+    ]);
+    expect('contextWindow' in out.models[3]!).toBe(false);
+  });
   it('falls back to the known list on failure', async () => {
     for (const send of [get(500, {}), get(200, { nope: 1 }), vi.fn<HttpTransport>().mockRejectedValue(new Error('x'))]) {
       const out = await listCodexModels({ accessToken: 't', accountId: 'a', transport: send });

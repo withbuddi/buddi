@@ -232,3 +232,11 @@ it('connects Ollama from the account card: window in the click, poll, connected-
   // The server's own sentence: whether ollama.com confirmed it forgot the device.
   expect(await screen.findByText(/no longer lists this device/)).toBeInTheDocument();
 }, 10_000);
+
+it('says whose the detected context window is', async () => {
+  const { detectedWindowSource } = await import('./Providers');
+  expect(detectedWindowSource({ kind: 'codex', detectedContextWindowSource: 'provider' })).toBe('from ChatGPT');
+  expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'provider' })).toBe('from the provider');
+  expect(detectedWindowSource({ kind: 'openai', detectedContextWindowSource: 'table' })).toBe('assumed');
+  expect(detectedWindowSource({ kind: 'codex' })).toBe('assumed');
+});

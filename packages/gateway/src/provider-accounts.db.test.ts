@@ -118,6 +118,23 @@ suite('named provider accounts', () => {
     await f.service.save({ ...settings, id: a.id, revision: 2, enabled: false });
     await expect(f.service.models(a.id)).rejects.toThrow('Enable this account');
   });
+  it('keeps the windows a model list reports and shows the default model\'s as the provider\'s', async () => {
+    const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
+    const view = () => f.service.view().accounts.find(x => x.id === a.id)!;
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 1_000_000, detectedContextWindowSource: 'table' });
+    expect(view()).not.toHaveProperty('reportedContextWindows');
+    f.listModels.mockResolvedValueOnce({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 500_000 }, { id: 'old', name: 'O', isDefault: false, contextWindow: 64_000 }], truncated: false } as never);
+    await f.service.models(a.id, true);
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 500_000, detectedContextWindowSource: 'provider' });
+    f.listModels.mockResolvedValueOnce({ models: [{ id: 'claude-sonnet-5', name: 'S', isDefault: true, contextWindow: 600_000 }], truncated: false } as never);
+    await f.service.models(a.id, true);
+    f.listModels.mockRejectedValueOnce(new Error('down'));
+    await expect(f.service.models(a.id, true)).rejects.toThrow();
+    const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
+    expect(rows[0].m).toEqual({ 'claude-sonnet-5': 600_000, old: 64_000 });
+    await f.service.refresh();
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 600_000, detectedContextWindowSource: 'provider' });
+  });
   it('redacts discovery failures and never falls back to another credential', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
     f.listModels.mockRejectedValue(Object.assign(new Error('SECRET-RESPONSE'), { status: 401 }));

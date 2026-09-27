@@ -8,6 +8,8 @@ export interface AccountModel {
   isDefault: boolean;
   /** The host says this model reasons before it answers. Only known for hosts that say (Ollama). */
   thinks?: boolean;
+  /** The host's own number for this model's window, when it says (the ChatGPT backend does). */
+  contextWindow?: number;
 }
 export interface AccountModels { models: AccountModel[]; truncated: boolean }
 

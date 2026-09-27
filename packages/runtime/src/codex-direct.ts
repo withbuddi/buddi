@@ -28,6 +28,7 @@ import {
 import { providerCapabilities } from './capabilities.js';
 import { parseToolArguments } from './openai.js';
 import type { AccountModels } from './provider-models.js';
+import { MAX_CONTEXT_WINDOW_TOKENS, MIN_CONTEXT_WINDOW_TOKENS } from './context-window.js';
 import { SseParser, frameJson } from './sse.js';
 import { defaultHttpTransport, type HttpTransport, type TransportResponse } from './transport.js';
 
@@ -310,7 +311,10 @@ export async function listCodexModels(options: { accessToken: string; accountId:
     for (const m of listed.slice(0, 1000)) {
       const id = m.slug as string;
       const label = typeof m.display_name === 'string' && m.display_name.length <= 200 && !/[\x00-\x1f\x7f]/.test(m.display_name) ? m.display_name : id;
-      if (!models.has(id)) models.set(id, { id, name: label, isDefault: models.size === 0 });
+      const window = m.context_window;
+      const contextWindow = typeof window === 'number' && Number.isInteger(window) && window > 0
+        ? Math.min(MAX_CONTEXT_WINDOW_TOKENS, Math.max(MIN_CONTEXT_WINDOW_TOKENS, window)) : undefined;
+      if (!models.has(id)) models.set(id, { id, name: label, isDefault: models.size === 0, ...(contextWindow ? { contextWindow } : {}) });
     }
     return models.size ? { models: [...models.values()], truncated: listed.length > 1000 } : fallback;
   } catch { return fallback; }

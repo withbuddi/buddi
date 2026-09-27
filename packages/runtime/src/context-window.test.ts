@@ -36,6 +36,8 @@ describe('the window of a model we bind', () => {
   it('knows the GPT-5 family and the o-series', () => {
     expect(contextWindowTokens('gpt-5', 'openai')).toBe(400_000);
     expect(contextWindowTokens('gpt-5-mini', 'openai')).toBe(400_000);
+    expect(contextWindowTokens('gpt-6-astra', 'openai')).toBe(1_000_000);
+    expect(contextWindowTokens('gpt-6', 'openai')).toBe(1_000_000);
     expect(contextWindowTokens('o3', 'openai')).toBe(200_000);
     expect(contextWindowTokens('o4-mini', 'openai')).toBe(200_000);
     expect(contextWindowTokens('gpt-4o', 'openai')).toBe(128_000);

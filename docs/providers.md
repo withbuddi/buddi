@@ -45,8 +45,10 @@ them. Anything else, unset included, leaves them on.
 stored in `core.provider_accounts.context_window_tokens`. It overrides the
 built-in table of model windows for that endpoint, which is the only truth
 available for a locally served model whose window is whatever `num_ctx` the
-host was started with. [conversations.md](conversations.md) is what the number
-is used for.
+host was started with. Left blank, the number is the provider's own when its
+model list reports one (a ChatGPT subscription does, as would an Ollama host
+that says), otherwise buddi's assumption for the model name; the owner's value
+always wins. [conversations.md](conversations.md) is what the number is used for.
 
 ## Ollama Cloud with a device key
 

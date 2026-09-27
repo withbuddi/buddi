@@ -820,6 +820,8 @@ export interface ProviderAccount {
   contextWindowTokens?: number | null;
   /** What the server would assume for `defaultModel`: the field's placeholder. */
   detectedContextWindowTokens?: number;
+  /** Whose that number is: the provider's own model list, or buddi's table for the model name. */
+  detectedContextWindowSource?: 'provider' | 'table';
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;

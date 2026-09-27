@@ -13,7 +13,7 @@ import { forgetProjectedSizes, projectedTranscriptTokens, transcriptBudget } fro
 
 const CONVERSATION = '11111111-1111-1111-1111-111111111111';
 
-type Account = { model: string; kind: string; override: number | null };
+type Account = { model: string; kind: string; override: number | null; reported?: Record<string, unknown> };
 
 /**
  * A pool that answers the two questions the budget asks: this conversation's
@@ -57,6 +57,18 @@ describe('what a conversation may grow to', () => {
     expect(laptop.windowTokens).toBe(8_000);
     expect(hosted.windowTokens).toBe(262_144);
     expect(hosted.maxTokens).toBeGreaterThan(laptop.maxTokens * 30);
+  });
+
+  it('uses the provider-reported window when the owner has not said one', async () => {
+    const reported = { 'gpt-6-astra': 272_000 };
+    const codex = await transcriptBudget(accounts({ binding: { model: 'gpt-6-astra', kind: 'codex', override: null, reported } }), CONVERSATION);
+    expect(codex.windowTokens).toBe(272_000);
+    const owner = await transcriptBudget(accounts({ binding: { model: 'gpt-6-astra', kind: 'codex', override: 64_000, reported } }), CONVERSATION);
+    expect(owner.windowTokens).toBe(64_000);
+    const other = await transcriptBudget(accounts({ binding: { model: 'gpt-5.5', kind: 'codex', override: null, reported } }), CONVERSATION);
+    expect(other.windowTokens).toBe(400_000);
+    const installation = await transcriptBudget(accounts({ binding: null, installation: { model: 'gpt-6-astra', kind: 'codex', override: null, reported } }), CONVERSATION);
+    expect(installation.windowTokens).toBe(272_000);
   });
 
   it('sizes an unbound agent against the installation default it will run on', async () => {

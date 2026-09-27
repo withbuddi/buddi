@@ -135,6 +135,12 @@ export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'>): string 
   return 'OpenAI-compatible';
 }
 
+/** Whose the detected context window is, for the label beside it. */
+export function detectedWindowSource(a: Pick<ProviderAccount, 'kind' | 'detectedContextWindowSource'>): string {
+  if (a.detectedContextWindowSource !== 'provider') return 'assumed';
+  return a.kind === 'codex' ? 'from ChatGPT' : 'from the provider';
+}
+
 /** A provider's mark: one letter in the provider's own tint, never a logo we do not own. */
 function ProviderMark({ kind, auth }: { kind: ProviderAccount['kind']; auth: ProviderAccount['auth'] }): JSX.Element {
   const letter = kind === 'anthropic' ? 'A' : kind === 'codex' ? 'G' : kind === 'openai' ? 'O' : '∞';
@@ -173,7 +179,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
         items={[
           { label: 'Provider', value: providerName(a) },
           { label: 'Default model', value: <span className="mono">{a.defaultModel || '—'}</span> },
-          { label: 'Context window', value: <span className="mono">{`${(a.contextWindowTokens ?? a.detectedContextWindowTokens ?? 0).toLocaleString()} tokens${a.contextWindowTokens ? '' : ' (detected)'}`}</span> },
+          { label: 'Context window', value: <span className="mono">{`${(a.contextWindowTokens ?? a.detectedContextWindowTokens ?? 0).toLocaleString()} tokens${a.contextWindowTokens ? '' : ` (${detectedWindowSource(a)})`}`}</span> },
           ...(a.baseUrl ? [{ label: 'Endpoint', value: <span className="mono">{a.baseUrl}</span> }] : []),
           {
             label: 'Used by',
@@ -314,7 +320,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
         </Toolbar>
         <Field label="Context window" hint="Tokens this endpoint actually serves. Leave blank unless you run the model yourself and set a window of your own — a conversation is ended once its history would fill half of this.">
           <input type="number" inputMode="numeric" min={8000} max={2000000} step={1000} value={contextWindow}
-            placeholder={a?.detectedContextWindowTokens ? String(a.detectedContextWindowTokens) : 'detected from the model'}
+            placeholder={a?.detectedContextWindowTokens ? `${a.detectedContextWindowTokens} (${detectedWindowSource(a)})` : 'assumed from the model'}
             onChange={e => setContextWindow(e.target.value)} />
         </Field>
         {kind === 'codex' && <p className="muted">Pick a model from the list once the account is connected.</p>}

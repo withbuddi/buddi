@@ -16,11 +16,20 @@ import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } f
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
-type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean };
+type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean; reportedContextWindows: Record<string, unknown> | null };
+/** At most this many models' windows are kept per account. */
+const REPORTED_WINDOWS_MAX = 1000;
+
+/** The provider's reported window for a model, when it said a usable one. */
+function reportedWindow(map: Record<string, unknown> | null | undefined, model: string): number | undefined {
+  const tokens = map && Object.hasOwn(map, model) ? map[model] : undefined;
+  return typeof tokens === 'number' && Number.isInteger(tokens) && tokens >= 8_000 && tokens <= 2_000_000 ? tokens : undefined;
+}
+
 type Binding = { agentId: string; accountId: string; model: string };
 type TestResult = ProviderDiagnostic & { checkedAt: string };
 const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as "defaultModel",
-  context_window_tokens as "contextWindowTokens",
+  context_window_tokens as "contextWindowTokens", reported_context_windows as "reportedContextWindows",
   enabled, deleting, revision, secret_ref as "secretRef", legacy_env as "legacyEnv"`;
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
@@ -228,12 +237,15 @@ export class ProviderAccounts {
       vault: { kind: this.vault?.kind ?? 'none', ...vaultState({ env: this.deps.env }) },
       codexEnabled: !!this.codex,
       anthropicOAuthEnabled: this.anthropicOAuthEnabled,
-      accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, ...row }) => ({
+      accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, reportedContextWindows, ...row }) => {
+        // The provider's own number for the default model when its model list
+        // said one, else what the runtime would assume from the name, so the
+        // field can show it as a placeholder instead of a blank.
+        const reported = reportedWindow(reportedContextWindows, row.defaultModel);
+        return {
         ...row, configured: this.#configured.get(row.id) ?? false,
-        // What the runtime would assume for this account's default model, so
-        // the field can show it as a placeholder instead of a blank the owner
-        // has to guess at.
-        detectedContextWindowTokens: contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind),
+        detectedContextWindowTokens: reported ?? contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind),
+        detectedContextWindowSource: (reported ? 'provider' : 'table') as 'provider' | 'table',
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
@@ -241,7 +253,8 @@ export class ProviderAccounts {
         ...(row.auth === 'device-key' ? { device: this.#devices.get(row.id) ?? null, login: this.ollama?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
-      })),
+        };
+      }),
       bindings: [...this.#bindings.values()],
     };
   }
@@ -278,6 +291,7 @@ export class ProviderAccounts {
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
         this.#modelLists.set(id, { revision: row.revision, until: Date.now() + 60_000, value });
+        await this.#rememberWindows(current, value).catch(() => {});
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
@@ -287,6 +301,29 @@ export class ProviderAccounts {
     })();
     this.#modelRequests.set(key, pending);
     return pending;
+  }
+
+  /**
+   * Keep the windows the provider's own model list reported, merged over what
+   * earlier fetches said, so the account page and the transcript budget can
+   * use the provider's number instead of a guess from the model name.
+   */
+  async #rememberWindows(row: Row, list: AccountModels): Promise<void> {
+    const found = list.models.filter(m => typeof m.contextWindow === 'number');
+    if (!found.length) return;
+    const merged = new Map<string, number>();
+    for (const [model, tokens] of Object.entries(row.reportedContextWindows ?? {})) {
+      if (typeof tokens === 'number' && Number.isFinite(tokens)) merged.set(model, tokens);
+    }
+    // Fresh entries go last, so the cap drops the oldest.
+    for (const m of found) { merged.delete(m.id); merged.set(m.id, m.contextWindow!); }
+    const entries = [...merged.entries()];
+    const capped = Object.fromEntries(entries.slice(Math.max(0, entries.length - REPORTED_WINDOWS_MAX)));
+    const { rows } = await this.deps.pool.query(
+      `update core.provider_accounts set reported_context_windows=$2::jsonb where id=$1 returning reported_context_windows as "reportedContextWindows"`,
+      [row.id, JSON.stringify(capped)]);
+    const live = this.#rows.get(row.id);
+    if (rows[0] && live) this.#rows.set(row.id, { ...live, reportedContextWindows: rows[0].reportedContextWindows });
   }
 
   /**
@@ -727,7 +764,12 @@ export class ProviderAccounts {
     const lease = await this.#codexAccess(row);
     try {
       const started = await this.codex.login(lease.access);
-      void started.finished.then(() => lease.release()).catch(() => {});
+      void started.finished.then(() => lease.release()).then(() => {
+        if (this.codex?.view(id)?.state !== 'connected') return;
+        // Fill the provider's windows now, not when the owner next opens the picker.
+        this.#modelLists.delete(id);
+        void this.models(id, true).catch(() => {});
+      }).catch(() => {});
       return started.view;
     } catch {
       await lease.release();

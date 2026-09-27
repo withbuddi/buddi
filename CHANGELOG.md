@@ -23,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A ChatGPT subscription account's context window now comes from OpenAI's own model list instead of a guess from the model name, on the account page and in the conversation budget. The label says whether the number is the provider's or assumed.
 - A picture or file a colleague makes through a delegation now reaches the conversation that asked for it. It shows under the asking agent's message and on the Delegation card, the Files page lists it under both conversations, and the asking agent is told it is attached (and sees an image when its model takes images) instead of telling you to ask the colleague.
 - Asking an agent for a colleague that is not on its delegate list now gets a clear answer: the refusal names who it may ask and says the colleague can be added on its Access page, and the agent is told to say that rather than improvise or try another colleague to find out. An allowed colleague's handle, like `@art`, now works where its id was needed.
 

@@ -80,8 +80,10 @@ const ANTHROPIC: readonly Entry[] = [
 ];
 
 const OPENAI: readonly Entry[] = [
-  // The GPT-6 family as a ChatGPT subscription serves it through Codex.
-  ['gpt-6', 272_000],
+  // GPT-6 on the API (~1.05M for Astra). A ChatGPT subscription serves a
+  // smaller window through Codex, but that account reads its number from the
+  // backend's own model list, so this entry only answers for `kind: 'openai'`.
+  ['gpt-6', 1_000_000],
   ['gpt-5', 400_000],
   ['gpt-4.1', 1_000_000],
   ['gpt-4o', 128_000],

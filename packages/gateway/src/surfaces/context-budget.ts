@@ -103,7 +103,12 @@ function fallbackBudget(): TranscriptBudget {
 function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['source']): TranscriptBudget {
   const model = typeof row.model === 'string' ? row.model : '';
   const raw = row.override;
-  const override = raw === null || raw === undefined ? null : Number(raw);
+  const owner = raw === null || raw === undefined ? null : Number(raw);
+  // The owner's value wins; then what the provider's own model list reported.
+  const map = row.reported;
+  const reportedRaw = map && typeof map === 'object' && Object.hasOwn(map, model) ? (map as Record<string, unknown>)[model] : undefined;
+  const reported = typeof reportedRaw === 'number' && Number.isFinite(reportedRaw) ? reportedRaw : null;
+  const override = owner ?? reported;
   const windowTokens = contextWindowTokens(model, providerOf(row.kind), override);
   const maxTokens = transcriptTokenBudget(windowTokens);
   return {
@@ -121,7 +126,8 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
  */
 export async function transcriptBudget(pool: Queryable, conversationId: string): Promise<TranscriptBudget> {
   const { rows } = await pool.query(
-    `select b.model as model, a.kind as kind, a.context_window_tokens as override
+    `select b.model as model, a.kind as kind, a.context_window_tokens as override,
+            a.reported_context_windows as reported
        from core.conversations c
        join core.agent_provider_accounts b on b.agent_id = c.agent_id
        left join core.provider_accounts a on a.id = b.account_id
@@ -135,7 +141,8 @@ export async function transcriptBudget(pool: Queryable, conversationId: string):
   // account — the first enabled one, which is the order everything else reads
   // them in — so that is the window it will actually be given.
   const { rows: defaults } = await pool.query(
-    `select default_model as model, kind, context_window_tokens as override
+    `select default_model as model, kind, context_window_tokens as override,
+            reported_context_windows as reported
        from core.provider_accounts
       where enabled and not deleting
       order by created_at, id
