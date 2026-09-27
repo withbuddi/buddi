@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.21 — 2026-09-27
+
 ### Changed
 
 - Recording in the composer is now a clear Listening state with a live waveform, a ✓ to transcribe and a × to discard, with Enter and Escape doing the same.
