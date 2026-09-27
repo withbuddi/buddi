@@ -21,6 +21,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Kokoro on this computer now speaks French, Spanish, Italian, Portuguese and Hindi with its own voices for those languages (espeak-ng, fetched with the model, does the pronunciation); a reply in one of them picks the matching voice. Japanese and Chinese still need a cloud speaker.
 - Home has a composer: write to your front desk straight from the first page, by keyboard or voice, and the conversation opens with the answer. `/` focuses the composer anywhere.
 - On the dashboard, a microphone in the composer turns what you say into text (Shift to send at once), and a speaker toggle reads each reply aloud, through the listening and speaking you chose in Settings → Speech.
 - Prompt caching: buddi marks the tool list, the instructions and the earlier conversation for Anthropic's cache and keys OpenAI's automatic cache by conversation, so a long conversation's repeated prompt is billed at the cached rate. Usage shows cached tokens separately and the cost estimate prices them.

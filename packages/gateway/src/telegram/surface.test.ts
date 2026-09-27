@@ -3781,7 +3781,7 @@ describe('voice on Telegram', () => {
     expect(sent.some((s) => s.method === 'sendVoice')).toBe(false);
     const all = sent.map((s) => (s.method === 'editMessageText' || s.method === 'sendMessage' ? s.body.text : '')).join('\n');
     expect(all).toContain('Vous avez dépensé 212 euros.');
-    expect(texts(sent).filter((t) => t === 'I answered in text: the voice on this computer speaks English only.')).toHaveLength(1);
+    expect(texts(sent).filter((t) => t === 'I answered in text: the voice on this computer does not speak this language.')).toHaveLength(1);
   });
 
   it('says where to set up listening, or that it could not transcribe, keeping the file', async () => {

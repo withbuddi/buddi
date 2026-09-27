@@ -174,7 +174,7 @@ export function notHeardText(message: string): string {
 export function textInsteadText(reason: SpeechFailure): string {
   switch (reason) {
     case 'not-english':
-      return 'I answered in text: the voice on this computer speaks English only.';
+      return 'I answered in text: the voice on this computer does not speak this language.';
     case 'missing':
       return 'I answered in text: voice replies need the speech plugin, from Settings → Plugins.';
     case 'unconfigured':

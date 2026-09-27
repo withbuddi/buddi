@@ -39,7 +39,7 @@ export interface RouteReply {
 const reply = (status: number, body: unknown): RouteReply => ({ status, body });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const NOT_ENGLISH_SENTENCE = 'Replies are not read aloud: the voice on this computer speaks English only.';
+export const NOT_ENGLISH_SENTENCE = 'Replies are not read aloud: the voice on this computer does not speak this language.';
 export const INSTALL_SPEECH_SENTENCE = 'Talking to buddi needs the speech plugin, from Settings → Plugins.';
 
 function hooksOf(deps: SpeechRouteDeps): SpeechHooks {

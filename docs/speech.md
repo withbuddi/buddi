@@ -43,14 +43,15 @@ cloud account or on this computer, with nothing leaving it.
    Whisper on this computer picks the likeliest of yours for each recording
    (a French accent is not heard as Portuguese), and a cloud service is sent
    none and detects the language itself. With Kokoro as the speaker and a
-   language other than English on your list, the Speaking block says that a
-   note in that language gets a text answer unless a cloud speaker is
-   chosen.
+   language on your list that no Kokoro voice speaks (Japanese, Chinese,
+   German…), the Speaking block names it and says that a note in it gets a
+   text answer unless a cloud speaker is chosen.
 4. Try each side. **Test** on Listening sends a two-second clip that says
    "Hello from buddi. This is a test." and shows what was heard. On Speaking,
    the play button beside **Voice** says "Hi, I'm buddi. This is how I
    sound." in your browser with the service, account, model and voice the
-   form holds, saved or not; press it again to stop. Nothing is kept, and it
+   form holds, saved or not (a Kokoro French, Spanish, Italian, Portuguese or
+   Hindi voice says it in its language); press it again to stop. Nothing is kept, and it
    does not count against the daily limit.
 5. Give `speech.*` to the agents that should use it, on their Access page.
 
@@ -59,20 +60,27 @@ none of them serves audio.
 
 ## On this computer
 
-**Whisper** (small, multilingual) listens and **Kokoro** (82M, English)
-speaks without anything leaving the machine, on macOS and Linux alike, the
+**Whisper** (small, multilingual) listens and **Kokoro** (82M: English,
+French, Spanish, Italian, Portuguese and Hindi) speaks without anything leaving the machine, on macOS and Linux alike, the
 Docker image included. buddi downloads each once: **Settings → Speech → On
 this computer → Install**, with a progress line, or from a terminal:
 
 ```sh
 buddi speech install           # both
 buddi speech install whisper   # 252 MB
-buddi speech install kokoro    # 92 MB
+buddi speech install kokoro    # 105 MB: the model, and eSpeak NG
 buddi speech                   # which are here
 ```
 
 The files come from Hugging Face at a pinned version, each checked against
-its SHA-256 before it is kept; a failed check keeps nothing. They live in the
+its SHA-256 before it is kept; a failed check keeps nothing. Kokoro comes
+with eSpeak NG (13 MB, from the npm registry at a pinned version, checked
+the same way), which pronounces its languages other than English. eSpeak NG
+is GPL-3.0, so it is downloaded like the models rather than shipped inside
+the plugin; its licence is kept beside it in `plugins-data/speech/espeak/`.
+Kokoro installed before this version speaks English until you press
+**Install** again (or run `buddi speech install kokoro`), which fetches only
+eSpeak NG. They live in the
 data directory under `plugins-data/speech/`. **Remove** on the page deletes
 one. Installed, and with no other service chosen for that side, they are
 used; you can also choose them by name.
@@ -81,10 +89,20 @@ used; you can also choose them by name.
   minutes a recording, one at a time. It detects the language among the ones
   you speak (any, when you listed none), or uses the one you listed. On an Apple M-series Mac a short voice note
   takes under a second once the model is loaded, a little more for the first.
-- Kokoro speaks English only, with American and British voices. Asked to say
-  something in another language, it refuses rather than read it wrong;
-  Telegram then sends the answer as text. A short reply takes about half a
-  second. Its voice notes are OGG/Opus at 24 kbps.
+- Kokoro speaks English with American and British voices, and French,
+  Spanish, Italian, Portuguese (Brazilian) and Hindi with voices of their
+  own: eSpeak NG turns the text into the sounds Kokoro reads, as Kokoro's own
+  pipeline does. A reply is said with a voice of its language: with an
+  English voice chosen, a French reply (on Telegram, read aloud on the
+  dashboard, or `speech.say`) is said by Siwis, the French voice, and a
+  Spanish one by Dora; the first voice of each language is the one used.
+  The language is what the reply looks like, or, when it is too short to
+  tell, the one language you speak. Japanese and Chinese voices are in
+  Kokoro's pack but not offered: they need a different pronunciation front
+  end. Asked to say something in a language it has no voice for, Kokoro
+  refuses rather than read it wrong; Telegram then sends the answer as text.
+  A short reply takes about half a second. Its voice notes are OGG/Opus at
+  24 kbps.
 - Both run on the CPU, through ONNX Runtime's prebuilt binaries: nothing is
   compiled on install and ffmpeg is not needed.
 - They run in a thread of their own, so the rest of buddi (the dashboard,
@@ -162,4 +180,5 @@ back to the agent that asked; the plugin does not keep it.
   what it sent, and one that sends something that is not audio is refused.
 - OpenAI's voices are its fixed list (alloy, ash, ballad, coral, echo, fable,
   nova, onyx, sage, shimmer, verse). Kokoro's are its voice pack (Heart,
-  Bella, Emma, George…). A compatible server names its own.
+  Bella, Emma, George…, Siwis in French, Dora and Alex in Spanish, Sara and
+  Nicola in Italian, Dora and Alex in Portuguese, Alpha and Omega in Hindi). A compatible server names its own.

@@ -20,7 +20,7 @@ export const SPEECH_MODELS: readonly SpeechModel[] = ['whisper', 'kokoro'];
 interface InstallProgress { fraction: number; bytes: number; total: number }
 interface SpeechModule {
   installLocal?: (kind: SpeechModel, options: { dir: string; onProgress?: (p: InstallProgress) => void }) => Promise<{ bytes: number; fetched: boolean; path: string }>;
-  installedLocal?: (dir: string) => Record<SpeechModel, { label: string; installed: boolean; bytes: number; path: string }>;
+  installedLocal?: (dir: string) => Record<SpeechModel, { label: string; installed: boolean; bytes: number; path: string; missing?: number }>;
   LOCAL_MODELS?: Record<SpeechModel, { label: string }>;
 }
 
@@ -88,7 +88,8 @@ export async function runSpeechCli(
       io.out(`${s.label} is already installed (${MB(s.bytes)}).`);
       continue;
     }
-    io.out(`Downloading ${s.label} (${MB(s.bytes)}) into ${s.path}…`);
+    // `missing`: what is left when part is already here (Kokoro before eSpeak NG came with it).
+    io.out(`Downloading ${s.label} (${MB(s.missing || s.bytes)}) into ${s.path}…`);
     let shown = -1;
     try {
       const result = await mod.installLocal(kind, {
