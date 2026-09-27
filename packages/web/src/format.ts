@@ -48,6 +48,32 @@ export function fmtNumber(value: number): string {
   return new Intl.NumberFormat('en-US').format(value);
 }
 
+/** Token usage as the server sends it; the cache counts ride along only when non-zero. */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/**
+ * `cached 9,800` (plus `cache write 2,000` when there was one), or `''` when
+ * nothing came from the cache. `input` never includes these.
+ */
+export function fmtCached(usage: TokenUsage): string {
+  const parts = [
+    ...(usage.cacheRead ? [`cached ${fmtNumber(usage.cacheRead)}`] : []),
+    ...(usage.cacheWrite ? [`cache write ${fmtNumber(usage.cacheWrite)}`] : []),
+  ];
+  return parts.join(', ');
+}
+
+/** `1,204 in (cached 9,800) / 318 out`. */
+export function fmtInOut(usage: TokenUsage): string {
+  const cached = fmtCached(usage);
+  return `${fmtNumber(usage.input)} in${cached ? ` (${cached})` : ''} / ${fmtNumber(usage.output)} out`;
+}
+
 export function json(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2) ?? 'null';

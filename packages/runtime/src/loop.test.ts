@@ -2415,3 +2415,30 @@ describe("a colleague's files come back as the asking turn's own", () => {
     expect(db.uses).toContainEqual({ role: 'user', uses: [{ artifactId: ART, kind: 'produced', agentId: 'finance' }] });
   });
 });
+
+describe('prompt caching', () => {
+  it('keys every call by the conversation and sums the cache counts', async () => {
+    const db = new FakeDb();
+    const cachedTurn = (text: string, cacheRead: number, cacheWrite?: number): CompletionResponse => ({
+      content: [{ type: 'text', text }],
+      stopReason: 'end_turn',
+      usage: { input: 3, output: 1, cacheRead, ...(cacheWrite ? { cacheWrite } : {}) },
+      model: 'm',
+    });
+    const provider = scriptedProvider([cachedTurn('done', 100, 20)]);
+    const result = await runAgent({
+      agent: webAgent,
+      provider,
+      registry: registryWithWeb(),
+      ctx,
+      pool: db,
+      conversationId: 'c1',
+      userMessage: 'hi',
+      env: {},
+    });
+    expect(provider.calls[0]!.cacheKey).toBe('c1');
+    expect(result.usage).toMatchObject({ input: 3, output: 1, cacheRead: 100, cacheWrite: 20 });
+    const finished = db.events.find((e) => e.kind === 'run.finished')!.payload as any;
+    expect(finished.usage).toMatchObject({ cacheRead: 100, cacheWrite: 20 });
+  });
+});

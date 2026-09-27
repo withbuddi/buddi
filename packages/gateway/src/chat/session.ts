@@ -87,7 +87,7 @@ import { listRecentConversations, type ConversationLine } from './conversations.
 import { renderMarkdown } from './render.js';
 import type { Spinner } from './spinner.js';
 import { bold, dim, green, red, yellow, type TerminalStyle } from './terminal.js';
-import { formatWebSearches, UsageLedger } from './usage.js';
+import { formatInOut, formatWebSearches, UsageLedger } from './usage.js';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -1251,7 +1251,7 @@ export class ChatSession {
     const parts = [
       `${run.turns} turn${run.turns === 1 ? '' : 's'}`,
       `${run.tools} tool${run.tools === 1 ? '' : 's'}`,
-      ...(usage ? [`in ${usage.input.toLocaleString('en-US')} / out ${usage.output.toLocaleString('en-US')}`] : []),
+      ...(usage ? [formatInOut(usage)] : []),
       // Only when there were any: a footer that says "0 web searches" on every
       // turn is noise, and the meter only matters when it moved.
       ...(usage?.webSearches ? [formatWebSearches(usage.webSearches)] : []),

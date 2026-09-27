@@ -204,3 +204,21 @@ describe('Codex model list', () => {
     }
   });
 });
+
+describe('Codex direct adapter — prompt caching', () => {
+  it('sends prompt_cache_key when the caller keys the request', async () => {
+    const send = streaming(200, sse(completed()));
+    await adapter(send).complete(request({ cacheKey: 'conv-9' }));
+    const body = JSON.parse(String(send.mock.calls[0]![1].body));
+    expect(body.prompt_cache_key).toBe('conv-9');
+    const bare = streaming(200, sse(completed()));
+    await adapter(bare).complete(request());
+    expect(JSON.parse(String(bare.mock.calls[0]![1].body))).not.toHaveProperty('prompt_cache_key');
+  });
+
+  it('lifts input_tokens_details.cached_tokens out of input', async () => {
+    const send = streaming(200, sse({ type: 'response.completed', response: { status: 'completed', model: 'gpt-5.5', usage: { input_tokens: 5_000, output_tokens: 9, input_tokens_details: { cached_tokens: 4_608 } } } }));
+    const out = await adapter(send).complete(request());
+    expect(out.usage).toEqual({ input: 392, output: 9, cacheRead: 4_608 });
+  });
+});

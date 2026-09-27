@@ -3,6 +3,7 @@
  * them. Written down here so a change on either side is a type error rather
  * than an empty panel.
  */
+import type { TokenUsage } from '../format';
 
 /**
  * Why an agent is listed but cannot run: a plugin it was granted is absent,
@@ -225,7 +226,7 @@ export interface ChatRun {
    * draw the marker. Optional: an older server does not send it.
    */
   noticed?: boolean;
-  usage: { input: number; output: number };
+  usage: TokenUsage;
   actionId: string | null;
   resumed: boolean;
 }

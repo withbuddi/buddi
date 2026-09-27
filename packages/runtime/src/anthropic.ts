@@ -169,6 +169,14 @@ export interface CompletionRequest {
    * throws ends the request without a dispatch.
    */
   onDispatch?: () => Promise<void>;
+  /**
+   * Opaque key that groups requests sharing a prompt prefix, so the
+   * provider's automatic cache routes them together. The loop passes the
+   * conversation id (or the agent id). OpenAI-shaped adapters send it as
+   * `prompt_cache_key`; Anthropic ignores it (it caches by breakpoints).
+   * At most 64 characters; longer keys are cut.
+   */
+  cacheKey?: string;
 }
 
 export interface CompletionDelta {
@@ -185,8 +193,18 @@ export interface CompletionDelta {
 export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'pause_turn' | 'other';
 
 export interface Usage {
+  /**
+   * Prompt tokens billed at the full input rate: the prompt *minus* whatever
+   * was read from or written to the provider's cache. Anthropic reports it
+   * that way already; the OpenAI-shaped adapters subtract the cached count so
+   * `input + (cacheRead ?? 0) + (cacheWrite ?? 0)` is always the whole prompt.
+   */
   input: number;
   output: number;
+  /** Prompt tokens served from the provider's cache (cheaper than `input`). Absent when none. */
+  cacheRead?: number;
+  /** Prompt tokens written to the provider's cache this call (Anthropic only; dearer than `input`). Absent when none. */
+  cacheWrite?: number;
   /**
    * Server-side web searches the provider ran for this request.
    *
@@ -379,7 +397,8 @@ export const WEB_SEARCH_TOOL_TYPE = 'web_search_20250305';
 export const THINKING_MIN_BUDGET = 1024;
 export const WEB_SEARCH_TOOL_NAME = 'web_search';
 
-type WireSystemBlock = { type: 'text'; text: string };
+type WireCacheControl = { type: 'ephemeral' };
+type WireSystemBlock = { type: 'text'; text: string; cache_control?: WireCacheControl };
 
 type WireRequest = {
   model: string;
@@ -390,8 +409,8 @@ type WireRequest = {
   system: string | WireSystemBlock[];
   messages: { role: MessageRole; content: WireBlock[] }[];
   tools?: (
-    | { name: string; description: string; input_schema: Record<string, unknown> }
-    | { type: string; name: string; max_uses?: number }
+    | { name: string; description: string; input_schema: Record<string, unknown>; cache_control?: WireCacheControl }
+    | { type: string; name: string; max_uses?: number; cache_control?: WireCacheControl }
   )[];
 };
 
@@ -399,12 +418,69 @@ type WireResponse = {
   model?: string;
   stop_reason?: string | null;
   content?: unknown;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    server_tool_use?: { web_search_requests?: number };
-  };
+  usage?: WireUsage;
 };
+
+type WireUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  server_tool_use?: { web_search_requests?: number };
+};
+
+/** The neutral usage for one Anthropic answer. `input_tokens` already excludes cached tokens. */
+function usageFromWire(usage: WireUsage | undefined): Usage {
+  const webSearches = usage?.server_tool_use?.web_search_requests ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
+  return {
+    input: usage?.input_tokens ?? 0,
+    output: usage?.output_tokens ?? 0,
+    ...(cacheRead > 0 ? { cacheRead } : {}),
+    ...(cacheWrite > 0 ? { cacheWrite } : {}),
+    ...(webSearches > 0 ? { webSearches } : {}),
+  };
+}
+
+const EPHEMERAL: WireCacheControl = { type: 'ephemeral' };
+
+/** Block types `cache_control` may sit on. Thinking and provider-native blocks are skipped. */
+function cacheableBlock(block: WireBlock): boolean {
+  const type = (block as { type?: unknown }).type;
+  if (type === 'text') return (block as { text?: unknown }).text !== '';
+  return type === 'image' || type === 'document' || type === 'tool_use' || type === 'tool_result';
+}
+
+/**
+ * Prompt caching breakpoints (GA; no beta header). The cache order is tools,
+ * system, messages, and a breakpoint caches everything before it, so three
+ * marks cover it: the last tool (the tool list), the last system block (the
+ * instructions), and the last cacheable block of the last-but-one message (the
+ * history up to the previous turn; only this turn's message is fresh). The API
+ * allows four; one is left free. Blocks are copied, never mutated — a
+ * `provider_native` block's `raw` is the caller's object.
+ */
+function applyCacheBreakpoints(wire: WireRequest): void {
+  if (wire.tools && wire.tools.length > 0) {
+    const last = wire.tools.length - 1;
+    wire.tools[last] = { ...wire.tools[last]!, cache_control: EPHEMERAL };
+  }
+  if (typeof wire.system === 'string') {
+    if (wire.system !== '') wire.system = [{ type: 'text', text: wire.system, cache_control: EPHEMERAL }];
+  } else if (wire.system.length > 0) {
+    const last = wire.system.length - 1;
+    wire.system[last] = { ...wire.system[last]!, cache_control: EPHEMERAL };
+  }
+  if (wire.messages.length < 2) return;
+  const message = wire.messages[wire.messages.length - 2]!;
+  for (let i = message.content.length - 1; i >= 0; i--) {
+    const block = message.content[i]!;
+    if (!cacheableBlock(block)) continue;
+    message.content[i] = { ...block, cache_control: EPHEMERAL } as WireBlock;
+    return;
+  }
+}
 
 function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock {
   switch (block.type) {
@@ -726,6 +802,7 @@ export function createAnthropicProvider(
       wire.thinking = { type: 'disabled' };
     }
     if (req.onDelta) wire.stream = true;
+    applyCacheBreakpoints(wire);
     return wire;
   }
 
@@ -820,16 +897,11 @@ export function createAnthropicProvider(
         if (res.ok) {
           const json = assembly ? assembly.finish() : ((await res.json()) as WireResponse);
           const parsed = fromWireBlocks(json.content, names);
-          const webSearches = json.usage?.server_tool_use?.web_search_requests ?? 0;
           const stopReason = mapStopReason(json.stop_reason);
           return {
             content: markCutOff(parsed.content, stopReason),
             stopReason,
-            usage: {
-              input: json.usage?.input_tokens ?? 0,
-              output: json.usage?.output_tokens ?? 0,
-              ...(webSearches > 0 ? { webSearches } : {}),
-            },
+            usage: usageFromWire(json.usage),
             model: json.model ?? resolved.model,
             ...(parsed.searches.length > 0 ? { searches: parsed.searches } : {}),
           };
@@ -879,7 +951,7 @@ class AnthropicStreamAssembly {
   readonly #partialJson = new Map<number, string>();
   #model: string | undefined;
   #stopReason: string | null = null;
-  #usage: { input_tokens?: number; output_tokens?: number; server_tool_use?: { web_search_requests?: number } } = {};
+  #usage: WireUsage = {};
   /** True once a delta has been handed to the caller. */
   spoke = false;
 
@@ -897,8 +969,7 @@ class AnthropicStreamAssembly {
       case 'message_start': {
         const message = (json.message ?? {}) as Record<string, unknown>;
         if (typeof message.model === 'string') this.#model = message.model;
-        const usage = (message.usage ?? {}) as Record<string, unknown>;
-        if (typeof usage.input_tokens === 'number') this.#usage.input_tokens = usage.input_tokens;
+        this.#takeUsage((message.usage ?? {}) as Record<string, unknown>);
         break;
       }
       case 'content_block_start': {
@@ -944,8 +1015,7 @@ class AnthropicStreamAssembly {
         const delta = (json.delta ?? {}) as Record<string, unknown>;
         if (typeof delta.stop_reason === 'string') this.#stopReason = delta.stop_reason;
         const usage = (json.usage ?? {}) as Record<string, unknown>;
-        if (typeof usage.output_tokens === 'number') this.#usage.output_tokens = usage.output_tokens;
-        if (typeof usage.input_tokens === 'number') this.#usage.input_tokens = usage.input_tokens;
+        this.#takeUsage(usage);
         const server = usage.server_tool_use as { web_search_requests?: number } | undefined;
         if (server) this.#usage.server_tool_use = server;
         break;
@@ -960,6 +1030,13 @@ class AnthropicStreamAssembly {
       }
       default:
         break;
+    }
+  }
+
+  /** Counts arrive on `message_start` and again (cumulative) on `message_delta`; the latest wins. */
+  #takeUsage(usage: Record<string, unknown>): void {
+    for (const key of ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const) {
+      if (typeof usage[key] === 'number') this.#usage[key] = usage[key] as number;
     }
   }
 

@@ -24,9 +24,10 @@ import {
   type ContentBlock,
   type RuntimeProvider,
   type StopReason,
+  type Usage,
 } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
-import { parseToolArguments } from './openai.js';
+import { parseToolArguments, wireCacheKey } from './openai.js';
 import type { AccountModels } from './provider-models.js';
 import { MAX_CONTEXT_WINDOW_TOKENS, MIN_CONTEXT_WINDOW_TOKENS } from './context-window.js';
 import { SseParser, frameJson } from './sse.js';
@@ -137,7 +138,7 @@ async function httpError(res: TransportResponse): Promise<ProviderError> {
 export class CodexStreamAssembly {
   readonly #parser = new SseParser();
   readonly #items: { id: string; block: ContentBlock; args?: string; gotArgs?: boolean }[] = [];
-  #usage = { input: 0, output: 0 };
+  #usage: Usage = { input: 0, output: 0 };
   #model: string | undefined;
   #incomplete = false;
   #completed = false;
@@ -206,7 +207,12 @@ export class CodexStreamAssembly {
       case 'response.incomplete': {
         const response = record(event.response);
         const usage = record(response.usage);
-        if (typeof usage.input_tokens === 'number') this.#usage.input = usage.input_tokens;
+        // Responses' `input_tokens` includes the cached ones; the neutral `input` does not.
+        if (typeof usage.input_tokens === 'number') {
+          const cached = Math.min(usage.input_tokens, Number(record(usage.input_tokens_details).cached_tokens) || 0);
+          this.#usage.input = usage.input_tokens - cached;
+          if (cached > 0) this.#usage.cacheRead = cached;
+        }
         if (typeof usage.output_tokens === 'number') this.#usage.output = usage.output_tokens;
         if (typeof response.model === 'string') this.#model = response.model;
         if (type === 'response.incomplete' || response.status === 'incomplete') this.#incomplete = true;
@@ -272,6 +278,8 @@ export function createCodexDirectAdapter(options: CodexDirectOptions): RuntimePr
         tool_choice: 'auto', parallel_tool_calls: true,
       };
       if (req.thinking === 'on') body.reasoning = { effort: 'medium', summary: 'auto' };
+      const cacheKey = wireCacheKey(req.cacheKey);
+      if (cacheKey) body.prompt_cache_key = cacheKey;
       const assembly = new CodexStreamAssembly(mapping, req.onDelta);
       await req.onDispatch?.();
       req.signal?.throwIfAborted();

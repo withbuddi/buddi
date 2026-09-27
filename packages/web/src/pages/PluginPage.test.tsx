@@ -1285,3 +1285,39 @@ describe('an agent offer', () => {
     expect(screen.queryByText('Background triage needs a mail agent.')).not.toBeInTheDocument();
   });
 });
+
+describe('a repeat that polls', () => {
+  it('asks its own query again while its answer says so, and stops once it does not', async () => {
+    let calls = 0;
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) => {
+      if (query !== 'downloads') return Promise.resolve({ data: DATA[query] });
+      calls += 1;
+      const busy = calls < 3;
+      return Promise.resolve({
+        data: { busy, rows: [{ id: 'm', line: busy ? `Downloading: ${calls * 30}%` : 'Installed, 92 MB' }] },
+      });
+    }) as typeof api.pageQuery);
+    const polled: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [
+        {
+          kind: 'repeat',
+          query: { query: 'downloads' },
+          rows: 'rows',
+          key: 'id',
+          poll: { seconds: 1, while: { path: 'busy', equals: true } },
+          body: [{ kind: 'notice', text: { path: 'line' } }],
+        },
+      ],
+    };
+    render(<PluginPage page={polled} item={null} navigate={navigate} timezone="UTC" />);
+    expect(await screen.findByText('Downloading: 30%')).toBeInTheDocument();
+    expect(await screen.findByText('Installed, 92 MB', undefined, { timeout: 4000 })).toBeInTheDocument();
+    const settled = calls;
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(calls).toBe(settled);
+  }, 10_000);
+});

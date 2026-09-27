@@ -112,14 +112,14 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
     // line — a concatenated "<line>\n<prompt>" string is rejected with 429.
     expect(body.system).toEqual([
       { type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX },
-      { type: 'text', text: AGENT_PROMPT },
+      { type: 'text', text: AGENT_PROMPT, cache_control: { type: 'ephemeral' } },
     ]);
     expect(body.system[0].text).toBe(
       "You are Claude Code, Anthropic's official CLI for Claude.",
     );
     expect(body.model).toBe('claude-sonnet-5');
     expect(body.tools).toEqual([
-      { name: 'finance_balance', description: 'Balance.', input_schema: { type: 'object' } },
+      { name: 'finance_balance', description: 'Balance.', input_schema: { type: 'object' }, cache_control: { type: 'ephemeral' } },
     ]);
   });
 
@@ -138,7 +138,7 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.system).toEqual([
       { type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX },
-      { type: 'text', text: AGENT_PROMPT },
+      { type: 'text', text: AGENT_PROMPT, cache_control: { type: 'ephemeral' } },
     ]);
   });
 
@@ -150,7 +150,7 @@ describe('createAnthropicProvider — subscription-token wire requirements', () 
     });
     await provider.complete({ ...request, system: '' });
     const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(body.system).toEqual([{ type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX }]);
+    expect(body.system).toEqual([{ type: 'text', text: CLAUDE_CODE_SYSTEM_PREFIX, cache_control: { type: 'ephemeral' } }]);
   });
 });
 
@@ -171,7 +171,8 @@ describe('createAnthropicProvider — api-key wire requirements', () => {
     expect(headers.authorization).toBeUndefined();
 
     const body = JSON.parse(init.body as string);
-    expect(body.system).toBe(AGENT_PROMPT);
+    // A string prompt becomes one block so it can carry the cache breakpoint.
+    expect(body.system).toEqual([{ type: 'text', text: AGENT_PROMPT, cache_control: { type: 'ephemeral' } }]);
   });
 });
 
@@ -738,7 +739,7 @@ describe('createAnthropicProvider — server-side web search', () => {
     const body = JSON.parse(init.body as string);
     expect(body.tools).toEqual([
       { name: 'finance_balance', description: 'Balance.', input_schema: { type: 'object' } },
-      { type: 'web_search_20250305', name: 'web_search', max_uses: 3 },
+      { type: 'web_search_20250305', name: 'web_search', max_uses: 3, cache_control: { type: 'ephemeral' } },
     ]);
   });
 
@@ -872,5 +873,125 @@ describe('toolNameMap — the name the server tool has already taken', () => {
   it('leaves the mapping alone when nothing is reserved', () => {
     const map = toolNameMap([{ name: 'web.search', description: 'x', input_schema: {} }]);
     expect(map.get('web_search')).toBe('web.search');
+  });
+});
+
+describe('createAnthropicProvider — prompt caching', () => {
+  const E = { type: 'ephemeral' };
+  async function sent(req: CompletionRequest, kind: 'api-key' | 'subscription-token' = 'api-key') {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve(kind), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    await provider.complete(req);
+    return JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+  }
+
+  it('marks the last tool, the last system block and the last-but-one message', async () => {
+    const body = await sent({
+      ...request,
+      tools: [
+        { name: 'a', description: 'A.', input_schema: { type: 'object' } },
+        { name: 'b', description: 'B.', input_schema: { type: 'object' } },
+      ],
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'first' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'calling' }, { type: 'tool_use', id: 't1', name: 'a', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'done' }] },
+      ],
+    });
+    expect(body.tools[0].cache_control).toBeUndefined();
+    expect(body.tools[1].cache_control).toEqual(E);
+    expect(body.system).toEqual([{ type: 'text', text: AGENT_PROMPT, cache_control: E }]);
+    expect(body.messages[0].content[0].cache_control).toBeUndefined();
+    expect(body.messages[1].content).toEqual([
+      { type: 'text', text: 'calling' },
+      { type: 'tool_use', id: 't1', name: 'a', input: {}, cache_control: E },
+    ]);
+    expect(body.messages[2].content[0].cache_control).toBeUndefined();
+    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(3);
+  });
+
+  it('adds no message breakpoint with fewer than two messages', async () => {
+    const body = await sent(request);
+    expect(body.messages[0].content[0].cache_control).toBeUndefined();
+    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(2);
+  });
+
+  it('skips a thinking block (and the empty stand-in for an unsigned one) at the edge', async () => {
+    const body = await sent({
+      ...request,
+      tools: [],
+      messages: [
+        { role: 'user', content: [{ type: 'image', mime: 'image/png', data: 'AAAA' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'looking' }, { type: 'thinking', text: 'hm', signature: 's' }, { type: 'thinking', text: 'x' }] },
+        { role: 'user', content: [{ type: 'text', text: 'next' }] },
+      ],
+    });
+    expect(body.tools).toBeUndefined();
+    expect(body.messages[1].content).toEqual([
+      { type: 'text', text: 'looking', cache_control: E },
+      { type: 'thinking', thinking: 'hm', signature: 's' },
+      { type: 'text', text: '' },
+    ]);
+  });
+
+  it('puts the breakpoint on an image when that is the last block', async () => {
+    const body = await sent({
+      ...request,
+      messages: [
+        { role: 'user', content: [{ type: 'image', mime: 'image/png', data: 'AAAA' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      ],
+    });
+    expect(body.messages[0].content[0]).toEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' }, cache_control: E });
+  });
+
+  it('never mutates a provider-native block and leaves it unmarked', async () => {
+    const raw = { type: 'web_search_tool_result', tool_use_id: 'srv', content: [] };
+    const body = await sent({
+      ...request,
+      messages: [
+        { role: 'assistant', content: [{ type: 'text', text: 'searching' }, { type: 'provider_native', provider: 'anthropic', raw }] },
+        { role: 'user', content: [{ type: 'text', text: 'go on' }] },
+      ],
+    });
+    expect(raw).not.toHaveProperty('cache_control');
+    expect(body.messages[0].content[0].cache_control).toEqual(E);
+    expect(body.messages[0].content[1].cache_control).toBeUndefined();
+  });
+
+  it('sends no prompt_cache_key and no extra beta header', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody()));
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    await provider.complete({ ...request, cacheKey: 'conv-1' });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).prompt_cache_key).toBeUndefined();
+    expect((init.headers as Record<string, string>)['anthropic-beta']).toBeUndefined();
+  });
+
+  it('reads cache reads and writes from a plain answer; input stays the uncached count', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300 },
+    })));
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete(request);
+    expect(res.usage).toEqual({ input: 12, output: 4, cacheRead: 9000, cacheWrite: 300 });
+  });
+
+  it('reads cache counts from a stream', async () => {
+    const frames = [
+      ['message_start', { type: 'message_start', message: { model: 'claude-sonnet-5', usage: { input_tokens: 7, cache_read_input_tokens: 5000, cache_creation_input_tokens: 40, output_tokens: 1 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6 } }],
+    ] as const;
+    const wire = frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      init.onChunk(wire, 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete({ ...request, onDelta: () => {} });
+    expect(res.usage).toEqual({ input: 7, output: 6, cacheRead: 5000, cacheWrite: 40 });
   });
 });

@@ -177,6 +177,23 @@ Model accounts. Dashboard edits take effect in its shared serving process immedi
 The account/domain layer is portable. OAuth and native-client credentials are
 resolved server-side; agent tools never receive the credential envelopes.
 
+## Prompt caching
+
+On Anthropic, buddi marks three cache breakpoints on every request: the last
+tool definition (the tool list), the last system block (the instructions) and
+the last block of the last-but-one message (the conversation up to the previous
+turn), so only the newest message is read at the full rate. Thinking and
+provider-native blocks are skipped when choosing that last block; there is no
+beta header. On OpenAI caching is automatic; buddi sends `prompt_cache_key` set
+to the conversation id (Chat Completions to OpenAI itself, and the Codex
+sign-in), which only helps requests land on a warm cache. OpenAI-compatible
+hosts get neither. Usage reports cached tokens separately: `input` is always
+the uncached part, with `cacheRead` and (Anthropic only) `cacheWrite` beside
+it, so `input + cacheRead + cacheWrite` is the whole prompt. `/usage`, the chat
+footer and Activity show "cached N", and the local cost estimate prices reads
+at a tenth of input (or the row's published cached rate) and Anthropic writes
+at 1.25x.
+
 ## Subscription support: what "complete" means
 
 Two subscription sign-ins exist — [Claude](anthropic-oauth.md) and

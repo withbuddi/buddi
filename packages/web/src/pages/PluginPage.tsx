@@ -327,13 +327,18 @@ function resolveArgs(
  * Reads and writes
  * ------------------------------------------------------------------ */
 
-function usePageQuery(ref: QueryRef | undefined, data: unknown): { data: unknown; error: string | null; loading: boolean } {
+function usePageQuery(
+  ref: QueryRef | undefined,
+  data: unknown,
+  pollMs?: number,
+): { data: unknown; error: string | null; loading: boolean } {
   const scope = useScope();
   const params = ref ? resolveParams(ref.params, data, scope) : {};
   const key = JSON.stringify([ref?.query ?? null, params, scope.version]);
   const state = useAsync<unknown>(
     () => (ref ? api.pageQuery(scope.plugin, ref.query, params).then((body) => body.data) : Promise.resolve(undefined)),
     [key],
+    pollMs,
   );
   return { data: state.data, error: state.error, loading: state.loading };
 }
@@ -1811,7 +1816,11 @@ function ListDetailPiece({ component, data }: { component: Of<'list-detail'>; da
  */
 function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unknown }): JSX.Element {
   const scope = useScope();
-  const query = usePageQuery(component.query, data);
+  // `poll`: this query alone is asked again while its own answer says so.
+  const [polling, setPolling] = useState(false);
+  const query = usePageQuery(component.query, data, polling && component.poll ? component.poll.seconds * 1000 : undefined);
+  const shouldPoll = component.poll !== undefined && query.data !== undefined && holds(query.data, component.poll.while);
+  useEffect(() => setPolling(shouldPoll), [shouldPoll]);
   const rows = rowsOf(query.data, component.rows);
   return (
     <PieceSection title={component.title} note={component.note}>

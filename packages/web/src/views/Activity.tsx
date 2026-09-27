@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import type { PlaceProps } from '../App';
 import { api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
 import { Markdown } from '../chat/markdown';
-import { fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
+import { fmtCached, fmtInOut, fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { ACTIVITY_ROUTE, chatRoute, transcriptRoute } from '../routes';
 import { AgentAvatar, Button, ButtonLink, Code, Empty, ErrorBanner, List, ListRow, PageHeader, Panel, Pill, Section, Stack, Stat, StatePill, Stats, Tab, Table, Tabs, useAsync, EmptyState } from '../ui';
 import { Alerts } from './Alerts';
@@ -81,7 +81,7 @@ function Conversations({ timezone, navigate, nameOf, agents }: { timezone: strin
                 onClick={() => navigate(transcriptRoute(c.id))}
                 lead={<AgentAvatar agents={agents} id={c.agentId} size="sm" />}
                 title={c.opening ? truncate(c.opening, 100) : 'Untitled conversation'}
-                sub={`${nameOf(c.agentId)}, ${c.messageCount} message${c.messageCount === 1 ? '' : 's'}, ${c.runs} run${c.runs === 1 ? '' : 's'}, ${fmtNumber(c.usage.input)} in / ${fmtNumber(c.usage.output)} out`}
+                sub={`${nameOf(c.agentId)}, ${c.messageCount} message${c.messageCount === 1 ? '' : 's'}, ${c.runs} run${c.runs === 1 ? '' : 's'}, ${fmtInOut(c.usage)}`}
                 side={<span title={fmtTime(c.lastMessageAt ?? c.createdAt, timezone)}>{fmtRelative(c.lastMessageAt ?? c.createdAt)}</span>}
               />
             ))}
@@ -188,7 +188,7 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
           <Stats>
             <Stat label="Agent" value={nameOf(transcript.agentId)} size="sm" />
             <Stat label="Runs" value={transcript.runs.length} />
-            <Stat label="Tokens" value={`${fmtNumber(transcript.usage.input)} / ${fmtNumber(transcript.usage.output)}`} note="input / output" />
+            <Stat label="Tokens" value={`${fmtNumber(transcript.usage.input)} / ${fmtNumber(transcript.usage.output)}`} note={fmtCached(transcript.usage) ? `input / output, ${fmtCached(transcript.usage)}` : 'input / output'} />
             <Stat label="Started" value={fmtTime(transcript.createdAt, timezone)} size="sm" />
           </Stats>
 
@@ -202,6 +202,7 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
                     <th className="num">Turns</th>
                     <th>Stopped</th>
                     <th className="num">Tokens</th>
+                    <th className="num">Cached</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -215,6 +216,7 @@ function TranscriptView({ id, timezone, navigate, nameOf }: { id: string; timezo
                         {run.actionId ? <div className="sub mono">action {short(run.actionId)}</div> : null}
                       </td>
                       <td className="num muted nowrap">{fmtNumber(run.usage.input)} / {fmtNumber(run.usage.output)}</td>
+                      <td className="num muted nowrap">{run.usage.cacheRead || run.usage.cacheWrite ? fmtNumber((run.usage.cacheRead ?? 0) + (run.usage.cacheWrite ?? 0)) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

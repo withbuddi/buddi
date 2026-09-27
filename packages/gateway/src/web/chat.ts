@@ -26,6 +26,7 @@
  * `TelegramSurface.enqueue` chains them per chat: the second message waits, it
  * does not interleave.
  */
+import { addUsage, usageView, type UsageView } from './usage-view.js';
 import { randomUUID } from 'node:crypto';
 import {
   WEB_SURFACE,
@@ -407,7 +408,7 @@ export interface ChatRunView {
    * only where there is a message saying so to draw it under.
    */
   noticed: boolean;
-  usage: { input: number; output: number };
+  usage: UsageView;
   actionId: string | null;
   resumed: boolean;
 }
@@ -457,7 +458,7 @@ export interface ChatTranscript {
   lifetime: ChatLifetimeView;
   messages: ChatMessageView[];
   runs: ChatRunView[];
-  usage: { input: number; output: number };
+  usage: UsageView;
   /**
    * What is still on the table in this conversation — usually nothing. Read
    * with the transcript rather than pushed on the stream, so a reloaded page
@@ -998,7 +999,7 @@ async function artifactsById(pool: Pool, ids: readonly string[]): Promise<Map<st
 async function runsOf(
   pool: Pool,
   conversationId: string,
-): Promise<{ runs: ChatRunView[]; usage: { input: number; output: number } }> {
+): Promise<{ runs: ChatRunView[]; usage: UsageView }> {
   const { rows } = await pool.query(
     `select kind, payload, created_at from core.events
       where conversation_id = $1::uuid
@@ -1047,7 +1048,7 @@ async function runsOf(
       // Absent on every row written before the loop said so out loud, which is
       // the honest answer for those runs: they did not.
       noticed: p.noticed === true,
-      usage: { input: Number(p.usage?.input ?? 0), output: Number(p.usage?.output ?? 0) },
+      usage: usageView(p.usage),
     };
     if (open) {
       Object.assign(open, finished, {
@@ -1065,10 +1066,7 @@ async function runsOf(
     }
   }
 
-  const usage = runs.reduce(
-    (acc, run) => ({ input: acc.input + run.usage.input, output: acc.output + run.usage.output }),
-    { input: 0, output: 0 },
-  );
+  const usage = runs.reduce<UsageView>((acc, run) => addUsage(acc, run.usage), { input: 0, output: 0 });
   return { runs, usage };
 }
 

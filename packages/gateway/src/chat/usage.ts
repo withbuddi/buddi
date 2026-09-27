@@ -16,7 +16,16 @@ import type { Usage } from '@buddi/runtime';
  * they move, and a partner endpoint (Bedrock, Vertex) bills its own. Anything
  * not listed here is reported as tokens with the cost left unknown.
  */
-export const PRICES: readonly { prefix: string; input: number; output: number }[] = [
+export const PRICES: readonly {
+  prefix: string;
+  input: number;
+  output: number;
+  /**
+   * Cached-input rate, where the provider publishes one that is not the 0.1x
+   * default. OpenAI's older families discount less (gpt-4.1 0.25x, gpt-4o 0.5x).
+   */
+  cacheRead?: number;
+}[] = [
   { prefix: 'claude-fable-5', input: 10, output: 50 },
   { prefix: 'claude-mythos-5', input: 10, output: 50 },
   { prefix: 'claude-opus-5-5', input: 4, output: 20 },
@@ -27,13 +36,18 @@ export const PRICES: readonly { prefix: string; input: number; output: number }[
   { prefix: 'claude-sonnet-5', input: 2, output: 10 },
   { prefix: 'claude-sonnet-4-6', input: 3, output: 15 },
   { prefix: 'claude-haiku-4-5', input: 1, output: 5 },
-  { prefix: 'gpt-5-mini', input: 0.25, output: 2 },
-  { prefix: 'gpt-5', input: 1.25, output: 10 },
-  { prefix: 'gpt-4.1-mini', input: 0.4, output: 1.6 },
-  { prefix: 'gpt-4.1', input: 2, output: 8 },
-  { prefix: 'gpt-4o-mini', input: 0.15, output: 0.6 },
-  { prefix: 'gpt-4o', input: 2.5, output: 10 },
+  { prefix: 'gpt-5-mini', input: 0.25, output: 2, cacheRead: 0.025 },
+  { prefix: 'gpt-5', input: 1.25, output: 10, cacheRead: 0.125 },
+  { prefix: 'gpt-4.1-mini', input: 0.4, output: 1.6, cacheRead: 0.1 },
+  { prefix: 'gpt-4.1', input: 2, output: 8, cacheRead: 0.5 },
+  { prefix: 'gpt-4o-mini', input: 0.15, output: 0.6, cacheRead: 0.075 },
+  { prefix: 'gpt-4o', input: 2.5, output: 10, cacheRead: 1.25 },
 ];
+
+/** Cache reads cost a tenth of input unless the row says otherwise (Anthropic and gpt-5 both do). */
+export const CACHE_READ_MULTIPLIER = 0.1;
+/** Anthropic's 5-minute cache write costs a quarter more than plain input. Only Anthropic reports writes. */
+export const CACHE_WRITE_MULTIPLIER = 1.25;
 
 /** Estimated dollars for one model's tokens, or nothing when unpriced. */
 export function estimateCost(model: string, usage: Usage): number | undefined {
@@ -43,7 +57,15 @@ export function estimateCost(model: string, usage: Usage): number | undefined {
   );
   const price = matches[0];
   if (!price) return undefined;
-  return (usage.input * price.input + usage.output * price.output) / 1_000_000;
+  const cacheRead = price.cacheRead ?? price.input * CACHE_READ_MULTIPLIER;
+  const cacheWrite = price.input * CACHE_WRITE_MULTIPLIER;
+  return (
+    (usage.input * price.input +
+      (usage.cacheRead ?? 0) * cacheRead +
+      (usage.cacheWrite ?? 0) * cacheWrite +
+      usage.output * price.output) /
+    1_000_000
+  );
 }
 
 /** `$0.0143`, or `$0.00` for something that rounds away. Never rounded to 0 tokens. */
@@ -58,6 +80,18 @@ export function formatWebSearches(count: number): string {
   return `${formatTokens(count)} web search${count === 1 ? '' : 'es'}`;
 }
 
+/**
+ * `in 1,204 (cached 9,800) / out 318`. The cache parts appear only when they
+ * moved; `input` never includes them (see `Usage.input`).
+ */
+export function formatInOut(usage: Pick<Usage, 'input' | 'output' | 'cacheRead' | 'cacheWrite'>): string {
+  const parts = [
+    ...(usage.cacheRead ? [`cached ${formatTokens(usage.cacheRead)}`] : []),
+    ...(usage.cacheWrite ? [`cache write ${formatTokens(usage.cacheWrite)}`] : []),
+  ];
+  return `in ${formatTokens(usage.input)}${parts.length ? ` (${parts.join(', ')})` : ''} / out ${formatTokens(usage.output)}`;
+}
+
 /** Thousands separators, because six-digit token counts are unreadable without. */
 export function formatTokens(count: number): string {
   return count.toLocaleString('en-US');
@@ -68,6 +102,8 @@ export interface ModelUsage {
   model: string;
   input: number;
   output: number;
+  cacheRead: number;
+  cacheWrite: number;
   runs: number;
   /**
    * Searches the provider ran on its own servers for this model.
@@ -112,9 +148,11 @@ export class UsageLedger {
       (sum, m) => ({
         input: sum.input + m.input,
         output: sum.output + m.output,
+        cacheRead: (sum.cacheRead ?? 0) + m.cacheRead,
+        cacheWrite: (sum.cacheWrite ?? 0) + m.cacheWrite,
         webSearches: (sum.webSearches ?? 0) + m.webSearches,
       }),
-      { input: 0, output: 0, webSearches: 0 } as Usage,
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, webSearches: 0 } as Usage,
     );
   }
 
@@ -123,11 +161,15 @@ export class UsageLedger {
       model,
       input: 0,
       output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
       runs: 0,
       webSearches: 0,
     };
     existing.input += usage.input;
     existing.output += usage.output;
+    existing.cacheRead += usage.cacheRead ?? 0;
+    existing.cacheWrite += usage.cacheWrite ?? 0;
     existing.webSearches += usage.webSearches ?? 0;
     existing.runs += 1;
     this.#byModel.set(model, existing);
@@ -147,7 +189,7 @@ export class UsageLedger {
       else known += cost;
       lines.push(
         `  ${m.model} — ${m.runs} run${m.runs === 1 ? '' : 's'}, ` +
-          `in ${formatTokens(m.input)} / out ${formatTokens(m.output)}` +
+          formatInOut(m) +
           `${m.webSearches > 0 ? `, ${formatWebSearches(m.webSearches)}` : ''}` +
           `${cost === undefined ? ', cost unknown (no local price)' : `, about ${formatCost(cost)}`}`,
       );
@@ -158,7 +200,7 @@ export class UsageLedger {
       ...lines,
       `  ${this.#turns} turn${this.#turns === 1 ? '' : 's'}, ${this.#tools} tool call${
         this.#tools === 1 ? '' : 's'
-      }, in ${formatTokens(total.input)} / out ${formatTokens(total.output)}`,
+      }, ${formatInOut(total)}`,
       `  estimated cost ${formatCost(known)}${unpriced ? ' plus the unpriced models above' : ''}` +
         `${(total.webSearches ?? 0) > 0 ? `, plus ${formatWebSearches(total.webSearches ?? 0)} metered separately` : ''}`,
       '  Estimates from a local price table — check your provider dashboard for the bill.',

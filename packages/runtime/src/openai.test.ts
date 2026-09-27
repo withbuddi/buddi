@@ -607,3 +607,60 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     expect(res.model).toBe('gemma4:12b');
   });
 });
+
+describe('createOpenAiProvider — prompt caching', () => {
+  const base: CompletionRequest = { system: 's', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [] };
+
+  it('sends prompt_cache_key to OpenAI itself, cut to 64 characters', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: any) => jsonResponse(200, okBody()));
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock, sleep: noSleep });
+    await provider.complete({ ...base, cacheKey: 'conv-1' });
+    await provider.complete({ ...base, cacheKey: 'x'.repeat(80) });
+    await provider.complete(base);
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(bodies[0].prompt_cache_key).toBe('conv-1');
+    expect(bodies[1].prompt_cache_key).toBe('x'.repeat(64));
+    expect(bodies[2]).not.toHaveProperty('prompt_cache_key');
+    expect(JSON.stringify(bodies[0])).not.toContain('cache_control');
+  });
+
+  it('does not send prompt_cache_key to a compatible host', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: any) => jsonResponse(200, okBody()));
+    const provider = createOpenAiProvider({ ...resolved(), compatible: true, baseUrl: 'http://localhost:11434/v1' }, { fetch: fetchMock, sleep: noSleep });
+    await provider.complete({ ...base, cacheKey: 'conv-1' });
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).not.toHaveProperty('prompt_cache_key');
+  });
+
+  it('lifts cached tokens out of prompt_tokens (non-stream)', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      usage: { prompt_tokens: 10_000, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 9_216 } },
+    })));
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete(base);
+    expect(res.usage).toEqual({ input: 784, output: 5, cacheRead: 9_216 });
+  });
+
+  it('leaves usage unchanged when nothing was cached', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, okBody({
+      usage: { prompt_tokens: 11, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 0 } },
+    })));
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    expect((await provider.complete(base)).usage).toEqual({ input: 11, output: 3 });
+  });
+
+  it('lifts cached tokens out of the streamed usage frame', async () => {
+    const frames = [
+      { model: 'gpt-5', choices: [{ index: 0, delta: { content: 'hi' } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
+      { choices: [], usage: { prompt_tokens: 2_000, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 1_024 } } },
+    ];
+    const wire = frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      init.onChunk(wire, 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider(resolved(), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete({ ...base, onDelta: () => {} });
+    expect(res.usage).toEqual({ input: 976, output: 2, cacheRead: 1_024 });
+  });
+});

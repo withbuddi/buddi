@@ -1081,6 +1081,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
       ...(search.enabled && !waitingForOwner ? { nativeSearch: { maxUses: search.maxUses } } : {}),
       ...(agent.thinking ? { thinking: agent.thinking } : {}),
       ...(opts.onDelta ? { onDelta: opts.onDelta } : {}),
+      // Groups this conversation's calls in the provider's prompt cache.
+      cacheKey: conversationId || agent.id,
     });
     let res: CompletionResponse;
     try {
@@ -1113,6 +1115,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
     ctx.signal?.throwIfAborted();
     usage.input += res.usage.input;
     usage.output += res.usage.output;
+    if (res.usage.cacheRead) usage.cacheRead = (usage.cacheRead ?? 0) + res.usage.cacheRead;
+    if (res.usage.cacheWrite) usage.cacheWrite = (usage.cacheWrite ?? 0) + res.usage.cacheWrite;
     if (res.usage.webSearches) {
       usage.webSearches = (usage.webSearches ?? 0) + res.usage.webSearches;
     }

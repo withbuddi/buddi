@@ -6,6 +6,7 @@
  * header — the double-submit half of the protection; the server checks the
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
+import type { TokenUsage } from './format';
 import type { ViewDescriptor } from './canvas/types';
 import type { PageActResult, PluginPageDescriptor, PluginWorkspaceFiles } from './pages/types';
 import type {
@@ -246,7 +247,7 @@ export interface ConversationSummary {
   lastMessageAt: string | null;
   opening: string | null;
   runs: number;
-  usage: { input: number; output: number };
+  usage: TokenUsage;
 }
 
 export interface TranscriptBlock {
@@ -270,11 +271,11 @@ export interface Transcript {
     finishedAt: string | null;
     turns: number | null;
     stopped: string | null;
-    usage: { input: number; output: number };
+    usage: TokenUsage;
     actionId: string | null;
     resumed: boolean;
   }>;
-  usage: { input: number; output: number };
+  usage: TokenUsage;
 }
 
 export interface MissionRow {

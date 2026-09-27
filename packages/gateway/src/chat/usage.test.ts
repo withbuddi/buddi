@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UsageLedger, estimateCost, formatCost, formatTokens } from './usage.js';
+import { UsageLedger, estimateCost, formatCost, formatInOut, formatTokens } from './usage.js';
 
 describe('estimateCost', () => {
   it('prices the models this installation actually runs', () => {
@@ -47,7 +47,7 @@ describe('UsageLedger', () => {
     // `webSearches` is always present and always counted, even at zero: it is
     // a meter, and a meter that only appears once it has moved is one nobody
     // thinks to look at.
-    expect(ledger.totals).toEqual({ input: 1500, output: 300, webSearches: 0 });
+    expect(ledger.totals).toEqual({ input: 1500, output: 300, cacheRead: 0, cacheWrite: 0, webSearches: 0 });
     expect(ledger.turns).toBe(3);
     expect(ledger.tools).toBe(3);
     const text = ledger.text();
@@ -73,5 +73,36 @@ describe('UsageLedger', () => {
     const ledger = new UsageLedger();
     ledger.record('gpt-5', { input: 10, output: 10 }, 1, 0);
     expect(ledger.text()).toContain('provider dashboard');
+  });
+});
+
+describe('prompt cache pricing', () => {
+  it('prices Anthropic cache reads at 0.1x and writes at 1.25x input', () => {
+    // claude-sonnet-5: $2 in, $10 out per million.
+    const cost = estimateCost('claude-sonnet-5', { input: 1_000_000, output: 0, cacheRead: 1_000_000, cacheWrite: 1_000_000 });
+    expect(cost).toBeCloseTo(2 + 0.2 + 2.5, 10);
+  });
+
+  it('uses the published cached-input rate for OpenAI rows', () => {
+    expect(estimateCost('gpt-5', { input: 0, output: 0, cacheRead: 1_000_000 })).toBeCloseTo(0.125, 10);
+    expect(estimateCost('gpt-4o', { input: 0, output: 0, cacheRead: 1_000_000 })).toBeCloseTo(1.25, 10);
+  });
+
+  it('is unchanged for usage with no cache counts', () => {
+    expect(estimateCost('claude-sonnet-5', { input: 1_000_000, output: 1_000_000 })).toBeCloseTo(12, 10);
+  });
+
+  it('shows cached tokens next to input only when there were some', () => {
+    expect(formatInOut({ input: 1204, output: 318 })).toBe('in 1,204 / out 318');
+    expect(formatInOut({ input: 12, output: 3, cacheRead: 9800 })).toBe('in 12 (cached 9,800) / out 3');
+    expect(formatInOut({ input: 12, output: 3, cacheRead: 9800, cacheWrite: 400 })).toBe('in 12 (cached 9,800, cache write 400) / out 3');
+  });
+
+  it('carries the cache counts through the /usage ledger', () => {
+    const ledger = new UsageLedger();
+    ledger.record('claude-sonnet-5', { input: 10, output: 2, cacheRead: 500 }, 1, 0);
+    ledger.record('claude-sonnet-5', { input: 5, output: 1, cacheRead: 700, cacheWrite: 50 }, 1, 0);
+    expect(ledger.totals).toMatchObject({ input: 15, output: 3, cacheRead: 1200, cacheWrite: 50 });
+    expect(ledger.text()).toContain('in 15 (cached 1,200, cache write 50) / out 3');
   });
 });

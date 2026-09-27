@@ -9,6 +9,7 @@
  *
  * Nothing here writes. Nothing here reaches a model.
  */
+import { addUsage, usageView, type UsageView } from './usage-view.js';
 import path from 'node:path';
 import { readDelegates } from '../agents/delegation.js';
 import {
@@ -152,7 +153,7 @@ export interface ConversationSummary {
   /** The first thing the owner (or the mission prompt) said. */
   opening: string | null;
   runs: number;
-  usage: { input: number; output: number };
+  usage: UsageView;
 }
 
 export async function readConversations(
@@ -175,7 +176,7 @@ export async function readConversations(
   const openings = await openingByConversation(pool, ids);
   return rows.map((r) => {
     const id = String(r.id);
-    const u = usage.get(id) ?? { input: 0, output: 0, runs: 0 };
+    const u = usage.get(id) ?? { usage: { input: 0, output: 0 }, runs: 0 };
     return {
       id,
       agentId: r.agent_id,
@@ -184,7 +185,7 @@ export async function readConversations(
       lastMessageAt: r.last_message_at ? new Date(r.last_message_at).toISOString() : null,
       opening: openings.get(id) ?? null,
       runs: u.runs,
-      usage: { input: u.input, output: u.output },
+      usage: u.usage,
     };
   });
 }
@@ -192,14 +193,16 @@ export async function readConversations(
 async function usageByConversation(
   pool: Pool,
   ids: readonly string[],
-): Promise<Map<string, { input: number; output: number; runs: number }>> {
-  const out = new Map<string, { input: number; output: number; runs: number }>();
+): Promise<Map<string, { usage: UsageView; runs: number }>> {
+  const out = new Map<string, { usage: UsageView; runs: number }>();
   if (ids.length === 0) return out;
   const { rows } = await pool.query(
     `select conversation_id,
             count(*)::int as runs,
             coalesce(sum((payload->'usage'->>'input')::bigint), 0)::bigint as input,
-            coalesce(sum((payload->'usage'->>'output')::bigint), 0)::bigint as output
+            coalesce(sum((payload->'usage'->>'output')::bigint), 0)::bigint as output,
+            coalesce(sum((payload->'usage'->>'cacheRead')::bigint), 0)::bigint as cache_read,
+            coalesce(sum((payload->'usage'->>'cacheWrite')::bigint), 0)::bigint as cache_write
        from core.events
       where kind = 'run.finished' and conversation_id = any($1::uuid[])
       group by conversation_id`,
@@ -208,8 +211,7 @@ async function usageByConversation(
   for (const row of rows) {
     out.set(String(row.conversation_id), {
       runs: Number(row.runs),
-      input: Number(row.input),
-      output: Number(row.output),
+      usage: usageView({ input: row.input, output: row.output, cacheRead: row.cache_read, cacheWrite: row.cache_write }),
     });
   }
   return out;
@@ -269,7 +271,7 @@ export interface TranscriptRun {
   finishedAt: string | null;
   turns: number | null;
   stopped: string | null;
-  usage: { input: number; output: number };
+  usage: UsageView;
   actionId: string | null;
   resumed: boolean;
 }
@@ -280,7 +282,7 @@ export interface Transcript {
   createdAt: string;
   messages: TranscriptMessage[];
   runs: TranscriptRun[];
-  usage: { input: number; output: number };
+  usage: UsageView;
 }
 
 export async function readConversation(
@@ -332,10 +334,7 @@ export async function readConversation(
       finishedAt: new Date(event.created_at).toISOString(),
       turns: typeof payload.turns === 'number' ? payload.turns : null,
       stopped: typeof payload.stopped === 'string' ? payload.stopped : null,
-      usage: {
-        input: Number(payload.usage?.input ?? 0),
-        output: Number(payload.usage?.output ?? 0),
-      },
+      usage: usageView(payload.usage),
       actionId: typeof payload.actionId === 'string' ? payload.actionId : (open?.actionId ?? null),
       resumed: open?.resumed ?? false,
     };
@@ -343,10 +342,7 @@ export async function readConversation(
     else runs.push(finished);
   }
 
-  const usage = runs.reduce(
-    (acc, run) => ({ input: acc.input + run.usage.input, output: acc.output + run.usage.output }),
-    { input: 0, output: 0 },
-  );
+  const usage = runs.reduce<UsageView>((acc, run) => addUsage(acc, run.usage), { input: 0, output: 0 });
 
   return {
     id: String(conversation.id),

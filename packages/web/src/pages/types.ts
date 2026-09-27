@@ -203,7 +203,19 @@ export type Component =
       selection?: 'route' | 'local';
       detail: Component[];
     })
-  | (ComponentCommon & { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] })
+  | (ComponentCommon & {
+      kind: 'repeat';
+      query: QueryRef;
+      rows: string;
+      key: string;
+      body: Component[];
+      /**
+       * Ask the query again every `seconds` while `while` holds of its answer,
+       * and only this query: a download's progress line moves without the
+       * page's forms being read again under the owner's hands.
+       */
+      poll?: { seconds: number; while: Visibility };
+    })
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })

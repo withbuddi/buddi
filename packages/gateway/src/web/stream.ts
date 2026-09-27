@@ -22,6 +22,7 @@
  * The cost is a poll. It is a single indexed `select` every 250ms against one
  * conversation, and only while a page is actually open on it.
  */
+import { usageView, type UsageView } from './usage-view.js';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
 import type { LiveTurns } from './live.js';
@@ -139,9 +140,8 @@ export function toStreamEvent(row: LogRow): { event: string; data: Record<string
   }
 }
 
-function usageOf(raw: unknown): { input: number; output: number } {
-  const u = (raw ?? {}) as { input?: unknown; output?: unknown };
-  return { input: Number(u.input ?? 0), output: Number(u.output ?? 0) };
+function usageOf(raw: unknown): UsageView {
+  return usageView(raw);
 }
 
 /** The cursor this request resumes from: `?since=`, else `Last-Event-ID`. */

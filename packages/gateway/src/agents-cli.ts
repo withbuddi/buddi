@@ -40,7 +40,7 @@ import { createProvider, providerCapabilities } from '@buddi/runtime';
 import { gatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
 import { migrateAgents, renderMigration } from './agents/migrate.js';
 import { createWiringAsync, hydrateSecrets, loadEnvironment, type Wiring } from './bootstrap.js';
-import { estimateCost, formatCost, formatTokens, formatWebSearches } from './chat/usage.js';
+import { estimateCost, formatCost, formatInOut, formatWebSearches } from './chat/usage.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 
 export const USAGE = `buddi agents — which engine each agent runs on
@@ -383,6 +383,8 @@ export interface LastRun {
   stopped: string | null;
   input: number;
   output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
   webSearches: number;
 }
 
@@ -391,7 +393,7 @@ export function lastRunLine(run: LastRun): string {
   const served = run.servedModel ? ` (served ${run.servedModel})` : '';
   return (
     `${run.at} — ${run.provider} · ${run.model}${served} · ${run.credentialKind} · ` +
-    `${run.turns ?? '?'} turns, ${run.stopped ?? '?'}, in ${run.input} / out ${run.output}` +
+    `${run.turns ?? '?'} turns, ${run.stopped ?? '?'}, ${formatInOut(run)}` +
     `${run.webSearches ? `, ${run.webSearches} provider web search${run.webSearches === 1 ? '' : 'es'}` : ''}`
   );
 }
@@ -416,7 +418,7 @@ async function lastRunSnapshot(
     const row = rows[0];
     if (!row) return undefined;
     const p = (row.payload ?? {}) as Record<string, unknown>;
-    const usage = (p.usage ?? {}) as { input?: number; output?: number; webSearches?: number };
+    const usage = (p.usage ?? {}) as { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; webSearches?: number };
     return {
       at: new Date(row.created_at).toISOString(),
       provider: String(p.provider ?? '?'),
@@ -427,6 +429,8 @@ async function lastRunSnapshot(
       stopped: typeof p.stopped === 'string' ? p.stopped : null,
       input: usage.input ?? 0,
       output: usage.output ?? 0,
+      ...(usage.cacheRead ? { cacheRead: usage.cacheRead } : {}),
+      ...(usage.cacheWrite ? { cacheWrite: usage.cacheWrite } : {}),
       webSearches: usage.webSearches ?? 0,
     };
   } catch {
@@ -662,7 +666,7 @@ async function testCommand(
   console.log(
     dim(
       `  served ${answer.model || '(not reported)'} · ${ms} ms · ` +
-        `in ${formatTokens(answer.usage.input)} / out ${formatTokens(answer.usage.output)} · ` +
+        `${formatInOut(answer.usage)} · ` +
         `${answer.usage.webSearches ? `${formatWebSearches(answer.usage.webSearches)} · ` : ''}` +
         `${cost === undefined ? 'cost unknown (no local price)' : `about ${formatCost(cost)}`}`,
       style.color,

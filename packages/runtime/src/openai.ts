@@ -46,6 +46,7 @@ import {
   type StopReason,
   type ToolSchema,
   type CompletionDelta,
+  type Usage,
 } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
 import {
@@ -135,6 +136,12 @@ type WireRequest = {
    * alone is ignored. Nothing else is sent it.
    */
   think?: boolean;
+  /**
+   * Routes requests sharing a prompt prefix to the same cache (OpenAI's
+   * caching is automatic; this only improves the hit rate). Sent to OpenAI
+   * itself, never to a compatible host that may refuse unknown fields.
+   */
+  prompt_cache_key?: string;
   messages: WireMessage[];
   tools?: {
     type: 'function';
@@ -154,8 +161,34 @@ type WireResponse = {
       tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
     };
   }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: WireUsage;
 };
+
+type WireUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+};
+
+/**
+ * `prompt_tokens` *includes* the cached tokens; the neutral `input` does not,
+ * so the cached count is lifted out (see `Usage.input`).
+ */
+function usageFromWire(usage: WireUsage | undefined): Usage {
+  const total = usage?.prompt_tokens ?? 0;
+  const cached = Math.min(total, usage?.prompt_tokens_details?.cached_tokens ?? 0);
+  return {
+    input: total - cached,
+    output: usage?.completion_tokens ?? 0,
+    ...(cached > 0 ? { cacheRead: cached } : {}),
+  };
+}
+
+/** OpenAI caps `prompt_cache_key` at 64 characters. */
+export function wireCacheKey(key: string | undefined): string | undefined {
+  if (!key) return undefined;
+  return key.slice(0, 64);
+}
 
 /* ------------------------------------------------------------------ *
  * Neutral -> wire
@@ -469,6 +502,8 @@ export function createOpenAiProvider(
     // Ollama asks for this by its own name. Sent only there, and only when the
     // answer to "should it think" is no.
     if (req.thinking === 'off' && isOllama(resolved.baseUrl)) wire.think = false;
+    const cacheKey = wireCacheKey(req.cacheKey);
+    if (cacheKey && !resolved.compatible) wire.prompt_cache_key = cacheKey;
     if (req.onDelta) {
       wire.stream = true;
       wire.stream_options = { include_usage: true };
@@ -555,10 +590,7 @@ export function createOpenAiProvider(
           return {
             content,
             stopReason,
-            usage: {
-              input: json.usage?.prompt_tokens ?? 0,
-              output: json.usage?.completion_tokens ?? 0,
-            },
+            usage: usageFromWire(json.usage),
             model: json.model ?? resolved.model,
           };
         }
@@ -609,7 +641,7 @@ class OpenAiStreamAssembly {
   #saidText = 0;
   #model: string | undefined;
   #finish: string | null = null;
-  #usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  #usage: WireUsage | undefined;
   spoke = false;
 
   constructor(private readonly onDelta: (delta: CompletionDelta) => void) {}
@@ -632,7 +664,7 @@ class OpenAiStreamAssembly {
       });
     }
     if (typeof json.model === 'string') this.#model = json.model;
-    const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number } | null | undefined;
+    const usage = json.usage as WireUsage | null | undefined;
     if (usage && typeof usage === 'object') this.#usage = usage;
     const choices = Array.isArray(json.choices) ? (json.choices as Record<string, unknown>[]) : [];
     const choice = choices[0];
