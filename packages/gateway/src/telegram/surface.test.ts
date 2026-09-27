@@ -154,21 +154,21 @@ class FakeDb implements Queryable {
   };
 
   /** core.surface_chat_voice, keyed by chat. */
-  voice = new Map<string, { voice: string; noted: string | null }>();
+  voice = new Map<string, { when: string; form: string; noted: string | null }>();
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
 
-    if (text.startsWith('select voice from core.surface_chat_voice')) {
+    if (text.startsWith('select voice_when, voice_form from core.surface_chat_voice')) {
       const row = this.voice.get(params[1]);
-      return { rows: row ? [{ voice: row.voice }] : [] };
+      return { rows: row ? [{ voice_when: row.when, voice_form: row.form }] : [] };
     }
-    if (text.startsWith('insert into core.surface_chat_voice (surface, external_chat_id, voice,')) {
-      this.voice.set(params[1], { voice: params[2], noted: this.voice.get(params[1])?.noted ?? null });
+    if (text.startsWith('insert into core.surface_chat_voice (surface, external_chat_id, voice_when, voice_form,')) {
+      this.voice.set(params[1], { when: params[2], form: params[3], noted: this.voice.get(params[1])?.noted ?? null });
       return { rows: [] };
     }
     if (text.startsWith('insert into core.surface_chat_voice (surface, external_chat_id, fallback_noted_on)')) {
-      const row = this.voice.get(params[1]) ?? { voice: 'spoken', noted: null };
+      const row = this.voice.get(params[1]) ?? { when: 'spoken', form: 'voice', noted: null };
       if (row.noted === params[2]) return { rows: [] };
       this.voice.set(params[1], { ...row, noted: params[2] });
       return { rows: [{ claimed: 1 }] };
@@ -778,19 +778,22 @@ function voiceUpdate(updateId: number, caption?: string): TelegramUpdate {
 }
 
 /** The speech plugin, as the surface's hooks would answer. */
-function fakeSpeech(over: Partial<SpeechHooks> = {}, store?: ArtifactStore): SpeechHooks & { said: string[]; heard: string[] } {
+function fakeSpeech(over: Partial<SpeechHooks> = {}, store?: ArtifactStore): SpeechHooks & { said: string[]; heard: string[]; handles: Array<Record<string, string> | undefined> } {
   const said: string[] = [];
   const heard: string[] = [];
+  const handles: Array<Record<string, string> | undefined> = [];
   return {
     said,
     heard,
+    handles,
     canSpeak: () => true,
     async transcribe(id) {
       heard.push(id);
       return { ok: true, text: 'how much did I spend on groceries', language: 'en' };
     },
-    async say(text) {
+    async say(text, names) {
       said.push(text);
+      handles.push(names);
       const row = await store!.save({ bytes: Buffer.from('OggS-voice'), mime: 'audio/ogg', filename: 'reply.ogg', createdBy: 'owner' });
       return { ok: true, artifactId: row.id };
     },
@@ -3693,26 +3696,39 @@ describe('voice on Telegram', () => {
   };
   const texts = (sent: Sent[]) => sent.filter((s) => s.method === 'sendMessage').map((s) => s.body.text as string);
 
-  it('hears a voice note, quotes it, runs it as the owner\'s words with the caption after, and answers with a voice note', async () => {
+  it('hears a voice note without echoing it, runs it as the owner\'s words with the caption after, and answers with the voice note alone', async () => {
     const { surface, sent, run, speech } = voiceHarness();
     await surface.processUpdates([voiceUpdate(501, 'and last month?')]);
     await surface.drain();
 
     expect(speech.heard).toEqual(['art-1']);
-    expect(texts(sent)).toContain('🎤 how much did I spend on groceries');
+    // Nothing is sent back about what was heard.
+    expect(texts(sent).some((t) => t.includes('how much did I spend on groceries'))).toBe(false);
     const req = run.mock.calls[0]?.[0] as any;
     expect(req.text).toBe('how much did I spend on groceries\n\nand last month?');
     // The turn is told it will be read aloud, and nothing is streamed.
     expect(req.spoken).toBe(true);
     expect(req.onTextDelta).toBeUndefined();
     expect(speech.said).toEqual(['You spent 212 dollars on groceries this month.']);
+    // Handles are read as the agents' names.
+    expect(speech.handles[0]).toMatchObject({ buddi: expect.any(String) });
+    const voice = sent.find((s) => s.method === 'sendVoice');
+    expect(voice?.body.multipart).not.toContain('name="caption"');
+    expect(voice?.body.multipart).toContain('Content-Type: audio/ogg');
+    // The placeholder gives way to the voice note, and no text follows it.
+    expect(sent.some((s) => s.method === 'deleteMessage')).toBe(true);
+    expect(sent.slice(sent.indexOf(voice!) + 1).some((s) => s.method === 'sendMessage' || s.method === 'editMessageText')).toBe(false);
+  });
+
+  it('with /voice both, sends the text as the caption', async () => {
+    const { surface, sent } = voiceHarness();
+    await surface.processUpdates([message(500, OWNER, OWNER, '/voice both')]);
+    await surface.drain();
+    expect(texts(sent).at(-1)).toBe('Voice replies: when you send a voice note, as a voice note with the text.');
+    await surface.processUpdates([voiceUpdate(501)]);
+    await surface.drain();
     const voice = sent.find((s) => s.method === 'sendVoice');
     expect(voice?.body.multipart).toContain('name="caption"\r\n\r\nYou spent 212 dollars on groceries this month.');
-    expect(voice?.body.multipart).toContain('Content-Type: audio/ogg');
-    // The placeholder gives way to the voice note.
-    expect(sent.some((s) => s.method === 'deleteMessage')).toBe(true);
-    // The quote came before the voice.
-    expect(sent.findIndex((s) => s.body.text === '🎤 how much did I spend on groceries')).toBeLessThan(sent.indexOf(voice!));
   });
 
   it('names the language the note was heard in for the run, and only for that run', async () => {
@@ -3727,14 +3743,22 @@ describe('voice on Telegram', () => {
     expect((run.mock.calls.at(-1)?.[0] as any).spokenLanguage).toBeUndefined();
   });
 
-  it('puts a long answer in a second message, and does not speak one over 4,000 characters', async () => {
+  it('puts a long answer in a second message under both, none under voice, and does not speak one over 4,000 characters', async () => {
     const long = 'Groceries. '.repeat(120).trim();
     const first = voiceHarness({}, long);
+    await first.surface.processUpdates([message(501, OWNER, OWNER, '/voice both')]);
+    await first.surface.drain();
     await first.surface.processUpdates([voiceUpdate(502)]);
     await first.surface.drain();
     const voice = first.sent.find((s) => s.method === 'sendVoice');
     expect(voice?.body.multipart).not.toContain('name="caption"');
     expect(texts(first.sent).at(-1)).toBe(long);
+
+    const alone = voiceHarness({}, long);
+    await alone.surface.processUpdates([voiceUpdate(502)]);
+    await alone.surface.drain();
+    expect(alone.sent.some((s) => s.method === 'sendVoice')).toBe(true);
+    expect(texts(alone.sent).includes(long)).toBe(false);
 
     const huge = 'x'.repeat(4001);
     const second = voiceHarness({}, huge);
@@ -3784,11 +3808,11 @@ describe('voice on Telegram', () => {
     await surface.processUpdates([message(510, OWNER, OWNER, '/voice')]);
     await surface.drain();
     expect(texts(sent).at(-1)).toBe(
-      'Voice replies: spoken: a voice note back when you send one.\nSend /voice spoken, /voice always or /voice off to change it.',
+      'Voice replies: when you send a voice note, as the voice note alone. Send /voice spoken, always or off for when, and /voice voice, both or text for what.',
     );
     await surface.processUpdates([message(511, OWNER, OWNER, '/voice loud')]);
     await surface.drain();
-    expect(texts(sent).at(-1)).toBe('Send /voice spoken, /voice always or /voice off.');
+    expect(texts(sent).at(-1)).toBe('Send /voice spoken, always or off for when, and /voice voice, both or text for what.');
 
     // A typed message under `spoken` is answered in text.
     await surface.processUpdates([message(512, OWNER, OWNER, 'how much on groceries?')]);
@@ -3798,17 +3822,38 @@ describe('voice on Telegram', () => {
 
     await surface.processUpdates([message(513, OWNER, OWNER, '/voice always')]);
     await surface.drain();
-    expect(texts(sent).at(-1)).toBe('Voice replies: always: every answer is also a voice note.');
+    expect(texts(sent).at(-1)).toBe('Voice replies: for every answer, as the voice note alone.');
     await surface.processUpdates([message(514, OWNER, OWNER, 'and restaurants?')]);
     await surface.drain();
     expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBe(true);
     expect(speech.said).toHaveLength(1);
 
-    await surface.processUpdates([message(515, OWNER, OWNER, '/voice off')]);
+    await surface.processUpdates([message(515, OWNER, OWNER, '/voice text')]);
     await surface.drain();
     await surface.processUpdates([voiceUpdate(516)]);
     await surface.drain();
     expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBeUndefined();
+    expect(speech.said).toHaveLength(1);
+  });
+
+  it("follows the speech plugin's copy of the choices, and /voice writes it too", async () => {
+    const prefs: Record<string, string> = { when: 'off' };
+    const saved: unknown[] = [];
+    const { surface, sent, run, speech } = voiceHarness({
+      voicePrefs: async () => ({ ...prefs }) as never,
+      saveVoicePrefs: async (v) => { saved.push(v); Object.assign(prefs, v); return true; },
+    });
+    await surface.processUpdates([voiceUpdate(530)]);
+    await surface.drain();
+    expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBeUndefined();
+    expect(speech.said).toEqual([]);
+
+    await surface.processUpdates([message(531, OWNER, OWNER, '/voice always')]);
+    await surface.drain();
+    expect(saved).toEqual([{ when: 'always', form: 'voice' }]);
+    expect(texts(sent).at(-1)).toBe('Voice replies: for every answer, as the voice note alone.');
+    await surface.processUpdates([message(532, OWNER, OWNER, 'and restaurants?')]);
+    await surface.drain();
     expect(speech.said).toHaveLength(1);
   });
 

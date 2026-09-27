@@ -1,12 +1,19 @@
 /**
  * Voice on Telegram (docs/telegram.md, Voice).
  *
- * In: a voice note is transcribed by the speech plugin's `speech.transcribe`,
- * shown back as a quote ("🎤 …"), then run as if the owner had typed it. Out:
- * when the owner spoke (or chose `/voice always`), the answer is synthesized
- * with `speech.say` and sent as a voice note with the text as its caption.
+ * In: a voice note is transcribed by the speech plugin's `speech.transcribe`
+ * and run as if the owner had typed it; nothing is echoed back, the transcript
+ * is the owner's message in the conversation. Out: when the owner spoke (or
+ * chose `/voice always`), the answer is synthesized with `speech.say` (which
+ * rewrites it for the ear first) and sent as a voice note, alone or with the
+ * text as its caption (`/voice voice|both`).
  *
- * buddi does not know the speech plugin: it calls the two tools **by name**
+ * The two choices live in the chat's row (core.surface_chat_voice) and, when
+ * the plugin is there, in its own copy (`speech.telegram_voice`, Settings →
+ * Speech → On Telegram): the plugin's copy wins where it has one, and
+ * `/voice` writes both.
+ *
+ * buddi does not know the speech plugin: it calls its tools **by name**
  * through the registry, as the owner (`OWNER_AGENT_ID`), so no approval card
  * is raised for the owner's own voice note and the plugin's daily caps still
  * count it. No plugin, or nothing set up on Settings → Speech, is one
@@ -14,9 +21,19 @@
  */
 import { localDateString, OWNER_AGENT_ID, type CoreToolContext, type Queryable, type ToolRegistry } from '@buddi/core';
 
-export type VoiceSetting = 'spoken' | 'always' | 'off';
-export const VOICE_SETTINGS: readonly VoiceSetting[] = ['spoken', 'always', 'off'];
-export const DEFAULT_VOICE: VoiceSetting = 'spoken';
+/** When an answer is spoken: when the owner spoke, always, or never. */
+export type VoiceWhen = 'spoken' | 'always' | 'off';
+/** What is sent: the voice note alone, or with the text as its caption. */
+export type VoiceForm = 'voice' | 'both';
+export const VOICE_WHEN: readonly VoiceWhen[] = ['spoken', 'always', 'off'];
+export const VOICE_FORM: readonly VoiceForm[] = ['voice', 'both'];
+
+export interface ChatVoice {
+  when: VoiceWhen;
+  form: VoiceForm;
+}
+
+export const DEFAULT_CHAT_VOICE: ChatVoice = { when: 'spoken', form: 'voice' };
 
 /** Telegram's caption ceiling: past it the text follows as its own message. */
 export const MAX_VOICE_CAPTION_CHARS = 1024;
@@ -36,8 +53,12 @@ export interface SpeechHooks {
   /** Is there a speaker at all? Decides whether a turn is told it will be read aloud. */
   canSpeak(): boolean;
   transcribe(artifactId: string): Promise<SpeechOutcome<{ text: string; language?: string }>>;
-  /** Say `text`; the voice is kept in Files and its id returned. */
-  say(text: string): Promise<SpeechOutcome<{ artifactId: string }>>;
+  /** Say `text` (handles read as the names given); the voice is kept in Files and its id returned. */
+  say(text: string, handles?: Record<string, string>): Promise<SpeechOutcome<{ artifactId: string }>>;
+  /** The plugin's copy of the two choices (Settings → Speech); `{}` when it has none. */
+  voicePrefs?(): Promise<Partial<ChatVoice>>;
+  /** Write the two choices to the plugin's copy too; false when it could not be. */
+  saveVoicePrefs?(voice: ChatVoice): Promise<boolean>;
 }
 
 export interface SpeechHooksDeps {
@@ -48,6 +69,8 @@ export interface SpeechHooksDeps {
 
 export const TRANSCRIBE_TOOL = 'speech.transcribe';
 export const SAY_TOOL = 'speech.say';
+/** Owner-only, so never in `registry.list()`: reached by invoking it. */
+export const TELEGRAM_VOICE_TOOL = 'speech.telegram_voice';
 
 /** A refusal's words, sorted: nothing set up, a language it cannot speak, or anything else. */
 export function classifySpeechRefusal(message: string): SpeechFailure {
@@ -69,6 +92,12 @@ export function createSpeechHooks(deps: SpeechHooksDeps): SpeechHooks {
     if (result.reason === 'unknown-tool') return { ok: false as const, reason: 'missing' as const, message: result.message };
     return { ok: false as const, reason: classifySpeechRefusal(result.message), message: result.message };
   };
+  /** An owner-only tool, invoked straight away; undefined when it is not there or refused. */
+  const ownerCall = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown> | undefined> => {
+    const { conversationId: _none, ...ctx } = deps.ctx;
+    const result = await deps.registry.invoke(name, args, { ...ctx, agentId: OWNER_AGENT_ID, now: deps.now } as CoreToolContext);
+    return result.ok && result.output && typeof result.output === 'object' ? (result.output as Record<string, unknown>) : undefined;
+  };
   return {
     canSpeak: () => has(SAY_TOOL),
     async transcribe(artifactId) {
@@ -78,12 +107,25 @@ export function createSpeechHooks(deps: SpeechHooksDeps): SpeechHooks {
       const language = typeof result.output.language === 'string' ? result.output.language : undefined;
       return { ok: true, text, ...(language ? { language } : {}) };
     },
-    async say(text) {
-      const result = await invoke(SAY_TOOL, { text });
+    async say(text, handles) {
+      const result = await invoke(SAY_TOOL, { text, ...(handles && Object.keys(handles).length > 0 ? { handles } : {}) });
       if (!result.ok) return result;
       const id = result.output.id;
       if (typeof id !== 'string') return { ok: false, reason: 'failed', message: 'speech.say returned no file' };
       return { ok: true, artifactId: id };
+    },
+    async voicePrefs() {
+      const result = await ownerCall(TELEGRAM_VOICE_TOOL, {});
+      if (!result) return {};
+      const when = result.when;
+      const form = result.form;
+      return {
+        ...((VOICE_WHEN as readonly unknown[]).includes(when) ? { when: when as VoiceWhen } : {}),
+        ...((VOICE_FORM as readonly unknown[]).includes(form) ? { form: form as VoiceForm } : {}),
+      };
+    },
+    async saveVoicePrefs(voice) {
+      return (await ownerCall(TELEGRAM_VOICE_TOOL, { when: voice.when, form: voice.form })) !== undefined;
     },
   };
 }
@@ -109,11 +151,6 @@ export function languageName(detected: string | undefined): string | undefined {
   }
   if (!/^\p{L}[\p{L} ]*$/u.test(raw)) return undefined;
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
-}
-
-/** The transcript, shown back so the owner sees what was heard. */
-export function heardText(transcript: string): string {
-  return `🎤 ${transcript}`;
 }
 
 /** The turn's text: the transcript, then a caption the owner typed under the note. */
@@ -145,56 +182,76 @@ export function textInsteadText(reason: SpeechFailure): string {
   }
 }
 
-const SETTING_WORDS: Record<VoiceSetting, string> = {
-  spoken: 'spoken: a voice note back when you send one',
-  always: 'always: every answer is also a voice note',
-  off: 'off: answers are text only',
+const WHEN_WORDS: Record<Exclude<VoiceWhen, 'off'>, string> = {
+  spoken: 'when you send a voice note',
+  always: 'for every answer',
 };
 
-/** `/voice` alone: the current value, and the three words. */
-export function voiceStatusText(current: VoiceSetting): string {
-  return [
-    `Voice replies: ${SETTING_WORDS[current]}.`,
-    'Send /voice spoken, /voice always or /voice off to change it.',
-  ].join('\n');
+const FORM_WORDS: Record<VoiceForm, string> = {
+  voice: 'as the voice note alone',
+  both: 'as a voice note with the text',
+};
+
+/** "when you send a voice note, as the voice note alone", or "off: answers are text only". */
+export function voiceSummary(voice: ChatVoice): string {
+  return voice.when === 'off' ? 'off: answers are text only' : `${WHEN_WORDS[voice.when]}, ${FORM_WORDS[voice.form]}`;
 }
 
-export function voiceSetText(setting: VoiceSetting): string {
-  return `Voice replies: ${SETTING_WORDS[setting]}.`;
+export const VOICE_USAGE_TEXT = 'Send /voice spoken, always or off for when, and /voice voice, both or text for what.';
+
+/** `/voice` alone: the current choice and the words it takes, on one line. */
+export function voiceStatusText(current: ChatVoice): string {
+  return `Voice replies: ${voiceSummary(current)}. ${VOICE_USAGE_TEXT}`;
 }
 
-export const VOICE_USAGE_TEXT = 'Send /voice spoken, /voice always or /voice off.';
+export function voiceSetText(voice: ChatVoice): string {
+  return `Voice replies: ${voiceSummary(voice)}.`;
+}
 
-/** `/voice <word>`: the setting, or undefined when the word is not one of the three. */
-export function parseVoiceArg(arg: string): VoiceSetting | undefined {
+/**
+ * `/voice <word>` over the current choice: spoken, always or off set when;
+ * voice or both set what (and turn an `off` chat back to spoken); text is
+ * off. Undefined when the word is none of these.
+ */
+export function applyVoiceArg(current: ChatVoice, arg: string): ChatVoice | undefined {
   const word = arg.trim().toLowerCase();
-  return (VOICE_SETTINGS as readonly string[]).includes(word) ? (word as VoiceSetting) : undefined;
+  if ((VOICE_WHEN as readonly string[]).includes(word)) return { ...current, when: word as VoiceWhen };
+  if ((VOICE_FORM as readonly string[]).includes(word)) {
+    return { when: current.when === 'off' ? 'spoken' : current.when, form: word as VoiceForm };
+  }
+  if (word === 'text') return { ...current, when: 'off' };
+  return undefined;
 }
 
 /** Will this turn's answer be spoken? When the owner spoke (unless off), or always. */
-export function answerSpoken(setting: VoiceSetting, ownerSpoke: boolean): boolean {
-  return setting === 'always' || (setting === 'spoken' && ownerSpoke);
+export function answerSpoken(when: VoiceWhen, ownerSpoke: boolean): boolean {
+  return when === 'always' || (when === 'spoken' && ownerSpoke);
 }
 
 /* ------------------------------------------------------------------ *
- * The chat's setting (core.surface_chat_voice, migration 048)
+ * The chat's setting (core.surface_chat_voice, migrations 048 and 049)
  * ------------------------------------------------------------------ */
 
-export async function getChatVoice(pool: Queryable, surface: string, chatId: string): Promise<VoiceSetting> {
+export async function getChatVoice(pool: Queryable, surface: string, chatId: string): Promise<ChatVoice> {
   const { rows } = await pool.query(
-    `select voice from core.surface_chat_voice where surface = $1 and external_chat_id = $2`,
+    `select voice_when, voice_form from core.surface_chat_voice where surface = $1 and external_chat_id = $2`,
     [surface, chatId],
   );
-  const value = rows[0]?.voice;
-  return (VOICE_SETTINGS as readonly string[]).includes(value) ? (value as VoiceSetting) : DEFAULT_VOICE;
+  const when = rows[0]?.voice_when;
+  const form = rows[0]?.voice_form;
+  return {
+    when: (VOICE_WHEN as readonly string[]).includes(when) ? (when as VoiceWhen) : DEFAULT_CHAT_VOICE.when,
+    form: (VOICE_FORM as readonly string[]).includes(form) ? (form as VoiceForm) : DEFAULT_CHAT_VOICE.form,
+  };
 }
 
-export async function setChatVoice(pool: Queryable, surface: string, chatId: string, voice: VoiceSetting): Promise<void> {
+export async function setChatVoice(pool: Queryable, surface: string, chatId: string, voice: ChatVoice): Promise<void> {
   await pool.query(
-    `insert into core.surface_chat_voice (surface, external_chat_id, voice, updated_at)
-     values ($1, $2, $3, now())
-     on conflict (surface, external_chat_id) do update set voice = excluded.voice, updated_at = now()`,
-    [surface, chatId, voice],
+    `insert into core.surface_chat_voice (surface, external_chat_id, voice_when, voice_form, updated_at)
+     values ($1, $2, $3, $4, now())
+     on conflict (surface, external_chat_id) do update
+       set voice_when = excluded.voice_when, voice_form = excluded.voice_form, updated_at = now()`,
+    [surface, chatId, voice.when, voice.form],
   );
 }
 

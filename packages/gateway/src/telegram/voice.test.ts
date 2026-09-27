@@ -1,7 +1,7 @@
 /** The speech plugin reached by name, as the owner, and the words of voice on Telegram. */
 import { describe, expect, it, vi } from 'vitest';
 import type { CoreToolContext } from '@buddi/core';
-import { answerSpoken, classifySpeechRefusal, createSpeechHooks, languageName, parseVoiceArg, textInsteadText } from './voice.js';
+import { answerSpoken, applyVoiceArg, classifySpeechRefusal, createSpeechHooks, languageName, textInsteadText, voiceStatusText } from './voice.js';
 
 const ctx = { ownerId: 'owner', timezone: 'UTC', conversationId: 'c-1', agentId: 'buddy' } as unknown as CoreToolContext;
 
@@ -24,6 +24,27 @@ describe('the speech hooks', () => {
     expect(caller.agentId).toBe('owner');
     expect(caller.conversationId).toBeUndefined();
     expect(reg.invoke.mock.calls.map((c) => [c[0], c[1]])).toEqual([['speech.transcribe', { artifactId: 'art-1' }], ['speech.say', { text: 'Hi.' }]]);
+    await hooks.say('Ask @ledger.', { ledger: 'Ledger' });
+    expect(reg.invoke.mock.calls.at(-1)!.slice(0, 2)).toEqual(['speech.say', { text: 'Ask @ledger.', handles: { ledger: 'Ledger' } }]);
+  });
+
+  it("read and write the plugin's copy of the voice choices through its owner-only tool", async () => {
+    const reg = registry(['speech.say'], (name, args) => {
+      if (name !== 'speech.telegram_voice') throw new Error(name);
+      return Object.keys(args as object).length === 0
+        ? { ok: true, output: { when: 'always', form: null } }
+        : { ok: true, output: { ...(args as object), note: 'Saved.' } };
+    });
+    const hooks = createSpeechHooks({ registry: reg, ctx, now: () => new Date(0) });
+    expect(await hooks.voicePrefs!()).toEqual({ when: 'always' });
+    expect(await hooks.saveVoicePrefs!({ when: 'off', form: 'both' })).toBe(true);
+    expect(reg.invoke.mock.calls.at(-1)![1]).toEqual({ when: 'off', form: 'both' });
+    expect(reg.invoke.mock.calls.at(-1)![2].agentId).toBe('owner');
+
+    const none = registry([], () => ({ ok: false, reason: 'unknown-tool', message: 'no such tool' }));
+    const bare = createSpeechHooks({ registry: none, ctx, now: () => new Date(0) });
+    expect(await bare.voicePrefs!()).toEqual({});
+    expect(await bare.saveVoicePrefs!({ when: 'spoken', form: 'voice' })).toBe(false);
   });
 
   it('say the plugin is missing without calling anything, and sort refusals', async () => {
@@ -54,8 +75,16 @@ describe('the words', () => {
   });
 
   it('reads /voice, decides when an answer is spoken, and says why it was not', () => {
-    expect(parseVoiceArg(' Always ')).toBe('always');
-    expect(parseVoiceArg('loud')).toBeUndefined();
+    const base = { when: 'spoken', form: 'voice' } as const;
+    expect(applyVoiceArg(base, ' Always ')).toEqual({ when: 'always', form: 'voice' });
+    expect(applyVoiceArg(base, 'both')).toEqual({ when: 'spoken', form: 'both' });
+    expect(applyVoiceArg(base, 'text')).toEqual({ when: 'off', form: 'voice' });
+    expect(applyVoiceArg({ when: 'off', form: 'both' }, 'voice')).toEqual({ when: 'spoken', form: 'voice' });
+    expect(applyVoiceArg(base, 'loud')).toBeUndefined();
+    expect(voiceStatusText(base)).toBe(
+      'Voice replies: when you send a voice note, as the voice note alone. Send /voice spoken, always or off for when, and /voice voice, both or text for what.',
+    );
+    expect(voiceStatusText({ when: 'off', form: 'both' })).toMatch(/^Voice replies: off: answers are text only\. /);
     expect(answerSpoken('spoken', true)).toBe(true);
     expect(answerSpoken('spoken', false)).toBe(false);
     expect(answerSpoken('always', false)).toBe(true);

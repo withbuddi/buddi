@@ -1,7 +1,7 @@
 ---
 title: "Telegram: the phone in your pocket"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # Telegram: the phone in your pocket
@@ -79,7 +79,7 @@ gives you. Then pair your phone in any of three places:
 | `/files` | The last files you sent. |
 | `/where` | The dashboard address when your phone can reach it; otherwise says it is on this computer only. |
 | `/browser` | Where the screen stands; `stop`, `resume` or `release` it. |
-| `/voice [spoken\|always\|off]` | Voice replies: a voice note back when you send one (spoken, the default), every answer, or never. `/voice` alone says which. |
+| `/voice [spoken\|always\|off\|voice\|both\|text]` | Voice replies. When: a voice note back when you send one (spoken, the default), every answer (always), or never (off). What: the voice note alone (voice, the default), or with the text (both); text is off. `/voice` alone says which. |
 | `/host`, `/hoststop`, `/hostrevoke` | Host execution permissions and running commands. |
 | `/devices` | The devices paired to this installation. |
 | `/reset` | Starts a fresh conversation with the active agent. |
@@ -174,27 +174,38 @@ ledger: ledger proposes a skill: monthly-close
 ## Voice
 
 With the [speech plugin](speech.md) installed and listening set up on
-Settings → Speech, a voice note is transcribed and shown back as a quote, so
-you see what was heard:
+Settings → Speech, a voice note is transcribed and the agent answers as if
+you had typed it:
 
 ```
 you:    (voice note, 0:04)
-buddi:  🎤 How much did I spend on groceries this month?
-buddi:  (voice note, 0:05) You spent 212 dollars on groceries this month, 30 less than in August.
+buddi:  (voice note, 0:05)
 ```
 
-Then the agent answers as if you had typed it; a caption under your voice
-note is added after the transcript. Only the transcript reaches the model,
-with the language it was heard in ("The owner spoke in French."), so the
-agent answers in that language; the recording stays in your Files.
+Nothing is echoed back to the chat: the transcript is your message in the
+conversation, where the dashboard shows what was heard. A caption under your
+voice note is added after the transcript. Only the transcript reaches the
+model, with the language it was heard in ("The owner spoke in French."), so
+the agent answers in that language; the recording stays in your Files. When
+the note cannot be transcribed, one line says so.
 
-When you spoke, the answer comes back as a voice note with its text as the
-caption, or right under it when the text is longer than 1,024 characters.
+Two choices decide the answer, per chat with `/voice` or on **Settings →
+Speech → On Telegram** (the two are the same setting):
+
+- **When.** `/voice spoken` (the default) answers a voice note with one;
+  `/voice always` speaks every answer, typed questions included; `/voice off`
+  keeps every answer text.
+- **What.** `/voice voice` (the default) sends the voice note alone, with no
+  caption and no text; `/voice both` puts the text in its caption, or right
+  under it when the text is longer than 1,024 characters. `/voice text` is
+  the same as `/voice off`.
+
 The agent knows it will be read aloud and keeps to two or three short
-sentences. `/voice always` speaks every answer, typed questions included;
-`/voice off` keeps every answer text. Cards, questions, proposals and answers
-with buttons stay text, and an answer over 4,000 characters is sent as text
-only.
+sentences, and what is spoken is rewritten for the ear first: handles read
+as names, dates and amounts as words, links as their site, no markdown or
+emoji ([Speech](speech.md#text-for-the-ear)). Cards, questions, proposals
+and answers with buttons stay text, and an answer over 4,000 characters is
+sent as text only.
 
 When the voice cannot be made (speaking is not set up, or Kokoro on this
 computer is asked for a language other than English), the answer comes as

@@ -104,7 +104,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'missions', description: 'The next five scheduled missions' },
   { command: 'goals', description: 'Your goals and where they stand' },
   { command: 'where', description: 'The dashboard address' },
-  { command: 'voice', description: 'Voice replies: spoken, always or off' },
+  { command: 'voice', description: 'Voice replies: spoken, always, off; voice, both, text' },
   { command: 'browser', description: 'Where the screen stands; stop, resume or release it' },
   { command: 'host', description: 'Host execution permissions and running commands' },
   { command: 'hoststop', description: 'Interrupt all host commands' },

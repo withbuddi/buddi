@@ -95,6 +95,35 @@ Two daily limits bound it: 200 transcriptions and 200 spoken replies a day by
 default, counted from your midnight, yours and every agent's together. Change
 them under **Daily limits**. Past a limit the tool says so and does nothing.
 
+## On Telegram
+
+The **On Telegram** block chooses how your chat answers with a voice: when
+(when you send a voice note, always, or never) and what (the voice note
+alone, or with the text). `/voice` in the chat changes the same two choices
+([Voice on Telegram](telegram.md#voice)).
+
+## Text for the ear
+
+Before any service speaks it, `speech.say` rewrites the text for the ear,
+whichever service speaks:
+
+- Markdown goes: emphasis, inline code, headings and quotes lose their
+  marks, each bullet and each table row becomes its own sentence (a row's
+  cells separated by commas), and a code block is said as "a code block".
+- A link is read as its label, a bare address as its site ("buddi.com").
+- `@buddi` is read as "buddi", an agent's handle as its name on Telegram
+  (an agent calling `speech.say` can pass `handles` too), else as the bare
+  word.
+- `2026-09-27` is "September 27" this year and "September 27, 2026"
+  otherwise; `10:53` stays. An amount with a currency is said in words:
+  `$40`, `40 USD` and `USD 40` are "40 dollars", `-6626.35 USD` is "minus
+  6,626 dollars and 35 cents" (euros and pounds alike). Another decimal is
+  "6626 point 35", `72%` is "72 percent", `1,024` stays.
+- Emoji go; → is "to", & "and", ≤ "at most", ≥ "at least", ° "degrees".
+
+What was written is kept as the file's caption in Files; only what is said
+changes.
+
 ## What it asks
 
 The first transcription in a conversation is an approval card, and so is the

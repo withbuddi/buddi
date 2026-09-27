@@ -88,16 +88,15 @@ import {
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
 import {
   answerSpoken,
+  applyVoiceArg,
   claimTextInsteadNote,
   getChatVoice,
-  heardText,
   languageName,
   INSTALL_SPEECH_TEXT,
   MAX_SPOKEN_CHARS,
   MAX_VOICE_CAPTION_CHARS,
   NO_WORDS_TEXT,
   notHeardText,
-  parseVoiceArg,
   SET_UP_LISTENING_TEXT,
   setChatVoice,
   textInsteadText,
@@ -105,6 +104,7 @@ import {
   voiceSetText,
   voiceStatusText,
   voiceTurnText,
+  type ChatVoice,
   type SpeechFailure,
   type SpeechHooks,
 } from './voice.js';
@@ -235,7 +235,8 @@ export const HELP = [
   '/missions — the next five scheduled missions',
   '/goals — each goal with its number and where it stands',
   '/where — the dashboard address, when your phone can reach it',
-  '/voice [spoken|always|off] — answer a voice note with one (spoken), every answer (always), or never (off)',
+  '/voice [spoken|always|off] — answer with a voice when you send one (spoken), every time (always), or never (off)',
+  '/voice [voice|both|text] — send the voice note alone, with the text, or text only',
   '/browser — where the screen stands; /browser stop, /browser resume, /browser release',
   '/host — host execution permissions and running commands',
   '/hoststop — interrupt all host commands',
@@ -2227,8 +2228,8 @@ export class TelegramSurface {
       sizeBytes: row.sizeBytes,
     });
 
-    // A voice note is heard by the speech plugin, shown back as a quote, and
-    // run as the owner's words. Without the plugin, or with listening not set
+    // A voice note is heard by the speech plugin and run as the owner's
+    // words. Without the plugin, or with listening not set
     // up, it is kept and the reply says where to fix that.
     if (row.kind === 'audio') {
       await this.#heard(chatId, row, filename, incoming.caption);
@@ -2799,20 +2800,33 @@ export class TelegramSurface {
    * Voice
    * ---------------------------------------------------------------- */
 
-  /** `/voice` alone shows the chat's setting; `/voice spoken|always|off` sets it. */
+  /**
+   * `/voice` alone shows the chat's choice; `/voice spoken|always|off` sets
+   * when, `/voice voice|both|text` what. Written to the chat's row and to the
+   * speech plugin's copy, so Settings → Speech shows the same.
+   */
   async handleVoice(chatId: string, arg: string): Promise<void> {
     const api = this.#opts.api;
+    const current = await this.#chatVoice(chatId);
     if (arg.trim() === '') {
-      await api.sendMessage(chatId, voiceStatusText(await getChatVoice(this.#opts.pool, SURFACE, chatId)));
+      await api.sendMessage(chatId, voiceStatusText(current));
       return;
     }
-    const setting = parseVoiceArg(arg);
-    if (!setting) {
+    const next = applyVoiceArg(current, arg);
+    if (!next) {
       await api.sendMessage(chatId, VOICE_USAGE_TEXT);
       return;
     }
-    await setChatVoice(this.#opts.pool, SURFACE, chatId, setting);
-    await api.sendMessage(chatId, voiceSetText(setting));
+    await setChatVoice(this.#opts.pool, SURFACE, chatId, next);
+    await this.#opts.speech?.saveVoicePrefs?.(next).catch(() => false);
+    await api.sendMessage(chatId, voiceSetText(next));
+  }
+
+  /** The chat's two choices: the speech plugin's copy where it has one, else the chat's row. */
+  async #chatVoice(chatId: string): Promise<ChatVoice> {
+    const row = await getChatVoice(this.#opts.pool, SURFACE, chatId);
+    const prefs: Partial<ChatVoice> = (await this.#opts.speech?.voicePrefs?.().catch(() => ({}))) ?? {};
+    return { when: prefs.when ?? row.when, form: prefs.form ?? row.form };
   }
 
   /** Will this chat's next answer be read aloud? */
@@ -2820,7 +2834,7 @@ export class TelegramSurface {
     const speech = this.#opts.speech;
     if (!speech || !this.#opts.artifacts || !speech.canSpeak()) return false;
     try {
-      return answerSpoken(await getChatVoice(this.#opts.pool, SURFACE, chatId), this.#ownerSpoke.has(chatId));
+      return answerSpoken((await this.#chatVoice(chatId)).when, this.#ownerSpoke.has(chatId));
     } catch (err) {
       this.#log(`telegram: chat ${chatId} — the voice setting could not be read: ${message(err)}`);
       return false;
@@ -2828,9 +2842,10 @@ export class TelegramSurface {
   }
 
   /**
-   * A voice note, saved: transcribe it, show what was heard, and run it as the
-   * owner's words (a caption follows the transcript). Refused or failed: one
-   * sentence, and the file stays saved.
+   * A voice note, saved: transcribe it and run it as the owner's words (a
+   * caption follows the transcript). Nothing is echoed back: the transcript is
+   * the owner's message in the conversation, where the dashboard shows it.
+   * Refused or failed: one sentence, and the file stays saved.
    */
   async #heard(chatId: string, row: ArtifactRow, filename: string, caption: string | undefined): Promise<void> {
     const api = this.#opts.api;
@@ -2862,7 +2877,6 @@ export class TelegramSurface {
       await api.sendMessage(chatId, NO_WORDS_TEXT);
       return;
     }
-    await api.sendMessage(chatId, heardText(heard.text));
     this.#ownerSpoke.add(chatId);
     const language = languageName(heard.language);
     if (language) this.#ownerLanguage.set(chatId, language);
@@ -2875,8 +2889,9 @@ export class TelegramSurface {
   }
 
   /**
-   * The answer as a voice note, with its text as the caption (or right after
-   * it, past Telegram's 1,024 characters), in place of the placeholder. Not
+   * The answer as a voice note, in place of the placeholder: alone (`/voice
+   * voice`), or with its text as the caption, or right after it past
+   * Telegram's 1,024 characters (`/voice both`). Not
    * sent: the caller lands the text as usual, and `note` is the once-a-day
    * line saying why, when there is one to say.
    */
@@ -2892,29 +2907,42 @@ export class TelegramSurface {
       return note ? { sent: false, note } : { sent: false };
     };
     api.sendChatAction(chatId, 'record_voice').catch(() => {});
+    const form = (await this.#chatVoice(chatId).catch(() => undefined))?.form ?? 'voice';
     let said: Awaited<ReturnType<SpeechHooks['say']>>;
     try {
-      said = await speech.say(reply);
+      said = await speech.say(reply, this.#handleNames());
     } catch (err) {
       said = { ok: false, reason: 'failed', message: message(err) };
     }
     if (!said.ok) return fallback(said.reason, said.message);
     const loaded = await store.load(said.artifactId).catch(() => null);
     if (!loaded) return fallback('failed', `the voice ${said.artifactId} could not be read back`);
+    const withText = form === 'both';
     const long = reply.length > MAX_VOICE_CAPTION_CHARS;
     progress.silence();
     try {
       await api.sendVoice(chatId, Buffer.from(loaded.data, 'base64'), {
         contentType: loaded.mime,
         filename: loaded.mime === 'audio/mpeg' ? 'voice.mp3' : 'voice.ogg',
-        ...(long ? {} : { caption: reply }),
+        ...(withText && !long ? { caption: reply } : {}),
       });
     } catch (err) {
       return fallback('failed', message(err));
     }
-    if (long) await api.sendMessage(chatId, reply);
+    if (withText && long) await api.sendMessage(chatId, reply);
     if (placeholderId !== undefined) await api.deleteMessage(chatId, placeholderId).catch(() => {});
     return { sent: true };
+  }
+
+  /** Every agent's handle and name, so a spoken `@ledger` is read as its name. */
+  #handleNames(): Record<string, string> {
+    const names: Record<string, string> = {};
+    try {
+      for (const agent of this.#opts.catalog.list()) if (agent.handle && agent.name) names[agent.handle] = agent.name;
+    } catch {
+      // No names: handles are read as bare words.
+    }
+    return names;
   }
 
   /** Today's "why this came as text" line for this chat, or nothing when it was said today. */
