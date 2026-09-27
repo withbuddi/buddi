@@ -135,10 +135,14 @@ describe('the groups section', () => {
     expect(groupableAgents([agent({ id: 'ada', name: 'Ada' }), maker]).map((a) => a.id)).toEqual(['ada']);
   });
 
-  it('is absent, + button and all, with one assistant and the maker', () => {
+  it('keeps the heading, without its + button, and says what it needs with one assistant and the maker', () => {
     railWith([agent({ id: 'ada', name: 'Ada' }), maker]);
     expect(screen.queryByTestId('group-rail')).toBeNull();
     expect(screen.queryByRole('button', { name: 'New group' })).toBeNull();
+    const hint = screen.getByTestId('group-rail-hint');
+    expect(hint.textContent).toContain('Groups');
+    expect(hint.textContent).toContain('A group needs two agents; add a teammate.');
+    expect(screen.getByRole('link', { name: 'add a teammate' }).getAttribute('href')).toBe('#/agents');
     expect(screen.getByTestId('agent-face-ada')).toBeDefined();
   });
 
@@ -146,6 +150,7 @@ describe('the groups section', () => {
     railWith([agent({ id: 'ada', name: 'Ada' }), agent({ id: 'ledger', name: 'Ledger' }), maker]);
     expect(screen.getByTestId('group-rail')).toBeDefined();
     expect(screen.getByRole('button', { name: 'New group' })).toBeDefined();
+    expect(screen.queryByTestId('group-rail-hint')).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 ---
 title: "Groups: a team of agents in one conversation"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-27
 ---
 
 # Groups: a team of agents in one conversation
@@ -175,7 +175,10 @@ summarising.
 The existing chat and Canvas carry it:
 
 - Groups in the roster beside the agents, with a stacked-faces avatar. Creating
-  one is a sheet: name, members, coordinator, the memory sentence.
+  one is a sheet: name, members, coordinator, the memory sentence. The Groups
+  heading and its + appear once two agents besides Agent Father can run; until
+  then the heading says "A group needs two agents; add a teammate." and links
+  to the Agents page.
 - The header shows the members; every turn carries its agent's face and name.
 - `@` completion in the composer.
 - A compact activity line for coordination: "Concierge asked Ledger to analyse

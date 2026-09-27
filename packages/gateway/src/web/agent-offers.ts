@@ -23,6 +23,7 @@ import {
 } from '@buddi/core';
 import { pluginAgentProposals } from '../agents/platform.js';
 import { runPageQuery, type PagesDeps } from './pages.js';
+import { PLUGIN_TEAMMATES, STARTER_PLUGIN, starterAgents, type TeammateFix } from '../agents/starter-team.js';
 
 /** The `core.web_settings` key the owner's dismissals are kept under. */
 export const AGENT_OFFERS_KEY = 'agent-offers';
@@ -103,6 +104,9 @@ export async function readAgentOffers(deps: AgentOffersDeps): Promise<{ offers: 
   const dismissed = await dismissedSet(deps.pool);
   const offers: AgentOfferView[] = [];
   for (const { plugin, agent } of pluginAgentProposals(deps.registry)) {
+    // The starter team is drawn as its own cards ("Add a teammate",
+    // `readTeammates`), not as something that needs the owner on Home.
+    if (plugin === STARTER_PLUGIN) continue;
     const offer = agent.offer;
     if (!offer || typeof offer.text !== 'string' || offer.text.trim() === '') continue;
     if (present.has(agent.id) || dismissed.has(keyOf(plugin, agent.id))) continue;
@@ -125,9 +129,13 @@ export async function dismissAgentOffer(
   plugin: string,
   agent: string,
 ): Promise<{ status: number; body: unknown }> {
-  const known = pluginAgentProposals(deps.registry).some(
-    (p) => p.plugin === plugin && p.agent.id === agent && p.agent.offer !== undefined,
-  );
+  const known =
+    pluginAgentProposals(deps.registry).some(
+      (p) => p.plugin === plugin && p.agent.id === agent && p.agent.offer !== undefined,
+    ) ||
+    // A plugin teammate the catalogue draws greyed can be dismissed too, even
+    // while its plugin is not there to propose it.
+    PLUGIN_TEAMMATES.some((t) => t.plugin === plugin && t.agent === agent);
   if (!known) return { status: 404, body: { error: `No plugin offers an agent "${agent}" under "${plugin}".` } };
   await remember(deps.pool, 'dismissed', keyOf(plugin, agent));
   return { status: 200, body: { dismissed: true } };
@@ -195,4 +203,70 @@ export async function raiseAgentOffers(deps: RaiseAgentOffersDeps, plugin: strin
     }
   }
   return raisedIds;
+}
+
+/** One card under "Add a teammate". */
+export interface TeammateView {
+  plugin: string;
+  agent: string;
+  handle: string;
+  name: string;
+  /** The card's one line. */
+  text: string;
+  /** What it needs, in the card's muted line. */
+  needs: string;
+  /**
+   * `available`: Add creates it through the plugin accept route.
+   * `added`: the roster holds it. `unavailable`: greyed, with `reason` and `fix`.
+   */
+  state: 'available' | 'added' | 'unavailable';
+  reason?: string;
+  fix?: TeammateFix;
+}
+
+/**
+ * The starter team, then the plugin teammates, as "Add a teammate" draws them.
+ *
+ * A dismissed card is left out. A card whose agent the roster holds says
+ * "added". A plugin teammate is addable exactly when its plugin proposes it
+ * and, when the plugin names an offer query, says it is wanted now — the same
+ * test `readAgentOffers` uses — and greyed with the reason otherwise.
+ */
+export async function readTeammates(deps: AgentOffersDeps): Promise<{ teammates: TeammateView[] }> {
+  const present = new Set(deps.agentIds().map((id) => id.toLowerCase()));
+  const dismissed = await dismissedSet(deps.pool);
+  const proposals = pluginAgentProposals(deps.registry);
+  const teammates: TeammateView[] = [];
+  for (const agent of starterAgents()) {
+    if (dismissed.has(keyOf(STARTER_PLUGIN, agent.id))) continue;
+    teammates.push({
+      plugin: STARTER_PLUGIN,
+      agent: agent.id,
+      handle: agent.handle,
+      name: agent.name,
+      text: agent.offer?.text ?? agent.description,
+      needs: 'Needs a brain',
+      state: present.has(agent.id) ? 'added' : 'available',
+    });
+  }
+  for (const entry of PLUGIN_TEAMMATES) {
+    if (dismissed.has(keyOf(entry.plugin, entry.agent))) continue;
+    const proposal = proposals.find((p) => p.plugin === entry.plugin && p.agent.id === entry.agent);
+    const card = {
+      plugin: entry.plugin,
+      agent: entry.agent,
+      handle: proposal?.agent.handle ?? entry.handle,
+      name: entry.name,
+      text: entry.text,
+      needs: entry.needs,
+    };
+    if (present.has(entry.agent)) {
+      teammates.push({ ...card, state: 'added' });
+    } else if (proposal && (await wanted(deps, entry.plugin, proposal.agent.offer?.query))) {
+      teammates.push({ ...card, state: 'available' });
+    } else {
+      teammates.push({ ...card, state: 'unavailable', reason: entry.reason, fix: entry.fix });
+    }
+  }
+  return { teammates };
 }

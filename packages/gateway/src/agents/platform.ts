@@ -77,6 +77,8 @@ import {
   type GroupCandidate,
   type GroupRow,
   type CatalogAgent,
+  setSchedule,
+  upsertMission,
 } from '@buddi/core';
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
@@ -85,6 +87,8 @@ import { DELEGATES_FILE, readDelegates } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
 import { storeBundledMascot } from './mascots.js';
+import { starterMission, starterProposals } from './starter-team.js';
+import { agentMissionId, describeCadence, slugify } from '../missions/reminders.js';
 import {
   composeAgentFile,
   composeSkillFile,
@@ -1306,9 +1310,14 @@ export interface PluginAgentProposal {
 }
 
 export function pluginAgentProposals(registry: ToolRegistry): PluginAgentProposal[] {
-  return registry.manifests().flatMap((m) =>
-    (m.agents ?? []).map((agent) => ({ plugin: m.name, pluginVersion: m.version, agent })),
-  );
+  return [
+    ...registry.manifests().flatMap((m) =>
+      (m.agents ?? []).map((agent) => ({ plugin: m.name, pluginVersion: m.version, agent })),
+    ),
+    // The starter team (starter-team.ts): buddi's own proposals, under the
+    // built-in source `buddi`, accepted through the very same gated tool.
+    ...starterProposals(),
+  ];
 }
 
 export function pluginSkillProposals(
@@ -1350,6 +1359,12 @@ export interface AcceptPluginAgentEnvelope extends Omit<CreateAgentEnvelope, 'to
    * Null when the account was named, or when this installation has none.
    */
   inheritedFrom: string | null;
+  /**
+   * The mission a starter agent arrives with (Planner's morning brief), run as
+   * the new agent in the owner's timezone. Created by the same approval, and
+   * named in its preview. Absent for every plugin proposal.
+   */
+  mission?: { id: string; name: string; cron: string; timezone: string; prompt: string };
 }
 
 const acceptAgentInput = z
@@ -1387,7 +1402,7 @@ type AcceptAgentInput = z.infer<typeof acceptAgentInput>;
  */
 function buildAcceptAgentEnvelope(
   input: AcceptAgentInput,
-  deps: { binding: ResolvedBinding; registry: ToolRegistry; proposedBy: string },
+  deps: { binding: ResolvedBinding; registry: ToolRegistry; proposedBy: string; timezone: string },
 ): AcceptPluginAgentEnvelope {
   const proposal = findProposal(deps.registry, input.plugin, input.agent);
   const suggestion = proposal.agent;
@@ -1461,6 +1476,7 @@ function buildAcceptAgentEnvelope(
       content,
     };
   });
+  const mission = starterMission(proposal.plugin, suggestion.id);
   return {
     ...base,
     tool: 'platform.accept_plugin_agent',
@@ -1468,6 +1484,17 @@ function buildAcceptAgentEnvelope(
     proposalChecksum: proposalChecksum(suggestion),
     skills,
     inheritedFrom: base.account === null ? null : (speaks?.from ?? null),
+    ...(mission === null
+      ? {}
+      : {
+          mission: {
+            id: agentMissionId(base.id, slugify(mission.name)),
+            name: mission.name,
+            cron: mission.cron,
+            timezone: deps.timezone,
+            prompt: mission.prompt,
+          },
+        }),
   };
 }
 
@@ -1536,6 +1563,14 @@ export function renderAcceptAgentPreview(
           `It also arrives with ${envelope.skills.length} skill${envelope.skills.length === 1 ? '' : 's'} of its own ` +
             '(a procedure in its prompt; it grants no tool and lowers no tier):',
           ...envelope.skills.map((s) => `  ${s.name} — ${s.description}`),
+          '',
+        ]),
+    ...(envelope.mission === undefined
+      ? []
+      : [
+          `It also starts one mission of its own: ${envelope.mission.name}, ` +
+            `${describeCadence(envelope.mission.cron, envelope.mission.timezone)}. It speaks only when it has ` +
+            'something to say, and you can pause it under Agents → Missions.',
           '',
         ]),
     `Once you approve, this file is YOURS: it is written into ${path.dirname(envelope.file)} and`,
@@ -2347,7 +2382,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const binding = resolved(registry);
       return describing(
         (i: AcceptAgentInput) =>
-          buildAcceptAgentEnvelope(i, { binding, registry, proposedBy: ctx.agentId ?? 'unknown' }),
+          buildAcceptAgentEnvelope(i, { binding, registry, proposedBy: ctx.agentId ?? 'unknown', timezone: ctx.timezone }),
         (envelope) => renderAcceptAgentPreview(envelope, specsFor(registry)),
       )(input);
     },
@@ -2357,6 +2392,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         binding,
         registry,
         proposedBy: ctx.agentId ?? 'unknown',
+        timezone: ctx.timezone,
       });
       const dir = path.dirname(envelope.file);
       assertApprovedEffect(ctx, envelope);
@@ -2386,6 +2422,20 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       // leaves the initials, never an unfinished approval.
       const suggestion = findProposal(registry, input.plugin, input.agent).agent;
       const pictured = ctx.db ? await storeBundledMascot(ctx.db, envelope.id, suggestion.avatar) : false;
+      // A starter agent's first mission, approved with it: run as the new
+      // agent, so it is its own (`schedule.list_mine`) and it can stop it.
+      const mission = envelope.mission;
+      if (mission && ctx.db) {
+        await upsertMission(ctx.db, {
+          id: mission.id,
+          name: mission.name,
+          agentId: envelope.id,
+          prompt: mission.prompt,
+          enabled: true,
+          alwaysDeliver: false,
+        });
+        await setSchedule(ctx.db, mission.id, { cron: mission.cron, timezone: mission.timezone, misfirePolicy: 'coalesce' });
+      }
       return {
         ok: true,
         id: envelope.id,
@@ -2393,6 +2443,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         file: envelope.file,
         tools: envelope.tools,
         ...(pictured ? { picture: suggestion.avatar } : {}),
+        ...(mission && ctx.db ? { mission: mission.id } : {}),
         fromPlugin: envelope.fromPlugin,
         skills: envelope.skills.map((s) => s.name),
         account: envelope.account,

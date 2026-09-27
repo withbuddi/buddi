@@ -45,6 +45,7 @@ import { agentSearchPath, builtInManifests } from '../agents/catalog.js';
 import { createMissionManifest } from '../missions/report.js';
 import { createAskManifest } from '../surfaces/pending-question.js';
 import { createOfferManifest } from '../surfaces/offered-actions.js';
+import { STARTER_PLUGIN } from '../agents/starter-team.js';
 
 /**
  * The families that are *not* in the base registry: they are registered onto a
@@ -85,6 +86,9 @@ export function builtInPluginNames(env: NodeJS.ProcessEnv = process.env): Readon
   const names = new Set<string>(
     [...builtInManifests(env), ...perRunManifests()].map((m) => m.name),
   );
+  // The source the starter team is proposed under: no manifest, but a plugin
+  // named `buddi` would put a second proposal behind the same accept.
+  names.add(STARTER_PLUGIN);
   builtInNames.set(env, names);
   return names;
 }

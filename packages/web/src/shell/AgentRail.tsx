@@ -38,6 +38,7 @@ import type { GroupView } from '../chat/types';
 import { FaceMark } from '../views/parts/Avatar';
 import { Icon } from '../ui/Icon';
 import { accentAttrs, accentOf } from './accent';
+import { AGENTS_ROUTE } from '../routes';
 
 export interface AgentRailProps {
   /** Already grouped and ordered — `groupAgents` decides, in one place. */
@@ -125,14 +126,14 @@ export function AgentRail({
       <div className="wb-agent-scroll">
         {agents.middle.map(face)}
         {/*
-          Groups appear when there is somebody to group.
+          Groups need somebody to group.
 
           On a fresh installation the rail holds one assistant and the agent
           that makes agents — and the second of those is a settings door, not a
-          colleague. A "Groups" heading with a + button there offers a room the
-          owner cannot fill, and the sheet behind it would refuse them. So the
-          whole section waits until two agents who could actually be in a room
-          together exist.
+          colleague. A + button there offers a room the owner cannot fill, and
+          the sheet behind it would refuse them. So until two agents who could
+          share a room exist, the heading stays without its + and says what it
+          needs, with the way to get there: a hidden section teaches nothing.
         */}
         {onSelectGroup && canGroup(everyone) ? (
           <div className="wb-groups" data-testid="group-rail">
@@ -168,6 +169,16 @@ export function AgentRail({
                 </span>
               </button>
             ))}
+          </div>
+        ) : onSelectGroup ? (
+          <div className="wb-groups" data-testid="group-rail-hint">
+            <span className="wb-agent-sep" aria-hidden="true" />
+            <div className="wb-groups-head">
+              <span className="wb-groups-label">Groups</span>
+            </div>
+            <p className="wb-groups-hint">
+              A group needs two agents; <a href={AGENTS_ROUTE}>add a teammate</a>.
+            </p>
           </div>
         ) : null}
       </div>

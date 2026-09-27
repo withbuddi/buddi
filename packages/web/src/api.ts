@@ -391,6 +391,23 @@ export interface AgentOfferRow {
   text: string;
 }
 
+/** One card under "Add a teammate" (`/api/teammates`). */
+export interface TeammateRow {
+  /** `buddi` for the starter team; the plugin's name for a plugin agent. */
+  plugin: string;
+  agent: string;
+  handle: string;
+  name: string;
+  text: string;
+  /** What it needs, in the card's muted line. */
+  needs: string;
+  state: 'available' | 'added' | 'unavailable';
+  /** Why it is greyed, when it is. */
+  reason?: string;
+  /** Where the owner lifts the greying. */
+  fix?: 'plugins' | 'mailbox' | 'accounts';
+}
+
 /**
  * One thing an agent learned and proposed, as the inbox draws it.
  *
@@ -1503,6 +1520,8 @@ export const api = {
     post<{ dismissed: number }>('/offers/dismiss-all', { ids }),
   /** Agents a plugin offers on Home while nobody has them (`SuggestedAgent.offer`). */
   agentOffers: () => get<{ offers: AgentOfferRow[] }>('/agent-offers'),
+  /** The starter team and the plugin agents, as "Add a teammate" draws them. */
+  teammates: () => get<{ teammates: TeammateRow[] }>('/teammates'),
   /** Home stops offering this one. It stays on the Plugins page. */
   dismissAgentOffer: (plugin: string, agent: string) =>
     post<{ dismissed: boolean }>(`/agent-offers/${encodeURIComponent(plugin)}/${encodeURIComponent(agent)}/dismiss`, {}),

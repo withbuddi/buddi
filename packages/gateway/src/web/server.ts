@@ -212,7 +212,7 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
-import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
+import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
   upgradeJobRoute,
@@ -1210,6 +1210,10 @@ export function createWebApp(deps: WebServerDeps): Server {
           // Agents a plugin offers on Home while nobody has them. Accepting
           // is the Plugins page's own accept route, below.
           return sendJson(res, 200, await readAgentOffers(agentOffersDeps()));
+        case '/api/teammates':
+          // "Add a teammate": the starter team and the plugin teammates, each
+          // added, addable, or greyed with why. Adding is the accept route below.
+          return sendJson(res, 200, await readTeammates(agentOffersDeps()));
         case '/api/chat/views':
           // How the installed plugins want their tool output drawn. The page
           // owns the renderers and learns the domain mapping from here, so an

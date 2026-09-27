@@ -17,7 +17,8 @@
     "buddi-missions": "./dist/missions-cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "src/agents/starter"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

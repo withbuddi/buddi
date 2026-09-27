@@ -36,6 +36,7 @@ import {
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
+import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { HomeAsk } from './parts/HomeAsk';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
@@ -260,6 +261,9 @@ export function Home({
           </div>
         )}
       </Section>
+
+      {/* Day one: the front desk and the maker, and the teammates one tap away. */}
+      {onlyDeskAndMaker(agents, defaultAgentId) ? <AddTeammate navigate={navigate} /> : null}
 
       {onOffer.length > 0 ? (
         <Section

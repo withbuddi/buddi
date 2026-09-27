@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Add a teammate: the Agents page and Home offer a starter team, Scout for research, Planner for your day with a morning brief, Keeper for one domain's history, plus the plugin agents when their plugin is there, each added in one tap through Agent Father. The Groups heading now says what it needs instead of hiding.
 - Settings → Speech: with no language listed, listening and speaking take the one your profile answers in, and the page says "From your profile: French." Plugins read it with `ctx.buddi.owner.language()` (host API 1.5).
 - Settings → Speech: Off as the service for listening or speaking, which keeps that side off even with Whisper or Kokoro installed on this computer.
 - A buddi button in the corner of every page opens a small chat with your front desk over what you are doing, so a quick question needs no page change; `/` opens it too.

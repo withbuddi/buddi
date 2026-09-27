@@ -21,6 +21,7 @@ unbuilt specs are kept outside this repository.
 
 ## What agents do
 
+- [Agents](agents.md): what an agent is, and the starter team you add in one tap.
 - [Conversations](conversations.md): what the model sees, and what you can say
   while it works.
 - [Groups](groups.md), [Files](files.md), [Host execution](host-execution.md).

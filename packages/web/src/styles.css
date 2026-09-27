@@ -739,6 +739,10 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-groups-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 2px 12px; }
 .wb-groups-label { font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
 .wb-agent-rail[data-collapsed='true'] .wb-groups-label { display: none; }
+/* With nobody to group yet, the heading stays and says what it needs. */
+.wb-groups-hint { margin: 0; padding: 0 10px 6px 12px; font-size: var(--text-xs); line-height: var(--leading); color: var(--text-faint); }
+.wb-groups-hint a { color: inherit; text-decoration: underline; }
+.wb-agent-rail[data-collapsed='true'] .wb-groups-hint { display: none; }
 /* Lain down, the groups block is a column of faces like the agents above it:
    the separator and the + sit on the rail's centre line, and a group's stacked
    faces are centred as one mark. */
@@ -2670,6 +2674,15 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 /* The kit's agent cards: four across on a wide page, a soft wash of the
    agent's colour at the top and the face sitting half on it. */
 .agents-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-3); }
+/* "Add a teammate": the starter team and the plugin agents, one card each. */
+.teammates-lede { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--text-md); line-height: var(--leading); }
+.teammates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); }
+.teammate > .ui-card { height: 100%; }
+.teammate-needs { margin: 0; color: var(--text-faint); font-size: var(--text-sm); }
+.teammate-reason { color: var(--text-muted); font-size: var(--text-sm); }
+.teammate[data-state='unavailable'] > .ui-card { background: var(--surface-sunken); }
+.teammate[data-state='unavailable'] .ui-card-title,
+.teammate[data-state='unavailable'] .ui-card-meta { color: var(--text-muted); }
 .agent-card { position: relative; }
 .agent-card-top {
   height: 56px;

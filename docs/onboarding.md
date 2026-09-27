@@ -1,7 +1,7 @@
 ---
 title: "First run: you meet buddi"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # First run: you meet buddi
@@ -234,6 +234,10 @@ any other.
 - Mention the terminal. The one command that exists for later (`buddi`) is
   said once by the assistant if asked, never by the screen.
 - Ask twice. Name, clock, brain, assistant. Four questions, then it is theirs.
+
+After the first run, the Agents page and Home offer a starter team under
+"Add a teammate": Scout, Planner and Keeper, each added in one tap, and the
+plugin agents greyed with what they need ([agents](agents.md#starter-team)).
 
 ## 4. Resume and "change"
 
