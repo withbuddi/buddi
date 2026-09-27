@@ -31,6 +31,7 @@ import {
   Details,
   Empty,
   ErrorBanner,
+  ChipPicker,
   Field as FieldBox,
   FormGrid,
   KV,
@@ -681,21 +682,19 @@ function FieldControl({
   const hint = compact ? undefined : field.hint;
   if (field.type === 'select' && field.multiple) {
     const chosen = Array.isArray(value) ? value.map(String) : [];
+    const atCap = field.max !== undefined && chosen.length >= field.max;
+    const capNote = atCap ? `Up to ${field.max}; remove one to add another.` : undefined;
     return (
-      <FieldBox label={field.label} hint={hint}>
-        <select
-          {...shared}
-          multiple
-          size={Math.min(8, Math.max(3, choices.options.length))}
+      <FieldBox label={field.label} hint={compact ? undefined : [hint, capNote].filter(Boolean).join(' ') || undefined} group>
+        <ChipPicker
+          id={shared.id}
+          label={field.label}
+          options={choices.options}
           value={chosen}
-          onChange={(e) => onChange(Array.from(e.target.selectedOptions, (option) => option.value))}
-        >
-          {choices.options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          max={field.max}
+          disabled={disabled}
+          onChange={onChange}
+        />
       </FieldBox>
     );
   }

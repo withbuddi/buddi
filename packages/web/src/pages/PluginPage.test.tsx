@@ -1393,17 +1393,60 @@ describe('a select with several choices', () => {
       ],
     };
     render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
-    await waitFor(() => {
-      const drawn = screen.getByLabelText('Languages you speak') as HTMLSelectElement;
-      expect(Array.from(drawn.selectedOptions, (o) => o.value)).toEqual(['fr']);
-    });
-    const box = screen.getByLabelText('Languages you speak') as HTMLSelectElement;
-    expect(box.multiple).toBe(true);
-    for (const option of Array.from(box.options)) option.selected = option.value !== 'es';
-    fireEvent.change(box);
+    // Drawn as chips, not a scrolling box.
+    expect(await screen.findByRole('button', { name: 'Remove French' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Languages you speak' })).toBeInTheDocument();
+    expect(document.querySelector('select[multiple]')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add…' }));
+    const list = screen.getByRole('listbox', { name: 'Languages you speak' });
+    expect(list).toHaveAttribute('aria-multiselectable', 'true');
+    fireEvent.click(within(list).getByRole('option', { name: 'English' }));
+    // The order it was picked in.
+    expect(screen.getByRole('button', { name: 'Remove English' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.save', args: { languages: ['en', 'fr'] } }),
+      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.save', args: { languages: ['fr', 'en'] } }),
     );
+  });
+
+  it('greys Add at `max` and says why in the hint', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({ data: query === 'prefs' ? { languages: ['fr', 'en'] } : DATA[query] })) as typeof api.pageQuery);
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [
+        {
+          kind: 'form',
+          initial: { query: 'prefs' },
+          fields: [
+            {
+              name: 'languages',
+              label: 'Languages you speak',
+              type: 'select',
+              multiple: true,
+              max: 2,
+              hint: 'None lets the service detect.',
+              from: 'languages',
+              options: [
+                { value: 'en', label: 'English' },
+                { value: 'fr', label: 'French' },
+                { value: 'es', label: 'Spanish' },
+              ],
+            },
+          ],
+          submit: { tool: 'demo.save', label: 'Save', args: { languages: { field: 'languages' } } },
+        },
+      ],
+    };
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    expect(await screen.findByRole('button', { name: 'Remove English' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add…' })).toBeDisabled();
+    expect(screen.getByText('None lets the service detect. Up to 2; remove one to add another.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove English' }));
+    expect(screen.getByRole('button', { name: 'Add…' })).toBeEnabled();
+    expect(screen.getByText('None lets the service detect.')).toBeInTheDocument();
   });
 });

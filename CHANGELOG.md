@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 - Plugin pages can show a progress bar; the Speech page uses it for the model downloads.
 - Settings → Speech asks which languages you speak instead of one language hint, so a French note and an English one are both heard right on this computer, and it lists the models your account offers instead of asking you to type one.
 - Plugin pages can offer a select that takes several choices (`multiple: true`).
+- Choosing several things on a plugin page, the languages you speak for example, is done with chips and an Add list instead of a scrolling box.
 - A voice note on Telegram tells the agent which language you spoke in, so it answers in it.
 
 ### Added

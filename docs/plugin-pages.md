@@ -167,7 +167,8 @@ interface Field { name: string; label: string; type: 'text' | 'number' | 'select
 // the loaded data otherwise. A field they hide or grey is neither required
 // nor submitted: the owner said nothing about it.
 // A select with `multiple: true` holds an array of the chosen values (empty
-// for none) and submits it as one; `from` reads an array too.
+// for none) and submits it as one; `from` reads an array too. It is drawn as
+// chips with an Add list; `max` caps how many it takes.
 
 ```
 

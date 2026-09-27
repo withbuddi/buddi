@@ -6,7 +6,8 @@
  * attribute the rule already knows. There is no `style` prop on purpose.
  */
 import * as Dialog from '@radix-ui/react-dialog';
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes, ReactNode } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 
 export { useAsync } from './async';
 export { Icon, ICON_NAMES, type IconName } from './Icon';
@@ -92,6 +93,7 @@ export function Field({
   inline,
   grow,
   wide,
+  group,
   children,
 }: {
   label: ReactNode;
@@ -100,8 +102,14 @@ export function Field({
   grow?: boolean;
   /** In a FormGrid, take the whole row: a long input, a textarea, a checkbox. */
   wide?: boolean;
+  /**
+   * The control is several controls (a ChipPicker): the label names a group
+   * instead of wrapping it, so a click on the label presses nothing.
+   */
+  group?: boolean;
   children: ReactNode;
 }): JSX.Element {
+  const labelId = useId();
   return (
     <div
       className="ui-field"
@@ -109,10 +117,17 @@ export function Field({
       data-grow={grow ? 'true' : undefined}
       data-wide={wide ? 'true' : undefined}
     >
-      <label className="ui-field-control">
-        <span className="ui-field-label">{label}</span>
-        {children}
-      </label>
+      {group ? (
+        <div className="ui-field-control" role="group" aria-labelledby={labelId}>
+          <span className="ui-field-label" id={labelId}>{label}</span>
+          {children}
+        </div>
+      ) : (
+        <label className="ui-field-control">
+          <span className="ui-field-label">{label}</span>
+          {children}
+        </label>
+      )}
       {hint ? <span className="ui-field-hint">{hint}</span> : null}
     </div>
   );
@@ -827,14 +842,192 @@ export function Split({
 }
 
 /** A filter that is on, said as a word with a way to take it off. */
-export function Chip({ children, onRemove, label }: { children: ReactNode; onRemove: () => void; label: string }): JSX.Element {
+export function Chip({
+  children,
+  onRemove,
+  label,
+  disabled,
+}: {
+  children: ReactNode;
+  onRemove: () => void;
+  label: string;
+  disabled?: boolean;
+}): JSX.Element {
   return (
     <span className="ui-chip">
       {children}
-      <button type="button" className="ui-chip-x" aria-label={`Remove ${label}`} onClick={onRemove}>
+      <button type="button" className="ui-chip-x" aria-label={`Remove ${label}`} onClick={onRemove} disabled={disabled}>
         ×
       </button>
     </span>
+  );
+}
+
+/** Past this many options the Add list gets a filter field. */
+const CHIP_PICKER_FILTER_AFTER = 8;
+
+/**
+ * Several choices from a list, said as chips: each chosen value with its ×,
+ * then Add…, which opens the rest as a compact list (with a filter field when
+ * there are more than eight). Backspace on an empty filter takes the last
+ * chip off, Enter picks the highlighted option, Escape closes. At `max` the
+ * Add control is greyed; saying why is the field's hint.
+ */
+export function ChipPicker({
+  label,
+  options,
+  value,
+  onChange,
+  max,
+  disabled,
+  id,
+}: {
+  /** Names the list of options for a screen reader. */
+  label: string;
+  options: Array<{ value: string; label: string }>;
+  value: string[];
+  onChange: (value: string[]) => void;
+  max?: number;
+  disabled?: boolean;
+  id?: string;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const filterInput = useRef<HTMLInputElement>(null);
+  const listbox = useRef<HTMLDivElement>(null);
+  const listId = useId();
+
+  const labelOf = (v: string): string => options.find((o) => o.value === v)?.label ?? v;
+  const atCap = max !== undefined && value.length >= max;
+  const remaining = options.filter((o) => !value.includes(o.value));
+  const filterable = options.length > CHIP_PICKER_FILTER_AFTER;
+  const needle = filter.trim().toLowerCase();
+  const shown = needle === '' ? remaining : remaining.filter((o) => o.label.toLowerCase().includes(needle));
+  const highlighted = Math.min(active, Math.max(0, shown.length - 1));
+
+  const close = (refocus: boolean): void => {
+    setOpen(false);
+    setFilter('');
+    setActive(0);
+    if (refocus) addButton.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    (filterable ? filterInput.current : listbox.current)?.focus();
+    const outside = (event: MouseEvent): void => {
+      if (root.current && !root.current.contains(event.target as Node)) close(false);
+    };
+    document.addEventListener('mousedown', outside);
+    return () => document.removeEventListener('mousedown', outside);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, filterable]);
+
+  const pick = (chosen: string): void => {
+    const next = [...value, chosen];
+    onChange(next);
+    setFilter('');
+    setActive(0);
+    const full = max !== undefined && next.length >= max;
+    if (full || next.length >= options.length) close(!full);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActive(shown.length === 0 ? 0 : (highlighted + 1) % shown.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive(shown.length === 0 ? 0 : (highlighted - 1 + shown.length) % shown.length);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const option = shown[highlighted];
+      if (option) pick(option.value);
+    } else if (event.key === 'Backspace' && filter === '' && value.length > 0) {
+      event.preventDefault();
+      onChange(value.slice(0, -1));
+    }
+  };
+
+  const optionId = (index: number): string => `${listId}-${index}`;
+  const activeDescendant = open && shown.length > 0 ? optionId(highlighted) : undefined;
+
+  return (
+    <div className="ui-chippicker" ref={root} id={id}>
+      {value.map((v) => (
+        <Chip key={v} label={labelOf(v)} disabled={disabled} onRemove={() => onChange(value.filter((x) => x !== v))}>
+          {labelOf(v)}
+        </Chip>
+      ))}
+      <div className="ui-chippicker-add">
+        <button
+          ref={addButton}
+          type="button"
+          className="ui-btn"
+          data-size="sm"
+          data-variant="ghost"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          disabled={disabled || atCap || remaining.length === 0}
+          onClick={() => (open ? close(false) : setOpen(true))}
+        >
+          Add…
+        </button>
+        {open ? (
+          <div className="ui-menu ui-chippicker-menu" onKeyDown={onKeyDown}>
+            {filterable ? (
+              <input
+                ref={filterInput}
+                type="search"
+                className="ui-chippicker-filter"
+                aria-label={`Filter ${label}`}
+                aria-controls={listId}
+                aria-activedescendant={activeDescendant}
+                value={filter}
+                onChange={(e) => {
+                  setFilter(e.target.value);
+                  setActive(0);
+                }}
+              />
+            ) : null}
+            <div
+              ref={listbox}
+              id={listId}
+              role="listbox"
+              aria-multiselectable="true"
+              aria-label={label}
+              aria-activedescendant={filterable ? undefined : activeDescendant}
+              tabIndex={filterable ? -1 : 0}
+              className="ui-chippicker-list"
+            >
+              {shown.map((option, index) => (
+                <div
+                  key={option.value}
+                  id={optionId(index)}
+                  role="option"
+                  aria-selected="false"
+                  className="ui-menu-item"
+                  data-highlighted={index === highlighted ? '' : undefined}
+                  onMouseEnter={() => setActive(index)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(option.value)}
+                >
+                  {option.label}
+                </div>
+              ))}
+              {shown.length === 0 ? <p className="ui-menu-empty">Nothing matches</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

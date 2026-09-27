@@ -296,7 +296,8 @@ export interface Field {
   options?: Array<{ value: string; label: string }>;
   /**
    * A select that takes several choices: its value is an array of the
-   * chosen options' values, empty meaning none. On a `select` only.
+   * chosen options' values, empty meaning none. On a `select` only; `max`
+   * caps how many it takes.
    */
   multiple?: boolean;
   required?: boolean;
