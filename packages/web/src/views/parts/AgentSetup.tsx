@@ -19,7 +19,7 @@
  *  - the service reloads its catalog for new runs; existing runs keep their
  *    adapter.
  */
-import { THINKING_UP_TO_MODEL, thinkingIsHonoured } from '../../shell/thinking';
+import { THINKING_UP_TO_MODEL, effectiveProviderKind, thinkingIsHonoured } from '../../shell/thinking';
 import { useEffect, useRef, useState } from 'react';
 import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../../ui';
@@ -255,7 +255,7 @@ function Agent({
                       ))}
                     </select>
                   </Field>
-                  {thinkingIsHonoured(provider) ? (
+                  {thinkingIsHonoured(effectiveProviderKind(engine ?? { provider }, accounts?.accounts)) ? (
                     <Field label="Thinking" hint="Reasoning before the answer. Off is faster and cheaper.">
                       <select
                         aria-label="Thinking"

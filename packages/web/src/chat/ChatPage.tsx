@@ -14,7 +14,7 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
-import { thinkingIsHonoured } from '../shell/thinking';
+import { effectiveProviderKind, thinkingIsHonoured } from '../shell/thinking';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
@@ -202,6 +202,8 @@ export function ChatPage({
   const threadOwner = group ? `group:${group.id}` : (agentId ?? null);
   const everyone = [...agents.top, ...agents.middle, ...agents.bottom];
   const agent = everyone.find((c) => c.id === agentId) ?? null;
+  // Which kind of account the agent runs on decides whether the thinking switch is real.
+  const providerAccounts = useAsync(() => api.providerAccounts(), []);
   const members = group ? group.members.map((id) => everyone.find((a) => a.id === id)).filter((a): a is ChatAgent => Boolean(a)) : [];
   /** Who is speaking right now in a room, from the run's own event. */
   const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
@@ -1322,7 +1324,7 @@ export function ChatPage({
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
-            {...(!group && agent && thinkingIsHonoured(agent.provider) ? { onThinking: switchThinking } : {})}
+            {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data?.accounts)) ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />

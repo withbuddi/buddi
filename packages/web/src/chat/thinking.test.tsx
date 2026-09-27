@@ -16,8 +16,9 @@ import { chatRoute } from '../routes';
 vi.mock('./stream', () => ({ openChatStream: () => ({ close() {} }) }));
 
 const agents = [
-  { id: 'ada', handle: 'ada', name: 'Ada', description: 'The assistant', available: true, roles: [], provider: 'fixture', model: 'a-model', thinking: 'on' },
-  { id: 'local', handle: 'local', name: 'Local', description: 'On this machine', available: true, roles: [], provider: 'fixture', model: 'a-model', thinking: 'off' },
+  { id: 'ada', handle: 'ada', name: 'Ada', description: 'The assistant', available: true, roles: [], provider: 'anthropic', model: 'a-model', thinking: 'on' },
+  { id: 'local', handle: 'local', name: 'Local', description: 'On this machine', available: true, roles: [], provider: 'openai', model: 'a-model', thinking: 'off' },
+  { id: 'compat', handle: 'compat', name: 'Compat', description: 'On a compatible host', available: true, roles: [], provider: 'openai-compatible', model: 'gemma4:12b', thinking: 'on' },
 ];
 
 beforeEach(() => {
@@ -30,6 +31,7 @@ beforeEach(() => {
   vi.spyOn(api, 'browser').mockResolvedValue({ enabled: true, busy: false, state: 'idle', hasScreenshot: false });
   vi.spyOn(api, 'browserControl').mockResolvedValue({ enabled: true, busy: false, state: 'idle', hasScreenshot: false });
   vi.spyOn(api, 'setAgentEngine').mockResolvedValue({ agent: {}, changed: ['thinking'], note: '' } as never);
+  vi.spyOn(api, 'providerAccounts').mockResolvedValue({ accounts: [], bindings: [] } as never);
   vi.spyOn(chatApi, 'agents').mockResolvedValue({ agents, defaultAgentId: 'ada' } as never);
   vi.spyOn(chatApi, 'views').mockResolvedValue({ views: [] });
   vi.spyOn(chatApi, 'conversations').mockResolvedValue({ conversations: [] } as never);
@@ -64,4 +66,11 @@ describe('the thinking switch in the chat', () => {
       expect(screen.getByRole('button', { name: 'Thinking' })).toHaveAttribute('aria-pressed', 'false'),
     );
   });
+});
+
+it('shows no thinking switch for an agent on an OpenAI-compatible host', async () => {
+  render(<App />);
+  await screen.findByRole('button', { name: 'Thinking' });
+  fireEvent.click(screen.getByTestId('agent-face-compat'));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Thinking' })).not.toBeInTheDocument());
 });
