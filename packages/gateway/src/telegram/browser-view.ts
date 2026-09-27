@@ -103,7 +103,8 @@ export function actionWords(call: StepCall): string {
  * The same two lists the drivers enforce, read here from the status the
  * dashboard reads: the owner's allowed hosts, and — in computer mode, where a
  * screenshot is a picture of a whole application window — the owner's allowed
- * bundle IDs. Fails closed: an unparseable address, or a computer-mode
+ * bundle IDs, or an app the owner allowed Once for this session's
+ * conversation (`session.allowedOnce`). Fails closed: an unparseable address, or a computer-mode
  * observation whose settings did not arrive, is not sent.
  */
 export function screenshotAllowed(
@@ -113,7 +114,8 @@ export function screenshotAllowed(
   const page = status.page;
   if (!page || !status.hasScreenshot) return false;
   if (page.appId !== undefined) {
-    return status.settings?.allowedApps?.includes(page.appId) === true;
+    return status.settings?.allowedApps?.includes(page.appId) === true
+      || status.session?.allowedOnce?.includes(page.appId) === true;
   }
   if (allowedHosts.length === 0) return true;
   try {

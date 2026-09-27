@@ -14,7 +14,8 @@ const target = z.object({
 
 export const commandSchema = z.object({
   action: z.enum(['navigate', 'open', 'observe', 'click', 'fill', 'select', 'press', 'scroll', 'tab', 'close']),
-  appId: z.string().min(1).max(200).regex(/^[A-Za-z0-9.-]+$/).optional().describe('Computer mode: exact bundle ID from status.settings.allowedApps. open selects that application.'),
+  appId: z.string().min(1).max(200).regex(/^[A-Za-z0-9.-]+$/).optional().describe('Computer mode: exact bundle ID, e.g. from status.settings.allowedApps. open selects that application.'),
+  app: z.string().trim().min(1).max(100).optional().describe('Computer mode, open only: the app\'s name as the owner says it ("Voicito"), instead of appId. It must match one installed app exactly.'),
   url: z.string().max(2048).optional(),
   target: target.optional(),
   value: z.string().max(10_000).optional(),
@@ -27,7 +28,10 @@ export const commandSchema = z.object({
     if (input[key] === undefined) ctx.addIssue({ code: 'custom', path: [key], message: `Required for ${input.action}` });
   };
   if (input.action === 'navigate') require('url');
-  if (input.action === 'open') require('appId');
+  if (input.action === 'open') {
+    if (input.appId === undefined && input.app === undefined) ctx.addIssue({ code: 'custom', path: ['appId'], message: 'Required for open: appId, or app with the app\'s name' });
+    if (input.appId !== undefined && input.app !== undefined) ctx.addIssue({ code: 'custom', path: ['app'], message: 'Give appId or app, not both' });
+  } else if (input.app !== undefined) ctx.addIssue({ code: 'custom', path: ['app'], message: 'app is only for open' });
   if (['click', 'fill', 'select'].includes(input.action)) require('target');
   if (['fill', 'select'].includes(input.action)) require('value');
   if (input.action === 'press') { require('key'); require('target'); }

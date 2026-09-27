@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -21,6 +21,54 @@ export interface ComputerPermissions { supported: boolean; accessibility: boolea
 export interface ComputerBridge {
   run(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   cancel(): void;
+}
+
+/** One installed application, as Spotlight names it. */
+export interface InstalledApp { bundleId: string; name: string }
+/** Find installed applications by display name or by bundle id. Never launches anything. */
+export type AppResolver = (query: { name: string } | { bundleId: string }) => Promise<InstalledApp[]>;
+
+function execText(file: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: 5_000, maxBuffer: 1 << 20, env: computerEnvironment() }, (error, stdout) => error ? reject(error) : resolve(String(stdout)));
+  });
+}
+
+/**
+ * Installed applications through Spotlight: `mdfind` for the bundles, `mdls`
+ * for each one's bundle id and display name. Five seconds per call; nothing
+ * is opened. A name is matched exactly, ignoring case, with or without `.app`.
+ */
+export const spotlightApps: AppResolver = async (query) => {
+  if (process.platform !== 'darwin') return [];
+  const quoted = (text: string) => text.replace(/[\\'"*?]/g, (c) => `\\${c}`);
+  const filter = 'name' in query
+    ? `kMDItemContentType == 'com.apple.application-bundle' && (kMDItemDisplayName == '${quoted(query.name)}'c || kMDItemDisplayName == '${quoted(query.name)}.app'c)`
+    : `kMDItemContentType == 'com.apple.application-bundle' && kMDItemCFBundleIdentifier == '${quoted(query.bundleId)}'`;
+  const paths = (await execText('mdfind', [filter])).split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 20);
+  const found = await Promise.all(paths.map(async (appPath) => {
+    try {
+      const [id, name] = (await execText('mdls', ['-raw', '-nullMarker', '', '-name', 'kMDItemCFBundleIdentifier', '-name', 'kMDItemDisplayName', appPath])).split('\0');
+      return id?.trim() ? [{ bundleId: id.trim(), name: (name ?? '').trim().replace(/\.app$/i, '') || appPath.replace(/^.*\//, '').replace(/\.app$/i, '') }] : [];
+    } catch { return []; }
+  }));
+  return found.flat();
+};
+
+/**
+ * The one application a name or a bundle id stands for, or the refusal.
+ * Several copies of the same bundle id are one app.
+ */
+export async function resolveApp(query: { name: string } | { bundleId: string }, resolver: AppResolver = spotlightApps): Promise<InstalledApp> {
+  let found: InstalledApp[];
+  try { found = await resolver(query); } catch { found = []; }
+  if ('bundleId' in query) found = found.filter((app) => app.bundleId === query.bundleId);
+  else found = found.filter((app) => app.name.toLowerCase() === query.name.trim().toLowerCase());
+  const unique = [...new Map(found.map((app) => [app.bundleId, app])).values()];
+  const asked = 'name' in query ? query.name.trim() : query.bundleId;
+  if (unique.length === 0) throw new BrowserPreconditionError('name' in query ? `No installed app is called ${asked}.` : `No installed app has the bundle id ${asked}.`);
+  if (unique.length > 1) throw new BrowserPreconditionError(`Several apps are called ${asked}: ${unique.map((app) => `${app.name} (${app.bundleId})`).join(', ')}. Say which bundle id.`);
+  return unique[0]!;
 }
 
 /** Do not copy vault/provider/database secrets into the native UI helper. */
@@ -88,7 +136,13 @@ export class ComputerDriver implements BrowserDriver {
   #observation?: Observation;
   #picture?: Buffer;
   #generation = 0;
-  constructor(readonly settings: ControlSettings, readonly bridge: ComputerBridge = new NativeComputerBridge(), readonly allowedHosts?: readonly string[]) {}
+  /**
+   * `allows` is the controller's answer for an app: the owner's list, or an
+   * app the owner allowed once for the conversation acting now. Without it,
+   * the settings' list alone.
+   */
+  constructor(readonly settings: ControlSettings, readonly bridge: ComputerBridge = new NativeComputerBridge(), readonly allowedHosts?: readonly string[],
+    readonly allows: (appId: string) => boolean = (appId) => settings.allowedApps.includes(appId)) {}
   async start(): Promise<void> {
     const permissions = await this.bridge.run({ operation: 'permissions', prompt: false });
     if (!permissions.accessibility || !permissions.screenRecording) throw new BrowserPreconditionError('Computer control needs macOS Accessibility and Screen Recording permission. Use Check permissions on the Browser / Computer page. No browser debugging fallback was used.');
@@ -99,7 +153,7 @@ export class ComputerDriver implements BrowserDriver {
     if (command.action === 'close') { await this.close(); return; }
     if (command.action === 'open' || command.action === 'navigate') {
       const appId = command.action === 'navigate' ? this.settings.browserApp : command.appId!;
-      if (!this.settings.allowedApps.includes(appId)) throw new BrowserPreconditionError('This app is not owner-allowed. Ask the owner to add its bundle ID in Computer settings.');
+      if (!this.allows(appId)) throw new BrowserPreconditionError('This app is not owner-allowed. Ask the owner to add its bundle ID in Computer settings.');
       let url: string | undefined;
       if (command.action === 'navigate') {
         const checked = checkUrl(command.url!).url;

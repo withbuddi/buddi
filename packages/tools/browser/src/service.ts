@@ -2,7 +2,7 @@ import type { InstallProgress, LaunchCheck } from './availability.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import type { SurfaceProfile, ToolContext } from '@buddi/core/plugin';
+import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
 import { BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
@@ -62,7 +62,9 @@ export interface BrowserStatus {
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;
   busy: boolean;
-  session?: { id: string; agentId: string; conversationId: string; requestId: string; task: string; expiresAt: string; steps: number; maxSteps: number };
+  session?: { id: string; agentId: string; conversationId: string; requestId: string; task: string; expiresAt: string; steps: number; maxSteps: number;
+    /** Computer mode: apps the owner allowed once for this session's conversation, beside `settings.allowedApps`. */
+    allowedOnce?: string[] };
   page?: Omit<Observation, 'tree' | 'targets'>;
   lastAction?: string;
   message?: string;
@@ -128,6 +130,14 @@ export interface BrowserController {
   checkPermissions?(prompt?: boolean): Promise<BrowserStatus>;
   /** Start Playwright's Chromium install. Returns at once; the status carries its progress. */
   installBrowser?(): BrowserStatus;
+  /**
+   * `browser.act`'s tier for one call: `session`, or `gated` when it opens an
+   * app the owner has not allowed for computer control — the card asks them.
+   * Throws a `ToolRefusal` for an app that cannot be named or was refused.
+   */
+  tierFor?(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }>;
+  /** The card for a gated `open`: the app as resolved on this machine, Once or Always. */
+  describe?(command: BrowserCommand, ctx: ToolContext): Promise<EffectDescription>;
   /** Launch the agents' browser once and close it: does it start on this machine? Owner UI only. */
   checkLaunch?(): Promise<LaunchCheck>;
   rollover?(input: BrowserRollover): boolean;

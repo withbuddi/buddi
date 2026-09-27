@@ -160,6 +160,24 @@ export interface ApprovalsArea {
   standing(tool: string): Promise<ToolPermission | null>;
   /** Whether the owner approved this plugin's `tool` in a conversation or a delegation from it. */
   approvedInConversation(tool: string, conversationId: string): Promise<boolean>;
+  /**
+   * The owner's cards on this plugin's `tool` in a conversation or a delegation
+   * from it, oldest first: what each was about (its envelope), where its
+   * approval stands, and what the owner picked on it. For a tool that asks
+   * once per subject — "this app, in this conversation" — and must not ask
+   * again after a yes or a no. Since 1.4.
+   */
+  decisionsInConversation(tool: string, conversationId: string): Promise<ConversationDecision[]>;
+}
+
+/** One card, as `ApprovalsArea.decisionsInConversation` returns it. */
+export interface ConversationDecision {
+  /** The envelope the tool's `describe` recorded. */
+  envelope: unknown;
+  /** `pending`, `approved`, `rejected`, `expired`, `executing`, `succeeded`, `failed`, `refused` or `unknown`. */
+  state: string;
+  /** What the owner picked, by choice key, when the card declared choices and was decided. */
+  choices?: Record<string, string>;
 }
 
 /** What a query or a tool asks of the host about its pages and previews. */

@@ -17,6 +17,7 @@ import { createPool, migrateCore } from '../db.js';
 import { urlForDatabase } from '../backup/restore.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { ToolRegistry } from '../registry.js';
+import { createAction } from '../actions/store.js';
 import { runSources } from '../sources/run.js';
 import type { PluginManifest, CoreToolContext } from '../tools.js';
 import type { ProviderAccountsAccess } from '../provider-accounts.js';
@@ -96,7 +97,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.3');
+    expect(host.version).toBe('1.4');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -384,6 +385,23 @@ suite('ctx.buddi', () => {
     await expect(host.approvals.approvedInConversation('email.send', '00000000-0000-0000-0000-000000000000')).rejects.toThrow(
       /not one of its own tools/,
     );
+  });
+
+  it('lists its own cards in a conversation, with the state and what the owner picked', async () => {
+    const { rows } = await pool.query(`insert into core.conversations (agent_id) values ('assistant') returning id::text as id`);
+    const conversationId = rows[0].id as string;
+    const host = createPluginHost(hostBindingOf(plugin('weather')), ctx({ conversationId }));
+    expect(await host.approvals.decisionsInConversation('weather.host', conversationId)).toEqual([]);
+    const yes = await createAction(pool, { tool: 'weather.host', toolVersion: '1.0.0', agentId: 'assistant', conversationId, canonicalArgs: { a: 1 },
+      envelope: { app: 'one' }, preview: 'one', choices: [{ key: 'remember', label: 'Allow', options: ['Once', 'Always'], default: 'Once' }], tier: 'gated', now });
+    await createAction(pool, { tool: 'weather.host', toolVersion: '1.0.0', agentId: 'assistant', conversationId, canonicalArgs: { a: 2 },
+      envelope: { app: 'two' }, preview: 'two', tier: 'gated', now: new Date(now.getTime() + 1000) });
+    await pool.query(`update core.approvals set state = 'approved', owner_choices = '{"remember":"Always"}' where action_id = $1`, [yes.id]);
+    expect(await host.approvals.decisionsInConversation('weather.host', conversationId)).toEqual([
+      { envelope: { app: 'one' }, state: 'approved', choices: { remember: 'Always' } },
+      { envelope: { app: 'two' }, state: 'pending' },
+    ]);
+    await expect(host.approvals.decisionsInConversation('email.send', conversationId)).rejects.toThrow(/not one of its own tools/);
   });
 
   it('counts only its own open proposals, and reads reminders by one context key', async () => {

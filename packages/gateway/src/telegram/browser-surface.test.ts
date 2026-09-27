@@ -184,6 +184,15 @@ describe('a photo per browser step', () => {
     expect(third.sent).toHaveLength(1);
   });
 
+  it('sends an app the owner allowed Once for this conversation, and only that one', () => {
+    const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] };
+    const session = { id: 's', agentId: 'a', conversationId: 'c', requestId: 'r', task: 't', expiresAt: 'x', steps: 1, maxSteps: 10 };
+    const page = (appId: string) => ({ id: 'p', url: `app://${appId}`, title: '', appId, tabs: [], capturedAt: 'x' }) as any;
+    expect(screenshotAllowed(status({ mode: 'computer', settings, session: { ...session, allowedOnce: ['com.example.voicito'] }, page: page('com.example.voicito') }))).toBe(true);
+    expect(screenshotAllowed(status({ mode: 'computer', settings, session: { ...session, allowedOnce: ['com.example.voicito'] }, page: page('com.apple.Notes') }))).toBe(false);
+    expect(screenshotAllowed(status({ mode: 'computer', settings, session, page: page('com.example.voicito') }))).toBe(false);
+  });
+
   it('fails closed on an address it cannot read, and on computer settings it did not get', () => {
     expect(screenshotAllowed(status({ page: { id: 'p', url: 'not a url', title: '', tabs: [], capturedAt: 'x' } as any }), ['example.com'])).toBe(false);
     expect(screenshotAllowed(status({ page: { id: 'p', url: 'app://com.apple.Notes', title: '', appId: 'com.apple.Notes', tabs: [], capturedAt: 'x' } as any }))).toBe(false);

@@ -99,6 +99,7 @@ export type { MisfirePolicy } from '../scheduler/types.js';
 export type {
   AccountsArea,
   ApprovalsArea,
+  ConversationDecision,
   BuddiHost,
   ChannelsArea,
   ClockArea,

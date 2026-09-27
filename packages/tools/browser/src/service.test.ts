@@ -3,7 +3,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TELEGRAM_SURFACE, ToolRegistry, WEB_SURFACE, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core/testing';
-import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE } from './service.js';
+import { browserPausedMessage, browserStoppedMessage, BrowserService, OWNER_WATCHING_MESSAGE, type BrowserController } from './service.js';
 import { createBrowserManifest } from './index.js';
 import { BrowserPreconditionError, commandSchema, MAILED_CODE, OBSERVE_AGAIN, UNTRUSTED, type BrowserDriver, type Observation } from './types.js';
 
@@ -92,6 +92,21 @@ describe('host browser authority and lifecycle', () => {
     const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
     expect(act.description).toContain(OBSERVE_AGAIN);
     expect(act.description).toContain('Each result says when it was observed');
+  });
+  it('tells the model it may open an app by name, and that an app the owner has not allowed asks them', async () => {
+    const act = createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!;
+    expect(act.description).toContain('{action:"open",app:"Voicito"}');
+    expect(act.description).toContain('asks them with a decision card (Once or Always)');
+    expect(act.description).toContain('do not ask again in this conversation');
+    // Wired to the controller: a card for an unallowed app, the session grant otherwise.
+    const tierFor = vi.fn(async () => ({ tier: 'gated' as const }));
+    const describeCard = vi.fn(async () => ({ envelope: {}, preview: 'Use Voicito on your computer?' }));
+    const wired = createBrowserManifest({ tierFor, describe: describeCard } as unknown as BrowserController).tools.find((tool) => tool.name === 'browser.act')!;
+    const open = commandSchema.parse({ action: 'open', app: 'Voicito' });
+    await expect(wired.tierFor!(open, {} as never)).resolves.toEqual({ tier: 'gated' });
+    await expect(Promise.resolve(wired.describe!(open, {} as never))).resolves.toMatchObject({ preview: 'Use Voicito on your computer?' });
+    const plain = createBrowserManifest({} as BrowserController).tools.find((tool) => tool.name === 'browser.act')!;
+    await expect(plain.tierFor!(open, {} as never)).resolves.toEqual({ tier: 'session' });
   });
   it('tells the model to read a mailed one-time code from the inbox before asking the owner', () => {
     expect(MAILED_CODE).toBe("A one-time code a site just mailed is read from the owner's inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.");

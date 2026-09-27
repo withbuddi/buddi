@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ComputerDriver, computerEnvironment, settingsSchema, type ComputerBridge } from './computer.js';
+import { ComputerDriver, computerEnvironment, resolveApp, settingsSchema, type ComputerBridge } from './computer.js';
 import { BrowserPreconditionError, commandSchema } from './types.js';
 
 const node = { path: [0, 1], role: 'AXButton', name: 'Continue', value: '', secure: false, enabled: true, bounds: { x: 10, y: 20, width: 100, height: 30 } };
@@ -94,5 +94,34 @@ describe('native computer driver', () => {
     run.mockResolvedValue({ appId: '' });
     await expect(driver.focusedBundleId()).resolves.toBeUndefined();
     await expect(driver.nativeType('typed-value')).rejects.toThrow(/No focused application/);
+  });
+  it('opens an app the controller allows beyond the settings list, and nothing else', async () => {
+    const run = vi.fn(async (): Promise<Record<string, unknown>> => ({ completed: true }));
+    const driver = new ComputerDriver(settingsSchema.parse({}), { run, cancel: vi.fn() }, undefined, (appId) => appId === 'com.example.voicito');
+    await driver.perform(commandSchema.parse({ action: 'open', appId: 'com.example.voicito' }));
+    expect(run).toHaveBeenCalledWith({ operation: 'open', appId: 'com.example.voicito' });
+    await expect(driver.perform(open)).rejects.toThrow('not owner-allowed');
+  });
+});
+
+describe('finding an installed app', () => {
+  const apps = [{ bundleId: 'com.example.voicito', name: 'Voicito' }, { bundleId: 'com.example.voicito', name: 'Voicito' }, { bundleId: 'com.apple.Notes', name: 'Notes' }];
+  const resolver = vi.fn(async () => apps);
+  it('matches a name exactly, ignoring case, and one bundle id in two places is one app', async () => {
+    await expect(resolveApp({ name: 'VOICITO' }, resolver)).resolves.toEqual({ bundleId: 'com.example.voicito', name: 'Voicito' });
+    await expect(resolveApp({ name: 'Voic' }, resolver)).rejects.toThrow('No installed app is called Voic.');
+    await expect(resolveApp({ bundleId: 'com.apple.Notes' }, resolver)).resolves.toEqual({ bundleId: 'com.apple.Notes', name: 'Notes' });
+  });
+  it('names every candidate when several apps share the name, and a failed lookup finds nothing', async () => {
+    const twins = vi.fn(async () => [{ bundleId: 'a.one', name: 'Twin' }, { bundleId: 'b.two', name: 'twin' }]);
+    await expect(resolveApp({ name: 'Twin' }, twins)).rejects.toThrow('Several apps are called Twin: Twin (a.one), twin (b.two). Say which bundle id.');
+    await expect(resolveApp({ name: 'Twin' }, async () => { throw new Error('timed out'); })).rejects.toThrow('No installed app is called Twin.');
+  });
+  it('accepts app only for open, and not with appId', () => {
+    expect(commandSchema.safeParse({ action: 'open', app: 'Voicito' }).success).toBe(true);
+    expect(commandSchema.safeParse({ action: 'open' }).success).toBe(false);
+    expect(commandSchema.safeParse({ action: 'open', app: 'Voicito', appId: 'com.example.voicito' }).success).toBe(false);
+    expect(commandSchema.safeParse({ action: 'observe', app: 'Voicito' }).success).toBe(false);
+    expect(commandSchema.safeParse({ action: 'open', app: 'x'.repeat(101) }).success).toBe(false);
   });
 });

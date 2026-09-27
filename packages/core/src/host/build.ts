@@ -185,6 +185,26 @@ export type HostFacts = Pick<CoreToolContext, 'db' | 'now' | 'timezone'> &
     hasAgent?: (id: string) => boolean;
   };
 
+/**
+ * A conversation and every conversation delegated from it, as `family`.
+ *
+ * A delegate's run lives in its own conversation, opened from the owner's:
+ * the family is the root conversation and every conversation delegated from
+ * it. `$1` is the conversation id. Moved from the image plugin.
+ */
+const CONVERSATION_FAMILY = `with root as (
+             select coalesce(
+               (select e.conversation_id from core.events e
+                 where e.kind = 'delegation.started' and e.payload->>'conversationId' = $1::text
+                 order by e.created_at limit 1),
+               $1::uuid) as id
+           ), family as (
+             select id from root
+             union
+             select (e.payload->>'conversationId')::uuid from core.events e, root
+              where e.kind = 'delegation.started' and e.conversation_id = root.id
+           )`;
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -290,23 +310,8 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       },
       async approvedInConversation(tool, conversationId) {
         ownTool(tool);
-        // A delegate's run lives in its own conversation, opened from the
-        // owner's: the family is the root conversation and every conversation
-        // delegated from it. Moved from the image plugin, unchanged but for
-        // the tool, which was always its own.
         const { rows } = await pool().query(
-          `with root as (
-             select coalesce(
-               (select e.conversation_id from core.events e
-                 where e.kind = 'delegation.started' and e.payload->>'conversationId' = $1::text
-                 order by e.created_at limit 1),
-               $1::uuid) as id
-           ), family as (
-             select id from root
-             union
-             select (e.payload->>'conversationId')::uuid from core.events e, root
-              where e.kind = 'delegation.started' and e.conversation_id = root.id
-           )
+          `${CONVERSATION_FAMILY}
            select exists (
              select 1 from core.actions a join core.approvals p on p.action_id = a.id
               where a.tool = $2 and a.conversation_id in (select id from family)
@@ -315,6 +320,22 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
           [conversationId, tool],
         );
         return (rows[0] as { approved?: boolean } | undefined)?.approved === true;
+      },
+      async decisionsInConversation(tool, conversationId) {
+        ownTool(tool);
+        const { rows } = await pool().query(
+          `${CONVERSATION_FAMILY}
+           select a.envelope, p.state, p.owner_choices
+             from core.actions a join core.approvals p on p.action_id = a.id
+            where a.tool = $2 and a.conversation_id in (select id from family)
+            order by a.created_at`,
+          [conversationId, tool],
+        );
+        return (rows as Array<{ envelope: unknown; state: string; owner_choices: Record<string, string> | null }>).map((row) => ({
+          envelope: row.envelope,
+          state: row.state,
+          ...(row.owner_choices ? { choices: row.owner_choices } : {}),
+        }));
       },
     },
     pages: {

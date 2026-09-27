@@ -1,16 +1,25 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ToolContext } from '@buddi/core/plugin';
+import { ToolRefusal, type EffectDescription, type ToolContext } from '@buddi/core/plugin';
 import { BrowserManager } from './manager.js';
 import { PlaywrightHost, type LaunchProblem } from './host.js';
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
-import { ComputerDriver, NativeComputerBridge, settingsSchema, type ComputerBridge, type ComputerPermissions, type ControlSettings } from './computer.js';
+import { ComputerDriver, NativeComputerBridge, resolveApp, settingsSchema, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type ControlSettings, type InstalledApp } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
-import type { BrowserCommand } from './types.js';
+import { BrowserPreconditionError, type BrowserCommand } from './types.js';
 import { detectBrowser, HEADLESS_NOTE, installBrowser, InstallProgressReader, missingLibrariesMessage, needsHeadless, noSandboxMessage, NO_BROWSER_STATUS, probeLaunch, type BrowserAvailability, type InstallOutcome, type LaunchCheck, type ProbeDeps } from './availability.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The one control an app card carries: how long the yes lasts. */
+const REMEMBER = { key: 'remember', label: 'Allow', options: ['Once', 'Always'], default: 'Once' };
+/** What an app card's envelope says, read back from the ledger. */
+interface AppEnvelope { tool: 'browser.act'; allowApp: string; name: string }
+function isAppEnvelope(value: unknown): value is AppEnvelope {
+  return typeof value === 'object' && value !== null && typeof (value as AppEnvelope).allowApp === 'string';
+}
 
 /** Owner-only mode switch. No automatic fallback and no model-selected driver. */
 export class HostController implements BrowserController {
@@ -23,6 +32,10 @@ export class HostController implements BrowserController {
   #extension?: () => ExtensionBridge;
   #problem?: LaunchProblem;
   #install?: NonNullable<BrowserEngineStatus['install']>;
+  /** Apps the owner allowed Once, by conversation. Memory only: the ledger answers again after a restart. */
+  #once = new Map<string, Set<string>>();
+  /** The conversation whose `browser.act` is running, for the driver's app check. */
+  #acting?: string;
   constructor(readonly dir: string, readonly options: {
     channel?: 'chrome'; allowedHosts?: readonly string[];
     bridge?: () => ComputerBridge;
@@ -39,6 +52,8 @@ export class HostController implements BrowserController {
     installer?: (onLine: (line: string) => void) => Promise<InstallOutcome>;
     /** How the launch check launches. Injectable, so a test never opens a browser. */
     launch?: ProbeDeps['launch'];
+    /** How an app name or bundle id is found on this Mac. Defaults to Spotlight. Injectable for tests. */
+    resolveApp?: AppResolver;
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -57,7 +72,8 @@ export class HostController implements BrowserController {
       const offline: ExtensionBridge = { connected: () => false, send: () => Promise.reject(new Error(NOT_CONNECTED)), close: () => {} };
       return new BrowserManager(() => new ExtensionDriver(this.#extension?.() ?? offline, this.options.allowedHosts), { controlFile: path.join(this.dir, 'control.json') });
     }
-    if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts), {
+    if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts,
+      (appId) => this.#allowed(appId, this.#acting)), {
       controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
     });
     const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
@@ -138,7 +154,101 @@ export class HostController implements BrowserController {
     const status = this.#manager.status(scope);
     const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions,
       ...(this.#settings.mode === 'playwright' ? { browser: this.#engine() } : {}) };
-    return { ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => ({ ...session, ...metadata })) } : {}) };
+    const once = (entry: BrowserStatus): BrowserStatus => {
+      const allowed = entry.session ? this.#once.get(entry.session.conversationId) : undefined;
+      return allowed?.size && entry.session ? { ...entry, session: { ...entry.session, allowedOnce: [...allowed] } } : entry;
+    };
+    return once({ ...status, ...metadata, ...(status.sessions ? { sessions: status.sessions.map((session) => once({ ...session, ...metadata })) } : {}) });
+  }
+  /** On the owner's list, or allowed Once in this conversation. */
+  #allowed(appId: string, conversationId: string | undefined): boolean {
+    return this.#settings.allowedApps.includes(appId) || (conversationId !== undefined && this.#once.get(conversationId)?.has(appId) === true);
+  }
+  /** The app an `open` names, as found on this Mac. An allowed bundle id needs no lookup. */
+  async #resolve(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
+    const resolver = this.options.resolveApp ?? spotlightApps;
+    if (command.app !== undefined) return resolveApp({ name: command.app }, resolver);
+    const appId = command.appId!;
+    if (this.#allowed(appId, conversationId)) return { bundleId: appId, name: appId };
+    return resolveApp({ bundleId: appId }, resolver);
+  }
+  /** `#resolve`, with its refusal said as the tool's own sentence. */
+  async #resolveOrRefuse(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
+    try { return await this.#resolve(command, conversationId); }
+    catch (error) { throw error instanceof BrowserPreconditionError ? new ToolRefusal(error.message) : error; }
+  }
+  /**
+   * Session for everything but an `open`, in computer mode, of an app the
+   * owner has not allowed: that one is gated, so the owner gets a card.
+   *
+   * Asked once per app and conversation, from core's own ledger: a yes Once
+   * lets it through (remembered here, too, for the screen guards), a no is
+   * refused without a second card, and a card still waiting is not doubled.
+   */
+  async tierFor(command: BrowserCommand, ctx: ToolContext): Promise<{ tier: 'session' | 'gated'; reason?: string }> {
+    if (command.action !== 'open' || this.#settings.mode !== 'computer') return { tier: 'session' };
+    const app = await this.#resolveOrRefuse(command, ctx.conversationId);
+    if (this.#allowed(app.bundleId, ctx.conversationId)) return { tier: 'session' };
+    const conversationId = ctx.conversationId;
+    if (conversationId && UUID.test(conversationId) && ctx.buddi?.approvals.decisionsInConversation) {
+      const cards = (await ctx.buddi.approvals.decisionsInConversation('browser.act', conversationId))
+        .filter((card) => isAppEnvelope(card.envelope) && card.envelope.allowApp === app.bundleId);
+      const last = cards.at(-1);
+      if (last?.state === 'rejected') throw new ToolRefusal(`The owner said no to ${app.name} this time.`);
+      if (last?.state === 'pending') throw new ToolRefusal(`The owner has not answered the card about ${app.name} yet. Tell them it is waiting, and wait.`);
+      if (last && ['approved', 'executing', 'succeeded'].includes(last.state) && (last.choices?.remember ?? 'Once') === 'Once') {
+        this.#allowOnce(conversationId, app.bundleId);
+        return { tier: 'session' };
+      }
+    }
+    return { tier: 'gated' };
+  }
+  async describe(command: BrowserCommand, ctx: ToolContext): Promise<EffectDescription> {
+    // Always looked up, never read from an allowance: the executor describes
+    // again before it runs, and the card must say the same both times.
+    const app = await this.#resolveOrRefuse(command, undefined);
+    const agent = ctx.agentId ?? 'An agent';
+    const envelope: AppEnvelope = { tool: 'browser.act', allowApp: app.bundleId, name: app.name };
+    return {
+      envelope,
+      preview: `Use ${app.name} on your computer?\n${agent} wants to open ${app.name} (${app.bundleId}). While it works, buddi sees that window's screen and sends it to the model, as with the apps you allowed already.`,
+      choices: [{ ...REMEMBER, options: [...REMEMBER.options] }],
+    };
+  }
+  #allowOnce(conversationId: string, appId: string): void {
+    const apps = this.#once.get(conversationId) ?? new Set<string>();
+    apps.add(appId); this.#once.set(conversationId, apps);
+  }
+  /**
+   * The owner said yes on the card. Once: this conversation. Always: the
+   * owner's list, written the way Settings writes it — without restarting
+   * the driver, since the agent's session is usually live. A full list falls
+   * back to Once and says so.
+   */
+  async #grant(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
+    if (this.#settings.mode !== 'computer') throw new BrowserPreconditionError('Computer control is no longer on, so there is no app to allow. Ask the owner.');
+    if (!ctx.conversationId) throw new Error('An app is allowed for a conversation, and this call has none.');
+    const app = await this.#resolve(command, undefined);
+    let remember = ctx.choices?.remember === 'Always' ? 'Always' : 'Once';
+    let note = '';
+    if (remember === 'Always' && !this.#settings.allowedApps.includes(app.bundleId)) {
+      if (this.#settings.allowedApps.length >= 32) { remember = 'Once'; note = ' The list of apps is full (32), so it is allowed for this conversation only.'; }
+      else await this.#writeSettings({ ...this.#settings, allowedApps: [...this.#settings.allowedApps, app.bundleId] });
+    }
+    if (remember === 'Once') this.#allowOnce(ctx.conversationId, app.bundleId);
+    const how = remember === 'Always' ? 'Always: it is now on the list in Settings' : 'Once: for this conversation';
+    return {
+      allowed: { appId: app.bundleId, name: app.name, remember },
+      message: `Allowed ${app.name} (${how}).${note}`,
+      forAgent: `The owner allowed ${app.name} (${remember}). Nothing was opened yet: call browser.act {action:"open", appId:"${app.bundleId}"} again to open it.${note}`,
+    };
+  }
+  async #writeSettings(next: ControlSettings): Promise<void> {
+    const parsed = settingsSchema.parse(next);
+    await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    const file = path.join(this.dir, 'settings.json'); const temp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(temp, JSON.stringify(parsed), { mode: 0o600 }); await rename(temp, file);
+    this.#settings = parsed;
   }
   screenshot(sessionId?: string): Buffer | undefined { return this.#manager.screenshot(sessionId); }
   hand(scope?: BrowserScope): BrowserHandOffer {
@@ -147,7 +257,10 @@ export class HostController implements BrowserController {
   }
   rollover(input: BrowserRollover): boolean {
     if (this.#changing) throw new Error('Control settings are changing. Wait before continuing.');
-    return this.#manager.rollover(input);
+    const moved = this.#manager.rollover(input);
+    const once = this.#once.get(input.previousConversationId);
+    if (moved && once) { this.#once.delete(input.previousConversationId); this.#once.set(input.conversationId, once); }
+    return moved;
   }
   async execute(command: BrowserCommand, ctx: ToolContext): Promise<unknown> {
     if (this.#changing) throw new Error('Computer/browser settings are changing. Wait for the owner.');
@@ -157,7 +270,17 @@ export class HostController implements BrowserController {
       this.#requests.set(ctx.ownerRequest.id, { expiresAt: ctx.ownerRequest.expiresAt, revoked: false });
     }
     if (this.#settings.mode !== 'computer' && (command.action === 'open' || command.target?.x !== undefined)) throw new Error('Native apps and coordinate targets require Computer mode. Only the owner can change modes.');
-    return this.#manager.execute(command, ctx);
+    // The owner's yes on an app card, run by core's executor: record it; the agent opens next.
+    if (ctx.actionId !== undefined && command.action === 'open') return this.#grant(command, ctx);
+    let run = command;
+    if (command.action === 'open') {
+      const app = await this.#resolve(command, ctx.conversationId);
+      if (!this.#allowed(app.bundleId, ctx.conversationId)) throw new BrowserPreconditionError(`${app.name} is not allowed yet. Ask to open it again so the owner gets a card.`);
+      run = { ...command, appId: app.bundleId, app: undefined };
+    }
+    this.#acting = ctx.conversationId;
+    try { return await this.#manager.execute(run, ctx); }
+    finally { if (this.#acting === ctx.conversationId) this.#acting = undefined; }
   }
   /**
    * The gates `execute` runs before anything reaches a manager, secret uses

@@ -132,3 +132,81 @@ describe('the agents\' own browser on this machine', () => {
     });
   });
 });
+
+describe('an app the owner has not allowed', () => {
+  const conversation = '11111111-1111-4111-8111-111111111111';
+  const voicito = { bundleId: 'com.example.voicito', name: 'Voicito' };
+  type Card = { envelope: unknown; state: string; choices?: Record<string, string> };
+  function asking(cards: Card[] = []) {
+    const base = ctx(conversation);
+    return { ...base, buddi: { ...base.buddi!, approvals: { ...base.buddi!.approvals, decisionsInConversation: async () => cards } } } as CoreToolContext;
+  }
+  async function computer(apps: Array<typeof voicito> = [voicito]) {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
+    const performed: unknown[] = [];
+    const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async (command) => { performed.push(command); }), close: vi.fn(async () => {}), screenshot: async () => undefined,
+      observe: async () => ({ id: 'o', url: 'app://com.example.voicito', appId: 'com.example.voicito', title: 'Voicito', tree: '', tabs: [], capturedAt: new Date().toISOString() }) };
+    const resolveApp = vi.fn(async (query: { name: string } | { bundleId: string }) => apps.filter((app) => 'name' in query ? app.name.toLowerCase() === query.name.toLowerCase() : app.bundleId === query.bundleId));
+    const controller = new HostController(dir, { platform: 'darwin', resolveApp,
+      manager: (settings) => new BrowserManager(() => driver, { controlFile: path.join(dir, 'control.json'), maxSessions: settings.mode === 'computer' ? 1 : 8, allowOpen: settings.mode === 'computer' }) });
+    resources.push({ dir, controller }); await controller.enable();
+    await controller.configure({ ...controller.status().settings!, mode: 'computer' });
+    return { dir, controller, performed, resolveApp };
+  }
+  const byName = commandSchema.parse({ action: 'open', app: 'voicito' });
+
+  it('resolves a name to one installed app and refuses none or several', async () => {
+    const { controller } = await computer([voicito, { bundleId: 'org.other.voicito', name: 'Voicito' }]);
+    await expect(controller.tierFor(byName, asking())).rejects.toThrow('Several apps are called voicito: Voicito (com.example.voicito), Voicito (org.other.voicito). Say which bundle id.');
+    await expect(controller.tierFor(commandSchema.parse({ action: 'open', app: 'Nope' }), asking())).rejects.toThrow('No installed app is called Nope.');
+    await expect(controller.tierFor(commandSchema.parse({ action: 'open', appId: 'com.nope' }), asking())).rejects.toThrow('No installed app has the bundle id com.nope.');
+  });
+  it('asks with a card naming the resolved app, Once or Always', async () => {
+    const { controller } = await computer();
+    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'gated' });
+    const card = await controller.describe(byName, asking());
+    expect(card.envelope).toEqual({ tool: 'browser.act', allowApp: 'com.example.voicito', name: 'Voicito' });
+    expect(card.preview).toBe(`Use Voicito on your computer?\n${conversation} wants to open Voicito (com.example.voicito). While it works, buddi sees that window's screen and sends it to the model, as with the apps you allowed already.`);
+    expect(card.choices).toEqual([{ key: 'remember', label: 'Allow', options: ['Once', 'Always'], default: 'Once' }]);
+    // An allowed app, and every other action, is the session grant as before.
+    await expect(controller.tierFor(commandSchema.parse({ action: 'open', app: 'Safari' }), asking())).rejects.toThrow('No installed app');
+    await expect(controller.tierFor(open, asking())).resolves.toEqual({ tier: 'session' });
+    await expect(controller.tierFor(commandSchema.parse({ action: 'navigate', url: 'https://example.com' }), asking())).resolves.toEqual({ tier: 'session' });
+  });
+  it('Once allows it for this conversation only, and the screen guard sees it', async () => {
+    const { controller, performed } = await computer();
+    await expect(controller.execute(byName, asking())).rejects.toThrow('not allowed yet');
+    const granted = await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Once' } });
+    expect(granted).toMatchObject({ allowed: { appId: 'com.example.voicito', remember: 'Once' } });
+    expect(performed).toEqual([]);
+    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
+    await controller.execute(byName, asking());
+    expect(performed).toEqual([expect.objectContaining({ action: 'open', appId: 'com.example.voicito' })]);
+    expect(controller.status({ agentId: conversation, conversationId: conversation }).session?.allowedOnce).toEqual(['com.example.voicito']);
+    expect(controller.status().settings!.allowedApps).not.toContain('com.example.voicito');
+    await expect(controller.tierFor(byName, { ...asking(), conversationId: '22222222-2222-4222-8222-222222222222' })).resolves.toEqual({ tier: 'gated' });
+  });
+  it('Always adds it to the list in Settings, with a session running', async () => {
+    const { controller, dir } = await computer();
+    await controller.execute(open, asking());
+    await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Always' } });
+    expect(controller.status().settings!.allowedApps).toContain('com.example.voicito');
+    expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')).allowedApps).toContain('com.example.voicito');
+    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
+  });
+  it('No is refused without a second card; a waiting card is not doubled; a Once survives a restart through the ledger', async () => {
+    const { controller } = await computer();
+    const envelope = { tool: 'browser.act', allowApp: 'com.example.voicito', name: 'Voicito' };
+    await expect(controller.tierFor(byName, asking([{ envelope, state: 'rejected' }]))).rejects.toThrow('The owner said no to Voicito this time.');
+    await expect(controller.tierFor(byName, asking([{ envelope, state: 'pending' }]))).rejects.toThrow('has not answered');
+    await expect(controller.tierFor(byName, asking([{ envelope, state: 'expired' }]))).resolves.toEqual({ tier: 'gated' });
+    await expect(controller.tierFor(byName, asking([{ envelope: { ...envelope, allowApp: 'com.other' }, state: 'rejected' }]))).resolves.toEqual({ tier: 'gated' });
+    await expect(controller.tierFor(byName, asking([{ envelope, state: 'succeeded', choices: { remember: 'Once' } }]))).resolves.toEqual({ tier: 'session' });
+  });
+  it('raises no card outside computer mode', async () => {
+    const { controller } = await computer();
+    await controller.configure({ ...controller.status().settings!, mode: 'playwright' });
+    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
+    await expect(controller.execute(byName, asking())).rejects.toThrow('require Computer mode');
+  });
+});

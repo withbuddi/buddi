@@ -85,7 +85,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.3'; see §7
+  readonly version: string;            // '1.4'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -118,7 +118,10 @@ library live.
 `standing(tool): Promise<ToolPermission | null>` (for this plugin's own tools
 only), and `approvedInConversation(tool, conversationId): Promise<boolean>`
 (whether the owner already approved this tool in this conversation, own tools
-only). Never another plugin's actions.
+only), and `decisionsInConversation(tool, conversationId):
+Promise<{ envelope, state, choices? }[]>` (1.4: every card on that tool in this
+conversation, so a tool that asks once per subject knows a yes from a no).
+Never another plugin's actions.
 
 **pages.** `previewPort(): number | undefined`, `previewUrl(name): string |
 undefined`. Page descriptors and queries stay in the manifest; this is only
@@ -302,7 +305,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.3`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.4`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

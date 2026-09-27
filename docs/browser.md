@@ -35,9 +35,11 @@ delegation restrictions and owner Stop apply in both modes.
    Computer mode. Non-macOS hosts are not offered it.
 2. Open **Host browser → Computer & browser settings**. Choose Use my apps, the
    browser app, and allowed application bundle IDs. Chrome and
-   Safari are initially allowed, Chrome is initially selected. Native apps such
-   as `com.apple.TextEdit` and `com.apple.calculator` require an owner settings
-   change. Agents cannot change the mode or allowlist.
+   Safari are initially allowed, Chrome is initially selected. Other native
+   apps, such as `com.apple.TextEdit`, are either allowed here ahead of time or
+   answered on a card when an agent first asks to open one (below). Agents
+   cannot change the mode, and reach the allowlist only through the owner's
+   Always on that card.
 3. Click **Check permissions**, then **Request macOS permissions** if needed.
    Grant macOS **Accessibility** and **Screen Recording** to the helper/service
    identified by the system prompt. This may be attributed to its launching app
@@ -45,7 +47,27 @@ delegation restrictions and owner Stop apply in both modes.
    grant these permissions itself. Native rebuilds may require permission renewal.
 4. Send a fresh task to an agent granted `browser.*`. `navigate` opens an ordinary
    tab through macOS LaunchServices, in the selected browser's existing profile.
-   `open` selects an owner-allowed app. No debugging connection is created.
+   `open` selects an app, by bundle id (`appId`) or by name (`app`). No
+   debugging connection is created.
+
+**Allowed apps.** The owner can pre-allow an app in Settings, or answer the
+card when an agent first asks. `open` with `app` resolves the name through
+Spotlight to one installed application (exact name, any case; nothing is
+launched to find it, five seconds at most); none or several is refused and the
+refusal lists the candidates. An app not on the list turns the call into a
+decision card in the agent's conversation — "Use Voicito on your computer?",
+naming the agent, the app and the bundle id as found on this Mac, never as the
+agent wrote them — with **Once** (this conversation only), **Always** (added
+to `allowedApps` in `settings.json`, so Settings shows it; with the list full
+at 32 it falls back to Once) and Reject. The agent is told to wait; after a
+yes it calls `open` again, after a no the next `open` of that app is refused
+("The owner said no to Voicito this time.") and no second card is raised in
+that conversation. The answers are read from the approvals ledger
+(`ApprovalsArea.decisionsInConversation`), so they hold across a restart; a
+Once is also kept on the conversation's session (`session.allowedOnce`) so the
+Telegram photo guard treats it as allowed. The browser app itself stays a
+Settings choice: `navigate` never asks. Playwright and extension mode have no
+native apps, so `open` there is refused as before.
 
 Settings persist in `<BUDDI_DATA_DIR>/browser/settings.json` (owner-only). Active
 sessions must be released before changing settings or requesting permissions.
@@ -504,7 +526,8 @@ did not change.
 content going to a third party's servers, so it is checked again on the way
 out: a page whose host is not in `BUDDI_BROWSER_HOSTS` is not sent, and in
 computer mode — where the screenshot is a whole application window — the window's
-bundle ID must be in the owner's `allowedApps`. Anything unreadable or missing
+bundle ID must be in the owner's `allowedApps`, or allowed Once for that
+conversation (`session.allowedOnce`). Anything unreadable or missing
 fails closed and the step is reported in words only.
 
 **A "Take over" button** under the photo links to that conversation's Browser

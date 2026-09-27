@@ -276,7 +276,7 @@ three modes and what each refuses.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;   // '1.3' — see §1.7
+  readonly version: string;   // '1.4' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
@@ -3119,6 +3119,7 @@ that say otherwise.
 | `assert` | `(ctx, envelope) => void` | yes | 1.0 | Throw unless `envelope` is the effect the owner approved on this call. |
 | `standing` | `(tool) => Promise<ToolPermission \| null>` | yes | 1.0 | The standing permission that answers for one of your tools on this call. Refused for another plugin's tool. |
 | `approvedInConversation` | `(tool, conversationId) => Promise<boolean>` | yes | 1.0 | Whether the owner approved your `tool` in this conversation or one delegated from it. Refused for another plugin's tool. |
+| `decisionsInConversation` | `(tool, conversationId) => Promise<ConversationDecision[]>` | yes | 1.4 | Your `tool`'s cards in this conversation or one delegated from it, oldest first: `{ envelope, state, choices? }`. For a tool that asks once per subject and must not ask again after a yes or a no. Refused for another plugin's tool. |
 
 #### `PagesArea`
 
