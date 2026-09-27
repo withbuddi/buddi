@@ -86,7 +86,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.4'; see §7
+  readonly version: string;            // '1.5'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -99,7 +99,9 @@ interface BuddiHost {
 
 **owner.** `id: string`, `timezone: string`, `agentForRole(role): string |
 undefined`, `hasAgent(id): boolean` (1.1), `protectedPaths: readonly
-string[]`, and `notify(message)` (1.2) when the plugin declares
+string[]`, `language(): Promise<string | undefined>` (1.5: the profile's
+"Answer me in" as a tag like `fr` or `pt-BR`, `undefined` when blank or not
+a language), and `notify(message)` (1.2) when the plugin declares
 `owner:notify`. Never returns an agent's file, grant or provider.
 
 **clock.** `now(): Date`, `today(): string` (the owner's local date).
@@ -306,7 +308,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.4`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.5`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

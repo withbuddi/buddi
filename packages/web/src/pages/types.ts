@@ -183,6 +183,17 @@ export type Component =
   | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
   | (ComponentCommon & { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef })
+  /** A small chart of a query's rows; `rows` is left out when the answer is the array. */
+  | (ComponentCommon & {
+      kind: 'chart';
+      query: QueryRef;
+      rows?: string;
+      x: string;
+      y: string | string[];
+      type?: 'line' | 'bar';
+      label?: string;
+      target?: ValueRef;
+    })
   | (ComponentCommon & {
       kind: 'stats';
       query: QueryRef;

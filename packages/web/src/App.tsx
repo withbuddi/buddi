@@ -36,7 +36,7 @@ import {
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { AskDock, showsAskDock } from './shell/AskDock';
-import { NotificationToasts, useToastQueue } from './shell/NotificationToasts';
+import { NotificationToasts, ToastStack, toastPlacement, useToastQueue } from './shell/NotificationToasts';
 import { usePresence } from './shell/presence';
 import { GroupSheet } from './shell/GroupSheet';
 import { PluginPage } from './pages/PluginPage';
@@ -428,8 +428,10 @@ export function App(): JSX.Element {
         {askShown && frontDesk ? (
           <AskDock agent={frontDesk} agents={agents} open={askOpen} onOpenChange={setAskOpen} navigate={navigate} />
         ) : null}
-        <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />
-        <Toast.Viewport className="ui-toasts" />
+        <ToastStack placement={toastPlacement(askShown, askOpen)}>
+          <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />
+          <Toast.Viewport className="ui-toasts" />
+        </ToastStack>
       </Toast.Provider>
     </Tooltip.Provider>
     </MascotProvider>

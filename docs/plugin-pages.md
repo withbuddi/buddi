@@ -125,6 +125,8 @@ type Component =
   | { kind: 'link'; label: string; to: RouteRef }
   /** A bar: `value` a fraction 0–1, or a count of bytes against `total`; `label` the line above; `done` the line instead of the bar once it is full. */
   | { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef }
+  /** A small inline chart of a query's rows: a line (default) or bars; `y` one path or up to four; `rows` left out when the answer is the array; `target` a dashed line, read from the answer. */
+  | { kind: 'chart'; query: QueryRef; rows?: string; x: string; y: string | string[]; type?: 'line' | 'bar'; label?: string; target?: ValueRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
   /** A column may carry `pill: { tone }` — a state, in the tone the row names;
@@ -211,11 +213,20 @@ What each one is for, in email's terms:
 | `select` field with `multiple` | (Speech) The languages you speak, several at once |
 | `form` with `columns: 3` | (Speech) Speaking: Service and the two voices on one row |
 | `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
+| `chart` | (Goals) A goal's values over its window as a line with the target dashed; a frequency goal's weeks as bars |
 | select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
 
-Not in the set, on purpose: free layout, custom styling, charts (those are
-canvas views), embedded HTML, client-side logic beyond `when`. A plugin that
-needs those serves its own app.
+A `chart` is small on purpose: a trend beside the numbers, drawn inline in
+the dashboard's own colours, with two ticks a side, the first and last x
+(and the middle one past four points), and a legend only for several series.
+A row whose `y` is not a number is a gap in the line, not a zero; bars stand
+on zero. A screen reader hears a sentence instead of the drawing: how many
+points, from when to when, each series' latest, lowest and highest, and the
+target. A chart with hover, zoom, annotations or many series is a canvas
+view (`timeseries`), not a page component.
+
+Not in the set, on purpose: free layout, custom styling, embedded HTML,
+client-side logic beyond `when`. A plugin that needs those serves its own app.
 
 ## 5. The dashboard side
 

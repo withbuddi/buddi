@@ -191,6 +191,54 @@ suite('reaching the owner', () => {
     expect(sent).toHaveLength(3);
   });
 
+  it('folds the same thing from two agents into one row, delivered once', async () => {
+    fakeChannel();
+    const amex = [
+      { agentId: 'finance-advisor', title: 'Pay the Amex Blue Cash minimum, 40 USD, today…' },
+      { agentId: 'mail-triage', title: 'Pay at least the 40.00 USD minimum on the Amex Blue Cash Everyday 92000 today…' },
+      { agentId: 'mail-triage', title: 'Amex card ending 992000 (Blue Cash Everyday): payment is due today, Sept 27…' },
+      { agentId: 'finance-advisor', title: 'Pay at least 40 USD on the Amex Blue Cash Everyday 92000 today. The minimum is due tomorrow…' },
+    ];
+    const results = [];
+    for (const [i, m] of amex.entries()) {
+      clock = minutes(i * 30);
+      results.push(await notifyOwner(pool, deps, { kind: i % 2 ? 'watcher' : 'reminder', urgency: 'now', ...m }));
+    }
+    expect(new Set(results.map((r) => r.id)).size).toBe(1);
+    expect(results.map((r) => r.deduped)).toEqual([false, true, true, true]);
+    expect(sent).toHaveLength(1);
+    const rows = await listNotifications(pool);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      agentId: 'finance-advisor',
+      alsoFrom: ['mail-triage'],
+      title: amex[3]!.title,
+      state: 'sent',
+      firedCount: 4,
+      createdAt: minutes(90).toISOString(),
+    });
+
+    // A different thing is its own row; the same thing two days later is too.
+    clock = minutes(100);
+    await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Pay the Chase Sapphire minimum, 35 USD, by Friday', agentId: 'finance-advisor' });
+    clock = minutes(90 + 48 * 60 + 1);
+    await notifyOwner(pool, deps, { kind: 'reminder', urgency: 'now', ...amex[0]! });
+    expect(await listNotifications(pool)).toHaveLength(3);
+    expect(sent).toHaveLength(3);
+  });
+
+  it('does not fold into a row the owner acted on, nor fold approvals', async () => {
+    fakeChannel();
+    const first = await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Amex Blue Cash Everyday payment due', agentId: 'a' });
+    await markActed(pool, first.id, minutes(1));
+    clock = minutes(2);
+    const again = await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Amex Blue Cash Everyday payment due', agentId: 'b' });
+    expect(again.id).not.toBe(first.id);
+    const approval = await notifyOwner(pool, deps, { kind: 'approval', urgency: 'now', title: 'Amex Blue Cash Everyday payment due', agentId: 'c' });
+    expect(approval.id).not.toBe(again.id);
+    expect(approval.deduped).toBe(false);
+  });
+
   it('holds now messages through quiet hours, except approvals and questions', async () => {
     fakeChannel();
     await writeNotificationSettings(pool, { ...DEFAULT_NOTIFICATION_SETTINGS, quietStart: '22:00', quietEnd: '07:00' });

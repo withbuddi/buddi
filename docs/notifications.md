@@ -1,7 +1,7 @@
 ---
 title: "Notifications"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # Notifications
@@ -48,6 +48,17 @@ A mission that decides to stay silent sends nothing and writes nothing here.
 - **The same thing again.** A message with the same key as one not yet sent
   replaces it rather than adding a second. The same key more than three
   times in an hour waits for the end-of-day message, and says so once.
+- **The same thing from two agents.** Every message but an approval or a
+  question gets a topic: the words of its title that name things (the text's
+  too when the title names fewer than three), lowercased, with the agent's own
+  name, dates, weekdays, currency codes and the everyday words of a reminder
+  ("pay", "due", "today", "minimum") left out, and numbers written plainly, so
+  "40.00" is "40". Two topics match when they share at least three words and
+  those are at least two thirds of the shorter one. A new message whose topic
+  matches a row from any agent written in the last 48 hours and not acted on
+  is folded into that row instead of adding one: the row lists the agent under
+  "also from", takes the new title and text when they are longer, and moves to
+  the new time. It keeps its state, so it reaches your channel once at most.
 - **Nowhere to go.** With no channel, nothing fails: the message is kept, and
   its row says `no channel`. A channel that refuses or errors is written on
   the row the same way. Nothing retries it.
@@ -140,7 +151,8 @@ answers `{ id }`, `'refused'` or `{ refused: reason }`, or throws.
 
 `core.owner_notifications` has one row per message: `kind`, `urgency`,
 `title`, `text`, `link` (a dashboard route), `offers`, `dedupe_key`,
-`agent_id`, `plugin_id`, `action_id` (an approval's action), `state`,
+`agent_id`, `plugin_id`, `action_id` (an approval's action), `topic`,
+`also_from` (the other agents folded into it), `state`,
 `due_at`, `channel`, `created_at`, `sent_at`, `seen_at`, `acted_at`,
 `error`.
 

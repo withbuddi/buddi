@@ -33,7 +33,7 @@ const iso = (v: unknown): string | null =>
 
 export const NOTIFICATION_COLUMNS =
   'id, kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, ' +
-  'channel, fired_count, lowered, created_at, sent_at, seen_at, acted_at, error';
+  'channel, fired_count, lowered, topic, also_from, created_at, sent_at, seen_at, acted_at, error';
 
 export function toNotification(row: Record<string, any>): OwnerNotification {
   return {
@@ -53,6 +53,8 @@ export function toNotification(row: Record<string, any>): OwnerNotification {
     channel: row.channel ?? null,
     firedCount: Number(row.fired_count ?? 1),
     lowered: row.lowered === true,
+    topic: row.topic ?? null,
+    alsoFrom: Array.isArray(row.also_from) ? row.also_from.map(String) : [],
     createdAt: iso(row.created_at) as string,
     sentAt: iso(row.sent_at),
     seenAt: iso(row.seen_at),

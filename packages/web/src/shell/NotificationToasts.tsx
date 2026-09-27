@@ -1,5 +1,5 @@
 /**
- * What buddi kept for the dashboard, said at the top right.
+ * What buddi kept for the dashboard, said in a card in the corner.
  *
  * A `now` message that arrives while the owner is here is `shown`: the page
  * draws it as a card here and tells buddi it was seen, which stops it going
@@ -7,7 +7,7 @@
  * "and N more" and are marked seen only when they are drawn. Dismissing one
  * is the same as having seen it.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type NotificationKind, type NotificationRow } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { AgentAvatar } from '../ui';
@@ -21,6 +21,28 @@ export function toneOf(kind: NotificationKind): 'accent' | 'warm' | 'critical' |
   if (kind === 'watcher' || kind === 'reminder') return 'warm';
   if (kind === 'failure') return 'critical';
   return undefined;
+}
+
+/**
+ * Where the toasts stand, so they never cover the corner buddi: in the corner
+ * when there is no button, over the button when it is drawn, over the dock
+ * when it is open. On a phone the stylesheet puts them all at the top centre,
+ * since the dock takes the full width there.
+ */
+export type ToastPlacement = 'corner' | 'above-button' | 'above-dock';
+
+export function toastPlacement(askShown: boolean, askOpen: boolean): ToastPlacement {
+  if (!askShown) return 'corner';
+  return askOpen ? 'above-dock' : 'above-button';
+}
+
+/** The one place both kinds of toast stand: the notifications and the page's own. */
+export function ToastStack({ placement, children }: { placement: ToastPlacement; children: ReactNode }): JSX.Element {
+  return (
+    <div className="wb-toast-stack" data-placement={placement}>
+      {children}
+    </div>
+  );
 }
 
 /** A row the toast should draw: kept for the dashboard, and not seen yet. */

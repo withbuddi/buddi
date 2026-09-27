@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-li
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type NotificationRow } from '../api';
-import { NotificationToasts, useToastQueue } from './NotificationToasts';
+import { NotificationToasts, ToastStack, toastPlacement, useToastQueue } from './NotificationToasts';
 
 vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
@@ -78,5 +78,30 @@ describe('the notification toasts', () => {
 
     await act(async () => { result.current.dismiss('n1'); });
     expect(vi.mocked(api.notificationSeen).mock.calls.map(([id]) => id)).toEqual(['n1', 'n2', 'n3', 'n4']);
+  });
+});
+
+describe('where the toasts stand', () => {
+  it('stands over the corner button when it is drawn, over the dock when it is open, in the corner otherwise', () => {
+    expect(toastPlacement(false, false)).toBe('corner');
+    expect(toastPlacement(true, false)).toBe('above-button');
+    expect(toastPlacement(true, true)).toBe('above-dock');
+  });
+
+  it('carries the placement on the stack that holds the toasts', () => {
+    const { container, rerender } = render(
+      <ToastStack placement={toastPlacement(true, false)}>
+        <NotificationToasts queue={[row({})]} agents={[]} navigate={vi.fn()} onDismiss={vi.fn()} />
+      </ToastStack>,
+    );
+    const stack = container.querySelector('.wb-toast-stack');
+    expect(stack).toHaveAttribute('data-placement', 'above-button');
+    expect(stack).toContainElement(screen.getByRole('status'));
+    rerender(
+      <ToastStack placement={toastPlacement(true, true)}>
+        <NotificationToasts queue={[row({})]} agents={[]} navigate={vi.fn()} onDismiss={vi.fn()} />
+      </ToastStack>,
+    );
+    expect(container.querySelector('.wb-toast-stack')).toHaveAttribute('data-placement', 'above-dock');
   });
 });

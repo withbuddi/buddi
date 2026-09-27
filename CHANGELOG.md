@@ -6,14 +6,23 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Settings → Speech: with no language listed, listening and speaking take the one your profile answers in, and the page says "From your profile: French." Plugins read it with `ctx.buddi.owner.language()` (host API 1.5).
+- Settings → Speech: Off as the service for listening or speaking, which keeps that side off even with Whisper or Kokoro installed on this computer.
 - A buddi button in the corner of every page opens a small chat with your front desk over what you are doing, so a quick question needs no page change; `/` opens it too.
+- Plugin pages can draw a small chart, a line or bars with a dashed target line, and a screen reader hears it as a sentence.
 
 ### Changed
 
 - Home: what needs you is a deck of cards you read in full and move through with Done, with the list one toggle away; the conversations to continue sit as chips under the composer.
+- The install guide and the computer-control part of the browser guide now say what buddi does, how to set it up, what leaves your machine and where the limits are, instead of reading like a plan.
 
 ### Fixed
 
+- Notifications no longer cover the corner buddi button or its chat: they stack above it, and on a phone they drop from the top.
+- A delegation that came back after you approved something now opens on who was asked, the question, the answer, the files and how long it took, with the raw JSON folded under Details.
+- The same reminder from two agents is one line on Home: a message about the same thing as one from the last two days is folded into it, says "also from" the other agent, and reaches your phone once.
+- The queue test for retries past the sixth minute no longer fails now and then on CI: it waits for each failure to be recorded before pulling the retry forward.
+- Finance: a statement line that is a pending charge now posting is no longer skipped as a duplicate; it settles the pending row, also when the posted line reads differently or is dated up to two days earlier. A deleted row never counts as already imported.
 - Home's update notice reads on one line.
 - The Gemini card starts a free Google AI key on the newest Flash when Google refuses Pro, and says why in plain words; a rate-limit answer from any provider now reads as a sentence about the key and the model, not about responses.
 

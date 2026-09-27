@@ -443,6 +443,25 @@ export type Component =
       query: QueryRef;
       items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }>;
     })
+  /**
+   * A small chart of a query's rows: a line (default) or bars. `x` and `y` are
+   * paths within a row — `y` several paths for several series — and `rows`
+   * the path to the array in the answer, left out when the answer is the
+   * array. `target`, read from the answer, draws a dashed line across; `label`
+   * names what `y` measures, for the axis and the summary a screen reader
+   * hears. Drawn inline, in the page's own colours; a descriptor never says
+   * how it looks.
+   */
+  | (ComponentCommon & {
+      kind: 'chart';
+      query: QueryRef;
+      rows?: string;
+      x: string;
+      y: string | string[];
+      type?: 'line' | 'bar';
+      label?: string;
+      target?: ValueRef;
+    })
   | (ComponentCommon & {
       kind: 'list';
       query: QueryRef;
@@ -787,6 +806,19 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           )
           .min(1)
           .max(12),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('chart'),
+        query: queryRefSchema,
+        rows: viewPathSchema.optional(),
+        x: viewPathSchema,
+        y: z.union([viewPathSchema, z.array(viewPathSchema).min(1).max(4)]),
+        type: z.enum(['line', 'bar']).optional(),
+        label: label.optional(),
+        target: valueRefSchema.optional(),
       })
       .strict(),
     z

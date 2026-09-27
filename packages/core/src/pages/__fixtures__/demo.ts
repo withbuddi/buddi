@@ -19,7 +19,18 @@ import { QueryRefusal, type PageDescriptor, type PageQuery } from '../../pages.j
 
 /** What the demo plugin's queries answer with. Constants, deliberately. */
 export const DEMO_DATA = {
-  counts: { items: 3, open: 1, state: 'ready', headline: 'Three things, one of them open.' },
+  counts: {
+    items: 3,
+    open: 1,
+    state: 'ready',
+    headline: 'Three things, one of them open.',
+    goal: 2,
+    weeks: [
+      { week: '2026-09-07', open: 3 },
+      { week: '2026-09-14', open: 2 },
+      { week: '2026-09-21', open: 1 },
+    ],
+  },
   items: {
     items: [
       { id: 'a1', title: 'The first thing', sub: 'one@example.com', state: 'open', tone: 'warning', pinned: false },
@@ -311,6 +322,17 @@ const board: PageDescriptor = {
     { kind: 'notice', text: { path: 'headline' }, when: { path: 'state', equals: 'ready' } },
     { kind: 'notice', text: 'Everything the demo plugin knows, drawn from descriptors.' },
     { kind: 'progress', value: { path: 'open' }, total: { path: 'items' }, label: 'Open of all', done: 'Everything is open.' },
+    {
+      kind: 'chart',
+      title: 'Open by week',
+      query: { query: 'counts' },
+      rows: 'weeks',
+      x: 'week',
+      y: 'open',
+      type: 'bar',
+      label: 'Open',
+      target: { path: 'goal' },
+    },
     {
       kind: 'stats',
       title: 'Where things stand',

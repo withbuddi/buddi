@@ -519,21 +519,35 @@ suite('queue (postgres)', () => {
       // The backoff is real minutes, so the test pulls each retry forward
       // rather than sleeping through it. Five attempts is already two more than
       // the queue used to allow.
+      //
+      // `attempts` goes up when the job is leased, not when it fails, so the
+      // count alone is seen while the attempt is still running; pulling
+      // `run_after` forward then matches nothing and the retry waits its real
+      // minutes. Each round waits for the failure itself: attempt n recorded,
+      // back to pending, and put off into the future by the backoff.
+      const failed = async (n: number): Promise<boolean> => {
+        const { rows } = await pool.query(
+          `select 1 from core.jobs
+            where id = $1::uuid and attempts >= $2 and state = 'pending' and run_after > now()`,
+          [job.id, n],
+        );
+        return rows.length > 0;
+      };
       for (let n = 1; n <= 5; n += 1) {
-        await waitFor(async () => ((await getJob(pool, job.id))?.attempts ?? 0) >= n);
+        await waitFor(() => failed(n));
         // The last failure is left where the backoff put it — minutes away —
         // so the worker cannot lease it again between here and the read below.
         if (n === 5) break;
-        await pool.query(
+        const pulled = await pool.query(
           `update core.jobs set run_after = now() where id = $1::uuid and state = 'pending'`,
           [job.id],
         );
+        expect(pulled.rowCount).toBe(1);
       }
-      await waitFor(async () => (await getJob(pool, job.id))?.state === 'pending');
       await worker.stop();
       const after = await getJob(pool, job.id);
       expect(after?.state).toBe('pending');
-      expect(after?.attempts).toBeGreaterThanOrEqual(4);
+      expect(after?.attempts).toBe(5);
       expect(after?.maxAttempts).toBe(8);
     }, 30_000);
 

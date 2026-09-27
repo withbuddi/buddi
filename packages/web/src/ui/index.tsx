@@ -10,6 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 
 export { useAsync } from './async';
+export { Chart, chartGeometry, chartSummary, type ChartSeries } from './Chart';
 export { Icon, ICON_NAMES, type IconName } from './Icon';
 import { Icon, type IconName } from './Icon';
 export { Avatar, AgentAvatar, Mascot, MascotProvider } from '../views/parts/Avatar';

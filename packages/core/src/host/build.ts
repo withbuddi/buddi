@@ -32,6 +32,8 @@ import { registerChannel } from '../notifications/channels.js';
 import { notifyOwner } from '../notifications/notify.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
+import { getOwnerProfile } from '../onboarding/store.js';
+import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
@@ -294,6 +296,14 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
       agentForRole: (role) => (facts.agentForRole ?? services.agentForRole)?.(role),
       hasAgent: (id) => (facts.hasAgent ?? services.hasAgent)?.(id) ?? true,
       protectedPaths: facts.protectedPaths ?? [],
+      language: async () => {
+        try {
+          return languageTag((await getOwnerProfile(facts.db)).language);
+        } catch {
+          // No owner row (a fresh install, a test database): no answer, not an error.
+          return undefined;
+        }
+      },
     },
     clock: {
       now: () => facts.now(),

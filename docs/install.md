@@ -1,138 +1,126 @@
 ---
 title: "Install: one command, then the dashboard"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # Install: one command, then the dashboard
 
-Someone who is not a developer but can type `npm` gets from nothing to a
-working buddi, with their first agent answering in the browser, in about ten
-minutes and without reading a terminal. Owners install the package, and the
-dashboard is the surface that owns onboarding, upgrades and plugins. A source
-checkout is for developers working on buddi itself (§14). §13 says what of this
-page is built and what is not.
+You install buddi with npm, run `buddi` once, and the rest happens in your
+browser: the key for a model, who you are, your first agent. There is nothing
+to read in a terminal and nothing to answer there. From then on the dashboard
+is where you set buddi up, upgrade it and add plugins. A source checkout is
+for people working on buddi itself (§14). §13 lists what is not there yet.
 
-This is not a desktop app. A packaged app (Electron or Tauri, DMG or MSI) is a
-thin shell over everything below and is deferred until the install described
-here has a second owner running it. Nothing here prevents that shell; most of
-it is what the shell would need anyway.
+buddi is not a desktop app. There is no DMG or MSI; it runs as a background
+service on your machine and you reach it in the browser.
 
 ---
 
-## 1. What an owner does
+## 1. Install
 
 ```
 npm install -g @withbuddi/buddi
 buddi
 ```
 
-The first `buddi` with no data directory:
+The first `buddi`, when there is no data directory yet:
 
 1. creates the data directory (§4),
-2. provisions a private Postgres inside it (§3),
-3. writes the minimum to boot the gateway: database URL, a session secret, a
-   loopback port,
+2. sets up a private Postgres inside it (§3),
+3. writes what the gateway needs to start: the database URL, a session secret
+   and a loopback port,
 4. installs the background service and starts it (§6),
-5. opens the browser on `http://127.0.0.1:4317/#/welcome`.
+5. opens your browser on `http://127.0.0.1:4317/#/welcome`.
 
-Everything else — provider and keys, who the owner is, the first agent,
-Telegram, plugins — happens in the wizard (§5). The terminal prints one line
-per step and the URL; it asks nothing. Every later `buddi` with no arguments
+Everything else — the provider and its key, who you are, the first agent,
+Telegram, plugins — happens in the browser (§5). The terminal prints one line
+per step and the link, and asks nothing. Every later `buddi` with no arguments
 opens the dashboard.
 
-`buddi doctor`, `buddi service`, `buddi vault` and `buddi upgrade` also work
-from a terminal, for a headless machine. The wizard calls
-the same functions through the API; there is one implementation of each step.
+On a machine without a screen, `buddi doctor`, `buddi service`, `buddi vault`
+and `buddi upgrade` do the same work from a terminal. The dashboard calls the
+same code through its API, so each step has one implementation.
 
 ---
 
-## 2. Distribution
+## 2. What npm installs, and upgrades
 
-`buddi` becomes one published npm package that carries the CLI, the gateway,
-core, runtime, the built dashboard and the built-in tools. The monorepo stays;
-publishing is a bundling step (build, then a single package assembled
-from `packages/*/dist` with its runtime dependencies), not a restructuring.
-`@buddi/core` is published alongside it, unbundled, because plugins import it
+`@withbuddi/buddi` is one npm package. It carries the command line, the
+gateway, core, the runtime, the dashboard and the built-in tools.
+`@buddi/core` is published beside it, on its own, because plugins import it
 (§7).
 
-Requirements on the machine: Node 22 or newer. Nothing else. No Docker, no
-git, no pnpm, no build step. `buddi` itself has no install script. The one
-package that would want one is the Postgres binary package, whose upstream
-rebuilds the symlinks inside its binaries directory that way; it is not
-needed, because first run copies that directory into the data directory,
-checks the binaries are runnable and creates those links itself from the
-manifest the package ships (`prepareBinaries`). Every install in this project,
-the upgrade included, therefore passes `--ignore-scripts`. Provisioning of the
-cluster happens on first run, so a failed install leaves no half-state.
+What the machine needs: Node 22 or newer. Nothing else — no Docker, no git,
+no pnpm, no build step. `buddi` has no install script. The Postgres binaries
+come in a package whose upstream uses one to recreate symlinks inside its
+binaries directory; buddi does not need it, because the first run copies that
+directory into the data directory, checks the binaries run and makes those
+links itself from the manifest the package ships (`prepareBinaries`). So every
+install buddi runs, upgrades included, passes `--ignore-scripts`. The database
+is set up on the first run, not during the install, so a failed install leaves
+nothing half done.
 
-Versioning: the package version is the product version. `buddi upgrade`
-becomes `npm install -g @withbuddi/buddi@latest` followed by the existing
-build-free sequence: backup, migrate, restart. The dashboard shows the running
-version and says when a newer one is published (a version check against the
-npm registry, once a day, owner can turn it off).
+The package version is buddi's version. The dashboard shows the version that
+is running and says when a newer one is published: it asks the npm registry
+once a day, and you can turn that off.
 
-As built, the supervisor runs that sequence itself — `backup`, `stopping`,
-`installing`, then it hands over to the code it just installed, which migrates
-and records the outcome. The install passes `--ignore-scripts` like every
-other install here; the symlinks the Postgres package would have made are made
-at the successor's first start instead. The prefix comes from the install root
-that is running rather than from npm's configuration, so an installation made
-with `--prefix` upgrades itself and not some other copy — and an installation
-that turns out to sit inside somebody's project is refused in one sentence
-rather than upgraded by rewriting that project's `package.json`.
+**Upgrading.** `buddi upgrade`, or Upgrade in Settings → System, runs one
+sequence through the supervisor: `backup`, `stopping`, `installing`
+(`npm install -g @withbuddi/buddi@<version>`, with `--ignore-scripts` like every
+install here), then it hands over to the code it has just installed, which
+migrates and records how it went. The Postgres symlinks are made when the new
+version first starts. The install prefix is the install root that is running,
+not npm's configuration, so an installation made with `--prefix` upgrades
+itself and not another copy. An installation that sits inside somebody's
+project is refused in one sentence rather than upgraded by rewriting that
+project's `package.json`.
 
-What may be installed is one version: `1.2.3`, or `1.2.3-rc.1`. A range, a
-tag, a URL or an npm alias is refused by the dashboard route, by the control
-socket and by the supervisor alike; `latest` is a word the check resolves to a
-version before npm is told anything, and after npm returns the installed
-`package.json` has to say `buddi` at exactly that version or the upgrade is a
-failure that leaves the running version running. The backup taken first is
-encrypted exactly as the backup schedule says, so an installation with
-encryption on and no vault is told so before anything stops.
+What can be installed is one exact version: `1.2.3`, or `1.2.3-rc.1`. A range,
+a tag, a URL or an npm alias is refused by the dashboard, by the control socket
+and by the supervisor alike. `latest` is turned into a version before npm is
+told anything, and once npm returns, the installed `package.json` must say
+`buddi` at exactly that version; otherwise the upgrade fails and the running
+version keeps running. The backup taken first is encrypted the way your backup
+schedule says, so an installation with encryption on and no vault is told so
+before anything stops.
 
 ---
 
-## 3. Postgres without Docker
+## 3. Postgres, without Docker
 
-Postgres stays. The queue's `skip locked` claims, the scheduler's locks, jsonb
-everywhere, 32 core migrations and every plugin's own schema make a port to
-SQLite a rewrite, not an option.
+buddi keeps its data in Postgres. The work queue, the scheduler's locks, jsonb
+throughout, core's migrations and every plugin's own schema all depend on it.
 
-The install ships Postgres binaries for the platform through the
-`embedded-postgres` family of npm packages (per-platform optional
-dependencies, roughly 30 MB each; npm installs only the matching one). On
-first run buddi:
+The package brings Postgres binaries for your platform through the
+`embedded-postgres` npm packages: one optional dependency per platform,
+roughly 30 MB each, and npm installs only the one that matches. On the first
+run buddi:
 
-- runs `initdb` into `<data>/postgres` with a generated superuser password
-  stored in the vault,
+- runs `initdb` into `<data>/postgres`, with a generated superuser password
+  kept in the vault,
 - picks a free loopback port and records it,
 - starts the server, creates the `buddi` role and database, and migrates.
 
-The gateway owns the Postgres process: the service starts it before the
-gateway and stops it after. `buddi doctor` reports its state. A stopped or
-missing cluster is a doctor finding with a repair action, never a crash at
-the moment an agent needs the database.
+The service starts Postgres before the gateway and stops it after.
+`buddi doctor` reports its state. A stopped or missing database is a doctor
+finding with a repair, never a crash at the moment an agent needs it.
 
-The cluster manager itself lives in `@buddi/core` (`packages/core/src/postgres`),
-so the checkout CLI and the packaged launcher run one implementation: the
-binaries, `initdb`, the authenticated start and the liveness probe. The
-postmaster is always this process's own child. A server left on the cluster by
-a supervisor that was killed is stopped (`pg_ctl stop -m fast`) and started
-again, never adopted, so there is exactly one lifecycle to reason about.
+The server is always the supervisor's own child. If a supervisor was killed and
+left a server running on the cluster, the next one stops it
+(`pg_ctl stop -m fast`) and starts it again rather than adopting it.
 
-An owner with their own Postgres sets `DATABASE_URL` in the data directory's
-`.env`, exactly as today, and no cluster is provisioned. Docker is no longer
-mentioned anywhere in the install path; `docker compose` remains for the
-development checkout only.
+**Your own Postgres.** Set `DATABASE_URL` in the data directory's `.env` and
+buddi uses that database; no cluster is created. Docker plays no part in the
+install; `docker compose` is only for a source checkout.
 
-Backups are §8; they need no `pg_dump`, so the bundled cluster changes nothing.
+Backups (§8) need no `pg_dump`, so the bundled Postgres is enough for them.
 
 ---
 
 ## 4. The data directory
 
-One directory holds everything buddi owns:
+One directory holds everything buddi keeps:
 
 | Platform | Default |
 |---|---|
@@ -140,395 +128,350 @@ One directory holds everything buddi owns:
 | Linux | `$XDG_DATA_HOME/buddi`, else `~/.local/share/buddi` |
 | Windows | `%LOCALAPPDATA%\buddi` |
 
-Inside: `postgres/` (the cluster), `artifacts/` (the store), `plugins/`
-(§7), `logs/`, `backups/`, `browser/engines/` (the agents' Chromium, when
-buddi fetched it), `.env` (the few settings that are not secrets) and the file
-vault where there is no OS keychain. `BUDDI_DATA_DIR` overrides it,
-as today. Nothing is written outside it except the service unit and the OS
-keychain entries.
+Inside: `postgres/` (the database), `artifacts/` (your files), `plugins/`
+(§7), `logs/`, `backups/`, `browser/engines/` (the agents' Chromium, when buddi
+downloaded it), `.env` (the few settings that are not secrets) and, where there
+is no OS keychain, the file vault. `BUDDI_DATA_DIR` moves it. Nothing is written
+outside it except the service's unit file and the keychain entries.
 
-Secrets go in the vault: the macOS keychain on a Mac, an encrypted file
-everywhere else (`<data>/vault.json`, opened by the per-install key in
-`<data>/vault-key`, mode `0600`, minted on the first run). Windows gains
-Credential Manager through the same interface when it comes. Linux keeps the
-file vault on purpose, decided 2026-09-24: a Secret Service backend would help
-only desktop Linux with a keyring daemon, and a server has none. What the file
-vault protects is said plainly, in `buddi doctor` and here: the file at rest
-and against another account on the machine. The key sits beside the
-ciphertext under the owner's `0700` data directory, so anyone who can read
-that directory can open the vault — the same trust boundary as the database
-beside it. A backup is different: it is sealed with the owner's passphrase and
-the key never leaves the machine. The stronger form for a server — the key
-handed in by systemd (`LoadCredential=`, TPM-sealed where there is one) —
-waits on a system-unit install and is a roadmap note, not a redesign.
+**Secrets** go in the vault: the macOS keychain on a Mac, and an encrypted file
+everywhere else (`<data>/vault.json`, opened with the key in `<data>/vault-key`,
+mode `0600`, made on the first run). Linux uses the file vault on purpose: a
+Secret Service backend would only help desktop Linux with a keyring running, and
+a server has none. Windows has no Credential Manager vault yet (§13).
+
+What the file vault protects, plainly — `buddi doctor` says the same: the file
+at rest, and against another account on the machine. The key sits beside the
+encrypted file in your `0700` data directory, so anyone who can read that
+directory can open the vault, exactly as they could read the database beside
+it. A backup is different: it is sealed with your passphrase, and the key never
+leaves the machine. A key handed in by systemd (`LoadCredential=`, sealed by a
+TPM where there is one) would be stronger on a server; it needs a system-wide
+unit and is not there yet.
 
 ---
 
 ## 5. First run: you meet buddi
 
-**Built.** The seven screens this section used to describe are gone; the screen
-script is [onboarding.md](onboarding.md), and that document is the contract.
-What is here is only what the rest of this page depends on.
+[onboarding.md](onboarding.md) describes the first run screen by screen. What
+follows is only what the rest of this page relies on.
 
-The route is unchanged: `#/welcome`, and the dashboard sends the owner there —
-replacing the entry, not pushing it — when `core.onboarding` is still `pending`
-*and* the installation has no usable model account. A record that is `done`,
-`skipped` or `in-progress` (an interview another surface already claimed), and
-any installation that already has an account, never sees it. There is no way
-to reopen a finished first run: everything it set has a page of its own in
-Settings and on the agent's Setup tab.
+The dashboard sends you to `#/welcome` — replacing the page in your history,
+not adding one — while first run is still `pending` *and* the installation has
+no usable model account. Once it is `done`, `skipped` or `in-progress` (another
+surface already started it), or once there is an account, you never see it
+again. A finished first run cannot be reopened: everything it set has its own
+place in Settings and on the agent's Setup tab.
 
-What the owner sees is one thread, not a tour: buddi asks four things in
-message bubbles — a name, a clock, a brain for the assistant, and the assistant
-itself — each answered inline where a reply would go, each answer staying above
-with a "change" link. Then the assistant speaks first, on the model, and the
-screen does not change; only the speaker does. Reload replays the answered
-questions from the record, the profile and the accounts, and asks the first one
-nobody has answered.
+It is one conversation, not a tour. buddi asks four things in message bubbles —
+your name, your time zone, a brain for your assistant, and the assistant
+itself — and you answer each inline, where a reply would go; each answer stays
+above with a "change" link. Then your assistant speaks first, on its model, and
+the screen stays where it is; only the speaker changes. Reloading replays what
+you answered, from the record, your profile and your accounts, and asks the
+first question nobody has answered.
 
-The server routes are `GET /api/onboarding`, `POST /api/onboarding/step`,
-`/complete`, `/skip`, `/agent` and `/agent/update` (the script promises the
-owner can change their assistant's name, face and purpose, and once one exists
-that is an edit of its file rather than a second agent), plus
-`GET /api/onboarding/ollama` (is Ollama
-running on *this* machine — the page never reaches `localhost:11434` itself)
-and `POST /api/telegram/token` and `/api/telegram/pairing`, which is Telegram
-without a terminal: the token BotFather gave the owner goes into the vault, the
-surface starts in the running gateway when the process can start it, and the
-pairing code comes back as a link the thread draws as a QR code. Settings →
-Notifications uses the same two, plus `GET /api/telegram/bot`,
-`GET /api/telegram/devices` and `DELETE /api/telegram/devices/:id`
-([notifications.md](notifications.md), "Telegram"). All of them are behind the
-dashboard's ordinary session, Origin and CSRF gate.
-A step carries what its name cannot — the account the owner chose, and the
-conversation the handover opened — and `GET /api/onboarding` answers with both
-under `details`. That is what a reload mid-handover reads: the assistant is
-introduced by one turn, sent on the owner's behalf, claimed against the record
-so it can happen only once, marked as first run's on the message row and left
-out of every transcript the owner reads.
+Behind it are `GET /api/onboarding`, `POST /api/onboarding/step`, `/complete`,
+`/skip`, `/agent` and `/agent/update` (you can change your assistant's name,
+face and purpose, and once it exists that edits its file rather than making a
+second agent), plus `GET /api/onboarding/ollama` (is Ollama running on *this*
+machine; the page never calls `localhost:11434` itself), and
+`POST /api/telegram/token` and `/api/telegram/pairing`, which set Telegram up
+without a terminal: the token BotFather gave you goes into the vault, the bot
+starts in the running gateway when it can, and the pairing link comes back for
+the page to draw as a QR code. Settings → Notifications uses the same two, plus
+`GET /api/telegram/bot`, `GET /api/telegram/devices` and
+`DELETE /api/telegram/devices/:id` ([notifications.md](notifications.md),
+"Telegram"). All of them sit behind the dashboard's session, Origin and CSRF
+checks.
 
-`/complete` refuses while the installation still has no model account or no
-agent — "done" has to mean done — and `/skip` is the explicit bypass that
-always works. `done` and `skipped` are terminal in core, so the two endings
-cannot overwrite each other. Finishing or skipping here also closes the
-Telegram nudge arc, which has nothing to add to an owner who set up in the
-dashboard.
+A step keeps what its name cannot — the account you chose, and the
+conversation the handover opened — and `GET /api/onboarding` returns both
+under `details`. A reload in the middle of the handover reads them: your
+assistant is introduced by one turn sent on your behalf, claimed against the
+record so it happens only once, marked as first run's, and left out of every
+transcript you read.
 
-Everything else uses the API the settings pages use: the owner profile, the
-provider accounts (saved, then tested with one small call), and `/onboarding/agent`,
-which has an endpoint of its own because the alternative — an approval-gated
-tool call — is the wrong shape for the owner acting directly from their own
-dashboard. It takes the id of the account the thread just tested, so the
-assistant is bound to the brain the owner chose.
+`/complete` refuses while there is still no model account or no agent, so
+"done" means done; `/skip` always works. `done` and `skipped` are final, so the
+two cannot overwrite each other. Finishing or skipping here also ends the
+Telegram nudges, which have nothing to add once you set up in the dashboard.
 
-A source checkout's setup ends by opening the same route (§14).
+Everything else uses what Settings uses: your profile, the provider accounts
+(saved, then tested with one small call), and `/onboarding/agent`, which exists
+because you are acting from your own dashboard and an approval-gated tool call
+is the wrong shape for that. It takes the id of the account you just tested,
+so your assistant runs on the brain you chose.
+
+A source checkout's setup ends on the same page (§14).
 
 ---
 
 ## 6. Running in the background
 
-The service manager already writes a launchd agent on macOS and a systemd
-user unit on Linux. Windows gains a Task Scheduler entry at logon (no
-service host, no admin).
+buddi runs as a launchd agent on macOS and a systemd user unit on Linux.
+Windows has no service yet; the plan is a Task Scheduler entry at logon, with
+no service host and no admin rights (§13).
 
-The unit runs a small supervisor, `buddi supervise`, not the gateway
-directly. The supervisor owns the bundled Postgres and the gateway as two
-children: it starts Postgres, waits for it to answer, then starts the
-gateway; it restarts the gateway when it exits; and it keeps Postgres up
-while the gateway is down. Maintenance therefore never needs the gateway:
+The unit runs a small supervisor, `buddi supervise`, not the gateway itself.
+The supervisor owns two children, Postgres and the gateway: it starts Postgres,
+waits for it to answer, then starts the gateway; it restarts the gateway when it
+exits; and it keeps Postgres up while the gateway is down. So maintenance never
+needs the gateway:
 
-- The supervisor's whole control surface is a Unix domain socket,
-  `supervisor.sock` in the data directory, mode 0600 inside a 0700 directory.
-  It answers `GET /status` and `POST /start|/stop|/restart`, the backup verbs,
-  `GET /version`, `POST /version/check`, `PUT /version/check` and
-  `POST /upgrade`, JSON in and out, with no token and no session: the
-  filesystem is the credential, because only the owning user can open the
-  socket. There is no second web surface to log in to.
-- `buddi upgrade`, `buddi backup restore` and `buddi migrate` talk to the
-  supervisor over that socket: "stop the gateway, keep the database", do the
-  work, "start the gateway". With no supervisor running (the service not
-  installed, or a source checkout) they start Postgres themselves for the
-  duration and stop it after.
-- The Start, Stop and Restart switches live in the dashboard, in Settings →
-  System, and act through the supervisor rather than the gateway — so a
-  restart leaves the database up. They are there only while the gateway is up
-  to serve them: a stop or a restart closes the page it was pressed on, and
-  the page says so before it asks. When the gateway is down, `buddi` in a
-  terminal starts it again. A checkout with no supervisor shows no section at
-  all.
-- An interrupted upgrade is recoverable by construction: the backup is taken
-  first, migrations run in one transaction each, and the supervisor records
-  the step it was on in a state file; the next start reads it, finishes or
-  rolls back, and reports in doctor. The gateway refuses to start against a
-  schema newer than its own code and says which version it needs.
+- **The control socket.** The supervisor's only control surface is a Unix
+  socket, `supervisor.sock` in the data directory, mode 0600 in a 0700
+  directory. It answers `GET /status`, `POST /start|/stop|/restart`, the backup
+  verbs, `GET /version`, `POST /version/check`, `PUT /version/check` and
+  `POST /upgrade`, JSON in and out, with no token and no session: only your
+  user can open the socket, and that is the credential. There is no second web
+  page to sign in to.
+- **Maintenance commands.** `buddi upgrade`, `buddi backup restore` and
+  `buddi migrate` ask the supervisor over that socket to stop the gateway and
+  keep the database, do their work, and start the gateway again. With no
+  supervisor running (no service installed, or a source checkout) they start
+  Postgres themselves for as long as they need it.
+- **Start, Stop and Restart** are in Settings → System, and act through the
+  supervisor, so a restart keeps the database up. They are there only while the
+  gateway is up to serve the page: a stop or a restart closes the page you
+  pressed it on, and the page says so before it asks. When the gateway is down,
+  `buddi` in a terminal starts it again. A checkout with no supervisor shows no
+  such section.
+- **An interrupted upgrade recovers.** The backup comes first, each migration
+  runs in its own transaction, and the supervisor writes down the step it is
+  on; the next start reads it, finishes or rolls back, and `buddi doctor`
+  reports it. The gateway refuses to start on a database newer than its code
+  and says which version it needs.
 
-  As built: `installation.json` carries `phase: upgrading` plus the versions
-  and the archive from the moment the new code is on disk until the supervisor
-  running that code has migrated. On success the phase is `ready` again and
-  `<data>/upgrade.json` gains a `done` entry; on failure the phase stays
-  `upgrade-failed`, the gateway is deliberately not started, and doctor prints
-  the one sentence that names the archive and the two commands back. Under
-  launchd the hand-over is an exit: the agent has `KeepAlive` and its
-  `ProgramArguments` name the launcher inside the install root, which the
-  install has just replaced, so launchd starts the new code from the same path.
-  That case is recognised by identity — `XPC_SERVICE_NAME` naming this
-  installation's own agent — and not by having pid 1 as a parent, which every
-  detached process has. Off launchd the supervisor spawns its own successor and
-  waits up to a minute for it to answer `/status` with the new version, which
-  is the readiness that matters (holding the lock is not: a successor can take
-  the lock and then die bringing the cluster up). It tries a second time, and
-  if nothing answers it writes the attempt down as failed at `starting`, with
-  the recovery sentence, before it goes.
+What an upgrade writes down: `installation.json` holds `phase: upgrading`, the
+two versions and the backup archive from the moment the new code is on disk
+until the supervisor running that code has migrated. When it succeeds the phase
+is `ready` again and `<data>/upgrade.json` gains a `done` entry. When it fails
+the phase stays `upgrade-failed`, the gateway is not started, and doctor prints
+one sentence naming the archive and the two commands that take you back.
 
-  Which upgrade is half done is the marker in `installation.json`, not the
-  phase: a crash while migrating can leave any phase on disk, so a start
-  finishes whatever `state.upgrade` names and clears it only together with the
-  outcome. From the moment the new code is on disk the old gateway is never
-  started again — what is down stays down until the new supervisor brings it
-  up, rather than serving last month's code over a database the new code owns.
+How the new code takes over: under launchd the old supervisor simply exits.
+The agent has `KeepAlive`, and its `ProgramArguments` name the launcher inside
+the install root the upgrade has just replaced, so launchd starts the new code
+from the same path. buddi knows it runs under its own launchd agent from
+`XPC_SERVICE_NAME`, not from having pid 1 as a parent, which every detached
+process has. Elsewhere the supervisor starts its successor itself and waits up
+to a minute for it to answer `/status` with the new version — the readiness that
+counts, since a successor can take the lock and then fail to bring the database
+up. It tries twice; if nothing answers, it records the attempt as failed at
+`starting`, with the recovery sentence, before it exits.
 
-`buddi service` remains the CLI face of the same manager and gains
-`buddi service status --json` for the page. Logs are files in the data
-directory, one per child, shown in the dashboard's Activity page on request.
+Which upgrade is half done is the marker in `installation.json`, not the phase:
+a crash while migrating can leave any phase on disk, so a start finishes
+whatever `state.upgrade` names and clears it only together with the outcome.
+From the moment the new code is on disk, the old gateway never starts again;
+what is down stays down until the new supervisor brings it up, rather than old
+code running over a database the new code owns.
 
-A menu-bar or tray presence is out of scope; it belongs to the deferred app
-shell.
+`buddi service` is the command-line side of the same manager, and
+`buddi service status --json` is what the page reads. Logs are files in the
+data directory, one per child; Activity shows them on request. There is no
+menu-bar or tray icon.
 
 ---
 
-## 7. Plugins: distribution and install
+## 7. Plugins
 
-Today a plugin is compiled into the gateway at its composition root and
-installed from a built directory. That stays the developer path. For an
-owner, a plugin is an npm package:
+A plugin you install is an npm package. (A plugin compiled into the gateway and
+installed from a built directory is the developer path.)
 
-- **Contract unchanged.** A plugin package exports a `PluginManifest` from
-  its entry point and depends on `@buddi/core` as a peer dependency. Its
-  migrations, tools, sentinels, views and suggestions are as `docs/plugins.md`
-  describes. Nothing in the manifest changes.
-- **Naming.** Packages are discoverable by the keyword `buddi-plugin` and a
-  `buddi` field in `package.json` naming the manifest export and the minimum
-  core version. Unscoped names, scoped names and private registries all work;
-  the name is whatever npm resolves.
-- **Install, in two halves with approval between them.** Importing a
-  plugin's entry point executes its code; the existing loader says so. So
-  nothing of the plugin runs before the owner has approved it:
-  1. *Stage.* `npm pack` the package into a staging directory under
-     `<data>/plugins/staging`, and install its dependencies there with
-     `--ignore-scripts`. Nothing is imported. Read only static metadata:
-     `package.json` (name, version, the `buddi` field, dependencies,
-     whether any dependency declares lifecycle scripts, the peer range on
-     `@buddi/core`), the registry's integrity hash and publisher, and the
-     `buddi.md` the package ships, which is where a plugin states in prose
-     what it does, which schema it owns and which hosts it reaches. A
-     manifest cannot be validated at this point, and the page says the
-     summary is the package's claim.
-  2. *Approve.* The owner sees name, version, publisher, integrity hash,
-     dependency count and any with install scripts, the claimed schema and
-     hosts, and this sentence: **a plugin runs inside buddi's process with
+- **The contract.** A plugin package exports a `PluginManifest` from its entry
+  point and depends on `@buddi/core` as a peer dependency. Its migrations,
+  tools, sentinels, views and suggestions are as [plugins.md](plugins.md)
+  describes.
+- **Names.** Plugins carry the npm keyword `buddi-plugin` and a `buddi` field
+  in `package.json` naming the manifest export and the lowest core version
+  they need. Unscoped names, scoped names and private registries all work; the
+  name is whatever npm resolves.
+- **Installing happens in two halves, with your approval between them.**
+  Importing a plugin's entry point runs its code, so nothing of the plugin runs
+  before you approve it:
+  1. *Stage.* buddi runs `npm pack` on the package into
+     `<data>/plugins/staging` and installs its dependencies there with
+     `--ignore-scripts`. Nothing is imported. It reads only what is static:
+     `package.json` (name, version, the `buddi` field, dependencies, whether any
+     dependency has lifecycle scripts, the peer range on `@buddi/core`), the
+     registry's integrity hash and publisher, and the `buddi.md` the package
+     ships, where a plugin says in prose what it does, which schema it owns and
+     which hosts it reaches. The manifest cannot be checked yet, and the page
+     says the summary is the package's own claim.
+  2. *Approve.* You see the name, version, publisher, integrity hash, how many
+     dependencies it has and which have install scripts, the schema and hosts
+     it claims, and this sentence: **a plugin runs inside buddi's process with
      everything buddi can do; it is not sandboxed, and a plugin that wants to
      can bypass tool approvals and the network allowlist. Install only what
-     you would run as yourself.** Approval is `gated` and recorded with the
+     you would run as yourself.** The approval is `gated` and recorded with the
      integrity hash.
-  3. *Load and plan.* Only now is the entry point imported. The existing
-     plan runs: the manifest is validated, a name or schema collision is
-     refused, the claims in `buddi.md` are compared with the manifest's
-     contributions and hosts and any difference is shown and needs a second
-     approval. Then it is registered, its migrations are applied into its
-     own schema, and the install is recorded with its provenance.
-  The plan exists (`packages/gateway/src/plugins/install.ts`); staging and
-  the npm source are the pieces it was written to wait for. A package the
-  owner rejects is deleted from staging.
-- **Loading.** Installed plugins are loaded at gateway start from
-  `<data>/plugins`, after the built-ins, through the same manifest loader.
-  A plugin that fails to load is reported in doctor and on the Plugins page
-  and is skipped; it never stops the gateway.
-- **Trust, stated plainly.** The registry, the approval machinery and the
-  network allowlist protect the owner from what the *model* does through a
-  well-behaved plugin. They do not protect against the plugin's own code,
-  which runs with the process's full privileges and can reach the database,
-  the vault and the network directly. Isolation is not on this roadmap;
-  the honest control is the approval above, the recorded hash, and doctor
-  reporting when what is on disk no longer matches what was approved. There
-  is no marketplace and no curation; a plugin comes from a name the owner
-  typed, and the Plugins page repeats the sentence from step 2.
-- **Update and remove.** `buddi plugins update <name>` reinstalls at the
-  newer version and re-runs the plan (migrations forward only). Uninstall
-  keeps the schema; `--purge` drops it, as today.
-- **Agents that need a plugin.** A suggested agent whose role no plugin
-  claims stays a suggestion; the Plugins page shows which suggestions each
-  plugin would unlock, so "install finance" and "accept Ledger" are two
-  steps the owner sees together.
+  3. *Load and plan.* Only now is the entry point imported. The manifest is
+     validated; a clash of names or schemas is refused; what `buddi.md` claimed
+     is compared with the manifest's contributions and hosts, and any
+     difference is shown to you and needs a second approval. Then the plugin
+     is registered, its migrations run in its own schema, and the install is
+     recorded with where it came from.
+  A package you reject is deleted from staging.
+- **Loading.** Installed plugins load when the gateway starts, from
+  `<data>/plugins`, after the built-in ones. A plugin that fails to load is
+  reported in doctor and on the Plugins page and skipped; it never stops the
+  gateway.
+- **Trust, plainly.** The approvals and the network allowlist protect you from
+  what the *model* does through a well-behaved plugin. They do not protect you
+  from the plugin's own code, which runs with the process's full rights and
+  can reach the database, the vault and the network directly. There is no
+  isolation. What you have is the approval above, the recorded hash, and doctor
+  telling you when what is on disk no longer matches what you approved. There
+  is no marketplace and no curation: a plugin comes from a name you typed, and
+  the Plugins page repeats the sentence from step 2.
+- **Update and remove.** `buddi plugins update <name>` stages the newer
+  version and runs the plan again (migrations only go forward).
+  `buddi plugins uninstall <name>` keeps the schema; `--purge` drops it.
+- **Agents that need a plugin.** A suggested agent whose role no plugin covers
+  stays a suggestion. The Plugins page shows which suggestions each plugin
+  would unlock, so installing finance and accepting Ledger are two steps you
+  see side by side.
 
-Sharing a plugin between two owners is therefore `npm publish` on one side
-and `buddi plugins install` on the other, or a tarball path for a plugin that
-should never be public.
+Sharing a plugin with someone else is `npm publish` on one side and
+`buddi plugins install <name>` on the other, or a tarball path for a plugin
+that should never be public.
 
 ---
 
 ## 8. Backup and restore
 
-[operations.md](operations.md) is the owner-facing page for backup and restore
-and owns all of it: what an archive holds, the passphrase, the schedule, the
-Backup page, restore, the pre-restore snapshot and recovery mode. Read it
-first. This section keeps only what belongs to the install spec: why a packaged
-install cannot use `pg_dump`, the copy off the machine, and restore from the
-wizard.
+[operations.md](operations.md) is the page for backup and restore: what an
+archive holds, the passphrase, the schedule, the Backup page, restore, the
+snapshot taken before a restore, and recovery mode. Read it first. This section
+covers what is particular to an npm install.
 
-### 8.1 Why there is no `pg_dump`
+### 8.1 No `pg_dump` needed
 
 The bundled Postgres (`@embedded-postgres/*`, and the zonky jars behind it)
-ships `initdb`, `pg_ctl` and `postgres` and nothing else, so an engine that
-shelled out to `pg_dump` would work only on a developer machine with Homebrew
-Postgres on it. The engine therefore reads and writes the database over the
-ordinary connection, from `packages/core/src/backup`, so the CLI, the
-supervisor and the dashboard all call the same one; the schema is rebuilt from
-our own migrations rather than by a server-side restore. The consequence that
-matters for a packaged install: the *code* has to know the schema, not the
-server, so any Postgres this build runs on can read any archive this build
-wrote, newer or older cluster alike, and `pg_upgrade` is never needed. The
-manifest records the `@buddi/core` version rather than a description of the
-checkout, which says nothing on a packaged install.
+has `initdb`, `pg_ctl` and `postgres` and nothing else. So buddi's backup
+reads and writes the database over its ordinary connection
+(`packages/core/src/backup`), and the command line, the supervisor and the
+dashboard all use that one engine. A restore rebuilds the schema from buddi's
+own migrations rather than asking the server to. The result: buddi's *code*
+knows the schema, so any Postgres this version runs on can read any archive
+this version wrote, from a newer or an older server alike, and you never need
+`pg_upgrade`. The archive's manifest records the `@buddi/core` version.
 [operations.md](operations.md) has the archive layout and the manifest fields.
 
-The archive also carries **the plugin record**: for each installed plugin its
-name, version, integrity hash and *source* — a registry name, a tarball path,
-or a directory — so restore can reinstall what it can and name what it cannot
-(a tarball that was on the old machine's disk is the owner's to supply again).
-That record exists because plugins arrive from npm in a packaged install (§7);
-the bundled Postgres binaries and the installed plugin packages are themselves
-never in an archive, since they are reinstalled.
+The archive also holds **the plugin record**: each installed plugin's name,
+version, integrity hash and *source* — a registry name, a tarball path or a
+directory — so a restore reinstalls what it can and names what it cannot (a
+tarball that was on the old machine's disk is yours to supply again). The
+Postgres binaries and the plugin packages themselves are never in an archive;
+they are reinstalled.
 
 ### 8.2 A copy off the machine
 
-Two tiers, the first covering most of the value at almost no cost.
+**A folder.** Point buddi at a folder something else syncs: the Google Drive,
+Dropbox, iCloud Drive or OneDrive desktop app's folder, a Syncthing share, a
+mounted disk. After each scheduled backup, the encrypted archive and its
+envelope are copied there and pruned there by the same retention. No
+credentials, no API, no network code. The Backup page checks that the folder
+exists and can be written, and shows how old the last copy is. Restoring from
+a folder is picking the file. Every copy that leaves the machine is encrypted;
+there is no way to send an unencrypted archive off it.
 
-**Tier one: a folder.** Built. The owner points buddi at a directory that
-something else syncs: the Google Drive, Dropbox, iCloud Drive or OneDrive
-desktop client's folder, a Syncthing share, a mounted disk. After each
-scheduled backup, the encrypted archive and its envelope are copied there and
-pruned there by the same retention. No credentials, no API, no network code.
-The Backup page validates that the folder exists and is writable, and shows the
-last copy's age. Restore from a folder is "pick the file".
+Signing in to Google Drive or Dropbox directly, with no desktop app, is not
+there yet (§13).
 
-**Tier two: the provider's API.** Not built (§13). Google Drive and Dropbox,
-through OAuth in the browser: buddi opens the consent page, receives the
-redirect on loopback, and keeps the refresh token in the vault. Scope is the
-narrowest each offers: Drive's per-application folder (`drive.appdata` or
-`drive.file`), Dropbox's app folder. After each backup the encrypted archive is
-uploaded; `list`, `verify` and `restore` work against the remote listing;
-retention prunes remotely. This is the tier that makes "restore on a brand-new
-machine from the wizard" possible without a desktop client. It adds two hosts
-to the network allowlist, both named on the Backup page, and a provider outage
-degrades to "the copy is late", reported by doctor, never a failed backup.
+### 8.3 Restoring on first run
 
-The provider layer is one interface (`put`, `list`, `get`, `delete`) behind
-both tiers; the folder is the first implementation and the reference for the
-tests. Adding a third provider is one file. Encryption is forced on for every
-remote target: there is no way to send an unencrypted archive off the machine.
-
-### 8.3 Restore in the wizard
-
-The welcome screen gains a second button: "I have a backup". It leads to a
-step before "You": choose the source (a file, a folder, or sign in to Drive
-or Dropbox), pick the archive, enter the passphrase, see what it holds, and
-restore. The wizard then continues at the model step, since keys are never in
-a backup, and the "You" step is skipped because the profile came back. This
-is also how an owner moves from the developer checkout to the npm install,
-and from one machine to the next. The restored installation starts in recovery
-mode, as [operations.md](operations.md) describes.
+Before its first question, first run offers **I have a backup from another
+buddi**: pick the backup file, give its passphrase if it was locked with one,
+and press Restore. The thread says where the restore has got to, one line per
+step. A backup never carries keys, so the model step asks for your key once
+more; your name and profile come back with the backup, so buddi welcomes you
+back instead of asking who you are. The restored installation starts in
+recovery mode, as [operations.md](operations.md) describes. This is also how
+you move from a source checkout to the npm install, and from one machine to the
+next. Restoring straight from Google Drive or Dropbox needs the sign-in that is
+not there yet (§13); a synced folder's file works today.
 
 ---
 
 ## 9. Platforms
 
-The agents' own browser (the default mode) needs a browser binary, and the
-tarball ships none: Playwright's Chromium arrives only through its installer.
-The first run prints one line saying which browser was found — Google Chrome,
-or Chromium already installed — or "not installed yet — buddi browser install
-(about 150 MB)", and repeats that line on later runs until one is.
+**The agents' own browser** (the default mode) needs a browser, and the package
+ships none: Playwright's Chromium arrives only through its installer. The first
+run prints one line saying which browser it found — Google Chrome, or a
+Chromium already installed — or "not installed yet — buddi browser install
+(about 150 MB)", and repeats that line on later runs until there is one.
 `buddi browser install`, or **Install Chromium** in Settings → Computer &
 browser, runs Playwright's installer from the copy buddi ships;
-`BUDDI_BROWSER_INSTALL=1 buddi` does it on the first run. It lands in
+`BUDDI_BROWSER_INSTALL=1 buddi` does it on the first run. Chromium lands in
 `<data>/browser/engines`, so a container that keeps its data volume keeps the
 browser too; `buddi browser` says where it is. An install that already had
 Chromium in Playwright's own cache keeps using it until `buddi browser install`
 runs again. On a Linux server with no display the browser runs headless (see
-docs/browser.md).
+[browser.md](browser.md)).
 
-The third browser mode, **Your browser**, is Chrome on every platform: the
-tarball carries the unpacked extension at `<root>/extension`, the owner loads it
-through `chrome://extensions` → Developer mode → Load unpacked, and pairs it
-with a six-digit code in Computer & browser. Nothing about it is macOS-only.
+**Your browser** is Chrome on every platform: the package carries the unpacked
+extension at `<root>/extension`; you load it through `chrome://extensions` →
+Developer mode → Load unpacked, and pair it with a six-digit code in Computer &
+browser. Nothing about it is macOS-only.
 
-- **macOS**: the reference platform, and today the only supported one.
-  Everything above; computer control (the browser plugin's computer mode)
-  stays macOS-only.
-- **Linux** — *in trial* (2026-09-24, on a Pop!_OS home server). The packaged
-  install works: the file vault, the bundled Postgres, and a systemd *user*
-  unit written by `buddi` the way the LaunchAgent is on macOS (it survives
-  logout only after `loginctl enable-linger`). Browser automation through
-  Playwright and "Your browser" — the Chrome extension in `<root>/extension`,
-  loaded unpacked and paired from Settings — are untested there; computer
-  control will not work, and says so. A Secret Service vault is not planned
-  while the file vault covers a headless host (§13).
-- **Windows** — *planned*. The target is the core loop, the dashboard, the
-  bundled Postgres, Telegram, email, memory and web plugins. Host execution
-  (`host.exec`) refuses on Windows and will stay refused until it is written
-  against PowerShell with the same approval shape; browser automation via
-  Playwright is expected to work, as is "Your browser" through the Chrome
-  extension. The Task Scheduler service and the Credential Manager vault are
-  the pieces still to be written. Once Windows is supported for the generic
-  install, plugins will declare their own platform support in the manifest and
-  the Plugins page will show it.
-
-Anything platform-specific is to sit behind one function with a stated
-fallback, and `generic-install.test.ts` is to gain a run per platform in CI
-(macOS, Ubuntu, Windows runners) that installs the published package into a
-clean home, runs first-run headless, and asserts the gateway answers. That CI
-job does not exist yet (§13).
+- **macOS** is the reference platform, and the one supported today.
+  Everything on this page works there. Computer control (the browser plugin's
+  Use my apps mode) is macOS-only.
+- **Linux** is in trial, on a Pop!_OS home server. The npm install works: the
+  file vault, the bundled Postgres, and a systemd *user* unit that `buddi`
+  writes the way it writes the LaunchAgent on macOS (it survives logging out
+  only after `loginctl enable-linger`). The agents' own browser and "Your
+  browser" are untested there. Computer control does not work, and says so.
+- **Windows** is not supported yet. What is aimed for is the core loop, the
+  dashboard, the bundled Postgres, Telegram, email, memory and the web plugin.
+  Running commands on the host (`host.exec`) is refused on Windows until it is
+  written against PowerShell with the same approval. The agents' own browser
+  and "Your browser" are expected to work. The Task Scheduler service and the
+  Credential Manager vault do not exist yet, and plugins do not yet say which
+  platforms they support.
 
 ---
 
 ## 10. Security
 
-- The dashboard listens on loopback only, unchanged. The wizard never
-  proposes a network bind.
-- Keys never touch a terminal, a log or `.env`; they go from the wizard's
-  form to the vault over the loopback session with the CSRF header, as
-  every write does.
+- The dashboard listens on loopback only, and first run never offers a network
+  address.
+- Keys never touch a terminal, a log or `.env`: they go from the form in your
+  browser to the vault over the loopback session with the CSRF header, like
+  every write.
 - The bundled Postgres listens on loopback with a password only the vault
   holds; there is no trust authentication.
-- Plugin install is approved by the owner with the contributions and hosts
-  in front of them, and is recorded with the package integrity hash so
-  doctor can say if what is on disk is what was approved.
-- Signing in through Tailscale is off until an owner turns it on in Settings
-  → System and names the login that may sign in. It never trusts the proxy's
-  headers on their own: the connection must arrive on loopback, `X-Forwarded-For`
-  must name exactly one address (Serve overwrites that header; a second proxy
-  appends, and a list is refused), that address must be a tailnet address,
+- You approve a plugin install with its contributions and hosts in front of
+  you, and it is recorded with the package's integrity hash, so doctor can say
+  whether what is on disk is what you approved.
+- **Signing in through Tailscale** is off until you turn it on in Settings →
+  System and name the login that may sign in. buddi never trusts the proxy's
+  headers alone: the connection must arrive on loopback, `X-Forwarded-For` must
+  name exactly one address (Serve overwrites that header; a second proxy
+  appends to it, and a list is refused), that address must be on your tailnet,
   `X-Forwarded-Proto` must be `https`, and the local `tailscaled` must confirm
-  over its own socket that the address belongs to that login and that the login
-  the header claimed is the one it names. The session it mints is a remote one
-  — 12 hours idle, seven days at the outside, Secure cookies, CSRF and Origin
-  checks — and it is re-confirmed against the daemon on every request, so
-  turning the setting off or naming a different login ends every tailnet
-  session at once. The setting itself can only be changed from a session
-  established on this machine.
-- What that does **not** prove, plainly: the gateway cannot distinguish
-  `tailscale serve` from another process on the same machine connecting to the
-  same loopback port and spelling the same headers. This feature therefore
-  extends to the tailnet the trust the loopback dashboard already gives the
-  machine — no more than that, and no less. It is a small step rather than a
-  new exposure, because a process that can reach the loopback port could
-  already read the data directory, the `.env` and the keychain, and so already
-  had everything a dashboard session could give it. An owner who does not
-  accept that should not publish the dashboard on the tailnet at all.
-- The version check and the plugin install are the only outbound calls the
-  install path makes, both to the npm registry, both through the shared
-  transport, both disclosed on the security screen. A cloud backup target
-  adds its provider's hosts, named on the Backup page, and nothing leaves
-  for them unencrypted.
+  over its own socket that the address belongs to that login and that the
+  login the header claims is the one it names. The session is a remote one —
+  12 hours idle, seven days at most, Secure cookies, CSRF and Origin checks —
+  and it is checked against the daemon on every request, so turning the
+  setting off or naming a different login ends every tailnet session at once.
+  The setting itself can only be changed from a session on this machine.
+- What that does **not** prove: the gateway cannot tell `tailscale serve` from
+  another process on the same machine connecting to the same loopback port and
+  sending the same headers. So this extends to your tailnet the trust the
+  loopback dashboard already gives your machine, no more and no less. It is a
+  small step, because a process that can reach the loopback port can already
+  read the data directory, the `.env` and the keychain, and so already has
+  everything a dashboard session could give it. If you do not accept that, do
+  not publish the dashboard on your tailnet.
+
+**What leaves the machine.** The install itself makes two outbound calls, both
+to the npm registry, both through buddi's shared transport, both listed on the
+security screen: the daily version check and a plugin install. A folder copy of
+your backups goes wherever that folder syncs, and only encrypted.
 
 ---
 
@@ -577,80 +520,66 @@ and leaves the repository, `.env` and the data folder alone.
 
 ---
 
-## 12. Acceptance
+## 12. Checking an install
 
-1. A clean macOS user account with Node 22: `npm install -g @withbuddi/buddi && buddi`
-   opens the wizard within a minute; a pasted key and a first agent produce
-   an answer without any other terminal command.
-2. The same on Ubuntu and on Windows 11, with computer control and host
-   execution declining in the words above rather than failing.
-3. Reload or restart in the middle of the wizard resumes at the same step
-   with everything already entered still there.
-4. `npm install -g @withbuddi/buddi@<next>` then `buddi upgrade` migrates and restarts
-   with a backup taken first; the dashboard shows the new version.
-5. `buddi plugins install <published plugin>` shows the plan, waits for
-   approval, registers the plugin, and its tools appear in the agents'
-   tool lists; uninstall removes them and `--purge` drops the schema.
-6. A source checkout with Docker keeps its own setup, ending in the same
-   wizard at step 3.
-7. The `generic-install` check still passes with zero plugins, and the
-   new CI job passes on the three platforms.
-8. A scheduled backup lands encrypted in a synced folder; on a clean machine
-   the wizard's "I have a backup" restores it from that folder with the
-   passphrase, and the first agent answers after the key is pasted once.
-9. The same through Dropbox or Google Drive sign-in, with no desktop client
-   installed; the archive on the provider is unreadable without the
-   passphrase, and `age -d` plus `tar` open it without buddi.
-10. A restored installation runs no mission, poll, queue claim or Telegram
-    connection until the owner leaves recovery mode; a restore whose file
-    step fails leaves the target database exactly as it was.
-11. Installing a plugin whose package has an install script, or whose entry
-    point throws on import, executes nothing before the owner has approved
-    the staged summary; rejecting it leaves nothing on disk.
-12. With the gateway stopped, the dashboard tab can start it; `buddi upgrade`
-    interrupted after the backup and before the restart is completed or
-    rolled back on the next start, and doctor says which.
+What a working install looks like, and how to see it:
+
+1. On a clean macOS account with Node 22, `npm install -g @withbuddi/buddi && buddi`
+   opens first run within a minute; a pasted key and a first agent give an
+   answer without any other terminal command.
+2. Reloading or restarting in the middle of first run comes back to the same
+   question, with everything you already answered still there.
+3. After `npm install -g @withbuddi/buddi@<next>`, `buddi upgrade` takes a
+   backup, migrates and restarts; the dashboard shows the new version.
+4. `buddi plugins install <published plugin>` shows what the plugin claims,
+   waits for your approval, registers it, and its tools appear in the agents'
+   tool lists; `buddi plugins uninstall` removes them and `--purge` drops the
+   schema.
+5. A source checkout with Docker keeps its own setup and ends on the same
+   first-run page.
+6. A scheduled backup lands encrypted in a synced folder; on a clean machine,
+   first run's "I have a backup from another buddi" restores it with the
+   passphrase, and the first agent answers once the key is pasted again. The
+   archive is unreadable without the passphrase, and `age -d` plus `tar` open
+   it without buddi.
+7. A restored installation runs no mission, poll, queue claim or Telegram
+   connection until you leave recovery mode; a restore whose file step fails
+   leaves the database exactly as it was.
+8. A plugin whose package has an install script, or whose entry point throws on
+   import, runs nothing before you approve the staged summary; rejecting it
+   leaves nothing on disk.
+9. With the gateway stopped, `buddi` starts it again; an upgrade interrupted
+   after the backup and before the restart is finished or rolled back on the
+   next start, and `buddi doctor` says which.
 
 ---
 
-## 13. What of this is built
+## 13. What is not there yet
 
-Built:
-
-1. **The published package**: bundling and `bin` (`packages/install`).
-2. **Bundled Postgres under the supervisor**, `buddi` first run, the data
-   directory layout, and the maintenance path for upgrade and restore
-   (`packages/install/src/{postgres,supervisor,launcher,environment}.ts`;
-   §14 has the map).
-3. **The wizard**, reusing the settings pages; `init` ends in it
-   (`packages/cli/src/init.ts`, and [onboarding.md](onboarding.md)).
-4. **Encrypted backup to a folder**, restore with recovery mode, the Backup
-   page (`packages/core/src/backup`,
-   `packages/web/src/views/{Backup,Recovery}.tsx`, and
-   [operations.md](operations.md)).
-5. **Plugins from npm**: staging, approval before import, the loader for
-   `<data>/plugins`, provenance and doctor checks
-   (`packages/gateway/src/plugins/{npm,stage,install}.ts`,
-   `packages/web/src/views/Plugins.tsx`).
-7. **The version check and the upgrade action in the dashboard**
-   (`packages/web/src/views/Settings.tsx`, `packages/install/src/upgrade.ts`).
-
-Not built:
-
-6. **Linux and Windows.** Linux: the file vault, the bundled Postgres and the
-   systemd user unit (`packages/install/src/launcher.ts`) — no Secret Service backend, by choice.
-   Windows: the data-directory layout knows it
-   (`packages/install/src/environment.ts`) and nothing else does — no
-   Credential Manager vault, no Task Scheduler unit. The repository carries
-   no CI workflow at all.
-8. **The provider APIs for backup (Drive, Dropbox).** No code references
-   either.
-
-Three parts carry real risk and get the same care: the managed cluster,
-plugin code executing in the process, and restore.
-
-The app shell, if it comes, wraps the result of steps 1 to 3 and adds
-signing, auto-update and a tray. It is not on this list.
+- **Windows.** The data directory knows where it goes
+  (`packages/install/src/environment.ts`) and nothing else does: there is no
+  Credential Manager vault and no Task Scheduler unit, and `host.exec` is
+  refused.
+- **Linux, fully.** The file vault, the bundled Postgres and the systemd user
+  unit work (`packages/install/src/launcher.ts`); the browser modes are
+  untested and computer control is macOS-only. A Secret Service vault is not
+  planned while the file vault covers a headless machine.
+- **Backups to Google Drive or Dropbox by sign-in.** The plan is OAuth in the
+  browser (the consent page, the redirect received on loopback, the refresh
+  token kept in the vault), each provider's narrowest scope (Drive's
+  per-application folder, `drive.appdata` or `drive.file`; Dropbox's app
+  folder), upload after each backup, `list`, `verify` and `restore` against the
+  remote listing, and retention pruning there too. It would add two hosts to
+  the network allowlist, both named on the Backup page, and a provider outage
+  would make the copy late, reported by doctor, never fail the backup. The
+  folder copy already sits behind the one interface this would use (`put`,
+  `list`, `get`, `delete`). No code for either provider exists yet.
+- **Continuous checks on every platform.** There is no CI workflow: nothing yet
+  installs the published package into a clean home on macOS, Ubuntu and
+  Windows runners, runs first run headless and checks the gateway answers.
+- **An app.** No packaged desktop app (Electron or Tauri, DMG or MSI), no
+  menu-bar or tray icon. If one comes, it wraps this install and adds signing,
+  auto-update and a tray.
 
 ---
 
@@ -660,8 +589,13 @@ signing, auto-update and a tray. It is not on this list.
 
 A checkout of the repository is the developer path: `git clone`, Docker
 Desktop for its Postgres container, then `buddi init`, which writes `.env`,
-starts the database, migrates, installs the service and ends in the same
-wizard as a packaged install. It is safe to run again.
+starts the database, migrates, installs the service and ends on the same
+first-run page as a packaged install (`packages/cli/src/init.ts`). It is safe
+to run again.
+
+The published package is a bundling step, not a different layout: the
+monorepo is built, then one package is assembled from `packages/*/dist` with
+its runtime dependencies.
 
 ### Where the code lives
 
@@ -684,8 +618,13 @@ wizard as a packaged install. It is safe to run again.
 - **Plugin install** is `packages/gateway/src/plugins`: `stage.ts` fetches,
   unpacks and reads a package **without importing it**, `approve.ts` is the two
   approvals, `npm.ts` is the only place that shells out to npm, `hash.ts` is
-  what `buddi doctor` recomputes, and `paths.ts` puts everything under
-  `<data>/plugins` (§7).
+  what `buddi doctor` recomputes, `install.ts` is the plan (validate, refuse a
+  clash, compare the claims, register, migrate, record), and `paths.ts` puts
+  everything under `<data>/plugins` (§7). The Plugins page is
+  `packages/web/src/views/Plugins.tsx`.
+- **Backup and recovery pages** are `packages/web/src/views/{Backup,Recovery}.tsx`;
+  the version check and Upgrade are in `packages/web/src/views/Settings.tsx`
+  and `packages/install/src/upgrade.ts`.
 - **The dashboard's side of the control socket** is
   `packages/gateway/src/web/service.ts`, used by the `/api/service` routes; the
   page is the Service section of `packages/web/src/views/Settings.tsx`.
@@ -698,6 +637,10 @@ That is why it imports none of them, and why the launcher, the supervisor and
 the cluster reach `@buddi/core`, `@buddi/gateway` and `@buddi/cli` through
 dynamic imports. The tarball declares exactly one `bin`, the launcher's
 `buddi`; `build.mjs` strips `bin` from every other staged package.
+
+Anything platform-specific sits behind one function with a stated fallback.
+Three parts carry real risk and get the most care: the managed cluster, plugin
+code running in the process, and restore.
 
 ### Build and verify
 
@@ -748,7 +691,7 @@ The link printed is the launcher's own, good for five minutes;
 whose `Origin` is not its own, so the browser must reach it at the port the
 gateway bound. `run.sh` refuses to start when 4317 is already listening on the
 host — most likely your own buddi. `BUDDI_TRIAL_PORT=4318` works around it
-read-only: login and every `GET` work, and writes answer 403. To try the wizard
+read-only: login and every `GET` work, and writes answer 403. To try first run
 for real, stop the local installation first.
 
 Data lives in the named volume `buddi-trial`, so the container is disposable

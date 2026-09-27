@@ -1,7 +1,7 @@
 ---
 title: "Computer and browser control"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # Computer and browser control
@@ -9,73 +9,79 @@ updated: 2026-09-26
 ## Default: the agents' own browser
 
 A new installation starts in **Give agents their own browser** (Playwright) on
-every platform. **Use my apps** (native computer control) is offered only on
-macOS and is an explicit owner choice. An existing `settings.json` keeps its
-stored mode; on a non-macOS host a stored Computer choice runs and reads as
-Playwright, and the file is left as written.
+every platform. **Use my apps** (computer control) is offered only on macOS,
+and only when you choose it. An existing `settings.json` keeps the mode it
+holds; on a host that is not a Mac, a stored Use my apps choice runs and reads
+as the agents' own browser, and the file is left as written.
 
-## Native computer control
+## Computer control: Use my apps
 
-**Use my apps** (Computer mode) drives your own apps on macOS. The headed
-Playwright driver is available as an explicit **Browser automation** option. Buddi never silently
-switches modes when permissions, accessibility or a website fail.
+**Use my apps** lets an agent drive your own apps on macOS, in the selected
+browser's existing profile and in any other app you allow. The headed
+Playwright browser stays available as **Browser automation**. buddi never
+switches modes on its own when a permission, the accessibility tree or a
+website fails.
 
-The existing `browser.status` / `browser.act` grants and `#/browser` route are
-kept for compatibility. In Computer mode these tools operate allowed native apps
-as well as browsers. The canvas tab is labeled **Computer**. All actions still
-require an authenticated interactive owner task; existing step/time/ownership,
-delegation restrictions and owner Stop apply in both modes.
+The same tools do the work: `browser.status` and `browser.act`, granted to an
+agent as `browser.*`, and the `#/browser` route. In this mode they operate the
+apps you allowed as well as the browser, and the canvas tab reads
+**Computer**. Every action needs an interactive task from you, signed in; the
+step, time and ownership limits, the rules on delegation, and your Stop apply
+exactly as in the other modes.
 
-### Setup and mode selection
+### Setting it up
 
-1. Build on **macOS 14+**, with Xcode Command Line Tools (`xcrun swiftc`). The
-   browser package builds a fixed, ad-hoc-signed Swift executable at
-   `packages/tools/browser/dist/native/buddi-computer`. No downloaded actuator,
-   AppleScript, shell command, browser extension, CDP or WebDriver is used by
-   Computer mode. Non-macOS hosts are not offered it.
-2. Open **Host browser → Computer & browser settings**. Choose Use my apps, the
-   browser app, and allowed application bundle IDs. Chrome and
-   Safari are initially allowed, Chrome is initially selected. Other native
-   apps, such as `com.apple.TextEdit`, are either allowed here ahead of time or
-   answered on a card when an agent first asks to open one (below). Agents
-   cannot change the mode, and reach the allowlist only through the owner's
-   Always on that card.
-3. Click **Check permissions**, then **Request macOS permissions** if needed.
-   Grant macOS **Accessibility** and **Screen Recording** to the helper/service
-   identified by the system prompt. This may be attributed to its launching app
-   or service. Restart Buddi and check again if macOS requires it. Buddi cannot
-   grant these permissions itself. Native rebuilds may require permission renewal.
-4. Send a fresh task to an agent granted `browser.*`. `navigate` opens an ordinary
-   tab through macOS LaunchServices, in the selected browser's existing profile.
-   `open` selects an app, by bundle id (`appId`) or by name (`app`). No
-   debugging connection is created.
+1. **A Mac on macOS 14 or newer.** Computer control uses one fixed helper, an
+   ad-hoc-signed Swift executable at
+   `packages/tools/browser/dist/native/buddi-computer`, built with the Xcode
+   Command Line Tools (`xcrun swiftc`). Nothing is downloaded to act for it: no
+   AppleScript, shell command, browser extension, CDP or WebDriver. Other
+   platforms are not offered it.
+2. **Choose it.** Open **Host browser → Computer & browser settings** and pick
+   Use my apps, the browser app, and the apps agents may use (by bundle id).
+   Chrome and Safari are allowed to begin with, and Chrome is selected. Any
+   other app, such as `com.apple.TextEdit`, you allow here ahead of time or
+   answer on a card the first time an agent asks to open it (below). Agents
+   cannot change the mode, and reach the list of allowed apps only through
+   your Always on that card.
+3. **Grant the permissions.** Click **Check permissions**, then **Request
+   macOS permissions** if needed, and grant **Accessibility** and **Screen
+   Recording** to the helper or service macOS names in its prompt; macOS may
+   attribute it to the app or service that launched it. Restart buddi and
+   check again if macOS asks you to. buddi cannot grant these itself, and a
+   rebuilt helper may need them granted again.
+4. **Ask an agent.** Send a fresh task to an agent granted `browser.*`.
+   `navigate` opens an ordinary tab through macOS LaunchServices, in the
+   selected browser's existing profile. `open` brings an app forward by bundle
+   id (`appId`) or by name (`app`). No debugging connection is made.
 
-**Allowed apps.** The owner can pre-allow an app in Settings, or answer the
-card when an agent first asks. `open` with `app` resolves the name through
-Spotlight to one installed application (exact name, any case; nothing is
-launched to find it, five seconds at most); none or several is refused and the
-refusal lists the candidates. An app not on the list turns the call into a
-decision card in the agent's conversation — "Use Voicito on your computer?",
-naming the agent, the app and the bundle id as found on this Mac, never as the
-agent wrote them — with **Once** (this conversation only), **Always** (added
-to `allowedApps` in `settings.json`, so Settings shows it; with the list full
-at 32 it falls back to Once) and Reject. The agent is told to wait; after a
-yes it calls `open` again, after a no the next `open` of that app is refused
-("The owner said no to Voicito this time.") and no second card is raised in
-that conversation. The answers are read from the approvals ledger
-(`ApprovalsArea.decisionsInConversation`), so they hold across a restart; a
-Once is also kept on the conversation's session (`session.allowedOnce`) so the
-Telegram photo guard treats it as allowed. The browser app itself stays a
-Settings choice: `navigate` never asks. Playwright and extension mode have no
-native apps, so `open` there is refused as before.
+**Allowed apps.** You can allow an app in Settings ahead of time, or answer the
+card when an agent first asks. `open` with `app` finds the name through
+Spotlight as exactly one installed application (the exact name, any case;
+nothing is launched to find it, and it takes five seconds at most); none or
+several is refused, and the refusal lists the candidates. An app not on the
+list turns the call into a decision card in the agent's conversation — "Use
+Voicito on your computer?" — naming the agent, the app and its bundle id as
+found on this Mac, never as the agent wrote them, with **Once** (this
+conversation only), **Always** (added to `allowedApps` in `settings.json`, so
+Settings shows it; with the list full at 32 it counts as Once) and Reject. The
+agent is told to wait. After a yes it calls `open` again; after a no, the next
+`open` of that app is refused ("The owner said no to Voicito this time.") and
+no second card is raised in that conversation. Your answers are read from the
+approvals ledger (`ApprovalsArea.decisionsInConversation`), so they hold across
+a restart; a Once is also kept on the conversation's session
+(`session.allowedOnce`), so the Telegram photo guard treats that app as
+allowed. The browser app itself is only ever a Settings choice: `navigate`
+never asks. The agents' own browser and "Your browser" have no apps, so `open`
+is refused there.
 
-Settings persist in `<BUDDI_DATA_DIR>/browser/settings.json` (owner-only). Active
-sessions must be released before changing settings or requesting permissions.
-Switching modes does not lift a persisted Stop; old requests cannot be replayed
-to obtain a new budget after a mode switch. Playwright uses its existing separate
-profile, not the native browser's profile.
+The settings live in `<BUDDI_DATA_DIR>/browser/settings.json`, readable only by
+you. Release any active session before you change them or request permissions.
+Switching modes does not lift a Stop you set, and old requests cannot be
+replayed to get a fresh budget after a switch. The agents' own browser keeps
+its separate profile; it never uses your browser's.
 
-### Native actions and handoff
+### What an agent can do, and taking over
 
 ```json
 {"action":"open","appId":"com.apple.calculator"}
@@ -87,101 +93,112 @@ profile, not the native browser's profile.
 {"action":"close"}
 ```
 
-Refs come from the macOS accessibility tree of the selected app's focused window.
-Clicks use accessibility actions where supported, otherwise OS mouse events.
-Fill and restricted keys use OS keyboard events, not the clipboard. Window
-identity, focus and the observed target are rechecked before input. Pixel clicks
-are relative to the window screenshot, and require an unchanged screenshot;
-animation can therefore make a coordinate click fail safely. Prefer refs. DOM
-`select` and Playwright tab IDs are unavailable: click visible options/tabs.
+Refs come from the macOS accessibility tree of the selected app's focused
+window. A click uses the accessibility action where the app offers one, and
+an OS mouse event otherwise. Fill and the allowed keys use OS keyboard events,
+never the clipboard. Before any input, buddi checks again that it is the same
+window, that it has focus and that the target is the one observed. A pixel
+click is relative to the window's screenshot and needs that screenshot
+unchanged, so an animation can make a coordinate click fail, safely; refs are
+better. There is no DOM `select` and there are no Playwright tab ids: the agent
+clicks the visible option or tab.
 
-Only **one conversation** owns native computer control at a time. It retains the
-lock between tool calls and during takeover. Other conversations cannot steal
-the desktop or switch modes to evade that lock. **Take over** interrupts input;
-**Resume access** requires a fresh observation; **Release control** and `close`
-end control **without closing windows or applications**. **Stop computer control**
-revokes access across restarts until owner resume. Apps, documents and browser
-tabs remain open. Already dispatched actions cannot be undone. Do not use the
-same mouse/keyboard while the agent is driving. A focus change causes refusal,
-not automatic refocusing; use takeover, then resume in the intended app.
+**One conversation at a time** controls your computer. It keeps the lock
+between tool calls and while you have taken over; another conversation cannot
+take the desktop or switch modes to get around it.
 
-Every observation carries `observedAt`, and the result opens with "Observed
-12:04:35 UTC.", so the agent can tell the newest page from an older one. After
-a click that submits or navigates, it observes once more before concluding,
-and judges from the newest observation only.
+- **Take over** interrupts the agent's input.
+- **Resume access** hands control back, and the agent must observe afresh.
+- **Release control**, and the agent's `close`, end control **without closing
+  any window or app**.
+- **Stop computer control** revokes access, across restarts, until you resume.
+
+Apps, documents and browser tabs stay open. An action already sent cannot be
+undone. Do not use the mouse and keyboard while the agent is driving. If focus
+moves, the next action is refused rather than refocused: take over, then
+resume in the app you meant.
+
+Every observation carries `observedAt`, and its result opens with "Observed
+12:04:35 UTC.", so the agent can tell the newest screen from an older one.
+After a click that submits or navigates, it observes once more before it
+concludes, and judges from the newest observation only.
 
 When a site mails a one-time code, an agent that has the email tools reads it
-from the owner's inbox before asking the owner: the newest message from that
-site, arrived in the last ten minutes. The code is never stored and never
-reused. The agent types it with `browser.act`, so it appears in that call's
-input in the transcript; the scrubber only knows values saved under Keys and
-secrets.
+from your inbox before asking you: the newest message from that site, arrived
+in the last ten minutes. The code is never stored and never reused. The agent
+types it with `browser.act`, so it appears in that call's input in the
+transcript; the scrubber only knows values saved under Keys and secrets.
 
-An observation or screenshot failure preserves the helper's actual error instead
-of returning a successful empty observation. Most of these are a page still
-loading or busy, so control stays with the agent: the result says "The page has
-not answered yet. Wait a few seconds and observe again.", and the next action
-must be a fresh observation, never a click on old evidence. If input already
-completed before capture failed, the result explicitly preserves that fact: do
-not repeat the input just to recover a screenshot. In your own Chrome, the
-extension itself injects its page script again and reads the page up to three
-more times, after 0.5, 1 and 2 seconds, before it reports that the page has not
+When an observation or a screenshot fails, the agent gets the helper's actual
+error, never an empty observation that looks like success. Most of these are a
+page still loading or busy, so control stays with the agent: the result says
+"The page has not answered yet. Wait a few seconds and observe again.", and the
+next action must be a fresh observation, never a click on old evidence. If the
+input went through before the capture failed, the result says so: the agent
+must not repeat the input just to get a screenshot. In your own Chrome, the
+extension injects its page script again and reads the page up to three more
+times, after 0.5, 1 and 2 seconds, before it reports that the page has not
 answered.
 
 Control pauses when:
 
 - the tab or window the agent was reading is gone (closed by you, or by the page);
 - observation fails three times in a row in the same session;
-- a click, fill, select or press itself failed part-way, since it may have half
+- a click, fill, select or press failed part-way, since it may have half
   happened;
 - targeting fails three times in a row;
 - you take over.
 
-The agent cannot retry or click while paused. Inspect the reported cause and the
-selected window, use **Resume access** (or send `/browser resume` on Telegram),
-then request a fresh observation. Resume clears old screenshots and target
-evidence. Release remains available.
+While paused the agent cannot retry or click. Look at the reported cause and
+the selected window, press **Resume access** (or send `/browser resume` on
+Telegram), then ask for a fresh observation. Resuming clears old screenshots
+and target evidence. Release is always available.
 
-Automatic **size-based transcript rollover** in Telegram and the dashboard
-continues the same agent's existing computer/browser task. The surface moves the
-session before adopting the new transcript and carries at most six short text
-messages plus the task description, never old tool calls or accessibility trees.
-Session identity, expiry and paused state survive; old requests are fenced and
-the next action must be a fresh observation (or release). No click is replayed.
-Idle rollover, explicit reset, another chat or another agent do not adopt control,
-and conversation-scoped host execution permissions are not transferred.
+When a long conversation rolls over to a new transcript because of its size, in
+Telegram or the dashboard, the same agent carries on with the same computer or
+browser task. The session moves before the new transcript is taken up, carrying
+at most six short text messages and the task description, never old tool calls
+or accessibility trees. The session's identity, expiry and paused state
+survive; old requests are fenced off, and the next action must be a fresh
+observation (or a release). No click is replayed. A rollover after idle time,
+an explicit reset, another chat or another agent does not take control over,
+and permissions to run commands on the host for that conversation do not carry
+over.
 
-### Native boundaries and current limitations
+### What leaves the machine, and the limits
 
-- Captures only the selected window, not the whole desktop. Its screenshot and
-  bounded accessibility text go to the configured model provider. Secure AX
-  fields are masked and cannot be filled; other sensitive visible information
-  can still be captured. Use human takeover for credentials/MFA.
-- The helper is a short-lived fixed native executable, with bounded JSON input,
-  output and timeout. Cancellation terminates outstanding helper processes.
-  No arbitrary script, arbitrary hotkey, clipboard or file-transfer operation is
-  exposed. The owner allowlist restricts which app Buddi selects, **not what an
-  allowed app itself can do**. This is not an OS sandbox or a guarantee that UI
-  gestures match the owner's natural-language intent.
-- Native apps use their normal network and sessions. Public-URL/host validation
-  applies to explicit `navigate` calls only. **The Playwright SOCKS guard cannot
-  constrain native app redirects, clicked links, background traffic or external
-  app launches.** Do not assume the two modes have identical confinement.
-- App menus, complex popovers, minimized/off-screen windows and custom widgets
-  may not expose usable AX targets. Only the uniquely matched focused window is
-  captured. The initial implementation has no drag, right-click, arbitrary
-  keyboard shortcuts, multi-monitor desktop overview or remote interactive feed.
-- Native OS input does not make behavioral automation detection impossible.
-  It removes the browser debugging connection, not websites' other signals.
-- Unit/contract tests use a fake native bridge. The Swift helper compiles and
-  the non-prompting permission probe runs on the host. **Live native input and
-  capture acceptance remain pending owner-granted macOS permissions.**
+- **What is captured.** Only the selected window, never the whole desktop. Its
+  screenshot and a bounded amount of accessibility text go to your configured
+  model provider. Secure accessibility fields are masked and cannot be filled;
+  anything else visible can still be captured, so take over yourself for
+  passwords and two-factor codes.
+- **What the helper can do.** It is a short-lived fixed executable with bounded
+  JSON input, output and timeout; cancelling kills any helper still running.
+  There is no arbitrary script, arbitrary hotkey, clipboard or file transfer.
+  The list of allowed apps limits which app buddi picks, **not what an allowed
+  app itself can do**. This is not an OS sandbox, and nothing guarantees that a
+  gesture matches what you meant in words.
+- **The network.** Your apps use their normal network and sessions. The
+  public-URL and host checks apply to an explicit `navigate` only. **The
+  Playwright SOCKS guard cannot constrain an app's redirects, clicked links,
+  background traffic or the apps it launches.** The two modes are not confined
+  the same way.
+- **What it cannot reach.** App menus, complex popovers, minimised or
+  off-screen windows and custom widgets may expose no usable accessibility
+  target. Only the one focused window that matches is captured. There is no
+  drag, no right-click, no arbitrary keyboard shortcut, no overview across
+  several monitors and no live remote view.
+- **Detection.** OS input does not make automation undetectable. It removes
+  the browser's debugging connection, not the other signals a website reads.
+- **Testing.** buddi's automated tests use a fake native bridge; only the
+  helper's build and the permission probe, which never prompts, run against
+  the real system.
 
-First acceptance test after granting permissions: allow `com.apple.calculator`,
-ask an agent to open Calculator, calculate `12 × 7` by clicking visible buttons,
-report the result, and release control while leaving Calculator open. Then test
+**Try it.** After granting the permissions, allow `com.apple.calculator`, ask
+an agent to open Calculator, work out `12 × 7` by clicking the visible buttons,
+report the result, and release control with Calculator left open. Then
 Wikipedia: ask the agent to open it and wait, take over and choose an article,
-resume, and ask it to observe and summarize without navigating away.
+resume, and ask it to observe and summarise without navigating away.
 
 ## Optional: "Your browser", the Chrome extension
 

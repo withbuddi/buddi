@@ -1088,6 +1088,11 @@ pre.wb-command-text { white-space: pre; word-break: normal; overflow-wrap: norma
   word-break: break-word;
 }
 
+/* A delegation that came back after a decision: who, the question, the answer, the files. */
+.wb-delegation-result { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-1) 0 var(--space-1) var(--space-3); border-left: 2px solid var(--line); width: 100%; }
+.wb-delegation-facts { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+.wb-delegation-question { margin: 0; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
+.wb-delegation-answer { font-size: var(--text-md); line-height: var(--leading); overflow-wrap: anywhere; }
 /* A decided action, back in the thread: the tool's row, its result one click away. */
 .wb-approval { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; max-width: 68ch; }
 .wb-approval .wb-tool-arrow { transition: transform 120ms ease; }
@@ -3481,16 +3486,50 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .setup-upload[data-dragging='true'] { border-color: var(--accent); background: var(--surface-sunken); }
 .setup-upload-name { color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
-/* ---- notifications: the toasts at the top right, Home's lines, Settings → Notifications ---- */
-.nt-toasts {
+/* ---- notifications: the toasts in the corner, Home's lines, Settings → Notifications ---- */
+/* Both stacks (these and the page's own) stand in one column in the bottom
+   right that grows upward, clear of the corner buddi and its dock. */
+.wb-toast-stack {
+  --toast-edge: var(--space-4);
+  --toast-lift: 0px;
   position: fixed;
-  top: var(--space-4);
-  right: var(--space-4);
+  right: calc(var(--toast-edge) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--toast-edge) + var(--toast-lift) + env(safe-area-inset-bottom, 0px));
   width: min(22.5rem, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - var(--toast-edge) - var(--toast-lift) - var(--space-4));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  z-index: 50;
+  pointer-events: none;
+}
+.wb-toast-stack > * { pointer-events: auto; }
+.wb-toast-stack .ui-toasts { position: static; width: auto; }
+.wb-toast-stack[data-placement='above-button'] { --toast-edge: var(--space-5); --toast-lift: calc(var(--fab-size) + var(--space-3)); }
+.wb-toast-stack[data-placement='above-dock'] { --toast-edge: var(--space-5); --toast-lift: calc(var(--dock-h) + var(--space-3)); }
+/* A short window leaves no room over the dock: the stack stands beside it. */
+@media (min-width: 721px) and (max-height: 56rem) {
+  .wb-toast-stack[data-placement='above-dock'] { --toast-lift: 0px; right: calc(var(--space-5) + var(--dock-w) + var(--space-3) + env(safe-area-inset-right, 0px)); }
+}
+/* A phone: the dock is the full width, so the toasts go to the top centre. */
+@media (max-width: 720px) {
+  .wb-toast-stack,
+  .wb-toast-stack[data-placement] {
+    top: calc(var(--space-3) + env(safe-area-inset-top, 0px));
+    bottom: auto;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    max-height: calc(100vh - 2 * var(--space-3));
+    justify-content: flex-start;
+  }
+}
+.nt-toasts {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  z-index: 50;
 }
 .nt-toast { display: flex; align-items: flex-start; gap: var(--space-3); }
 .ui-toast[data-tone='accent'] { background: var(--accent-soft); border-color: transparent; }

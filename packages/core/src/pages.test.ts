@@ -65,6 +65,7 @@ describe('page descriptors', () => {
         'approval',
         'artifact',
         'button',
+        'chart',
         'detail',
         'editor',
         'expand',
@@ -92,9 +93,19 @@ describe('page descriptors', () => {
   });
 
   it('refuses a component kind it does not have', () => {
-    expect(() => parse([page({ body: [{ kind: 'chart', query: { query: 'x' } }] })])).toThrow(
+    expect(() => parse([page({ body: [{ kind: 'map', query: { query: 'x' } }] })])).toThrow(
       /invalid page descriptor board — body\.0\.kind/,
     );
+  });
+
+  it('takes a chart of one series or several, and refuses one that says how it looks', () => {
+    const chart = { kind: 'chart', query: { query: 'series' }, rows: 'points', x: 'at', y: 'value', label: 'Weight', target: { path: 'target' } };
+    expect(parse([page({ body: [chart] })], { queries: ['series'] })[0]!.body[0]).toMatchObject({ kind: 'chart', y: 'value' });
+    expect(parse([page({ body: [{ ...chart, y: ['a', 'b'], type: 'bar' }] })], { queries: ['series'] })[0]!.body[0]).toMatchObject({ y: ['a', 'b'], type: 'bar' });
+    expect(() => parse([page({ body: [{ ...chart, type: 'pie' }] })], { queries: ['series'] })).toThrow(/body\.0\.type/);
+    expect(() => parse([page({ body: [{ ...chart, colour: 'red' }] })], { queries: ['series'] })).toThrow(/Unrecognized key\(s\) in object: 'colour'/);
+    expect(() => parse([page({ body: [{ ...chart, y: [] }] })], { queries: ['series'] })).toThrow(/body\.0\.y/);
+    expect(() => parse([page({ body: [{ ...chart, query: { query: 'other' } }] })], { queries: ['series'] })).toThrow(/no query called other/);
   });
 
   it('refuses an unknown field rather than ignoring it', () => {

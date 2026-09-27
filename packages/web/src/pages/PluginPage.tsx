@@ -22,12 +22,13 @@
 import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
-import { fmtValue } from '../canvas/format';
+import { fmtDay, fmtValue } from '../canvas/format';
 import { asNumber, readPath, readRef } from '../canvas/resolve';
 import { chatRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
 import {
   Button,
   ButtonLink,
+  Chart,
   Details,
   Empty,
   ErrorBanner,
@@ -1047,6 +1048,8 @@ function Piece({
       return <LinkPiece component={component} data={data} />;
     case 'progress':
       return <ProgressPiece component={component} data={data} />;
+    case 'chart':
+      return <ChartPiece component={component} data={data} />;
     case 'stats':
       return <StatsPiece component={component} data={data} />;
     case 'list':
@@ -1216,6 +1219,42 @@ function ProgressPiece({ component, data }: { component: Of<'progress'>; data: u
         </>
       )}
     </Stack>
+  );
+}
+
+/**
+ * A small chart of a query's rows. `rows` names the array, or the answer is
+ * the array; each row gives an x and one number per series. A row whose y is
+ * not a number is a gap in the line, not a zero. The x reads as a day when it
+ * is a date.
+ */
+function ChartPiece({ component, data }: { component: Of<'chart'>; data: unknown }): JSX.Element {
+  const query = usePageQuery(component.query, data);
+  const rows = component.rows === undefined ? (Array.isArray(query.data) ? (query.data as unknown[]) : []) : rowsOf(query.data, component.rows);
+  const paths = Array.isArray(component.y) ? component.y : [component.y];
+  const xs = rows.map((row) => String(readPath(row, component.x) ?? ''));
+  const series = paths.map((path) => ({
+    label: paths.length === 1 ? component.label ?? path : path,
+    values: rows.map((row) => asNumber(readPath(row, path)) ?? null),
+  }));
+  const target = component.target ? asNumber(readRef(query.data, component.target)) ?? null : null;
+  return (
+    <PieceSection title={component.title} note={component.note}>
+      <ErrorBanner message={query.error} />
+      {rows.length === 0 ? (
+        query.loading || query.data === undefined ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing recorded yet.'} />
+      ) : (
+        <Chart
+          xs={xs}
+          series={series}
+          type={component.type ?? 'line'}
+          target={target}
+          {...(component.label ? { label: component.label } : {})}
+          formatX={(x) => (/^\d{4}-\d{2}-\d{2}/.test(x) ? fmtDay(x) : x)}
+          formatY={(y) => fmtValue(y, 'number', null)}
+        />
+      )}
+    </PieceSection>
   );
 }
 

@@ -276,11 +276,11 @@ three modes and what each refuses.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;   // '1.4' — see §1.7
+  readonly version: string;   // '1.5' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
-  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths; notify with `owner:notify`
+  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths, language; notify with `owner:notify`
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
   dir: DirArea;               // <data>/plugins-data/<plugin>
@@ -1218,7 +1218,7 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
   Write `z.coerce.number()` for a number and `z.enum(['true','false'])` for a
   flag; a parameter your schema does not declare is refused, not ignored.
 - **The components are a fixed set**, each a shape: `section`, `notice`,
-  `link`, `progress`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
+  `link`, `progress`, `chart`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
   `repeat`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
   carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
   in §2.5.
@@ -1240,6 +1240,11 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
 - **`progress` is a bar.** `{ kind: 'progress', value, total?, label?, done? }`:
   `value` is a fraction 0–1, or a count of bytes against `total`, drawn as the
   bar and "7 of 252 MB · 2%"; `done` replaces the bar once it is full.
+- **`chart` is a small trend.** `{ kind: 'chart', query, rows?, x, y, type?,
+  label?, target? }`: `x` and `y` are paths within a row (`y` up to four for
+  several series), `rows` the array in the answer or left out when the answer
+  is the array, `type` `line` (default) or `bar`, and `target` a value in the
+  answer drawn as a dashed line. A row whose `y` is not a number is a gap.
 - **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
   of the form's *own values* first — a path that names a field on the form
   reads what the owner has just typed — and of the loaded data otherwise, so
@@ -3103,6 +3108,7 @@ that say otherwise.
 | `agentForRole` | `(role) => string \| undefined` | yes | 1.0 | The first runnable agent holding a role, or `undefined`. Never an agent's file, grant or provider. |
 | `hasAgent` | `(id) => boolean` | yes | 1.1 | Whether an agent with this id is installed — for a plugin that proposes one and must not start runs for it before the owner accepts it. `true` where there is no roster to ask. |
 | `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
+| `language` | `() => Promise<string \| undefined>` | yes | 1.5 | The language the owner asked to be answered in (their profile's "Answer me in"), as a tag: `fr`, `pt-BR`. A language name, in English or its own words, becomes its ISO 639-1 code; `undefined` when blank or not a language. |
 | `notify` | `(message: PluginOwnerMessage) => Promise<{ id }>` | no | 1.2 | Tell the owner something: `urgency` (`now`, `today`, `digest`), a one-line `title`, optional `text`, `link: { route }`, `dedupeKey` and `agentId`. Declared as `owner:notify`. The kind is always `plugin`, your name is on the message, and the owner's settings pick the channel, never you. See [notifications.md](notifications.md). |
 
 #### `ClockArea`

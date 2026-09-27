@@ -26,6 +26,7 @@ import type { BuddiHost } from './types.js';
 import { BlockedError } from '../plugin/url.js';
 import { clearChannels, deliverTo, listChannels } from '../notifications/channels.js';
 import type { RegisterHost } from './types.js';
+import { setOwnerProfile } from '../onboarding/store.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -97,7 +98,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.4');
+    expect(host.version).toBe('1.5');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -108,6 +109,21 @@ suite('ctx.buddi', () => {
     expect(host.owner.id).toBe('owner');
     expect(host.owner.notify).toBeUndefined();
     expect(host.clock.today()).toBe('2026-09-23');
+  });
+
+  it("answers the owner's language as a tag, and nothing for what is not one", async () => {
+    const registry = new ToolRegistry();
+    registry.register(plugin('weather'));
+    const host = await hostOf(registry, 'weather.host');
+    await setOwnerProfile(pool, { language: null });
+    expect(await host.owner.language()).toBeUndefined();
+    await setOwnerProfile(pool, { language: 'Français' });
+    expect(await host.owner.language()).toBe('fr');
+    await setOwnerProfile(pool, { language: 'pt_br' });
+    expect(await host.owner.language()).toBe('pt-BR');
+    await setOwnerProfile(pool, { language: 'whatever I write in' });
+    expect(await host.owner.language()).toBeUndefined();
+    await setOwnerProfile(pool, { language: null });
   });
 
   it('lets a plugin that declared owner:channel add a channel from its register hook, in its own namespace', async () => {

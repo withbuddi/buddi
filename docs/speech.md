@@ -42,7 +42,10 @@ cloud account or on this computer, with nothing leaving it.
    **Other…** takes any id you type.
 
    **Languages you speak.** Pick every language you send voice notes in, up
-   to eight, from about 25 by name; none means any. With one, it is sent to
+   to eight, from about 25 by name. None means the language your profile
+   answers in ("Answer me in" on You), sent as the one language, and the
+   Listening block says "From your profile: French."; with that blank too,
+   any. With one, it is sent to
    the service as the language, which helps short clips. With several,
    Whisper on this computer picks the likeliest of yours for each recording
    (a French accent is not heard as Portuguese), and a cloud service is sent
@@ -87,7 +90,9 @@ Kokoro installed before this version speaks English until you press
 eSpeak NG. They live in the
 data directory under `plugins-data/speech/`. **Remove** on the page deletes
 one. Installed, and with no other service chosen for that side, they are
-used; you can also choose them by name.
+used; you can also choose them by name. **Off** as the service turns that
+side off even with its model here: `speech.transcribe` or `speech.say`, and
+voice on Telegram and the dashboard, answer that it is not set up.
 
 - Whisper reads OGG/Opus (Telegram's voice notes), MP3 and WAV, up to ten
   minutes a recording, one at a time. It detects the language among the ones

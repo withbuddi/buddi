@@ -81,6 +81,12 @@ export interface OwnerArea {
   /** Directories no plugin may write into, whatever it was granted. */
   readonly protectedPaths: readonly string[];
   /**
+   * The language the owner asked to be answered in (the profile's "Answer me
+   * in"), as a tag: "fr", "pt-BR". Undefined when they left it blank or wrote
+   * something that is not a language. Since 1.5.
+   */
+  language(): Promise<string | undefined>;
+  /**
    * Tell the owner something (docs/notifications.md). Declared as
    * `owner:notify`; absent otherwise. Core picks the channel, never the
    * plugin; the row carries the plugin's name. Since 1.2.

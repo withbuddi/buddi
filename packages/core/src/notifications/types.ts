@@ -58,6 +58,10 @@ export interface OwnerNotification {
   channel: string | null;
   firedCount: number;
   lowered: boolean;
+  /** What it is about (notifications/topic.ts); null for approvals, questions and keyed rows. */
+  topic: string | null;
+  /** Other agents that said the same thing and were folded into this row. */
+  alsoFrom: string[];
   createdAt: string;
   sentAt: string | null;
   seenAt: string | null;

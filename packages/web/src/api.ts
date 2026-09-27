@@ -598,6 +598,8 @@ export interface NotificationRow {
   dueAt: string | null;
   /** The channel kind it went to, `dashboard` when shown there, else null. */
   channel: string | null;
+  /** Other agents that said the same thing, folded into this row. */
+  alsoFrom?: string[];
   createdAt: string;
   sentAt: string | null;
   seenAt: string | null;

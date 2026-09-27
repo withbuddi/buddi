@@ -27,6 +27,7 @@ import {
   timezoneFromEnv,
 } from '../time.js';
 import { channelFor, deliverTo } from './channels.js';
+import { notificationTopic, sameTopic, TOPIC_WINDOW_MS } from './topic.js';
 import {
   NOTIFICATION_COLUMNS,
   presentSurfaces,
@@ -202,6 +203,15 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     fires = Number(counted.rows[0]?.n ?? 0);
   }
 
+  // The same thing from another agent (or unkeyed, again): folded into the
+  // open row that already says it, and never delivered a second time.
+  // Approvals and questions carry their own action and are never folded.
+  const topic = always ? null : notificationTopic({ title: baseTitle, text, agentId: message.agentId ?? null }) || null;
+  if (!existing && topic) {
+    const folded = await foldIntoTopic(db, { ...message, title: baseTitle, text, dedupeKey, topic }, now);
+    if (folded) return folded;
+  }
+
   // The rate rule. Approvals and questions are never lowered.
   let urgency = message.urgency;
   let lowered = existing?.lowered ?? false;
@@ -228,12 +238,12 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `update core.owner_notifications
           set urgency = $2, title = $3, text = $4, link = $5, offers = $6::jsonb, agent_id = coalesce($7, agent_id),
-              plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
+              topic = coalesce($15, topic), plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
               channel = $12, fired_count = fired_count + 1, lowered = $13, seen_at = null, error = null, updated_at = $14
         where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.
@@ -242,11 +252,11 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `insert into core.owner_notifications
          (kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, channel,
-          lowered, created_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15)
+          lowered, created_at, updated_at, topic)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16)
        returning ${NOTIFICATION_COLUMNS}`,
       [message.kind, urgency, title, text, message.link?.route ?? null, offers, dedupeKey, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic],
     );
     row = toNotification(rows[0]);
   }
@@ -263,6 +273,47 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   if (row.state !== 'sending') return result;
   const sent = await sendClaimed(db, row, settings, now);
   return { ...result, ...sent };
+}
+
+/**
+ * Fold a message into the open row with the same topic, if there is one: a
+ * row not acted on, written or refreshed in the last 48 hours, from any agent,
+ * that is not an approval or a question and does not carry this message's own
+ * key (that one the key rule handles). The row keeps its state, so what was
+ * sent is not sent again and what is waiting keeps waiting; it gains the
+ * other agent under `also_from`, the new title and text when they say more,
+ * and the new time. Null when nothing matches.
+ */
+async function foldIntoTopic(
+  db: Queryable,
+  message: Omit<OwnerMessage, 'text' | 'dedupeKey'> & { text: string | null; dedupeKey: string | null; topic: string },
+  now: Date,
+): Promise<NotifyResult | null> {
+  const { rows } = await db.query(
+    `select ${NOTIFICATION_COLUMNS} from core.owner_notifications
+      where topic is not null and acted_at is null and created_at > $1 and kind not in ('approval', 'question')
+        and not (dedupe_key is not null and dedupe_key = coalesce($2, ''))
+      order by created_at desc limit 50`,
+    [new Date(now.getTime() - TOPIC_WINDOW_MS), message.dedupeKey],
+  );
+  const match = rows.map(toNotification).find((r) => sameTopic(r.topic, message.topic));
+  if (!match) return null;
+  const from = message.agentId ?? message.pluginId ?? null;
+  const also = from && from !== (match.agentId ?? match.pluginId) && !match.alsoFrom.includes(from) ? from : null;
+  const longer = `${message.title}\n${message.text ?? ''}`.trim().length > `${match.title}\n${match.text ?? ''}`.trim().length;
+  const { rows: updated } = await db.query(
+    `update core.owner_notifications
+        set title = case when $2 then $3 else title end,
+            text = case when $2 then $4 else text end,
+            also_from = case when $5::text is null then also_from else array_append(also_from, $5::text) end,
+            fired_count = fired_count + 1, created_at = $6, updated_at = $6
+      where id = $1 and acted_at is null
+      returning ${NOTIFICATION_COLUMNS}`,
+    [match.id, longer, message.title, message.text, also, now],
+  );
+  if (!updated[0]) return null; // Acted on between the read and the write: a new message after all.
+  const row = toNotification(updated[0]);
+  return { id: row.id, state: row.state, channel: row.channel, error: row.error, deduped: true, lowered: row.lowered };
 }
 
 /** What one tick did. */

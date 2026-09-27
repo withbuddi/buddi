@@ -19,6 +19,7 @@ import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { delegatedFiles, isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { DiffLines } from '../canvas/views/DiffLines';
 import { FileTile } from './FileTile';
+import { DelegationResult } from './DelegationResult';
 import { AudioCard, isPlayableAudio } from './AudioCard';
 import { ReplyActions } from './ReplyActions';
 import { gistFor } from './gist';
@@ -167,7 +168,7 @@ export function MessageList({
         if (decided.length > 0) {
           return (
             <div key={message.id} className="wb-msg" data-role="assistant" data-testid="approval-result">
-              {decided.map((block, i) => <ApprovalResult key={i} block={block} />)}
+              {decided.map((block, i) => <ApprovalResult key={i} block={block} messages={messages} at={message.at || null} />)}
             </div>
           );
         }
@@ -594,7 +595,16 @@ function isVisible(block: ChatBlock): boolean {
  * row's parts because that is what it is — the other half of a call the thread
  * already shows.
  */
-function ApprovalResult({ block }: { block: Extract<ChatBlock, { type: 'approval_result' }> }): JSX.Element {
+function ApprovalResult({
+  block,
+  messages,
+  at,
+}: {
+  block: Extract<ChatBlock, { type: 'approval_result' }>;
+  messages: ChatMessage[];
+  /** When the result came back, for how long a delegation took. */
+  at: string | null;
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   const ok = block.state === 'succeeded';
   return (
@@ -611,7 +621,8 @@ function ApprovalResult({ block }: { block: Extract<ChatBlock, { type: 'approval
         <span className="wb-tool-elapsed">{block.state}</span>
         <Icon name="arrow" className="wb-tool-arrow" />
       </button>
-      {open ? <pre className="wb-approval-output mono">{stringify(block.output)}</pre> : null}
+      {open && block.name === DELEGATE_TOOL ? <DelegationResult block={block} messages={messages} answeredAt={at} /> : null}
+      {open && block.name !== DELEGATE_TOOL ? <pre className="wb-approval-output mono">{stringify(block.output)}</pre> : null}
     </div>
   );
 }

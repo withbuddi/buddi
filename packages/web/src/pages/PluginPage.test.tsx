@@ -1362,6 +1362,49 @@ describe('a repeat that polls', () => {
   });
 });
 
+describe('a chart', () => {
+  it('draws a goal the way the Goals page asks: the values as a line with the target dashed, the weeks as bars', async () => {
+    let values: unknown[] = [
+      { at: '2026-09-01', value: 82 },
+      { at: '2026-09-08', value: 81.2 },
+      { at: '2026-09-15', value: 'n/a' },
+      { at: '2026-09-22', value: 80.4 },
+    ];
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) => {
+      if (query === 'goal') return Promise.resolve({ data: { target: 78, values } });
+      if (query === 'weeks') return Promise.resolve({ data: [{ week: '2026-09-07', count: 2 }, { week: '2026-09-14', count: 3 }] });
+      return Promise.resolve({ data: DATA[query] });
+    }) as typeof api.pageQuery);
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'board',
+      title: 'Goals',
+      place: 'rail',
+      body: [
+        { kind: 'chart', title: 'Over the window', query: { query: 'goal' }, rows: 'values', x: 'at', y: 'value', label: 'Weight', target: { path: 'target' }, empty: 'No values yet.' },
+        { kind: 'chart', title: 'Per week', query: { query: 'weeks' }, x: 'week', y: 'count', type: 'bar', label: 'Runs' },
+      ],
+    };
+    const { unmount } = render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    const line = await screen.findByText(/^Weight, 4 points from/);
+    const figure = line.closest('figure')!;
+    expect(figure).toHaveAttribute('data-type', 'line');
+    // The row that said "n/a" is a gap, not a zero: two strokes.
+    expect(figure.querySelector('.ui-chart-line')!.getAttribute('d')!.match(/M/g)).toHaveLength(2);
+    expect(within(figure as HTMLElement).getByTestId('chart-target')).toBeInTheDocument();
+    expect(line).toHaveTextContent('latest 80.4, lowest 80.4, highest 82. Target 78.');
+    const bars = (await screen.findByText(/^Runs, 2 points/)).closest('figure')!;
+    expect(bars).toHaveAttribute('data-type', 'bar');
+    expect(bars.querySelectorAll('.ui-chart-bar')).toHaveLength(2);
+    unmount();
+
+    values = [];
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    expect(await screen.findByText('No values yet')).toBeInTheDocument();
+    expect(screen.getAllByTestId('chart-svg')).toHaveLength(1);
+  });
+});
+
 describe('a form three to a row', () => {
   it('passes `columns` to the grid, and leaves the default grid alone', async () => {
     vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
