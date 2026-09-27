@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { EffectDescription, SurfaceProfile, ToolContext } from '@buddi/core/plugin';
 import { FORM_KIND, NATIVE_KIND, fieldBoundTo, secretKindFor, takeDelivered } from './secrets.js';
 import type { BrowserCommand, BrowserDriver, BrowserHand, Observation } from './types.js';
-import { BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
+import { APP_BEHIND, BrowserPreconditionError, UNTRUSTED, observedLine } from './types.js';
 
 /**
  * "The owner stopped the browser", said where the owner can undo it.
@@ -265,7 +265,10 @@ export class BrowserService {
       return { closed: true, notice: UNTRUSTED };
     }
     if (this.#state === 'paused') throw new Error('Browser is under human control or needs inspection. Wait for the owner to resume in the dashboard, then observe.');
-    if (this.#needsObservation && command.action !== 'observe') throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
+    // Computer mode's open only brings an app forward, then observes: nothing earlier is replayed.
+    // navigate still waits for a fresh look, since it loads a page.
+    const reopens = this.options.allowOpen === true && command.action === 'open';
+    if (this.#needsObservation && command.action !== 'observe' && !reopens) throw new Error('A fresh observation is required: observe the current page before acting. Do not replay an earlier action.');
     if (!this.#session || this.#session.requestId !== request.id) {
       if (!this.#session && command.action !== 'navigate' && !(this.options.allowOpen && command.action === 'open')) throw new Error('Start with navigate, or open an allowed application in computer mode.');
       this.#rekey(request, ctx.agentId!, ctx.conversationId!, ctx.buddi!.owner.id);
@@ -312,7 +315,8 @@ export class BrowserService {
         const cause = error instanceof Error ? error.message : String(error);
         const paused = this.#observationFailed(cause);
         // The extension's final error already says to wait and observe again; do not say it twice.
-        const recovery = paused ? browserPausedMessage(ctx.surface) : /observe again\.?$/i.test(cause.trim()) ? '' : browserWaitMessage(ctx.surface);
+        // The app pushed behind already says how to bring it back.
+        const recovery = paused ? browserPausedMessage(ctx.surface) : APP_BEHIND.test(cause) || /observe again\.?$/i.test(cause.trim()) ? '' : browserWaitMessage(ctx.surface);
         this.#message = `${command.action === 'observe' ? 'Observation failed' : 'Action completed, but observation failed'}: ${cause.replace(/\.$/, '')}.${recovery ? ` ${recovery}` : ''}${command.action === 'observe' ? '' : ' Do not repeat the action; its effect may already have happened.'}`;
         const result = { completed: command.action !== 'observe', observed: false, error: cause,
           state: this.#state, recovery, message: this.#message, notice: UNTRUSTED };
@@ -351,6 +355,8 @@ export class BrowserService {
     this.#observation = undefined;
     this.#picture = undefined;
     this.#needsObservation = true;
+    // The owner's window in front of the app is not a failing screen: the agent brings it back with open.
+    if (APP_BEHIND.test(cause)) { if (this.#state !== 'paused') this.#state = 'running'; return false; }
     const paused = ++this.#observationFailures >= MAX_OBSERVATION_FAILURES || (SCREEN_GONE.test(cause) && !SCREEN_REPLACEABLE.test(cause));
     this.#state = paused ? 'paused' : 'running';
     return paused;
@@ -391,6 +397,19 @@ export class BrowserService {
       throw new BrowserPreconditionError(JSON.stringify({ error: OWNER_WATCHING_MESSAGE, dispatched: false,
         recovery: 'Ask the owner now and wait for their answer. Do not retry by yourself.' }));
     }
+    if (APP_BEHIND.test(error.message)) {
+      // The owner's own window came forward (typing in the dashboard does it).
+      // Not a targeting failure and nothing for the owner to do: the agent
+      // calls open for the same app. No count, no pause, and no recovery
+      // observation, which would only be refused the same way.
+      this.#message = error.message;
+      this.#state = 'running';
+      this.#observation = undefined;
+      this.#picture = undefined;
+      this.#needsObservation = true;
+      throw new BrowserPreconditionError(JSON.stringify({ error: error.message, dispatched: false,
+        recovery: 'Call browser.act open with the same app now; it needs no approval. Then observe and continue.' }));
+    }
     this.#message = error.message;
     this.#state = ++this.#preconditionFailures >= 3 ? 'paused' : 'running';
     if (this.#state === 'paused') this.#message += ' Repeated targeting failures: ask the owner to inspect and resume. No input was dispatched.';
@@ -409,11 +428,11 @@ export class BrowserService {
       const targeting = this.#state === 'paused';
       const paused = this.#observationFailed(cause) || targeting;
       if (paused) this.#state = 'paused';
-      this.#message += ` Recovery observation failed: ${cause.replace(/\.$/, '')}. ${paused ? 'Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.' : browserWaitMessage()}`;
+      this.#message += ` Recovery observation failed: ${cause.replace(/\.$/, '')}.${paused ? ' Inspect the selected app/window and this error, then resume and observe. Do not retry while paused.' : APP_BEHIND.test(cause) ? '' : ` ${browserWaitMessage()}`}`;
     }
     throw new BrowserPreconditionError(JSON.stringify({ error: this.#message, dispatched: false,
       ...(this.#observation?.observedAt ? { message: observedLine(this.#observation.observedAt) } : {}),
-      recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : this.#needsObservation ? browserWaitMessage() : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
+      recovery: this.#state === 'paused' ? 'Wait for owner resume. Do not retry.' : this.#needsObservation ? (APP_BEHIND.test(this.#message) ? 'Call browser.act open with the same app; it needs no approval. Then observe.' : browserWaitMessage()) : 'Re-evaluate using the fresh observation below. Prefer target:{ref:"..."} and this observation.id. Do not guess an index or reuse the previous observation.',
       observation: this.#observation }));
   }
 

@@ -12,6 +12,10 @@ What changes in buddi from one release to the next, newest first.
 
 - A speech plugin: agents can listen to an audio file (`speech.transcribe`) and answer with a voice (`speech.say`) through an OpenAI or OpenAI-compatible account chosen on Settings → Speech, with daily caps. Local listening and speaking, and voice notes on Telegram, come next.
 
+### Fixed
+
+- Computer control: an app name with a typo now gets the close matches back ("Did you mean Vocito?"), and when your own window pushed the agent's app behind, the agent brings it forward again itself instead of asking you to.
+
 ## 0.1.0-pre.20 — 2026-09-27
 
 ### Changed

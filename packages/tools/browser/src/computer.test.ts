@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ComputerDriver, computerEnvironment, resolveApp, settingsSchema, type ComputerBridge } from './computer.js';
+import { ComputerDriver, computerEnvironment, isNearName, resolveApp, settingsSchema, type AppQuery, type ComputerBridge } from './computer.js';
 import { BrowserPreconditionError, commandSchema } from './types.js';
 
 const node = { path: [0, 1], role: 'AXButton', name: 'Continue', value: '', secure: false, enabled: true, bounds: { x: 10, y: 20, width: 100, height: 30 } };
@@ -95,6 +95,30 @@ describe('native computer driver', () => {
     await expect(driver.focusedBundleId()).resolves.toBeUndefined();
     await expect(driver.nativeType('typed-value')).rejects.toThrow(/No focused application/);
   });
+  it('tells the agent to open the app again when another window came in front, and sends nothing', async () => {
+    const { run } = setup();
+    const vocito = commandSchema.parse({ action: 'open', appId: 'co.applex.vocito' });
+    const allowed = new ComputerDriver(settingsSchema.parse({ allowedApps: ['com.google.Chrome', 'co.applex.vocito'] }), { run, cancel: vi.fn() }, undefined, undefined,
+      async (appId) => ({ 'com.google.Chrome': 'Google Chrome', 'co.applex.vocito': 'Vocito' })[appId]);
+    await allowed.perform(vocito); const observation = await allowed.observe();
+    run.mockImplementation(async (input) => {
+      if (input.operation === 'focused') return { appId: 'com.google.Chrome' };
+      if (input.operation === 'act' || input.operation === 'observe') throw new BrowserPreconditionError('The selected app is no longer in front. Take over, bring it forward, resume and observe. No input was sent.');
+      return { opened: true };
+    });
+    const behind = 'Vocito is no longer in front (Google Chrome is). Call open with the same app to bring it forward, then observe again.';
+    await expect(allowed.perform(commandSchema.parse({ action: 'click', observation: observation.id, target: { ref: 'ax0' } }))).rejects.toThrow(behind);
+    await expect(allowed.observe()).rejects.toThrow(behind);
+    // open for the same app brings it forward again; nothing else was dispatched.
+    await allowed.perform(vocito);
+    expect(run.mock.calls.map(([input]) => input.operation)).toEqual(['open', 'observe', 'act', 'focused', 'observe', 'focused', 'open']);
+    // Without a name, the bundle id; any other failure is left as it was.
+    const bare = new ComputerDriver(settingsSchema.parse({ allowedApps: ['com.google.Chrome', 'co.applex.vocito'] }), { run, cancel: vi.fn() });
+    run.mockResolvedValueOnce({ opened: true }); await bare.perform(vocito);
+    await expect(bare.observe()).rejects.toThrow('co.applex.vocito is no longer in front (com.google.Chrome is).');
+    run.mockRejectedValueOnce(new BrowserPreconditionError('The selected app has no accessible focused window.'));
+    await expect(bare.observe()).rejects.toThrow('The selected app has no accessible focused window.');
+  });
   it('opens an app the controller allows beyond the settings list, and nothing else', async () => {
     const run = vi.fn(async (): Promise<Record<string, unknown>> => ({ completed: true }));
     const driver = new ComputerDriver(settingsSchema.parse({}), { run, cancel: vi.fn() }, undefined, (appId) => appId === 'com.example.voicito');
@@ -109,13 +133,34 @@ describe('finding an installed app', () => {
   const resolver = vi.fn(async () => apps);
   it('matches a name exactly, ignoring case, and one bundle id in two places is one app', async () => {
     await expect(resolveApp({ name: 'VOICITO' }, resolver)).resolves.toEqual({ bundleId: 'com.example.voicito', name: 'Voicito' });
-    await expect(resolveApp({ name: 'Voic' }, resolver)).rejects.toThrow('No installed app is called Voic.');
+    await expect(resolveApp({ name: 'Voic' }, resolver)).rejects.toThrow('No app called Voic. Did you mean Voicito (com.example.voicito)? Ask again with that name.');
+    await expect(resolveApp({ name: 'Keynote' }, resolver)).rejects.toThrow('No installed app is called Keynote.');
     await expect(resolveApp({ bundleId: 'com.apple.Notes' }, resolver)).resolves.toEqual({ bundleId: 'com.apple.Notes', name: 'Notes' });
   });
   it('names every candidate when several apps share the name, and a failed lookup finds nothing', async () => {
     const twins = vi.fn(async () => [{ bundleId: 'a.one', name: 'Twin' }, { bundleId: 'b.two', name: 'twin' }]);
     await expect(resolveApp({ name: 'Twin' }, twins)).rejects.toThrow('Several apps are called Twin: Twin (a.one), twin (b.two). Say which bundle id.');
     await expect(resolveApp({ name: 'Twin' }, async () => { throw new Error('timed out'); })).rejects.toThrow('No installed app is called Twin.');
+  });
+  it('says close names back for a typo: one, several, or none', async () => {
+    const installed = [{ bundleId: 'co.applex.vocito', name: 'Vocito' }, { bundleId: 'com.example.vocitoo', name: 'Vocitoo' }, { bundleId: 'com.apple.Notes', name: 'Notes' }];
+    const lookup = vi.fn(async (query: AppQuery) => 'near' in query ? installed : installed.filter((app) => 'name' in query && app.name === query.name));
+    await expect(resolveApp({ name: 'Voicito' }, lookup)).rejects.toThrow('No app called Voicito. Close names: Vocito (co.applex.vocito), Vocitoo (com.example.vocitoo). Say which.');
+    await expect(resolveApp({ name: 'Voicito' }, async (query) => 'near' in query ? installed.slice(0, 1) : [])).rejects.toThrow('No app called Voicito. Did you mean Vocito (co.applex.vocito)? Ask again with that name.');
+    await expect(resolveApp({ name: 'Spreadsheet' }, lookup)).rejects.toThrow('No installed app is called Spreadsheet.');
+    // A lookup of close names that fails is today's sentence, and a bundle id never gets close names.
+    await expect(resolveApp({ name: 'Voicito' }, async (query) => { if ('near' in query) throw new Error('timed out'); return []; })).rejects.toThrow('No installed app is called Voicito.');
+    await expect(resolveApp({ bundleId: 'co.applex.vocit' }, lookup)).rejects.toThrow('No installed app has the bundle id co.applex.vocit.');
+  });
+  it('counts a name close by prefix, substring or a small edit distance', () => {
+    expect(isNearName('Voicito', 'Vocito')).toBe(true);
+    expect(isNearName('voc', 'Vocito')).toBe(true);
+    expect(isNearName('Vocito Pro Max', 'Vocito')).toBe(true);
+    expect(isNearName('Photoshop', 'Photoshp')).toBe(true);
+    expect(isNearName('Microsft Wrd', 'Microsoft Word')).toBe(true);
+    expect(isNearName('Notes', 'Numbers')).toBe(false);
+    expect(isNearName('Voicito', 'voicito')).toBe(false);
+    expect(isNearName('Vo', 'Go')).toBe(false);
   });
   it('accepts app only for open, and not with appId', () => {
     expect(commandSchema.safeParse({ action: 'open', app: 'Voicito' }).success).toBe(true);

@@ -73,7 +73,7 @@ export class HostController implements BrowserController {
       return new BrowserManager(() => new ExtensionDriver(this.#extension?.() ?? offline, this.options.allowedHosts), { controlFile: path.join(this.dir, 'control.json') });
     }
     if (this.#settings.mode === 'computer') return new BrowserManager(() => new ComputerDriver(this.#settings, this.options.bridge?.(), this.options.allowedHosts,
-      (appId) => this.#allowed(appId, this.#acting)), {
+      (appId) => this.#allowed(appId, this.#acting), (appId) => this.#nameOf(appId)), {
       controlFile: path.join(this.dir, 'control.json'), maxSessions: 1, allowOpen: true,
     });
     const host = new PlaywrightHost({ profileDir: path.join(this.dir, 'profile'), channel: this.options.channel, allowedHosts: this.options.allowedHosts, ...(this.options.lookup ? { lookup: this.options.lookup } : {}),
@@ -164,13 +164,22 @@ export class HostController implements BrowserController {
   #allowed(appId: string, conversationId: string | undefined): boolean {
     return this.#settings.allowedApps.includes(appId) || (conversationId !== undefined && this.#once.get(conversationId)?.has(appId) === true);
   }
+  /** Display names already looked up, by bundle id, for the agent's sentences. */
+  #names = new Map<string, string>();
+  #remember(app: InstalledApp): InstalledApp { if (app.name !== app.bundleId) this.#names.set(app.bundleId, app.name); return app; }
+  /** An app's display name, from an earlier lookup or Spotlight. Undefined when not found. */
+  async #nameOf(appId: string): Promise<string | undefined> {
+    const known = this.#names.get(appId);
+    if (known) return known;
+    try { return this.#remember(await resolveApp({ bundleId: appId }, this.options.resolveApp ?? spotlightApps)).name; } catch { return undefined; }
+  }
   /** The app an `open` names, as found on this Mac. An allowed bundle id needs no lookup. */
   async #resolve(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {
     const resolver = this.options.resolveApp ?? spotlightApps;
-    if (command.app !== undefined) return resolveApp({ name: command.app }, resolver);
+    if (command.app !== undefined) return this.#remember(await resolveApp({ name: command.app }, resolver));
     const appId = command.appId!;
-    if (this.#allowed(appId, conversationId)) return { bundleId: appId, name: appId };
-    return resolveApp({ bundleId: appId }, resolver);
+    if (this.#allowed(appId, conversationId)) return { bundleId: appId, name: this.#names.get(appId) ?? appId };
+    return this.#remember(await resolveApp({ bundleId: appId }, resolver));
   }
   /** `#resolve`, with its refusal said as the tool's own sentence. */
   async #resolveOrRefuse(command: BrowserCommand, conversationId: string | undefined): Promise<InstalledApp> {

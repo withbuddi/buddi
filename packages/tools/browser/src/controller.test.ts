@@ -8,6 +8,7 @@ import { createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/co
 const BROWSER_HOST = hostBindingOf({ name: 'browser', version: '0.1.0', schema: 'browser', migrationsDir: '', tools: [] });
 const hosted = (facts: CoreToolContext): CoreToolContext => ({ ...facts, buddi: createPluginHost(BROWSER_HOST, facts) });
 import { HostController } from './controller.js';
+import type { AppQuery } from './computer.js';
 import { BrowserManager } from './manager.js';
 import { commandSchema, type BrowserDriver } from './types.js';
 
@@ -146,7 +147,7 @@ describe('an app the owner has not allowed', () => {
     const performed: unknown[] = [];
     const driver: BrowserDriver = { start: vi.fn(async () => {}), perform: vi.fn(async (command) => { performed.push(command); }), close: vi.fn(async () => {}), screenshot: async () => undefined,
       observe: async () => ({ id: 'o', url: 'app://com.example.voicito', appId: 'com.example.voicito', title: 'Voicito', tree: '', tabs: [], capturedAt: new Date().toISOString() }) };
-    const resolveApp = vi.fn(async (query: { name: string } | { bundleId: string }) => apps.filter((app) => 'name' in query ? app.name.toLowerCase() === query.name.toLowerCase() : app.bundleId === query.bundleId));
+    const resolveApp = vi.fn(async (query: AppQuery) => apps.filter((app) => 'near' in query ? true : 'name' in query ? app.name.toLowerCase() === query.name.toLowerCase() : app.bundleId === query.bundleId));
     const controller = new HostController(dir, { platform: 'darwin', resolveApp,
       manager: (settings) => new BrowserManager(() => driver, { controlFile: path.join(dir, 'control.json'), maxSessions: settings.mode === 'computer' ? 1 : 8, allowOpen: settings.mode === 'computer' }) });
     resources.push({ dir, controller }); await controller.enable();
@@ -202,6 +203,20 @@ describe('an app the owner has not allowed', () => {
     await expect(controller.tierFor(byName, asking([{ envelope, state: 'expired' }]))).resolves.toEqual({ tier: 'gated' });
     await expect(controller.tierFor(byName, asking([{ envelope: { ...envelope, allowApp: 'com.other' }, state: 'rejected' }]))).resolves.toEqual({ tier: 'gated' });
     await expect(controller.tierFor(byName, asking([{ envelope, state: 'succeeded', choices: { remember: 'Once' } }]))).resolves.toEqual({ tier: 'session' });
+  });
+  it('answers a typo with the close names and picks none of them', async () => {
+    const { controller, performed } = await computer([{ bundleId: 'co.applex.vocito', name: 'Vocito' }]);
+    await expect(controller.tierFor(byName, asking())).rejects.toThrow('No app called voicito. Did you mean Vocito (co.applex.vocito)? Ask again with that name.');
+    await expect(controller.execute(byName, asking())).rejects.toThrow('Did you mean Vocito');
+    expect(performed).toEqual([]);
+  });
+  it('opens the conversation\'s own app again without a card, to bring it forward', async () => {
+    const { controller, performed } = await computer();
+    await controller.execute(byName, { ...asking(), actionId: 'action-1', choices: { remember: 'Once' } });
+    await controller.execute(byName, asking());
+    await expect(controller.tierFor(byName, asking())).resolves.toEqual({ tier: 'session' });
+    await controller.execute(commandSchema.parse({ action: 'open', appId: 'com.example.voicito' }), asking());
+    expect(performed).toEqual([expect.objectContaining({ action: 'open', appId: 'com.example.voicito' }), expect.objectContaining({ action: 'open', appId: 'com.example.voicito' })]);
   });
   it('raises no card outside computer mode', async () => {
     const { controller } = await computer();

@@ -113,6 +113,48 @@ describe('host browser authority and lifecycle', () => {
     expect(UNTRUSTED).toContain(MAILED_CODE);
     expect(createBrowserManifest().tools.find((tool) => tool.name === 'browser.act')!.description).toContain(MAILED_CODE);
   });
+  describe('an app the owner\'s own window pushed behind (computer mode)', () => {
+    const behind = 'Vocito is no longer in front (Google Chrome is). Call open with the same app to bring it forward, then observe again. No input was sent.';
+    const openVocito = commandSchema.parse({ action: 'open', appId: 'co.applex.vocito' });
+    const click = commandSchema.parse({ action: 'click', observation: 'o1', target: { ref: 'ax1' } });
+    it('tells the agent to open it again, never pauses, and lets that open through without a card or a fresh look first', async () => {
+      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
+      vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError(behind));
+      vi.mocked(driver.observe).mockClear();
+      for (let i = 0; i < 4; i++) {
+        const error = await service.execute(click, ctx).catch((e: unknown) => e);
+        if (i === 0) {
+          const result = JSON.parse((error as Error).message);
+          expect(result).toMatchObject({ error: behind, dispatched: false });
+          expect(result.recovery).toContain('open with the same app');
+          expect((error as Error).message).not.toMatch(/Take over|resume/i);
+        } else expect((error as Error).message).toContain('fresh observation is required');
+      }
+      expect(driver.observe).not.toHaveBeenCalled();
+      expect(service.status().state).toBe('running');
+      vi.mocked(driver.perform).mockReset().mockResolvedValue(undefined);
+      await expect(service.execute(openVocito, ctx)).resolves.toMatchObject({ completed: true, observation: expect.objectContaining({ id: 'o1' }) });
+      expect(driver.perform).toHaveBeenLastCalledWith(openVocito);
+      await expect(service.execute(click, ctx)).resolves.toMatchObject({ completed: true });
+    });
+    it('an observation refused the same way says the same, and does not count toward a pause', async () => {
+      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
+      vi.mocked(driver.observe).mockRejectedValue(new BrowserPreconditionError(behind));
+      for (let i = 0; i < 4; i++) {
+        const error = await service.execute(observe, ctx).catch((e: unknown) => e);
+        expect(JSON.parse((error as Error).message)).toMatchObject({ observed: false, recovery: '', message: `Observation failed: ${behind.replace(/\.$/, '')}.` });
+      }
+      expect(service.status().state).toBe('running');
+    });
+    it('keeps the owner\'s sentence while the owner has taken over: the agent waits', async () => {
+      const { service, driver, ctx } = await setup({ allowOpen: true }); await service.execute(openVocito, ctx);
+      await service.control('takeover');
+      vi.mocked(driver.perform).mockClear();
+      await expect(service.execute(openVocito, ctx)).rejects.toThrow('Browser is under human control or needs inspection. Wait for the owner to resume in the dashboard, then observe.');
+      await expect(service.execute(click, ctx)).rejects.toThrow('human control');
+      expect(driver.perform).not.toHaveBeenCalled();
+    });
+  });
   it('bounds repeated targeting failures and permits close without stale evidence', async () => {
     const { service, driver, ctx } = await setup(); await service.execute(navigate, ctx);
     vi.mocked(driver.perform).mockRejectedValue(new BrowserPreconditionError('Stale page observation'));
