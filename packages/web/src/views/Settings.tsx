@@ -51,7 +51,11 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
   // The counts the sections already keep: the proposals still open.
   const proposals = useAsync(() => Promise.resolve().then(() => api.proposals()), [], 30_000);
   const counts = { proposals: proposals.data?.open?.length ?? 0 };
-  const list = { entries, active: section, counts, navigate: (route: string) => navigate(route) };
+  // The rail's dot on Settings means a newer buddi is ready; the same dot on
+  // System says where that is.
+  const version = useAsync(() => api.version(), []);
+  const dots = version.data && !version.data.checkout && version.data.updateAvailable ? { system: 'a newer buddi is ready' } : ({} as Record<string, string>);
+  const list = { entries, active: section, counts, dots, navigate: (route: string) => navigate(route) };
   return (
     <div className="settings">
       {narrow ? null : <SettingsNav {...list} />}

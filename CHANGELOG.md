@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The dot on Settings, which means a newer buddi is ready, now shows on the System entry too, so it leads to the Version panel instead of pointing at nothing.
+
 - Asking an agent to open an app you have not allowed for computer control now asks you with a card, Once or Always, instead of sending you to Settings. Always adds the app to the list.
 - Plugin pages can show a progress bar; the Speech page uses it for the model downloads.
 - Settings → Speech asks which languages you speak instead of one language hint, so a French note and an English one are both heard right on this computer, and it lists the models your account offers instead of asking you to type one.

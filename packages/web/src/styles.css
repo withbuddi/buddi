@@ -294,6 +294,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .settings-nav-text { flex: 1 1 auto; min-width: 0; font-family: var(--font-display); font-size: var(--text-md); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-nav-link:not([data-active='true']) .settings-nav-text { color: var(--text); }
 .settings-nav-count { flex: 0 0 auto; box-shadow: none; }
+.settings-nav-dot { flex: 0 0 auto; box-shadow: none; }
 
 /* The section, to the right: the main column's own padding, and the page
    width the owner chose less the list beside it. */

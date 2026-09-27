@@ -223,3 +223,11 @@ describe('on a narrow window', () => {
     // takes its time over (the canvas's overflow menu is slow the same way).
   }, 60_000); // a large open menu in jsdom is slow on a CI runner; the assertions are the same
 });
+
+describe('dots', () => {
+  it('marks an entry with a dot and says why in its label', () => {
+    render(<SettingsNav entries={settingsEntries([])} active="profile" dots={{ system: 'a newer buddi is ready' }} navigate={() => {}} />);
+    expect(screen.getByTestId('settings-nav-dot')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'System, a newer buddi is ready' })).toBeInTheDocument();
+  });
+});

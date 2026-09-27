@@ -83,18 +83,20 @@ interface NavProps {
   active: string;
   /** A count beside an entry, by id, where that section already keeps one. */
   counts?: Readonly<Record<string, number>>;
+  /** A dot beside an entry, by id, with what it means, read out instead of shown as a number. */
+  dots?: Readonly<Record<string, string>>;
   navigate: (route: string) => void;
 }
 
-function countLabel(label: string, count: number | undefined): string {
-  return count ? `${label}, ${count} open` : label;
+function countLabel(label: string, count: number | undefined, dot?: string): string | undefined {
+  return count ? `${label}, ${count} open` : dot ? `${label}, ${dot}` : undefined;
 }
 
 /**
  * The column. A nav landmark whose links are one stop on Tab — the open one —
  * with Up and Down (and Home, End) moving between them and Enter opening one.
  */
-export function SettingsNav({ entries, active, counts = {}, navigate }: NavProps): JSX.Element {
+export function SettingsNav({ entries, active, counts = {}, dots = {}, navigate }: NavProps): JSX.Element {
   const ref = useRef<HTMLElement>(null);
   const groups = groupEntries(entries);
   const tabStop = entries.some((entry) => entry.id === active) ? active : entries[0]?.id;
@@ -126,6 +128,7 @@ export function SettingsNav({ entries, active, counts = {}, navigate }: NavProps
           {group.entries.map((entry) => {
             const on = entry.id === active;
             const count = counts[entry.id];
+            const dot = dots[entry.id];
             return (
               <a
                 key={entry.id}
@@ -133,13 +136,14 @@ export function SettingsNav({ entries, active, counts = {}, navigate }: NavProps
                 href={entry.route}
                 data-active={on ? 'true' : undefined}
                 aria-current={on ? 'page' : undefined}
-                aria-label={count ? countLabel(entry.label, count) : undefined}
+                aria-label={countLabel(entry.label, count, dot)}
                 tabIndex={entry.id === tabStop ? 0 : -1}
                 onClick={(e) => { e.preventDefault(); navigate(entry.route); }}
               >
                 <Icon name={entry.icon} className="settings-nav-icon" />
                 <span className="settings-nav-text">{entry.label}</span>
-                {count ? <span className="ui-badge settings-nav-count" aria-hidden="true">{count > 99 ? '99+' : count}</span> : null}
+                {count ? <span className="ui-badge settings-nav-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
+                  : dot ? <span className="ui-badge settings-nav-dot" data-kind="dot" data-testid="settings-nav-dot" aria-hidden="true" /> : null}
               </a>
             );
           })}
@@ -153,7 +157,7 @@ export function SettingsNav({ entries, active, counts = {}, navigate }: NavProps
  * The same list as one menu, for a window too narrow for the column: the open
  * section on the button, every group inside it.
  */
-export function SettingsMenu({ entries, active, counts = {}, navigate }: NavProps): JSX.Element {
+export function SettingsMenu({ entries, active, counts = {}, dots = {}, navigate }: NavProps): JSX.Element {
   const groups = groupEntries(entries);
   const current = entries.find((entry) => entry.id === active) ?? entries[0];
   return (
@@ -178,19 +182,21 @@ export function SettingsMenu({ entries, active, counts = {}, navigate }: NavProp
                   <DropdownMenu.Label className="ui-menu-label">{group.label}</DropdownMenu.Label>
                   {group.entries.map((entry) => {
                     const count = counts[entry.id];
+                    const dot = dots[entry.id];
                     return (
                       <DropdownMenu.RadioItem
                         key={entry.id}
                         value={entry.id}
                         className="ui-menu-item settings-menu-item"
                         data-active={entry.id === active ? 'true' : undefined}
-                        aria-label={count ? countLabel(entry.label, count) : undefined}
+                        aria-label={countLabel(entry.label, count, dot)}
                       >
                         <span className="settings-menu-entry">
                           <Icon name={entry.icon} className="settings-nav-icon" />
                           <span className="settings-nav-text">{entry.label}</span>
                         </span>
-                        {count ? <span className="ui-badge settings-nav-count" aria-hidden="true">{count > 99 ? '99+' : count}</span> : null}
+                        {count ? <span className="ui-badge settings-nav-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>
+                          : dot ? <span className="ui-badge settings-nav-dot" data-kind="dot" aria-hidden="true" /> : null}
                       </DropdownMenu.RadioItem>
                     );
                   })}
