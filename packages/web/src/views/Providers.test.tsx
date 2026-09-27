@@ -247,6 +247,7 @@ it('adds Gemini as a preset: Google\'s address and the name filled in, a key, th
   vi.mocked(api.providerAccounts).mockImplementation(async () => ({ ...view, gemini, accounts: saved ? [...view.accounts, row] : view.accounts }));
   vi.mocked(api.saveProviderAccount).mockImplementation(async () => { saved = true; return { id: 'two' }; });
   vi.mocked(api.probeModels).mockResolvedValue({ models: ['models/gemini-2.5-pro', 'models/gemini-3.1-pro-preview', 'models/gemini-3.8-flash'].map((id) => ({ id, name: id, isDefault: false })), truncated: false });
+  vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
   render(<Providers />);
   fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'gemini' } });
@@ -262,4 +263,23 @@ it('adds Gemini as a preset: Google\'s address and the name filled in, a key, th
   })));
   // The next step is the model list, not the end.
   expect(await screen.findByText(/Pick the model this account offers by default/)).toBeInTheDocument();
+});
+it('starts the Gemini preset on the newest Flash when Google refuses Pro on its first test', async () => {
+  const gemini = { baseUrl: 'http://localhost/google-fixture/openai/', keyUrl: 'http://localhost/key-page' };
+  let saved = false;
+  let model = '';
+  const row = () => ({ ...view.accounts[0]!, id: 'two', label: 'Gemini', kind: 'openai-compatible' as const, baseUrl: 'http://localhost/google-fixture/openai', defaultModel: model });
+  vi.mocked(api.providerAccounts).mockImplementation(async () => ({ ...view, gemini, accounts: saved ? [...view.accounts, row()] : view.accounts }));
+  vi.mocked(api.saveProviderAccount).mockImplementation(async (body) => { saved = true; model = body.defaultModel; return { id: 'two' }; });
+  vi.mocked(api.probeModels).mockResolvedValue({ models: ['models/gemini-3.1-pro', 'models/gemini-3.8-flash-lite', 'models/gemini-3.8-flash'].map((id) => ({ id, name: id, isDefault: false })), truncated: false });
+  vi.mocked(api.testProviderAccount).mockImplementation(async () =>
+    model === 'gemini-3.1-pro' ? { state: 'rate-limited', message: 'no', httpStatus: 429 } : { state: 'connected', message: 'ok' });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'gemini' } });
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'AIza-fixture' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  expect(await screen.findByText(/free tier has no Pro allowance, so it starts on gemini-3\.8-flash/)).toBeInTheDocument();
+  expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'two', defaultModel: 'gemini-3.8-flash' });
+  expect(api.testProviderAccount).toHaveBeenCalledTimes(2);
 });

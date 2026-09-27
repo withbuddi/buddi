@@ -66,6 +66,8 @@ account and pick **Gemini (Google AI key)**: the address and the name are
 filled in, the key is the one field left. Either way buddi reads the key's
 model list (Google names them `models/gemini-…`; buddi keeps the bare id),
 starts on the newest Gemini Pro, and offers the rest of the list to pick from.
+A free Google AI key has no Pro allowance, so when Google refuses Pro on the
+first test buddi starts on the newest Flash instead and says so.
 
 **What the compatible path does.** Chat, streaming and tool calls; the model
 list; the context window (a million tokens for every `gemini-` model in the

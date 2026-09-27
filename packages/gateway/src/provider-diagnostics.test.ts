@@ -15,3 +15,24 @@ it('only exposes valid retry timestamps, not arbitrary strings or headers', () =
   expect(providerDiagnostic({ status: 429, retryAt: 'SECRET' }).retryAt).toBeNull();
   expect(providerDiagnostic(null).state).toBe('unavailable');
 });
+it('says a generic rate limit as a sentence about the key and the model', () => {
+  const result = providerDiagnostic({ status: 429, message: 'SECRET' }, { provider: 'Anthropic', model: 'claude-sonnet-5' });
+  expect(result.message).toBe('Anthropic says this key has reached its limit for claude-sonnet-5. Wait a little, or pick another model.');
+  expect(result.message).not.toMatch(/response|establish/);
+});
+it('tells a free Google AI key on a Pro model to start on Flash, without echoing Google', () => {
+  const body = 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro';
+  const result = providerDiagnostic({ status: 429, type: 'http_error', message: body }, { provider: 'Google', model: 'gemini-3.1-pro', gemini: true });
+  expect(result).toMatchObject({ state: 'rate-limited', httpStatus: 429 });
+  expect(result.message).toBe('Google says this key has no allowance for gemini-3.1-pro. A free Google AI key does not include Pro models: start with a Flash model, or turn on billing at aistudio.google.com.');
+  expect(result.message).not.toContain('generate_content');
+  // Flash on the same key is an ordinary limit.
+  expect(providerDiagnostic({ status: 429, message: body }, { provider: 'Google', model: 'gemini-3.8-flash', gemini: true }).message).toMatch(/^Google says this key has reached its limit for gemini-3.8-flash/);
+});
+it('keeps every sentence short and free of engineer-speak', () => {
+  for (const status of [401, 403, 404, 429, 503, 0]) {
+    const { message } = providerDiagnostic({ status }, { provider: 'OpenAI', model: 'gpt-5' });
+    expect(message).not.toMatch(/response|establish/i);
+    expect(message.split(/(?<=\.)\s/).length).toBeLessThanOrEqual(2);
+  }
+});

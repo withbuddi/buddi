@@ -34,6 +34,40 @@ export function pickGeminiModel(ids: readonly string[]): string | undefined {
   return best?.id ?? bare.find((id) => id.startsWith('gemini-'));
 }
 
+/**
+ * The newest Flash in the list, for a free key Google refuses Pro on. Lite,
+ * image, speech and live variants are passed over; the highest version wins,
+ * and a release beats its preview.
+ */
+export function pickGeminiFlash(ids: readonly string[]): string | undefined {
+  let best: { id: string; version: number[]; preview: boolean } | undefined;
+  for (const id of ids.map(bareGeminiId)) {
+    const match = /^gemini-(\d+(?:\.\d+)*)-flash(?:-(.+))?$/.exec(id);
+    if (!match || /lite/.test(match[2] ?? '') || NOT_A_BRAIN.test(match[2] ?? '')) continue;
+    const version = match[1]!.split('.').map(Number);
+    const preview = (match[2] ?? '') !== '';
+    if (!best || newer(version, best.version) > 0 || (newer(version, best.version) === 0 && best.preview && !preview)) {
+      best = { id, version, preview };
+    }
+  }
+  return best?.id;
+}
+
+/** A Pro model, which a free Google AI key has no allowance for. */
+export function isGeminiPro(model: string): boolean {
+  return /^gemini-[\d.]+-pro(?:-|$)/.test(bareGeminiId(model));
+}
+
+/** The models worth offering in a picker: bare ids, brains only. */
+export function geminiBrains(ids: readonly string[]): string[] {
+  return [...new Set(ids.map(bareGeminiId).filter((id) => id.startsWith('gemini-') && !NOT_A_BRAIN.test(id)))];
+}
+
+/** Whether a connection test was refused for a rate or usage limit. */
+export function limited(verdict: { state: string; httpStatus?: number | null }): boolean {
+  return verdict.httpStatus === 429 || verdict.state === 'rate-limited' || verdict.state === 'quota-exhausted';
+}
+
 /** Positive when `a` is the newer version. */
 function newer(a: number[], b: number[]): number {
   for (let i = 0; i < Math.max(a.length, b.length); i += 1) {

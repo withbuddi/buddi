@@ -32,6 +32,8 @@ export interface BrainAnswer {
   label: string;
   /** The account's default model, which is what buddi names in its reply. */
   model: string;
+  /** Google refused Pro on a free key and buddi started on Flash: said once, in the reply. */
+  freeTier?: boolean;
 }
 
 /**

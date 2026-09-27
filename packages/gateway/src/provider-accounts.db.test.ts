@@ -138,7 +138,7 @@ suite('named provider accounts', () => {
   it('redacts discovery failures and never falls back to another credential', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
     f.listModels.mockRejectedValue(Object.assign(new Error('SECRET-RESPONSE'), { status: 401 }));
-    await expect(f.service.models(a.id)).rejects.toThrow('provider rejected this credential');
+    await expect(f.service.models(a.id)).rejects.toThrow('did not accept this key');
     expect(f.listModels).toHaveBeenCalledTimes(1);
     await expect(f.service.models('missing')).rejects.toThrow('not found');
   });

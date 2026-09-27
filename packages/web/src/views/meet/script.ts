@@ -162,6 +162,9 @@ export const SCRIPT = {
     },
     /** One small call, and then this. */
     works: (model: string): string => `That works. Your assistant will think with ${model}.`,
+    /** A free Google AI key: Pro was refused, Flash answered. */
+    worksOnFlash: (model: string): string =>
+      `That works. Google's free tier has no Pro allowance, so your assistant will think with ${model}; turn on billing at Google to use Pro.`,
     /** Anything else that went wrong, in its own words. */
     refused: (why: string): string => why,
     answer: (label: string): string => label,

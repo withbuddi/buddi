@@ -45,7 +45,7 @@ import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
 import { Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
-import { GEMINI_FALLBACK_MODEL, isGeminiAccount, pickGeminiModel } from '../gemini';
+import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
 import {
@@ -871,7 +871,11 @@ function Question(props: QuestionProps): JSX.Element | null {
           <>
             <Answered text={SCRIPT.brain.answer(answers.brain?.label ?? '')} onChange={onChange} />
             <Buddi>
-              <Said>{SCRIPT.brain.works(answers.brain?.model ?? '')}</Said>
+              <Said>
+                {answers.brain?.freeTier
+                  ? SCRIPT.brain.worksOnFlash(answers.brain.model)
+                  : SCRIPT.brain.works(answers.brain?.model ?? '')}
+              </Said>
               <CloudModels {...props} />
             </Buddi>
           </>
@@ -1077,12 +1081,31 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   const adopt = async (
     body: Parameters<typeof api.saveProviderAccount>[0],
     label: string,
+    flash?: string,
   ): Promise<void> => {
     setBusy(true);
     setProblem(null);
     try {
       const saved = await api.saveProviderAccount(body);
-      const verdict = await api.testProviderAccount(saved.id);
+      let verdict = await api.testProviderAccount(saved.id);
+      let model = body.defaultModel;
+      let freeTier = false;
+      // A free Google AI key has no Pro allowance at all: Google answers 429.
+      // Try once more on the newest Flash before saying anything.
+      if (verdict.state !== 'connected' && flash && flash !== model && limited(verdict)) {
+        const listed = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id);
+        if (listed) {
+          await api.saveProviderAccount({
+            id: listed.id, revision: listed.revision, label: listed.label, kind: listed.kind, auth: listed.auth,
+            baseUrl: listed.baseUrl, defaultModel: flash, enabled: listed.enabled,
+          });
+          verdict = await api.testProviderAccount(saved.id);
+          if (verdict.state === 'connected') {
+            model = flash;
+            freeTier = true;
+          }
+        }
+      }
       if (verdict.state !== 'connected') {
         // The account was saved so it could be tested; a test that failed
         // leaves nothing behind, or every retry would add one more copy of
@@ -1096,7 +1119,7 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         setProblem(verdict.message);
         return;
       }
-      const refused = await bind({ accountId: saved.id, label, model: body.defaultModel });
+      const refused = await bind({ accountId: saved.id, label, model, ...(freeTier ? { freeTier } : {}) });
       if (refused) setProblem(refused);
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : String(err));
@@ -1351,7 +1374,8 @@ function CloudMark(): JSX.Element {
   );
 }
 
-type Adopt = (body: Parameters<typeof api.saveProviderAccount>[0], label: string) => Promise<void>;
+/** Save, test and bind; `flash` is tried once when the first model is refused for a limit. */
+type Adopt = (body: Parameters<typeof api.saveProviderAccount>[0], label: string, flash?: string) => Promise<void>;
 
 /** Hand the models over, with what to do once one of them is chosen. */
 type Offer = (
@@ -1489,7 +1513,9 @@ function KeyCard({
 /**
  * Gemini, with a Google AI key: one field. The address is fixed and comes
  * from the gateway; the model is the newest Pro the key can reach, read from
- * Google's own list before anything is saved.
+ * Google's own list before anything is saved. A free key has no Pro
+ * allowance, so a refused Pro is tried once more on the newest Flash; when
+ * that fails too, the key stays and the list is offered to pick from.
  */
 function GeminiCard({
   busy,
@@ -1507,18 +1533,32 @@ function GeminiCard({
   const field = useOpened<HTMLInputElement>();
   const [secret, setSecret] = useState('');
   const [probing, setProbing] = useState(false);
+  /** Google's list for this key, once read; the picker after a refusal offers it. */
+  const [models, setModels] = useState<string[]>([]);
+  const [picked, setPicked] = useState('');
   const working = busy || probing;
+  const picking = problem !== null && models.length > 0;
   const submit = (): void => {
     const value = secret.trim();
     if (value === '' || working) return;
     setProbing(true);
     void (async () => {
       let defaultModel = GEMINI_FALLBACK_MODEL;
-      try {
-        const probed = await api.probeModels({ kind: 'openai-compatible', auth: 'api-key', baseUrl: preset.baseUrl, secret: value });
-        defaultModel = pickGeminiModel(probed.models.map((model) => model.id)) ?? defaultModel;
-      } catch {
-        // A key that cannot list may still answer; the test after the save decides.
+      let flash: string | undefined;
+      if (picking && picked !== '') {
+        // The owner chose from the list: that model, and no second guess.
+        defaultModel = picked;
+      } else {
+        try {
+          const probed = await api.probeModels({ kind: 'openai-compatible', auth: 'api-key', baseUrl: preset.baseUrl, secret: value });
+          const ids = probed.models.map((model) => model.id);
+          defaultModel = pickGeminiModel(ids) ?? defaultModel;
+          flash = isGeminiPro(defaultModel) ? pickGeminiFlash(ids) : undefined;
+          setModels(geminiBrains(ids));
+          setPicked(flash ?? defaultModel);
+        } catch {
+          // A key that cannot list may still answer; the test after the save decides.
+        }
       }
       setProbing(false);
       await onUse(
@@ -1532,6 +1572,7 @@ function GeminiCard({
           secret: value,
         },
         SCRIPT.brain.gemini.label,
+        flash,
       );
     })();
   };
@@ -1573,6 +1614,17 @@ function GeminiCard({
             }}
           />
         </Field>
+        {picking ? (
+          <Field label={SCRIPT.brain.model.label} grow>
+            <select value={picked} disabled={working} onChange={(event) => setPicked(event.target.value)}>
+              {models.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         <a className="meet-quiet" href={preset.keyUrl} target="_blank" rel="noreferrer">
           {SCRIPT.brain.gemini.get}
         </a>
@@ -1951,7 +2003,8 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
           baseUrl: account.baseUrl, defaultModel: model, enabled: account.enabled,
         });
         if (answers.assistant) await api.bindBrain({ accountId: account.id, model });
-        onSettled({ ...answers, brain: { ...brain, model } });
+        // The owner's own pick: the free-tier line no longer applies.
+        onSettled({ ...answers, brain: { accountId: brain.accountId, label: brain.label, model } });
       } catch (err) {
         onTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {

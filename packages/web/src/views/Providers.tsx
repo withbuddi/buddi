@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { OLLAMA_CLOUD_MODEL, api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
-import { GEMINI_FALLBACK_MODEL, pickGeminiModel } from '../gemini';
+import { GEMINI_FALLBACK_MODEL, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 
@@ -519,6 +519,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
       e.preventDefault();
       const value = secret; setSecret('');
       let defaultModel = chosen || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
+      let flash: string | undefined;
       void (async () => {
         if (google) {
           // Google flags no default: start on the newest Pro the key can reach,
@@ -526,13 +527,26 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           defaultModel = GEMINI_FALLBACK_MODEL;
           try {
             const listed = await api.probeModels({ kind: 'openai-compatible', auth: 'api-key', baseUrl, secret: value });
-            defaultModel = pickGeminiModel(listed.models.map((m) => m.id)) ?? defaultModel;
+            const ids = listed.models.map((m) => m.id);
+            defaultModel = pickGeminiModel(ids) ?? defaultModel;
+            flash = isGeminiPro(defaultModel) ? pickGeminiFlash(ids) : undefined;
           } catch { /* the save's own test says what is wrong with the key */ }
         }
         let created: { id: string } | undefined;
         const ok = await run(async () => {
           created = await api.saveProviderAccount({ label, kind, auth, baseUrl, defaultModel, enabled: true, ...(value.trim() ? { secret: value } : {}) });
-          return created;
+          if (!google) return created;
+          // A free Google AI key has no Pro allowance: a Pro refused for a
+          // limit is tried once more on the newest Flash.
+          const verdict = await api.testProviderAccount(created.id);
+          if (verdict.state === 'connected' || !flash || !limited(verdict)) return created;
+          const row = (await api.providerAccounts()).accounts.find((a) => a.id === created!.id);
+          if (!row) return created;
+          await api.saveProviderAccount({ ...accountSettings(row), defaultModel: flash });
+          const again = await api.testProviderAccount(created.id);
+          return again.state === 'connected'
+            ? { ...created, warning: `Account saved. Google's free tier has no Pro allowance, so it starts on ${flash}; turn on billing at Google to use Pro.` }
+            : created;
         }, 'Account saved.');
         if (!ok || !created) return;
         // A model picked here is the whole job; only a subscription has a next step.

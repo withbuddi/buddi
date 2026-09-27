@@ -9,12 +9,21 @@ import {
 import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, readCodexTokens, type AccountModels, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
+import { providerDiagnostic, type DiagnosticContext, type ProviderDiagnostic } from './provider-diagnostics.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
 import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
+
+/** Who answered, in the owner's words, for the diagnostic sentence. */
+function diagnosticContext(row: Pick<ProviderAccount, 'kind' | 'baseUrl' | 'label'>): DiagnosticContext {
+  const trim = (url: string): string => url.replace(/\/+$/, '');
+  const gemini = row.kind === 'openai-compatible' && trim(row.baseUrl) === trim(GEMINI_BASE_URL);
+  const provider = gemini ? 'Google' : row.kind === 'anthropic' ? 'Anthropic' : row.kind === 'openai' ? 'OpenAI' : row.kind === 'codex' ? 'ChatGPT'
+    : row.label && row.label !== 'probe' ? row.label : undefined;
+  return { provider, gemini };
+}
 
 type Row = ProviderAccount & { secretRef: string | null; legacyEnv: string | null; deleting: boolean; reportedContextWindows: Record<string, unknown> | null };
 /** At most this many models' windows are kept per account. */
@@ -297,7 +306,7 @@ export class ProviderAccounts {
         return value;
       } catch (error) {
         if (error instanceof ProviderAccountError) throw error;
-        const diagnostic = providerDiagnostic(error);
+        const diagnostic = providerDiagnostic(error, diagnosticContext(row));
         throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
       } finally { this.#modelRequests.delete(key); }
     })();
@@ -347,7 +356,7 @@ export class ProviderAccounts {
     try {
       return await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, placeholder, input.secret ?? null));
     } catch (error) {
-      const diagnostic = providerDiagnostic(error);
+      const diagnostic = providerDiagnostic(error, diagnosticContext(row));
       throw new ProviderAccountError(502, `Could not load models. ${diagnostic.message} You can still enter a custom model.`);
     }
   }
@@ -511,7 +520,7 @@ export class ProviderAccounts {
           tools: [], signal: AbortSignal.timeout(15_000),
         });
       } catch (error) {
-        diagnostic = providerDiagnostic(error);
+        diagnostic = providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel });
       }
       if ((await this.#row(id)).revision !== row.revision) throw new ProviderAccountError(409, 'Account changed during the test. Test it again.');
       const result = { ...diagnostic, checkedAt: new Date().toISOString() };

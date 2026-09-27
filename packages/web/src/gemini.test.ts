@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGeminiAccount, pickGeminiModel } from './gemini';
+import { isGeminiAccount, isGeminiPro, pickGeminiFlash, pickGeminiModel } from './gemini';
 
 describe('the Gemini model a new account starts on', () => {
   it('is the newest Pro, bare, stable over preview at the same version, never an image model', () => {
@@ -17,5 +17,17 @@ describe('the Gemini model a new account starts on', () => {
     expect(isGeminiAccount({ kind: 'openai-compatible', baseUrl: 'g/openai' }, 'g/openai/')).toBe(true);
     expect(isGeminiAccount({ kind: 'openai', baseUrl: 'g/openai' }, 'g/openai/')).toBe(false);
     expect(isGeminiAccount({ kind: 'openai-compatible', baseUrl: 'g/openai' }, undefined)).toBe(false);
+  });
+});
+
+describe('the Flash a free key falls back to', () => {
+  it('is the newest plain Flash, not lite, image, speech or live', () => {
+    expect(pickGeminiFlash(['models/gemini-2.5-flash', 'gemini-3.8-flash-lite', 'gemini-3.9-flash-image', 'gemini-3.9-flash-live', 'gemini-3.8-flash-preview', 'gemini-3.8-flash'])).toBe('gemini-3.8-flash');
+    expect(pickGeminiFlash(['gemini-3.1-pro'])).toBeUndefined();
+  });
+  it('knows a Pro when it sees one', () => {
+    expect(isGeminiPro('models/gemini-3.1-pro')).toBe(true);
+    expect(isGeminiPro('gemini-2.5-pro-preview')).toBe(true);
+    expect(isGeminiPro('gemini-3.8-flash')).toBe(false);
   });
 });

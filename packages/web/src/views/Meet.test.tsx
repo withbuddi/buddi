@@ -42,6 +42,7 @@ vi.mock('../api', async (load) => {
       accountModels: vi.fn(),
       saveProviderAccount: vi.fn(),
       testProviderAccount: vi.fn(),
+      removeProviderAccount: vi.fn(),
       probeModels: vi.fn(),
       ollama: vi.fn(),
       telegram: vi.fn(),
@@ -474,6 +475,68 @@ describe('the questions', () => {
     const other = await screen.findByLabelText(SCRIPT.brain.model.change);
     fireEvent.change(other, { target: { value: 'gemini-3.8-flash' } });
     await waitFor(() => expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'gem', defaultModel: 'gemini-3.8-flash' }));
+  });
+
+  it('starts a free Google AI key on the newest Flash when Google refuses Pro, and says why', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    let model = 'gemini-3.1-pro';
+    let saved = false;
+    vi.mocked(api.providerAccounts).mockImplementation(async () =>
+      accounts(saved ? [{ id: 'gem', label: 'Gemini', auth: 'api-key', baseUrl: 'google-compatible/openai', defaultModel: model }] : [], { gemini: GEMINI }));
+    const listed = ['models/gemini-3.1-pro', 'models/gemini-3.8-flash-lite', 'models/gemini-3.8-flash', 'models/gemini-3.9-flash-image', 'models/gemini-2.5-flash']
+      .map((id) => ({ id, name: id, isDefault: false }));
+    vi.mocked(api.probeModels).mockResolvedValue({ models: listed, truncated: false });
+    vi.mocked(api.accountModels).mockResolvedValue({ models: listed.map((m) => ({ ...m, id: m.id.replace('models/', '') })), truncated: false });
+    vi.mocked(api.saveProviderAccount).mockImplementation(async (body) => {
+      saved = true;
+      model = body.defaultModel;
+      return { id: 'gem' };
+    });
+    vi.mocked(api.testProviderAccount).mockImplementation(async () =>
+      model === 'gemini-3.1-pro' ? { state: 'rate-limited', message: 'Google says no Pro.', httpStatus: 429 } : { state: 'connected', message: 'ok' });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.gemini.title));
+    fireEvent.change(await screen.findByLabelText(SCRIPT.brain.gemini.field), { target: { value: 'AIza-fixture' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.gemini.submit }));
+    expect(await screen.findByText(SCRIPT.brain.worksOnFlash('gemini-3.8-flash'))).toBeInTheDocument();
+    expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'gem', defaultModel: 'gemini-3.8-flash' });
+    expect(api.testProviderAccount).toHaveBeenCalledTimes(2);
+    expect(api.removeProviderAccount).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText(SCRIPT.brain.model.change)).toHaveValue('gemini-3.8-flash');
+  });
+
+  it('keeps the key and offers the list when Flash is refused too', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    let model = '';
+    let saved = false;
+    vi.mocked(api.providerAccounts).mockImplementation(async () =>
+      accounts(saved ? [{ id: 'gem', label: 'Gemini', auth: 'api-key', baseUrl: 'google-compatible/openai', defaultModel: model }] : [], { gemini: GEMINI }));
+    const listed = ['models/gemini-3.1-pro', 'models/gemini-3.8-flash', 'models/gemini-2.5-flash'].map((id) => ({ id, name: id, isDefault: false }));
+    vi.mocked(api.probeModels).mockResolvedValue({ models: listed, truncated: false });
+    vi.mocked(api.saveProviderAccount).mockImplementation(async (body) => {
+      saved = true;
+      model = body.defaultModel;
+      return { id: 'gem' };
+    });
+    vi.mocked(api.removeProviderAccount).mockImplementation(async () => {
+      saved = false;
+      return {};
+    });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'rate-limited', message: 'Google says this key has reached its limit.', httpStatus: 429 });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.gemini.title));
+    fireEvent.change(await screen.findByLabelText(SCRIPT.brain.gemini.field), { target: { value: 'AIza-fixture' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.gemini.submit }));
+    expect(await screen.findByText('Google says this key has reached its limit.')).toBeInTheDocument();
+    expect(screen.getByLabelText(SCRIPT.brain.gemini.field)).toHaveValue('AIza-fixture');
+    const picker = screen.getByLabelText(SCRIPT.brain.model.label);
+    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['gemini-3.1-pro', 'gemini-3.8-flash', 'gemini-2.5-flash']);
+    fireEvent.change(picker, { target: { value: 'gemini-2.5-flash' } });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.gemini.submit }));
+    expect(await screen.findByText(SCRIPT.brain.works('gemini-2.5-flash'))).toBeInTheDocument();
+    // The list was already there: no second probe.
+    expect(api.probeModels).toHaveBeenCalledTimes(1);
   });
 
   it('asks which model when the service offers several and names no default', async () => {
