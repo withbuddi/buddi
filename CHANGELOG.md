@@ -10,6 +10,8 @@ What changes in buddi from one release to the next, newest first.
 - Settings → Speech: Off as the service for listening or speaking, which keeps that side off even with Whisper or Kokoro installed on this computer.
 - A buddi button in the corner of every page opens a small chat with your front desk over what you are doing, so a quick question needs no page change; `/` opens it too.
 - Plugin pages can draw a small chart, a line or bars with a dashed target line, and a screen reader hears it as a sentence.
+- Goals page: each goal with recorded values shows a chart under its figures, a line over its window or a bar per week for a goal counted per week, with the target dashed.
+- Home: a message folded across agents says who else sent it, "Finance Advisor · also Mail Triage".
 
 ### Changed
 

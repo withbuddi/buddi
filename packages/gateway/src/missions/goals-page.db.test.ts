@@ -241,6 +241,10 @@ suite('the Goals page reads (postgres)', () => {
       expect.objectContaining({ label: '$80', crossed: 'crossed 2026-09-29', crossedTone: 'good' }),
     ]);
     expect(one.findings).toEqual([]);
+    // The chart: the measured checks oldest first — the failed look is no point — and the target.
+    expect(one.chartType).toBe('line');
+    expect(one.series.map((p: { value: number }) => p.value)).toEqual([100, 75]);
+    expect(one.chartTarget).toBe(40);
   });
 
   /**

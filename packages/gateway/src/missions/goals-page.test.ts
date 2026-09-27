@@ -115,6 +115,19 @@ describe('the Goals page, as a contribution', () => {
     expect(() => registry.register(manifest)).toThrow(/goal.owner_delete/);
   });
 
+  it('draws the chart straight under the stats: a line for a level goal, bars for a frequency goal', () => {
+    const detail = ((goalsPage.body[1] as { body: unknown[] }).body[0] as { detail: Array<Record<string, unknown>> })
+      .detail;
+    expect(detail[0]?.kind).toBe('stats');
+    const charts = (detail[1] as { body: Array<Record<string, unknown>> }).body;
+    expect(charts.map((c) => [c.kind, c.type, (c.when as { equals: string }).equals, c.rows, c.x, c.y])).toEqual([
+      ['chart', 'line', 'line', 'series', 'day', 'value'],
+      ['chart', 'bar', 'bar', 'series', 'day', 'value'],
+    ]);
+    expect(charts.every((c) => (c.target as { path: string }).path === 'chartTarget')).toBe(true);
+    expect(() => goalRegistry()).not.toThrow();
+  });
+
   it('validates the view descriptor against the renderer that draws it', () => {
     expect(() => parseViewDescriptors(goalViews, { plugin: 'goal', tools: ['goal.status'] })).not.toThrow();
     const broken = copy(goalViews[0]!) as { map: Record<string, unknown> };

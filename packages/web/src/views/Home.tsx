@@ -37,7 +37,7 @@ import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { HomeAsk } from './parts/HomeAsk';
-import { NeedsYouDeck, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
+import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
   timezone,
@@ -96,7 +96,8 @@ export function Home({
     seeRow(row);
     if (row.link) navigate(row.link);
   };
-  const fromOf = (row: NotificationRow): string => (row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind]);
+  const fromOf = (row: NotificationRow): string =>
+    fromWithAlso(row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind], row, nameOf);
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);

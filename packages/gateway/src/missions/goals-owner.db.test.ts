@@ -495,6 +495,13 @@ suite('goals the owner measures (postgres)', () => {
       ['288 lb', 'api'],
     ]);
     expect(detail.windows).toEqual([]);
+    // The page's chart: the values oldest first, over the goal's window, the target dashed.
+    expect(detail.chartType).toBe('line');
+    expect(detail.series).toEqual([
+      { day: '2026-09-22', value: 288 },
+      { day: '2026-09-29', value: 285 },
+    ]);
+    expect(detail.chartTarget).toBe(220);
 
     const status = await registry.invoke('goal.status', { id: goal?.id }, agentCtx());
     if (!status.ok) throw new Error('goal.status');
@@ -527,6 +534,15 @@ suite('goals the owner measures (postgres)', () => {
       ['Week of 2026-09-28', '2 of 2', 'met'],
       ['Week of 2026-09-21', '0 of 2', 'partial'],
     ]);
+    // The page's chart: a bar per week, oldest first, the count per week dashed.
+    expect(detail.chartType).toBe('bar');
+    expect(detail.series).toEqual([
+      { day: '2026-09-21', value: 0 },
+      { day: '2026-09-28', value: 2 },
+      { day: '2026-10-05', value: 1 },
+      { day: '2026-10-12', value: 0 },
+    ]);
+    expect(detail.chartTarget).toBe(2);
     expect(detail.milestones).toEqual([
       { key: '2', label: '2 weeks in a row', crossed: 'not yet', crossedTone: 'neutral' },
     ]);

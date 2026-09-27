@@ -586,7 +586,28 @@ export function createGoalQueries(base: MetricSource): PageQuery[] {
       const owned = ownerSlugOf(goal.metric) !== null;
       const told = owned ? await goalOwnerValues(ctx.db, goal) : [];
       const frequency = await frequencyOf(ctx.db, goal, ctx.now(), ctx.timezone);
+      /*
+       * The chart under the stats, the same series `goal.status` draws on the
+       * canvas (`chartOf`), oldest first: a frequency goal's windows as bars,
+       * any other goal's values over its window as a line — the owner's
+       * values for an owner metric, the measured checks otherwise — with the
+       * target as the dashed line. Nothing recorded, no chart.
+       */
+      const drawn = chartOf(goal, unit, direction, history, ctx.timezone, owned ? { values: told, frequency } : null);
+      const windowStart = goal.baseline.asOf.getTime() - 24 * 60 * 60_000;
+      const series =
+        frequency !== null
+          ? frequency.windows.map((w) => ({ day: w.start, value: w.count }))
+          : drawn.points
+              .filter((p) => {
+                const at = new Date(p.at).getTime();
+                return at >= windowStart && at <= goal.deadline.getTime();
+              })
+              .map((p) => ({ day: localDateString(new Date(p.at), ctx.timezone), value: p.value }));
       const ownerRows = {
+        chartType: series.length === 0 ? 'none' : frequency !== null ? 'bar' : 'line',
+        series,
+        chartTarget: drawn.target,
         shape: goal.target.kind === 'frequency' ? 'frequency' : 'level',
         owned,
         values: told.slice(0, PAGE_CHECKS).map((v) => ({
@@ -914,6 +935,43 @@ export const goalsPage: PageDescriptor = {
                 { label: 'At this pace', value: { path: 'projection' } },
                 { label: 'Deadline', value: { path: 'deadline' } },
                 { label: 'Held by', value: { path: 'holder' } },
+              ],
+            },
+            {
+              /*
+               * The chart, straight under the stats' Now: in a titleless detail
+               * for the reason the owner's series is — `when` reads the data a
+               * component is handed. A line of the values over the goal's
+               * window, or a frequency goal's windows as bars; the target dashed.
+               */
+              kind: 'detail',
+              query: goalRef(),
+              fields: [],
+              body: [
+                {
+                  kind: 'chart',
+                  when: { path: 'chartType', equals: 'line' },
+                  title: 'Over its window',
+                  query: goalRef(),
+                  rows: 'series',
+                  x: 'day',
+                  y: 'value',
+                  type: 'line',
+                  label: 'Value',
+                  target: { path: 'chartTarget' },
+                },
+                {
+                  kind: 'chart',
+                  when: { path: 'chartType', equals: 'bar' },
+                  title: 'Each window',
+                  query: goalRef(),
+                  rows: 'series',
+                  x: 'day',
+                  y: 'value',
+                  type: 'bar',
+                  label: 'Count',
+                  target: { path: 'chartTarget' },
+                },
               ],
             },
             {

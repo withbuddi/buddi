@@ -513,10 +513,19 @@ after two whole weeks short running. Both sections sit in a titleless `detail`
 over the goal query, because `when` reads the data a component is handed and
 inside a list-detail's detail that is the page's own.
 
-The series is a table and the windows a list, not a chart: page descriptors
-have no chart component, by design ([plugin-pages.md](plugin-pages.md) §4,
-"charts are canvas views"). The points and the target line are drawn on the
-canvas, by `goal.status`. A frequency goal's windows are read per goal
+**The chart.** Straight under the stats, a page `chart` over the goal query
+(in a titleless `detail`, for the same `when` reason): for a frequency goal a
+bar per window (a calendar week, or a month), oldest first, with the target
+count as the dashed line; for any other goal a line of its values over its
+window — the owner's values for an owner metric, the measured checks
+otherwise, from the day before it was set to its deadline, oldest first — with
+the target dashed. It is the same series `goal.status` draws on the canvas
+(`chartOf`), answered as `series` (`{ day, value }`), `chartTarget` and
+`chartType` (`line`, `bar`, or `none` when nothing is recorded, which draws
+nothing). The table and the windows list stay under it for the exact figures;
+hover, events and milestones remain the canvas's (`goal.status`).
+
+A frequency goal's windows are read per goal
 (`frequencyOf`, one statement each), not in the one statement Home and the list
 use for checks.
 

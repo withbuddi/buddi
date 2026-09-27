@@ -295,6 +295,18 @@ describe('"Needs you" as a deck', () => {
     expect(navigate).toHaveBeenCalledWith('#/activity');
   });
 
+  it('names the other agents a folded row came from, on the deck and in the list', async () => {
+    const MAIL = { ...DESK, id: 'mail', handle: 'mail', name: 'Mail Triage' } as ChatAgent;
+    vi.mocked(api.notifications).mockResolvedValue({ notifications: [{ ...BANK, alsoFrom: ['mail'] }] });
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={vi.fn()} agents={[DESK, MAIL]} attention={new Map()} />);
+    });
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    expect(region).toHaveTextContent('Concierge · also Mail Triage');
+    fireEvent.click(screen.getByRole('radio', { name: 'List' }));
+    expect(screen.getByRole('link', { name: /A mail from the bank/ })).toHaveTextContent('Concierge · also Mail Triage');
+  });
+
   it('switches to the list and remembers it', async () => {
     await deck([BANK, RECAP]);
     expect(screen.getByRole('radio', { name: 'Deck' })).toHaveAttribute('aria-checked', 'true');

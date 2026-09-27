@@ -35,6 +35,16 @@ export function writeNeedsYouView(view: NeedsYouView): void {
   }
 }
 
+/**
+ * Who a row is from, with the other agents it was folded across:
+ * "Finance Advisor · also Mail Triage". Names, not ids — `nameOf` resolves
+ * them the way the row's own agent is — and the list and the deck both say it.
+ */
+export function fromWithAlso(from: string, row: NotificationRow, nameOf: (id: string) => string): string {
+  const also = (row.alsoFrom ?? []).filter((id) => id !== row.agentId).map(nameOf);
+  return also.length === 0 ? from : `${from} · also ${also.join(', ')}`;
+}
+
 export function NeedsYouDeck({
   rows,
   agents,
