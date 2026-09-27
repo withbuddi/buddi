@@ -44,7 +44,7 @@ import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Button, ButtonLink, Code, Field, Icon, Mark, Stack, Toolbar } from '../ui';
+import { Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
 import { InstallProgress } from './parts/InstallProgress';
 import {
   DEFAULT_ASSISTANT_NAME,
@@ -227,7 +227,8 @@ function Buddi({ children }: { children: ReactNode }): JSX.Element {
   return (
     <div className="meet-turn">
       <div className="wb-msg-who">
-        <Mark size="sm" />
+        {/* The Blob speaks here, the same face as above the card. */}
+        <img className="meet-turn-mark" src={mascotUrl('core')} alt="" aria-hidden="true" />
         <span>buddi</span>
       </div>
       {children}

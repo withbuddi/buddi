@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Assemble a release, not a checkout. Never reads .env, data, or private/. */
+import { execFileSync } from 'node:child_process';
 import { cp, mkdir, readFile, writeFile, mkdtemp, chmod } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -65,6 +66,14 @@ if (releaseVersion !== '' && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(releaseVe
   throw new Error(`BUDDI_RELEASE_VERSION is not a version: ${JSON.stringify(releaseVersion)}`);
 }
 if (releaseVersion !== '') product.version = releaseVersion;
+else {
+  // A local pack (the Docker trial, a scratch install) says which commit it is,
+  // so its "0.1.0" cannot be mistaken for a release: 0.1.0-dev.<short sha>.
+  try {
+    const sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    if (sha) product.version = `${product.version}-dev.${sha}`;
+  } catch { /* no git: keep the version as written */ }
+}
 // The release notes: the version's section of CHANGELOG.md, carried in the
 // manifest so the installation's daily check can show them before an upgrade.
 // A release must have them. A pre-release may go without when
