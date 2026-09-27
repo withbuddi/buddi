@@ -27,7 +27,11 @@ cloud account or on this computer, with nothing leaving it.
    Kokoro server).
 3. Open **Settings → Speech**. Under **Listening**, pick the service, the
    account and the model, then the languages you speak. Under **Speaking**,
-   pick the service, the account, the model and a voice. Save each side.
+   pick the service, the account, the model and a voice. With Kokoro, you
+   pick a voice for each language you speak instead: an **English voice**,
+   a **French voice** and so on, one row per language on your list that
+   Kokoro has voices for. A cloud service keeps the one **Voice**, and so
+   does Kokoro when your list is empty (its English voices). Save each side.
 
    **Models.** The Model list shows what your account offers: buddi asks its
    server (`GET /models`, kept ten minutes) and lists the ids with
@@ -44,14 +48,14 @@ cloud account or on this computer, with nothing leaving it.
    (a French accent is not heard as Portuguese), and a cloud service is sent
    none and detects the language itself. With Kokoro as the speaker and a
    language on your list that no Kokoro voice speaks (Japanese, Chinese,
-   German…), the Speaking block names it and says that a note in it gets a
-   text answer unless a cloud speaker is chosen.
+   German…), the Speaking block says so: "No German voice on this computer;
+   German replies use the cloud speaker when one is set, else text."
 4. Try each side. **Test** on Listening sends a two-second clip that says
    "Hello from buddi. This is a test." and shows what was heard. On Speaking,
    the play button beside **Voice** says "Hi, I'm buddi. This is how I
    sound." in your browser with the service, account, model and voice the
-   form holds, saved or not (a Kokoro French, Spanish, Italian, Portuguese or
-   Hindi voice says it in its language); press it again to stop. Nothing is kept, and it
+   form holds, saved or not; beside a language's voice (**French voice**) it
+   says the same sentence in that language; press it again to stop. Nothing is kept, and it
    does not count against the daily limit.
 5. Give `speech.*` to the agents that should use it, on their Access page.
 
@@ -92,10 +96,12 @@ used; you can also choose them by name.
 - Kokoro speaks English with American and British voices, and French,
   Spanish, Italian, Portuguese (Brazilian) and Hindi with voices of their
   own: eSpeak NG turns the text into the sounds Kokoro reads, as Kokoro's own
-  pipeline does. A reply is said with a voice of its language: with an
-  English voice chosen, a French reply (on Telegram, read aloud on the
-  dashboard, or `speech.say`) is said by Siwis, the French voice, and a
-  Spanish one by Dora; the first voice of each language is the one used.
+  pipeline does. A reply is said with the voice you chose for its language
+  (on Telegram, read aloud on the dashboard, or `speech.say`): an English
+  reply with your English voice, a French one with your French voice. For a
+  language Kokoro speaks that has no voice chosen, its first voice is used
+  (Siwis for French, Dora for Spanish). An agent that names a voice keeps it
+  when it speaks the reply's language.
   The language is what the reply looks like, or, when it is too short to
   tell, the one language you speak. Japanese and Chinese voices are in
   Kokoro's pack but not offered: they need a different pronunciation front
