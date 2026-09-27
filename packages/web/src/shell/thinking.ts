@@ -18,11 +18,16 @@ export function thinkingIsHonoured(providerKind: string | null | undefined): boo
  * provider), else the provider family from the file.
  */
 export function effectiveProviderKind(
-  engine: { provider: string; credentialKind?: string; credentialEnv?: string } | null | undefined,
-  accounts: ReadonlyArray<{ id: string; kind: string }> | undefined,
+  engine: { id?: string; provider: string; credentialKind?: string; credentialEnv?: string } | null | undefined,
+  view: { accounts: ReadonlyArray<{ id: string; kind: string }>; bindings?: ReadonlyArray<{ agentId: string; accountId: string }> } | undefined,
 ): string | null {
   if (!engine) return null;
-  const bound = engine.credentialEnv ? accounts?.find((a) => a.id === engine.credentialEnv) : undefined;
+  // The engine row names the account in `credentialEnv`; the chat row does not,
+  // so the bindings list answers there.
+  const accountId = engine.credentialEnv && view?.accounts.some((a) => a.id === engine.credentialEnv)
+    ? engine.credentialEnv
+    : view?.bindings?.find((b) => b.agentId === engine.id)?.accountId;
+  const bound = accountId ? view?.accounts.find((a) => a.id === accountId) : undefined;
   return bound?.kind ?? engine.provider;
 }
 

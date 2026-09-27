@@ -268,6 +268,10 @@ it('shows no thinking switch on an OpenAI-compatible host, and says it is up to 
     ...view,
     agents: view.agents.map((a) => ({ ...a, provider: { ...a.provider, kind: 'openai-compatible' } })),
     engines: view.engines.map((e) => ({ ...e, provider: 'openai-compatible' })),
+    providerAccounts: view.providerAccounts && {
+      ...view.providerAccounts,
+      accounts: view.providerAccounts.accounts.map((a) => ({ ...a, kind: 'openai-compatible' })),
+    },
   };
   vi.mocked(api.agents).mockResolvedValue(compatible as never);
   render(<AgentSetup agentId="demo" section="brain" />);

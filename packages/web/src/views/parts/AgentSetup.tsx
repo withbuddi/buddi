@@ -255,7 +255,7 @@ function Agent({
                       ))}
                     </select>
                   </Field>
-                  {thinkingIsHonoured(effectiveProviderKind(engine ?? { provider }, accounts?.accounts)) ? (
+                  {thinkingIsHonoured(effectiveProviderKind(engine ?? { id: agent.id, provider }, accounts)) ? (
                     <Field label="Thinking" hint="Reasoning before the answer. Off is faster and cheaper.">
                       <select
                         aria-label="Thinking"

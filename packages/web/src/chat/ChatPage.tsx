@@ -1324,7 +1324,7 @@ export function ChatPage({
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
-            {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data?.accounts)) ? { onThinking: switchThinking } : {})}
+            {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data)) ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />
