@@ -1208,7 +1208,7 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
   Write `z.coerce.number()` for a number and `z.enum(['true','false'])` for a
   flag; a parameter your schema does not declare is refused, not ignored.
 - **The components are a fixed set**, each a shape: `section`, `notice`,
-  `link`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
+  `link`, `progress`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
   `repeat`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
   carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
   in §2.5.
@@ -1223,9 +1223,13 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
 - **A page may have its own read.** `PageDescriptor.data` is resolved once and
   is the data the top of `body` is drawn against — without it a `when` at the
   top level has nothing to be about.
-- **Text is a constant or a value.** `notice.text` and `expand.label` accept a
-  `ValueRef` as well as a string, and `ToolRef.confirm` may contain `{count}`,
-  replaced by the size of the selection.
+- **Text is a constant or a value.** `notice.text`, `expand.label`,
+  `progress.label` and `progress.done` accept a `ValueRef` as well as a string,
+  and `ToolRef.confirm` may contain `{count}`, replaced by the size of the
+  selection.
+- **`progress` is a bar.** `{ kind: 'progress', value, total?, label?, done? }`:
+  `value` is a fraction 0–1, or a count of bytes against `total`, drawn as the
+  bar and "7 of 252 MB · 2%"; `done` replaces the bar once it is full.
 - **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
   of the form's *own values* first — a path that names a field on the form
   reads what the owner has just typed — and of the loaded data otherwise, so

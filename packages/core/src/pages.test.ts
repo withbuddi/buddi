@@ -73,6 +73,7 @@ describe('page descriptors', () => {
         'list',
         'list-detail',
         'notice',
+        'progress',
         'repeat',
         'search',
         'section',

@@ -310,6 +310,7 @@ const board: PageDescriptor = {
   body: [
     { kind: 'notice', text: { path: 'headline' }, when: { path: 'state', equals: 'ready' } },
     { kind: 'notice', text: 'Everything the demo plugin knows, drawn from descriptors.' },
+    { kind: 'progress', value: { path: 'open' }, total: { path: 'items' }, label: 'Open of all', done: 'Everything is open.' },
     {
       kind: 'stats',
       title: 'Where things stand',

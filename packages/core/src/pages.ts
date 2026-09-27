@@ -375,6 +375,20 @@ export type Component =
   /** A sentence. `text` may be a path, for something the data has to say. */
   | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
+  /**
+   * How far something has got: a bar. `value` is a number — a fraction 0–1
+   * when there is no `total`, or a count of bytes against `total` (the line
+   * under the bar reads "7 of 252 MB · 2%"). `label` is the line above the
+   * bar; `done` is the line shown instead of the bar once `value` reaches
+   * `total` (or 1). Inside a `repeat` with `poll`, a download moves.
+   */
+  | (ComponentCommon & {
+      kind: 'progress';
+      value: ValueRef;
+      total?: ValueRef;
+      label?: string | ValueRef;
+      done?: string | ValueRef;
+    })
   | (ComponentCommon & {
       kind: 'stats';
       query: QueryRef;
@@ -681,6 +695,16 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
       })
       .strict(),
     z.object({ ...common, kind: z.literal('link'), label, to: routeRefSchema }).strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('progress'),
+        value: valueRefSchema,
+        total: valueRefSchema.optional(),
+        label: z.union([label, valueRefSchema]).optional(),
+        done: z.union([sentence, valueRefSchema]).optional(),
+      })
+      .strict(),
     z
       .object({
         ...common,

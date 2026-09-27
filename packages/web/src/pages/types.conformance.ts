@@ -161,6 +161,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   section: true,
   notice: true,
   link: true,
+  progress: true,
   stats: true,
   list: true,
   table: true,

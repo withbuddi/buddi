@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - Asking an agent to open an app you have not allowed for computer control now asks you with a card, Once or Always, instead of sending you to Settings. Always adds the app to the list.
+- Plugin pages can show a progress bar; the Speech page uses it for the model downloads.
 
 ### Added
 

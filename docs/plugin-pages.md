@@ -123,6 +123,8 @@ type Component =
   | { kind: 'section'; title?: string; note?: string; actions?: Array<{ kind: 'link' | 'button' }>; body: Component[] }
   | { kind: 'notice'; text: string | ValueRef; tone?: Tone }
   | { kind: 'link'; label: string; to: RouteRef }
+  /** A bar: `value` a fraction 0–1, or a count of bytes against `total`; `label` the line above; `done` the line instead of the bar once it is full. */
+  | { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
   /** A column may carry `pill: { tone }` — a state, in the tone the row names;
@@ -185,6 +187,7 @@ What each one is for, in email's terms:
 | `form` with `initial` | The Watchers block: five numbers, one Save |
 | `table` | The accounts list with their state and a remove action (with `confirm`) |
 | `stats` | Counts at the top of a settings page |
+| `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
 
 Not in the set, on purpose: free layout, custom styling, charts (those are
 canvas views), embedded HTML, client-side logic beyond `when`. A plugin that

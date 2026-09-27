@@ -1320,4 +1320,43 @@ describe('a repeat that polls', () => {
     await new Promise((resolve) => setTimeout(resolve, 1300));
     expect(calls).toBe(settled);
   }, 10_000);
+
+  it('draws progress as the install does: the label, a bar and "7 of 252 MB · 2%", then the done line', async () => {
+    let bytes = 7_400_000;
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) => {
+      if (query !== 'downloads') return Promise.resolve({ data: DATA[query] });
+      return Promise.resolve({ data: { rows: [{ id: 'w', bytes, total: 252_000_000, label: 'Whisper on this computer · listening' }] } });
+    }) as typeof api.pageQuery);
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [
+        {
+          kind: 'repeat',
+          query: { query: 'downloads' },
+          rows: 'rows',
+          key: 'id',
+          body: [
+            { kind: 'progress', value: { path: 'bytes' }, total: { path: 'total' }, label: { path: 'label' }, done: 'Installed, 252 MB' },
+            { kind: 'progress', value: { const: 0.5 }, label: 'Half' },
+          ],
+        },
+      ],
+    };
+    const { unmount } = render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    const bar = await screen.findByRole('progressbar', { name: 'Whisper on this computer · listening' });
+    expect(bar).toHaveAttribute('aria-valuenow', '2');
+    expect(screen.getByText('Whisper on this computer · listening')).toBeInTheDocument();
+    expect(screen.getByText('7 of 252 MB · 2%')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Half' })).toHaveAttribute('aria-valuenow', '50');
+    expect(screen.getByText('50%')).toBeInTheDocument();
+    unmount();
+
+    bytes = 252_000_000;
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    expect(await screen.findByText('Installed, 252 MB')).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar', { name: 'Whisper on this computer · listening' })).not.toBeInTheDocument();
+  });
 });

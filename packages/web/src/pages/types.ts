@@ -164,6 +164,7 @@ export type Component =
   | (ComponentCommon & { kind: 'section'; actions?: SectionAction[]; body: Component[] })
   | (ComponentCommon & { kind: 'notice'; text: string | ValueRef; tone?: Tone })
   | (ComponentCommon & { kind: 'link'; label: string; to: RouteRef })
+  | (ComponentCommon & { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef })
   | (ComponentCommon & {
       kind: 'stats';
       query: QueryRef;

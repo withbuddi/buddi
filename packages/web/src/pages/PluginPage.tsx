@@ -23,7 +23,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
-import { readPath, readRef } from '../canvas/resolve';
+import { asNumber, readPath, readRef } from '../canvas/resolve';
 import { chatRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
 import {
   Button,
@@ -40,6 +40,7 @@ import {
   PageFrame,
   PickRow,
   Pill,
+  Progress,
   Section,
   Sheet,
   Spacer,
@@ -877,6 +878,8 @@ function Piece({
       );
     case 'link':
       return <LinkPiece component={component} data={data} />;
+    case 'progress':
+      return <ProgressPiece component={component} data={data} />;
     case 'stats':
       return <StatsPiece component={component} data={data} />;
     case 'list':
@@ -998,6 +1001,54 @@ function LinkPiece({ component, data }: { component: Of<'link'>; data: unknown }
         {component.label}
       </ButtonLink>
     </Toolbar>
+  );
+}
+
+/** "252 MB": decimal megabytes, as a download is counted. */
+function megabytes(bytes: number): number {
+  return Math.round(bytes / 1_000_000);
+}
+
+/**
+ * How far something has got, as the first-run install draws it: the label,
+ * the bar, and "7 of 252 MB · 2%" — or, once it is full, the `done` line
+ * in place of the bar.
+ */
+function progressView(
+  component: Pick<Of<'progress'>, 'value' | 'total'>,
+  data: unknown,
+): { percent: number; full: boolean; line: string } {
+  const value = asNumber(readRef(data, component.value)) ?? 0;
+  const total = component.total ? asNumber(readRef(data, component.total)) : null;
+  const fraction = component.total ? (total && total > 0 ? value / total : 0) : value;
+  const clamped = Math.max(0, Math.min(1, fraction));
+  const percent = Math.floor(clamped * 100);
+  const full = fraction >= 1;
+  const line =
+    component.total && total && total > 0
+      ? `${megabytes(value)} of ${Math.max(1, megabytes(total))} MB · ${percent}%`
+      : `${percent}%`;
+  return { percent, full, line };
+}
+
+function ProgressPiece({ component, data }: { component: Of<'progress'>; data: unknown }): JSX.Element {
+  const text = (ref: string | ValueRef | undefined): string =>
+    ref === undefined ? '' : typeof ref === 'string' ? ref : String(readRef(data, ref) ?? '');
+  const label = text(component.label);
+  const done = text(component.done);
+  const { percent, full, line } = progressView(component, data);
+  return (
+    <Stack gap="sm">
+      {label ? <span>{label}</span> : null}
+      {full && done ? (
+        <span role="status">{done}</span>
+      ) : (
+        <>
+          <Progress value={percent} label={label || 'Progress'} />
+          <span role="status">{line}</span>
+        </>
+      )}
+    </Stack>
   );
 }
 
