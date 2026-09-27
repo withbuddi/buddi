@@ -84,6 +84,9 @@ used; you can also choose them by name.
   second. Its voice notes are OGG/Opus at 24 kbps.
 - Both run on the CPU, through ONNX Runtime's prebuilt binaries: nothing is
   compiled on install and ffmpeg is not needed.
+- They run in a thread of their own, so the rest of buddi (the dashboard,
+  Telegram) keeps answering while a long reply is read aloud; they use up to
+  four cores and leave two free, and `SPEECH_THREADS` sets the number.
 
 ## What it costs
 

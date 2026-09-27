@@ -28,6 +28,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Local Whisper and Kokoro now run in their own thread. A long reply read aloud used to freeze the whole of buddi, dashboard and Telegram included, until it finished.
 - Computer control: an app name with a typo now gets the close matches back ("Did you mean Vocito?"), and when your own window pushed the agent's app behind, the agent brings it forward again itself instead of asking you to.
 
 ## 0.1.0-pre.20 — 2026-09-27
