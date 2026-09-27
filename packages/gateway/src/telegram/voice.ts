@@ -52,9 +52,9 @@ export type SpeechOutcome<T> = ({ ok: true } & T) | { ok: false; reason: SpeechF
 export interface SpeechHooks {
   /** Is there a speaker at all? Decides whether a turn is told it will be read aloud. */
   canSpeak(): boolean;
-  transcribe(artifactId: string): Promise<SpeechOutcome<{ text: string; language?: string }>>;
+  transcribe(artifactId: string, conversationId?: string): Promise<SpeechOutcome<{ text: string; language?: string }>>;
   /** Say `text` (handles read as the names given); the voice is kept in Files and its id returned. */
-  say(text: string, handles?: Record<string, string>): Promise<SpeechOutcome<{ artifactId: string }>>;
+  say(text: string, handles?: Record<string, string>, conversationId?: string): Promise<SpeechOutcome<{ artifactId: string; mime?: string }>>;
   /** The plugin's copy of the two choices (Settings → Speech); `{}` when it has none. */
   voicePrefs?(): Promise<Partial<ChatVoice>>;
   /** Write the two choices to the plugin's copy too; false when it could not be. */
@@ -84,10 +84,11 @@ export function classifySpeechRefusal(message: string): SpeechFailure {
 /** The two tools through the registry, as the owner. */
 export function createSpeechHooks(deps: SpeechHooksDeps): SpeechHooks {
   const has = (name: string): boolean => deps.registry.list().some((t) => t.name === name);
-  const invoke = async (name: string, args: Record<string, unknown>) => {
+  const invoke = async (name: string, args: Record<string, unknown>, conversationId?: string) => {
     if (!has(name)) return { ok: false as const, reason: 'missing' as const, message: `${name} is not installed` };
     const { conversationId: _none, ...ctx } = deps.ctx;
-    const result = await deps.registry.invoke(name, args, { ...ctx, agentId: OWNER_AGENT_ID, now: deps.now } as CoreToolContext);
+    // A conversation only when the surface names one (the dashboard does), so the use is counted against it.
+    const result = await deps.registry.invoke(name, args, { ...ctx, ...(conversationId ? { conversationId } : {}), agentId: OWNER_AGENT_ID, now: deps.now } as CoreToolContext);
     if (result.ok) return { ok: true as const, output: result.output as Record<string, unknown> };
     if (result.reason === 'unknown-tool') return { ok: false as const, reason: 'missing' as const, message: result.message };
     return { ok: false as const, reason: classifySpeechRefusal(result.message), message: result.message };
@@ -100,19 +101,20 @@ export function createSpeechHooks(deps: SpeechHooksDeps): SpeechHooks {
   };
   return {
     canSpeak: () => has(SAY_TOOL),
-    async transcribe(artifactId) {
-      const result = await invoke(TRANSCRIBE_TOOL, { artifactId });
+    async transcribe(artifactId, conversationId) {
+      const result = await invoke(TRANSCRIBE_TOOL, { artifactId }, conversationId);
       if (!result.ok) return result;
       const text = typeof result.output.text === 'string' ? result.output.text.trim() : '';
       const language = typeof result.output.language === 'string' ? result.output.language : undefined;
       return { ok: true, text, ...(language ? { language } : {}) };
     },
-    async say(text, handles) {
-      const result = await invoke(SAY_TOOL, { text, ...(handles && Object.keys(handles).length > 0 ? { handles } : {}) });
+    async say(text, handles, conversationId) {
+      const result = await invoke(SAY_TOOL, { text, ...(handles && Object.keys(handles).length > 0 ? { handles } : {}) }, conversationId);
       if (!result.ok) return result;
       const id = result.output.id;
       if (typeof id !== 'string') return { ok: false, reason: 'failed', message: 'speech.say returned no file' };
-      return { ok: true, artifactId: id };
+      const mime = result.output.mime;
+      return { ok: true, artifactId: id, ...(typeof mime === 'string' ? { mime } : {}) };
     },
     async voicePrefs() {
       const result = await ownerCall(TELEGRAM_VOICE_TOOL, {});

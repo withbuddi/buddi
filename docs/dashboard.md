@@ -75,6 +75,16 @@ the agent works: what you send joins the run (see
   setup to change it;
 - **Thinking** turns the agent's reasoning before the answer on or off.
 
+**Talking to buddi.** With the speech plugin set up on Settings → Speech,
+the **microphone** beside the paperclip turns what you say into text: hold it
+and let go, or click once to start and again to stop; a red dot follows your
+voice while it listens. The words land in the box for you to edit and send;
+hold **Shift** when you stop to send them at once. The **speaker** switch reads
+each reply aloud when it is finished, and a new reply interrupts the last; it
+is remembered in this browser and off until you switch it on. Both run as
+you, so they ask nothing, and they count against the speech plugin's daily
+limits ([Speech](speech.md)). The recording is kept in Files like any upload.
+
 **The canvas** holds the last few things the conversation produced, as tabs:
 tables, charts, diffs, terminal output, pictures, documents and previews, the
 agent's workspace files, and a **Browser** tab while an agent drives a browser

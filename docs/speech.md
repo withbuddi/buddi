@@ -9,7 +9,8 @@ updated: 2026-09-27
 The speech plugin lets your agents listen and talk. An agent with `speech.*`
 can turn a recording into text (`speech.transcribe`) and answer with a voice
 (`speech.say`), which lands in your Files library as an audio file. It also
-gives Telegram its ears and voice ([Voice on Telegram](telegram.md#voice)).
+gives Telegram its ears and voice ([Voice on Telegram](telegram.md#voice)), and the dashboard's composer its
+microphone and speaker switch ([Talking to buddi](dashboard.md#chat)).
 It is a plugin, `@buddi/tool-speech` in the buddi-plugins repository,
 installed like the image plugin. Listening and speaking run either through a
 cloud account or on this computer, with nothing leaving it.

@@ -86,6 +86,7 @@ import {
   type PagesDeps,
 } from './pages.js';
 import { listSecrets, secretUses, secretsAct, type SecretsDeps } from './secrets.js';
+import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
@@ -869,6 +870,8 @@ export function createWebApp(deps: WebServerDeps): Server {
     });
     /** The Keys and secrets page (docs/owner-secrets.md §6): core's own queries and ownerOnly tools. */
     const secretsDeps = (): SecretsDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
+    /** Talking to buddi on the dashboard: the speech plugin's two tools, as the owner. */
+    const speechDeps = (): SpeechRouteDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, agents: () => deps.catalog.list() });
     /** The same, for the version and upgrade routes. */
     const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
@@ -2499,6 +2502,14 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (path === '/api/secrets/act') {
       return reply(res, await secretsAct(secretsDeps(), body, session));
     }
+
+    /*
+     * Talking to buddi (docs/dashboard.md): the composer's microphone and the
+     * speaker toggle, through the speech plugin's tools by name, as the owner.
+     * They count against the plugin's daily caps like any use.
+     */
+    if (path === '/api/speech/transcribe') return reply(res, await transcribeRoute(speechDeps(), body));
+    if (path === '/api/speech/say') return reply(res, await sayRoute(speechDeps(), body));
 
     /*
      * The owner's own profile. What an agent may write through owner.set_profile

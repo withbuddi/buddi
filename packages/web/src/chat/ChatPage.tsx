@@ -41,6 +41,7 @@ import { ApprovalDock, type DockedApproval } from './ApprovalDock';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
+import { playAudio, readAloudPreference, saveReadAloud, stopPlayback } from './voice';
 import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
 import { accentAttrs, accentOf } from '../shell/accent';
@@ -179,6 +180,23 @@ export function ChatPage({
   const [loadingProfile, setLoadingProfile] = useState(false);
   /** A line the panel put in the composer's mouth. Never sent for the owner. */
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
+  /*
+   * Read replies aloud (docs/dashboard.md, Talking to buddi): a preference of
+   * this browser, off until switched on. The last turn's words are followed
+   * as they stream, and at `run.finished` they are spoken through the speech
+   * plugin and played through the page's one audio element.
+   */
+  const [readAloud, setReadAloud] = useState(readAloudPreference);
+  const readAloudOn = useRef(readAloud);
+  readAloudOn.current = readAloud;
+  const lastTurn = useRef<{ runId: string; turn: number; text: string } | null>(null);
+  /** Why replies are not being read aloud, said once per page load. */
+  const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const switchReadAloud = useCallback((on: boolean) => {
+    setReadAloud(on);
+    saveReadAloud(on);
+    if (!on) stopPlayback();
+  }, []);
   /*
    * Thinking, as this page has it since the owner switched it.
    *
@@ -328,6 +346,7 @@ export function ChatPage({
       onEvent: (event: ChatEvent) => {
         switch (event.name) {
           case 'run.started':
+            lastTurn.current = null;
             setRunning(true);
             setPartial(null);
             setRunningAgentId(str(event.data['agentId']));
@@ -338,6 +357,12 @@ export function ChatPage({
             const kind = event.data['kind'] === 'thinking' ? 'thinking' : 'text';
             const text = str(event.data['text']) ?? '';
             const at = Date.now();
+            if (kind === 'text') {
+              const held = lastTurn.current;
+              lastTurn.current = held && held.runId === runId && held.turn === turn
+                ? { ...held, text: held.text + text }
+                : { runId, turn, text };
+            }
             setPartial((current) => {
               const base: LiveTurnView = current && current.runId === runId && current.turn === turn
                 ? current
@@ -354,6 +379,7 @@ export function ChatPage({
             const text = str(event.data['text']) ?? '';
             const thinking = str(event.data['thinking']) ?? '';
             const startedAt = Number(event.data['startedAt'] ?? Date.now());
+            lastTurn.current = { runId, turn, text };
             setPartial({ runId, turn, text, thinking, thinkingStartedAt: thinking ? startedAt : null, textStartedAt: text ? startedAt : null, settled: false });
             break;
           }
@@ -403,6 +429,11 @@ export function ChatPage({
             // handed it, so it can never put it on the screen.
             const failed = str(event.data['message']);
             setError(failed ?? null);
+            const spoken = lastTurn.current?.text.trim() ?? '';
+            lastTurn.current = null;
+            if (!failed && spoken !== '' && readAloudOn.current) {
+              void speakReply(spoken, conversationId).then((note) => { if (note) setVoiceNote(note); });
+            }
             void refresh(conversationId);
             break;
           }
@@ -1327,7 +1358,11 @@ export function ChatPage({
             {...(!group && agent && thinkingIsHonoured(effectiveProviderKind(agent, providerAccounts.data)) ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
+            conversationId={conversationId ?? null}
+            readAloud={readAloud}
+            onReadAloud={switchReadAloud}
           />
+          {voiceNote ? <p className="wb-voice-note" role="status">{voiceNote}</p> : null}
           </div>
         )}
       </section>
@@ -1538,4 +1573,34 @@ export function askedByLine(chain: readonly string[], agents: readonly ChatAgent
   const [raised, ...askers] = chain;
   if (raised === undefined) return '';
   return [handle(raised), ...askers.map((id) => `asked by ${handle(id)}`)].join(', ');
+}
+
+/** Said once per page load: why replies are not read aloud. */
+let voiceNoted = false;
+const VOICE_NOTE_REASONS = new Set(['missing', 'unconfigured', 'not-english']);
+
+/**
+ * Speak a finished reply and play it, interrupting any other. A refusal the
+ * owner can act on (no plugin, nothing set up, a language the voice cannot
+ * speak) comes back as a sentence, once per page load; anything else is
+ * quiet — the text is on the screen either way.
+ */
+export async function speakReply(text: string, conversationId: string): Promise<string | null> {
+  try {
+    const said = await chatApi.say({ text, conversationId });
+    await playAudio(said.audioUrl, said.mime);
+    return null;
+  } catch (err) {
+    const reason = err instanceof ApiError && err.detail && typeof err.detail === 'object' ? (err.detail as { reason?: unknown }).reason : undefined;
+    if (typeof reason === 'string' && VOICE_NOTE_REASONS.has(reason) && !voiceNoted) {
+      voiceNoted = true;
+      return (err as ApiError).message;
+    }
+    return null;
+  }
+}
+
+/** For tests: forget that the note was said. */
+export function resetVoiceNote(): void {
+  voiceNoted = false;
 }

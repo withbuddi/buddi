@@ -1395,6 +1395,12 @@ export const chatApi = {
     form.append('file', file, file.name);
     return upload<UploadedAttachment>('/chat/attachments', form);
   },
+  /** Talking to buddi: the uploaded recording heard, through the speech plugin as the owner. */
+  transcribe: (body: { artifactId: string; conversationId?: string }) =>
+    post<{ text: string; language?: string }>('/speech/transcribe', body),
+  /** A reply spoken; the page fetches `audioUrl` and plays it. */
+  say: (body: { text: string; conversationId?: string }) =>
+    post<{ artifactId: string; audioUrl: string; mime: string }>('/speech/say', body),
   /** A file taken back out of the tray before it was sent. Refused if a message carries it. */
   discardAttachment: (artifactId: string) => del<null>(`/artifacts/${encodeURIComponent(artifactId)}`),
   /* ---- groups ---- */

@@ -33,6 +33,7 @@ import { chatApi, ApiError } from '../api';
 import { Icon } from '../ui';
 import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
+import { MicButton } from './MicButton';
 import { snapTab } from './snap';
 import type { UploadedAttachment } from './types';
 
@@ -117,7 +118,15 @@ export const Composer = forwardRef<ComposerHandle, {
    * typed. Only the text: an attachment is an upload, not a draft.
    */
   threadKey?: string | null;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey }, ref) {
+  /** The conversation a recording is heard in, so the plugin counts it there. */
+  conversationId?: string | null;
+  /**
+   * Read replies aloud (docs/dashboard.md, Talking to buddi). The page owns
+   * the preference and the playing; the switch sits here, with the others.
+   */
+  readAloud?: boolean;
+  onReadAloud?: (on: boolean) => void;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud }, ref) {
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -139,7 +148,7 @@ export const Composer = forwardRef<ComposerHandle, {
   const [text, setText] = useState(() => readDraft(storageKey));
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [snapping, setSnapping] = useState(false);
-  /** Why the last tab snap gave nothing, in the browser's words made plain. */
+  /** Why the last tab snap or recording gave nothing, in the browser's words made plain. */
   const [snapNote, setSnapNote] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -365,12 +374,13 @@ export const Composer = forwardRef<ComposerHandle, {
     node.style.height = `${Math.min(node.scrollHeight, 200)}px`;
   };
 
-  const send = (): void => {
-    if (!canSend) return;
+  const send = (spoken?: string): void => {
+    const outgoing = (spoken ?? text).trim();
+    if (spoken === undefined ? !canSend : disabled || uploading || filesWait || outgoing === '') return;
     const ready = attachments
       .filter((attachment) => attachment.state === 'ready' && attachment.uploaded)
       .map((attachment) => attachment.uploaded as UploadedAttachment);
-    onSend(text.trim(), ready);
+    onSend(outgoing, ready);
     attachments.forEach(release);
     setRecalled(-1);
     // Sent is not drafted: the thread's draft is dropped, here and on disk.
@@ -528,6 +538,22 @@ export const Composer = forwardRef<ComposerHandle, {
           >
             <Icon name="clip" />
           </button>
+          {/*
+            Press to talk. What was heard joins what is typed, for the owner
+            to read and send; Shift at the stop sends it straight away.
+          */}
+          <MicButton
+            disabled={disabled}
+            conversationId={conversationId ?? null}
+            onNotice={setSnapNote}
+            onText={(heard, sendNow) => {
+              const joined = text.trim() === '' ? heard : `${text.replace(/\s+$/, '')} ${heard}`;
+              if (sendNow) { send(joined); return; }
+              put(joined);
+              if (recalled < 0) remember(joined);
+              area.current?.focus();
+            }}
+          />
           <button
             className="ui-icon-btn" data-size="sm"
             aria-label="Snap a tab"
@@ -588,6 +614,20 @@ export const Composer = forwardRef<ComposerHandle, {
             </button>
           ) : null}
 
+          {onReadAloud ? (
+            <button
+              type="button"
+              className="ui-icon-btn wb-read-aloud"
+              data-size="sm"
+              aria-label="Read replies aloud"
+              aria-pressed={Boolean(readAloud)}
+              title={readAloud ? 'Replies are read aloud. Click to stop.' : 'Read replies aloud, through the voice chosen in Settings → Speech'}
+              onClick={() => onReadAloud(!readAloud)}
+            >
+              <Icon name="speaker" />
+            </button>
+          ) : null}
+
           {/* The hint waits its turn: it appears only once the placeholder is
               gone, so the two never occupy the same line. A failed upload
               takes the line over. What the agent is doing is said in the
@@ -627,7 +667,7 @@ export const Composer = forwardRef<ComposerHandle, {
                     ? `Send — ${agentName} picks it up between steps`
                     : 'Send'
             }
-            onClick={send}
+            onClick={() => send()}
             disabled={!canSend}
           >
             <Icon name="send" />

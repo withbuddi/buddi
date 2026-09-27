@@ -59,6 +59,10 @@ const GLYPHS = {
   // A camera: one picture of another tab, into the composer.
   camera: [17, 1.5, <><path d="M2.6 6.2a1.4 1.4 0 0 1 1.4-1.4h2l1.1-1.6h2.8l1.1 1.6h2a1.4 1.4 0 0 1 1.4 1.4v6.4a1.4 1.4 0 0 1-1.4 1.4H4a1.4 1.4 0 0 1-1.4-1.4z" /><circle cx="8.5" cy="9.2" r="2.4" /></>],
   clip: [17, 1.5, <path d="M13.2 8 8.4 12.8a3 3 0 0 1-4.2-4.2l5.1-5.1a2 2 0 1 1 2.8 2.8l-5 5" />],
+  // A microphone: press to talk, the words land in the box.
+  mic: [17, 1.5, <><rect x="6.3" y="2.4" width="4.4" height="7.6" rx="2.2" /><path d="M3.9 8.4a4.6 4.6 0 0 0 9.2 0M8.5 13v2" /></>],
+  // A speaker with its waves: replies read aloud.
+  speaker: [17, 1.5, <><path d="M2.8 6.6h2.4l3.4-2.8v9.4l-3.4-2.8H2.8z" /><path d="M11.2 6.2a3.2 3.2 0 0 1 0 4.6M13.2 4.4a5.8 5.8 0 0 1 0 8.2" /></>],
   // Up, not right: the message leaves the box and goes to the thread above.
   send: [16, 1.8, <path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2" />],
 

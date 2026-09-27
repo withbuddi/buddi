@@ -1643,6 +1643,23 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 .wb-composer-think[aria-pressed='true'] .wb-composer-think-dot { background: var(--accent); border-color: var(--accent); }
 .wb-hint[data-tone='critical'] { color: var(--critical); white-space: normal; overflow: visible; text-overflow: clip; }
 
+/* ---- talking to buddi: the microphone and the speaker ---- */
+
+.wb-mic { touch-action: none; user-select: none; -webkit-user-select: none; }
+.wb-mic[data-state='recording'], .wb-mic[data-state='starting'] { color: var(--critical); }
+.wb-mic[data-state='transcribing'] { opacity: 0.6; cursor: progress; }
+.wb-mic-level {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--critical);
+  transition: transform 80ms linear;
+}
+@media (prefers-reduced-motion: reduce) { .wb-mic-level { transition: none; } }
+.wb-read-aloud[aria-pressed='true'] { color: var(--accent); }
+.wb-voice-note { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+
 /* ---- a file on the canvas ---- */
 
 .wb-artifact { display: flex; flex-direction: column; gap: 18px; }
