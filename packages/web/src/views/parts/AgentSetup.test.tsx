@@ -262,3 +262,16 @@ it('says the agent cannot run on Identity as well as on Brain', async () => {
   fireEvent.click(screen.getByRole('link', { name: 'See Brain.' }));
   expect(screen.getByText('This agent cannot run right now: no credential.')).toBeVisible();
 });
+
+it('shows no thinking switch on an OpenAI-compatible host, and says it is up to the model', async () => {
+  const compatible = {
+    ...view,
+    agents: view.agents.map((a) => ({ ...a, provider: { ...a.provider, kind: 'openai-compatible' } })),
+    engines: view.engines.map((e) => ({ ...e, provider: 'openai-compatible' })),
+  };
+  vi.mocked(api.agents).mockResolvedValue(compatible as never);
+  render(<AgentSetup agentId="demo" section="brain" />);
+  expect(await screen.findByRole('combobox', { name: 'Account' })).toBeInTheDocument();
+  expect(screen.queryByRole('combobox', { name: 'Thinking' })).not.toBeInTheDocument();
+  expect(screen.getByText('Up to the model')).toBeInTheDocument();
+});

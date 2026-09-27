@@ -96,7 +96,7 @@ Your team, and one page per agent. The index has four tabs:
 An agent's own page has the same things for that agent, plus Conversations,
 Memory, Skills and **Setup**. Setup has three parts: **Identity** (name,
 handle, face, description, persona), **Brain** (the account and model, turn
-budget, language, thinking) and **Access** (roles, the tools it may call, and
+budget, language, and thinking where the provider honours the switch: Anthropic and OpenAI; on an OpenAI-compatible host it is up to the model) and **Access** (roles, the tools it may call, and
 who it may ask).
 
 Try it: move an agent to another model under Setup → Brain.

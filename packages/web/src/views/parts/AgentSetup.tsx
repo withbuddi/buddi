@@ -19,6 +19,7 @@
  *  - the service reloads its catalog for new runs; existing runs keep their
  *    adapter.
  */
+import { THINKING_UP_TO_MODEL, thinkingIsHonoured } from '../../shell/thinking';
 import { useEffect, useRef, useState } from 'react';
 import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../../ui';
@@ -254,17 +255,23 @@ function Agent({
                       ))}
                     </select>
                   </Field>
-                  <Field label="Thinking" hint="Reasoning before the answer. Off is faster; the model's default is usually on for local models.">
-                    <select
-                      aria-label="Thinking"
-                      value={engine?.thinking ?? 'default'}
-                      onChange={(e) => set({ thinking: e.target.value === 'default' ? null : e.target.value })}
-                    >
-                      <option value="default">Model default</option>
-                      <option value="on">On</option>
-                      <option value="off">Off</option>
-                    </select>
-                  </Field>
+                  {thinkingIsHonoured(provider) ? (
+                    <Field label="Thinking" hint="Reasoning before the answer. Off is faster and cheaper.">
+                      <select
+                        aria-label="Thinking"
+                        value={engine?.thinking ?? 'default'}
+                        onChange={(e) => set({ thinking: e.target.value === 'default' ? null : e.target.value })}
+                      >
+                        <option value="default">Model default</option>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </Field>
+                  ) : (
+                    <Field label="Thinking" hint={THINKING_UP_TO_MODEL}>
+                      <span className="ui-card-meta">Up to the model</span>
+                    </Field>
+                  )}
                 </FormGrid>
               </Section>
             </Stack>

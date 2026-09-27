@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The thinking switch appears only where it is honoured, on Anthropic and OpenAI accounts. On an OpenAI-compatible host, Ollama Cloud and local Ollama included, the Brain page says thinking is up to the model, and the composer shows no switch.
 - On the first-run page buddi speaks with the Blob as its face instead of a letter tile. A locally packed build (the Docker trial) calls itself `0.1.0-dev.<commit>` so it is never mistaken for a release.
 
 ### Added

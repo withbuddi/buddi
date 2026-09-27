@@ -14,6 +14,7 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
+import { thinkingIsHonoured } from '../shell/thinking';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
@@ -1321,7 +1322,7 @@ export function ChatPage({
             model={group ? null : (agent?.model ?? null)}
             setupHref={group ? null : (agent ? agentRoute(agent.id, 'setup', 'brain') : null)}
             thinking={thinking}
-            {...(!group && agent ? { onThinking: switchThinking } : {})}
+            {...(!group && agent && thinkingIsHonoured(agent.provider) ? { onThinking: switchThinking } : {})}
             {...(group ? { mentions: members.map((m) => ({ handle: m.handle, name: m.name })) } : {})}
             onOpenFile={openFile}
           />
