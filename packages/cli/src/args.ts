@@ -102,6 +102,8 @@ export type Command =
   | { kind: 'dashboard'; action: DashboardAction }
   /** The agents' own browser: `status` says which one is here, `install` downloads Chromium. */
   | { kind: 'browser'; action: 'install' | 'status' }
+  /** The local speech models: `install` fetches Whisper, Kokoro or both through the speech plugin; bare says which are here. */
+  | { kind: 'speech'; action: 'install' | 'status'; model?: 'whisper' | 'kokoro' }
   /** buddi as an MCP server over stdio, for Claude Code or any MCP client. */
   | { kind: 'mcp' }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
@@ -299,6 +301,20 @@ export function parseArgs(argv: string[]): Command {
     }
     if (rest.length > 1) throw new UsageError(`unexpected argument: ${rest[1]}`);
     return { kind: 'browser', action };
+  }
+
+  if (head === 'speech') {
+    const action = rest[0] ?? 'status';
+    if (action !== 'install' && action !== 'status') {
+      throw new UsageError(`unknown speech action: ${action} (expected install or status)`);
+    }
+    const model = rest[1];
+    if (action === 'status' && model !== undefined) throw new UsageError(`unexpected argument: ${model}`);
+    if (model !== undefined && model !== 'whisper' && model !== 'kokoro') {
+      throw new UsageError(`unknown speech model: ${model} (expected whisper or kokoro)`);
+    }
+    if (rest.length > 2) throw new UsageError(`unexpected argument: ${rest[2]}`);
+    return { kind: 'speech', action, ...(model ? { model } : {}) };
   }
 
   if (head === 'telegram') {

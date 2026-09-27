@@ -87,6 +87,8 @@ const PARSED: string[][] = [
   ['ask', 'q'],
   ['browser'],
   ['browser', 'install'],
+  ['speech'],
+  ['speech', 'install'],
   ['jobs'],
   ['jobs', 'retry', 'x'],
   ['jobs', 'cancel', 'x'],

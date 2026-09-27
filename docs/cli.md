@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-09-26
+updated: 2026-09-27
 ---
 
 # The buddi command line
@@ -206,6 +206,8 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - `buddi vault import-env`: Move the secrets in .env into the vault.
 - `buddi browser [status]`: Say which browser the agents' own browser uses here.
 - `buddi browser install`: Download Chromium for the agents' own browser, about 150 MB.
+- `buddi speech [status]`: Say which local speech models are downloaded, and their size.
+- `buddi speech install [whisper|kokoro]`: Download Whisper (252 MB) and Kokoro (92 MB), or one of them, so listening and speaking run on this computer.
 - `buddi jobs [--state <state>] [--kind <kind>] [--limit <n>] [--json]`: List the work queue: what is waiting, running and failed.
   - `--state <state>`: Only pending, leased, succeeded, failed, suspended or cancelled jobs.
   - `--kind <kind>`: Only jobs of this kind.

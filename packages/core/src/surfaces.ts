@@ -51,6 +51,12 @@ export interface SurfaceProfile {
   interactive: boolean;
   /** Where the owner reads: a phone between other things, or a screen they sat down at. */
   reading: 'phone' | 'screen';
+  /**
+   * This turn's answer will be read aloud to the owner as a voice note (the
+   * owner spoke to Telegram, or chose voice always). Per turn, not per
+   * surface: the surface sets it on a copy of its profile for that one run.
+   */
+  spoken?: boolean;
 }
 
 /** Telegram: plain text, a hard message cap, buttons, a person reading. */
@@ -160,6 +166,9 @@ export function surfaceSection(profile: SurfaceProfile): string {
       : '- Nobody is here: this text is delivered as a notification and cannot be answered.',
     ...(profile.reading === 'phone'
       ? ['- The owner reads this on a phone, between other things: lead with the point, keep to a few short sentences, and offer detail rather than giving it.']
+      : []),
+    ...(profile.spoken
+      ? ['- Your answer will be read aloud to the owner as a voice note: two or three short sentences, no lists, tables, links or markdown.']
       : []),
   ];
   return `${SURFACE_SECTION_HEADING}\n${lines.join('\n')}`;

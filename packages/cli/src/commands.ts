@@ -698,6 +698,23 @@ export const COMMANDS: readonly CommandEntry[] = [
     applies: 'both',
   },
   {
+    name: 'speech',
+    group: 'Operate',
+    summary: 'Say which local speech models are downloaded, and their size.',
+    usage: 'buddi speech [status]',
+    flags: [],
+    applies: 'both',
+  },
+  {
+    name: 'speech install',
+    group: 'Operate',
+    summary: 'Download Whisper (252 MB) and Kokoro (92 MB), or one of them, so listening and speaking run on this computer.',
+    usage: 'buddi speech install [whisper|kokoro]',
+    flags: [],
+    example: 'buddi speech install kokoro',
+    applies: 'both',
+  },
+  {
     name: 'jobs',
     group: 'Operate',
     summary: 'List the work queue: what is waiting, running and failed.',

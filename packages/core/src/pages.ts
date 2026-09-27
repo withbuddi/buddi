@@ -454,7 +454,19 @@ export type Component =
    * component inside is drawn against one row, so `artifact`, `approval` and
    * `when` all work per row.
    */
-  | (ComponentCommon & { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] })
+  | (ComponentCommon & {
+      kind: 'repeat';
+      query: QueryRef;
+      rows: string;
+      key: string;
+      body: Component[];
+      /**
+       * Ask the query again every `seconds` while `while` holds of its answer,
+       * and only this query: a download's progress line moves without the
+       * page's forms being read again under the owner's hands.
+       */
+      poll?: { seconds: number; while: Visibility };
+    })
   /** A fold. `label` may be a path, so a row's own words are on it. */
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   /**
@@ -771,6 +783,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         rows: viewPathSchema,
         key: viewPathSchema,
         body: z.array(componentSchema).max(24),
+        poll: z.object({ seconds: z.number().int().min(1).max(60), while: visibilitySchema }).strict().optional(),
       })
       .strict(),
     z

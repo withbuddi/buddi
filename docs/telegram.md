@@ -57,8 +57,9 @@ gives you. Then pair your phone in any of three places:
   [Files](files.md) and handed to the agent; a caption is your message. A
   file over 20 MB is refused, because Telegram will not hand a bot anything
   bigger.
-- **Voice notes.** Saved, but not listened to yet: say in a line what it was
-  about.
+- **Voice notes.** Heard and answered, when the speech plugin is set up (see
+  [Voice](#voice)). Without it they are saved, and the reply says how to have
+  them heard.
 
 ## Commands
 
@@ -78,7 +79,7 @@ gives you. Then pair your phone in any of three places:
 | `/files` | The last files you sent. |
 | `/where` | The dashboard address when your phone can reach it; otherwise says it is on this computer only. |
 | `/browser` | Where the screen stands; `stop`, `resume` or `release` it. |
-
+| `/voice [spoken\|always\|off]` | Voice replies: a voice note back when you send one (spoken, the default), every answer, or never. `/voice` alone says which. |
 | `/host`, `/hoststop`, `/hostrevoke` | Host execution permissions and running commands. |
 | `/devices` | The devices paired to this installation. |
 | `/reset` | Starts a fresh conversation with the active agent. |
@@ -170,6 +171,39 @@ ledger: ledger proposes a skill: monthly-close
         [Keep] [Discard]
 ```
 
+## Voice
+
+With the [speech plugin](speech.md) installed and listening set up on
+Settings → Speech, a voice note is transcribed and shown back as a quote, so
+you see what was heard:
+
+```
+you:    (voice note, 0:04)
+buddi:  🎤 How much did I spend on groceries this month?
+buddi:  (voice note, 0:05) You spent 212 dollars on groceries this month, 30 less than in August.
+```
+
+Then the agent answers as if you had typed it; a caption under your voice
+note is added after the transcript. Only the transcript reaches the model;
+the recording stays in your Files.
+
+When you spoke, the answer comes back as a voice note with its text as the
+caption, or right under it when the text is longer than 1,024 characters.
+The agent knows it will be read aloud and keeps to two or three short
+sentences. `/voice always` speaks every answer, typed questions included;
+`/voice off` keeps every answer text. Cards, questions, proposals and answers
+with buttons stay text, and an answer over 4,000 characters is sent as text
+only.
+
+When the voice cannot be made (speaking is not set up, or Kokoro on this
+computer is asked for a language other than English), the answer comes as
+text and, once a day, one line says why. Transcribing and speaking count
+against the speech plugin's daily limits, and run without an approval card:
+they are you, acting in your own chat.
+
+Without the speech plugin, or with listening not set up, a voice note is
+saved and the reply says where to fix that.
+
 ## Short answers
 
 Agents know you read Telegram on a phone: they lead with the point, keep to a
@@ -191,6 +225,8 @@ name, for example).
 - 50 MB per file buddi sends. A bigger file is named in one sentence that
   points to Files on the dashboard.
 - 20 MB per file you send.
+- A voice note is heard up to 25 MB with a cloud listener, and up to ten
+  minutes with Whisper on this computer.
 
 ## What leaves this computer
 
@@ -198,3 +234,7 @@ Everything in the chat goes through Telegram's servers (`api.telegram.org`):
 your messages and files on the way in, the answers, files, tables and cards
 on the way out. The bot token is kept in the vault. Nothing else about buddi
 is sent to Telegram.
+
+A voice note is also sent to your listening service and a spoken answer's
+text to your speaking service when those are cloud accounts; with Whisper and
+Kokoro on this computer neither leaves it (see [Speech](speech.md)).

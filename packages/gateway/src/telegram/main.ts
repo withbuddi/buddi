@@ -71,6 +71,7 @@ import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createEngagementHooks } from '../missions/engagement.js';
 import { recapMissionId } from '../missions/recap.js';
 import { createCoreArtifactStore, type ArtifactStore } from './attachments.js';
+import { createSpeechHooks } from './voice.js';
 import {
   QUIET_UNAVAILABLE_TEXT,
   SURFACE,
@@ -103,6 +104,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'missions', description: 'The next five scheduled missions' },
   { command: 'goals', description: 'Your goals and where they stand' },
   { command: 'where', description: 'The dashboard address' },
+  { command: 'voice', description: 'Voice replies: spoken, always or off' },
   { command: 'browser', description: 'Where the screen stands; stop, resume or release it' },
   { command: 'host', description: 'Host execution permissions and running commands' },
   { command: 'hoststop', description: 'Interrupt all host commands' },
@@ -475,6 +477,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       : { recapMissionId: deps.recapMissionId }),
     approvals,
     proposals,
+    // Voice notes in and out, through the speech plugin's tools by name, as
+    // the owner. Without the plugin the hooks say so and every answer is text.
+    speech: createSpeechHooks({ registry: deps.registry, ctx: deps.ctx, now }),
     missions: async () =>
       missionsText(
         await upcomingMissions(pool, now(), (agentId) => deps.catalog.get(agentId)?.name ?? agentId),
@@ -501,7 +506,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
     ...(publicOrigin ? { publicOrigin } : {}),
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections, spoken }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -557,7 +562,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // The declared profile, not a sentence written here: how Telegram
         // renders is a property of Telegram, and it belongs in one place that
         // every surface reads the same way.
-        surface: TELEGRAM_SURFACE,
+        // A turn whose answer will be read aloud says so, for this run only.
+        surface: spoken ? { ...TELEGRAM_SURFACE, spoken: true } : TELEGRAM_SURFACE,
         // The ask policy is about every interactive turn; the first run's
         // instruction is about this one. Both, in that order.
         systemSuffix: [

@@ -206,3 +206,13 @@ describe('dashboard', () => {
     expect(() => parseArgs(['dashboard', '--token', 'extra'])).toThrow(UsageError);
   });
 });
+
+describe('buddi speech', () => {
+  it('installs both, one model, or says which are here', () => {
+    expect(parseArgs(['speech'])).toEqual({ kind: 'speech', action: 'status' });
+    expect(parseArgs(['speech', 'install'])).toEqual({ kind: 'speech', action: 'install' });
+    expect(parseArgs(['speech', 'install', 'kokoro'])).toEqual({ kind: 'speech', action: 'install', model: 'kokoro' });
+    expect(() => parseArgs(['speech', 'install', 'piper'])).toThrow(UsageError);
+    expect(() => parseArgs(['speech', 'remove'])).toThrow(/expected install or status/);
+  });
+});

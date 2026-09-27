@@ -274,6 +274,13 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
     case 'browser':
       // No database and no environment: it only looks on disk, or runs Playwright's installer.
       return runBrowser(command.action);
+    case 'speech': {
+      // No database: the plugins record, the data directory from `.env`, and
+      // the installed speech plugin's own `installLocal`.
+      loadEnv();
+      const { runSpeechCli } = await import('@buddi/gateway');
+      return runSpeechCli(command.action, command.model, process.env);
+    }
     case 'telegram': {
       await loadEnvironment();
       const blocked = await requireDatabase(process.env.DATABASE_URL);

@@ -86,6 +86,27 @@ import {
   type CanvasView,
 } from './outbound.js';
 import { FIRST_RUN_SUFFIX, shouldStartFirstRun } from '../agents/first-run.js';
+import {
+  answerSpoken,
+  claimTextInsteadNote,
+  getChatVoice,
+  heardText,
+  INSTALL_SPEECH_TEXT,
+  MAX_SPOKEN_CHARS,
+  MAX_VOICE_CAPTION_CHARS,
+  NO_WORDS_TEXT,
+  notHeardText,
+  parseVoiceArg,
+  SET_UP_LISTENING_TEXT,
+  setChatVoice,
+  textInsteadText,
+  VOICE_USAGE_TEXT,
+  voiceSetText,
+  voiceStatusText,
+  voiceTurnText,
+  type SpeechFailure,
+  type SpeechHooks,
+} from './voice.js';
 
 export const SURFACE = 'telegram';
 
@@ -195,6 +216,7 @@ export const HELP = [
   'buddi on Telegram.',
   '',
   'Send a statement, a receipt photo or a CSV and tell me what to do with it.',
+  'Send a voice note and I hear it, and answer with one, when the speech plugin is set up.',
   '',
   'Answers here are kept short, because you read them on a phone. Ask for more and you get more.',
   '',
@@ -212,6 +234,7 @@ export const HELP = [
   '/missions — the next five scheduled missions',
   '/goals — each goal with its number and where it stands',
   '/where — the dashboard address, when your phone can reach it',
+  '/voice [spoken|always|off] — answer a voice note with one (spoken), every answer (always), or never (off)',
   '/browser — where the screen stands; /browser stop, /browser resume, /browser release',
   '/host — host execution permissions and running commands',
   '/hoststop — interrupt all host commands',
@@ -537,6 +560,12 @@ export interface RunRequest {
    * answers the first message, which is what this surface did before.
    */
   interjections?: InterjectionSource;
+  /**
+   * This turn's answer will be read aloud as a voice note: the surface
+   * profile carries the `spoken` fact for this one run, so the agent writes
+   * for the ear.
+   */
+  spoken?: boolean;
 }
 
 /**
@@ -632,6 +661,12 @@ export interface TelegramSurfaceOptions {
   artifacts?: ArtifactStore;
   /** Submits one turn and returns the reply text, and what it declared. */
   run(req: RunRequest): Promise<string | RunReply>;
+  /**
+   * The speech plugin's two tools, called by name as the owner. Absent: a
+   * voice note is kept and answered with the sentence that says how to have
+   * it heard, and every answer is text.
+   */
+  speech?: SpeechHooks;
   /** Runs a mission inline for `/recap`. Absent: the command is unavailable. */
   runMission?: RunMission;
   /**
@@ -1175,6 +1210,8 @@ export class TelegramSurface {
    * restart drops it back to ordinary routing, never to a wrong agent.
    */
   readonly #pending = new PendingQuestions();
+  /** The chats whose message in hand is a voice note the owner spoke; read by `#runFor`. */
+  readonly #ownerSpoke = new Set<string>();
   #offset: number | undefined;
   #running = false;
   #abort: AbortController | undefined;
@@ -1364,8 +1401,10 @@ export class TelegramSurface {
     const incoming = extractAttachment(message);
     if (incoming) {
       // A file arrives with its own intent, caption or not. It is never the
-      // answer to "what time tonight?", so it ends any pending question.
-      this.#pending.clear(chatId);
+      // answer to "what time tonight?", so it ends any pending question. A
+      // voice note can be exactly that answer: it is heard, then routed as
+      // the words it carries.
+      if (incoming.slot !== 'voice' && incoming.slot !== 'audio') this.#pending.clear(chatId);
       const messageId = String(message.message_id);
       this.enqueue(chatId, () =>
         this.handleAttachment(chatId, resolution.ownerId, messageId, incoming),
@@ -1709,6 +1748,10 @@ export class TelegramSurface {
       await this.#opts.api.sendMessage(chatId, whereText(this.#opts.publicOrigin));
       return;
     }
+    if (command === '/voice') {
+      await this.handleVoice(chatId, text.slice(command.length));
+      return;
+    }
     // `/quiet 1w` — the argument is everything after the command word, so
     // `/quiet` alone parses as the default. The surface never reads a duration.
     if (command === '/quiet') {
@@ -1964,6 +2007,10 @@ export class TelegramSurface {
     // run, not out of what the owner is shown: the note is prepended after.
     let askedOwner = false;
 
+    // Read aloud? When the owner spoke and the chat says `spoken`, or always.
+    // Only with a speaker to read it; otherwise the agent is not told so.
+    const spoken = await this.#willSpeak(chatId);
+
     // Where a message typed while this run works arrives. It is registered
     // before the first model call and closed after the last, so the window in
     // which the owner can get a word in is exactly the window in which the
@@ -1981,8 +2028,11 @@ export class TelegramSurface {
             text: prompt,
             interjections,
             ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
+            ...(spoken ? { spoken: true } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
-            onTextDelta: (delta) => stream.push(delta),
+            // A spoken answer is not streamed: it arrives as a voice note with
+            // its text underneath, and the progress line holds until then.
+            ...(spoken ? {} : { onTextDelta: (delta: string) => stream.push(delta) }),
           });
           const reply = replyText(produced);
           askedOwner = turnAskedOwner(
@@ -2011,6 +2061,7 @@ export class TelegramSurface {
         label,
         carried ? readingText(label) : undefined,
         { agentId: agent.id, conversationId, prompt },
+        spoken,
         );
     } finally {
       /*
@@ -2165,10 +2216,11 @@ export class TelegramSurface {
       sizeBytes: row.sizeBytes,
     });
 
-    // Voice notes are kept, not heard: no run is started over bytes no model
-    // in this build can read, with or without a caption.
+    // A voice note is heard by the speech plugin, shown back as a quote, and
+    // run as the owner's words. Without the plugin, or with listening not set
+    // up, it is kept and the reply says where to fix that.
     if (row.kind === 'audio') {
-      await api.sendMessage(chatId, gotAudioText(filename, row.sizeBytes));
+      await this.#heard(chatId, row, filename, incoming.caption);
       return;
     }
 
@@ -2632,6 +2684,8 @@ export class TelegramSurface {
      * and "try again" there would re-run something they never typed.
      */
     retry?: { agentId: string; conversationId: string; prompt: string },
+    /** Send the answer as a voice note, with its text as the caption. */
+    speak = false,
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
     const placeholder = placeholderOverride ?? placeholderText(agentName);
@@ -2675,12 +2729,14 @@ export class TelegramSurface {
       const drawn: RenderedTurn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
       const reply = toPlainText(drawn.text);
       await progress.settle();
-      await stream.finish(
-        reply,
-        drawn.question && drawn.question.options.length > 0
-          ? questionKeyboard(drawn.question)
-          : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls),
-      );
+      const keyboard = drawn.question && drawn.question.options.length > 0
+        ? questionKeyboard(drawn.question)
+        : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls);
+      // Buttons need a text message to sit under: an answer that carries any
+      // stays text, as cards and questions do.
+      const voice = speak && keyboard === undefined ? await this.#speakAnswer(chatId, placeholderId, reply, progress) : { sent: false };
+      if (!voice.sent) await stream.finish(reply, keyboard);
+      if (voice.note) await this.#opts.api.sendMessage(chatId, voice.note).catch(() => {});
       // Then what else the turn made: the view it drew, the files it saved.
       if (drawn.artifacts || drawn.canvas) {
         await sendRunExtras(
@@ -2725,6 +2781,137 @@ export class TelegramSurface {
       ).catch(() => {});
     } finally {
       stopTyping();
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Voice
+   * ---------------------------------------------------------------- */
+
+  /** `/voice` alone shows the chat's setting; `/voice spoken|always|off` sets it. */
+  async handleVoice(chatId: string, arg: string): Promise<void> {
+    const api = this.#opts.api;
+    if (arg.trim() === '') {
+      await api.sendMessage(chatId, voiceStatusText(await getChatVoice(this.#opts.pool, SURFACE, chatId)));
+      return;
+    }
+    const setting = parseVoiceArg(arg);
+    if (!setting) {
+      await api.sendMessage(chatId, VOICE_USAGE_TEXT);
+      return;
+    }
+    await setChatVoice(this.#opts.pool, SURFACE, chatId, setting);
+    await api.sendMessage(chatId, voiceSetText(setting));
+  }
+
+  /** Will this chat's next answer be read aloud? */
+  async #willSpeak(chatId: string): Promise<boolean> {
+    const speech = this.#opts.speech;
+    if (!speech || !this.#opts.artifacts || !speech.canSpeak()) return false;
+    try {
+      return answerSpoken(await getChatVoice(this.#opts.pool, SURFACE, chatId), this.#ownerSpoke.has(chatId));
+    } catch (err) {
+      this.#log(`telegram: chat ${chatId} — the voice setting could not be read: ${message(err)}`);
+      return false;
+    }
+  }
+
+  /**
+   * A voice note, saved: transcribe it, show what was heard, and run it as the
+   * owner's words (a caption follows the transcript). Refused or failed: one
+   * sentence, and the file stays saved.
+   */
+  async #heard(chatId: string, row: ArtifactRow, filename: string, caption: string | undefined): Promise<void> {
+    const api = this.#opts.api;
+    const speech = this.#opts.speech;
+    if (!speech) {
+      await api.sendMessage(chatId, `${gotAudioText(filename, row.sizeBytes)} ${INSTALL_SPEECH_TEXT}`);
+      return;
+    }
+    const stopTyping = this.#startTyping(chatId);
+    let heard: Awaited<ReturnType<SpeechHooks['transcribe']>>;
+    try {
+      heard = await speech.transcribe(row.id);
+    } catch (err) {
+      heard = { ok: false, reason: 'failed', message: message(err) };
+    } finally {
+      stopTyping();
+    }
+    if (!heard.ok) {
+      if (heard.reason === 'failed') this.#log(`telegram: chat ${chatId} — transcription failed: ${heard.message}`);
+      const text = heard.reason === 'missing'
+        ? `${gotAudioText(filename, row.sizeBytes)} ${INSTALL_SPEECH_TEXT}`
+        : heard.reason === 'unconfigured'
+          ? `${gotAudioText(filename, row.sizeBytes)} ${SET_UP_LISTENING_TEXT}`
+          : notHeardText(heard.message);
+      await api.sendMessage(chatId, text);
+      return;
+    }
+    if (heard.text === '') {
+      await api.sendMessage(chatId, NO_WORDS_TEXT);
+      return;
+    }
+    await api.sendMessage(chatId, heardText(heard.text));
+    this.#ownerSpoke.add(chatId);
+    try {
+      await this.handleText(chatId, '', voiceTurnText(heard.text, caption));
+    } finally {
+      this.#ownerSpoke.delete(chatId);
+    }
+  }
+
+  /**
+   * The answer as a voice note, with its text as the caption (or right after
+   * it, past Telegram's 1,024 characters), in place of the placeholder. Not
+   * sent: the caller lands the text as usual, and `note` is the once-a-day
+   * line saying why, when there is one to say.
+   */
+  async #speakAnswer(chatId: string, placeholderId: number | undefined, reply: string, progress: ProgressBubble): Promise<{ sent: boolean; note?: string }> {
+    const api = this.#opts.api;
+    const speech = this.#opts.speech;
+    const store = this.#opts.artifacts;
+    // A long answer is not read aloud, and nothing is said about it.
+    if (!speech || !store || reply.trim() === '' || reply.length > MAX_SPOKEN_CHARS) return { sent: false };
+    const fallback = async (reason: SpeechFailure, detail: string): Promise<{ sent: false; note?: string }> => {
+      this.#log(`telegram: chat ${chatId} — the answer went as text (${reason}): ${detail}`);
+      const note = await this.#textInsteadNote(chatId, reason);
+      return note ? { sent: false, note } : { sent: false };
+    };
+    api.sendChatAction(chatId, 'record_voice').catch(() => {});
+    let said: Awaited<ReturnType<SpeechHooks['say']>>;
+    try {
+      said = await speech.say(reply);
+    } catch (err) {
+      said = { ok: false, reason: 'failed', message: message(err) };
+    }
+    if (!said.ok) return fallback(said.reason, said.message);
+    const loaded = await store.load(said.artifactId).catch(() => null);
+    if (!loaded) return fallback('failed', `the voice ${said.artifactId} could not be read back`);
+    const long = reply.length > MAX_VOICE_CAPTION_CHARS;
+    progress.silence();
+    try {
+      await api.sendVoice(chatId, Buffer.from(loaded.data, 'base64'), {
+        contentType: loaded.mime,
+        filename: loaded.mime === 'audio/mpeg' ? 'voice.mp3' : 'voice.ogg',
+        ...(long ? {} : { caption: reply }),
+      });
+    } catch (err) {
+      return fallback('failed', message(err));
+    }
+    if (long) await api.sendMessage(chatId, reply);
+    if (placeholderId !== undefined) await api.deleteMessage(chatId, placeholderId).catch(() => {});
+    return { sent: true };
+  }
+
+  /** Today's "why this came as text" line for this chat, or nothing when it was said today. */
+  async #textInsteadNote(chatId: string, reason: SpeechFailure): Promise<string | undefined> {
+    try {
+      const claimed = await claimTextInsteadNote(
+        this.#opts.pool, SURFACE, chatId, new Date(this.#now()), this.#opts.timezone ?? DEFAULT_TIMEZONE,
+      );
+      return claimed ? textInsteadText(reason) : undefined;
+    } catch {
+      return undefined;
     }
   }
 

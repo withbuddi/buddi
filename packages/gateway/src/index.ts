@@ -50,3 +50,4 @@ export * from './plugins/index.js';
 export { main as runServe } from './serve.js';
 // The agents' own browser, for the launcher's first-run line and `buddi browser install`.
 export { detectBrowser, browserLine, installBrowser, installDepsCommand, noSandboxMessage } from '@buddi/tool-browser';
+export { runSpeechCli, SPEECH_MODELS, type SpeechModel } from './speech-cli.js';

@@ -64,6 +64,7 @@ import {
 } from './attachments.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
 import { OwnerNotPairedError, notifyOwner, ownerChatId } from './notify.js';
+import type { SpeechHooks } from './voice.js';
 import {
   createPairingCode,
   createPairingCodeFor,
@@ -152,8 +153,26 @@ class FakeDb implements Queryable {
     updated_at: new Date(0),
   };
 
+  /** core.surface_chat_voice, keyed by chat. */
+  voice = new Map<string, { voice: string; noted: string | null }>();
+
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
+
+    if (text.startsWith('select voice from core.surface_chat_voice')) {
+      const row = this.voice.get(params[1]);
+      return { rows: row ? [{ voice: row.voice }] : [] };
+    }
+    if (text.startsWith('insert into core.surface_chat_voice (surface, external_chat_id, voice,')) {
+      this.voice.set(params[1], { voice: params[2], noted: this.voice.get(params[1])?.noted ?? null });
+      return { rows: [] };
+    }
+    if (text.startsWith('insert into core.surface_chat_voice (surface, external_chat_id, fallback_noted_on)')) {
+      const row = this.voice.get(params[1]) ?? { voice: 'spoken', noted: null };
+      if (row.noted === params[2]) return { rows: [] };
+      this.voice.set(params[1], { ...row, noted: params[2] });
+      return { rows: [{ claimed: 1 }] };
+    }
 
     // The detailed listing must be matched before the narrow one: it starts
     // with the same column list.
@@ -485,7 +504,9 @@ function fakeApi(
       };
     }
     const method = url.split('/').pop() as string;
-    const body = JSON.parse(String(init?.body ?? '{}'));
+    // An upload (sendVoice, sendPhoto) is multipart: kept as its raw text.
+    const raw = init?.body as unknown;
+    const body = Buffer.isBuffer(raw) ? { multipart: raw.toString('latin1') } : JSON.parse(String(raw ?? '{}'));
     sent.push({ method, body });
     if (failOn?.(method)) {
       return {
@@ -499,7 +520,7 @@ function fakeApi(
     const result =
       method === 'getUpdates'
         ? (updateQueue.shift() ?? [])
-        : method === 'sendMessage'
+        : method === 'sendMessage' || method === 'sendVoice'
           ? { message_id: nextMessageId++ }
           : method === 'getFile'
             ? {
@@ -656,6 +677,8 @@ function surfaceWith(
     goals?: () => Promise<string>;
     publicOrigin?: string;
     proposals?: { handleCallback(query: any): Promise<void> };
+    speech?: SpeechHooks;
+    timezone?: string;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -681,6 +704,8 @@ function surfaceWith(
     ...(extra.goals ? { goals: extra.goals } : {}),
     ...(extra.publicOrigin ? { publicOrigin: extra.publicOrigin } : {}),
     ...(extra.proposals ? { proposals: extra.proposals } : {}),
+    ...(extra.speech ? { speech: extra.speech } : {}),
+    ...(extra.timezone ? { timezone: extra.timezone } : {}),
   });
   return { surface, sent, run, api, store };
 }
@@ -736,6 +761,40 @@ function documentUpdate(
       document: file,
       ...(caption ? { caption } : {}),
     },
+  };
+}
+
+function voiceUpdate(updateId: number, caption?: string): TelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      from: { id: OWNER, is_bot: false },
+      chat: { id: OWNER, type: 'private' },
+      voice: { file_id: 'voice-1', file_unique_id: `u${updateId}`, mime_type: 'audio/ogg' },
+      ...(caption ? { caption } : {}),
+    },
+  };
+}
+
+/** The speech plugin, as the surface's hooks would answer. */
+function fakeSpeech(over: Partial<SpeechHooks> = {}, store?: ArtifactStore): SpeechHooks & { said: string[]; heard: string[] } {
+  const said: string[] = [];
+  const heard: string[] = [];
+  return {
+    said,
+    heard,
+    canSpeak: () => true,
+    async transcribe(id) {
+      heard.push(id);
+      return { ok: true, text: 'how much did I spend on groceries', language: 'en' };
+    },
+    async say(text) {
+      said.push(text);
+      const row = await store!.save({ bytes: Buffer.from('OggS-voice'), mime: 'audio/ogg', filename: 'reply.ogg', createdBy: 'owner' });
+      return { ok: true, artifactId: row.id };
+    },
+    ...over,
   };
 }
 
@@ -2315,7 +2374,7 @@ describe('TelegramSurface attachment ingest', () => {
     expect(req.text).not.toContain('artifact id');
   });
 
-  it('stores a voice note, says it cannot listen, and runs nothing', async () => {
+  it('stores a voice note and, with no speech plugin, says how to have it heard, and runs nothing', async () => {
     const db = withOwner(new FakeDb());
     const store = fakeStore();
     const { surface, sent, run } = surfaceWith(db, vi.fn(async (_req?: any) => 'never'), {
@@ -2323,24 +2382,14 @@ describe('TelegramSurface attachment ingest', () => {
       files: { 'voice-1': { bytes: 'OGG' } },
     });
 
-    await surface.processUpdates([
-      {
-        update_id: 409,
-        message: {
-          message_id: 409,
-          from: { id: OWNER, is_bot: false },
-          chat: { id: OWNER, type: 'private' },
-          voice: { file_id: 'voice-1', file_unique_id: 'u1', mime_type: 'audio/ogg' },
-          caption: 'listen to this',
-        },
-      },
-    ]);
+    await surface.processUpdates([voiceUpdate(409, 'listen to this')]);
     await surface.drain();
 
     expect(run).not.toHaveBeenCalled();
     expect(store.saved).toHaveLength(1);
     const text = sent.filter((s) => s.method === 'sendMessage').at(-1)?.body.text as string;
     expect(text).toContain("I can't listen to audio yet");
+    expect(text).toContain('install the speech plugin from Settings → Plugins');
     expect(db.attachments[0]?.kind).toBe('audio');
   });
 
@@ -3627,5 +3676,144 @@ describe('read-only commands: /missions, /goals, /where', () => {
     await surface.drain();
     expect(handled).toHaveLength(1);
     expect(approvals.handleCallback).not.toHaveBeenCalled();
+  });
+});
+
+describe('voice on Telegram', () => {
+  const voiceHarness = (speechOver: Partial<SpeechHooks> = {}, reply = 'You spent 212 dollars on groceries this month.') => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const speech = fakeSpeech(speechOver, store.store);
+    const built = surfaceWith(db, vi.fn(async (_req?: any) => reply), {
+      artifacts: store.store,
+      files: { 'voice-1': { bytes: 'OggS' } },
+      speech,
+    });
+    return { ...built, db, store, speech };
+  };
+  const texts = (sent: Sent[]) => sent.filter((s) => s.method === 'sendMessage').map((s) => s.body.text as string);
+
+  it('hears a voice note, quotes it, runs it as the owner\'s words with the caption after, and answers with a voice note', async () => {
+    const { surface, sent, run, speech } = voiceHarness();
+    await surface.processUpdates([voiceUpdate(501, 'and last month?')]);
+    await surface.drain();
+
+    expect(speech.heard).toEqual(['art-1']);
+    expect(texts(sent)).toContain('🎤 how much did I spend on groceries');
+    const req = run.mock.calls[0]?.[0] as any;
+    expect(req.text).toBe('how much did I spend on groceries\n\nand last month?');
+    // The turn is told it will be read aloud, and nothing is streamed.
+    expect(req.spoken).toBe(true);
+    expect(req.onTextDelta).toBeUndefined();
+    expect(speech.said).toEqual(['You spent 212 dollars on groceries this month.']);
+    const voice = sent.find((s) => s.method === 'sendVoice');
+    expect(voice?.body.multipart).toContain('name="caption"\r\n\r\nYou spent 212 dollars on groceries this month.');
+    expect(voice?.body.multipart).toContain('Content-Type: audio/ogg');
+    // The placeholder gives way to the voice note.
+    expect(sent.some((s) => s.method === 'deleteMessage')).toBe(true);
+    // The quote came before the voice.
+    expect(sent.findIndex((s) => s.body.text === '🎤 how much did I spend on groceries')).toBeLessThan(sent.indexOf(voice!));
+  });
+
+  it('puts a long answer in a second message, and does not speak one over 4,000 characters', async () => {
+    const long = 'Groceries. '.repeat(120).trim();
+    const first = voiceHarness({}, long);
+    await first.surface.processUpdates([voiceUpdate(502)]);
+    await first.surface.drain();
+    const voice = first.sent.find((s) => s.method === 'sendVoice');
+    expect(voice?.body.multipart).not.toContain('name="caption"');
+    expect(texts(first.sent).at(-1)).toBe(long);
+
+    const huge = 'x'.repeat(4001);
+    const second = voiceHarness({}, huge);
+    await second.surface.processUpdates([voiceUpdate(503)]);
+    await second.surface.drain();
+    expect(second.speech.said).toEqual([]);
+    expect(second.sent.some((s) => s.method === 'sendVoice')).toBe(false);
+    // Text only, and nothing said about why.
+    expect(texts(second.sent).some((t) => t.startsWith('I answered in text'))).toBe(false);
+  });
+
+  it('answers in text when the voice is refused, and says why once a day', async () => {
+    const { surface, sent } = voiceHarness({
+      say: async () => ({ ok: false, reason: 'not-english', message: 'refused: not-english: Kokoro on this computer speaks English only' }),
+    }, 'Vous avez dépensé 212 euros.');
+    await surface.processUpdates([voiceUpdate(504)]);
+    await surface.drain();
+    await surface.processUpdates([voiceUpdate(505)]);
+    await surface.drain();
+    expect(sent.some((s) => s.method === 'sendVoice')).toBe(false);
+    const all = sent.map((s) => (s.method === 'editMessageText' || s.method === 'sendMessage' ? s.body.text : '')).join('\n');
+    expect(all).toContain('Vous avez dépensé 212 euros.');
+    expect(texts(sent).filter((t) => t === 'I answered in text: the voice on this computer speaks English only.')).toHaveLength(1);
+  });
+
+  it('says where to set up listening, or that it could not transcribe, keeping the file', async () => {
+    const unset = voiceHarness({ transcribe: async () => ({ ok: false, reason: 'unconfigured', message: 'refused: listening is not set up.' }) });
+    await unset.surface.processUpdates([voiceUpdate(506)]);
+    await unset.surface.drain();
+    expect(unset.run).not.toHaveBeenCalled();
+    expect(texts(unset.sent).at(-1)).toMatch(/I've saved it.*set up listening in Settings → Speech\.$/s);
+    expect(unset.store.saved).toHaveLength(1);
+
+    const broken = voiceHarness({ transcribe: async () => ({ ok: false, reason: 'failed', message: 'refused: Transcribing took longer than 60 seconds, so it was stopped.' }) });
+    await broken.surface.processUpdates([voiceUpdate(507)]);
+    await broken.surface.drain();
+    expect(texts(broken.sent).at(-1)).toBe('I saved the voice note, but could not transcribe it: transcribing took longer than 60 seconds, so it was stopped.');
+
+    const silent = voiceHarness({ transcribe: async () => ({ ok: true, text: '' }) });
+    await silent.surface.processUpdates([voiceUpdate(508)]);
+    await silent.surface.drain();
+    expect(texts(silent.sent).at(-1)).toBe('I saved the voice note, but heard no words in it.');
+  });
+
+  it('/voice shows and sets the chat\'s choice: off keeps answers text, always speaks typed ones too', async () => {
+    const { surface, sent, run, speech } = voiceHarness();
+    await surface.processUpdates([message(510, OWNER, OWNER, '/voice')]);
+    await surface.drain();
+    expect(texts(sent).at(-1)).toBe(
+      'Voice replies: spoken: a voice note back when you send one.\nSend /voice spoken, /voice always or /voice off to change it.',
+    );
+    await surface.processUpdates([message(511, OWNER, OWNER, '/voice loud')]);
+    await surface.drain();
+    expect(texts(sent).at(-1)).toBe('Send /voice spoken, /voice always or /voice off.');
+
+    // A typed message under `spoken` is answered in text.
+    await surface.processUpdates([message(512, OWNER, OWNER, 'how much on groceries?')]);
+    await surface.drain();
+    expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBeUndefined();
+    expect(speech.said).toEqual([]);
+
+    await surface.processUpdates([message(513, OWNER, OWNER, '/voice always')]);
+    await surface.drain();
+    expect(texts(sent).at(-1)).toBe('Voice replies: always: every answer is also a voice note.');
+    await surface.processUpdates([message(514, OWNER, OWNER, 'and restaurants?')]);
+    await surface.drain();
+    expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBe(true);
+    expect(speech.said).toHaveLength(1);
+
+    await surface.processUpdates([message(515, OWNER, OWNER, '/voice off')]);
+    await surface.drain();
+    await surface.processUpdates([voiceUpdate(516)]);
+    await surface.drain();
+    expect((run.mock.calls.at(-1)?.[0] as any).spoken).toBeUndefined();
+    expect(speech.said).toHaveLength(1);
+  });
+
+  it('keeps an answer that carries buttons as text', async () => {
+    const db = withOwner(new FakeDb());
+    const store = fakeStore();
+    const speech = fakeSpeech({}, store.store);
+    const asking = vi.fn(async (_req?: any) => ({
+      text: 'Which account?',
+      question: { id: 'q1', text: 'Which account?', options: ['Checking', 'Savings'] } as any,
+    }));
+    const { surface, sent } = surfaceWith(db, asking as unknown as ReturnType<typeof vi.fn<(_req?: any) => Promise<string>>>, {
+      artifacts: store.store, files: { 'voice-1': { bytes: 'OggS' } }, speech,
+    });
+    await surface.processUpdates([voiceUpdate(520)]);
+    await surface.drain();
+    expect(speech.said).toEqual([]);
+    expect(sent.some((s) => s.method === 'sendVoice')).toBe(false);
   });
 });

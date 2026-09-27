@@ -473,6 +473,23 @@ export class TelegramApi {
   }
 
   /**
+   * Send a voice note: OGG/Opus plays inline as one, with a waveform (MP3 and
+   * M4A are accepted too). Telegram asks for 1 MB or less for the best
+   * results; the caption is cut at 1,024 characters like every other one.
+   */
+  async sendVoice(
+    chatId: string | number,
+    voice: Buffer,
+    opts: { caption?: string; filename?: string; contentType?: string } = {},
+  ): Promise<number | undefined> {
+    return this.#upload('sendVoice', 'voice', chatId, voice, {
+      ...opts,
+      filename: opts.filename ?? 'voice.ogg',
+      contentType: opts.contentType ?? 'audio/ogg',
+    });
+  }
+
+  /**
    * multipart/form-data, assembled by hand rather than through `FormData` so
    * the body stays a `Buffer` and every existing `FetchLike` fake keeps
    * working. The filename is quoted, so a quote or a line break in it is
