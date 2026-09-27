@@ -94,10 +94,19 @@ export function Field({
   grow,
   wide,
   group,
+  action,
+  after,
   children,
 }: {
   label: ReactNode;
   hint?: ReactNode;
+  /**
+   * A small button right after the control, outside its label so the
+   * control's name stays the label's words: a select's play button.
+   */
+  action?: ReactNode;
+  /** Under the field, outside its label: what that button just said. */
+  after?: ReactNode;
   inline?: boolean;
   grow?: boolean;
   /** In a FormGrid, take the whole row: a long input, a textarea, a checkbox. */
@@ -117,7 +126,15 @@ export function Field({
       data-grow={grow ? 'true' : undefined}
       data-wide={wide ? 'true' : undefined}
     >
-      {group ? (
+      {action ? (
+        <div className="ui-field-row">
+          <label className="ui-field-control">
+            <span className="ui-field-label">{label}</span>
+            {children}
+          </label>
+          {action}
+        </div>
+      ) : group ? (
         <div className="ui-field-control" role="group" aria-labelledby={labelId}>
           <span className="ui-field-label" id={labelId}>{label}</span>
           {children}
@@ -129,6 +146,7 @@ export function Field({
         </label>
       )}
       {hint ? <span className="ui-field-hint">{hint}</span> : null}
+      {after}
     </div>
   );
 }

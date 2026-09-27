@@ -70,8 +70,10 @@ export type { ViewDescriptor, ViewMap, RendererName } from '../views.js';
 export type {
   Component,
   Field,
+  FieldAction,
   OptionsFrom,
   PageDescriptor,
+  PagePlay,
   PageIcon,
   PageQuery,
   QueryRef,

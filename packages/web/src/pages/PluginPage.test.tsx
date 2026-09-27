@@ -11,11 +11,12 @@
  * a URL per item, a write that sends the arguments the descriptor named, a
  * gated write that draws an approval card instead of pretending it happened.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type ApprovalRow } from '../api';
 import { PluginPage } from './PluginPage';
+import { resetPlayer } from './play';
 import type { Component, PluginPageDescriptor } from './types';
 
 vi.mock('../api', async (load) => ({
@@ -1448,5 +1449,149 @@ describe('a select with several choices', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove English' }));
     expect(screen.getByRole('button', { name: 'Add…' })).toBeEnabled();
     expect(screen.getByText('None lets the service detect.')).toBeInTheDocument();
+  });
+});
+
+describe('a sound a tool answers with', () => {
+  /** One fake `Audio`: what it was given, and a way to end it. */
+  class FakeAudio {
+    static last: FakeAudio | null = null;
+    src = '';
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    play = vi.fn(() => Promise.resolve());
+    pause = vi.fn();
+    constructor() {
+      FakeAudio.last = this;
+    }
+  }
+  const SOUND = { play: { mime: 'audio/ogg', data: btoa('OggS fake opus') }, message: 'Alloy, with OpenAI.' };
+
+  beforeEach(() => {
+    FakeAudio.last = null;
+    resetPlayer();
+    vi.stubGlobal('Audio', FakeAudio);
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:sound'), revokeObjectURL: vi.fn() }));
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({ data: query === 'prefs' ? { backend: 'openai', voice: 'alloy' } : DATA[query] })) as typeof api.pageQuery);
+  });
+
+  afterEach(() => {
+    resetPlayer();
+    vi.unstubAllGlobals();
+  });
+
+  const voicePage = (action: Record<string, unknown>): PluginPageDescriptor => ({
+    plugin: 'demo',
+    id: 'settings',
+    title: 'Demo',
+    place: 'settings',
+    body: [
+      {
+        kind: 'form',
+        initial: { query: 'prefs' },
+        fields: [
+          { name: 'backend', label: 'Service', type: 'select', from: 'backend', options: [{ value: 'openai', label: 'OpenAI' }] },
+          {
+            name: 'voice',
+            label: 'Voice',
+            type: 'select',
+            from: 'voice',
+            options: [
+              { value: 'alloy', label: 'Alloy' },
+              { value: 'nova', label: 'Nova' },
+            ],
+            action: action as never,
+          },
+        ],
+        submit: { tool: 'demo.save', label: 'Save', args: { voice: { field: 'voice' } } },
+      },
+    ],
+  });
+
+  it('plays the unsaved choice in the browser, spins while asked, and stops when pressed again', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    vi.mocked(api.pageAct).mockImplementation(() => new Promise((resolve) => (answer = resolve as never)));
+    render(
+      <PluginPage
+        page={voicePage({ tool: 'demo.preview', label: 'Play a sample', icon: 'play', args: { backend: { field: 'backend' }, voice: { field: 'voice' } } })}
+        item={null}
+        navigate={navigate}
+        timezone="UTC"
+      />,
+    );
+    // The form is drawn again once its `initial` answers: ask for the select after that.
+    await waitFor(() => expect(screen.getByLabelText('Voice')).toHaveValue('alloy'));
+    const voice = screen.getByLabelText('Voice');
+    // Changed, and not saved.
+    fireEvent.change(voice, { target: { value: 'nova' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample' }));
+    expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.preview', args: { backend: 'openai', voice: 'nova' } });
+    expect(await screen.findByRole('button', { name: 'Play a sample: working' })).toBeDisabled();
+    answer({ result: SOUND });
+    const stop = await screen.findByRole('button', { name: 'Stop' });
+    expect(FakeAudio.last?.play).toHaveBeenCalled();
+    expect(FakeAudio.last?.src).toBe('blob:sound');
+    expect(screen.getByRole('status')).toHaveTextContent('Alloy, with OpenAI.');
+    // Nothing re-read: the unsaved choice is still on the form.
+    expect(voice).toHaveValue('nova');
+    fireEvent.click(stop);
+    expect(FakeAudio.last?.pause).toHaveBeenCalled();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:sound');
+    expect(await screen.findByRole('button', { name: 'Play a sample' })).toBeEnabled();
+    expect(api.pageAct).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the form\'s active values when the action names no arguments, and goes back to play when the sound ends', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ result: SOUND });
+    render(<PluginPage page={voicePage({ tool: 'demo.preview', label: 'Play a sample', icon: 'play' })} item={null} navigate={navigate} timezone="UTC" />);
+    await waitFor(() => expect(screen.getByLabelText('Voice')).toHaveValue('alloy'));
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample' }));
+    await screen.findByRole('button', { name: 'Stop' });
+    expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.preview', args: { backend: 'openai', voice: 'alloy' } });
+    act(() => FakeAudio.last?.onended?.());
+    expect(await screen.findByRole('button', { name: 'Play a sample' })).toBeInTheDocument();
+  });
+
+  it('says the refusal under the field, and plays nothing', async () => {
+    vi.mocked(api.pageAct).mockRejectedValue(new Error('refused: Kokoro on this computer is not installed.'));
+    render(<PluginPage page={voicePage({ tool: 'demo.preview', label: 'Play a sample', icon: 'play' })} item={null} navigate={navigate} timezone="UTC" />);
+    await waitFor(() => expect(screen.getByLabelText('Voice')).toHaveValue('alloy'));
+    fireEvent.click(screen.getByRole('button', { name: 'Play a sample' }));
+    expect(await screen.findByText('refused: Kokoro on this computer is not installed.')).toBeInTheDocument();
+    expect(FakeAudio.last).toBeNull();
+  });
+
+  it('plays a sound any page button answers with, and shows its message', async () => {
+    vi.mocked(api.pageAct).mockResolvedValue({ result: SOUND });
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [{ kind: 'button', action: { tool: 'demo.chime', label: 'Chime' } }],
+    };
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Chime' }));
+    expect(await screen.findByText('Alloy, with OpenAI.')).toBeInTheDocument();
+    expect(FakeAudio.last?.play).toHaveBeenCalled();
+  });
+
+  it('plays nothing that is not audio, or is too big', async () => {
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [{ kind: 'button', action: { tool: 'demo.chime', label: 'Chime', done: 'Done.' } }],
+    };
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { play: { mime: 'text/html', data: btoa('<b>hi</b>') } } });
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Chime' }));
+    expect(await screen.findByText('Done.')).toBeInTheDocument();
+    vi.mocked(api.pageAct).mockResolvedValue({ result: { play: { mime: 'audio/ogg', data: 'A'.repeat(800_000) } } });
+    fireEvent.click(screen.getByRole('button', { name: 'Chime' }));
+    await waitFor(() => expect(api.pageAct).toHaveBeenCalledTimes(2));
+    expect(FakeAudio.last).toBeNull();
   });
 });

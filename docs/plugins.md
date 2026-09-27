@@ -1035,6 +1035,16 @@ means, the page knows how to draw a line, and this says which is which.
   `optionsFrom: { query, rows, value, label, dependsOn? }`: it loads when the
   form opens, and again whenever a field in `dependsOn` changes, with those
   fields' values as the query's parameters (mailbox, then what is in it).
+  A single select may carry `action: { tool, label, icon?: 'play', args? }`:
+  a small icon button after it that runs the tool with the form's current,
+  unsaved values (`args` as a submit's, or all active values without them)
+  and refreshes nothing, so the choices stay. Speech's play button beside the
+  Voice is one.
+- **A sound, played and forgotten.** A tool a page calls may answer
+  `{ play: { mime: 'audio/…', data: '<base64, ≤ 512 KB>' }, message? }`: the
+  dashboard plays it through one shared player from a blob URL and stores
+  nothing, and shows `message` if there is one. A field's `action` shows a
+  spinner while the tool runs and a stop button while the sound plays.
 - **Say what happened.** `ToolRef.done` is the sentence shown after a write
   worked — a string, or a `ValueRef` read out of the tool's own result. A
   gated tool says it once the approval has executed, because that is when it

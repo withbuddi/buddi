@@ -28,11 +28,13 @@ import type {
   Component as CoreComponent,
   ComponentCommon as CoreComponentCommon,
   Field as CoreField,
+  FieldAction as CoreFieldAction,
   GroupBy as CoreGroupBy,
   ListItem as CoreListItem,
   OptionsFrom as CoreOptionsFrom,
   PageDescriptor as CorePageDescriptor,
   PageIcon as CorePageIcon,
+  PagePlay as CorePagePlay,
   ParamRef as CoreParamRef,
   PillRef as CorePillRef,
   QueryRef as CoreQueryRef,
@@ -50,11 +52,13 @@ import type {
   Component,
   ComponentCommon,
   Field,
+  FieldAction,
   GroupBy,
   ListComponent,
   ListItem,
   OptionsFrom,
   PageIcon,
+  PagePlay,
   ParamRef,
   PillRef,
   PluginPageDescriptor,
@@ -120,6 +124,8 @@ interface Conformance {
   groupBy: Exact<CoreGroupBy, GroupBy>;
   optionsFrom: Exact<CoreOptionsFrom, OptionsFrom>;
   field: Exact<CoreField, Field>;
+  fieldAction: Exact<CoreFieldAction, FieldAction>;
+  pagePlay: Exact<CorePagePlay, PagePlay>;
   componentCommon: Exact<CoreComponentCommon, ComponentCommon>;
   sectionAction: Same<CoreSectionAction, SectionAction>;
   /** The web's `ListComponent` is core's list arm, named so it can be reused. */
@@ -149,6 +155,8 @@ export const CONTRACTS_AGREE: Conformance = {
   groupBy: true,
   optionsFrom: true,
   field: true,
+  fieldAction: true,
+  pagePlay: true,
   componentCommon: true,
   sectionAction: true,
   listComponent: true,
@@ -205,6 +213,8 @@ export const CHECKED_TYPES = [
   'GroupBy',
   'OptionsFrom',
   'Field',
+  'FieldAction',
+  'PagePlay',
   'ComponentCommon',
   'SectionAction',
   'Component',

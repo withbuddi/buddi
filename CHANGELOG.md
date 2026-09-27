@@ -13,6 +13,8 @@ What changes in buddi from one release to the next, newest first.
 - Plugin pages can show a progress bar; the Speech page uses it for the model downloads.
 - Settings → Speech asks which languages you speak instead of one language hint, so a French note and an English one are both heard right on this computer, and it lists the models your account offers instead of asking you to type one.
 - Plugin pages can offer a select that takes several choices (`multiple: true`).
+- Settings → Speech: a play button beside the voice speaks a short sample in the browser with the chosen service and voice; nothing is saved. The old Test that wrote a file to Files is gone.
+- Plugin pages can play a sound a tool returns (`play: { mime, data }`), and a select can carry a small button of its own (`action`) that runs a tool with the form's unsaved values.
 - Choosing several things on a plugin page, the languages you speak for example, is done with chips and an Add list instead of a scrolling box.
 - A voice note on Telegram tells the agent which language you spoke in, so it answers in it.
 - Voice on Telegram: a voice note is no longer echoed back as text; `/voice` chooses when to speak (spoken, always, off) and what to send (the voice note alone, or with the text), also on Settings → Speech. What is spoken is rewritten for the ear first: handles read as names, dates and amounts as words, links as their site, no markdown.

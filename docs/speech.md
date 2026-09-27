@@ -46,9 +46,12 @@ cloud account or on this computer, with nothing leaving it.
    language other than English on your list, the Speaking block says that a
    note in that language gets a text answer unless a cloud speaker is
    chosen.
-4. Press **Test** on each side. Listening sends a two-second clip that says
-   "Hello from buddi. This is a test." and shows what was heard. Speaking says
-   "This is buddi." and saves it to your Files.
+4. Try each side. **Test** on Listening sends a two-second clip that says
+   "Hello from buddi. This is a test." and shows what was heard. On Speaking,
+   the play button beside **Voice** says "Hi, I'm buddi. This is how I
+   sound." in your browser with the service, account, model and voice the
+   form holds, saved or not; press it again to stop. Nothing is kept, and it
+   does not count against the daily limit.
 5. Give `speech.*` to the agents that should use it, on their Access page.
 
 A ChatGPT subscription, a Claude sign-in and Ollama Cloud are not offered:

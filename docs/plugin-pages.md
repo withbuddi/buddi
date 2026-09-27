@@ -160,7 +160,11 @@ interface Selection { key: string; disabledWhen?: Visibility }
 interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
 /** `all` offers it over every enabled row when nothing is ticked. */
 interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }>; all?: true }
-interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; multiple?: boolean; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility }
+interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; multiple?: boolean; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility; action?: FieldAction }
+/** A small icon button right after a single select: a tool run with the form's current, unsaved values. */
+interface FieldAction { tool: string; label: string; icon?: 'play'; args?: Record<string, ValueRef | { param: string } | { field: string } | { selected: true }> }
+/** A tool result's sound: `{ play: PagePlay, message?: string }`. */
+interface PagePlay { mime: string /* audio/* */; data: string /* base64, ≤ 512 KB decoded */ }
 
 // `when` and `disabledWhen` on a Field are asked of the form's own values
 // first — a path naming a field reads what the owner has just typed — and of
@@ -169,6 +173,19 @@ interface Field { name: string; label: string; type: 'text' | 'number' | 'select
 // A select with `multiple: true` holds an array of the chosen values (empty
 // for none) and submits it as one; `from` reads an array too. It is drawn as
 // chips with an Add list; `max` caps how many it takes.
+// A select's `action` draws a small icon button after it (its `label` is the
+// button's name and tooltip). Pressing it calls the tool with `args` resolved
+// as a submit's — `{ field }` reads what is on the form now, hidden and greyed
+// fields left out — or, with no `args`, with the form's active values. Nothing
+// is refreshed after, so the unsaved choices stay. It spins while the tool
+// runs and is a stop button while a sound it returned plays.
+//
+// A sound: any page action — a button, a submit, a field's action — whose tool
+// answers `{ play: { mime, data } }` has it played in the browser through one
+// shared Audio element from a blob URL, revoked when it stops; nothing is
+// stored and a second sound stops the first. `mime` must be `audio/*` and
+// `data` base64 of at most 512 KB (`PAGE_PLAY_MAX_BYTES`), or it is ignored.
+// The result's `message`, when there is one, is shown as the sentence.
 
 ```
 
@@ -192,6 +209,7 @@ What each one is for, in email's terms:
 | `stats` | Counts at the top of a settings page |
 | `select` field with `multiple` | (Speech) The languages you speak, several at once |
 | `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
+| select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
 
 Not in the set, on purpose: free layout, custom styling, charts (those are
 canvas views), embedded HTML, client-side logic beyond `when`. A plugin that

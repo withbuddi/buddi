@@ -137,6 +137,22 @@ export interface Field {
   /** Asked of the form's own values first, then of the data behind it. */
   when?: Visibility;
   disabledWhen?: Visibility;
+  /** A small icon button after a single select: a tool run with the form's unsaved values. */
+  action?: FieldAction;
+}
+
+/** A field's own button: `args` as a submit's, or the form's active values when absent. */
+export interface FieldAction {
+  tool: string;
+  label: string;
+  icon?: 'play';
+  args?: Record<string, ArgRef>;
+}
+
+/** A tool result's sound: base64 `audio/*`, played in the browser and never stored. */
+export interface PagePlay {
+  mime: string;
+  data: string;
 }
 
 export interface ComponentCommon {

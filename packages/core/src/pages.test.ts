@@ -263,6 +263,36 @@ describe('page descriptors', () => {
     );
   });
 
+  it('takes an action beside a single select, names its tool, and refuses it anywhere else', () => {
+    const options = [{ value: 'alloy', label: 'Alloy' }];
+    const form = (field: Record<string, unknown>) => [
+      page({ body: [{ kind: 'form', fields: [field], submit: { tool: 'demo.write', label: 'Go' } }] }),
+    ];
+    const action = { tool: 'demo.preview', label: 'Play a sample', icon: 'play', args: { voice: { field: 'voice' } } };
+    const tools = { tools: ['demo.write', 'demo.preview'] };
+    expect(() => parse(form({ name: 'voice', label: 'Voice', type: 'select', options, action }) as never, tools)).not.toThrow();
+    // The act route may invoke it: a page names it.
+    expect(
+      parsePageContributions({
+        plugin: 'demo',
+        pages: form({ name: 'voice', label: 'Voice', type: 'select', options, action }),
+        tools: tools.tools,
+      }).tools,
+    ).toContain('demo.preview');
+    expect(() => parse(form({ name: 'voice', label: 'Voice', type: 'text', action }) as never, tools)).toThrow(
+      /a field `action` sits beside a single select/,
+    );
+    expect(() =>
+      parse(form({ name: 'voice', label: 'Voice', type: 'select', multiple: true, options, action }) as never, tools),
+    ).toThrow(/a field `action` sits beside a single select/);
+    expect(() =>
+      parse(form({ name: 'voice', label: 'Voice', type: 'select', options, action: { ...action, icon: 'rocket' } }) as never, tools),
+    ).toThrow(/icon/);
+    expect(() =>
+      parse(form({ name: 'voice', label: 'Voice', type: 'select', options, action }) as never, { tools: ['demo.write'] }),
+    ).toThrow(/names demo\.preview, which this plugin does not contribute/);
+  });
+
   it('checks the query a select reads its options from', () => {
     expect(() =>
       parse(

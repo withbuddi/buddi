@@ -322,7 +322,50 @@ export interface Field {
   when?: Visibility;
   /** Drawn, but not editable, on the same terms as `when`. */
   disabledWhen?: Visibility;
+  /**
+   * A small icon button right after a select, that runs a tool with the
+   * form's **current, unsaved** values: Settings → Speech's play button
+   * beside the voice. On a single `select` only. See `FieldAction`.
+   */
+  action?: FieldAction;
 }
+
+/**
+ * A tool a field offers beside itself: try the choice before saving it.
+ *
+ * `args` are resolved as a form's submit's are — `{ field }` reads what is
+ * on the form now, hidden and greyed fields left out — and when there are no
+ * `args` the form's active values are sent as they stand. Nothing is
+ * refreshed afterwards: the owner's unsaved choices stay where they are. A
+ * result carrying `play` (`PagePlay`) is played in the browser; the button
+ * spins while the tool runs and is a stop button while the sound plays.
+ */
+export interface FieldAction {
+  /** A tool this plugin contributes. */
+  tool: string;
+  /** The button's accessible name and tooltip: "Play a sample". */
+  label: string;
+  /** The glyph it draws; `play` also means "this answers with a sound". */
+  icon?: 'play';
+  args?: Record<string, ArgRef>;
+}
+
+/**
+ * The result convention for a sound: any page action — a button, a form's
+ * submit, a field's action — whose tool answers `{ play: { mime, data } }`
+ * has that audio played in the browser through one shared player, from a
+ * blob URL, and nothing is stored. `data` is base64, at most
+ * `PAGE_PLAY_MAX_BYTES` once decoded; `mime` an `audio/*` type. A `message`
+ * beside it, when there is one, is shown as the action's sentence.
+ */
+export interface PagePlay {
+  mime: string;
+  /** Base64. */
+  data: string;
+}
+
+/** The most audio a `play` result may carry, decoded. */
+export const PAGE_PLAY_MAX_BYTES = 512 * 1024;
 
 /** A select's options, read from a query rather than written in the descriptor. */
 export interface OptionsFrom {
@@ -651,8 +694,21 @@ const fieldSchema = z
       .optional(),
     when: visibilitySchema.optional(),
     disabledWhen: visibilitySchema.optional(),
+    action: z
+      .object({
+        tool: z.string().regex(TOOL_NAME, 'a tool name is `plugin.tool`, lower case'),
+        label,
+        icon: z.literal('play').optional(),
+        args: z.record(fieldArgSchema).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
+  .refine(
+    (field) => field.action === undefined || (field.type === 'select' && field.multiple !== true),
+    'a field `action` sits beside a single select, and nothing else',
+  )
   .refine(
     (field) =>
       field.type !== 'select' ||

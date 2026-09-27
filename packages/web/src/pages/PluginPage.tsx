@@ -19,7 +19,7 @@
  *    search's fields are page parameters, and a reload lands where the owner
  *    was — on a phone as much as on a desk.
  */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtValue } from '../canvas/format';
@@ -55,14 +55,17 @@ import {
   Toolbar,
   useAsync,
   EmptyState,
+  Icon,
 } from '../ui';
 import { AgentOffer } from '../views/parts/AgentOffer';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
+import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
 import type {
   ArgRef,
   ColumnMap,
   Component,
   Field,
+  FieldAction,
   ListComponent,
   ListItem,
   ParamRef,
@@ -370,6 +373,8 @@ interface ActState {
  */
 function useAct(): ActState {
   const scope = useScope();
+  /** Whose sound it is, when a result of this action is playing. */
+  const speaker = useId();
   const [running, setRunning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -419,7 +424,13 @@ function useAct(): ActState {
       }
       setApprovalId(null);
       setPending(null);
-      setDone(saidDone(ref, out.result));
+      /*
+       * A result with a sound in it is played, not stored (`PagePlay`); its
+       * `message` is the sentence when the descriptor wrote none.
+       */
+      const play = playOf(out.result);
+      setDone(saidDone(ref, out.result) ?? (play ? messageOf(out.result) : null));
+      if (play) await playSound(play, speaker);
       apply(ref.then, out.result, onDone);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -653,6 +664,7 @@ function useFieldOptions(
 
 function FieldControl({
   field,
+  fields,
   value,
   values,
   data,
@@ -661,6 +673,8 @@ function FieldControl({
   onChange,
 }: {
   field: Field;
+  /** Every field on this form, for a field `action`'s arguments. */
+  fields?: Field[];
   /** In a search bar: the hint is a placeholder and a tooltip, not a line under the field. */
   compact?: boolean;
   value: unknown;
@@ -699,16 +713,34 @@ function FieldControl({
     );
   }
   if (field.type === 'select') {
+    const select = (
+      <select {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{choices.loading ? 'Loading…' : '—'}</option>
+        {choices.options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+    if (field.action && !compact) {
+      return (
+        <FieldWithAction
+          field={field}
+          action={field.action}
+          fields={fields ?? [field]}
+          values={values}
+          data={data}
+          disabled={disabled}
+          hint={hint}
+        >
+          {select}
+        </FieldWithAction>
+      );
+    }
     return (
       <FieldBox label={field.label} hint={hint}>
-        <select {...shared} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{choices.loading ? 'Loading…' : '—'}</option>
-          {choices.options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        {select}
       </FieldBox>
     );
   }
@@ -739,6 +771,111 @@ function FieldControl({
         {...(compact && field.hint ? { placeholder: field.hint } : {})}
         onChange={(e) => onChange(field.type === 'number' ? numberOrText(e.target.value) : e.target.value)}
       />
+    </FieldBox>
+  );
+}
+
+/**
+ * A select with its own small button: try the choice before saving it.
+ *
+ * The tool is given the form's values as they stand now — the owner has not
+ * saved them, and that is the point — and nothing is refreshed afterwards, so
+ * those choices stay on the form. A `play` in the answer is played here
+ * (`./play.ts`); while it plays the button is a stop button, and pressing it
+ * stops the sound. A gated tool's card is drawn under the field.
+ */
+function FieldWithAction({
+  field,
+  action,
+  fields,
+  values,
+  data,
+  disabled,
+  hint,
+  children,
+}: {
+  field: Field;
+  action: FieldAction;
+  fields: Field[];
+  values: Values;
+  data: unknown;
+  disabled?: boolean;
+  hint?: string;
+  children: ReactNode;
+}): JSX.Element {
+  const scope = useScope();
+  const key = useId();
+  const playing = usePlaying() === key;
+  const [running, setRunning] = useState(false);
+  const [said, setSaid] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [approvalId, setApprovalId] = useState<string | null>(null);
+  // A sound nobody can stop any more is a sound nobody asked for.
+  useEffect(() => () => stopSound(key), [key]);
+  const omit = inactiveFields(fields, values, data);
+  const args =
+    action.args !== undefined
+      ? resolveArgs(action.args, { data, fields: values, shape: fields, omit, scope })
+      : Object.fromEntries(Object.entries(values).filter(([name, value]) => !omit.has(name) && value !== ''));
+  const press = async (): Promise<void> => {
+    if (playing) {
+      stopSound(key);
+      return;
+    }
+    setRunning(true);
+    setSaid(null);
+    setError(null);
+    setApprovalId(null);
+    try {
+      const out = await api.pageAct(scope.plugin, { tool: action.tool, args });
+      if (out.approvalId) {
+        setApprovalId(out.approvalId);
+        return;
+      }
+      setSaid(messageOf(out.result));
+      const play = playOf(out.result);
+      if (play) await playSound(play, key);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunning(false);
+    }
+  };
+  const label = playing ? 'Stop' : action.label;
+  return (
+    <FieldBox
+      label={field.label}
+      hint={hint}
+      action={
+        <Button
+          data-shape="icon"
+          aria-label={running ? `${action.label}: working` : label}
+          title={label}
+          aria-busy={running || undefined}
+          aria-pressed={action.icon === 'play' ? playing : undefined}
+          disabled={disabled === true || running}
+          onClick={() => void press()}
+        >
+          {running ? (
+            <span className="ui-spinner" aria-hidden="true" />
+          ) : (
+            <Icon name={playing ? 'stop' : action.icon ?? 'arrow'} />
+          )}
+        </Button>
+      }
+      after={
+        error ? (
+          <ErrorBanner message={error} />
+        ) : approvalId ? (
+          <ApprovalById id={approvalId} onDecided={() => setApprovalId(null)} />
+        ) : said ? (
+          <span className="ui-field-hint" role="status">
+            {said}
+          </span>
+        ) : null
+      }
+    >
+      {children}
     </FieldBox>
   );
 }
@@ -817,6 +954,7 @@ function Fields({
           <FieldControl
             key={field.name}
             field={field}
+            fields={fields}
             compact={compact}
             value={values[field.name]}
             values={values}
