@@ -855,6 +855,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       agentsDir: agentSearchPath(deps.env ?? process.env).owner.dir,
       examplesDir: EXAMPLES_AGENTS_DIR,
       reload: () => (deps.catalog as { reload?: () => void }).reload?.(),
+      registry: deps.registry,
     });
     /** What the backup routes need: the environment, and somewhere to log. */
     const backupDeps = (): { env: NodeJS.ProcessEnv; log: (line: string) => void } => ({

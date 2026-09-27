@@ -23,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 - Prompt caching: buddi marks the tool list, the instructions and the earlier conversation for Anthropic's cache and keys OpenAI's automatic cache by conversation, so a long conversation's repeated prompt is billed at the cached rate. Usage shows cached tokens separately and the cost estimate prices them.
 - Voice on Telegram: a voice note is transcribed and answered, spoken back as a voice note when you spoke (`/voice` chooses spoken, always or off). Listening and speaking can run on this computer: Settings → Speech installs Whisper and Kokoro (about 250 MB and 90 MB) with one button or `buddi speech install`; nothing leaves the machine then.
 - A speech plugin: agents can listen to an audio file (`speech.transcribe`) and answer with a voice (`speech.say`) through an OpenAI or OpenAI-compatible account chosen on Settings → Speech, with daily caps.
+- Under each reply, Copy and Read aloud. buddi's front desk can now make an audio file on request (`speech.say`), and an audio file in a conversation shows as a small player with a download link.
 
 ### Fixed
 

@@ -160,6 +160,43 @@ let playing: string | null = null;
 /** Each play gets a number; a fetch that finishes after a newer one started is dropped. */
 let generation = 0;
 
+/**
+ * Which message the one audio element is speaking for, if a reply's own
+ * Read aloud started it: its button shows stop while this names it.
+ */
+let playingKey: string | null = null;
+const listeners = new Set<() => void>();
+
+function setPlayingKey(key: string | null): void {
+  if (playingKey === key) return;
+  playingKey = key;
+  listeners.forEach((listener) => listener());
+}
+
+export function playbackKey(): string | null {
+  return playingKey;
+}
+
+export function subscribePlayback(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/**
+ * Stop whatever is playing and claim the element for `key` while its words
+ * are being made into audio. The number it returns is stale once anything
+ * else starts or stops, which is how a slow `say` knows it was cancelled.
+ */
+export function claimPlayback(key: string | null): number {
+  stopPlayback();
+  setPlayingKey(key);
+  return generation;
+}
+
+export function playbackCurrent(claim: number): boolean {
+  return claim === generation;
+}
+
 /** Stop whatever is playing. */
 export function stopPlayback(): void {
   generation++;
@@ -169,6 +206,7 @@ export function stopPlayback(): void {
   }
   if (playing && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(playing);
   playing = null;
+  setPlayingKey(null);
 }
 
 /**
@@ -176,15 +214,23 @@ export function stopPlayback(): void {
  * other. The bytes are fetched and played from memory, so the download
  * route's headers (and Safari's range requests) do not matter.
  */
-export async function playAudio(url: string, mime: string): Promise<void> {
-  stopPlayback();
-  const mine = generation;
-  const res = await fetch(url, { credentials: 'same-origin' });
-  if (!res.ok) throw new Error(`The spoken reply could not be fetched (${res.status}).`);
-  const blob = new Blob([await res.arrayBuffer()], { type: mime });
-  if (mine !== generation) return;
-  player ??= new Audio();
-  playing = URL.createObjectURL(blob);
-  player.src = playing;
-  await player.play();
+export async function playAudio(url: string, mime: string, key: string | null = null): Promise<void> {
+  const mine = claimPlayback(key);
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`The spoken reply could not be fetched (${res.status}).`);
+    const blob = new Blob([await res.arrayBuffer()], { type: mime });
+    if (mine !== generation) return;
+    if (!player) {
+      player = new Audio();
+      // The element outlives every reply; whichever one it finishes, the button goes back to play.
+      player.addEventListener?.('ended', () => setPlayingKey(null));
+    }
+    playing = URL.createObjectURL(blob);
+    player.src = playing;
+    await player.play();
+  } catch (err) {
+    if (mine === generation) setPlayingKey(null);
+    throw err;
+  }
 }

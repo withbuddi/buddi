@@ -73,6 +73,14 @@ const GLYPHS = {
   thought: [13, 1.4, <><path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" /></>],
   chevron: [11, 1.5, <path d="M2.8 4.2 5.5 6.9l2.7-2.7" />],
   arrow: [13, 1.5, <path d="M4.8 2.6 9 6.5l-4.2 3.9" />],
+  // Under a reply: two sheets, the back one peeking out.
+  copy: [16, 1.5, <><rect x="5.6" y="5.6" width="7.6" height="7.6" rx="1.4" /><path d="M10.4 5.6V4a1.2 1.2 0 0 0-1.2-1.2H4A1.2 1.2 0 0 0 2.8 4v5.2A1.2 1.2 0 0 0 4 10.4h1.6" /></>],
+  // Read aloud, and an audio file's player: start, pause, stop.
+  play: [16, 1.5, <path d="M5.2 3.4v9.2L12.6 8z" />],
+  pause: [16, 1.5, <path d="M5.6 3.6v8.8M10.4 3.6v8.8" />],
+  stop: [16, 1.5, <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" />],
+  // A tray with an arrow into it: the file, to keep.
+  download: [16, 1.5, <path d="M8 2.8v7.2M4.9 7 8 10.1 11.1 7M3 12.8h10" />],
 
   // ---- the roster ----
   // A struck-through circle: out of service, not merely quiet.

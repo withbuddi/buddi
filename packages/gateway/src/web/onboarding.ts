@@ -33,6 +33,7 @@ import {
   type Onboarding,
   type OnboardingDetails,
   type Queryable,
+  type ToolNameSource,
 } from '@buddi/core';
 import { createHttpTransport, type HttpTransport } from '@buddi/runtime';
 import { composeAgentFile, createAgentDirAtomic, replaceBody, writeFilesAtomic } from '../agents/platform-files.js';
@@ -74,7 +75,8 @@ export type WebOnboardingStep = (typeof WEB_ONBOARDING_STEPS)[number];
  * `host.exec`, `email.send`, `browser.act` — still asks the owner first.
  *
  * Every family here is compiled in (`builtInManifests`), so none can hold the
- * agent back as "needs a plugin". What is left out, on purpose: the platform
+ * agent back as "needs a plugin" — except the ones in `OPTIONAL_FIRST_AGENT_FAMILIES`,
+ * which `firstAgentTools` writes only when this machine provides them. What is left out, on purpose: the platform
  * tools that write agents and grants (Agent Father's), and the interview's
  * owner tools (below). Optional plugins (finance, developer, image) are the
  * owner's to add.
@@ -91,6 +93,9 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   'browser.*',
   // The owner's secrets, used but never seen: `secret.list`, `secret.fill` and `secret.type` are their own family.
   'secret.*',
+  // The speech plugin's `speech.say` and `speech.transcribe`: installed, not
+  // compiled in, so written only where it is (`firstAgentTools`).
+  'speech.*',
   'host.*',
   'reminder.*',
   'schedule.*',
@@ -112,6 +117,22 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   'platform.installed_tools',
   'platform.list_skills',
 ];
+
+/**
+ * Families in `FIRST_AGENT_TOOLS` that come from an installed plugin rather
+ * than the build. Granting one this machine lacks would hold the whole first
+ * agent back as "needs a plugin", so the file names it only when it resolves.
+ */
+export const OPTIONAL_FIRST_AGENT_FAMILIES: readonly string[] = ['speech'];
+
+/** `FIRST_AGENT_TOOLS` as this machine can grant it: an optional family it lacks is left out. */
+export function firstAgentTools(registry?: ToolNameSource): string[] {
+  const families = new Set((registry?.list() ?? []).map((tool) => tool.name.split('.')[0]));
+  return FIRST_AGENT_TOOLS.filter((entry) => {
+    const family = entry.split('.')[0]!;
+    return !OPTIONAL_FIRST_AGENT_FAMILIES.includes(family) || families.has(family);
+  });
+}
 
 /** What the wizard still has to ask for. Each one is a screen that matters. */
 export interface OnboardingNeeds {
@@ -140,6 +161,8 @@ export interface OnboardingDeps {
   /** The examples tree, which this never writes into. */
   examplesDir: string;
   reload: () => void;
+  /** What is installed here; an optional family of the first agent's grant is written only when it resolves. */
+  registry?: ToolNameSource;
 }
 
 /** Does this installation hold an agent the owner made? Examples are not one. */
@@ -338,6 +361,7 @@ export const HOW_YOU_WORK: readonly string[] = [
   '  schedules, goals, the canvas, running commands on this machine, and handing work to other agents.',
   '  Use them. When the owner asks for something they cover, do it rather than explain it.',
   '- A sign-in the owner keeps under Keys and secrets goes into a page with secret.fill, by name; secret.list says which names exist and where each may go; you never see the value and never ask for it in chat.',
+  '- speech.say turns words into an audio file, in a voice, that the owner can play or download; speech.transcribe turns a recording into text.',
   '- A one-time code a site just mailed is read from the owner\'s inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.',
   '- Some actions ask the owner first: sending mail, running a command, acting in the browser. Propose them',
   '  plainly and let the owner approve; do not avoid them because they need a yes.',
@@ -346,6 +370,9 @@ export const HOW_YOU_WORK: readonly string[] = [
   '  were given one. When something needs data you cannot reach, say so and never guess, not even a small number.',
   '- Write down what the owner tells you about themselves with the memory and profile tools, as they say it.',
 ];
+
+/** The section as written before it named the speech tools; still recognised as generated. */
+const HOW_YOU_WORK_V2: readonly string[] = HOW_YOU_WORK.filter((line) => !line.startsWith('- speech.say '));
 
 /**
  * The section every first agent was written with before it held the wide
@@ -478,7 +505,7 @@ async function writeFirstAgent(
     handle,
     name,
     description,
-    tools: [...FIRST_AGENT_TOOLS],
+    tools: firstAgentTools(deps.registry),
     language: 'mirror',
     ...(avatar === '' ? {} : { avatar }),
     // Every agent carries its own opening; the one agent nobody writes by hand
@@ -562,7 +589,7 @@ function checkInstructions(value: string | undefined): string | undefined {
  * persona it carries, or none for the older shape that quoted the description.
  */
 function generatedPersona(body: string, name: string, description: string): { instructions?: string } | null {
-  for (const section of [HOW_YOU_WORK, HOW_YOU_WORK_V1]) {
+  for (const section of [HOW_YOU_WORK, HOW_YOU_WORK_V2, HOW_YOU_WORK_V1]) {
     if (body === firstAgentPersona({ name, description }, section).trim()) return {};
     const head = `${personaHead(name)}\n\n`;
     const tail = firstAgentPersona({ name, description, instructions: '\u0000' }, section).split('\u0000')[1]!.trimEnd();

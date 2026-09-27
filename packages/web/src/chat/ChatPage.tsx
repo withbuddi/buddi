@@ -41,7 +41,7 @@ import { ApprovalDock, type DockedApproval } from './ApprovalDock';
 import { conversationLine } from './lifetime';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
-import { playAudio, readAloudPreference, saveReadAloud, stopPlayback } from './voice';
+import { claimPlayback, playAudio, playbackCurrent, readAloudPreference, saveReadAloud, stopPlayback } from './voice';
 import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
 import { accentAttrs, accentOf } from '../shell/accent';
@@ -1255,6 +1255,10 @@ export function ChatPage({
           {...(group ? { speakers: everyone, coordinatorId: group.coordinator } : {})}
           {...(runningAgentId ? { workingAs: everyone.find((a) => a.id === runningAgentId)?.name ?? runningAgentId } : {})}
           onOpenFile={openFile}
+          onReadAloud={(messageId, text) => {
+            setVoiceNote(null);
+            void speakReply(text, conversationId ?? undefined, messageId).then((note) => { if (note) setVoiceNote(note); });
+          }}
           onOpen={(toolUseId) => {
             /*
              * A browser call has no tab of its own while the Browser panel is
@@ -1585,14 +1589,23 @@ const VOICE_NOTE_REASONS = new Set(['missing', 'unconfigured', 'not-english']);
  * speak) comes back as a sentence, once per page load; anything else is
  * quiet — the text is on the screen either way.
  */
-export async function speakReply(text: string, conversationId: string): Promise<string | null> {
+export async function speakReply(
+  text: string,
+  conversationId: string | undefined,
+  /** A reply's own Read aloud: its message id, and the refusal is said every time it is asked for. */
+  key: string | null = null,
+): Promise<string | null> {
+  const claim = claimPlayback(key);
   try {
-    const said = await chatApi.say({ text, conversationId });
-    await playAudio(said.audioUrl, said.mime);
+    const said = await chatApi.say({ text, ...(conversationId ? { conversationId } : {}) });
+    // Stopped, or another reply started, while the words were being spoken.
+    if (!playbackCurrent(claim)) return null;
+    await playAudio(said.audioUrl, said.mime, key);
     return null;
   } catch (err) {
+    if (playbackCurrent(claim)) stopPlayback();
     const reason = err instanceof ApiError && err.detail && typeof err.detail === 'object' ? (err.detail as { reason?: unknown }).reason : undefined;
-    if (typeof reason === 'string' && VOICE_NOTE_REASONS.has(reason) && !voiceNoted) {
+    if (typeof reason === 'string' && VOICE_NOTE_REASONS.has(reason) && (key !== null || !voiceNoted)) {
       voiceNoted = true;
       return (err as ApiError).message;
     }

@@ -1526,6 +1526,24 @@ button.wb-file-open:focus-visible { outline: 2px solid var(--accent); outline-of
 }
 .wb-file-meta { font-size: var(--text-xs); color: var(--text-faint); white-space: nowrap; }
 
+/* An audio file is a small player: play, name and time, download. Same frame as a tile. */
+.wb-audio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+.wb-audio .wb-file-text { flex: 1 1 auto; max-width: 200px; }
+.wb-audio .wb-file-meta { font-variant-numeric: tabular-nums; }
+.wb-audio-play { background: var(--surface-sunken); color: var(--text); }
+.wb-audio audio { display: none; }
+.file-preview-audio { padding: var(--space-4) 0; }
+
 /* An image with a thumbnail is mostly picture: bigger visual, the name under it only on hover. */
 .wb-file[data-thumb='true'] .wb-file-open { padding: 4px; gap: 0; }
 .wb-file[data-thumb='true'] .wb-file-visual { width: 128px; height: 96px; border-radius: calc(var(--radius-lg) - 3px); }
@@ -2250,6 +2268,29 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
  * and how many steps — so nobody has to guess whether it finished or stopped.
  * Same faint register as `.wb-msg-added`: it is about the run, not the answer.
  */
+/*
+ * Under an agent's reply: Copy and Read aloud. Quiet until the message is
+ * hovered or focused; always there where there is no hover to find it by.
+ */
+.wb-reply-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0);
+  margin-top: calc(-1 * var(--space-1));
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.wb-msg:hover .wb-reply-actions,
+.wb-msg:focus-within .wb-reply-actions { opacity: 1; }
+@media (hover: none), (pointer: coarse) {
+  .wb-reply-actions { opacity: 1; }
+}
+.wb-reply-actions .ui-icon-btn { color: inherit; }
+.wb-reply-actions .ui-icon-btn:hover { color: var(--text); }
+.wb-reply-actions .ui-icon-btn[aria-pressed='true'] { color: var(--accent); }
+.wb-reply-copied { font-size: var(--text-xs); color: var(--text-muted); padding: 0 var(--space-1); }
+
 .wb-msg-budget {
   align-self: flex-start;
   font-size: var(--text-2xs);

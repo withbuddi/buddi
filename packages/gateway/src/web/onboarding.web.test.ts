@@ -12,7 +12,7 @@ import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { createFirstAgent, firstSentence, FIRST_AGENT_TOOLS } from './onboarding.js';
+import { createFirstAgent, firstAgentTools, firstSentence, FIRST_AGENT_TOOLS } from './onboarding.js';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { resolveToolNames } from '@buddi/core';
 import { shouldStartFirstRun } from '../agents/first-run.js';
@@ -644,7 +644,13 @@ it('grants the first agent no tool for running a first run', async () => {
 it('grants the first agent the built-in families, web and browser included', async () => {
   // Every entry resolves against what this build compiles in, so no family can
   // hold the first agent back as "needs a plugin".
-  const tools = resolveToolNames(FIRST_AGENT_TOOLS, createToolRegistry({}), 'concierge');
+  // (The speech plugin's family is written only where it is installed.)
+  expect(FIRST_AGENT_TOOLS).toContain('speech.*');
+  expect(firstAgentTools(createToolRegistry({}))).not.toContain('speech.*');
+  const withSpeech = { list: () => [...createToolRegistry({}).list(), { name: 'speech.say' }, { name: 'speech.transcribe' }] };
+  expect(firstAgentTools(withSpeech)).toContain('speech.*');
+  expect(resolveToolNames(firstAgentTools(withSpeech), withSpeech, 'concierge')).toEqual(expect.arrayContaining(['speech.say', 'speech.transcribe']));
+  const tools = resolveToolNames(firstAgentTools(createToolRegistry({})), createToolRegistry({}), 'concierge');
   for (const name of ['web.search', 'web.read', 'browser.status', 'browser.act', 'secret.fill', 'secret.list', 'host.exec', 'email.send', 'agent.delegate', 'system.time']) {
     expect(tools).toContain(name);
   }
@@ -667,6 +673,7 @@ it('grants the first agent the built-in families, web and browser included', asy
   expect(file).toMatch(/web\.\*/);
   expect(file).toMatch(/browser\.\*/);
   // A mailed one-time code is read from the inbox before the owner is asked.
+  expect(file).toContain('speech.say turns words into an audio file, in a voice, that the owner can play or download; speech.transcribe turns a recording into text.');
   expect(file).toContain("A one-time code a site just mailed is read from the owner's inbox with email tools when you have them, before asking the owner: the newest message from that site, arrived in the last ten minutes; never stored, never reused.");
 });
 

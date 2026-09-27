@@ -19,6 +19,8 @@ import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { delegatedFiles, isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
 import { DiffLines } from '../canvas/views/DiffLines';
 import { FileTile } from './FileTile';
+import { AudioCard, isPlayableAudio } from './AudioCard';
+import { ReplyActions } from './ReplyActions';
 import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
@@ -59,6 +61,7 @@ export function MessageList({
   coordinatorId,
   workingAs,
   onOpenFile,
+  onReadAloud,
   children,
   agentName,
   emptyHint,
@@ -89,6 +92,8 @@ export function MessageList({
   workingAs?: string;
   /** A file in the thread was clicked: show it on the canvas. */
   onOpenFile?: (attachment: AttachmentBlock) => void;
+  /** A reply's own Read aloud was pressed: speak these words for that message. */
+  onReadAloud?: (messageId: string, text: string) => void;
   children?: ReactNode;
   /** Whose turn the agent's turn is. Shown once per run of its messages. */
   agentName?: string;
@@ -205,6 +210,9 @@ export function MessageList({
         }
         const stop = stops.get(message.id) ?? null;
         const carried = files(message, messages);
+        // The reply's own words, for its Copy and Read aloud. Only an agent's
+        // turn that said something has them; a turn of tool calls does not.
+        const said = !mine && !interjected && !plain ? replyText(message) : '';
         return (
           <div key={message.id} className="wb-msg" data-role={mine || interjected ? 'user' : 'assistant'}>
             {interjected ? (
@@ -223,6 +231,9 @@ export function MessageList({
               <div className="wb-msg-files" role="list" aria-label="Files sent with this message">
                 {carried.map((block) => (
                   <span role="listitem" key={block.artifactId}>
+                    {isPlayableAudio(block.mime) ? (
+                      <AudioCard artifactId={block.artifactId} name={block.filename ?? 'Untitled file'} mime={block.mime} sizeBytes={block.sizeBytes} />
+                    ) : (
                     <FileTile
                       name={block.filename ?? 'Untitled file'}
                       mime={block.mime}
@@ -230,6 +241,7 @@ export function MessageList({
                       thumbnail={isPreviewable(block.mime) ? previewUrl(block.artifactId) : null}
                       {...(onOpenFile ? { onOpen: () => onOpenFile(block) } : {})}
                     />
+                    )}
                   </span>
                 ))}
               </div>
@@ -280,6 +292,7 @@ export function MessageList({
             {stop ? (
               <div className="wb-msg-budget" data-testid="budget-stop">{budgetLine(stop)}</div>
             ) : null}
+            {said !== '' ? <ReplyActions messageId={message.id} text={said} onReadAloud={onReadAloud} /> : null}
           </div>
         );
       })}
@@ -474,6 +487,15 @@ function askedFor(message: ChatMessage): { handle: string; request: string } | n
   const match = /You are a member of the group "[^"]*"\. @([\w-]+), the coordinator, asks you now:\n\n([\s\S]*?)(?:\n\nAnswer for the room|$)/.exec(text);
   if (!match) return null;
   return { handle: match[1]!, request: match[2]!.trim() };
+}
+
+/** What an agent's message said, as plain text: its text blocks, in order. */
+export function replyText(message: ChatMessage): string {
+  return (message.blocks ?? [])
+    .filter((b): b is Extract<ChatBlock, { type: 'text' }> => b.type === 'text')
+    .map((b) => b.text.trim())
+    .filter((t) => t !== '')
+    .join('\n\n');
 }
 
 /**

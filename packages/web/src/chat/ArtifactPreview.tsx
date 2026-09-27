@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Notice } from '../ui';
 import { previewUrl, type FileFamily } from './attachments';
+import { AudioCard, isPlayableAudio } from './AudioCard';
 
 export const TEXT_PREVIEW_CHARS = 100_000;
 export const TABLE_ROWS = 200;
@@ -31,6 +32,9 @@ export function ArtifactPreview({ artifactId, filename, mime, family, available 
   if (!available) return <Notice>The file is no longer available; its record is kept.</Notice>;
   if (family === 'image' && !broken) {
     return <figure className="file-preview file-preview-image"><img src={previewUrl(artifactId)} alt={filename ?? 'Image'} onError={() => setBroken(true)} /></figure>;
+  }
+  if (family === 'audio' && isPlayableAudio(mime)) {
+    return <div className="file-preview file-preview-audio"><AudioCard artifactId={artifactId} name={filename ?? 'Audio'} mime={mime} /></div>;
   }
   if (family === 'pdf') {
     return (

@@ -84,6 +84,10 @@ each reply aloud when it is finished, and a new reply interrupts the last; it
 is remembered in this browser and off until you switch it on. Both run as
 you, so they ask nothing, and they count against the speech plugin's daily
 limits ([Speech](speech.md)). The recording is kept in Files like any upload.
+Under each reply, **Copy** puts its words on the clipboard and **Read aloud**
+speaks that one reply (stop while it plays); they show on hover, and always on
+a touch screen. An audio file in a conversation or in Files shows as a small
+player with its length and a download link.
 
 **The canvas** holds the last few things the conversation produced, as tabs:
 tables, charts, diffs, terminal output, pictures, documents and previews, the
