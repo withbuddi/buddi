@@ -252,6 +252,17 @@ describe('page descriptors', () => {
     ).not.toThrow();
   });
 
+  it('takes a select with several choices, and `multiple` on nothing else', () => {
+    const form = (field: Record<string, unknown>) => [
+      page({ body: [{ kind: 'form', fields: [field], submit: { tool: 'demo.write', label: 'Go' } }] }),
+    ];
+    const options = [{ value: 'en', label: 'English' }, { value: 'fr', label: 'French' }];
+    expect(() => parse(form({ name: 'a', label: 'A', type: 'select', multiple: true, options }) as never, { tools: ['demo.write'] })).not.toThrow();
+    expect(() => parse(form({ name: 'a', label: 'A', type: 'text', multiple: true }) as never, { tools: ['demo.write'] })).toThrow(
+      /`multiple` is for a select field only/,
+    );
+  });
+
   it('checks the query a select reads its options from', () => {
     expect(() =>
       parse(

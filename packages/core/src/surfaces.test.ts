@@ -121,6 +121,7 @@ describe('surfaceSection', () => {
   });
 
   it('tells the agent, for one turn, that its answer will be read aloud', () => {
+    expect(surfaceSection({ ...TELEGRAM_SURFACE, spokenLanguage: 'French' }).split('\n').at(-1)).toBe('- The owner spoke in French.');
     const spoken = surfaceSection({ ...TELEGRAM_SURFACE, spoken: true });
     expect(spoken.split('\n').at(-1)).toBe(
       '- Your answer will be read aloud to the owner as a voice note: two or three short sentences, no lists, tables, links or markdown.',

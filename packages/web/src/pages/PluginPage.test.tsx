@@ -1360,3 +1360,50 @@ describe('a repeat that polls', () => {
     expect(screen.queryByRole('progressbar', { name: 'Whisper on this computer · listening' })).not.toBeInTheDocument();
   });
 });
+
+describe('a select with several choices', () => {
+  it('starts from the array it reads, and submits what is picked as an array', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({ data: query === 'prefs' ? { languages: ['fr'] } : DATA[query] })) as typeof api.pageQuery);
+    const page: PluginPageDescriptor = {
+      plugin: 'demo',
+      id: 'settings',
+      title: 'Demo',
+      place: 'settings',
+      body: [
+        {
+          kind: 'form',
+          initial: { query: 'prefs' },
+          fields: [
+            {
+              name: 'languages',
+              label: 'Languages you speak',
+              type: 'select',
+              multiple: true,
+              from: 'languages',
+              options: [
+                { value: 'en', label: 'English' },
+                { value: 'fr', label: 'French' },
+                { value: 'es', label: 'Spanish' },
+              ],
+            },
+          ],
+          submit: { tool: 'demo.save', label: 'Save', args: { languages: { field: 'languages' } } },
+        },
+      ],
+    };
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    await waitFor(() => {
+      const drawn = screen.getByLabelText('Languages you speak') as HTMLSelectElement;
+      expect(Array.from(drawn.selectedOptions, (o) => o.value)).toEqual(['fr']);
+    });
+    const box = screen.getByLabelText('Languages you speak') as HTMLSelectElement;
+    expect(box.multiple).toBe(true);
+    for (const option of Array.from(box.options)) option.selected = option.value !== 'es';
+    fireEvent.change(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.save', args: { languages: ['en', 'fr'] } }),
+    );
+  });
+});

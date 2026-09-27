@@ -57,6 +57,11 @@ export interface SurfaceProfile {
    * surface: the surface sets it on a copy of its profile for that one run.
    */
   spoken?: boolean;
+  /**
+   * The language the owner spoke this turn in, by name ("French"), when a
+   * voice note was heard and its language detected. Per turn, like `spoken`.
+   */
+  spokenLanguage?: string;
 }
 
 /** Telegram: plain text, a hard message cap, buttons, a person reading. */
@@ -170,6 +175,7 @@ export function surfaceSection(profile: SurfaceProfile): string {
     ...(profile.spoken
       ? ['- Your answer will be read aloud to the owner as a voice note: two or three short sentences, no lists, tables, links or markdown.']
       : []),
+    ...(profile.spokenLanguage ? [`- The owner spoke in ${profile.spokenLanguage}.`] : []),
   ];
   return `${SURFACE_SECTION_HEADING}\n${lines.join('\n')}`;
 }

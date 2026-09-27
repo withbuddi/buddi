@@ -184,8 +184,9 @@ buddi:  (voice note, 0:05) You spent 212 dollars on groceries this month, 30 les
 ```
 
 Then the agent answers as if you had typed it; a caption under your voice
-note is added after the transcript. Only the transcript reaches the model;
-the recording stays in your Files.
+note is added after the transcript. Only the transcript reaches the model,
+with the language it was heard in ("The owner spoke in French."), so the
+agent answers in that language; the recording stays in your Files.
 
 When you spoke, the answer comes back as a voice note with its text as the
 caption, or right under it when the text is longer than 1,024 characters.

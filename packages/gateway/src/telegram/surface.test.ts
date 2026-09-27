@@ -3715,6 +3715,18 @@ describe('voice on Telegram', () => {
     expect(sent.findIndex((s) => s.body.text === '🎤 how much did I spend on groceries')).toBeLessThan(sent.indexOf(voice!));
   });
 
+  it('names the language the note was heard in for the run, and only for that run', async () => {
+    const { surface, run } = voiceHarness({
+      transcribe: async () => ({ ok: true, text: 'combien ai-je dépensé ce mois-ci', language: 'fr' }),
+    });
+    await surface.processUpdates([voiceUpdate(511)]);
+    await surface.drain();
+    expect((run.mock.calls[0]?.[0] as any).spokenLanguage).toBe('French');
+    await surface.processUpdates([message(512, OWNER, OWNER, 'and in dollars?')]);
+    await surface.drain();
+    expect((run.mock.calls.at(-1)?.[0] as any).spokenLanguage).toBeUndefined();
+  });
+
   it('puts a long answer in a second message, and does not speak one over 4,000 characters', async () => {
     const long = 'Groceries. '.repeat(120).trim();
     const first = voiceHarness({}, long);

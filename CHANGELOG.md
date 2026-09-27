@@ -8,6 +8,9 @@ What changes in buddi from one release to the next, newest first.
 
 - Asking an agent to open an app you have not allowed for computer control now asks you with a card, Once or Always, instead of sending you to Settings. Always adds the app to the list.
 - Plugin pages can show a progress bar; the Speech page uses it for the model downloads.
+- Settings → Speech asks which languages you speak instead of one language hint, so a French note and an English one are both heard right on this computer, and it lists the models your account offers instead of asking you to type one.
+- Plugin pages can offer a select that takes several choices (`multiple: true`).
+- A voice note on Telegram tells the agent which language you spoke in, so it answers in it.
 
 ### Added
 

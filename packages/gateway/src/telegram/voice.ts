@@ -92,6 +92,25 @@ export function createSpeechHooks(deps: SpeechHooksDeps): SpeechHooks {
  * The words
  * ------------------------------------------------------------------ */
 
+/**
+ * A detected language, by its English name: Whisper answers a code ("fr"),
+ * OpenAI a name ("french"). Unknown or empty: undefined, and nothing is said.
+ */
+export function languageName(detected: string | undefined): string | undefined {
+  const raw = detected?.trim();
+  if (!raw || raw.length > 40) return undefined;
+  if (/^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})*$/i.test(raw)) {
+    try {
+      const name = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'none' }).of(raw.replace('_', '-'));
+      return name && name.toLowerCase() !== raw.toLowerCase() ? name : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (!/^\p{L}[\p{L} ]*$/u.test(raw)) return undefined;
+  return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+}
+
 /** The transcript, shown back so the owner sees what was heard. */
 export function heardText(transcript: string): string {
   return `🎤 ${transcript}`;

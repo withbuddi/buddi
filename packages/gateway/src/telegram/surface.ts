@@ -91,6 +91,7 @@ import {
   claimTextInsteadNote,
   getChatVoice,
   heardText,
+  languageName,
   INSTALL_SPEECH_TEXT,
   MAX_SPOKEN_CHARS,
   MAX_VOICE_CAPTION_CHARS,
@@ -566,6 +567,12 @@ export interface RunRequest {
    * for the ear.
    */
   spoken?: boolean;
+  /**
+   * The language the owner's voice note was in, by name ("French"), when it
+   * was detected: the surface profile names it for this one run, so the
+   * agent answers in it.
+   */
+  spokenLanguage?: string;
 }
 
 /**
@@ -1212,6 +1219,8 @@ export class TelegramSurface {
   readonly #pending = new PendingQuestions();
   /** The chats whose message in hand is a voice note the owner spoke; read by `#runFor`. */
   readonly #ownerSpoke = new Set<string>();
+  /** The language of the voice note being run now, per chat, by name. */
+  readonly #ownerLanguage = new Map<string, string>();
   #offset: number | undefined;
   #running = false;
   #abort: AbortController | undefined;
@@ -2010,6 +2019,7 @@ export class TelegramSurface {
     // Read aloud? When the owner spoke and the chat says `spoken`, or always.
     // Only with a speaker to read it; otherwise the agent is not told so.
     const spoken = await this.#willSpeak(chatId);
+    const spokenLanguage = this.#ownerLanguage.get(chatId);
 
     // Where a message typed while this run works arrives. It is registered
     // before the first model call and closed after the last, so the window in
@@ -2029,6 +2039,7 @@ export class TelegramSurface {
             interjections,
             ...(carried?.attachments.length ? { attachments: carried.attachments } : {}),
             ...(spoken ? { spoken: true } : {}),
+            ...(spokenLanguage ? { spokenLanguage } : {}),
             onToolCall: (name) => progress.noteToolCall(name),
             // A spoken answer is not streamed: it arrives as a voice note with
             // its text underneath, and the progress line holds until then.
@@ -2853,10 +2864,13 @@ export class TelegramSurface {
     }
     await api.sendMessage(chatId, heardText(heard.text));
     this.#ownerSpoke.add(chatId);
+    const language = languageName(heard.language);
+    if (language) this.#ownerLanguage.set(chatId, language);
     try {
       await this.handleText(chatId, '', voiceTurnText(heard.text, caption));
     } finally {
       this.#ownerSpoke.delete(chatId);
+      this.#ownerLanguage.delete(chatId);
     }
   }
 

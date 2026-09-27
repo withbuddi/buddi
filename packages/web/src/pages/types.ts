@@ -125,6 +125,8 @@ export interface Field {
   label: string;
   type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date';
   options?: Array<{ value: string; label: string }>;
+  /** A select taking several choices; its value is an array. */
+  multiple?: boolean;
   required?: boolean;
   min?: number;
   max?: number;

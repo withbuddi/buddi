@@ -1,7 +1,7 @@
 /** The speech plugin reached by name, as the owner, and the words of voice on Telegram. */
 import { describe, expect, it, vi } from 'vitest';
 import type { CoreToolContext } from '@buddi/core';
-import { answerSpoken, classifySpeechRefusal, createSpeechHooks, parseVoiceArg, textInsteadText } from './voice.js';
+import { answerSpoken, classifySpeechRefusal, createSpeechHooks, languageName, parseVoiceArg, textInsteadText } from './voice.js';
 
 const ctx = { ownerId: 'owner', timezone: 'UTC', conversationId: 'c-1', agentId: 'buddy' } as unknown as CoreToolContext;
 
@@ -42,6 +42,17 @@ describe('the speech hooks', () => {
 });
 
 describe('the words', () => {
+  it('names a detected language in English, from a code or a name', () => {
+    expect(languageName('fr')).toBe('French');
+    expect(languageName('pt-BR')).toBe('Brazilian Portuguese');
+    expect(languageName('french')).toBe('French');
+    expect(languageName('en')).toBe('English');
+    expect(languageName('')).toBeUndefined();
+    expect(languageName(undefined)).toBeUndefined();
+    expect(languageName('zz')).toBeUndefined();
+    expect(languageName('<script>')).toBeUndefined();
+  });
+
   it('reads /voice, decides when an answer is spoken, and says why it was not', () => {
     expect(parseVoiceArg(' Always ')).toBe('always');
     expect(parseVoiceArg('loud')).toBeUndefined();

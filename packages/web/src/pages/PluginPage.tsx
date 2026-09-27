@@ -596,8 +596,15 @@ function initialValues(fields: Field[], data: unknown): Values {
   const values: Values = {};
   for (const field of fields) {
     const found = field.from === undefined ? undefined : readPath(data, field.from);
-    values[field.name] =
-      found !== undefined ? found : field.type === 'checkbox' ? false : field.type === 'number' ? '' : '';
+    values[field.name] = field.multiple
+      ? Array.isArray(found)
+        ? found.map(String)
+        : []
+      : found !== undefined
+        ? found
+        : field.type === 'checkbox'
+          ? false
+          : '';
   }
   return values;
 }
@@ -672,6 +679,26 @@ function FieldControl({
     ...(compact && field.hint ? { title: field.hint } : {}),
   };
   const hint = compact ? undefined : field.hint;
+  if (field.type === 'select' && field.multiple) {
+    const chosen = Array.isArray(value) ? value.map(String) : [];
+    return (
+      <FieldBox label={field.label} hint={hint}>
+        <select
+          {...shared}
+          multiple
+          size={Math.min(8, Math.max(3, choices.options.length))}
+          value={chosen}
+          onChange={(e) => onChange(Array.from(e.target.selectedOptions, (option) => option.value))}
+        >
+          {choices.options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </FieldBox>
+    );
+  }
   if (field.type === 'select') {
     return (
       <FieldBox label={field.label} hint={hint}>
@@ -1615,7 +1642,9 @@ function FormBody({
     (field) =>
       field.required &&
       !inactive.has(field.name) &&
-      (values[field.name] === '' || values[field.name] === undefined),
+      (values[field.name] === '' ||
+        values[field.name] === undefined ||
+        (Array.isArray(values[field.name]) && (values[field.name] as unknown[]).length === 0)),
   );
   return (
     <Stack>

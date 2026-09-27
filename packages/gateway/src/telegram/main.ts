@@ -506,7 +506,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // again here is what makes the definition current (`{{today}}`, a reloaded
     // file) without letting the wiring choose a different agent.
     ...(publicOrigin ? { publicOrigin } : {}),
-    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections, spoken }) => {
+    run: runInteractive = async ({ conversationId, chatId, text, agent, attachments, onToolCall, onTextDelta, systemSuffix, resume, approval, interjections, spoken, spokenLanguage }) => {
       // Interactive turns stay inline — they are user-facing and already
       // serialized per chat — but they are not exempt from a global pause.
       const blocked = deps.gate ? await deps.gate() : null;
@@ -563,7 +563,10 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         // renders is a property of Telegram, and it belongs in one place that
         // every surface reads the same way.
         // A turn whose answer will be read aloud says so, for this run only.
-        surface: spoken ? { ...TELEGRAM_SURFACE, spoken: true } : TELEGRAM_SURFACE,
+        surface:
+          spoken || spokenLanguage
+            ? { ...TELEGRAM_SURFACE, ...(spoken ? { spoken: true } : {}), ...(spokenLanguage ? { spokenLanguage } : {}) }
+            : TELEGRAM_SURFACE,
         // The ask policy is about every interactive turn; the first run's
         // instruction is about this one. Both, in that order.
         systemSuffix: [

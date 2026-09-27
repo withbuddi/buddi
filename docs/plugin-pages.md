@@ -160,12 +160,14 @@ interface Selection { key: string; disabledWhen?: Visibility }
 interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
 /** `all` offers it over every enabled row when nothing is ticked. */
 interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }>; all?: true }
-interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility }
+interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; multiple?: boolean; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility }
 
 // `when` and `disabledWhen` on a Field are asked of the form's own values
 // first — a path naming a field reads what the owner has just typed — and of
 // the loaded data otherwise. A field they hide or grey is neither required
 // nor submitted: the owner said nothing about it.
+// A select with `multiple: true` holds an array of the chosen values (empty
+// for none) and submits it as one; `from` reads an array too.
 
 ```
 
@@ -187,6 +189,7 @@ What each one is for, in email's terms:
 | `form` with `initial` | The Watchers block: five numbers, one Save |
 | `table` | The accounts list with their state and a remove action (with `confirm`) |
 | `stats` | Counts at the top of a settings page |
+| `select` field with `multiple` | (Speech) The languages you speak, several at once |
 | `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
 
 Not in the set, on purpose: free layout, custom styling, charts (those are

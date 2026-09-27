@@ -24,12 +24,27 @@ cloud account or on this computer, with nothing leaving it.
    with an API key, or an **OpenAI-compatible** account whose server answers
    OpenAI's two audio routes (a local Whisper server, LM Studio, speaches, a
    Kokoro server).
-3. Open **Settings → Speech**. Under **Listening**, pick the service and the
-   account; leave the model blank for the default (`gpt-4o-mini-transcribe` on
-   OpenAI) or type the one your server names. A language (`en`, `fr`) helps
-   short clips; blank lets the service detect it. Under **Speaking**, pick the
-   service, the account, the model (blank for `gpt-4o-mini-tts`) and a voice.
-   Save each side.
+3. Open **Settings → Speech**. Under **Listening**, pick the service, the
+   account and the model, then the languages you speak. Under **Speaking**,
+   pick the service, the account, the model and a voice. Save each side.
+
+   **Models.** The Model list shows what your account offers: buddi asks its
+   server (`GET /models`, kept ten minutes) and lists the ids with
+   `transcribe` or `whisper` in them for listening, `tts` or `speech` for
+   speaking, the default first (`gpt-4o-mini-transcribe` and
+   `gpt-4o-mini-tts` on OpenAI). A new account's models appear once you have
+   saved it. When the server lists nothing, only the default is offered;
+   **Other…** takes any id you type.
+
+   **Languages you speak.** Pick every language you send voice notes in, up
+   to eight, from about 25 by name; none means any. With one, it is sent to
+   the service as the language, which helps short clips. With several,
+   Whisper on this computer picks the likeliest of yours for each recording
+   (a French accent is not heard as Portuguese), and a cloud service is sent
+   none and detects the language itself. With Kokoro as the speaker and a
+   language other than English on your list, the Speaking block says that a
+   note in that language gets a text answer unless a cloud speaker is
+   chosen.
 4. Press **Test** on each side. Listening sends a two-second clip that says
    "Hello from buddi. This is a test." and shows what was heard. Speaking says
    "This is buddi." and saves it to your Files.
@@ -59,8 +74,8 @@ one. Installed, and with no other service chosen for that side, they are
 used; you can also choose them by name.
 
 - Whisper reads OGG/Opus (Telegram's voice notes), MP3 and WAV, up to ten
-  minutes a recording, one at a time. It detects the language, or follows the
-  one you set under Listening. On an Apple M-series Mac a short voice note
+  minutes a recording, one at a time. It detects the language among the ones
+  you speak (any, when you listed none), or uses the one you listed. On an Apple M-series Mac a short voice note
   takes under a second once the model is loaded, a little more for the first.
 - Kokoro speaks English only, with American and British voices. Asked to say
   something in another language, it refuses rather than read it wrong;

@@ -294,6 +294,11 @@ export interface Field {
   label: string;
   type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date';
   options?: Array<{ value: string; label: string }>;
+  /**
+   * A select that takes several choices: its value is an array of the
+   * chosen options' values, empty meaning none. On a `select` only.
+   */
+  multiple?: boolean;
   required?: boolean;
   min?: number;
   max?: number;
@@ -626,6 +631,7 @@ const fieldSchema = z
     label,
     type: z.enum(['text', 'number', 'select', 'textarea', 'checkbox', 'secret', 'email', 'date']),
     options: z.array(z.object({ value: z.string(), label }).strict()).max(60).optional(),
+    multiple: z.boolean().optional(),
     required: z.boolean().optional(),
     min: z.number().optional(),
     max: z.number().optional(),
@@ -652,7 +658,8 @@ const fieldSchema = z
       (field.options !== undefined && field.options.length > 0) ||
       field.optionsFrom !== undefined,
     'a select field needs `options` or `optionsFrom`',
-  );
+  )
+  .refine((field) => field.multiple !== true || field.type === 'select', '`multiple` is for a select field only');
 
 const common = {
   when: visibilitySchema.optional(),
