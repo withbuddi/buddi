@@ -55,6 +55,7 @@ const NEWER: VersionView = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   vi.mocked(api.overview).mockResolvedValue(OVERVIEW as never);
 });
 
@@ -121,6 +122,7 @@ describe('what buddi kept for you, under "Needs you"', () => {
       ],
     });
     const navigate = vi.fn();
+    window.localStorage.setItem('buddi.needsYouView', 'list');
     await home(null, navigate);
     expect(screen.getByText('2 messages for you.')).toBeInTheDocument();
     expect(screen.getByText('Needs you')).toBeInTheDocument();
@@ -207,21 +209,99 @@ describe("Home's composer", () => {
     expect(navigate).toHaveBeenCalledWith('#/');
   });
 
-  it("lists the front desk's last three conversations, each a click back", async () => {
+  it("puts the front desk's last three conversations under the box as chips, each a click back", async () => {
     vi.mocked(chatApi.conversations).mockResolvedValue({
       conversations: [
         { id: 'c1', opening: 'Flights to Lisbon', lastMessageAt: new Date(Date.now() - 2 * 3600_000).toISOString(), messageCount: 4 },
-        { id: 'c2', opening: 'The dentist', lastMessageAt: null, createdAt: '2026-09-20T09:00:00Z', messageCount: 2 },
-        { id: 'c3', preview: 'Groceries', lastMessageAt: null, messageCount: 1 },
+        { id: 'c2', opening: 'The dentist, and whether Thursday afternoon still works for everyone', lastMessageAt: new Date(Date.now() - 8 * 60_000).toISOString(), messageCount: 2 },
+        { id: 'c3', preview: 'Groceries', lastMessageAt: null, createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString(), messageCount: 1 },
       ],
     });
     const navigate = vi.fn();
     await frontDesk(navigate);
     expect(chatApi.conversations).toHaveBeenCalledWith('concierge', 3);
-    const link = screen.getByRole('link', { name: 'Continue: Flights to Lisbon · 2 hours ago' });
+    expect(screen.getByText('Continue')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'Flights to Lisbon 2 h' });
     expect(link).toHaveAttribute('href', '#/chat/concierge/c1');
     fireEvent.click(link);
     expect(navigate).toHaveBeenCalledWith('#/chat/concierge/c1');
-    expect(screen.getByRole('link', { name: /Continue: Groceries/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'The dentist, and whether Thursday after… 8 min' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Groceries 2 d' })).toBeInTheDocument();
+  });
+});
+
+const BANK = note({ id: 'n1', title: 'A mail from the bank', text: 'Your card ending 4242 was charged twice.\nThe second charge is pending.', agentId: 'concierge' });
+const RECAP = note({ id: 'n2', kind: 'recap', title: 'The weekly recap', link: '#/activity' });
+const PLUGIN = note({ id: 'n3', kind: 'plugin', title: 'A plugin wants a key', link: null, pluginId: 'github' });
+
+async function deck(rows: NotificationRow[], navigate = vi.fn()): Promise<void> {
+  vi.mocked(api.notifications).mockResolvedValue({ notifications: rows });
+  await act(async () => {
+    render(<Home timezone="UTC" navigate={navigate} agents={[DESK]} attention={new Map()} />);
+  });
+}
+
+describe('"Needs you" as a deck', () => {
+  it('shows the first message in full, with its sender and the counter, and moves with the arrows', async () => {
+    await deck([BANK, RECAP, PLUGIN]);
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    expect(region).toHaveTextContent('Concierge');
+    expect(region).toHaveTextContent('A mail from the bank');
+    expect(region).toHaveTextContent(/Your card ending 4242 was charged twice\.\s*The second charge is pending\./);
+    expect(region).toHaveTextContent('1 of 3');
+    expect(region).toHaveAttribute('data-depth', '2');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(region).toHaveTextContent('The weekly recap');
+    expect(region).toHaveTextContent('2 of 3');
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+    expect(region).toHaveTextContent('1 of 3');
+    fireEvent.keyDown(region, { key: 'ArrowLeft' });
+    expect(region).toHaveTextContent('3 of 3');
+    expect(region).toHaveTextContent('github');
+    expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
+    fireEvent.keyDown(region, { key: 'ArrowRight' });
+    expect(region).toHaveTextContent('1 of 3');
+  });
+
+  it('Done marks it seen as the row did and brings the next one; d does the same', async () => {
+    const navigate = vi.fn();
+    await deck([BANK, RECAP, PLUGIN], navigate);
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(api.notificationSeen).toHaveBeenCalledWith('n1');
+    expect(navigate).not.toHaveBeenCalled();
+    expect(region).toHaveTextContent('The weekly recap');
+    expect(region).toHaveTextContent('1 of 2');
+    expect(region).toHaveAttribute('data-depth', '1');
+    fireEvent.keyDown(region, { key: 'd' });
+    expect(api.notificationSeen).toHaveBeenCalledWith('n2');
+    expect(region).toHaveTextContent('1 of 1');
+    expect(region).toHaveAttribute('data-depth', '0');
+    fireEvent.keyDown(region, { key: 'Delete' });
+    expect(api.notificationSeen).toHaveBeenCalledWith('n3');
+    expect(screen.queryByRole('region', { name: 'Needs you, one at a time' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Nothing needs you. Your agents are on it.').length).toBeGreaterThan(0);
+  });
+
+  it('Open and Enter go where the row went, and mark it seen', async () => {
+    const navigate = vi.fn();
+    await deck([BANK, RECAP], navigate);
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(api.notificationSeen).toHaveBeenCalledWith('n1');
+    expect(navigate).toHaveBeenCalledWith('#/chat/finance');
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    fireEvent.keyDown(region, { key: 'Enter' });
+    expect(api.notificationSeen).toHaveBeenCalledWith('n2');
+    expect(navigate).toHaveBeenCalledWith('#/activity');
+  });
+
+  it('switches to the list and remembers it', async () => {
+    await deck([BANK, RECAP]);
+    expect(screen.getByRole('radio', { name: 'Deck' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('radio', { name: 'List' }));
+    expect(screen.queryByRole('region', { name: 'Needs you, one at a time' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /A mail from the bank/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /The weekly recap/ })).toBeInTheDocument();
+    expect(window.localStorage.getItem('buddi.needsYouView')).toBe('list');
   });
 });

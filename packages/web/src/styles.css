@@ -2502,9 +2502,26 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
    desk's last few conversations under it, quiet. */
 .home-ask { display: flex; flex-direction: column; gap: var(--space-2); }
 .home-ask .wb-composer { padding: 0; background: transparent; }
-.home-ask-recent { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0 var(--space-1); list-style: none; font-size: var(--text-sm); }
-.home-ask-recent a { color: var(--text-muted); text-decoration: none; }
-.home-ask-recent a:hover { color: var(--text); text-decoration: underline; }
+.home-continue { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: 0 var(--space-1); font-size: var(--text-sm); min-width: 0; }
+.home-continue-label { color: var(--text-muted); }
+.home-continue-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.home-continue-chips li { min-width: 0; max-width: 100%; }
+.home-continue-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+}
+.home-continue-chip:hover { border-color: var(--accent); color: var(--accent); }
+.home-continue-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.home-continue-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-continue-when { flex: none; color: var(--text-faint); font-size: var(--text-xs); }
 
 /* ---- the corner buddi: a quick chat with the front desk over any page ---- */
 
@@ -2602,6 +2619,34 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .home-offer-x:hover { color: var(--critical); border-color: var(--critical); }
 .home-offer-x:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
 .home-offer-x[disabled] { cursor: default; opacity: 0.5; }
+
+/* "Needs you" as a deck: the front card, and up to two edges behind it. The
+   edges are the ground's own pseudo-elements, so there is nothing to draw
+   when one card is left. */
+.home-deck { position: relative; isolation: isolate; border-radius: var(--radius-lg); }
+.home-deck:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.home-deck[data-depth='1'] { margin-bottom: var(--space-2); }
+.home-deck[data-depth='2'] { margin-bottom: var(--space-4); }
+.home-deck::before,
+.home-deck::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  display: none;
+}
+.home-deck::before { inset: var(--space-2) var(--space-3) calc(-1 * var(--space-2)); }
+.home-deck::after { inset: var(--space-4) var(--space-6) calc(-1 * var(--space-4)); z-index: -2; }
+.home-deck[data-depth='1']::before,
+.home-deck[data-depth='2']::before,
+.home-deck[data-depth='2']::after { display: block; }
+.home-deck-from { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.home-deck-count { color: var(--text-muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.home-deck-body { display: flex; flex-direction: column; gap: var(--space-2); max-height: calc(var(--space-12) * 6); overflow-y: auto; overscroll-behavior: contain; }
+.home-deck-title { margin: 0; font-weight: var(--weight-medium); line-height: var(--leading-read); white-space: pre-wrap; overflow-wrap: anywhere; }
+.home-deck-text { margin: 0; color: var(--text); line-height: var(--leading-read); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .home-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-5); align-items: start; }
 .home-foot { margin: 0; font-size: var(--text-sm); }

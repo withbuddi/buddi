@@ -8,6 +8,10 @@ What changes in buddi from one release to the next, newest first.
 
 - A buddi button in the corner of every page opens a small chat with your front desk over what you are doing, so a quick question needs no page change; `/` opens it too.
 
+### Changed
+
+- Home: what needs you is a deck of cards you read in full and move through with Done, with the list one toggle away; the conversations to continue sit as chips under the composer.
+
 ### Fixed
 
 - Home's update notice reads on one line.

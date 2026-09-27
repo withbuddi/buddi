@@ -31,6 +31,21 @@ export function fmtRelative(iso: string | null | undefined, now = Date.now()): s
   return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(value, unit);
 }
 
+/**
+ * A quiet, short age for a chip: "now", "8 min", "6 h", "2 d". Past and
+ * future read the same; the chip already says which it is.
+ */
+export function fmtShortRelative(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const abs = Math.abs(Math.round((now - then) / 1000));
+  if (abs < 60) return 'now';
+  if (abs < 3600) return `${Math.floor(abs / 60)} min`;
+  if (abs < 86_400) return `${Math.floor(abs / 3600)} h`;
+  return `${Math.floor(abs / 86_400)} d`;
+}
+
 export function fmtMoney(value: number | null | undefined, currency: string | null): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   try {

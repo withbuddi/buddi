@@ -5,20 +5,23 @@
  * a send that opens a new conversation with the default agent, puts the
  * message in it and goes there, so the answer is read where it is written.
  * A send that fails leaves the words in the box and says why. Under it, the
- * last three conversations with the same agent, so one still being answered
- * is a click back.
+ * last three conversations with the same agent as one row of chips, so one
+ * still being answered is a click back.
  */
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, chatApi } from '../../api';
 import { Composer, type ComposerDraft, type ComposerHandle } from '../../chat/Composer';
 import type { ChatAgent, UploadedAttachment } from '../../chat/types';
-import { fmtRelative, truncate } from '../../format';
+import { fmtShortRelative, truncate } from '../../format';
 import { chatRoute } from '../../routes';
 import { ErrorBanner, useAsync } from '../../ui';
 import { NARROW_QUERY, useMediaQuery } from '../../useMediaQuery';
 
 /** How many of the front desk's conversations sit under the box. */
 export const HOME_RECENT = 3;
+
+/** A chip's title past this many characters ends in an ellipsis. */
+const CHIP_TITLE_MAX = 40;
 
 export function HomeAsk({ agent, navigate }: { agent: ChatAgent; navigate: (route: string) => void }): JSX.Element {
   const composer = useRef<ComposerHandle>(null);
@@ -73,20 +76,24 @@ export function HomeAsk({ agent, navigate }: { agent: ChatAgent; navigate: (rout
         threadKey={`home.${agent.id}`}
       />
       {rows.length > 0 ? (
-        <ul className="home-ask-recent" aria-label={`Recent conversations with ${agent.name}`}>
-          {rows.map((row) => {
-            const route = chatRoute(agent.id, row.id);
-            const title = row.opening ?? row.preview ?? 'Untitled conversation';
-            const when = fmtRelative(row.lastMessageAt ?? row.createdAt ?? row.startedAt ?? null);
-            return (
-              <li key={row.id}>
-                <a href={route} onClick={(event) => { event.preventDefault(); navigate(route); }}>
-                  Continue: {truncate(title, 60)}{when ? ` · ${when}` : ''}
-                </a>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="home-continue">
+          <span className="home-continue-label" id={`home-continue-${agent.id}`}>Continue</span>
+          <ul className="home-continue-chips" aria-labelledby={`home-continue-${agent.id}`}>
+            {rows.map((row) => {
+              const route = chatRoute(agent.id, row.id);
+              const title = row.opening ?? row.preview ?? 'Untitled conversation';
+              const when = fmtShortRelative(row.lastMessageAt ?? row.createdAt ?? row.startedAt ?? null);
+              return (
+                <li key={row.id}>
+                  <a className="home-continue-chip" href={route} title={title} onClick={(event) => { event.preventDefault(); navigate(route); }}>
+                    <span className="home-continue-title">{truncate(title, CHIP_TITLE_MAX)}</span>
+                    {when ? <span className="home-continue-when">{when}</span> : null}
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : null}
     </div>
   );

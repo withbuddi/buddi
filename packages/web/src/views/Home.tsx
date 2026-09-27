@@ -27,6 +27,7 @@ import {
   Panel,
   Pill,
   Section,
+  Segment,
   Stack,
   Stat,
   Stats,
@@ -36,6 +37,7 @@ import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { HomeAsk } from './parts/HomeAsk';
+import { NeedsYouDeck, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
   timezone,
@@ -82,6 +84,19 @@ export function Home({
   );
   const told = homeNotifications(notifications.data?.notifications ?? [], pending);
   const [seenHere, setSeenHere] = useState<Set<string>>(new Set());
+  const [needsView, setNeedsView] = useState<NeedsYouView>(readNeedsYouView);
+  const unseen = told.filter((row) => !seenHere.has(row.id));
+  // Opening is seeing it, and so is a click on a line with nowhere to go (or
+  // Done on a card): it leaves at once rather than on the next poll.
+  const seeRow = (row: NotificationRow): void => {
+    setSeenHere((current) => new Set(current).add(row.id));
+    void api.notificationSeen(row.id).catch(() => {});
+  };
+  const openRow = (row: NotificationRow): void => {
+    seeRow(row);
+    if (row.link) navigate(row.link);
+  };
+  const fromOf = (row: NotificationRow): string => (row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind]);
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
@@ -123,7 +138,17 @@ export function Home({
       {note ? <Notice tone="good" role="status">{note}</Notice> : null}
 
       {needs > 0 ? (
-        <Section title="Needs you">
+        <Section
+          title="Needs you"
+          actions={told.length > 0 ? (
+            <Segment<NeedsYouView>
+              label="Show what needs you as"
+              options={[{ value: 'list', label: 'List' }, { value: 'deck', label: 'Deck' }]}
+              value={needsView}
+              onChange={(view) => { setNeedsView(view); writeNeedsYouView(view); }}
+            />
+          ) : undefined}
+        >
           <Stack>
             {data?.paused ? (
               <Notice tone="warning" title="The installation is paused.">
@@ -136,23 +161,20 @@ export function Home({
             ))}
             {/* What buddi kept for the dashboard: a watcher's find, a reminder,
                 a report, held for today or not seen yet. Opening one is seeing it. */}
-            {told.length > 0 ? (
+            {told.length > 0 && needsView === 'deck' ? (
+              <NeedsYouDeck rows={unseen} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
+            ) : null}
+            {told.length > 0 && needsView === 'list' ? (
               <Panel flush>
                 <List>
-                  {told.filter((row) => !seenHere.has(row.id)).map((row) => (
+                  {unseen.map((row) => (
                     <ListRow
                       key={row.id}
                       href={row.link ?? undefined}
-                      onClick={() => {
-                        // Opening is seeing it, and so is a click on a line with
-                        // nowhere to go: it leaves at once rather than on the next poll.
-                        setSeenHere((current) => new Set(current).add(row.id));
-                        void api.notificationSeen(row.id).catch(() => {});
-                        if (row.link) navigate(row.link);
-                      }}
+                      onClick={() => openRow(row)}
                       lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
                       title={row.title}
-                      sub={row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind]}
+                      sub={fromOf(row)}
                       side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
                     />
                   ))}
