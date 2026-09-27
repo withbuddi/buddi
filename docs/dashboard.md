@@ -39,6 +39,10 @@ The page the dashboard opens on. It answers three questions in order: what
 needs me, what is my team up to, what is coming.
 
 - **The greeting** says the day and counts what needs you.
+- **The composer** under it writes to your front desk (the default agent),
+  with files and voice like the chat; sending opens the new conversation
+  where the answer arrives, and its last three conversations sit below as
+  "Continue" links.
 - **Needs you**: approval cards you decide in place, messages kept for the
   dashboard (a watcher's find, a reminder, a report), failed jobs, urgent
   alerts, an agent a plugin needs, and proposals to keep or discard.
@@ -180,6 +184,8 @@ Needs you. See [Notifications](notifications.md).
 ## Keyboard
 
 - **Enter** sends, **Shift+Enter** starts a new line.
+- **/** outside a field focuses the page's composer (Home's, the chat's); on
+  a page without one it opens Home.
 - **Up** in an empty composer brings back what you sent before; **Down** and
   **Escape** go back to your draft.
 - In a group chat, `@` offers the members; **Enter** or **Tab** picks one.

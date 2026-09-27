@@ -46,6 +46,7 @@ import { Rail } from './shell/Rail';
 import { useAsync } from './ui';
 import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
+import { useSlashToComposer } from './shell/slash';
 import { applyAppearance, useAppearance } from './appearance';
 import type { ThemeChoice } from './theme';
 import { Activity } from './views/Activity';
@@ -102,6 +103,9 @@ export function useThemeChoice(): [ThemeChoice, (choice: ThemeChoice) => void] {
 
 export function App(): JSX.Element {
   const [hash, navigate] = useHash();
+  // `/` on any page: that page's composer, or Home's. Not during first run,
+  // which has nowhere else to go.
+  useSlashToComposer(navigate, parseWelcomeRoute(hash) === null);
   const [timezone, setTimezone] = useState('UTC');
   const [badges, setBadges] = useState<{ approvals: number; failed: number }>({ approvals: 0, failed: 0 });
   const [theme, setTheme] = useThemeChoice();

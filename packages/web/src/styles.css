@@ -2498,6 +2498,13 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   line-height: 1.15;
 }
 .home-lede { margin: 0; font-size: var(--text-lg); color: var(--text); font-weight: var(--weight-medium); line-height: var(--leading); }
+/* Home's composer: the chat's box on the page's own field, and the front
+   desk's last few conversations under it, quiet. */
+.home-ask { display: flex; flex-direction: column; gap: var(--space-2); }
+.home-ask .wb-composer { padding: 0; background: transparent; }
+.home-ask-recent { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0 var(--space-1); list-style: none; font-size: var(--text-sm); }
+.home-ask-recent a { color: var(--text-muted); text-decoration: none; }
+.home-ask-recent a:hover { color: var(--text); text-decoration: underline; }
 
 .home-team { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--space-3); }
 .home-face {

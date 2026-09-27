@@ -5,7 +5,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { api, type NotificationRow, type VersionView } from '../api';
+import { api, chatApi, type NotificationRow, type VersionView } from '../api';
+import type { ChatAgent } from '../chat/types';
+import { useSlashToComposer } from '../shell/slash';
 import { Home, homeNotifications } from './Home';
 
 vi.mock('../api', async (importOriginal) => {
@@ -27,6 +29,12 @@ vi.mock('../api', async (importOriginal) => {
       version: vi.fn(),
       notifications: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
+    },
+    chatApi: {
+      ...original.chatApi,
+      conversations: vi.fn(async () => ({ conversations: [] })),
+      startConversation: vi.fn(),
+      send: vi.fn(),
     },
   };
 });
@@ -119,5 +127,93 @@ describe('what buddi kept for you, under "Needs you"', () => {
   it('leaves out a row about an approval Home already draws as a card', () => {
     const rows = [note({ id: 'a', actionId: 'act-1', kind: 'failure' }), note({ id: 'b', actionId: 'act-2' }), note({ id: 'c', actedAt: '2026-09-21T08:56:00Z' })];
     expect(homeNotifications(rows, [{ id: 'act-1' }]).map((row) => row.id)).toEqual(['b']);
+  });
+});
+
+const DESK: ChatAgent = {
+  id: 'concierge', handle: 'concierge', name: 'Concierge', description: 'The front desk.', available: true,
+  roles: [], provider: 'anthropic', model: 'claude-sonnet-5',
+} as ChatAgent;
+
+async function frontDesk(navigate = vi.fn()): Promise<void> {
+  function Shell(): JSX.Element {
+    useSlashToComposer(navigate);
+    return <Home timezone="UTC" navigate={navigate} agents={[DESK]} defaultAgentId="concierge" attention={new Map()} />;
+  }
+  await act(async () => { render(<Shell />); });
+}
+
+describe("Home's composer", () => {
+  it('asks the default agent by name, focused on a wide screen', async () => {
+    await frontDesk();
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    expect(box).toHaveFocus();
+  });
+
+  it('opens a conversation, sends to it and goes there', async () => {
+    vi.mocked(chatApi.startConversation).mockResolvedValue({ conversationId: 'c-new' });
+    vi.mocked(chatApi.send).mockResolvedValue({ conversationId: 'c-new', runId: 'r1' });
+    const navigate = vi.fn();
+    await frontDesk(navigate);
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    fireEvent.change(box, { target: { value: 'Book a table for two' } });
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }); });
+    expect(chatApi.startConversation).toHaveBeenCalledWith('concierge');
+    expect(chatApi.send).toHaveBeenCalledWith('concierge', { conversationId: 'c-new', text: 'Book a table for two' });
+    expect(navigate).toHaveBeenCalledWith('#/chat/concierge/c-new');
+  });
+
+  it('keeps the words and says why when the conversation cannot be opened', async () => {
+    vi.mocked(chatApi.startConversation).mockRejectedValue(new Error('The gateway is down.'));
+    const navigate = vi.fn();
+    await frontDesk(navigate);
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    fireEvent.change(box, { target: { value: 'Still there?' } });
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }); });
+    expect(screen.getByText(/The gateway is down\./)).toBeInTheDocument();
+    expect(box).toHaveValue('Still there?');
+    expect(chatApi.send).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('`/` outside a field focuses it; inside a field it is typed', async () => {
+    await frontDesk();
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    act(() => { box.blur(); });
+    expect(box).not.toHaveFocus();
+    act(() => { fireEvent.keyDown(document.body, { key: '/' }); });
+    expect(box).toHaveFocus();
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    act(() => { other.focus(); });
+    act(() => { fireEvent.keyDown(other, { key: '/' }); });
+    expect(other).toHaveFocus();
+    other.remove();
+  });
+
+  it('`/` on a page without a composer goes home', () => {
+    const navigate = vi.fn();
+    function Page(): JSX.Element { useSlashToComposer(navigate); return <p>Settings</p>; }
+    render(<Page />);
+    fireEvent.keyDown(document.body, { key: '/' });
+    expect(navigate).toHaveBeenCalledWith('#/');
+  });
+
+  it("lists the front desk's last three conversations, each a click back", async () => {
+    vi.mocked(chatApi.conversations).mockResolvedValue({
+      conversations: [
+        { id: 'c1', opening: 'Flights to Lisbon', lastMessageAt: new Date(Date.now() - 2 * 3600_000).toISOString(), messageCount: 4 },
+        { id: 'c2', opening: 'The dentist', lastMessageAt: null, createdAt: '2026-09-20T09:00:00Z', messageCount: 2 },
+        { id: 'c3', preview: 'Groceries', lastMessageAt: null, messageCount: 1 },
+      ],
+    });
+    const navigate = vi.fn();
+    await frontDesk(navigate);
+    expect(chatApi.conversations).toHaveBeenCalledWith('concierge', 3);
+    const link = screen.getByRole('link', { name: 'Continue: Flights to Lisbon · 2 hours ago' });
+    expect(link).toHaveAttribute('href', '#/chat/concierge/c1');
+    fireEvent.click(link);
+    expect(navigate).toHaveBeenCalledWith('#/chat/concierge/c1');
+    expect(screen.getByRole('link', { name: /Continue: Groceries/ })).toBeInTheDocument();
   });
 });

@@ -35,6 +35,7 @@ import {
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
+import { HomeAsk } from './parts/HomeAsk';
 
 export function Home({
   timezone,
@@ -67,6 +68,7 @@ export function Home({
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
 
   const data = overview.data;
+  const frontDesk = agents.find((agent) => agent.id === defaultAgentId) ?? null;
   const nameOf = (id: string): string => agents.find((a) => a.id === id)?.name ?? id;
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
 
@@ -104,6 +106,9 @@ export function Home({
         </header>
       </div>
     <div className="home">
+      {/* The front desk, first: writing to it is the commonest thing done here. */}
+      {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
+
       {update && update.updateAvailable && !update.checkout && update.latest ? (
         <Notice tone="accent">
           A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}

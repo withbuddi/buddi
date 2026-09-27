@@ -44,6 +44,12 @@ import type { UploadedAttachment } from './types';
  */
 export const FILES_DURING_RUN = 'Send files once the agent has answered.';
 
+/**
+ * The id of the one composer field on a page. The shell's `/` looks for it
+ * (shell/slash.ts): a page has at most one composer, so an id is enough.
+ */
+export const COMPOSER_INPUT_ID = 'wb-composer-input';
+
 export interface PendingAttachment {
   key: string;
   filename: string;
@@ -126,7 +132,9 @@ export const Composer = forwardRef<ComposerHandle, {
    */
   readAloud?: boolean;
   onReadAloud?: (on: boolean) => void;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud }, ref) {
+  /** What the empty box says, when the page wants other words than "Message <agent>". */
+  placeholder?: string;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud, placeholder }, ref) {
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -500,15 +508,15 @@ export const Composer = forwardRef<ComposerHandle, {
           </div>
         ) : null}
 
-        <label className="sr-only" htmlFor="wb-composer-input">
+        <label className="sr-only" htmlFor={COMPOSER_INPUT_ID}>
           Message {agentName}
         </label>
         <textarea
-          id="wb-composer-input"
+          id={COMPOSER_INPUT_ID}
           ref={area}
           value={text}
           rows={2}
-          placeholder={running ? `${agentName} is working…` : `Message ${agentName}`}
+          placeholder={running ? `${agentName} is working…` : placeholder ?? `Message ${agentName}`}
           onChange={(event) => {
             setText(event.target.value);
             // While walking back through what was said, what is in the box is
