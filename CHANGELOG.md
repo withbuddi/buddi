@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.20 — 2026-09-27
+
 ### Changed
 
 - The thinking switch appears only where it is honoured, on Anthropic and OpenAI accounts. On an OpenAI-compatible host, Ollama Cloud and local Ollama included, the Brain page says thinking is up to the model, and the composer shows no switch.
