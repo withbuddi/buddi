@@ -1646,17 +1646,56 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
 /* ---- talking to buddi: the microphone and the speaker ---- */
 
 .wb-mic { touch-action: none; user-select: none; -webkit-user-select: none; }
-.wb-mic[data-state='recording'], .wb-mic[data-state='starting'] { color: var(--critical); }
-.wb-mic[data-state='transcribing'] { opacity: 0.6; cursor: progress; }
-.wb-mic-level {
-  display: block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--critical);
-  transition: transform 80ms linear;
+
+/* Listening: the box becomes "Listening…", the waveform, and × and ✓ where send was. */
+.wb-listening {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2) var(--space-2) var(--space-4);
 }
-@media (prefers-reduced-motion: reduce) { .wb-mic-level { transition: none; } }
+.wb-listening-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-base);
+}
+.wb-listening-row { display: flex; align-items: center; gap: var(--space-2); }
+.wb-listening-spinner {
+  width: var(--space-3);
+  height: var(--space-3);
+  border: var(--space-0) solid var(--line);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: wb-spin 0.8s linear infinite;
+}
+@keyframes wb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .wb-listening-spinner { animation-duration: 2.4s; } }
+
+/* The waveform: the last few seconds as thin bars, newest on the right; silence is a dot. */
+.wb-wave {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-right: var(--space-2);
+}
+.wb-wave-bar {
+  flex: 0 0 auto;
+  width: var(--space-0);
+  height: max(var(--space-0), calc(var(--level, 0) * 100%));
+  border-radius: var(--radius-pill);
+  background: var(--text-muted);
+}
+.wb-listening[data-phase='transcribing'] .wb-wave { opacity: 0.4; }
+
+/* × beside ✓: the same round button, quiet instead of accent. */
+.wb-send[data-variant='quiet'] { background: var(--surface-sunken); color: var(--text-muted); }
+.wb-send[data-variant='quiet']:hover:not(:disabled) { background: var(--line); color: var(--text); }
 .wb-read-aloud[aria-pressed='true'] { color: var(--accent); }
 .wb-voice-note { margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 

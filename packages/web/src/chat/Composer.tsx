@@ -33,7 +33,7 @@ import { chatApi, ApiError } from '../api';
 import { Icon } from '../ui';
 import { FileTile } from './FileTile';
 import type { AttachmentBlock } from './attachments';
-import { MicButton } from './MicButton';
+import { ListeningPanel, MicButton, useVoice } from './MicButton';
 import { snapTab } from './snap';
 import type { UploadedAttachment } from './types';
 
@@ -449,9 +449,35 @@ export const Composer = forwardRef<ComposerHandle, {
   const failures = attachments.filter((attachment) => attachment.state === 'failed');
   const failed = failures.length;
 
+  /*
+   * Talking. While the microphone listens the box becomes the Listening
+   * panel; what was heard joins what is typed, for the owner to read and
+   * send, and Shift at the ✓ sends it straight away.
+   */
+  const voice = useVoice({
+    conversationId: conversationId ?? null,
+    onNotice: setSnapNote,
+    onText: (heard, sendNow) => {
+      const joined = text.trim() === '' ? heard : `${text.replace(/\s+$/, '')} ${heard}`;
+      if (sendNow) { send(joined); return; }
+      put(joined);
+      if (recalled < 0) remember(joined);
+    },
+  });
+  const listening = voice.state !== 'idle';
+  // The panel takes the focus when it opens (its ✓); the box gets it back when it closes.
+  const wasListening = useRef(false);
+  useEffect(() => {
+    if (wasListening.current && !listening) {
+      area.current?.focus();
+      window.requestAnimationFrame(resize);
+    }
+    wasListening.current = listening;
+  }, [listening]);
+
   return (
     <div className="wb-composer" data-testid="composer">
-      <div className="wb-composer-box" data-focused={focused} data-disabled={disabled}>
+      <div className="wb-composer-box" data-focused={focused || listening} data-disabled={disabled} data-listening={listening || undefined}>
         {attachments.length > 0 ? (
           <div className="wb-composer-files" role="list" aria-label="Files to send">
             {attachments.map((attachment) => (
@@ -496,9 +522,12 @@ export const Composer = forwardRef<ComposerHandle, {
           onKeyDown={onKeyDown}
           onPaste={onPaste}
           disabled={disabled}
+          hidden={listening}
         />
 
-        {mentionAt && offered.length > 0 ? (
+        {listening ? <ListeningPanel voice={voice} /> : null}
+
+        {!listening && mentionAt && offered.length > 0 ? (
           <div className="wb-mentions" role="listbox" aria-label="Members">
             {offered.map((m, i) => (
               <button
@@ -517,7 +546,7 @@ export const Composer = forwardRef<ComposerHandle, {
           </div>
         ) : null}
 
-        <div className="wb-composer-row">
+        <div className="wb-composer-row" hidden={listening}>
           <input
             ref={fileInput}
             type="file"
@@ -538,22 +567,7 @@ export const Composer = forwardRef<ComposerHandle, {
           >
             <Icon name="clip" />
           </button>
-          {/*
-            Press to talk. What was heard joins what is typed, for the owner
-            to read and send; Shift at the stop sends it straight away.
-          */}
-          <MicButton
-            disabled={disabled}
-            conversationId={conversationId ?? null}
-            onNotice={setSnapNote}
-            onText={(heard, sendNow) => {
-              const joined = text.trim() === '' ? heard : `${text.replace(/\s+$/, '')} ${heard}`;
-              if (sendNow) { send(joined); return; }
-              put(joined);
-              if (recalled < 0) remember(joined);
-              area.current?.focus();
-            }}
-          />
+          <MicButton disabled={disabled} voice={voice} />
           <button
             className="ui-icon-btn" data-size="sm"
             aria-label="Snap a tab"

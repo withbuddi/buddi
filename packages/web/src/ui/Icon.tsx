@@ -65,6 +65,9 @@ const GLYPHS = {
   speaker: [17, 1.5, <><path d="M2.8 6.6h2.4l3.4-2.8v9.4l-3.4-2.8H2.8z" /><path d="M11.2 6.2a3.2 3.2 0 0 1 0 4.6M13.2 4.4a5.8 5.8 0 0 1 0 8.2" /></>],
   // Up, not right: the message leaves the box and goes to the thread above.
   send: [16, 1.8, <path d="M8 13V3.5M3.8 7.7 8 3.5l4.2 4.2" />],
+  // The Listening panel: ✓ stops and transcribes, × throws the recording away.
+  check: [16, 1.8, <path d="M3.5 8.4 6.6 11.4 12.5 4.8" />],
+  close: [16, 1.8, <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />],
 
   // ---- the thread ----
   thought: [13, 1.4, <><path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" /></>],

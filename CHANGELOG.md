@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Recording in the composer is now a clear Listening state with a live waveform, a ✓ to transcribe and a × to discard, with Enter and Escape doing the same.
 - The dot on Settings, which means a newer buddi is ready, now shows on the System entry too, so it leads to the Version panel instead of pointing at nothing.
 
 - Asking an agent to open an app you have not allowed for computer control now asks you with a card, Once or Always, instead of sending you to Settings. Always adds the app to the list.
