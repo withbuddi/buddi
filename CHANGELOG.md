@@ -23,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- First run and Add account offer Gemini: paste a Google AI key and buddi connects through Google's OpenAI-compatible endpoint, lists the models and picks the newest Pro. Gemini's context window and prices are known to the usage view.
 - Kokoro on this computer now speaks French, Spanish, Italian, Portuguese and Hindi with its own voices for those languages (espeak-ng, fetched with the model, does the pronunciation); a reply in one of them picks the matching voice. Japanese and Chinese still need a cloud speaker.
 - Home has a composer: write to your front desk straight from the first page, by keyboard or voice, and the conversation opens with the answer. `/` focuses the composer anywhere.
 - On the dashboard, a microphone in the composer turns what you say into text (Shift to send at once), and a speaker toggle reads each reply aloud, through the listening and speaking you chose in Settings → Speech.

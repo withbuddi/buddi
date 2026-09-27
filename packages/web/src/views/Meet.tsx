@@ -45,6 +45,7 @@ import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
 import { Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
+import { GEMINI_FALLBACK_MODEL, isGeminiAccount, pickGeminiModel } from '../gemini';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
 import {
@@ -1004,7 +1005,7 @@ function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: Questio
  * 3. The brain
  * ------------------------------------------------------------------ */
 
-type Card = 'claude' | 'chatgpt' | 'key' | 'ollama' | 'cloud' | 'service';
+type Card = 'claude' | 'chatgpt' | 'gemini' | 'key' | 'ollama' | 'cloud' | 'service';
 
 function BrainAsk(props: QuestionProps): JSX.Element {
   const { accounts, answers, onSettled, onReload } = props;
@@ -1020,6 +1021,8 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   } | null>(null);
   const claudeOffered = accounts?.anthropicOAuthEnabled === true;
   const chatgptOffered = accounts?.codexEnabled === true;
+  /** Where Gemini answers and where a key is made: the gateway's to say, as ever. */
+  const gemini = accounts?.gemini;
   /** The ollama.com window, opened inside the tap so no popup blocker stops it. */
   const [consent, setConsent] = useState<Window | null>(null);
 
@@ -1144,6 +1147,9 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     );
   }
 
+  if (card === 'gemini' && gemini) {
+    return <GeminiCard busy={busy} problem={problem} preset={gemini} onBack={() => setCard(null)} onUse={adopt} />;
+  }
   if (card === 'key') return <KeyCard busy={busy} problem={problem} onBack={() => setCard(null)} onUse={adopt} />;
   if (card === 'service') {
     return (
@@ -1208,6 +1214,7 @@ function BrainAsk(props: QuestionProps): JSX.Element {
           }}
         />
       ) : null}
+      {gemini ? <BrainCard mark={<GeminiMark />} card={SCRIPT.brain.cards.gemini} onPick={() => setCard('gemini')} /> : null}
       <BrainCard mark={<KeyMark />} card={SCRIPT.brain.cards.key} onPick={() => setCard('key')} />
       <BrainCard
         mark={<OllamaMark />}
@@ -1327,6 +1334,15 @@ function OllamaMark(): JSX.Element {
 }
 
 /** Anything else that answers over the wire: a cloud. */
+/** Gemini: a four-pointed spark, drawn plainly — not Google's mark. */
+function GeminiMark(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
+      <path d="M12 3c.6 4.6 3.9 8.4 9 9-5.1.6-8.4 4.4-9 9-.6-4.6-3.9-8.4-9-9 5.1-.6 8.4-4.4 9-9Z" />
+    </svg>
+  );
+}
+
 function CloudMark(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
@@ -1465,6 +1481,101 @@ function KeyCard({
         >
           {kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai} · {SCRIPT.brain.key.which}
         </button>
+      </Ask>
+    </>
+  );
+}
+
+/**
+ * Gemini, with a Google AI key: one field. The address is fixed and comes
+ * from the gateway; the model is the newest Pro the key can reach, read from
+ * Google's own list before anything is saved.
+ */
+function GeminiCard({
+  busy,
+  problem,
+  preset,
+  onBack,
+  onUse,
+}: {
+  busy: boolean;
+  problem: string | null;
+  preset: { baseUrl: string; keyUrl: string };
+  onBack: () => void;
+  onUse: Adopt;
+}): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
+  const [secret, setSecret] = useState('');
+  const [probing, setProbing] = useState(false);
+  const working = busy || probing;
+  const submit = (): void => {
+    const value = secret.trim();
+    if (value === '' || working) return;
+    setProbing(true);
+    void (async () => {
+      let defaultModel = GEMINI_FALLBACK_MODEL;
+      try {
+        const probed = await api.probeModels({ kind: 'openai-compatible', auth: 'api-key', baseUrl: preset.baseUrl, secret: value });
+        defaultModel = pickGeminiModel(probed.models.map((model) => model.id)) ?? defaultModel;
+      } catch {
+        // A key that cannot list may still answer; the test after the save decides.
+      }
+      setProbing(false);
+      await onUse(
+        {
+          label: SCRIPT.brain.gemini.label,
+          kind: 'openai-compatible',
+          auth: 'api-key',
+          baseUrl: preset.baseUrl,
+          defaultModel,
+          enabled: true,
+          secret: value,
+        },
+        SCRIPT.brain.gemini.label,
+      );
+    })();
+  };
+  return (
+    <>
+      {working ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.gemini} />
+        </Buddi>
+      ) : problem ? (
+        <Buddi>
+          <Said>{problem}</Said>
+        </Buddi>
+      ) : null}
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={working} />
+            <Button variant="accent" disabled={working || secret.trim() === ''} onClick={submit}>
+              {SCRIPT.brain.gemini.submit}
+            </Button>
+          </>
+        }
+      >
+        <Field label={SCRIPT.brain.gemini.field} grow>
+          <input
+            ref={field}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={SCRIPT.brain.gemini.placeholder}
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                submit();
+              }
+            }}
+          />
+        </Field>
+        <a className="meet-quiet" href={preset.keyUrl} target="_blank" rel="noreferrer">
+          {SCRIPT.brain.gemini.get}
+        </a>
       </Ask>
     </>
   );
@@ -1810,9 +1921,9 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
   const account = brain ? (accounts?.accounts ?? []).find((row) => row.id === brain.accountId) : undefined;
   const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  // Ollama Cloud and ChatGPT both serve several models, and the first one
-  // chosen for the owner is only a start.
-  const cloud = account?.auth === 'device-key' || account?.kind === 'codex';
+  // Ollama Cloud, ChatGPT and Gemini all serve several models, and the first
+  // one chosen for the owner is only a start.
+  const cloud = account?.auth === 'device-key' || account?.kind === 'codex' || (!!account && isGeminiAccount(account, accounts?.gemini?.baseUrl));
   useEffect(() => {
     if (!cloud || !account) return;
     let cancelled = false;

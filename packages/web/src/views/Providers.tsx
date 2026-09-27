@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { OLLAMA_CLOUD_MODEL, api, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
+import { GEMINI_FALLBACK_MODEL, pickGeminiModel } from '../gemini';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 
@@ -67,6 +68,7 @@ export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Elemen
                 accounts={accounts}
                 codexEnabled={data.codexEnabled}
                 anthropicOAuthEnabled={data.anthropicOAuthEnabled}
+                gemini={data.gemini}
                 busy={busy}
                 run={run}
                 onDone={(id) => { setAdding(false); if (id) setSelectedId(id); }}
@@ -438,6 +440,11 @@ export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAcco
     : kind === 'openai' ? 'OpenAI API'
     : auth === 'device-key' ? 'Ollama Cloud'
     : 'Local endpoint';
+  return uniqueLabel(base, taken);
+}
+
+/** `base`, or `base 2`, `base 3`… when an account already has the name. */
+function uniqueLabel(base: string, taken: string[]): string {
   const names = new Set(taken.map((t) => t.trim().toLowerCase()));
   if (!names.has(base.toLowerCase())) return base;
   for (let n = 2; n < 100; n += 1) if (!names.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
@@ -446,8 +453,10 @@ export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAcco
 
 type Probe = { models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean };
 
-function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled }: {
+function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled, gemini }: {
   accounts: ProviderAccount[]; busy: boolean; run: Run; onDone: (id?: string) => void; codexEnabled?: boolean; anthropicOAuthEnabled?: boolean;
+  /** The Gemini preset's address and key page, from the gateway. */
+  gemini?: { baseUrl: string; keyUrl: string };
 }): JSX.Element {
   const taken = accounts.map((a) => a.label);
   const [savedId, setSavedId] = useState<string | null>(null);
@@ -464,9 +473,11 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
   const [customModel, setCustomModel] = useState(false);
 
   const [cloud, setCloud] = useState(false);
+  /** The Gemini preset: an OpenAI-compatible account on Google's address, a key, and the model list after the save. */
+  const [google, setGoogle] = useState(false);
   const choose = (nextKind: ProviderAccount['kind'], nextAuth: ProviderAccount['auth'], nextCloud = false) => {
     setKind(nextKind); setAuth(nextAuth); setSecret(''); setProbe(null); setProbeError(''); setModel(''); setCustomModel(false);
-    setCloud(nextCloud);
+    setCloud(nextCloud); setGoogle(false);
     setBaseUrl(nextCloud ? '' : nextKind === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
     if (!labelTouched) setLabel(nextCloud ? suggestedLabel(nextKind, 'device-key', taken) : suggestedLabel(nextKind, nextAuth, taken));
   };
@@ -474,6 +485,13 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
   const useKey = (on: boolean) => {
     choose('openai-compatible', on ? 'api-key' : 'device-key', true);
     if (on) void api.ollama().then((probed) => setBaseUrl(probed.cloudBaseUrl)).catch(() => {});
+  };
+  const chooseGemini = () => {
+    if (!gemini) return;
+    choose('openai-compatible', 'api-key');
+    setGoogle(true);
+    setBaseUrl(gemini.baseUrl);
+    if (!labelTouched) setLabel(uniqueLabel('Gemini', taken));
   };
   const saved = savedId ? accounts.find((a) => a.id === savedId) : undefined;
   if (savedId) {
@@ -495,13 +513,22 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     } finally { setProbing(false); }
   };
   const chosen = model.trim();
-  const incomplete = !label.trim() || (endpoint && !baseUrl.trim()) || (endpoint && !chosen);
+  const incomplete = !label.trim() || (endpoint && !baseUrl.trim()) || (endpoint && !google && !chosen) || (google && !secret.trim());
   return (
     <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
-      const defaultModel = chosen || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
+      let defaultModel = chosen || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
       void (async () => {
+        if (google) {
+          // Google flags no default: start on the newest Pro the key can reach,
+          // and let the next step offer the rest.
+          defaultModel = GEMINI_FALLBACK_MODEL;
+          try {
+            const listed = await api.probeModels({ kind: 'openai-compatible', auth: 'api-key', baseUrl, secret: value });
+            defaultModel = pickGeminiModel(listed.models.map((m) => m.id)) ?? defaultModel;
+          } catch { /* the save's own test says what is wrong with the key */ }
+        }
         let created: { id: string } | undefined;
         const ok = await run(async () => {
           created = await api.saveProviderAccount({ label, kind, auth, baseUrl, defaultModel, enabled: true, ...(value.trim() ? { secret: value } : {}) });
@@ -509,18 +536,21 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
         }, 'Account saved.');
         if (!ok || !created) return;
         // A model picked here is the whole job; only a subscription has a next step.
-        if (chosen || !subscription) onDone(created.id);
+        if (google) setSavedId(created.id);
+        else if (chosen || !subscription) onDone(created.id);
         else setSavedId(created.id);
       })();
     }}>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
         <Field label="Provider">
-          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : cloud ? 'ollama-cloud' : kind} onChange={e => {
+          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : cloud ? 'ollama-cloud' : google ? 'gemini' : kind} onChange={e => {
             if (e.target.value === 'anthropic-oauth') choose('anthropic', 'anthropic-oauth');
+            else if (e.target.value === 'gemini') chooseGemini();
             else if (e.target.value === 'ollama-cloud') choose('openai-compatible', 'device-key', true);
             else { const k = e.target.value as ProviderAccount['kind']; choose(k, k === 'codex' ? 'chatgpt' : 'api-key'); }
           }}>
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option>
+            {gemini && <option value="gemini">Gemini (Google AI key)</option>}
             <option value="ollama-cloud">Ollama Cloud</option>
             <option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
             {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription</option>}
@@ -540,18 +570,22 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
             <input required type="url" value={baseUrl} onChange={e => { setBaseUrl(e.target.value); setProbe(null); }} />
           </Field>
-          <Field label="Authentication">
+          {!google && <Field label="Authentication">
             <select value={auth} onChange={e => { setAuth(e.target.value as ProviderAccount['auth']); setSecret(''); setProbe(null); }}>
               <option value="api-key">API key</option><option value="none">No key (local/self-hosted)</option>
             </select>
-          </Field>
+          </Field>}
         </>}
         {auth === 'api-key' && (
           <Field label="API key" hint="Stored in the vault, never shown again.">
             <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => { setSecret(e.target.value); setProbe(null); }} />
           </Field>
         )}
-        {subscription ? (
+        {google && gemini ? (
+          <p className="muted">
+            <a href={gemini.keyUrl} target="_blank" rel="noreferrer">Get a key at aistudio.google.com</a>. buddi picks the newest Gemini Pro your key can reach; the next step lists the rest.
+          </p>
+        ) : subscription ? (
           <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a code you enter on openai.com, and pick a model then.'
             : auth === 'device-key' ? 'You will connect on the next step: ollama.com opens, you press Connect, and no key is typed. Free to start.'
             : 'You will connect your Claude subscription on the next step, in your browser, and pick a model then.'}</p>
@@ -586,7 +620,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
         </Toolbar>
       </fieldset>
-      {incomplete && <p className="muted">Enter an account name{endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
+      {incomplete && <p className="muted">Enter an account name{google ? ' and a key' : endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
     </form>
   );
 }

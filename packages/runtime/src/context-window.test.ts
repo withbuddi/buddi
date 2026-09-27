@@ -43,6 +43,13 @@ describe('the window of a model we bind', () => {
     expect(contextWindowTokens('gpt-4o', 'openai')).toBe(128_000);
   });
 
+  it('knows Gemini holds a million, bare or with Google\'s models/ prefix, and keeps gemma apart', () => {
+    expect(contextWindowTokens('gemini-3.1-pro-preview', 'openai-compatible')).toBe(1_000_000);
+    expect(contextWindowTokens('models/gemini-2.5-flash', 'openai-compatible')).toBe(1_000_000);
+    expect(contextWindowTokens('gemini-2.5-pro')).toBe(1_000_000);
+    expect(contextWindowTokens('gemma3:4b', 'openai-compatible')).toBe(128_000);
+  });
+
   it('knows common local models by name prefix, tag and all', () => {
     expect(contextWindowTokens('llama3.1:8b', 'ollama')).toBe(128_000);
     expect(contextWindowTokens('qwen3:14b', 'ollama')).toBe(32_000);

@@ -841,6 +841,8 @@ export interface OllamaConnect { state: 'pending'; attemptId: string; verificati
 export interface ProviderAccountsView {
   codexEnabled?: boolean;
   anthropicOAuthEnabled?: boolean;
+  /** Gemini through Google's OpenAI-compatible endpoint: where it answers, and where a key is made. */
+  gemini?: { baseUrl: string; keyUrl: string };
   vault: { kind: string; locked: boolean; advice: string };
   accounts: ProviderAccount[];
   bindings: Array<{ agentId: string; accountId: string; model: string }>;

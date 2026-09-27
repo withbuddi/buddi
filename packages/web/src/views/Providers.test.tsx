@@ -240,3 +240,26 @@ it('says whose the detected context window is', async () => {
   expect(detectedWindowSource({ kind: 'openai', detectedContextWindowSource: 'table' })).toBe('assumed');
   expect(detectedWindowSource({ kind: 'codex' })).toBe('assumed');
 });
+it('adds Gemini as a preset: Google\'s address and the name filled in, a key, the newest Pro, and the model list after the save', async () => {
+  const gemini = { baseUrl: 'http://localhost/google-fixture/openai/', keyUrl: 'http://localhost/key-page' };
+  let saved = false;
+  const row = { ...view.accounts[0]!, id: 'two', label: 'Gemini', kind: 'openai-compatible' as const, baseUrl: 'http://localhost/google-fixture/openai', defaultModel: 'gemini-3.1-pro-preview' };
+  vi.mocked(api.providerAccounts).mockImplementation(async () => ({ ...view, gemini, accounts: saved ? [...view.accounts, row] : view.accounts }));
+  vi.mocked(api.saveProviderAccount).mockImplementation(async () => { saved = true; return { id: 'two' }; });
+  vi.mocked(api.probeModels).mockResolvedValue({ models: ['models/gemini-2.5-pro', 'models/gemini-3.1-pro-preview', 'models/gemini-3.8-flash'].map((id) => ({ id, name: id, isDefault: false })), truncated: false });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'gemini' } });
+  expect(screen.getByLabelText('Account name')).toHaveValue('Gemini');
+  expect(screen.getByLabelText(/API base URL/)).toHaveValue(gemini.baseUrl);
+  expect(screen.queryByLabelText('Authentication')).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Get a key at aistudio.google.com' })).toHaveAttribute('href', gemini.keyUrl);
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'AIza-fixture' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith(expect.objectContaining({
+    label: 'Gemini', kind: 'openai-compatible', auth: 'api-key', baseUrl: gemini.baseUrl, secret: 'AIza-fixture', defaultModel: 'gemini-3.1-pro-preview',
+  })));
+  // The next step is the model list, not the end.
+  expect(await screen.findByText(/Pick the model this account offers by default/)).toBeInTheDocument();
+});

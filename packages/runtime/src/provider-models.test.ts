@@ -75,3 +75,6 @@ it('signs the model list for an Ollama device key and sends no bearer token', as
   expect(`ssh-ed25519 ${authorization.split(':')[0]}`).toBe(publicKey);
   expect(authorization).not.toMatch(/^Bearer/);
 });
+it("strips Google's leading models/ so a Gemini id is the bare one every table speaks", () => {
+  expect(modelOptions([{ id: 'models/gemini-3.1-pro-preview' }, { id: 'gemini-2.5-flash' }]).map((m) => m.id)).toEqual(['gemini-3.1-pro-preview', 'gemini-2.5-flash']);
+});

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  OLLAMA_CLOUD_ACCOUNT_URL, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
+  GEMINI_BASE_URL, GEMINI_KEY_URL, OLLAMA_CLOUD_ACCOUNT_URL, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   putOwnerSecret, registerSecretDestination, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
@@ -237,6 +237,8 @@ export class ProviderAccounts {
       vault: { kind: this.vault?.kind ?? 'none', ...vaultState({ env: this.deps.env }) },
       codexEnabled: !!this.codex,
       anthropicOAuthEnabled: this.anthropicOAuthEnabled,
+      // The Gemini preset's address and key page, as data: the bundle names no host.
+      gemini: { baseUrl: GEMINI_BASE_URL, keyUrl: GEMINI_KEY_URL },
       accounts: [...this.#rows.values()].map(({ secretRef: _secret, legacyEnv: _env, deleting, reportedContextWindows, ...row }) => {
         // The provider's own number for the default model when its model list
         // said one, else what the runtime would assume from the name, so the

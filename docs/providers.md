@@ -36,6 +36,8 @@ Supported connections:
 - [Ollama Cloud with a device key](#ollama-cloud-with-a-device-key): no key to
   paste; you press Connect on ollama.com once. Ollama Cloud with an API key is
   an OpenAI-compatible account at `https://ollama.com/v1`.
+- [Gemini](#gemini): a Google AI Studio key on Google's OpenAI-compatible
+  endpoint, offered as its own choice so the address is filled in.
 
 Both sign-ins are offered by default. `BUDDI_SUBSCRIPTION_SIGNINS=off` hides
 both: the account kinds are refused and the wizard and Settings do not offer
@@ -49,6 +51,31 @@ host was started with. Left blank, the number is the provider's own when its
 model list reports one (a ChatGPT subscription does, as would an Ollama host
 that says), otherwise buddi's assumption for the model name; the owner's value
 always wins. [conversations.md](conversations.md) is what the number is used for.
+
+## Gemini
+
+**What it is.** Gemini through Google's OpenAI-compatible endpoint,
+`https://generativelanguage.googleapis.com/v1beta/openai/`, with a Google AI
+Studio key (aistudio.google.com/apikey) sent as the bearer. It is an ordinary
+`openai-compatible` account labelled "Gemini"; nothing Google-specific runs
+on the request path.
+
+**Set it up.** In first run, tap **Gemini** and paste the key
+([onboarding.md](onboarding.md)). In Settings → Model accounts, add an
+account and pick **Gemini (Google AI key)**: the address and the name are
+filled in, the key is the one field left. Either way buddi reads the key's
+model list (Google names them `models/gemini-…`; buddi keeps the bare id),
+starts on the newest Gemini Pro, and offers the rest of the list to pick from.
+
+**What the compatible path does.** Chat, streaming and tool calls; the model
+list; the context window (a million tokens for every `gemini-` model in the
+built-in table) and the usage view's prices, from Google's published paid
+tier.
+
+**What it does not do, yet.** No thinking switch: thinking is left to the
+model, as on any compatible host (the endpoint takes `reasoning_effort`, which
+buddi does not send). No Google Search grounding or other native tools. No
+sign-in with a Google account: a key only.
 
 ## Ollama Cloud with a device key
 

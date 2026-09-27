@@ -77,6 +77,7 @@ export const SCRIPT = {
         line: 'I pay for ChatGPT',
         know: "Uses your ChatGPT plan through OpenAI's Codex backend. Sign in with a code.",
       },
+      gemini: { title: 'Gemini', line: 'I have a Google AI key' },
       key: { title: 'A key from Anthropic or OpenAI', line: 'I have an API key' },
       ollama: { title: 'Ollama', line: 'Free, on this computer' },
       cloud: { title: 'Ollama Cloud, one tap', line: 'Free to start, no key' },
@@ -108,6 +109,15 @@ export const SCRIPT = {
       waiting: 'Press Connect on the ollama.com page. Sign in there first if it asks. I will notice.',
       open: 'Open the ollama.com page',
       again: 'Try again',
+    },
+    /** Gemini with a Google AI Studio key: one field, and a link to where keys are made. */
+    gemini: {
+      /** What the account is called, in Settings and in the answer bubble. */
+      label: 'Gemini',
+      field: 'Your Google AI key',
+      placeholder: 'Paste it here',
+      submit: 'Use this key',
+      get: 'Get a key at aistudio.google.com',
     },
     key: {
       field: 'Your key',
@@ -141,6 +151,7 @@ export const SCRIPT = {
       cloud: 'Asking Ollama Cloud…',
       claude: 'Checking with Claude…',
       chatgpt: 'Asking ChatGPT…',
+      gemini: 'Asking Gemini…',
     },
     back: 'Back',
     service: {

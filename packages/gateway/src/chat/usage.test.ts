@@ -8,6 +8,15 @@ describe('estimateCost', () => {
     expect(estimateCost('claude-opus-5', million)).toBe(5);
   });
 
+  it('prices Gemini by its bare id or with Google\'s models/ prefix, lite apart from flash', () => {
+    const tokens = { input: 1_000_000, output: 1_000_000 };
+    expect(estimateCost('gemini-3.1-pro-preview', tokens)).toBe(14);
+    expect(estimateCost('models/gemini-2.5-pro', tokens)).toBe(11.25);
+    expect(estimateCost('gemini-2.5-flash', tokens)).toBe(2.8);
+    expect(estimateCost('gemini-2.5-flash-lite', tokens)).toBeCloseTo(0.5);
+    expect(estimateCost('gemini-3.8-flash', tokens)).toBe(4.5);
+  });
+
   it('keeps an older snapshot in the family on its own rate', () => {
     expect(estimateCost('claude-sonnet-4-6', { input: 1_000_000, output: 0 })).toBe(3);
   });

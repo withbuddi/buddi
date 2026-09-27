@@ -10,6 +10,15 @@ export type ProviderAccountAuth = 'api-key' | 'none' | 'legacy-subscription-toke
  * (buddi-planning specs/ollama-connect.md).
  */
 export const OLLAMA_CLOUD_ACCOUNT_URL = 'https://ollama.com/v1';
+
+/**
+ * Gemini, through Google's OpenAI-compatible endpoint: an ordinary
+ * `openai-compatible` account with a Google AI Studio key as its bearer. The
+ * dashboard names no host, so the address and the page that hands out keys
+ * travel to it as data (`ProviderAccountsView.gemini`).
+ */
+export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
+export const GEMINI_KEY_URL = 'https://aistudio.google.com/apikey';
 export interface ProviderAccount {
   id: string;
   label: string;

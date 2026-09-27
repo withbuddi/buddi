@@ -81,20 +81,28 @@ Inline: cards, two per row, each with a logo, a title and one line. Order:
    names the plan's default model with the list under it to pick another
    ([codex-accounts.md](codex-accounts.md)). Shown by default; absent when the
    host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
-3. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
+3. **Gemini** — "I have a Google AI key". One field for a Google AI Studio
+   key and a link, "Get a key at aistudio.google.com", that opens in a new
+   tab. buddi connects through Google's OpenAI-compatible endpoint (the
+   address comes from the gateway), reads the key's model list, starts on the
+   newest Gemini Pro (the highest version in the id; else the first `gemini-`
+   model) and shows the list under the confirmation to pick another
+   ([providers.md](providers.md#gemini)). Shown whenever the gateway names the
+   address.
+4. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
    pasted, provider detected from its prefix (`sk-ant-` is Anthropic, `sk-` is
    OpenAI), with a small "which?" toggle if detection is wrong.
-4. **Ollama** — "Free, on this computer". If Ollama answers on its default
+5. **Ollama** — "Free, on this computer". If Ollama answers on its default
    port, the card says "Found it, running now" and one tap connects. If not, it
    says "Install Ollama, then come back" with the download link, and polls.
-5. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
+6. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
    window on ollama.com's connect page, with this computer named "buddi on
    <this computer>"; the owner signs in there if asked and presses Connect.
    The card checks every two seconds, then says which model the assistant
    will think with (`gpt-oss:120b` while ollama.com offers it) and shows the
    model list under that line to pick another. No key is typed or shown
    ([providers.md](providers.md#ollama-cloud-with-a-device-key)).
-6. **Another service, or Ollama Cloud with a key** — "I have an address and a
+7. **Another service, or Ollama Cloud with a key** — "I have an address and a
    key". Address and key, for OpenAI-compatible endpoints.
 
 After any card is completed, buddi tests it with one small call (a ChatGPT

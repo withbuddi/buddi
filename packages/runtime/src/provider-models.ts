@@ -19,7 +19,11 @@ export function modelOptions(items: unknown[], native = false): AccountModel[] {
   for (const value of items) {
     if (!value || typeof value !== 'object') continue;
     const item = value as Record<string, unknown>;
-    const id = native ? item.model : item.id;
+    const raw = native ? item.model : item.id;
+    // Google's compatible listing names models `models/gemini-…`; its chat
+    // endpoint takes the bare id too, and the bare id is what every table
+    // (window, price) and every picker speaks.
+    const id = typeof raw === 'string' ? raw.replace(/^models\//, '') : raw;
     if (typeof id !== 'string' || !id.trim() || id.length > 150 || /[\x00-\x1f\x7f]/.test(id)) continue;
     const label = native ? item.displayName : item.display_name ?? item.name;
     const name = typeof label === 'string' && label.length <= 200 && !/[\x00-\x1f\x7f]/.test(label) ? label : id;

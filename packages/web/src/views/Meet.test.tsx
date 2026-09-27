@@ -108,6 +108,9 @@ const accounts = (list: Array<Record<string, unknown>> = [], over: Partial<Provi
     ...over,
   }) as ProviderAccountsView;
 
+/** The Gemini preset as the gateway names it; placeholders, never fetched. */
+const GEMINI = { baseUrl: 'google-compatible/openai/', keyUrl: 'key-page' };
+
 /** Every call the screen makes that a given test is not about. */
 function quiet(): void {
   vi.mocked(api.session).mockResolvedValue({ csrf: 'x', timezone: 'UTC', host: '127.0.0.1', port: 4317 });
@@ -421,6 +424,56 @@ describe('the questions', () => {
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
     const field = await screen.findByPlaceholderText(SCRIPT.brain.service.addressPlaceholder);
     expect(field).toHaveValue('');
+  });
+
+  it('offers Gemini after ChatGPT and before the key card, only when the server names its address', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { codexEnabled: true }));
+    const page = render(meet());
+    expect(await screen.findByText(SCRIPT.brain.cards.key.title)).toBeInTheDocument();
+    expect(screen.queryByText(SCRIPT.brain.cards.gemini.title)).not.toBeInTheDocument();
+    page.unmount();
+
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { codexEnabled: true, gemini: GEMINI }));
+    render(meet());
+    await screen.findByText(SCRIPT.brain.cards.gemini.title);
+    const titles = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button').map((card) => card.textContent ?? '');
+    const at = (title: string): number => titles.findIndex((text) => text.startsWith(title));
+    expect(at(SCRIPT.brain.cards.gemini.title)).toBe(at(SCRIPT.brain.cards.chatgpt.title) + 1);
+    expect(at(SCRIPT.brain.cards.key.title)).toBe(at(SCRIPT.brain.cards.gemini.title) + 1);
+  });
+
+  it('connects Gemini with a key: Google\'s address, the newest Pro, and the model can change after', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    const row = { id: 'gem', label: 'Gemini', auth: 'api-key', baseUrl: 'google-compatible/openai', defaultModel: 'gemini-3.1-pro-preview' };
+    let saved = false;
+    vi.mocked(api.providerAccounts).mockImplementation(async () => accounts(saved ? [row] : [], { gemini: GEMINI }));
+    const listed = ['models/gemini-2.5-pro', 'models/gemini-3-pro-image', 'models/gemini-3.8-flash', 'models/gemini-3.1-pro-preview', 'models/gemini-2.5-flash']
+      .map((id) => ({ id, name: id, isDefault: false }));
+    vi.mocked(api.probeModels).mockResolvedValue({ models: listed, truncated: false });
+    vi.mocked(api.accountModels).mockResolvedValue({ models: listed.map((m) => ({ ...m, id: m.id.replace('models/', '') })), truncated: false });
+    vi.mocked(api.saveProviderAccount).mockImplementation(async () => {
+      saved = true;
+      return { id: 'gem' };
+    });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.gemini.title));
+    expect(screen.getByRole('link', { name: SCRIPT.brain.gemini.get })).toHaveAttribute('href', GEMINI.keyUrl);
+    expect(screen.getByRole('link', { name: SCRIPT.brain.gemini.get })).toHaveAttribute('target', '_blank');
+    fireEvent.change(await screen.findByLabelText(SCRIPT.brain.gemini.field), { target: { value: 'AIza-fixture' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.gemini.submit }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(api.probeModels).toHaveBeenCalledWith({ kind: 'openai-compatible', auth: 'api-key', baseUrl: GEMINI.baseUrl, secret: 'AIza-fixture' });
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({
+      label: 'Gemini', kind: 'openai-compatible', auth: 'api-key', baseUrl: GEMINI.baseUrl, secret: 'AIza-fixture', defaultModel: 'gemini-3.1-pro-preview',
+    });
+    // Not asked which: the newest Pro is the answer.
+    expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.brain.works('gemini-3.1-pro-preview'))).toBeInTheDocument();
+    const other = await screen.findByLabelText(SCRIPT.brain.model.change);
+    fireEvent.change(other, { target: { value: 'gemini-3.8-flash' } });
+    await waitFor(() => expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'gem', defaultModel: 'gemini-3.8-flash' }));
   });
 
   it('asks which model when the service offers several and names no default', async () => {

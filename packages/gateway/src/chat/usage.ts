@@ -42,6 +42,20 @@ export const PRICES: readonly {
   { prefix: 'gpt-4.1', input: 2, output: 8, cacheRead: 0.5 },
   { prefix: 'gpt-4o-mini', input: 0.15, output: 0.6, cacheRead: 0.075 },
   { prefix: 'gpt-4o', input: 2.5, output: 10, cacheRead: 1.25 },
+  // Gemini: Google's paid-tier rates from ai.google.dev/gemini-api/docs/pricing
+  // (page dated 2026-09-24). Pro rows are the prompts-up-to-200k rate; longer
+  // prompts bill higher and are under-counted here. 3.6–3.8 Flash are at an
+  // introductory rate that doubles on 2027-01-01.
+  { prefix: 'gemini-3.1-pro', input: 2, output: 12, cacheRead: 0.2 },
+  { prefix: 'gemini-2.5-pro', input: 1.25, output: 10, cacheRead: 0.125 },
+  { prefix: 'gemini-3.8-flash', input: 0.75, output: 3.75, cacheRead: 0.075 },
+  { prefix: 'gemini-3.7-flash', input: 0.75, output: 3.75, cacheRead: 0.075 },
+  { prefix: 'gemini-3.6-flash', input: 0.75, output: 3.75, cacheRead: 0.075 },
+  { prefix: 'gemini-3.5-flash-lite', input: 0.3, output: 2.5, cacheRead: 0.03 },
+  { prefix: 'gemini-3.5-flash', input: 1.5, output: 9, cacheRead: 0.15 },
+  { prefix: 'gemini-3.1-flash-lite', input: 0.25, output: 1.5, cacheRead: 0.025 },
+  { prefix: 'gemini-2.5-flash-lite', input: 0.1, output: 0.4, cacheRead: 0.01 },
+  { prefix: 'gemini-2.5-flash', input: 0.3, output: 2.5, cacheRead: 0.03 },
 ];
 
 /** Cache reads cost a tenth of input unless the row says otherwise (Anthropic and gpt-5 both do). */
@@ -51,7 +65,8 @@ export const CACHE_WRITE_MULTIPLIER = 1.25;
 
 /** Estimated dollars for one model's tokens, or nothing when unpriced. */
 export function estimateCost(model: string, usage: Usage): number | undefined {
-  const id = model.toLowerCase();
+  // Google's listing may name a model `models/gemini-…`; the price is the bare id's.
+  const id = model.toLowerCase().replace(/^models\//, '');
   const matches = PRICES.filter((p) => id.startsWith(p.prefix)).sort(
     (a, b) => b.prefix.length - a.prefix.length,
   );

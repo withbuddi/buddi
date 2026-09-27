@@ -94,6 +94,16 @@ const OPENAI: readonly Entry[] = [
 ];
 
 /**
+ * Gemini, through Google's OpenAI-compatible endpoint. One prefix for the
+ * family: Pro and Flash (2.5 onwards) hold a million tokens. The family's
+ * image, TTS and live variants hold less, but they are not chat brains an
+ * agent is bound to. `gemma` (Ollama) does not start with `gemini-`.
+ */
+const GOOGLE: readonly Entry[] = [
+  ['gemini-', 1_000_000],
+];
+
+/**
  * Local models, by name prefix as Ollama tags them. These are the *served*
  * windows people actually run, not the architectural maximum: a host serves
  * far less than the paper says unless it was started otherwise, and claiming
@@ -120,13 +130,13 @@ const OLLAMA: readonly Entry[] = [
 /**
  * A model id, reduced to something the table can be asked about: lowercased,
  * with the routing prefixes hosts add (`us.anthropic.`, `anthropic/`, an
- * Ollama `:tag`) taken off, and Anthropic's dated suffix left in place because
+ * Ollama `:tag`, Google's `models/`) taken off, and Anthropic's dated suffix left in place because
  * the prefixes above stop short of it anyway.
  */
 function normalise(model: string): string {
   let name = model.trim().toLowerCase();
   for (let i = 0; i < 3; i += 1) {
-    const host = /^(us|eu|apac|anthropic|openai|openrouter|bedrock|vertex)[./]/.exec(name);
+    const host = /^(us|eu|apac|anthropic|openai|openrouter|bedrock|vertex|google|models)[./]/.exec(name);
     if (!host) break;
     name = name.slice(host[0].length);
   }
@@ -170,9 +180,9 @@ export function contextWindowTokens(
   const tables: readonly (readonly Entry[])[] =
     provider === 'anthropic' ? [ANTHROPIC]
     : provider === 'openai' ? [OPENAI]
-    : provider === 'ollama' || provider === 'openai-compatible' ? [OLLAMA, OPENAI, ANTHROPIC]
+    : provider === 'ollama' || provider === 'openai-compatible' ? [OLLAMA, GOOGLE, OPENAI, ANTHROPIC]
     // Unknown host: the name itself says whose it is, in every case we bind.
-    : [ANTHROPIC, OPENAI, OLLAMA];
+    : [ANTHROPIC, OPENAI, GOOGLE, OLLAMA];
 
   for (const table of tables) {
     for (const [prefix, tokens] of table) {
