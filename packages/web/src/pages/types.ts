@@ -202,6 +202,7 @@ export type Component =
       submit: ToolRef;
       initial?: QueryRef;
       drawer?: { title: string; button: string };
+      columns?: 2 | 3;
     })
   | (ComponentCommon & {
       kind: 'search';

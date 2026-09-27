@@ -252,6 +252,15 @@ describe('page descriptors', () => {
     ).not.toThrow();
   });
 
+  it('takes a form laid out three to a row, and no other count', () => {
+    const form = (columns: unknown) => [
+      page({ body: [{ kind: 'form', columns, fields: [{ name: 'a', label: 'A', type: 'text' }], submit: { tool: 'demo.write', label: 'Go' } }] }),
+    ];
+    expect(() => parse(form(3) as never, { tools: ['demo.write'] })).not.toThrow();
+    expect(() => parse(form(2) as never, { tools: ['demo.write'] })).not.toThrow();
+    expect(() => parse(form(4) as never, { tools: ['demo.write'] })).toThrow();
+  });
+
   it('takes a select with several choices, and `multiple` on nothing else', () => {
     const form = (field: Record<string, unknown>) => [
       page({ body: [{ kind: 'form', fields: [field], submit: { tool: 'demo.write', label: 'Go' } }] }),

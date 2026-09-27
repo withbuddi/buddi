@@ -155,6 +155,9 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); width
   gap: var(--space-4) var(--space-5);
   min-width: 0;
 }
+.ui-formgrid[data-columns='3'] {
+  grid-template-columns: repeat(auto-fill, minmax(max(240px, calc((100% - 2 * var(--space-5)) / 3)), 1fr));
+}
 .ui-formgrid > * { min-width: 0; }
 .ui-formgrid > [data-wide='true'] { grid-column: 1 / -1; }
 fieldset.ui-fields { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-3); min-width: 0; }

@@ -1362,6 +1362,27 @@ describe('a repeat that polls', () => {
   });
 });
 
+describe('a form three to a row', () => {
+  it('passes `columns` to the grid, and leaves the default grid alone', async () => {
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>
+      Promise.resolve({ data: DATA[query] })) as typeof api.pageQuery);
+    const form = (columns?: 2 | 3): Component => ({
+      kind: 'form',
+      ...(columns ? { columns } : {}),
+      fields: [
+        { name: 'a', label: columns ? 'Three A' : 'Two A', type: 'text' },
+        { name: 'b', label: 'B', type: 'text' },
+        { name: 'c', label: 'C', type: 'text' },
+      ],
+      submit: { tool: 'demo.save', label: 'Save' },
+    });
+    const page: PluginPageDescriptor = { plugin: 'demo', id: 'settings', title: 'Demo', place: 'settings', body: [form(3), form()] };
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    expect((await screen.findByLabelText('Three A')).closest('.ui-formgrid')).toHaveAttribute('data-columns', '3');
+    expect(screen.getByLabelText('Two A').closest('.ui-formgrid')).not.toHaveAttribute('data-columns');
+  });
+});
+
 describe('a select with several choices', () => {
   it('starts from the array it reads, and submits what is picked as an array', async () => {
     vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>

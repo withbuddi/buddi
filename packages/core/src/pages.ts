@@ -476,6 +476,11 @@ export type Component =
       initial?: QueryRef;
       /** Behind a button, in a sheet, rather than open on the page. */
       drawer?: { title: string; button: string };
+      /**
+       * Fields to a row on a wide panel: 2 (the default) or 3. The grid still
+       * drops to two, then one, as the panel narrows.
+       */
+      columns?: 2 | 3;
     })
   | (ComponentCommon & {
       kind: 'search';
@@ -831,6 +836,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         submit: toolRefSchema,
         initial: queryRefSchema.optional(),
         drawer: z.object({ title: label, button: label }).strict().optional(),
+        columns: z.union([z.literal(2), z.literal(3)]).optional(),
       })
       .strict(),
     z

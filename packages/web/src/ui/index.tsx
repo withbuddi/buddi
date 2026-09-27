@@ -156,10 +156,27 @@ export function Field({
  * width and one when it is narrow, every label starting on the same line. A
  * hint under one field never pushes its neighbour down, and a lone field on
  * its row keeps one column, so the grid reads as a grid and not as a wrap.
- * A field spans the row with `wide`.
+ * A field spans the row with `wide`. `columns={3}` puts three to a row on a
+ * wide panel, still dropping to two and then one as it narrows.
  */
-export function FormGrid({ children, dense }: { children: ReactNode; dense?: boolean }): JSX.Element {
-  return <div className="ui-formgrid" data-dense={dense ? 'true' : undefined}>{children}</div>;
+export function FormGrid({
+  children,
+  dense,
+  columns,
+}: {
+  children: ReactNode;
+  dense?: boolean;
+  columns?: 2 | 3;
+}): JSX.Element {
+  return (
+    <div
+      className="ui-formgrid"
+      data-dense={dense ? 'true' : undefined}
+      data-columns={columns === 3 ? '3' : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ *

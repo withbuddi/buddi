@@ -18,6 +18,7 @@ What changes in buddi from one release to the next, newest first.
 - Choosing several things on a plugin page, the languages you speak for example, is done with chips and an Add list instead of a scrolling box.
 - A voice note on Telegram tells the agent which language you spoke in, so it answers in it.
 - Settings → Speech: with Kokoro, you choose a voice for each language you speak, English and French each with their own, and a reply picks the voice of its language.
+- Plugin page forms can lay fields out three to a row; Settings → Speech uses it for the speaking voices.
 - Voice on Telegram: a voice note is no longer echoed back as text; `/voice` chooses when to speak (spoken, always, off) and what to send (the voice note alone, or with the text), also on Settings → Speech. What is spoken is rewritten for the ear first: handles read as names, dates and amounts as words, links as their site, no markdown.
 
 ### Added

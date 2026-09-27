@@ -131,7 +131,8 @@ type Component =
       an array value draws one pill per `{ value, tone }` item. */
   | { kind: 'table'; query: QueryRef; rows: string; columns: ColumnMap[]; actions?: RowAction[] }
   | { kind: 'detail'; query: QueryRef; fields: Array<{ label: string; value: ValueRef; unit?: Unit }>; body: Component[] }
-  | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string } }
+  /** `columns`: fields to a row on a wide panel, 2 (default) or 3; the grid still drops to two, then one, as it narrows. */
+  | { kind: 'form'; fields: Field[]; submit: ToolRef; initial?: QueryRef; drawer?: { title: string; button: string }; columns?: 2 | 3 }
   | { kind: 'search'; fields: Field[]; query: QueryRef; rows: string; results: ListItem; to?: RouteRef; count?: string; note?: string; auto?: true; reset?: true }
   | { kind: 'list-detail'; list: Component & { kind: 'list' }; param: string; selection?: 'route' | 'local'; detail: Component[] }
   /** The same sub-tree once per row, with that row as its data. */
@@ -208,6 +209,7 @@ What each one is for, in email's terms:
 | `table` | The accounts list with their state and a remove action (with `confirm`) |
 | `stats` | Counts at the top of a settings page |
 | `select` field with `multiple` | (Speech) The languages you speak, several at once |
+| `form` with `columns: 3` | (Speech) Speaking: Service and the two voices on one row |
 | `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
 | select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
 

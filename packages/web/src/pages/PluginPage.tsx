@@ -927,11 +927,14 @@ function Fields({
   data,
   disabled,
   compact,
+  columns,
   onChange,
 }: {
   fields: Field[];
   /** The search bar's filters: a dense grid, hints as tooltips. */
   compact?: boolean;
+  /** A form's `columns`: fields to a row on a wide panel. */
+  columns?: 2 | 3;
   values: Values;
   /** What `when` and `disabledWhen` are asked of, under the form's own values. */
   data?: unknown;
@@ -947,7 +950,7 @@ function Fields({
    */
   const asked = askedOf(values, data);
   return (
-    <FormGrid dense={compact}>
+    <FormGrid dense={compact} columns={columns}>
       {fields
         .filter((field) => field.when === undefined || holds(asked, field.when))
         .map((field) => (
@@ -1787,6 +1790,7 @@ function FormBody({
     <Stack>
       <Fields
         fields={component.fields}
+        columns={component.columns}
         values={values}
         data={initialData}
         onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
