@@ -8,7 +8,7 @@ unbuilt specs are kept outside this repository.
 - [Install](install.md), [first run](onboarding.md),
   [operations](operations.md): backup, restore, and where your data lives.
 - [Provider accounts](providers.md), [Claude subscription sign-in](anthropic-oauth.md),
-  [ChatGPT subscription through Codex](codex-accounts.md).
+  [ChatGPT subscription](codex-accounts.md).
 
 ## Where you talk to buddi
 

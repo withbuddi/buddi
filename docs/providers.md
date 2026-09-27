@@ -31,8 +31,8 @@ Supported connections:
 - [Claude subscription sign-in](anthropic-oauth.md), with browser consent,
   code paste, and coordinated vault-backed token refresh. Uses the plan's
   monthly Agent SDK credits; after them, an API key.
-- [ChatGPT subscription through Codex](codex-accounts.md), with native device
-  sign-in. Requires the pinned Codex client on the host.
+- [ChatGPT subscription](codex-accounts.md), with device-code sign-in. buddi
+  talks to OpenAI's Codex backend itself; nothing else to install.
 - [Ollama Cloud with a device key](#ollama-cloud-with-a-device-key): no key to
   paste; you press Connect on ollama.com once. Ollama Cloud with an API key is
   an OpenAI-compatible account at `https://ollama.com/v1`.
@@ -178,7 +178,7 @@ resolved server-side; agent tools never receive the credential envelopes.
 ## Subscription support: what "complete" means
 
 Two subscription sign-ins exist — [Claude](anthropic-oauth.md) and
-[ChatGPT through Codex](codex-accounts.md) — and both are offered by default.
+[ChatGPT](codex-accounts.md) — and both are offered by default.
 This is the checklist a subscription backend is held to:
 
 - **Isolated identity.** A distinct account backend and auth identity, with

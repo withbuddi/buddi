@@ -80,6 +80,8 @@ const ANTHROPIC: readonly Entry[] = [
 ];
 
 const OPENAI: readonly Entry[] = [
+  // The GPT-6 family as a ChatGPT subscription serves it through Codex.
+  ['gpt-6', 272_000],
   ['gpt-5', 400_000],
   ['gpt-4.1', 1_000_000],
   ['gpt-4o', 128_000],

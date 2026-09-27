@@ -1,8 +1,7 @@
 import type { CodexProfile, Vault } from '@buddi/core';
 import {
-  createCodexAppServerAdapter, initializeCodex, openCodexSession, assertCodexIsolation, stageCodexProfile,
-  type CodexSession, type CompletionRequest, type CompletionResponse,
-  modelOptions, type AccountModels,
+  CodexOAuthProtocol, createCodexDirectAdapter, listCodexModels, readCodexTokens, stageCodexProfile,
+  type AccountModels, type CodexTokens, type CompletionRequest, type CompletionResponse, type HttpTransport,
 } from '@buddi/runtime';
 
 export interface CodexLoginView {
@@ -18,205 +17,174 @@ export interface CodexAccountAccess {
   check(): Promise<void>;
 }
 
+const REFRESH_SKEW_MS = 5 * 60_000;
+const SAVE_FAILED = 'Could not save ChatGPT credentials securely. Check the host vault and reconnect.';
+
 /**
- * Owns only native account sessions, not permission decisions or tool execution.
- * Operations on one account are exclusive; other accounts remain independent.
- * The gateway must hold a cross-process account lock for each operation.
+ * ChatGPT subscription accounts: buddi's own device sign-in, the refresh of
+ * the vault envelope, and the calls that use it. Operations on one account are
+ * exclusive; other accounts stay independent. The gateway holds a
+ * cross-process account lock around each operation, which is what makes the
+ * single-use refresh token safe to rotate.
  */
 export class CodexAccounts {
   #active = new Map<string, { cancel(): Promise<void> }>();
   #logins = new Map<string, CodexLoginView>();
+  readonly protocol: CodexOAuthProtocol;
+  readonly now: () => number;
   constructor(readonly deps: {
     vault: Vault;
-    open?: (credential: string | null) => Promise<CodexSession>;
+    protocol?: CodexOAuthProtocol;
+    transport?: HttpTransport;
+    now?: () => number;
     loginTimeoutMs?: number;
-  }) {}
+  }) {
+    this.now = deps.now ?? Date.now;
+    this.protocol = deps.protocol ?? new CodexOAuthProtocol(deps.transport, this.now);
+  }
   view(id: string): CodexLoginView | null { return this.#logins.get(id) ?? null; }
   async cancel(id: string): Promise<void> { await this.#active.get(id)?.cancel(); }
   forget(id: string): void { this.#logins.delete(id); }
   #reserve(id: string, cancel: () => Promise<void>) {
-    if (this.#active.has(id)) throw new Error('This Codex account is busy. Finish or cancel its current operation first.');
+    if (this.#active.has(id)) throw new Error('This ChatGPT account is busy. Finish or cancel its current operation first.');
     this.#active.set(id, { cancel });
   }
-  async #open(access: CodexAccountAccess, credential: string | null) {
-    await access.check();
-    return (this.deps.open ?? openCodexSession)(credential);
+  /** Run `work` holding the account; `cancel` aborts it. */
+  async #exclusive<T>(id: string, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    this.#reserve(id, async () => { controller.abort(); await finished; });
+    try { return await work(controller.signal); }
+    finally { this.#active.delete(id); finish(); }
   }
 
-  /** No credential is loaded for sign-in, so reconnect cannot reuse another login. */
+  /**
+   * The account's tokens, refreshed when they expire within five minutes. A
+   * durable `refreshing` marker is written first so a crash or a failed save
+   * never lets another process replay a consumed refresh token.
+   */
+  async #credential(access: CodexAccountAccess): Promise<CodexTokens> {
+    const raw = await this.deps.vault.get(access.secretRef);
+    if (!raw) throw new Error('Connect this ChatGPT subscription account first.');
+    const tokens = readCodexTokens(raw);
+    if (tokens.state !== 'ready') throw new Error('ChatGPT token refresh was interrupted or failed. Reconnect this account.');
+    if (tokens.expiresAt > this.now() + REFRESH_SKEW_MS) return tokens;
+    await access.check();
+    await this.deps.vault.set(access.secretRef, JSON.stringify({ ...tokens, state: 'refreshing' }));
+    let rotated: CodexTokens;
+    try { rotated = await this.protocol.refresh(tokens); }
+    catch { throw new Error('ChatGPT token refresh failed. Reconnect this account.'); }
+    try { await this.deps.vault.set(access.secretRef, JSON.stringify(rotated)); }
+    catch { throw new Error('ChatGPT credentials rotated but could not be saved. Reconnect this account.'); }
+    return rotated;
+  }
+
+  /**
+   * Device sign-in: the owner opens the link, types the code on openai.com,
+   * and buddi polls in the background. Nothing is written to the vault until
+   * the tokens are in hand and the account is rechecked, so a cancelled or
+   * failed reconnect keeps the old credential.
+   */
   async login(access: CodexAccountAccess): Promise<{ view: CodexLoginView; finished: Promise<void> }> {
-    let session: CodexSession | undefined;
     let cancelled = false;
-    let finish!: () => void;
-    const finished = new Promise<void>((resolve) => { finish = resolve; });
-    let cleanup: Promise<void> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let removeListener = () => {};
-    let removeClose = () => {};
-    let loginId: string | undefined;
-    let earlyCompletion: { loginId?: string; success?: boolean } | undefined;
     let committing = false;
-    const end = (state: CodexLoginView['state'], message?: string) => {
-      if (cleanup) return cleanup;
-      cleanup = (async () => {
-        clearTimeout(timer); removeListener(); removeClose();
-        try {
-          if (session) {
-            await session.rpc.close();
-            if (state === 'connected' && !cancelled) {
-              const credential = await session.credential();
-              if (!credential) throw new Error('No subscription credential was saved.');
-              await access.check();
-              if (cancelled) throw new Error('Sign-in cancelled.');
-              committing = true;
-              await this.deps.vault.set(access.secretRef, credential);
-            }
-          }
-          this.#logins.set(access.id, { state: cancelled ? 'cancelled' : state, message });
-        } catch {
-          this.#logins.set(access.id, { state: 'failed', message: 'Could not finish sign-in securely. Check the host vault and reconnect.' });
-        } finally {
-          try { await session?.dispose(); }
-          finally { this.#active.delete(access.id); finish(); }
-        }
-      })();
-      // Login completion is asynchronous. Surface a sanitized state, not an
-      // unhandled rejection containing filesystem/authentication details.
-      void cleanup.catch(() => { this.#logins.set(access.id, { state: 'failed', message: 'Native session cleanup failed. Check the host.' }); });
-      return cleanup;
-    };
+    let wake: (() => void) | undefined;
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    const release = () => { this.#active.delete(access.id); finish(); };
     this.#reserve(access.id, async () => {
-      if (committing) { await cleanup; return; }
-      cancelled = true;
-      if (session && loginId) await session.rpc.request('account/login/cancel', { loginId }).catch(() => {});
-      await end('cancelled');
+      if (!committing) { cancelled = true; wake?.(); }
+      await finished;
     });
+    let start;
     try {
-      session = await this.#open(access, null);
-      if (cancelled) { await session.dispose(); throw new Error('Sign-in cancelled.'); }
-      await initializeCodex(session.rpc);
-      await assertCodexIsolation(session.rpc, session.cwd);
-      removeClose = session.rpc.onClose(() => { void end('failed', 'Codex sign-in process closed.'); });
-      removeListener = session.rpc.onMessage(message => {
-        if (message.method !== 'account/login/completed') return;
-        const result = message.params as { loginId?: string; success?: boolean };
-        if (!loginId) { earlyCompletion = result; return; }
-        if (result.loginId !== loginId) return;
-        void end(result.success ? 'connected' : 'failed', result.success ? undefined : 'Sign-in did not complete. Try again.');
-      });
-      const result = await session.rpc.request('account/login/start', { type: 'chatgptDeviceCode' }) as {
-        type?: string; loginId?: string; verificationUrl?: string; userCode?: string;
-      };
-      if (result.type !== 'chatgptDeviceCode' || typeof result.loginId !== 'string' ||
-        result.verificationUrl !== 'https://auth.openai.com/codex/device' ||
-        typeof result.userCode !== 'string' || !/^[A-Za-z0-9-]{4,32}$/.test(result.userCode)) {
-        throw new Error('Codex returned an unsupported device sign-in response.');
-      }
-      loginId = result.loginId;
-      if (cancelled || cleanup) throw new Error('Sign-in ended before the device challenge was ready.');
-      const timeout = this.deps.loginTimeoutMs ?? 5 * 60_000;
-      const view: CodexLoginView = { state: 'pending', verificationUrl: result.verificationUrl, userCode: result.userCode,
-        expiresAt: new Date(Date.now() + timeout).toISOString() };
-      this.#logins.set(access.id, view);
-      timer = setTimeout(() => { cancelled = true; void end('cancelled', 'Sign-in timed out. Start again.'); }, timeout);
-      timer.unref();
-      if (earlyCompletion?.loginId === loginId) void end(earlyCompletion.success ? 'connected' : 'failed');
-      return { view, finished };
+      await access.check();
+      start = await this.protocol.startDevice();
+      if (cancelled) throw new Error('Sign-in cancelled.');
     } catch (error) {
-      await end('failed', 'Could not start Codex sign-in. Check the installed client and host vault.');
+      const message = error instanceof Error && /ChatGPT|Device code|cancelled/.test(error.message) ? error.message : 'Could not start ChatGPT sign-in. Check the host vault and try again.';
+      this.#logins.set(access.id, { state: cancelled ? 'cancelled' : 'failed', message });
+      release();
       throw error;
     }
+    const deadline = Math.min(start.expiresAt, this.now() + (this.deps.loginTimeoutMs ?? 15 * 60_000));
+    const view: CodexLoginView = { state: 'pending', verificationUrl: start.verificationUrl, userCode: start.userCode, expiresAt: new Date(deadline).toISOString() };
+    this.#logins.set(access.id, view);
+    const end = (state: CodexLoginView['state'], message?: string) => {
+      this.#logins.set(access.id, { state: cancelled && state !== 'connected' ? 'cancelled' : state, ...(message ? { message } : {}) });
+    };
+    const sleep = (ms: number) => new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, Math.max(0, Math.min(ms, deadline - this.now())));
+      timer.unref?.();
+      wake = () => { clearTimeout(timer); resolve(); };
+    });
+    const poll = async () => {
+      let interval = start.intervalMs;
+      try {
+        for (;;) {
+          await sleep(interval);
+          if (cancelled) return end('cancelled', 'Sign-in cancelled.');
+          if (this.now() >= deadline) return end('failed', 'Sign-in timed out. Start again.');
+          const result = await this.protocol.pollDevice(start.deviceAuthId, start.userCode);
+          if (cancelled) return end('cancelled', 'Sign-in cancelled.');
+          if (result === 'pending') continue;
+          if (result === 'slow_down') { interval += 5_000; continue; }
+          if ('denied' in result) return end('failed', result.denied);
+          const tokens = await this.protocol.exchange(result);
+          await access.check().catch(() => { throw new Error('This account was changed or disabled during sign-in. Start again.'); });
+          if (cancelled) return end('cancelled', 'Sign-in cancelled.');
+          committing = true;
+          try { await this.deps.vault.set(access.secretRef, JSON.stringify(tokens)); }
+          catch { return end('failed', SAVE_FAILED); }
+          return end('connected');
+        }
+      } catch (error) {
+        end('failed', error instanceof Error && /ChatGPT|account|Start/.test(error.message) ? error.message : 'Sign-in did not complete. Try again.');
+      } finally { release(); }
+    };
+    void poll();
+    return { view, finished };
   }
 
   async complete(access: CodexAccountAccess, model: string, request: CompletionRequest): Promise<CompletionResponse> {
-    let session: CodexSession | undefined;
-    const controller = new AbortController();
-    let finish!: () => void;
-    const finished = new Promise<void>((resolve) => { finish = resolve; });
-    this.#reserve(access.id, async () => { controller.abort(); await session?.rpc.close(); await finished; });
-    try {
-      const credential = await this.deps.vault.get(access.secretRef);
-      if (!credential) throw new Error('Connect this Codex subscription account first.');
-      session = await this.#open(access, credential);
-      const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
-      return await createCodexAppServerAdapter({ model, cwd: session.cwd, connect: () => session!.rpc }).complete({ ...request, signal });
-    } finally {
-      try {
-        if (session) {
-          await session.rpc.close();
-          const refreshed = await session.credential();
-          if (refreshed && !controller.signal.aborted) {
-            await access.check();
-            await this.deps.vault.set(access.secretRef, refreshed);
-          }
-        }
-      } finally { try { await session?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
-    }
+    return this.#exclusive(access.id, async (abort) => {
+      const tokens = await this.#credential(access);
+      const signal = request.signal ? AbortSignal.any([request.signal, abort]) : abort;
+      return createCodexDirectAdapter({ model, accessToken: tokens.accessToken, accountId: tokens.accountId, ...(this.deps.transport ? { transport: this.deps.transport } : {}) })
+        .complete({ ...request, signal });
+    });
+  }
+
+  async models(access: CodexAccountAccess): Promise<AccountModels> {
+    return this.#exclusive(access.id, async () => {
+      const tokens = await this.#credential(access);
+      return listCodexModels({ accessToken: tokens.accessToken, accountId: tokens.accountId, ...(this.deps.transport ? { transport: this.deps.transport } : {}) });
+    });
   }
 
   /**
    * Stage this account's credential in a private profile and hand it to `use`,
-   * which runs its own native child (the image plugin's `codex exec`). The
-   * same exclusivity, recheck and refresh-save as a completion; the profile is
-   * removed afterwards whatever happened.
+   * which runs its own native child (the image plugin's `codex exec`). A
+   * refresh the child made is saved back; the profile is removed afterwards
+   * whatever happened.
    */
   async withProfile<T>(access: CodexAccountAccess, use: (profile: CodexProfile) => Promise<T>): Promise<T> {
-    let finish!: () => void;
-    const finished = new Promise<void>((resolve) => { finish = resolve; });
-    let cancelled = false;
-    this.#reserve(access.id, async () => { cancelled = true; await finished; });
-    let staged: Awaited<ReturnType<typeof stageCodexProfile>> | undefined;
-    try {
-      const credential = await this.deps.vault.get(access.secretRef);
-      if (!credential) throw new Error('Connect this Codex subscription account first.');
+    return this.#exclusive(access.id, async (abort) => {
+      const tokens = await this.#credential(access);
       await access.check();
-      staged = await stageCodexProfile(credential);
-      return await use({ home: staged.home, env: staged.env });
-    } finally {
+      const staged = await stageCodexProfile(tokens);
       try {
-        if (staged) {
-          const refreshed = await staged.credential().catch(() => null);
-          if (refreshed && !cancelled) { await access.check(); await this.deps.vault.set(access.secretRef, refreshed); }
-        }
-      } finally { try { await staged?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
-    }
-  }
-
-  async models(access: CodexAccountAccess): Promise<AccountModels> {
-    let session: CodexSession | undefined;
-    let cancelled = false;
-    let finish!: () => void;
-    const finished = new Promise<void>(resolve => { finish = resolve; });
-    this.#reserve(access.id, async () => { cancelled = true; await session?.rpc.close(); await finished; });
-    const timer = setTimeout(() => { cancelled = true; void session?.rpc.close().catch(() => {}); }, 20_000);
-    try {
-      const credential = await this.deps.vault.get(access.secretRef);
-      if (!credential) throw new Error('Connect this Codex subscription account first.');
-      session = await this.#open(access, credential);
-      if (cancelled) throw new Error('Model discovery cancelled.');
-      await initializeCodex(session.rpc);
-      const models: AccountModels['models'] = [];
-      const seen = new Set<string>();
-      let cursor: string | undefined;
-      for (let page = 0; page < 10; page++) {
-        const result = await session.rpc.request('model/list', { includeHidden: false, limit: 100, ...(cursor ? { cursor } : {}) }) as { data?: unknown[]; nextCursor?: string | null };
-        if (!Array.isArray(result.data)) throw new Error('Invalid native model list.');
-        models.push(...modelOptions(result.data, true));
-        if (models.length > 1000) return { models: models.slice(0, 1000), truncated: true };
-        if (!result.nextCursor) return { models: [...new Map(models.map(m => [m.id, m])).values()], truncated: false };
-        if (typeof result.nextCursor !== 'string' || result.nextCursor.length > 2048 || seen.has(result.nextCursor)) throw new Error('Invalid native model pagination.');
-        cursor = result.nextCursor; seen.add(cursor);
+        return await use({ home: staged.home, env: staged.env });
+      } finally {
+        try {
+          const after = await staged.credential().catch(() => null);
+          if (after && !abort.aborted && (after.accessToken !== tokens.accessToken || after.refreshToken !== tokens.refreshToken)) {
+            await access.check();
+            await this.deps.vault.set(access.secretRef, JSON.stringify(after));
+          }
+        } finally { await staged.dispose(); }
       }
-      return { models, truncated: true };
-    } finally {
-      clearTimeout(timer);
-      try {
-        if (session) {
-          await session.rpc.close();
-          const refreshed = await session.credential();
-          if (refreshed && !cancelled) { await access.check(); await this.deps.vault.set(access.secretRef, refreshed); }
-        }
-      } finally { try { await session?.dispose(); } finally { this.#active.delete(access.id); finish(); } }
-    }
+    });
   }
 }

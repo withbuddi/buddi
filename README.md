@@ -348,7 +348,7 @@ is in trial: the file vault, the bundled Postgres and the systemd user unit
 are built, and fixes land as the trial finds them. Windows is not supported
 yet. Native computer control (operating your own apps) is macOS-only. Signing
 in with a Claude subscription (on the plan's monthly Agent SDK credits) or a
-ChatGPT subscription through Codex is offered by default;
+ChatGPT subscription is offered by default;
 `BUDDI_SUBSCRIPTION_SIGNINS=off` hides both
 ([docs/anthropic-oauth.md](docs/anthropic-oauth.md),
 [docs/codex-accounts.md](docs/codex-accounts.md)). Host commands are approved,

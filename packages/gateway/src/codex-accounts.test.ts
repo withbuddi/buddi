@@ -1,149 +1,181 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createMemoryVault } from '@buddi/core';
-import type { CodexSession, RpcMessage } from '@buddi/runtime';
-import { CODEX_EXPERIMENT_CONFIG } from '@buddi/runtime';
+import type { CodexOAuthProtocol, CodexTokens, HttpTransport, TransportResponse } from '@buddi/runtime';
 import { CodexAccounts } from './codex-accounts.js';
 
-const secret = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'fake-access', refresh_token: 'fake-refresh' } });
-function fixture(options: { early?: boolean; badUrl?: boolean; timeout?: number } = {}) {
-  const messages = new Set<(m: RpcMessage) => void>();
-  const closes = new Set<(e: Error) => void>();
-  const emit = (id = 'login1', success = true) => { for (const listener of messages) listener({ method: 'account/login/completed', params: { loginId: id, success } }); };
-  const session: CodexSession = {
-    cwd: '/private/fake', credential: vi.fn(async () => secret), dispose: vi.fn(async () => {}),
-    rpc: {
-      request: vi.fn(async (method) => {
-        if (method === 'config/read') return { config: { sandbox_mode: 'read-only', web_search: 'disabled', features: Object.fromEntries(Object.entries(CODEX_EXPERIMENT_CONFIG).filter(([key]) => key.startsWith('features.')).map(([key, value]) => [key.slice(9), value])) } };
-        if (method === 'skills/list') return { data: [{ skills: [], errors: [] }] };
-        if (method === 'account/login/start') {
-          if (options.early) emit();
-          return { type: 'chatgptDeviceCode', loginId: 'login1', verificationUrl: options.badUrl ? 'https://evil.example/collect' : 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234' };
-        }
-        return {};
-      }), notify: vi.fn(),
-      close: vi.fn(async () => { for (const fn of closes) fn(new Error('closed')); }),
-      onMessage(listener) { messages.add(listener); return () => { messages.delete(listener); }; },
-      onClose(listener) { closes.add(listener); return () => { closes.delete(listener); }; },
-    },
-  };
-  const vault = createMemoryVault();
-  const open = vi.fn(async () => session);
-  const service = new CodexAccounts({ vault, open, loginTimeoutMs: options.timeout ?? 1000 });
-  const access = { id: 'account1', secretRef: 'CODEX_TEST_ACCOUNT', check: vi.fn(async () => {}) };
-  return { service, session, vault, access, open, emit };
-}
+const HOUR = 3_600_000;
+const tokens = (n: number, expiresAt: number): CodexTokens => ({ version: 1, state: 'ready', accessToken: `access-${n}`, refreshToken: `refresh-${n}`, accountId: 'acct-1', expiresAt });
 
-describe('Codex subscription session lifecycle', () => {
-  it('lists paginated native models without opening a thread, and persists refresh safely', async () => {
-    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
-    vi.mocked(f.session.rpc.request).mockImplementation(async (method, params) => {
-      if (method === 'model/list') return (params as { cursor?: string }).cursor
-        ? { data: [{ model: 'gpt-two', displayName: 'Two', isDefault: false }], nextCursor: null }
-        : { data: [{ model: 'gpt-one', displayName: 'One', isDefault: true }], nextCursor: 'next' };
-      return {};
-    });
-    expect((await f.service.models(f.access)).models.map(m => m.id)).toEqual(['gpt-one', 'gpt-two']);
-    expect(f.session.rpc.request).not.toHaveBeenCalledWith('thread/start', expect.anything());
-    expect(f.session.rpc.request).not.toHaveBeenCalledWith('turn/start', expect.anything());
+function fakeProtocol(polls: Array<'pending' | 'slow_down' | { code: string; verifier: string } | { denied: string }> = []) {
+  let now = 1_000_000;
+  const protocol = {
+    startDevice: vi.fn(async () => ({ deviceAuthId: 'dev-1', userCode: 'ABCD-1234', verificationUrl: 'https://auth.openai.com/codex/device', intervalMs: 1, expiresAt: now + 15 * 60_000 })),
+    pollDevice: vi.fn(async () => polls.shift() ?? 'pending'),
+    exchange: vi.fn(async () => tokens(1, now + HOUR)),
+    refresh: vi.fn(async (old: CodexTokens) => ({ ...tokens(Number(old.accessToken.split('-')[1]) + 1, now + HOUR) })),
+  };
+  return { protocol, clock: { get: () => now, set: (v: number) => { now = v; } } };
+}
+function sseOk(): HttpTransport {
+  const body = `data: ${JSON.stringify({ type: 'response.output_text.delta', item_id: 'm', delta: 'OK' })}\n\ndata: ${JSON.stringify({ type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`;
+  return vi.fn<HttpTransport>(async (_url, init) => {
+    init.onChunk?.(body, 200);
+    return { ok: true, status: 200, statusText: '', headers: { get: () => null }, text: async () => body, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) } satisfies TransportResponse;
+  });
+}
+function fixture(options: { polls?: Parameters<typeof fakeProtocol>[0]; timeout?: number; transport?: HttpTransport } = {}) {
+  const { protocol, clock } = fakeProtocol(options.polls);
+  const vault = createMemoryVault();
+  const transport = options.transport ?? sseOk();
+  const service = new CodexAccounts({ vault, protocol: protocol as unknown as CodexOAuthProtocol, transport, now: clock.get, loginTimeoutMs: options.timeout ?? 60_000 });
+  const access = { id: 'account1', secretRef: 'CODEX_TEST_ACCOUNT', check: vi.fn(async () => {}) };
+  return { service, protocol, clock, vault, access, transport };
+}
+const request = { system: 's', messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'hi' }] }], tools: [] };
+
+describe('ChatGPT device sign-in', () => {
+  it('shows the code, polls until approved, and saves the envelope', async () => {
+    const f = fixture({ polls: ['pending', 'pending', { code: 'code-1', verifier: 'ver-1' }] });
+    const start = await f.service.login(f.access);
+    expect(start.view).toMatchObject({ state: 'pending', userCode: 'ABCD-1234', verificationUrl: 'https://auth.openai.com/codex/device' });
+    expect(f.service.view(f.access.id)?.state).toBe('pending');
+    await start.finished;
+    expect(f.protocol.exchange).toHaveBeenCalledWith({ code: 'code-1', verifier: 'ver-1' });
+    expect(JSON.parse((await f.vault.get(f.access.secretRef))!)).toMatchObject({ version: 1, accessToken: 'access-1', accountId: 'acct-1' });
+    expect(f.service.view(f.access.id)).toEqual({ state: 'connected' });
     expect(f.access.check).toHaveBeenCalledTimes(2);
-    expect(f.session.dispose).toHaveBeenCalled();
   });
-  it('refuses model discovery during sign-in and cleans up malformed lists', async () => {
-    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
-    const login = await f.service.login(f.access);
-    await expect(f.service.models(f.access)).rejects.toThrow('busy');
-    await f.service.cancel(f.access.id); await login.finished;
-    await expect(f.service.models(f.access)).rejects.toThrow('Invalid native model list');
-    expect(f.session.dispose).toHaveBeenCalled();
+
+  it('reports a denial and keeps an old credential', async () => {
+    const f = fixture({ polls: [{ denied: 'ChatGPT did not approve the sign-in. Start again.' }] });
+    await f.vault.set(f.access.secretRef, 'old-fixture');
+    const start = await f.service.login(f.access); await start.finished;
+    expect(f.service.view(f.access.id)).toMatchObject({ state: 'failed', message: expect.stringContaining('did not approve') });
+    expect(await f.vault.get(f.access.secretRef)).toBe('old-fixture');
   });
-  it('persists only after a matching successful login and never returns tokens', async () => {
-    const f = fixture(); const start = await f.service.login(f.access);
-    expect(f.open).toHaveBeenCalledWith(null);
-    expect(start.view).toMatchObject({ state: 'pending', userCode: 'ABCD-1234' });
-    f.emit('other-login'); expect(await f.vault.get(f.access.secretRef)).toBeNull();
-    f.emit(); await start.finished;
-    expect(await f.vault.get(f.access.secretRef)).toBe(secret);
-    expect(f.service.view(f.access.id)?.state).toBe('connected');
-    expect(JSON.stringify(f.service.view(f.access.id))).not.toContain('fake-access');
-    expect(f.session.dispose).toHaveBeenCalled();
-  });
-  it('accepts an early matching completion but never a stale completion after cancellation', async () => {
-    const f = fixture({ early: true }); const start = await f.service.login(f.access); await start.finished;
-    expect(f.service.view(f.access.id)?.state).toBe('connected');
-    const g = fixture(); const pending = await g.service.login(g.access);
-    await g.service.cancel(g.access.id); g.emit(); await pending.finished;
-    expect(await g.vault.get(g.access.secretRef)).toBeNull();
-    expect(g.service.view(g.access.id)?.state).toBe('cancelled');
-  });
-  it('preserves an old credential when reconnect is cancelled or fails', async () => {
-    for (const cancel of [true, false]) {
-      const f = fixture(); await f.vault.set(f.access.secretRef, 'old-fixture');
-      const start = await f.service.login(f.access);
-      if (cancel) await f.service.cancel(f.access.id); else f.emit('login1', false);
-      await start.finished;
-      expect(await f.vault.get(f.access.secretRef)).toBe('old-fixture');
-    }
-  });
-  it('rejects a changed/disabled account before credential persistence', async () => {
-    const f = fixture(); const start = await f.service.login(f.access);
-    f.access.check.mockRejectedValue(new Error('disabled')); f.emit(); await start.finished;
-    expect(await f.vault.get(f.access.secretRef)).toBeNull();
-    expect(f.service.view(f.access.id)?.state).toBe('failed');
-  });
-  it('rejects non-provider sign-in URLs and cleans up', async () => {
-    const f = fixture({ badUrl: true });
-    await expect(f.service.login(f.access)).rejects.toThrow('unsupported');
-    expect(f.session.dispose).toHaveBeenCalled();
-    expect(await f.vault.get(f.access.secretRef)).toBeNull();
-  });
-  it('bounds sign-in time and removes the one-time code from status', async () => {
-    const f = fixture({ timeout: 5 }); const start = await f.service.login(f.access); await start.finished;
-    expect(f.service.view(f.access.id)).toMatchObject({ state: 'cancelled' });
+
+  it('times out and drops the one-time code from the view', async () => {
+    const f = fixture({ timeout: 5 });
+    const start = await f.service.login(f.access);
+    f.clock.set(f.clock.get() + 10);
+    await start.finished;
+    expect(f.service.view(f.access.id)).toMatchObject({ state: 'failed', message: expect.stringContaining('timed out') });
     expect(f.service.view(f.access.id)?.userCode).toBeUndefined();
-    expect(f.session.dispose).toHaveBeenCalled();
   });
-  it('serializes one account and redacts vault failures', async () => {
-    const f = fixture(); const start = await f.service.login(f.access);
+
+  it('cancels, and holds the account exclusively while pending', async () => {
+    const f = fixture();
+    const start = await f.service.login(f.access);
     await expect(f.service.login(f.access)).rejects.toThrow('busy');
-    vi.spyOn(f.vault, 'set').mockRejectedValue(new Error('sensitive-vault-detail'));
-    f.emit(); await start.finished;
+    await expect(f.service.models(f.access)).rejects.toThrow('busy');
+    await f.service.cancel(f.access.id); await start.finished;
+    expect(f.service.view(f.access.id)?.state).toBe('cancelled');
+    expect(await f.vault.get(f.access.secretRef)).toBeNull();
+  });
+
+  it('surfaces a start failure with its owner-facing sentence', async () => {
+    const f = fixture();
+    f.protocol.startDevice.mockRejectedValue(new Error('Device code sign-in is not enabled on this ChatGPT account. Turn it on in ChatGPT settings, under Security.'));
+    await expect(f.service.login(f.access)).rejects.toThrow();
+    expect(f.service.view(f.access.id)).toMatchObject({ state: 'failed', message: expect.stringContaining('not enabled') });
+    const again = await f.service.login(f.access).catch(e => e); // not left busy
+    expect(String(again)).not.toContain('busy');
+  });
+
+  it('rejects a changed account before saving and redacts vault failures', async () => {
+    const f = fixture({ polls: [{ code: 'c', verifier: 'v' }] });
+    const start = await f.service.login(f.access);
+    f.access.check.mockRejectedValue(new Error('disabled'));
+    await start.finished;
     expect(f.service.view(f.access.id)?.state).toBe('failed');
-    expect(JSON.stringify(f.service.view(f.access.id))).not.toContain('sensitive');
+    expect(await f.vault.get(f.access.secretRef)).toBeNull();
+    const g = fixture({ polls: [{ code: 'c', verifier: 'v' }] });
+    vi.spyOn(g.vault, 'set').mockRejectedValue(new Error('sensitive-vault-detail'));
+    const s = await g.service.login(g.access); await s.finished;
+    expect(g.service.view(g.access.id)?.state).toBe('failed');
+    expect(JSON.stringify(g.service.view(g.access.id))).not.toContain('sensitive');
+  });
+});
+
+describe('ChatGPT credential use', () => {
+  it('completes with a fresh token and no refresh', async () => {
+    const f = fixture();
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, f.clock.get() + HOUR)));
+    const out = await f.service.complete(f.access, 'gpt-5.5', request);
+    expect(out.content).toEqual([{ type: 'text', text: 'OK' }]);
+    expect(f.protocol.refresh).not.toHaveBeenCalled();
+    expect(vi.mocked(f.transport).mock.calls[0]![1].headers).toMatchObject({ authorization: 'Bearer access-1', 'chatgpt-account-id': 'acct-1' });
+  });
+
+  it('refreshes near expiry, saves the rotated pair, and uses it', async () => {
+    const f = fixture();
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, f.clock.get() + 60_000)));
+    const writes: string[] = [];
+    const set = f.vault.set.bind(f.vault);
+    vi.spyOn(f.vault, 'set').mockImplementation(async (ref, value) => { writes.push(JSON.parse(value).state); return set(ref, value); });
+    await f.service.complete(f.access, 'gpt-5.5', request);
+    expect(writes).toEqual(['refreshing', 'ready']);
+    expect(JSON.parse((await f.vault.get(f.access.secretRef))!)).toMatchObject({ accessToken: 'access-2', refreshToken: 'refresh-2', state: 'ready' });
+    expect(vi.mocked(f.transport).mock.calls[0]![1].headers).toMatchObject({ authorization: 'Bearer access-2' });
+  });
+
+  it('asks for a reconnect after a failed or interrupted refresh', async () => {
+    const f = fixture();
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, 0)));
+    f.protocol.refresh.mockRejectedValue(new Error('network SECRET'));
+    await expect(f.service.complete(f.access, 'gpt-5.5', request)).rejects.toThrow('ChatGPT token refresh failed. Reconnect this account.');
+    await expect(f.service.complete(f.access, 'gpt-5.5', request)).rejects.toThrow('Reconnect');
+    expect(f.protocol.refresh).toHaveBeenCalledTimes(1); // the marker stops a replay
+  });
+
+  it('accepts a legacy Codex auth.json credential without reconnecting', async () => {
+    const f = fixture();
+    const legacy = { auth_mode: 'chatgpt', tokens: { access_token: 'legacy-access', refresh_token: 'legacy-refresh', account_id: 'acct-1' } };
+    await f.vault.set(f.access.secretRef, JSON.stringify(legacy));
+    await f.service.complete(f.access, 'gpt-5.5', request);
+    // No `exp` claim reads as expired, so the first use refreshes it into the envelope.
+    expect(f.protocol.refresh).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: 'legacy-refresh', accountId: 'acct-1' }));
+    expect(JSON.parse((await f.vault.get(f.access.secretRef))!)).toMatchObject({ version: 1, state: 'ready' });
+  });
+
+  it('refuses with no credential', async () => {
+    const f = fixture();
+    await expect(f.service.complete(f.access, 'gpt-5.5', request)).rejects.toThrow('Connect this ChatGPT');
+    await expect(f.service.withProfile(f.access, async () => 1)).rejects.toThrow('Connect this ChatGPT');
   });
 });
 
 describe('Codex profile for a native child (image plugin)', () => {
-  it('stages the credential in a private CODEX_HOME with a scrubbed env, saves a refresh, and removes the profile', async () => {
+  it('stages a private CODEX_HOME with a scrubbed env, saves a refresh, and removes the profile', async () => {
     const { readFile, writeFile, stat } = await import('node:fs/promises');
     const { join } = await import('node:path');
-    const f = fixture(); await f.vault.set(f.access.secretRef, secret);
+    const f = fixture();
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, f.clock.get() + HOUR)));
     const before = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = 'ambient-should-not-leak';
-    const refreshed = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'new-access', refresh_token: 'new-refresh' } });
     let home = '';
     try {
       const out = await f.service.withProfile(f.access, async (profile) => {
         home = profile.home;
         expect(profile.env.CODEX_HOME).toBe(profile.home);
         expect(profile.env.OPENAI_API_KEY).toBeUndefined();
-        expect(JSON.parse(await readFile(join(profile.home, 'auth.json'), 'utf8')).tokens.access_token).toBe('fake-access');
+        const file = JSON.parse(await readFile(join(profile.home, 'auth.json'), 'utf8'));
+        expect(file).toMatchObject({ auth_mode: 'chatgpt', tokens: { access_token: 'access-1', account_id: 'acct-1' } });
         expect((await stat(profile.home)).mode & 0o077).toBe(0);
-        await writeFile(join(profile.home, 'auth.json'), refreshed);
+        await writeFile(join(profile.home, 'auth.json'), JSON.stringify({ ...file, tokens: { ...file.tokens, access_token: 'child-access', refresh_token: 'child-refresh' } }));
         return 'done';
       });
       expect(out).toBe('done');
     } finally {
       if (before === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = before;
     }
-    expect(await f.vault.get(f.access.secretRef)).toBe(refreshed);
+    expect(JSON.parse((await f.vault.get(f.access.secretRef))!)).toMatchObject({ version: 1, accessToken: 'child-access', refreshToken: 'child-refresh' });
     await expect(stat(home)).rejects.toThrow();
-    expect(f.access.check).toHaveBeenCalled();
   });
 
-  it('refuses with no credential and holds the account exclusively', async () => {
+  it('holds the account exclusively', async () => {
     const f = fixture();
-    await expect(f.service.withProfile(f.access, async () => 1)).rejects.toThrow(/Connect this Codex/);
-    await f.vault.set(f.access.secretRef, secret);
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, f.clock.get() + HOUR)));
     let release: (() => void) | undefined;
     const held = f.service.withProfile(f.access, () => new Promise<void>((resolve) => { release = resolve; }));
     await vi.waitFor(() => expect(release).toBeDefined());

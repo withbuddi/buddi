@@ -74,31 +74,32 @@ Inline: cards, two per row, each with a logo, a title and one line. Order:
    subscription flow. One more line under it: "Uses your Claude plan's monthly
    Agent SDK credits; after them, an API key." Shown by default; absent, not
    disabled, when the host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
-2. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
+2. **ChatGPT** — "I pay for ChatGPT", with "Uses your ChatGPT plan through
+   OpenAI's Codex backend. Sign in with a code." under it. The tap opens
+   openai.com's sign-in page and buddi shows a code to copy; the owner enters
+   it there and approves buddi. The card checks every two seconds, then
+   names the plan's default model with the list under it to pick another
+   ([codex-accounts.md](codex-accounts.md)). Shown by default; absent when the
+   host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
+3. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
    pasted, provider detected from its prefix (`sk-ant-` is Anthropic, `sk-` is
    OpenAI), with a small "which?" toggle if detection is wrong.
-3. **Ollama** — "Free, on this computer". If Ollama answers on its default
+4. **Ollama** — "Free, on this computer". If Ollama answers on its default
    port, the card says "Found it, running now" and one tap connects. If not, it
    says "Install Ollama, then come back" with the download link, and polls.
-4. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
+5. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
    window on ollama.com's connect page, with this computer named "buddi on
    <this computer>"; the owner signs in there if asked and presses Connect.
    The card checks every two seconds, then says which model the assistant
    will think with (`gpt-oss:120b` while ollama.com offers it) and shows the
    model list under that line to pick another. No key is typed or shown
    ([providers.md](providers.md#ollama-cloud-with-a-device-key)).
-5. **Another service, or Ollama Cloud with a key** — "I have an address and a
+6. **Another service, or Ollama Cloud with a key** — "I have an address and a
    key". Address and key, for OpenAI-compatible endpoints.
 
-ChatGPT subscriptions are not offered here. The adapter ships, but it drives
-the `codex` binary (pinned at `codex-cli 0.155.0`), which neither the release
-tarball nor the Docker image includes, so on a fresh install the card could
-only fail. The sign-in stays in Settings → Model accounts. When the build
-carries the binary, it becomes card 2, "ChatGPT — I pay for ChatGPT", with
-"Uses your ChatGPT plan through Codex.", and "A key" moves down.
-
-After any card is completed, buddi tests it with one small call and answers in
-the thread:
+After any card is completed, buddi tests it with one small call (a ChatGPT
+plan has no per-turn cap to keep a test small, so there the assistant's first
+answer is the test) and answers in the thread:
 
 > B: That works. Your assistant will think with **claude-sonnet-5**.
 

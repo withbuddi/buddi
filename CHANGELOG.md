@@ -8,12 +8,18 @@ What changes in buddi from one release to the next, newest first.
 
 - The thinking switch appears only where it is honoured, on Anthropic and OpenAI accounts. On an OpenAI-compatible host, Ollama Cloud and local Ollama included, the Brain page says thinking is up to the model, and the composer shows no switch.
 - On the first-run page buddi speaks with the Blob as its face instead of a letter tile. A locally packed build (the Docker trial) calls itself `0.1.0-dev.<commit>` so it is never mistaken for a release.
+- A ChatGPT subscription account no longer needs the `codex` command: buddi signs in with the same device code and talks to OpenAI's Codex backend itself. Accounts already connected keep working. Model turns can now run tools in parallel and report token usage.
 
 ### Added
 
+- First run offers **ChatGPT — I pay for ChatGPT** right after Claude: buddi shows a code, you enter it on openai.com, and buddi picks a model from your plan. The same code flow is on the account page in Settings.
 - The first-run page shows the running buddi version under its title.
 - An Ollama Cloud account can connect with a device key instead of a pasted key, the way `ollama login` does: buddi makes a key pair in the vault, you press Connect on ollama.com, and each request is signed with the key. `buddi status` and the account say "connected as <your ollama.com name>, device buddi on <this computer>". Disconnecting asks ollama.com to forget the device, as `ollama signout` does, and removes the key from buddi either way.
 - First run offers "Ollama Cloud, one tap" (free to start, no key) right after Ollama on this computer: tap it, press Connect on the ollama.com page that opens, and buddi says which model your assistant will think with, with the list to pick another. The address-and-key card is now "Another service, or Ollama Cloud with a key". In Settings → Model accounts, a new Ollama Cloud account connects the same way, with "Use a key instead" for a key.
+
+### Removed
+
+- The `codex-cli 0.155.0` version pin and the App Server runner.
 
 ### Fixed
 

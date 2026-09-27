@@ -36,6 +36,7 @@ vi.mock('../api', async (load) => {
       providerAccounts: vi.fn(),
       providers: vi.fn(),
       anthropicAccountAction: vi.fn(),
+      codexAccountAction: vi.fn(),
       ollamaConnect: vi.fn(),
       ollamaPoll: vi.fn(),
       accountModels: vi.fn(),
@@ -322,6 +323,87 @@ describe('the questions', () => {
     expect(api.saveProviderAccount).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.cloud.again }));
     await waitFor(() => expect(api.ollamaConnect).toHaveBeenCalledTimes(2));
+  }, 10_000);
+
+  it('offers ChatGPT right after Claude only when the host allows that sign-in', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: true, codexEnabled: false }));
+    const page = render(meet());
+    await screen.findByText(SCRIPT.brain.cards.claude.title);
+    expect(screen.queryByText(SCRIPT.brain.cards.chatgpt.title)).not.toBeInTheDocument();
+    page.unmount();
+
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([], { anthropicOAuthEnabled: true, codexEnabled: true }));
+    render(meet());
+    await screen.findByText(SCRIPT.brain.cards.chatgpt.title);
+    const cards = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button');
+    expect(cards[0]).toHaveTextContent(SCRIPT.brain.cards.claude.title);
+    expect(cards[1]).toHaveTextContent(SCRIPT.brain.cards.chatgpt.line);
+    expect(cards[1]).toHaveTextContent(SCRIPT.brain.cards.chatgpt.know);
+    expect(cards[2]).toHaveTextContent(SCRIPT.brain.cards.key.title);
+  });
+
+  it('connects ChatGPT: the code and the link, then the plan default once the code is approved', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    const pending = { state: 'pending', verificationUrl: 'device-page', userCode: 'ABCD-EFGH', expiresAt: '2099-01-01T00:00:00Z' };
+    const row = { id: 'gpt', label: 'ChatGPT', kind: 'codex', auth: 'chatgpt', baseUrl: '', defaultModel: 'gpt-5.5', configured: false };
+    let saved = false;
+    let login: Record<string, unknown> | null = null;
+    vi.mocked(api.providerAccounts).mockImplementation(async () =>
+      saved ? accounts([{ ...row, login }], { codexEnabled: true }) : accounts([], { codexEnabled: true }),
+    );
+    vi.mocked(api.saveProviderAccount).mockImplementation(async () => {
+      saved = true;
+      return { id: 'gpt' };
+    });
+    vi.mocked(api.codexAccountAction).mockImplementation(async () => {
+      login = pending;
+      return pending;
+    });
+    vi.mocked(api.accountModels).mockResolvedValue({ models: [{ id: 'gpt-5.5', name: 'gpt-5.5', isDefault: false }, { id: 'gpt-5.6', name: 'gpt-5.6', isDefault: true }], truncated: false });
+    const opened = { location: { href: '' }, close: vi.fn() };
+    const open = vi.spyOn(window, 'open').mockReturnValue(opened as unknown as Window);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.chatgpt.title));
+    expect(open).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(opened.location.href).toBe('device-page'));
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ kind: 'codex', auth: 'chatgpt', label: 'ChatGPT', defaultModel: 'gpt-5.5' });
+    expect(api.codexAccountAction).toHaveBeenCalledWith('gpt', 'login', 1);
+    expect(await screen.findByText('ABCD-EFGH')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('ABCD-EFGH')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: SCRIPT.brain.chatgpt.open })).toHaveAttribute('href', 'device-page');
+
+    login = { state: 'connected' };
+    expect(await screen.findByText(SCRIPT.brain.works('gpt-5.6'), undefined, { timeout: 4_000 })).toBeInTheDocument();
+    expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'gpt', defaultModel: 'gpt-5.6' });
+    expect(api.testProviderAccount).not.toHaveBeenCalled();
+    expect(api.codexAccountAction).not.toHaveBeenCalledWith('gpt', 'cancel-login', expect.anything());
+    expect(await screen.findByLabelText(SCRIPT.brain.model.change)).toBeInTheDocument();
+  }, 10_000);
+
+  it('says why a ChatGPT sign-in failed, offers to try again, and cancels one left pending', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    const row = { id: 'gpt', label: 'ChatGPT', kind: 'codex', auth: 'chatgpt', baseUrl: '', defaultModel: 'gpt-5.5', configured: false };
+    let login: Record<string, unknown> | null = null;
+    vi.mocked(api.providerAccounts).mockImplementation(async () => accounts([{ ...row, login }], { codexEnabled: true }));
+    vi.mocked(api.codexAccountAction).mockImplementation(async (_id, action) => {
+      if (action !== 'login') return {};
+      login = { state: 'pending', verificationUrl: 'device-page', userCode: 'ABCD-EFGH', expiresAt: '2099-01-01T00:00:00Z' };
+      return login;
+    });
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.chatgpt.title));
+    await screen.findByText('ABCD-EFGH');
+    // The account was already there: reused, not made twice.
+    expect(api.saveProviderAccount).not.toHaveBeenCalled();
+    login = { state: 'failed', message: 'Turn on device code sign-in for Codex in ChatGPT settings.' };
+    expect(await screen.findByText('Turn on device code sign-in for Codex in ChatGPT settings.', undefined, { timeout: 4_000 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.chatgpt.again }));
+    await waitFor(() => expect(vi.mocked(api.codexAccountAction).mock.calls.filter((call) => call[1] === 'login')).toHaveLength(2));
+    await screen.findByText('ABCD-EFGH');
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.back }));
+    await waitFor(() => expect(api.codexAccountAction).toHaveBeenCalledWith('gpt', 'cancel-login', 1));
   }, 10_000);
 
   it('opens the other-service card with the address the server offered', async () => {

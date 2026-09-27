@@ -9,8 +9,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { OLLAMA_CLOUD_MODEL, api, type ProviderAccount, type SaveProviderAccount } from '../api';
-import { Button, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
+import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
+import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
@@ -191,7 +192,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
         ]}
       />
       {a.removalPending && <Notice tone="warning">Removal is pending. Unlock the vault, then retry Remove account.</Notice>}
-      {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this Claude account.</Notice>}
+      {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this {a.kind === 'codex' ? 'ChatGPT' : 'Claude'} account.</Notice>}
       {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}
       {a.kind === 'codex' && <CodexLogin account={a} busy={busy} run={run} />}
       {a.auth === 'device-key' && <OllamaLogin account={a} busy={busy} run={run} />}
@@ -226,7 +227,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           {a.auth === 'legacy-subscription-token' && <p>Legacy subscription token: not refreshable, token expiry and subscription renewal date unknown.</p>}
           {a.kind === 'codex' ? (
             <>
-              <p>Runs through the Codex App Server. Credentials stay in Buddi’s vault and are staged in a private temporary file during native sessions. Codex manages refresh. Subscription renewal date is unknown.</p>
+              <p>Talks to OpenAI’s Codex backend directly with your ChatGPT sign-in. The credential stays in buddi’s vault; buddi refreshes it and never reads your own Codex login.</p>
               <p>Native tool-step usage reporting is incomplete. Do not use Buddi’s token or API-cost estimates as subscription billing or remaining quota.</p>
               <p>After connecting, assign this account to an agent and send a test message. Model turns use your subscription allowance.</p>
             </>
@@ -250,8 +251,10 @@ function CodexLogin({ account: a, busy, run }: { account: ProviderAccount; busy:
       <Button disabled={busy || !a.configured} onClick={() => void run(() => api.codexAccountAction(a.id, 'logout', a.revision), 'Subscription disconnected from Buddi. Your regular Codex login is unchanged.')}>Disconnect</Button>
     </Toolbar>
     {a.login?.state === 'pending' && <Notice tone="accent" role="status">
-      <p>Open <a href={a.login.verificationUrl} target="_blank" rel="noreferrer">{a.login.verificationUrl}</a> and enter <code>{a.login.userCode}</code>.</p>
-      <p className="muted">Buddi stops waiting at {a.login.expiresAt && new Date(a.login.expiresAt).toLocaleTimeString()}. This is the sign-in timeout, not your subscription expiry.</p>
+      <p>Here is your code: <strong>{a.login.userCode}</strong>. Open the link, enter it, and approve buddi on openai.com.</p>
+      {a.login.userCode && <SignInCode code={a.login.userCode} />}
+      {a.login.verificationUrl && <Toolbar><ButtonLink variant="accent" href={a.login.verificationUrl} target="_blank" rel="noreferrer">Open openai.com</ButtonLink></Toolbar>}
+      {a.login.expiresAt && <p className="muted">The code works until {new Date(a.login.expiresAt).toLocaleTimeString()}. Start again after that; this is the sign-in timeout, not your subscription expiry.</p>}
     </Notice>}
     {a.login && a.login.state !== 'pending' && <p role="status" className="muted">{a.login.message ?? `Sign-in ${a.login.state}.`}</p>}
   </>;
@@ -293,7 +296,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option><option value="openai-compatible">OpenAI-compatible endpoint</option>
             {a?.auth === 'device-key' && <option value="ollama-cloud">Ollama Cloud</option>}
             {(anthropicOAuthEnabled || a?.auth === 'anthropic-oauth') && <option value="anthropic-oauth">Claude subscription</option>}
-            {(codexEnabled || a?.kind === 'codex') && <option value="codex">ChatGPT subscription through Codex</option>}
+            {(codexEnabled || a?.kind === 'codex') && <option value="codex">ChatGPT subscription</option>}
           </select>
         </Field>
         {kind === 'openai-compatible' && auth !== 'device-key' && <>
@@ -314,7 +317,7 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
             placeholder={a?.detectedContextWindowTokens ? String(a.detectedContextWindowTokens) : 'detected from the model'}
             onChange={e => setContextWindow(e.target.value)} />
         </Field>
-        {kind === 'codex' && <p className="muted">Enter a model available to your Codex subscription. API model availability is different; there is no automatic model fallback.</p>}
+        {kind === 'codex' && <p className="muted">Pick a model from the list once the account is connected.</p>}
         {auth === 'anthropic-oauth' && <p className="muted">Save this account, then choose Connect Claude. You will approve in your browser and paste the authorization code here, not in chat. No existing agent assignment changes.</p>}
         {auth === 'api-key' && (
           <Field label={a ? 'Replacement API key (leave blank to keep)' : 'API key'}>
@@ -420,7 +423,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
  * subscription can be connected. The default model is chosen from a real
  * list, not typed from memory before there is anything to check it against.
  */
-const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5' };
+const STARTING_MODEL: Record<string, string> = { anthropic: 'claude-sonnet-5', openai: 'gpt-5', codex: 'gpt-5.5' };
 
 /** The name the form proposes for a provider, before the owner touches it. */
 export function suggestedLabel(kind: ProviderAccount['kind'], auth: ProviderAccount['auth'], taken: string[]): string {
@@ -515,7 +518,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
             <option value="ollama-cloud">Ollama Cloud</option>
             <option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
             {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription</option>}
-            {codexEnabled && <option value="codex">ChatGPT subscription through Codex</option>}
+            {codexEnabled && <option value="codex">ChatGPT subscription</option>}
           </select>
         </Field>
         <Field label="Account name" hint="Proposed from the provider. Change it to anything you will recognise.">
@@ -543,7 +546,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           </Field>
         )}
         {subscription ? (
-          <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a device code, and pick a model then.'
+          <p className="muted">{kind === 'codex' ? 'You will connect your ChatGPT subscription on the next step, with a code you enter on openai.com, and pick a model then.'
             : auth === 'device-key' ? 'You will connect on the next step: ollama.com opens, you press Connect, and no key is typed. Free to start.'
             : 'You will connect your Claude subscription on the next step, in your browser, and pick a model then.'}</p>
         ) : (

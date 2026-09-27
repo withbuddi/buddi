@@ -56,7 +56,7 @@ export function accountBaseUrl(kind: ProviderAccountKind, value?: string): strin
 }
 
 export function resolveProviderAccount(account: ProviderAccount, model: string, secret: string | null): ResolvedProvider {
-  if (account.kind === 'codex' || account.auth === 'chatgpt') throw new Error('Codex accounts require the native App Server adapter; API fallback is forbidden.');
+  if (account.kind === 'codex' || account.auth === 'chatgpt') throw new Error('ChatGPT subscription accounts use their own sign-in adapter; API fallback is forbidden.');
   if (!account.enabled) throw new Error('Provider account is disabled.');
   const problem = accountModelProblem(account.kind, model);
   if (problem) throw new Error(problem);

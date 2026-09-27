@@ -6,7 +6,7 @@ import {
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
 } from '@buddi/core';
-import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, type AccountModels, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
+import { contextWindowTokens, createProvider, providerCapabilities, listProviderModels, readAnthropicTokens, readCodexTokens, type AccountModels, type OllamaConnectProtocol, type RuntimeProvider } from '@buddi/runtime';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type ProviderDiagnostic } from './provider-diagnostics.js';
@@ -191,6 +191,10 @@ export class ProviderAccounts {
           const tokens = readAnthropicTokens(raw);
           this.#tokenInfo.set(row.id, { tokenExpiresAt: new Date(tokens.expiresAt).toISOString(), reconnectRequired: tokens.state !== 'ready' });
         }
+        if (row.kind === 'codex' && raw) {
+          const tokens = readCodexTokens(raw);
+          this.#tokenInfo.set(row.id, { tokenExpiresAt: new Date(tokens.expiresAt).toISOString(), reconnectRequired: tokens.state !== 'ready' });
+        }
       }
       catch { configured.set(row.id, false); }
     }
@@ -233,7 +237,7 @@ export class ProviderAccounts {
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
-        ...(row.kind === 'codex' ? { login: this.codex?.view(row.id) ?? null } : {}),
+        ...(row.kind === 'codex' ? { ...this.#tokenInfo.get(row.id), login: this.codex?.view(row.id) ?? null } : {}),
         ...(row.auth === 'device-key' ? { device: this.#devices.get(row.id) ?? null, login: this.ollama?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
@@ -435,7 +439,9 @@ export class ProviderAccounts {
     const snapshot = this.#rows.get(id);
     if (!snapshot) throw new ProviderAccountError(409, 'Provider account is no longer available.');
     return {
-      capabilities: { ...providerCapabilities(accountProtocol(snapshot.kind)), ...(snapshot.kind === 'codex' ? { usageReporting: false, parallelToolCalls: false } : {}) },
+      // A ChatGPT account speaks the Responses API, whose row matches OpenAI's:
+      // parallel tool calls, usage reported, no native search, no documents.
+      capabilities: providerCapabilities(accountProtocol(snapshot.kind)),
       complete: async request => {
         const row = await this.#row(id);
         if (row.revision !== snapshot.revision) throw new ProviderAccountError(409, 'Provider account settings changed during this run. Send a new message to continue with the updated account.');
@@ -456,7 +462,7 @@ export class ProviderAccounts {
     this.#testing.add(id);
     try {
       const row = await this.#row(id);
-      if (row.kind === 'codex') throw new ProviderAccountError(400, 'Codex connection testing has no verified output-token cap. Connect and send a test chat instead.');
+      if (row.kind === 'codex') throw new ProviderAccountError(400, 'A ChatGPT subscription has no output-token cap for a connection test. Connect and send a test chat instead.');
       let diagnostic: ProviderDiagnostic = { state: 'connected', message: 'Connection succeeded.', httpStatus: null, retryAt: null };
       try {
         const resolved = resolveProviderAccount(row, row.defaultModel, await this.#usableSecret(row));
@@ -725,7 +731,8 @@ export class ProviderAccounts {
       return started.view;
     } catch {
       await lease.release();
-      throw new ProviderAccountError(409, 'Could not start Codex sign-in. Check CLI version 0.155.0 and host vault access.');
+      const view = this.codex.view(id);
+      throw new ProviderAccountError(409, view?.state === 'failed' && view.message ? view.message : 'Could not start ChatGPT sign-in. Check the host vault and try again.');
     }
   }); }
 }

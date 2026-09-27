@@ -46,6 +46,7 @@ import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
 import { Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
 import { InstallProgress } from './parts/InstallProgress';
+import { SignInCode } from './parts/SignInCode';
 import {
   DEFAULT_ASSISTANT_NAME,
   OPENING_INSTRUCTION,
@@ -1003,7 +1004,7 @@ function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: Questio
  * 3. The brain
  * ------------------------------------------------------------------ */
 
-type Card = 'claude' | 'key' | 'ollama' | 'cloud' | 'service';
+type Card = 'claude' | 'chatgpt' | 'key' | 'ollama' | 'cloud' | 'service';
 
 function BrainAsk(props: QuestionProps): JSX.Element {
   const { accounts, answers, onSettled, onReload } = props;
@@ -1018,6 +1019,7 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     label: string;
   } | null>(null);
   const claudeOffered = accounts?.anthropicOAuthEnabled === true;
+  const chatgptOffered = accounts?.codexEnabled === true;
   /** The ollama.com window, opened inside the tap so no popup blocker stops it. */
   const [consent, setConsent] = useState<Window | null>(null);
 
@@ -1172,6 +1174,21 @@ function BrainAsk(props: QuestionProps): JSX.Element {
       />
     );
   }
+  if (card === 'chatgpt') {
+    return (
+      <ChatGPTCard
+        busy={busy}
+        consent={consent}
+        onBack={() => {
+          consent?.close();
+          setConsent(null);
+          setCard(null);
+        }}
+        onConnected={bind}
+        {...props}
+      />
+    );
+  }
   if (card === 'claude') {
     return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} onConnected={bind} {...props} />;
   }
@@ -1180,6 +1197,17 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     <Dock>
     <div className="meet-cards" role="group" aria-label={SCRIPT.brain.ask}>
       {claudeOffered ? <BrainCard mark={<ClaudeMark />} card={SCRIPT.brain.cards.claude} onPick={() => setCard('claude')} /> : null}
+      {chatgptOffered ? (
+        <BrainCard
+          mark={<ChatGPTMark />}
+          card={SCRIPT.brain.cards.chatgpt}
+          onPick={() => {
+            // Opened inside the tap, so no popup blocker stops it.
+            setConsent(typeof window.open === 'function' ? window.open('', '_blank') : null);
+            setCard('chatgpt');
+          }}
+        />
+      ) : null}
       <BrainCard mark={<KeyMark />} card={SCRIPT.brain.cards.key} onPick={() => setCard('key')} />
       <BrainCard
         mark={<OllamaMark />}
@@ -1252,6 +1280,17 @@ function ClaudeMark(): JSX.Element {
           transform={`rotate(${angle} 12 12)`}
         />
       ))}
+    </svg>
+  );
+}
+
+/** ChatGPT: a speech bubble, a neutral glyph rather than anyone's logo. */
+function ChatGPTMark(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5.4 4.6h13.2a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2h-7.4l-4.4 3.4v-3.4H5.4a2 2 0 0 1-2-2V6.6a2 2 0 0 1 2-2Z" />
+      <path d="M8 9.4h8" />
+      <path d="M8 12.6h5" />
     </svg>
   );
 }
@@ -1771,7 +1810,9 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
   const account = brain ? (accounts?.accounts ?? []).find((row) => row.id === brain.accountId) : undefined;
   const [models, setModels] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
-  const cloud = account?.auth === 'device-key';
+  // Ollama Cloud and ChatGPT both serve several models, and the first one
+  // chosen for the owner is only a start.
+  const cloud = account?.auth === 'device-key' || account?.kind === 'codex';
   useEffect(() => {
     if (!cloud || !account) return;
     let cancelled = false;
@@ -1821,6 +1862,201 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
         </select>
       </Field>
     </Said>
+  );
+}
+
+/** The model a new ChatGPT account starts on until the plan's list names its own default. */
+export const CHATGPT_FALLBACK_MODEL = 'gpt-5.5';
+
+/** How often the ChatGPT card asks whether the code was entered. */
+export const CHATGPT_POLL_MS = 2_000;
+
+type ChatGPTLogin = NonNullable<NonNullable<ProviderAccountsView['accounts'][number]['login']>>;
+
+/**
+ * ChatGPT, through buddi's own device sign-in: buddi shows a code, the owner
+ * enters it on openai.com and approves, and the card notices.
+ *
+ * The window was opened by the tap on the card and follows the sign-in page as
+ * soon as the server names it; the link stays for a browser that refused the
+ * window. Leaving the card while the code is still out cancels the sign-in.
+ */
+function ChatGPTCard({
+  busy,
+  consent,
+  onBack,
+  onConnected,
+  accounts,
+}: {
+  busy: boolean;
+  consent: Window | null;
+  onBack: () => void;
+  onConnected: (brain: BrainAnswer) => Promise<string | null>;
+} & QuestionProps): JSX.Element {
+  const [working, setWorking] = useState(true);
+  const [trouble, setTrouble] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState<{ id: string; revision: number; url: string; code: string } | null>(null);
+  const [round, setRound] = useState(0);
+  const started = useRef(-1);
+  /** The window a "Try again" tap opened, for the same reason the card's tap opens one. */
+  const retried = useRef<Window | null>(null);
+  /** The sign-in still waiting for its code, to cancel if the owner leaves. */
+  const pending = useRef<{ id: string; revision: number } | null>(null);
+  const label = SCRIPT.brain.chatgpt.label;
+
+  useEffect(
+    () => () => {
+      const open = pending.current;
+      pending.current = null;
+      if (open) void api.codexAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
+    },
+    [],
+  );
+
+  // Start once per round: the account (reused when there is one), then the sign-in.
+  useEffect(() => {
+    if (started.current === round) return;
+    started.current = round;
+    setWorking(true);
+    setTrouble(null);
+    const opened = round === 0 ? consent : retried.current;
+    void (async () => {
+      try {
+        const existing = (accounts?.accounts ?? []).find((account) => account.kind === 'codex');
+        const saved = existing
+          ? { id: existing.id }
+          : await api.saveProviderAccount({
+              label,
+              kind: 'codex',
+              auth: 'chatgpt',
+              // The server pins the address; this page names no outside host.
+              baseUrl: '',
+              defaultModel: CHATGPT_FALLBACK_MODEL,
+              enabled: true,
+            });
+        const row = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id)!;
+        const login = (await api.codexAccountAction(row.id, 'login', row.revision)) as ChatGPTLogin | undefined;
+        if (!login?.verificationUrl || !login.userCode) throw new Error(login?.message ?? SCRIPT.brain.chatgpt.failed);
+        pending.current = { id: row.id, revision: row.revision };
+        setAttempt({ id: row.id, revision: row.revision, url: login.verificationUrl, code: login.userCode });
+        if (opened) opened.location.href = login.verificationUrl;
+      } catch (err) {
+        opened?.close();
+        setTrouble(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
+      } finally {
+        setWorking(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [round]);
+
+  // Ask every two seconds until the server says the code was approved.
+  useEffect(() => {
+    if (!attempt) return undefined;
+    let stopped = false;
+    let asking = false;
+    const ask = async (): Promise<void> => {
+      if (stopped || asking) return;
+      asking = true;
+      try {
+        const row = (await api.providerAccounts()).accounts.find((account) => account.id === attempt.id);
+        if (stopped) return;
+        const login = row?.login;
+        if (!login || login.state === 'pending') return;
+        stopped = true;
+        pending.current = null;
+        setAttempt(null);
+        if (login.state !== 'connected') {
+          setTrouble(login.message ?? SCRIPT.brain.chatgpt.failed);
+          return;
+        }
+        setWorking(true);
+        setTrouble(await adopt(attempt.id));
+        setWorking(false);
+      } catch {
+        /* Not answering for a moment; ask again on the next tick. */
+      } finally {
+        asking = false;
+      }
+    };
+    const timer = window.setInterval(() => void ask(), CHATGPT_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attempt]);
+
+  /**
+   * Connected: settle on the plan's own default model, and move the assistant
+   * onto it. There is no connection test for a ChatGPT plan (it has no
+   * per-turn cap to keep a test small); the assistant's first answer is the test.
+   */
+  const adopt = async (id: string): Promise<string | null> => {
+    try {
+      const offered = (await api.accountModels(id).catch(() => ({ models: [] as Array<{ id: string; isDefault: boolean }> }))).models;
+      const model = offered.find((entry) => entry.isDefault)?.id ?? offered[0]?.id ?? CHATGPT_FALLBACK_MODEL;
+      const row = (await api.providerAccounts()).accounts.find((account) => account.id === id);
+      if (row && row.defaultModel !== model) {
+        await api.saveProviderAccount({
+          id: row.id, revision: row.revision, label: row.label, kind: row.kind, auth: row.auth,
+          baseUrl: row.baseUrl, defaultModel: model, enabled: row.enabled,
+        });
+      }
+      return await onConnected({ accountId: id, label, model });
+    } catch (err) {
+      return err instanceof ApiError ? err.message : String(err);
+    }
+  };
+
+  const leave = (): void => {
+    const open = pending.current;
+    pending.current = null;
+    if (open) void api.codexAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
+    onBack();
+  };
+
+  return (
+    <>
+      {working || busy ? (
+        <Buddi>
+          <Thinking line={SCRIPT.brain.checking.chatgpt} />
+        </Buddi>
+      ) : trouble ? (
+        <Buddi>
+          <Said>{trouble}</Said>
+        </Buddi>
+      ) : attempt ? (
+        <Buddi>
+          <Said>
+            {SCRIPT.brain.chatgpt.codeBefore}
+            <strong>{attempt.code}</strong>
+            {SCRIPT.brain.chatgpt.codeAfter}
+          </Said>
+        </Buddi>
+      ) : null}
+      <Ask
+        actions={
+          <>
+            <Back onClick={leave} disabled={working || busy} />
+            {attempt ? (
+              <ButtonLink variant="accent" href={attempt.url} target="_blank" rel="noreferrer">
+                {SCRIPT.brain.chatgpt.open}
+              </ButtonLink>
+            ) : trouble ? (
+              <Button variant="accent" disabled={working || busy} onClick={() => {
+                retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
+                setRound((n) => n + 1);
+              }}>
+                {SCRIPT.brain.chatgpt.again}
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        {attempt ? <SignInCode code={attempt.code} label={SCRIPT.brain.chatgpt.code} /> : null}
+      </Ask>
+    </>
   );
 }
 

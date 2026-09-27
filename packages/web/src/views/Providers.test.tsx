@@ -53,7 +53,10 @@ it('renders device sign-in inside the account card with cancellation and no paid
   }] });
   render(<Providers />);
   expect(await screen.findByText('ABCD-1234')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'http://localhost/device' })).toHaveAttribute('rel', 'noreferrer');
+  expect(screen.getByDisplayValue('ABCD-1234')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Open openai.com' })).toHaveAttribute('href', 'http://localhost/device');
+  expect(screen.getByRole('link', { name: 'Open openai.com' })).toHaveAttribute('rel', 'noreferrer');
+  expect(screen.getByText(/The code works until/)).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Cancel sign-in' }));
   await waitFor(() => expect(api.codexAccountAction).toHaveBeenCalledWith('one', 'cancel-login', 1));

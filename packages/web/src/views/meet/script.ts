@@ -72,6 +72,11 @@ export const SCRIPT = {
         line: 'I pay for Claude',
         know: "Uses your Claude plan's monthly Agent SDK credits; after them, an API key.",
       },
+      chatgpt: {
+        title: 'ChatGPT',
+        line: 'I pay for ChatGPT',
+        know: "Uses your ChatGPT plan through OpenAI's Codex backend. Sign in with a code.",
+      },
       key: { title: 'A key from Anthropic or OpenAI', line: 'I have an API key' },
       ollama: { title: 'Ollama', line: 'Free, on this computer' },
       cloud: { title: 'Ollama Cloud, one tap', line: 'Free to start, no key' },
@@ -83,6 +88,18 @@ export const SCRIPT = {
       paste: 'Paste what Claude gave you',
       finish: 'Done',
       waiting: 'Sign in, then paste the code Claude shows you.',
+    },
+    /** ChatGPT: buddi shows a code, the owner enters it on openai.com, buddi notices. */
+    chatgpt: {
+      /** What the account is called, in Settings and in the answer bubble. */
+      label: 'ChatGPT',
+      /** Around the code, which is drawn in bold between them. */
+      codeBefore: 'Here is your code: ',
+      codeAfter: '. Open the link, enter it, and approve buddi on openai.com.',
+      code: 'Your code',
+      open: 'Open openai.com',
+      again: 'Try again',
+      failed: 'The sign-in did not finish. Try again.',
     },
     /** Ollama Cloud with a device key: the owner presses Connect on ollama.com, buddi notices. */
     cloud: {
@@ -123,6 +140,7 @@ export const SCRIPT = {
       ollama: 'Asking Ollama…',
       cloud: 'Asking Ollama Cloud…',
       claude: 'Checking with Claude…',
+      chatgpt: 'Asking ChatGPT…',
     },
     back: 'Back',
     service: {
