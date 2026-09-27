@@ -389,7 +389,7 @@ the timers and the hosts:
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
-finance, artifacts, host and image declare it. An upgrade that adds an area marks it
+finance, artifacts, host, image and speech declare it. An upgrade that adds an area marks it
 as added on its card, and says what it drops. `uses: []` is a real answer: the
 template, memory and browser reach nothing beyond themselves.
 

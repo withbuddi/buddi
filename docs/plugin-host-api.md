@@ -43,6 +43,7 @@ Every plugin in both repositories is on the host. The areas each one declares
 | browser | buddi | `secrets` |
 | host | buddi | `files:library` |
 | image | buddi-plugins | `accounts`, `files:library` |
+| speech | buddi-plugins | `accounts`, `files:library` |
 | developer | buddi-plugins | `files`, `secrets` |
 | email | buddi | `files`, `proposals`, `schedule`, `secrets` |
 

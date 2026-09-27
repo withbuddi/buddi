@@ -30,6 +30,7 @@ unbuilt specs are kept outside this repository.
 - [Learning](learning.md): buddi proposes, the owner keeps.
 - [Owner secrets](owner-secrets.md): used, never seen.
 - [The developer plugin](developer.md): an agent that works in a workspace.
+- [Speech](speech.md): agents listen to a recording and answer with a voice.
 - [Built-in system context](system-context.md).
 
 ## How it is built

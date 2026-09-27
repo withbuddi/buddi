@@ -8,6 +8,10 @@ What changes in buddi from one release to the next, newest first.
 
 - Asking an agent to open an app you have not allowed for computer control now asks you with a card, Once or Always, instead of sending you to Settings. Always adds the app to the list.
 
+### Added
+
+- A speech plugin: agents can listen to an audio file (`speech.transcribe`) and answer with a voice (`speech.say`) through an OpenAI or OpenAI-compatible account chosen on Settings → Speech, with daily caps. Local listening and speaking, and voice notes on Telegram, come next.
+
 ## 0.1.0-pre.20 — 2026-09-27
 
 ### Changed
