@@ -1,5 +1,7 @@
 /**
- * `/` anywhere: to the page's composer, or home to the one there.
+ * `/` anywhere: to the page's composer, or — on a page without one — to the
+ * corner dock's (`onNoComposer`), or home to the one there when the shell has
+ * no dock to open.
  *
  * A page has at most one composer (Home's, the chat's), found by its field's
  * id. Typing a `/` into a field is typing, never a shortcut, and a chord with
@@ -18,7 +20,7 @@ export function isEditable(target: EventTarget | null): boolean {
   return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 }
 
-export function useSlashToComposer(navigate: (route: string) => void, enabled = true): void {
+export function useSlashToComposer(navigate: (route: string) => void, enabled = true, onNoComposer?: () => void): void {
   useEffect(() => {
     if (!enabled) return undefined;
     const onKey = (event: KeyboardEvent): void => {
@@ -30,9 +32,10 @@ export function useSlashToComposer(navigate: (route: string) => void, enabled = 
         if (!box.disabled && !box.hidden) box.focus();
         return;
       }
-      navigate(HOME_ROUTE);
+      if (onNoComposer) onNoComposer();
+      else navigate(HOME_ROUTE);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate, enabled]);
+  }, [navigate, enabled, onNoComposer]);
 }

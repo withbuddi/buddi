@@ -70,7 +70,15 @@ describe('the upgrade notice', () => {
     await home(NEWER, navigate);
     expect(screen.getByText('Nothing needs you. Your agents are on it.')).toBeInTheDocument();
     expect(screen.getByText(/A newer buddi is ready:/)).toHaveTextContent('A newer buddi is ready: 0.1.1. Upgrade from Settings → Version.');
+    // One line: the sentence, the version and the link share one paragraph,
+    // not three stacked rows of the notice.
+    const line = screen.getByText(/A newer buddi is ready:/);
+    expect(line.tagName).toBe('P');
+    expect(line.parentElement).toHaveClass('ui-notice');
+    expect(line.parentElement?.children).toHaveLength(1);
+    expect(line.querySelector('.mono')).toHaveTextContent('0.1.1');
     const link = screen.getByRole('link', { name: 'Upgrade from Settings → Version.' });
+    expect(line).toContainElement(link);
     expect(link).toHaveAttribute('href', '#/settings/system');
     fireEvent.click(link);
     expect(navigate).toHaveBeenCalledWith('#/settings/system');

@@ -35,6 +35,7 @@ import {
   placeOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
+import { AskDock, showsAskDock } from './shell/AskDock';
 import { NotificationToasts, useToastQueue } from './shell/NotificationToasts';
 import { usePresence } from './shell/presence';
 import { GroupSheet } from './shell/GroupSheet';
@@ -103,9 +104,6 @@ export function useThemeChoice(): [ThemeChoice, (choice: ThemeChoice) => void] {
 
 export function App(): JSX.Element {
   const [hash, navigate] = useHash();
-  // `/` on any page: that page's composer, or Home's. Not during first run,
-  // which has nowhere else to go.
-  useSlashToComposer(navigate, parseWelcomeRoute(hash) === null);
   const [timezone, setTimezone] = useState('UTC');
   const [badges, setBadges] = useState<{ approvals: number; failed: number }>({ approvals: 0, failed: 0 });
   const [theme, setTheme] = useThemeChoice();
@@ -124,6 +122,20 @@ export function App(): JSX.Element {
   /** The group whose sheet is open for editing, if any. */
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const attention = useAttention();
+  /*
+   * The corner buddi: a small chat with the front desk over any page but Home
+   * and the chat, which have composers of their own. `/` on a page without a
+   * composer opens it; with no front desk yet, `/` goes to Home as before.
+   * Not during first run, which has nowhere else to go.
+   */
+  const frontDesk = agents.find((agent) => agent.id === defaultAgentId) ?? null;
+  const askShown = frontDesk !== null && showsAskDock(hash);
+  const [askOpen, setAskOpen] = useState(false);
+  const openAsk = useCallback(() => setAskOpen(true), []);
+  useEffect(() => {
+    if (!askShown) setAskOpen(false);
+  }, [askShown]);
+  useSlashToComposer(navigate, parseWelcomeRoute(hash) === null, askShown ? openAsk : undefined);
   const railNarrow = useMediaQuery(AGENT_RAIL_QUERY);
   /*
    * Recovery is a property of the installation, not of a page, so the shell is
@@ -413,6 +425,9 @@ export function App(): JSX.Element {
           )}
         </div>
         </div>
+        {askShown && frontDesk ? (
+          <AskDock agent={frontDesk} agents={agents} open={askOpen} onOpenChange={setAskOpen} navigate={navigate} />
+        ) : null}
         <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />
         <Toast.Viewport className="ui-toasts" />
       </Toast.Provider>

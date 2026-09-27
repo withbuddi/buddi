@@ -688,6 +688,60 @@ export function Sheet({
   );
 }
 
+/**
+ * A small window docked in the bottom-right corner: a side conversation over
+ * the page, not in place of it. Non-modal, so the page under it stays usable
+ * and a click on it does not close the dock; Escape and Close do. A third of
+ * the width on a desk, the full width on a phone.
+ */
+export function Dock({
+  title,
+  actions,
+  onClose,
+  onCloseAutoFocus,
+  onOpenAutoFocus,
+  label,
+  children,
+}: {
+  title: ReactNode;
+  /** Beside Close in the head: a link, a "New". */
+  actions?: ReactNode;
+  onClose: () => void;
+  /** Where focus goes once the dock has gone; the caller's trigger, usually. */
+  onCloseAutoFocus?: (event: Event) => void;
+  /** What takes focus when it opens; by default the first control in it. */
+  onOpenAutoFocus?: (event: Event) => void;
+  /** The dialog's accessible name when `title` is not plain text. */
+  label?: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <Dialog.Root open modal={false} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Content
+          className="ui-dock"
+          aria-describedby={undefined}
+          {...(label ? { 'aria-label': label } : {})}
+          onInteractOutside={(event) => event.preventDefault()}
+          {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}
+          {...(onOpenAutoFocus ? { onOpenAutoFocus } : {})}
+        >
+          <div className="ui-dock-head">
+            <Dialog.Title className="ui-dock-title">{title}</Dialog.Title>
+            <div className="ui-dock-actions">
+              {actions}
+              <Dialog.Close asChild>
+                <Button size="sm" variant="ghost">Close</Button>
+              </Dialog.Close>
+            </div>
+          </div>
+          <div className="ui-dock-body">{children}</div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * tabs and lists
  * ------------------------------------------------------------------ */

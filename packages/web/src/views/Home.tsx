@@ -111,8 +111,11 @@ export function Home({
 
       {update && update.updateAvailable && !update.checkout && update.latest ? (
         <Notice tone="accent">
-          A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}
-          <a href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings → Version.</a>
+          {/* One paragraph: the notice stacks its children, and this is one sentence. */}
+          <p>
+            A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}
+            <a href={settingsRoute('system')} onClick={go(settingsRoute('system'))}>Upgrade from Settings → Version.</a>
+          </p>
         </Notice>
       ) : null}
 

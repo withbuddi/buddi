@@ -33,6 +33,11 @@ System), a way to Appearance, and the running version, `buddi <version>`. When a
 newer one is out it says "A newer buddi is ready" with its number, and a click
 goes to Settings → System to upgrade.
 
+On every page but Home and Chat, a round buddi button in the bottom-right
+corner opens a small chat with your front desk over the page (the same
+composer, the answer streamed in place, **Open in Chat** to carry on there);
+it keeps its conversation until you reload or press **New**.
+
 ## Home
 
 The page the dashboard opens on. It answers three questions in order: what
@@ -185,7 +190,8 @@ Needs you. See [Notifications](notifications.md).
 
 - **Enter** sends, **Shift+Enter** starts a new line.
 - **/** outside a field focuses the page's composer (Home's, the chat's); on
-  a page without one it opens Home.
+  a page without one it opens the corner chat. **Alt+/** opens or closes the
+  corner chat from anywhere, and **Escape** closes it.
 - **Up** in an empty composer brings back what you sent before; **Down** and
   **Escape** go back to your draft.
 - In a group chat, `@` offers the members; **Enter** or **Tab** picks one.

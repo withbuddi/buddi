@@ -97,6 +97,9 @@
   --page-max: 1320px;
   --page-gutter: clamp(24px, 3vw, 48px);
   --read-max: 68ch;
+  --fab-size: 52px;       /* the corner button that opens the dock */
+  --dock-w: clamp(360px, 33vw, 480px);
+  --dock-h: min(640px, calc(100vh - 96px));
   /* A list beside its reading pane: the list's width, and how tall both stand. */
   --split-list-w: 380px;
   --split-h: calc(100vh - 260px);

@@ -4,8 +4,13 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- A buddi button in the corner of every page opens a small chat with your front desk over what you are doing, so a quick question needs no page change; `/` opens it too.
+
 ### Fixed
 
+- Home's update notice reads on one line.
 - The Gemini card starts a free Google AI key on the newest Flash when Google refuses Pro, and says why in plain words; a rate-limit answer from any provider now reads as a sentence about the key and the model, not about responses.
 
 ## 0.1.0-pre.21 — 2026-09-27

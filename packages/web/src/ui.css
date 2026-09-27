@@ -672,6 +672,31 @@ fieldset:disabled { opacity: 0.6; }
 .ui-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .ui-sheet-title { margin: 0; font-size: var(--text-lg); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 
+/* A small window docked bottom-right: a side conversation over the page. */
+.ui-dock {
+  position: fixed;
+  right: calc(var(--space-5) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
+  width: var(--dock-w);
+  height: var(--dock-h);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-float);
+  overflow: hidden;
+  z-index: 45;
+  outline: none;
+  animation: ui-dock-in var(--dur-slow) var(--ease);
+}
+@keyframes ui-dock-in { from { transform: translateY(var(--space-3)); opacity: 0; } to { transform: none; opacity: 1; } }
+.ui-dock-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.ui-dock-title { margin: 0; min-width: 0; display: flex; align-items: center; gap: var(--space-2); font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-dock-actions { display: flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
+.ui-dock-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+@media (prefers-reduced-motion: reduce) { .ui-dock { animation: none; } }
+
 .ui-menu {
   min-width: 212px;
   background: var(--surface-raised);
@@ -759,6 +784,7 @@ fieldset:disabled { opacity: 0.6; }
   .ui-kv { grid-template-columns: 1fr; gap: 1px 0; }
   .ui-kv dt { margin-top: var(--space-2); }
   .ui-sheet { width: 100%; padding: var(--space-4); }
+  .ui-dock { left: 0; right: 0; bottom: 0; width: 100%; height: min(var(--dock-h), 85vh); border-radius: var(--radius-xl) var(--radius-xl) 0 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
 }
 
 /* ================================================================== *
