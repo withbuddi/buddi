@@ -86,11 +86,12 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.6'; see §7
+  readonly version: string;            // '1.7'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
   approvals: ApprovalsArea; pages: PagesArea; tools: ToolsArea;
+  network: NetworkArea;
   http?: HttpArea; accounts?: AccountsArea; files?: FilesArea;
   memory?: MemoryArea; proposals?: ProposalsArea; schedule?: ScheduleArea;
   secrets?: SecretsArea; channels?: ChannelsArea;
@@ -144,6 +145,17 @@ before its next turn: `mcp.github.*` covers a tool added after the agent
 loaded. Also on the `register` hook's host. A tool may describe its input with
 a JSON Schema (`inputSchema`) instead of zod, validated with Ajv and
 canonicalised into the approval envelope the same way (plugins.md §9).
+
+**network.** (1.7) `declare(uses: { host, why }[]): void`,
+`undeclare(hosts: string[]): void`, `declared(): { host, why, runtime }[]`.
+The manifest's `network` is fixed at `register()`; a plugin that learns where
+it talks while buddi runs declares those hosts here. They join the manifest's
+in the one list the `http` area checks a request against, and the Plugins page
+lists them under what leaves the machine from that moment: Connections
+declares each connected service's host when the connection is made and takes
+it back on disconnect. A host is a name or `*.name`, with a one-line `why`;
+`undeclare` removes only what `declare` added. Also on the `register` hook's
+host.
 
 ### 4.2 Declared
 
@@ -323,7 +335,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.6`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.7`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

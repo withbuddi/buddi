@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - First run has Start over at the foot of every step; what you already connected stays in Settings.
+- Install buddi as an app: browsers offer it, Home suggests it once, and the dashboard opens in its own window with the Blob as its icon.
 - buddi's Blob moves: it breathes on Home and the first-run page, thinks while an agent works in the chat and in the corner button, and on Telegram a thinking-Blob sticker replaces the hourglass until the answer arrives. Reduced-motion settings keep the still.
 - Add a teammate: the Agents page and Home offer a starter team, Scout for research, Planner for your day with a morning brief, Keeper for one domain's history, plus the plugin agents when their plugin is there, each added in one tap through Agent Father. The Groups heading now says what it needs instead of hiding.
 - Settings → Speech: with no language listed, listening and speaking take the one your profile answers in, and the page says "From your profile: French." Plugins read it with `ctx.buddi.owner.language()` (host API 1.5).
@@ -18,6 +19,8 @@ What changes in buddi from one release to the next, newest first.
 - The finance plugin proposes Ledger, a cash-flow advisor with the plugin's tools, skills and its daily check and Friday recap, so installing finance comes with someone to use it; the Add-a-teammate card lights up.
 - Connections: connect a service that speaks MCP, GitHub, Notion, Linear or any remote server, sign in with its own consent page, read every tool it brings and its tier, and give those tools to your agents; each call runs under the same approval cards as everything else.
 - Plugins can add and remove tools while buddi runs (host API 1.6), and a tool may describe its input with JSON Schema; the first user is the coming Connections feature.
+- Connections: when a service changes its tools after your review, the new and changed ones wait while the rest keep working, and Review again shows what changed; a connection that needs a sign-in or a review says so on Home and with the dot on Settings; an unreachable one is retried in the background and says since when.
+- Connections: a tool that asks you first can have its approval remembered for one agent, on the Give screen or the agent's Access page; one the service says destroys something shows why it cannot.
 
 ### Changed
 
@@ -28,6 +31,7 @@ What changes in buddi from one release to the next, newest first.
 - The install guide and the computer-control part of the browser guide now say what buddi does, how to set it up, what leaves your machine and where the limits are, instead of reading like a plan.
 - The agent's face in a reply's label is 32 px, per the design kit, so the working Blob is seen in the chat.
 - The Claude and ChatGPT sign-ins share one OAuth module with the refresh discipline written once.
+- Connections declare their service's host like a plugin's network (host API 1.7, `ctx.buddi.network`), so Settings → Plugins lists the services you connected under what leaves your machine. The GitHub card asks for a client id up front, and every card's address was checked; an agent held back for a missing connection says to reconnect it in Settings → Connections.
 
 ### Fixed
 
@@ -37,6 +41,7 @@ What changes in buddi from one release to the next, newest first.
 - A delegation that came back after you approved something now opens on who was asked, the question, the answer, the files and how long it took, with the raw JSON folded under Details.
 - The same reminder from two agents is one line on Home: a message about the same thing as one from the last two days is folded into it, says "also from" the other agent, and reaches your phone once.
 - The queue test for retries past the sixth minute no longer fails now and then on CI: it waits for each failure to be recorded before pulling the retry forward.
+- The chat test for an agent holding a question no longer fails now and then: it waits for the question to be recorded, which happens after the run reports finished.
 - Finance: a statement line that is a pending charge now posting is no longer skipped as a duplicate; it settles the pending row, also when the posted line reads differently or is dated up to two days earlier. A deleted row never counts as already imported.
 - Home's update notice reads on one line.
 - The Gemini card starts a free Google AI key on the newest Flash when Google refuses Pro, and says why in plain words; a rate-limit answer from any provider now reads as a sentence about the key and the model, not about responses.

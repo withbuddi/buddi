@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import type { JSONSchema7 } from '@buddi/core/plugin';
 import type { ServerTool, ToolTier } from './tiers.js';
 
-export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review';
+export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review' | 'needs-review';
 export type Queryable = Pick<Pool, 'query'> | PoolClient;
 
 export interface ConnectionRow {
@@ -21,6 +21,8 @@ export interface ConnectionRow {
   serverVersion: string | null;
   reviewedHash: string | null;
   reviewedAt: string | null;
+  /** When it stopped answering; null while it answers. */
+  unreachableSince: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +38,8 @@ export interface ToolRow {
   destructive: boolean;
   enabled: boolean;
   reviewedHash: string;
+  /** The server changed or dropped it since the review: not registered until reviewed again. */
+  changed: boolean;
 }
 
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v === null || v === undefined ? null : String(v));
@@ -47,7 +51,7 @@ function connection(r: Record<string, unknown>): ConnectionRow {
     clientId: (r.client_id as string | null) ?? null, clientSource: (r.client_source as ConnectionRow['clientSource']) ?? null,
     vaultRef: (r.vault_ref as string | null) ?? null,
     serverName: (r.server_name as string | null) ?? null, serverVersion: (r.server_version as string | null) ?? null,
-    reviewedHash: (r.reviewed_hash as string | null) ?? null, reviewedAt: iso(r.reviewed_at),
+    reviewedHash: (r.reviewed_hash as string | null) ?? null, reviewedAt: iso(r.reviewed_at), unreachableSince: iso(r.unreachable_since),
     createdAt: iso(r.created_at)!, updatedAt: iso(r.updated_at)!,
   };
 }
@@ -57,7 +61,7 @@ function tool(r: Record<string, unknown>): ToolRow {
     connectionId: String(r.connection_id), name: String(r.name), localName: String(r.local_name),
     description: String(r.description ?? ''), inputSchema: r.input_schema as JSONSchema7,
     annotations: (r.annotations as ToolRow['annotations']) ?? null, tier: r.tier as ToolTier,
-    destructive: r.destructive === true, enabled: r.enabled === true, reviewedHash: String(r.reviewed_hash),
+    destructive: r.destructive === true, enabled: r.enabled === true, reviewedHash: String(r.reviewed_hash), changed: r.changed === true,
   };
 }
 
@@ -86,10 +90,11 @@ export async function insertConnection(db: Queryable, input: {
 export async function updateConnection(db: Queryable, id: string, patch: Partial<{
   slug: string; name: string; state: ConnectionState; clientId: string | null; clientSource: 'dynamic' | 'manual' | null;
   vaultRef: string | null; serverName: string | null; serverVersion: string | null; reviewedHash: string; reviewedAt: Date;
+  unreachableSince: Date | null;
 }>): Promise<ConnectionRow | null> {
   const columns: Record<string, string> = {
     slug: 'slug', name: 'name', state: 'state', clientId: 'client_id', clientSource: 'client_source', vaultRef: 'vault_ref',
-    serverName: 'server_name', serverVersion: 'server_version', reviewedHash: 'reviewed_hash', reviewedAt: 'reviewed_at',
+    serverName: 'server_name', serverVersion: 'server_version', reviewedHash: 'reviewed_hash', reviewedAt: 'reviewed_at', unreachableSince: 'unreachable_since',
   };
   const sets: string[] = [];
   const values: unknown[] = [id];
@@ -122,7 +127,12 @@ export async function listTools(db: Queryable, connectionId?: string): Promise<T
   return rows.map(tool);
 }
 
-export async function replaceTools(db: Queryable, connectionId: string, tools: readonly Omit<ToolRow, 'connectionId'>[]): Promise<void> {
+/** Mark which reviewed tools the server changed or dropped since the review (all others unchanged). */
+export async function markChanged(db: Queryable, connectionId: string, changed: readonly string[]): Promise<void> {
+  await db.query(`update mcp.tools set changed = (name = any($2::text[])) where connection_id = $1`, [connectionId, [...changed]]);
+}
+
+export async function replaceTools(db: Queryable, connectionId: string, tools: readonly Omit<ToolRow, 'connectionId' | 'changed'>[]): Promise<void> {
   await db.query(`delete from mcp.tools where connection_id = $1`, [connectionId]);
   for (const t of tools) {
     await db.query(

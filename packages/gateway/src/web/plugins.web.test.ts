@@ -14,6 +14,7 @@ import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import type { RegisterHost } from '@buddi/core/plugin';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
@@ -83,10 +84,10 @@ function fakePool() {
   };
 }
 
-async function dashboard(engine: PluginsEngine, env: NodeJS.ProcessEnv = {}) {
+async function dashboard(engine: PluginsEngine, env: NodeJS.ProcessEnv = {}, registry = new ToolRegistry()) {
   const app = await startWebServer({
     pool: fakePool() as never,
-    registry: new ToolRegistry(),
+    registry,
     catalog: { list: () => [], get: () => undefined, reload: () => {} } as unknown as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture',
@@ -315,7 +316,23 @@ it('lists the plugins compiled into this gateway', async () => {
   // The description is the manifest's own line, and absent when it has none.
   for (const plugin of body.builtIn) {
     if (plugin.description !== undefined) expect(typeof plugin.description).toBe('string');
+    expect(Array.isArray(plugin.network)).toBe(true);
   }
+});
+
+/**
+ * What leaves the machine includes the hosts a plugin declared while buddi
+ * runs: a connection made this afternoon is on the list at once.
+ */
+it('lists a built-in plugin\'s runtime hosts from the live registry', async () => {
+  const registry = new ToolRegistry();
+  let host: RegisterHost | undefined;
+  registry.register({ name: 'mcp', version: '0.1.0', schema: 'mcp', migrationsDir: '', tools: [], register: (h) => { host = h; } });
+  host!.network.declare([{ host: 'mcp.notion.com', why: 'Notion, a connected service' }]);
+  const { origin, headers } = await dashboard(fakeEngine(), await emptyRecord(), registry);
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  const mcp = body.builtIn.find((p: { name: string }) => p.name === 'mcp');
+  expect(mcp.network).toEqual([{ host: 'mcp.notion.com', why: 'Notion, a connected service' }]);
 });
 
 /**

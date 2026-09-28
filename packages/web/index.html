@@ -8,7 +8,10 @@
     <title>buddi</title>
     <link rel="icon" type="image/png" sizes="64x64" href="./favicon.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
-    <meta name="theme-color" content="#2b6fe6" />
+    <!-- Installable: the manifest carries the session cookie so a signed-in remote tab can fetch it. -->
+    <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials" />
+    <meta name="theme-color" content="#eef4fd" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c1627" media="(prefers-color-scheme: dark)" />
     <script>
       /* Appearance before the first paint: the same three keys src/appearance.ts
          writes, each read in a try, each attribute absent at its default. */

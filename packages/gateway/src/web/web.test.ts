@@ -36,7 +36,7 @@ import {
   REMOTE_SESSION_TTL_MS,
   SessionStore,
 } from './sessions.js';
-import { resolveAsset } from './static.js';
+import { contentType, resolveAsset } from './static.js';
 import { toStreamEvent } from './stream.js';
 import { ensureWebToken, mintTicket, verifyTicket, webTokenExists, webTokenFile } from './token.js';
 
@@ -360,6 +360,11 @@ describe('static files', () => {
   it('refuse to escape it', () => {
     expect(resolveAsset(root, '/../../../etc/passwd')).toBeNull();
     expect(resolveAsset(root, '/%2e%2e%2f%2e%2e%2fetc/passwd')).toBeNull();
+  });
+
+  it('serve the app manifest and its icons with their own types', () => {
+    expect(contentType(`${root}/manifest.webmanifest`)).toBe('application/manifest+json');
+    expect(contentType(`${root}/icon-512.png`)).toBe('image/png');
   });
 });
 

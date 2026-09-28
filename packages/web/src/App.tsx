@@ -13,7 +13,7 @@
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useCallback, useEffect, useState } from 'react';
-import { AGENTS_CHANGED, api, chatApi, type VersionView } from './api';
+import { AGENTS_CHANGED, api, chatApi, type ConnectionSignal, type VersionView } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
 import {
@@ -43,7 +43,7 @@ import { PluginPage } from './pages/PluginPage';
 import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
 import type { GroupView } from './chat/types';
-import { Rail } from './shell/Rail';
+import { CONNECTION_DOT, Rail } from './shell/Rail';
 import { useAsync } from './ui';
 import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
@@ -157,6 +157,11 @@ export function App(): JSX.Element {
    */
   const version = useAsync<VersionView>(() => Promise.resolve().then(() => api.version()), [], 60 * 60_000).data;
   const update = version && !version.checkout && version.updateAvailable ? version : null;
+  /*
+   * Connections that need the owner (a sign-in ran out, the tools changed):
+   * the same dot on Settings, and a line on Home. One small read a minute.
+   */
+  const connectionSignals = useAsync(() => Promise.resolve().then(() => api.connectionSignals()), [], 60_000).data?.signals ?? [];
   /** When each agent last spoke, for the roster's quiet line. */
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -369,6 +374,7 @@ export function App(): JSX.Element {
             onTheme={setTheme}
             plugins={pluginPages.rail}
             updateAvailable={update !== null}
+            settingsDot={connectionSignals.length > 0 ? CONNECTION_DOT : undefined}
             version={version && !version.checkout ? { current: version.current, latest: version.latest, updateAvailable: version.updateAvailable } : version ? { current: version.current, updateAvailable: false } : undefined}
           />
 
@@ -420,6 +426,7 @@ export function App(): JSX.Element {
                 attention={attention}
                 pluginPages={pluginPages}
                 update={update}
+                connectionSignals={connectionSignals}
               />
             </main>
           )}
@@ -465,6 +472,8 @@ export interface PlaceProps {
   attention: ReturnType<typeof useAttention>;
   /** A newer buddi the installation can upgrade to, when one is known. Home says so. */
   update?: VersionView | null;
+  /** Connections that need the owner: Home says so under the greeting. */
+  connectionSignals?: ConnectionSignal[];
 }
 
 function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; pluginPages: PluginPages }): JSX.Element {

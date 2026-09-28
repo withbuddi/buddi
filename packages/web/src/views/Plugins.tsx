@@ -277,6 +277,13 @@ function BuiltIn({ plugin }: { plugin: BuiltInPluginView }): JSX.Element {
         ]}
       />
       {plugin.description ? <p className="ui-card-meta">{plugin.description}</p> : null}
+      {plugin.network && plugin.network.length > 0 ? (
+        <p className="ui-card-meta">
+          Talks to {plugin.network.map((use, i) => (
+            <span key={use.host}>{i > 0 ? ', ' : ''}<span className="mono" title={use.why}>{use.host}</span></span>
+          ))}.
+        </p>
+      ) : null}
     </Stack>
   );
 }

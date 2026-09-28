@@ -33,6 +33,7 @@ import { Proposals } from './Proposals';
 import { Plugins } from './Plugins';
 import { Notifications } from './Notifications';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
+import { CONNECTION_DOT } from '../shell/Rail';
 
 export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
   const section = settingsSectionOf(hash);
@@ -55,7 +56,11 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
   // The rail's dot on Settings means a newer buddi is ready; the same dot on
   // System says where that is.
   const version = useAsync(() => api.version(), []);
-  const dots = version.data && !version.data.checkout && version.data.updateAvailable ? { system: 'a newer buddi is ready' } : ({} as Record<string, string>);
+  // …and on Connections, when one needs a sign-in or another review.
+  const signals = useAsync(() => Promise.resolve().then(() => api.connectionSignals()), [], 60_000);
+  const dots: Record<string, string> = {};
+  if (version.data && !version.data.checkout && version.data.updateAvailable) dots.system = 'a newer buddi is ready';
+  if ((signals.data?.signals ?? []).length > 0) dots.connections = CONNECTION_DOT;
   const list = { entries, active: section, counts, dots, navigate: (route: string) => navigate(route) };
   return (
     <div className="settings">
@@ -83,7 +88,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'accounts' ? <Providers embedded /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
           {section === 'secrets' ? <Secrets embedded timezone={timezone} /> : null}
-          {section === 'connections' ? <Connections embedded /> : null}
+          {section === 'connections' ? <Connections embedded timezone={timezone} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
           {section === 'plugins' ? <Plugins /> : null}

@@ -197,3 +197,30 @@ describe('runtime tool registration', () => {
     expect(() => loose.tools.register([])).toThrow(/not bound to a tool registry/);
   });
 });
+
+describe('hosts declared while buddi runs (`ctx.buddi.network`, host API 1.7)', () => {
+  it('adds and removes hosts beside the manifest\'s, in the list the http area reads', async () => {
+    const p = plugin();
+    p.manifest.network = [{ host: 'static.example.com', why: 'icons' }];
+    const r = new ToolRegistry();
+    r.register(p.manifest);
+    p.host().network.declare([{ host: 'MCP.Notion.com', why: 'Notion, a connected service' }, { host: 'static.example.com', why: 'again' }]);
+    expect(r.networkOf('mcp')).toEqual([
+      { host: 'static.example.com', why: 'icons', runtime: false },
+      { host: 'mcp.notion.com', why: 'Notion, a connected service', runtime: true },
+    ]);
+    expect(() => p.host().network.declare([{ host: 'https://evil.example/x', why: 'x' }])).toThrow(/not a host name/);
+    expect(() => p.host().network.declare([{ host: 'a.example', why: ' ' }])).toThrow(/without saying why/);
+    const { createPluginHost, hostBindingOf } = await import('./host/build.js');
+    // The binding's one array is what `http` checks: a runtime host is in it at once.
+    const binding = hostBindingOf(plugin('loose').manifest);
+    const host = createPluginHost(binding, ctx);
+    host.network.declare([{ host: 'api.example.com', why: 'the api' }]);
+    expect(binding.network).toEqual(['api.example.com']);
+    host.network.undeclare(['api.example.com']);
+    expect(binding.network).toEqual([]);
+    p.host().network.undeclare(['mcp.notion.com', 'static.example.com']);
+    expect(r.networkOf('mcp')!.map((u) => u.host)).toEqual(['static.example.com']);
+    expect(r.networkOf('nobody')).toBeUndefined();
+  });
+});

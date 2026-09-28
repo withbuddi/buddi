@@ -103,6 +103,37 @@ describe('the upgrade notice', () => {
   });
 });
 
+describe('connections that need the owner', () => {
+  it('says so in one line each, linking to Settings → Connections', async () => {
+    const navigate = vi.fn();
+    await act(async () => {
+      render(
+        <Home
+          timezone="UTC" navigate={navigate} agents={[]} attention={new Map()}
+          connectionSignals={[
+            { id: 'a', name: 'GitHub', state: 'needs-reconnect', sentence: 'GitHub needs you to sign in again.' },
+            { id: 'b', name: 'Notion', state: 'needs-review', sentence: 'Notion changed its tools; review them.' },
+          ]}
+        />,
+      );
+    });
+    const line = screen.getByText(/GitHub needs you to sign in again\./);
+    expect(line.tagName).toBe('P');
+    expect(line.parentElement).toHaveClass('ui-notice');
+    expect(screen.getByText(/Notion changed its tools; review them\./)).toBeInTheDocument();
+    const links = screen.getAllByRole('link', { name: 'Settings → Connections.' });
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute('href', '#/settings/connections');
+    fireEvent.click(links[0]!);
+    expect(navigate).toHaveBeenCalledWith('#/settings/connections');
+  });
+
+  it('says nothing when every connection is fine', async () => {
+    await home(undefined);
+    expect(screen.queryByText(/Settings → Connections/)).not.toBeInTheDocument();
+  });
+});
+
 function note(over: Partial<NotificationRow>): NotificationRow {
   return {
     id: 'n1', kind: 'watcher', urgency: 'now', title: 'A mail from the bank', text: null, link: '#/chat/finance',

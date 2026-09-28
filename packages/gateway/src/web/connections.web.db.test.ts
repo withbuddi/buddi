@@ -172,6 +172,26 @@ suite('connections routes', () => {
     expect(agentFile('concierge')).toMatch(/tools: \[.*mcp\.tracker\.\*.*\]/);
     expect(agentFile('helper')).not.toContain('mcp.tracker');
     expect((await call(owner, 'GET', `/${id}`)).body.agents).toEqual(['concierge']);
+    expect((await call(owner, 'GET', '/signals')).body).toEqual({ signals: [] });
+
+    // Remembered approval, per agent: a gated tool may be; a destructive one says why not.
+    const tools = await call(owner, 'GET', `/${id}/tools`);
+    expect(tools.body.tools.map((t: { tool: string; tier: string; rememberable: boolean }) => [t.tool, t.tier, t.rememberable])).toEqual([
+      ['mcp.tracker.search_issues', 'auto', false], ['mcp.tracker.create_issue', 'gated', true], ['mcp.tracker.delete_repo', 'gated', false],
+    ]);
+    const before = await call(owner, 'GET', '/remembered/concierge');
+    expect(before.body.tools.map((t: { tool: string; remembered: boolean; why: string | null }) => [t.tool, t.remembered, t.why !== null])).toEqual([
+      ['mcp.tracker.create_issue', false, false], ['mcp.tracker.delete_repo', false, true],
+    ]);
+    expect(await call(owner, 'POST', '/remembered', { agent: 'concierge', tool: 'mcp.tracker.create_issue', remember: true })).toMatchObject({ status: 200, body: { remembered: true } });
+    expect((await call(owner, 'GET', '/remembered/concierge')).body.tools[0]).toMatchObject({ tool: 'mcp.tracker.create_issue', remembered: true });
+    const { rows } = await pool.query(`select agent_id, tool, tool_version, conversation_id from core.tool_permissions`);
+    expect(rows).toEqual([{ agent_id: 'concierge', tool: 'mcp.tracker.create_issue', tool_version: '0.1.0', conversation_id: '' }]);
+    expect(await call(owner, 'POST', '/remembered', { agent: 'concierge', tool: 'mcp.tracker.delete_repo', remember: true })).toMatchObject({ status: 409, body: { error: expect.stringMatching(/never remembered/) } });
+    expect((await call(owner, 'POST', '/remembered', { agent: 'helper', tool: 'mcp.tracker.create_issue', remember: true })).status).toBe(409);
+    expect((await call(owner, 'POST', '/remembered', { agent: 'concierge', tool: 'mcp.tracker.search_issues', remember: true })).status).toBe(404);
+    expect(await call(owner, 'POST', '/remembered', { agent: 'concierge', tool: 'mcp.tracker.create_issue', remember: false })).toMatchObject({ status: 200 });
+    expect((await pool.query(`select count(*)::int as n from core.tool_permissions`)).rows[0].n).toBe(0);
 
     const gone = await call(owner, 'DELETE', `/${id}`);
     expect(gone).toMatchObject({ status: 200, body: { touched: ['concierge'] } });

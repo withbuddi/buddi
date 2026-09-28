@@ -13,7 +13,7 @@
  * is saved.
  */
 import type { Pool } from 'pg';
-import { ToolRefusal, type JSONSchema7, type ToolContext, type ToolDefinition, type ToolsArea } from '@buddi/core/plugin';
+import { ToolRefusal, type JSONSchema7, type NetworkArea, type ToolContext, type ToolDefinition, type ToolsArea } from '@buddi/core/plugin';
 import type { DiscoveredAuthorization, HttpTransport, OAuthPort, VaultPort } from './ports.js';
 import { checkServerUrl } from './fetch.js';
 import { takeImage, toResult, type ServiceResult } from './output.js';
@@ -24,6 +24,7 @@ import {
   insertConnection,
   listConnections,
   listTools,
+  markChanged,
   replaceTools,
   slugTaken,
   updateConnection,
@@ -62,6 +63,8 @@ export interface ConnectionsDeps {
   allowLoopbackHttp?: boolean;
   log?: (line: string) => void;
   idleMs?: number;
+  /** How often a connection's tool list is compared with its review, at most. An hour. */
+  recheckMs?: number;
 }
 
 export interface ConnectionView {
@@ -81,6 +84,17 @@ export interface ConnectionView {
   serverName: string | null;
   serverVersion: string | null;
   reviewedAt: string | null;
+  /** When it stopped answering, while it is `unreachable` (buddi retries it in the background). */
+  unreachableSince: string | null;
+  /** Reviewed tools the server changed or dropped since: they wait for another review. */
+  heldTools: number;
+}
+
+/** What changed in a server's list since the owner's review, by the server's names. */
+export interface ReviewChanges {
+  added: string[];
+  changed: string[];
+  removed: string[];
 }
 
 export interface ReviewTool {
@@ -95,6 +109,8 @@ export interface ReviewTool {
   annotated: boolean;
   /** Why it cannot be used, when it cannot. */
   problem: string | null;
+  /** Against the last review: new, or changed since. Null when it is as reviewed (or on a first review). */
+  change: 'added' | 'changed' | null;
 }
 
 export interface ReviewView {
@@ -107,6 +123,16 @@ export interface ReviewView {
   tools: ReviewTool[];
   /** The server annotates none of its tools: every one is gated. */
   annotatedNothing: boolean;
+  /** Against the last review; null on the first one. */
+  changes: ReviewChanges | null;
+}
+
+/** A line for Home and the rail: a connection that needs the owner. */
+export interface ConnectionSignal {
+  id: string;
+  name: string;
+  state: 'needs-reconnect' | 'needs-review';
+  sentence: string;
 }
 
 export type SignIn = 'none' | 'dynamic' | 'manual';
@@ -132,6 +158,14 @@ const MAX_DESCRIPTION = 2000;
 export const NEEDS_CLIENT_ID =
   'This service does not let buddi register itself, so it needs a client id you create in the service\'s developer settings, with the address below as its redirect.';
 
+/** After a failure, the next try is this many minutes on; the last one repeats (spec: 1, 5, 15, 60, then hourly). */
+export const RETRY_MINUTES = [1, 5, 15, 60] as const;
+export const RECHECK_MS = 60 * 60_000;
+
+export function changedSentence(name: string, tool: string): string {
+  return `${name} changed ${tool} since you reviewed it, so it waits until you review ${name} again under Settings → Connections.`;
+}
+
 export function reconnectSentence(name: string): string {
   return `${name} needs to be reconnected before its tools work again: the owner can sign in again under Settings → Connections.`;
 }
@@ -140,7 +174,14 @@ export class ConnectionsService {
   readonly sessions: Sessions;
   readonly tokens: TokenKeeper;
   #tools: ToolsArea | undefined;
+  #network: NetworkArea | undefined;
   readonly #registered = new Map<string, string[]>();
+  /** When each connection's list was last compared with its review (ms). */
+  readonly #checkedAt = new Map<string, number>();
+  /** An unreachable connection's next try. */
+  readonly #retries = new Map<string, { attempts: number; nextAt: number }>();
+  #background: NodeJS.Timeout | undefined;
+  #retrying = false;
   readonly #live = new Map<string, ConnectionRow>();
   readonly #pending = new Map<string, PendingConsent>();
   readonly #discovered = new Map<string, { at: number; value: DiscoveredAuthorization }>();
@@ -158,32 +199,71 @@ export class ConnectionsService {
   #now(): Date { return this.deps.now?.() ?? new Date(); }
   #log(line: string): void { (this.deps.log ?? ((l: string) => console.error(l)))(`mcp: ${line}`); }
 
-  /** Where runtime tools go: the plugin's `ctx.buddi.tools`, handed over at register. */
-  attachTools(area: ToolsArea): void { this.#tools = area; }
+  /**
+   * Where runtime tools go (the plugin's `ctx.buddi.tools`) and where its
+   * hosts are declared (`ctx.buddi.network`), handed over at register.
+   */
+  attachTools(area: ToolsArea, network?: NetworkArea): void {
+    this.#tools = area;
+    if (network) {
+      this.#network = network;
+      for (const row of this.#live.values()) this.#declare(row);
+    }
+  }
+
+  /** The connection's host joins the plugin's declared network (docs/connections.md, "What leaves"). */
+  #declare(row: ConnectionRow): void {
+    if (!this.#network) return;
+    try {
+      this.#network.declare([{ host: hostnameOf(row), why: `${row.name}, a connected service: its tool list and the calls agents make with their arguments` }]);
+    } catch (err) {
+      this.#log(`${row.host} could not be declared: ${short(err)}`);
+    }
+  }
+
+  #undeclare(row: ConnectionRow): void {
+    if (!this.#network) return;
+    const host = hostnameOf(row);
+    if ([...this.#live.values()].some((other) => other.id !== row.id && hostnameOf(other) === host)) return;
+    this.#network.undeclare([host]);
+  }
 
   /* ---------------------------------------------------------------- *
    * Reading
    * ---------------------------------------------------------------- */
 
-  view(row: ConnectionRow, toolCount: number): ConnectionView {
+  view(row: ConnectionRow, tools: readonly ToolRow[]): ConnectionView {
+    const mine = row.slug ? tools.filter((t) => t.connectionId === row.id) : [];
     return {
       id: row.id, slug: row.slug, name: row.name, url: row.url, host: row.host, state: row.state, authKind: row.authKind,
       signedIn: row.authKind === 'none' || row.vaultRef !== null,
-      toolCount, grant: row.slug ? `${NAMESPACE}.${row.slug}.*` : null,
+      toolCount: mine.filter((t) => t.enabled && !t.changed).length, grant: row.slug ? `${NAMESPACE}.${row.slug}.*` : null,
       serverName: row.serverName, serverVersion: row.serverVersion, reviewedAt: row.reviewedAt,
+      unreachableSince: row.state === 'unreachable' ? row.unreachableSince : null,
+      heldTools: mine.filter((t) => t.changed).length,
     };
   }
 
   async list(): Promise<ConnectionView[]> {
     const rows = await listConnections(this.deps.pool);
     const tools = await listTools(this.deps.pool);
-    return rows.map((row) => this.view(row, tools.filter((t) => t.connectionId === row.id && t.enabled && row.slug !== null).length));
+    return rows.map((row) => this.view(row, tools));
   }
 
   async get(id: string): Promise<ConnectionView> {
     const row = await this.#row(id);
-    const tools = await listTools(this.deps.pool, id);
-    return this.view(row, row.slug ? tools.filter((t) => t.enabled).length : 0);
+    return this.view(row, await listTools(this.deps.pool, id));
+  }
+
+  /** The connections that need the owner, in a sentence each: Home's line and the rail's dot. */
+  async signals(): Promise<ConnectionSignal[]> {
+    const rows = await listConnections(this.deps.pool);
+    const out: ConnectionSignal[] = [];
+    for (const row of rows) {
+      if (row.state === 'needs-reconnect') out.push({ id: row.id, name: row.name, state: row.state, sentence: `${row.name} needs you to sign in again.` });
+      else if (row.state === 'needs-review') out.push({ id: row.id, name: row.name, state: row.state, sentence: `${row.name} changed its tools; review them.` });
+    }
+    return out;
   }
 
   async #row(id: string): Promise<ConnectionRow> {
@@ -236,7 +316,8 @@ export class ConnectionsService {
       if (cached) this.#discovered.set(row.id, cached);
     }
     this.#live.set(row.id, row);
-    return { connection: this.view(row, 0), signIn };
+    this.#declare(row);
+    return { connection: this.view(row, []), signIn };
   }
 
   #loopback(): { allowLoopbackHttp?: true } {
@@ -409,9 +490,10 @@ export class ConnectionsService {
     const taken = new Set((await listConnections(this.deps.pool)).filter((c) => c.id !== id && c.slug).map((c) => c.slug!));
     const slug = row.slug ?? suggestSlug(row.name, taken);
     const names = localNames(tools.map((t) => t.name));
-    const count = (await listTools(this.deps.pool, id)).filter((t) => t.enabled).length;
+    const stored = await listTools(this.deps.pool, id);
+    const changes = row.slug ? diff(stored, tools) : null;
     return {
-      connection: this.view(row, row.slug ? count : 0),
+      connection: this.view(row, stored),
       slug,
       slugEditable: row.slug === null,
       host: row.host,
@@ -421,9 +503,11 @@ export class ConnectionsService {
         return {
           name: t.name, fullName: `${NAMESPACE}.${slug}.${names.get(t.name)}`, description: String(t.description ?? ''),
           tier, destructive, annotated: annotated(t), problem: schemaProblem(t.inputSchema, this.deps.compileSchema),
+          change: changes?.added.includes(t.name) ? 'added' : changes?.changed.includes(t.name) ? 'changed' : null,
         };
       }),
       annotatedNothing: tools.length > 0 && tools.every((t) => !annotated(t)),
+      changes,
     };
   }
 
@@ -442,7 +526,7 @@ export class ConnectionsService {
       throw new ConnectionError(409, `${row.name} changed its tools while you read them. Read them again.`, 'changed');
     }
     const names = localNames(tools.map((t) => t.name));
-    const rows: Omit<ToolRow, 'connectionId'>[] = tools.map((t) => {
+    const rows: Omit<ToolRow, 'connectionId' | 'changed'>[] = tools.map((t) => {
       const { tier, destructive } = tierOf(t);
       return {
         name: t.name, localName: names.get(t.name)!, description: String(t.description ?? ''),
@@ -455,7 +539,7 @@ export class ConnectionsService {
     try {
       await client.query('begin');
       await replaceTools(client, id, rows);
-      updated = await updateConnection(client, id, { slug, reviewedHash: input.hash, reviewedAt: this.#now(), state: 'connected' });
+      updated = await updateConnection(client, id, { slug, reviewedHash: input.hash, reviewedAt: this.#now(), state: 'connected', unreachableSince: null });
       await client.query('commit');
     } catch (err) {
       await client.query('rollback').catch(() => {});
@@ -465,8 +549,11 @@ export class ConnectionsService {
       client.release();
     }
     this.#live.set(id, updated!);
-    this.#register(updated!, rows.map((r) => ({ ...r, connectionId: id })));
-    return this.view(updated!, rows.filter((r) => r.enabled).length);
+    this.#retries.delete(id);
+    this.#checkedAt.set(id, this.#now().getTime());
+    const kept = rows.map((r) => ({ ...r, connectionId: id, changed: false }));
+    this.#register(updated!, kept);
+    return this.view(updated!, kept);
   }
 
   /* ---------------------------------------------------------------- *
@@ -487,9 +574,12 @@ export class ConnectionsService {
       }
     }
     this.#unregister(id);
+    this.#undeclare(row);
     await deleteConnection(this.deps.pool, id);
     this.#live.delete(id);
     this.#discovered.delete(id);
+    this.#retries.delete(id);
+    this.#checkedAt.delete(id);
     return { id, name: row.name, slug: row.slug };
   }
 
@@ -503,6 +593,7 @@ export class ConnectionsService {
     const tools = await listTools(this.deps.pool);
     for (const row of rows) {
       this.#live.set(row.id, row);
+      this.#declare(row);
       if (!row.slug) continue;
       try {
         this.#register(row, tools.filter((t) => t.connectionId === row.id));
@@ -527,7 +618,7 @@ export class ConnectionsService {
       this.#log('no tool registry is bound; the tools wait for the next start');
       return;
     }
-    const defs = tools.filter((t) => t.enabled).map((t) => this.#definition(row.id, row.slug!, t));
+    const defs = tools.filter((t) => t.enabled && !t.changed).map((t) => this.#definition(row.id, row.slug!, t));
     this.#tools.register(defs);
     this.#registered.set(row.id, defs.map((d) => d.name));
   }
@@ -535,9 +626,109 @@ export class ConnectionsService {
   async #setState(id: string, state: ConnectionState): Promise<void> {
     const current = this.#live.get(id);
     if (current?.state === state) return;
-    const updated = await updateConnection(this.deps.pool, id, { state }).catch(() => null);
+    const now = this.#now();
+    const since = state === 'unreachable' ? now : null;
+    const updated = await updateConnection(this.deps.pool, id, { state, unreachableSince: since }).catch(() => null);
     if (updated) this.#live.set(id, updated);
-    else if (current) this.#live.set(id, { ...current, state });
+    else if (current) this.#live.set(id, { ...current, state, unreachableSince: since ? since.toISOString() : null });
+    if (state === 'unreachable') this.#retries.set(id, { attempts: 0, nextAt: now.getTime() + RETRY_MINUTES[0] * 60_000 });
+    else this.#retries.delete(id);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Review again: the server's list against the owner's review
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Compare what the server lists now with what the owner reviewed. The same
+   * list: connected, every reviewed tool registered. A different one: the
+   * tools that are new, changed or gone wait (unregistered, `changed` in the
+   * store) and the connection needs another review; the unchanged ones keep
+   * working. A server that goes back to the reviewed list is connected again.
+   */
+  async #compare(id: string, live: readonly ServerTool[]): Promise<void> {
+    const row = this.#live.get(id) ?? await this.#row(id);
+    this.#checkedAt.set(id, this.#now().getTime());
+    if (!row.slug) return;
+    const stored = await listTools(this.deps.pool, id);
+    const same = listHash(live) === row.reviewedHash;
+    const changes: ReviewChanges = same ? { added: [], changed: [], removed: [] } : diff(stored, live);
+    const held = [...changes.changed, ...changes.removed];
+    if (stored.some((t) => t.changed !== held.includes(t.name))) await markChanged(this.deps.pool, id, held);
+    const next = stored.map((t) => ({ ...t, changed: held.includes(t.name) }));
+    await this.#setState(id, same ? 'connected' : 'needs-review');
+    const wanted = next.filter((t) => t.enabled && !t.changed).map((t) => `${NAMESPACE}.${row.slug}.${t.localName}`).sort();
+    const have = [...(this.#registered.get(id) ?? [])].sort();
+    if (wanted.join(',') !== have.join(',')) {
+      try { this.#register(this.#live.get(id) ?? row, next); } catch (err) { this.#log(`the tools of ${row.name} did not register: ${short(err)}`); }
+    }
+    if (!same) this.#log(`${row.name} changed its tools since the review: ${changes.added.length} new, ${changes.changed.length} changed, ${changes.removed.length} gone`);
+  }
+
+  /** Whether the list is due another comparison: never compared in this process, or an hour ago. */
+  #due(id: string): boolean {
+    const at = this.#checkedAt.get(id);
+    return at === undefined || this.#now().getTime() - at >= (this.deps.recheckMs ?? RECHECK_MS);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Unreachable: retried in the background
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Try every unreachable connection whose time has come: open it and read
+   * its list. It answers: connected again (or needs review, when the list
+   * changed). A 401: needs reconnect. Nothing: the next try is further off
+   * (1, 5, 15, 60 minutes, then hourly).
+   */
+  async retryDue(): Promise<void> {
+    if (this.#retrying) return;
+    this.#retrying = true;
+    try {
+      const now = this.#now().getTime();
+      for (const row of [...this.#live.values()]) {
+        if (row.state !== 'unreachable') continue;
+        let retry = this.#retries.get(row.id);
+        if (!retry) {
+          retry = { attempts: 0, nextAt: now + RETRY_MINUTES[0] * 60_000 };
+          this.#retries.set(row.id, retry);
+        }
+        if (now < retry.nextAt) continue;
+        await this.sessions.close(row.id);
+        try {
+          const opened = await this.#session(row);
+          const live = await listAllTools(opened.client);
+          if (row.slug) await this.#compare(row.id, live);
+          else await this.#setState(row.id, 'connected');
+          this.#log(`${row.name} answers again`);
+        } catch (err) {
+          await this.sessions.close(row.id);
+          if (err instanceof ReconnectNeeded || err instanceof Unauthorized) {
+            await this.#setState(row.id, 'needs-reconnect');
+            continue;
+          }
+          retry.attempts += 1;
+          retry.nextAt = now + RETRY_MINUTES[Math.min(retry.attempts, RETRY_MINUTES.length - 1)]! * 60_000;
+        }
+      }
+    } finally {
+      this.#retrying = false;
+    }
+  }
+
+  /** When an unreachable connection is tried next (tests, the page). */
+  nextRetryAt(id: string): Date | null {
+    const retry = this.#retries.get(id);
+    return retry ? new Date(retry.nextAt) : null;
+  }
+
+  /** Retry unreachable connections on a timer that never keeps the process alive. */
+  startBackground(everyMs = 30_000): void {
+    if (this.#background) return;
+    this.#background = setInterval(() => {
+      void this.retryDue().catch((err: unknown) => this.#log(`retrying unreachable connections failed: ${short(err)}`));
+    }, everyMs);
+    this.#background.unref?.();
   }
 
   async #current(id: string): Promise<ConnectionRow> {
@@ -597,15 +788,24 @@ export class ConnectionsService {
     }
     let opened: Opened | undefined;
     try {
+      const fresh = !this.sessions.has(id);
       opened = await this.#session(row);
+      // A session just opened, or an hour since the last look: the list against the review.
+      if (row.slug && (fresh || this.#due(id))) {
+        await this.#compare(id, await listAllTools(opened.client));
+        if (!(this.#registered.get(id) ?? []).includes(`${NAMESPACE}.${row.slug}.${t.localName}`)) {
+          throw new ToolRefusal(changedSentence(row.name, t.name));
+        }
+      }
       const answer = await opened.client.callTool(
         { name: t.name, arguments: input ?? {} },
         undefined,
         { ...(ctx.signal ? { signal: ctx.signal } : {}), timeout: 110_000 },
       );
-      if (row.state === 'unreachable') await this.#setState(id, 'connected');
+      if (this.#live.get(id)?.state === 'unreachable') await this.#setState(id, 'connected');
       return toResult(answer as { content?: unknown; structuredContent?: unknown; isError?: boolean }, { service: row.name, tool: t.name });
     } catch (err) {
+      if (err instanceof ToolRefusal) throw err;
       const unauthorized = err instanceof ReconnectNeeded || err instanceof Unauthorized || (opened?.unauthorized() ?? null) !== null;
       await this.sessions.close(id);
       if (unauthorized) {
@@ -618,7 +818,26 @@ export class ConnectionsService {
     }
   }
 
-  async close(): Promise<void> { await this.sessions.closeAll(); }
+  async close(): Promise<void> {
+    if (this.#background) clearInterval(this.#background);
+    this.#background = undefined;
+    await this.sessions.closeAll();
+  }
+}
+
+/** The server's list against the reviewed rows, by the server's names. */
+function diff(stored: readonly ToolRow[], live: readonly ServerTool[]): ReviewChanges {
+  const reviewed = new Map(stored.map((t) => [t.name, t.reviewedHash]));
+  const listed = new Set(live.map((t) => t.name));
+  return {
+    added: live.filter((t) => !reviewed.has(t.name)).map((t) => t.name),
+    changed: live.filter((t) => reviewed.has(t.name) && reviewed.get(t.name) !== toolHash(t)).map((t) => t.name),
+    removed: stored.filter((t) => !listed.has(t.name)).map((t) => t.name),
+  };
+}
+
+function hostnameOf(row: Pick<ConnectionRow, 'url' | 'host'>): string {
+  try { return new URL(row.url).hostname.toLowerCase(); } catch { return row.host.replace(/:\d+$/, '').toLowerCase(); }
 }
 
 /** An MCP error the server sent (it answered), as opposed to no answer at all. */

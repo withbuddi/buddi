@@ -3053,6 +3053,12 @@ undeclared host is a plugin author who did not write it down, not a plugin that
 cannot reach the network. It is compared with the `Hosts:` line of your
 `buddi.md`, and a difference costs the owner a second approval.
 
+**Network at runtime.** `network` is read once, at `register()`. A plugin that
+only learns where it talks while buddi runs — Connections, whose hosts are the
+services the owner connected — declares them with `ctx.buddi.network.declare`
+(host API 1.7, §9b) and takes them back with `undeclare`. A runtime host is
+listed on the Plugins page beside the manifest's, and `http` treats it the same.
+
 ### Sentinel constants worth knowing
 
 | | |
@@ -3072,13 +3078,13 @@ your manifest's name, schema, tools, `network` and `uses`, and puts it on every
 context it hands you: a tool's, a page query's, a metric's, a home block's, a
 preview's, a source's, a sentinel's. §1.1 is the idea; this is every member.
 
-Seven areas are always there. The rest exist only when your manifest's `uses`
+Eight areas are always there. The rest exist only when your manifest's `uses`
 declares them, and `package.json`'s `buddi.uses` says the same (§1.3). An area
 you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.6`; most members are from `1.0`, and the later minors' additions are the rows
+`1.7`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3096,6 +3102,7 @@ that say otherwise.
 | `approvals` | `ApprovalsArea` | yes | 1.0 | The owner's decisions about your own tools. |
 | `pages` | `PagesArea` | yes | 1.0 | What a query or a tool asks about pages and previews. |
 | `tools` | `ToolsArea` | yes | 1.6 | Your own tools, added and removed while buddi runs. Also on the `register` hook's host. |
+| `network` | `NetworkArea` | yes | 1.7 | Hosts you talk to that you learn while buddi runs, beside your manifest's `network`. Also on the `register` hook's host. |
 | `http` | `HttpArea` | no | 1.0 | Declared as `http`. |
 | `accounts` | `AccountsArea` | no | 1.0 | Declared as `accounts`. |
 | `files` | `FilesArea` | no | 1.0 | Declared as `files` or `files:library`. |
@@ -3161,6 +3168,20 @@ that say otherwise.
 | `register` | `(definitions: ToolDefinition[]) => void` | yes | 1.6 | Add tools while buddi runs, for tools you cannot know at boot (a connection the owner made this afternoon). Each name must be `<plugin>.<what>` (letters, digits, `_`, `-`); every check a manifest's tools get applies — no name twice, tier and `tierFor` coherent, `untrusted` a known kind, an input a provider can take. All or nothing: one bad definition and none is added. Agents' `tools:` grants are resolved again for their next turn, so `mcp.github.*` covers a tool added after the agent loaded. |
 | `unregister` | `(names: string[]) => void` | yes | 1.6 | Remove tools you added with `register`. A manifest tool, or another plugin's, is refused; so is the whole call if one name is. An approval still pending on a removed tool is refused when it would execute. |
 | `registered` | `() => string[]` | yes | 1.6 | The names you have added at runtime and not removed, in order. |
+
+#### `NetworkArea`
+
+Your manifest's `network` is fixed when buddi starts. A plugin that learns
+where it talks while buddi runs (Connections: the owner connects Notion at
+3pm) declares those hosts here, and from that moment they are part of what the
+Plugins page lists under what leaves the machine, and part of the list `http`
+checks a request against, exactly like a manifest host.
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `declare` | `(uses: { host, why }[]) => void` | yes | 1.7 | Add hosts: a name (`mcp.notion.com`) or `*.name`, never a URL, a port or an address, each with one line the owner can weigh. Declaring a host again replaces its `why`; a host your manifest already names changes nothing. A malformed host throws and nothing is added. |
+| `undeclare` | `(hosts: string[]) => void` | yes | 1.7 | Remove hosts you declared with `declare`. Your manifest's stay. |
+| `declared` | `() => { host, why, runtime }[]` | yes | 1.7 | Every host you declared: the manifest's first (`runtime: false`), then the runtime ones in the order they came. |
 
 #### `HttpArea`
 

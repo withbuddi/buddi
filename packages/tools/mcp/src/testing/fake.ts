@@ -68,6 +68,10 @@ export class Fake {
   validToken = 'access-1';
   /** The token endpoint refuses a refresh. */
   refuseRefresh = false;
+  /** The MCP server does not answer at all (a refused connection). */
+  down = false;
+  /** How many `tools/list` requests the server has answered. */
+  lists = 0;
   issued = 0;
   constructor(readonly options: FakeOptions = {}) {
     this.tools = options.tools ?? DEFAULT_TOOLS;
@@ -81,7 +85,11 @@ export class Fake {
         if (!this.options.auth) return reply(404, '');
         return reply(200, JSON.stringify({ resource: MCP_URL, authorization_servers: [AS_ORIGIN], scopes_supported: ['read', 'write'] }));
       }
-      if (u.pathname === '/mcp') return this.#mcp(url, init);
+      if (u.pathname === '/mcp') {
+        if (this.down) throw new Error('connect ECONNREFUSED');
+        if (typeof init.body === 'string' && init.body.includes('"tools/list"')) this.lists += 1;
+        return this.#mcp(url, init);
+      }
       return reply(404, '');
     }
     if (u.origin === AS_ORIGIN) return this.#as(u, init);

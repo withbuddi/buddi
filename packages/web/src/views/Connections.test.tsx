@@ -20,6 +20,7 @@ vi.mock('../api', async (importOriginal) => {
       ...original.api,
       connections: vi.fn(), connection: vi.fn(), addConnection: vi.fn(), connectionConsent: vi.fn(), connectionCallback: vi.fn(),
       connectionReview: vi.fn(), saveConnectionReview: vi.fn(), grantConnection: vi.fn(), disconnect: vi.fn(),
+      connectionTools: vi.fn(), setRememberedApproval: vi.fn(),
     },
   };
 });
@@ -61,6 +62,7 @@ const REVIEW: ConnectionReview = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocked.connectionTools.mockResolvedValue({ connection: 'github', tools: [] });
 });
 
 describe('the list', () => {
@@ -165,6 +167,59 @@ describe('the four screens', () => {
     render(<ConnectFlow start={{ step: 'review', connection: REVIEW.connection }} agents={AGENTS} onClose={() => {}} />);
     expect(await screen.findByText(/says nothing about what its tools do/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Keep this tool' })).toBeInTheDocument();
+  });
+});
+
+describe('review again, the states, remembered approval', () => {
+  it('asks for another review when the tools changed, and says since when an unreachable one is retried', async () => {
+    mocked.connections.mockResolvedValue(view([
+      connection({ state: 'needs-review', heldTools: 1, toolCount: 11 }),
+      connection({ id: '22222222-2222-4222-8222-222222222222', name: 'Linear', slug: 'linear', state: 'unreachable', unreachableSince: '2026-09-28T09:05:00Z', grant: 'mcp.linear.*' }),
+    ]));
+    render(<Connections embedded timezone="UTC" />);
+    expect(await screen.findByText('Changed its tools')).toBeInTheDocument();
+    expect(screen.getByText(/The new and changed ones wait until you review it again \(1 of the ones you kept waits\)/)).toBeInTheDocument();
+    expect(screen.getByText('Unreachable since 28 Sept 2026, 09:05, retrying.'.replace('Sept', new Intl.DateTimeFormat('en-GB', { month: 'short' }).format(new Date('2026-09-28'))))).toBeInTheDocument();
+    const again = screen.getAllByRole('button', { name: 'Review again' });
+    expect(again[0]).toHaveAttribute('data-variant', 'accent');
+  });
+
+  it('shows what changed since the last review, tool by tool', async () => {
+    mocked.connectionReview.mockResolvedValue({
+      ...REVIEW, slugEditable: false, connection: connection({ state: 'needs-review' }),
+      changes: { added: ['close_issue'], changed: ['create_issue'], removed: ['old_tool'] },
+      tools: REVIEW.tools.map((t) => ({ ...t, change: t.name === 'create_issue' ? 'changed' as const : null })),
+    });
+    render(<ConnectFlow start={{ step: 'review', connection: connection({ state: 'needs-review' }), keepGrants: true }} agents={AGENTS} onClose={() => {}} />);
+    expect(await screen.findByText('GitHub changed its tools since your last review.')).toBeInTheDocument();
+    const changes = screen.getByRole('list', { name: 'What changed' });
+    expect(within(changes).getByText('close_issue')).toBeInTheDocument();
+    expect(within(changes).getByText('old_tool')).toBeInTheDocument();
+    expect(screen.getByText('Changed')).toBeInTheDocument();
+    // Why a destructive tool is never remembered, on the review itself.
+    expect(screen.getByText(/never remembered/)).toBeInTheDocument();
+  });
+
+  it('remembers approval for the agents given the tools, never for a destructive one', async () => {
+    const kept = connection({ slug: 'gh', grant: 'mcp.gh.*', agents: [] });
+    mocked.connectionTools.mockResolvedValue({ connection: 'gh', tools: [
+      { tool: 'mcp.gh.search_issues', tier: 'auto', rememberable: false, why: null },
+      { tool: 'mcp.gh.create_issue', tier: 'gated', rememberable: true, why: null },
+      { tool: 'mcp.gh.delete_repo', tier: 'gated', rememberable: false, why: 'It can delete or destroy something, so it asks you every time and is never remembered.' },
+    ] });
+    mocked.grantConnection.mockResolvedValue({ granted: ['concierge'], failed: [], connection: kept });
+    mocked.setRememberedApproval.mockResolvedValue({ agent: 'concierge', tool: 'mcp.gh.create_issue', remembered: true });
+    const onClose = vi.fn();
+    render(<ConnectFlow start={{ step: 'grant', connection: kept }} agents={AGENTS} onClose={onClose} />);
+    const group = await screen.findByRole('group', { name: 'Remembered approval' });
+    expect(within(group).getByRole('checkbox', { name: 'mcp.gh.delete_repo' })).toBeDisabled();
+    expect(within(group).getByText(/never remembered/)).toBeInTheDocument();
+    expect(within(group).queryByText('mcp.gh.search_issues')).toBeNull();
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'mcp.gh.create_issue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Give them' }));
+    await waitFor(() => expect(mocked.setRememberedApproval).toHaveBeenCalledWith('concierge', 'mcp.gh.create_issue', true));
+    expect(mocked.setRememberedApproval).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });
 

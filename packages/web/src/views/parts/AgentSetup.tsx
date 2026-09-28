@@ -555,8 +555,58 @@ function Access({ agent, all, onSaved }: { agent: AgentRow; all: readonly AgentR
           <ToolPicker view={picker.data} chosen={chosen} onChange={setPicked} disabled={busy || agent.isExample} />
         )}
       </div>
+      <RememberedApprovals agentId={agent.id} version={granted.join(',')} disabled={busy || agent.isExample} />
       </Stack>
     </Section>
+  );
+}
+
+/**
+ * The agent's connection tools that ask first (docs/connections.md): each may
+ * have its approval remembered for this agent — the row a card's "Always"
+ * writes — unless the server says it destroys something. Nothing is drawn
+ * for an agent that holds none.
+ */
+export function RememberedApprovals({ agentId, version, disabled }: { agentId: string; version: string; disabled: boolean }): JSX.Element | null {
+  const view = useAsync(() => Promise.resolve().then(() => api.rememberedApprovals(agentId)), [agentId, version]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const tools = view.data?.tools ?? [];
+  if (tools.length === 0) return null;
+  const toggle = async (tool: string, remember: boolean): Promise<void> => {
+    setBusy(tool);
+    setFailure(null);
+    try {
+      await api.setRememberedApproval(agentId, tool, remember);
+      view.reload();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="ui-field">
+      <span className="ui-field-label">Connection tools that ask first</span>
+      <div className="ui-stack" data-gap="sm" role="group" aria-label="Remembered approvals">
+        {tools.map((tool) => (
+          <Stack key={tool.tool} gap="sm">
+            <label className="backup-check">
+              <input
+                type="checkbox"
+                checked={tool.remembered}
+                disabled={disabled || !tool.rememberable || busy !== null}
+                onChange={(event) => void toggle(tool.tool, event.target.checked)}
+              />
+              <span><span className="mono">{tool.tool}</span> · remember my approval</span>
+            </label>
+            {tool.why ? <p className="ui-card-meta">{tool.why}</p> : null}
+          </Stack>
+        ))}
+      </div>
+      <ErrorBanner message={failure} />
+      <span className="ui-field-hint">Remembered, it asks once and then runs for this agent. Never for a tool that deletes or destroys.</span>
+    </div>
   );
 }
 

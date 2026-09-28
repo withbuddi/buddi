@@ -532,7 +532,18 @@ export function heldBackMessage(
   families: readonly string[],
   pluginForFamily?: (family: string) => string | undefined,
 ): string {
-  const parts = families.map((family) => {
+  /*
+   * `mcp.<slug>`: a connection's namespace, not a plugin. The connection was
+   * disconnected, or the server lists nothing buddi could register; either
+   * way the fix is on Settings → Connections, not the Plugins page.
+   */
+  const connections = families.filter((family) => CONNECTION_NAMESPACE.test(family));
+  const plugins = families.filter((family) => !CONNECTION_NAMESPACE.test(family));
+  const sentences = connections.map(
+    (family) => `The ${family.slice(family.indexOf('.') + 1)} connection is gone or has no tools; reconnect it in Settings → Connections.`,
+  );
+  if (plugins.length === 0 && sentences.length > 0) return sentences.join(' ');
+  const parts = plugins.map((family) => {
     const plugin = pluginForFamily?.(family);
     return plugin === undefined ? `a plugin providing the ${family} tools` : `the ${plugin} plugin`;
   });
@@ -540,8 +551,11 @@ export function heldBackMessage(
     parts.length <= 1
       ? (parts[0] ?? 'a plugin that is not installed')
       : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-  return `Needs ${list}.`;
+  return [`Needs ${list}.`, ...sentences].join(' ');
 }
+
+/** A connection's namespace inside the `mcp` family (docs/connections.md). */
+const CONNECTION_NAMESPACE = /^mcp\.[A-Za-z0-9_-]+$/;
 
 const LANGUAGE_LINE: Record<AgentLanguage, string> = {
   mirror:

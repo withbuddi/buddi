@@ -10,6 +10,10 @@
  *   POST   /api/connections/:id/review      3. keep them: { slug?, hash }
  *   POST   /api/connections/:id/grant       4. grant: { agents: [id] }
  *   DELETE /api/connections/:id             disconnect, taking the grants out of every agent file
+ *   GET    /api/connections/signals         the ones that need the owner: Home's line, the rail's dot
+ *   GET    /api/connections/:id/tools       its registered tools, with whether each may be remembered
+ *   GET    /api/connections/remembered/:agent  the agent's gated connection tools, remembered or not
+ *   POST   /api/connections/remembered      { agent, tool, remember }: remembered approval, per agent
  *
  * Every one is an owner route behind the dashboard's session, origin and CSRF
  * gate, like every other. The consent state is bound to the dashboard session
@@ -20,7 +24,8 @@
  * the agent editor's writes take: nothing is granted silently, and nothing is
  * written that the registry cannot resolve.
  */
-import type { AgentCatalog, ToolRegistry } from '@buddi/core';
+import type { Pool } from 'pg';
+import { grantToolPermission, listToolPermissions, revokeToolPermission, type AgentCatalog, type ToolRegistry } from '@buddi/core';
 import { CATALOG, ConnectionError, ConnectionsService, type ConnectionView } from '@buddi/tool-mcp';
 import { readBoundAgentFile, updateAgentFromOwner } from '../agents/platform.js';
 import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
@@ -32,6 +37,32 @@ export interface ConnectionsRouteDeps {
   service: ConnectionsService | undefined;
   registry: ToolRegistry;
   catalog: AgentCatalog;
+  /** Where remembered approvals live (`core.tool_permissions`), and whose they are. */
+  pool?: Pool;
+  ownerId?: string;
+}
+
+/** One gated connection tool, as a settings screen offers remembering it. */
+export interface RememberableTool {
+  /** `mcp.<slug>.<tool>`. */
+  tool: string;
+  /** The connection's slug. */
+  connection: string;
+  /** A destructive tool asks every time; `why` says so. */
+  rememberable: boolean;
+  why: string | null;
+}
+
+export const NEVER_REMEMBERED = 'It can delete or destroy something, so it asks you every time and is never remembered.';
+
+/** Whether a registered `mcp.*` tool is gated, and whether its approval may be remembered. */
+function rememberable(registry: ToolRegistry, name: string): RememberableTool | undefined {
+  if (!name.startsWith('mcp.')) return undefined;
+  const spec = registry.list().find((t) => t.name === name);
+  const tool = registry.lookup(name);
+  if (!spec || !tool || spec.tier !== 'gated') return undefined;
+  const reusable = tool.reusableApproval === true;
+  return { tool: name, connection: name.split('.')[1] ?? '', rememberable: reusable, why: reusable ? null : NEVER_REMEMBERED };
 }
 
 export interface ConnectionsRequest {
@@ -152,6 +183,12 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     }
     return { status: 405, body: { error: 'method not allowed' } };
   }
+  if (path === '/api/connections/signals') {
+    if (method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };
+    return { status: 200, body: { signals: await service.signals() } };
+  }
+  const remembered = /^\/api\/connections\/remembered(?:\/([a-z0-9][a-z0-9_-]{0,63}))?$/i.exec(path);
+  if (remembered) return rememberedRoute(deps, req, remembered[1]);
   if (path === '/api/connections/callback') {
     if (method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
     if (typeof body.state !== 'string') return { status: 400, body: { error: 'The service came back without the sign-in\'s state.' } };
@@ -163,7 +200,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: done };
   }
-  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|review|grant))?$`, 'i').exec(path);
+  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|review|grant|tools))?$`, 'i').exec(path);
   if (!one) return { status: 404, body: { error: 'no such route' } };
   const id = one[1]!.toLowerCase();
   const what = one[2];
@@ -191,6 +228,15 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: { ...started, redirectUri } };
   }
+  if (what === 'tools') {
+    if (method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };
+    const view = await service.get(id);
+    const tools = service.registeredNames(id).map((name) => {
+      const gated = rememberable(deps.registry, name);
+      return { tool: name, tier: gated ? 'gated' : 'auto', rememberable: gated?.rememberable ?? false, why: gated?.why ?? null };
+    });
+    return { status: 200, body: { connection: view.slug, tools } };
+  }
   if (what === 'review') {
     if (method === 'GET') return { status: 200, body: await service.review(id) };
     if (method === 'POST') {
@@ -210,4 +256,49 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
   if (unknown.length > 0) return { status: 400, body: { error: `No such agent: ${unknown.join(', ')}.` } };
   const result = await grantConnection(deps, view.slug, agents);
   return { status: result.failed.length > 0 && result.granted.length === 0 ? 409 : 200, body: { ...result, connection: withAgents(deps, await service.get(id)) } };
+}
+
+/**
+ * Remembered approval, per agent (docs/connections.md, "What an agent gets"):
+ * the row a card's "Always" writes, set from a settings screen instead. Only
+ * for a gated connection tool that allows it; a destructive one says why not.
+ */
+async function rememberedRoute(deps: ConnectionsRouteDeps, req: ConnectionsRequest, agentId: string | undefined): Promise<RouteAnswer> {
+  const pool = deps.pool;
+  const ownerId = deps.ownerId;
+  if (!pool || !ownerId) return { status: 503, body: { error: 'Remembered approvals are not available in this process.' } };
+  const held = async (agent: string): Promise<Set<string>> => {
+    const permissions = await listToolPermissions(pool, ownerId);
+    return new Set(permissions.filter((p) => p.agentId === agent && p.conversationId === '' && deps.registry.lookup(p.tool)?.version === p.toolVersion).map((p) => p.tool));
+  };
+  if (req.method === 'GET') {
+    if (!agentId) return { status: 404, body: { error: 'no such route' } };
+    const agent = deps.catalog.get(agentId);
+    if (!agent) return { status: 404, body: { error: 'No such agent.' } };
+    const on = await held(agent.id);
+    const tools = agent.tools
+      .map((name) => rememberable(deps.registry, name))
+      .filter((t): t is RememberableTool => t !== undefined)
+      .map((t) => ({ ...t, remembered: t.rememberable && on.has(t.tool) }));
+    return { status: 200, body: { agent: agent.id, tools } };
+  }
+  if (req.method !== 'POST' || agentId) return { status: 405, body: { error: 'method not allowed' } };
+  const { agent: agentRaw, tool: toolRaw, remember } = req.body;
+  if (typeof agentRaw !== 'string' || typeof toolRaw !== 'string' || typeof remember !== 'boolean') {
+    return { status: 400, body: { error: 'Say which agent, which tool, and whether to remember (agent, tool, remember).' } };
+  }
+  const agent = deps.catalog.get(agentRaw);
+  if (!agent) return { status: 404, body: { error: 'No such agent.' } };
+  const tool = rememberable(deps.registry, toolRaw);
+  if (!tool) return { status: 404, body: { error: `${toolRaw} is not a connection tool that asks you first.` } };
+  if (remember) {
+    if (!tool.rememberable) return { status: 409, body: { error: NEVER_REMEMBERED } };
+    if (!agent.tools.includes(tool.tool)) return { status: 409, body: { error: `${agent.name} does not hold ${tool.tool}. Give it the connection first.` } };
+    await grantToolPermission(pool, { ownerId, agentId: agent.id, tool: tool.tool, toolVersion: deps.registry.lookup(tool.tool)!.version, via: 'settings' });
+  } else {
+    for (const p of await listToolPermissions(pool, ownerId)) {
+      if (p.agentId === agent.id && p.tool === tool.tool && p.conversationId === '') await revokeToolPermission(pool, ownerId, p.id);
+    }
+  }
+  return { status: 200, body: { agent: agent.id, tool: tool.tool, remembered: remember } };
 }

@@ -26,6 +26,7 @@ const TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
   '.map': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
 };
 
 export function contentType(file: string): string {

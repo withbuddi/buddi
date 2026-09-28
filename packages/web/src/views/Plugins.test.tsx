@@ -386,6 +386,12 @@ describe('the plugins section', () => {
             description: 'What buddi remembers about you.',
           },
           { name: 'mail', version: '1.0.0', contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 } },
+          {
+            name: 'mcp',
+            version: '0.1.0',
+            contribution: { tools: 0, sentinels: 0, views: 0, agents: 0 },
+            network: [{ host: 'mcp.notion.com', why: 'Notion, a connected service' }, { host: 'mcp.linear.app', why: 'Linear' }],
+          },
         ],
       }),
     );
@@ -395,5 +401,8 @@ describe('the plugins section', () => {
     expect(screen.getByText('1.0.0 \u00b7 4 tools, 1 watcher')).toBeInTheDocument();
     expect(screen.getByText('1.0.0 \u00b7 1 tool')).toBeInTheDocument();
     expect(screen.getByText('What buddi remembers about you.')).toBeInTheDocument();
+    // What leaves the machine: the connected services' hosts, declared while buddi runs.
+    expect(screen.getByText('mcp.notion.com')).toHaveAttribute('title', 'Notion, a connected service');
+    expect(screen.getByText('mcp.linear.app').closest('p')).toHaveTextContent('Talks to mcp.notion.com, mcp.linear.app.');
   });
 });

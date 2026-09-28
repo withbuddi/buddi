@@ -26,7 +26,7 @@ import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQ
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
-import { hostBindingOf, registerHostOf, withPluginHost, type HostBinding } from './host/build.js';
+import { hostBindingOf, networkAreaOf, registerHostOf, withPluginHost, type HostBinding } from './host/build.js';
 import { registerSecretDestination } from './secrets/destinations.js';
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
@@ -600,6 +600,17 @@ export class ToolRegistry {
    * the spec describes: a page is not a console. A plugin that contributes no
    * pages contributes no page tools, so its act route can do nothing at all.
    */
+  /**
+   * The hosts a plugin declared: its manifest's `network`, then the ones it
+   * declared while buddi runs (`ctx.buddi.network`, since 1.7). What the
+   * Plugins page lists under "what leaves your machine". Undefined for a
+   * plugin this registry does not hold.
+   */
+  networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined {
+    const binding = this.#bindings.get(plugin);
+    return binding ? networkAreaOf(binding).declared() : undefined;
+  }
+
   pageTools(plugin: string): string[] {
     return [...(this.#pageTools.get(plugin) ?? [])];
   }

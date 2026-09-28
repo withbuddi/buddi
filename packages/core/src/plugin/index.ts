@@ -138,4 +138,5 @@ export type {
   SecretUseResult,
   SecretsArea,
   ToolsArea,
+  NetworkArea,
 } from '../host/types.js';

@@ -22,6 +22,9 @@ import { pageIcon } from '../pages/icons';
 import type { ThemeChoice } from '../theme';
 import { Icon, Mark, Segment, useAsync } from '../ui';
 
+/** What the Settings dot says when a connection needs the owner (the rail's, and Connections' in the settings nav). */
+export const CONNECTION_DOT = 'a connection needs you';
+
 export function Rail({
   attention,
   place,
@@ -30,6 +33,7 @@ export function Rail({
   onTheme,
   plugins = [],
   updateAvailable = false,
+  settingsDot,
   version,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
@@ -46,6 +50,8 @@ export function Rail({
   plugins?: PluginPageDescriptor[];
   /** A newer buddi is ready to install: Settings gets a dot. */
   updateAvailable?: boolean;
+  /** Something else in Settings needs the owner (a connection): the same dot, with this label. */
+  settingsDot?: string | undefined;
   /** The running version, and the newer one when the daily check found it. */
   version?: RailVersion | undefined;
 }): JSX.Element {
@@ -91,7 +97,7 @@ export function Rail({
         href={SETTINGS_ROUTE}
         active={place === SETTINGS_ROUTE}
         badge={0}
-        dot={updateAvailable ? 'a newer buddi is ready' : undefined}
+        dot={updateAvailable ? 'a newer buddi is ready' : settingsDot}
         onClick={() => onNavigate(SETTINGS_ROUTE)}
       >
         {ICONS[SETTINGS_ROUTE]}

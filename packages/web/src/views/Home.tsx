@@ -7,7 +7,7 @@
  * the agent that runs it.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
+import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -38,6 +38,7 @@ import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { HomeAsk } from './parts/HomeAsk';
+import { KeepClose } from './parts/KeepClose';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -47,6 +48,7 @@ export function Home({
   defaultAgentId,
   attention,
   update,
+  connectionSignals = [],
 }: {
   timezone: string;
   navigate: (route: string) => void;
@@ -55,6 +57,8 @@ export function Home({
   attention: Map<string, AgentAttention>;
   /** A newer buddi, as the shell read it from `/version`. Never a checkout's. */
   update?: VersionView | null;
+  /** Connections that need the owner (a sign-in ran out, the tools changed), as the shell read them. */
+  connectionSignals?: ConnectionSignal[];
 }): JSX.Element {
   const overview = useAsync<Overview>(() => api.overview(), [], 15_000);
   const approvals = useAsync(() => api.approvals(), [], 10_000);
@@ -125,6 +129,7 @@ export function Home({
     <div className="home">
       {/* The front desk, first: writing to it is the commonest thing done here. */}
       {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
+      <KeepClose />
 
       {update && update.updateAvailable && !update.checkout && update.latest ? (
         <Notice tone="accent">
@@ -135,6 +140,15 @@ export function Home({
           </p>
         </Notice>
       ) : null}
+
+      {connectionSignals.map((signal) => (
+        <Notice key={signal.id} tone="accent">
+          <p>
+            {signal.sentence}{' '}
+            <a href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Settings → Connections.</a>
+          </p>
+        </Notice>
+      ))}
 
       <ErrorBanner message={overview.error ?? approvals.error ?? failure} />
       {note ? <Notice tone="good" role="status">{note}</Notice> : null}

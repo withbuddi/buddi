@@ -10,6 +10,7 @@ import {
   DEFAULT_MAX_TURNS,
   selectSkills,
   generatedSection,
+  heldBackMessage,
   MAX_LISTED_COLLEAGUES,
   type AgentRosterEntry,
   type CatalogAgent,
@@ -1154,6 +1155,12 @@ describe('tools registered while buddi runs', () => {
     // GitHub disconnected, Linear still there: held back, not a broken catalog.
     host!.tools.unregister(['mcp.github.search']);
     expect(load().get('github-helper')?.heldBack?.families).toEqual(['mcp.github']);
+    expect(load().get('github-helper')?.heldBack?.message).toBe(
+      'The github connection is gone or has no tools; reconnect it in Settings → Connections.',
+    );
+    expect(heldBackMessage(['finance', 'mcp.notion'])).toBe(
+      'Needs a plugin providing the finance tools. The notion connection is gone or has no tools; reconnect it in Settings → Connections.',
+    );
     expect(() => resolveToolNames(['mcp.github.*'], registry, 'x')).toThrow(/"mcp\.github\.\*"/);
   });
 });

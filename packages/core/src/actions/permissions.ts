@@ -29,3 +29,24 @@ export async function revokeToolPermission(pool: Queryable, ownerId: string, id:
   if (rows[0]) await emitActionEvent(pool, 'permission.revoked', { id, ownerId, agentId: rows[0].agent_id, tool: rows[0].tool }, rows[0].conversation_id || null);
   return rows.length > 0;
 }
+
+/**
+ * A standing permission the owner set outside an approval card: "remember my
+ * approval of this tool for this agent", from a settings screen. The same row
+ * a card's "Always" writes (conversation `''`), keyed on the tool's version,
+ * and refused for a tool that does not allow remembering (`reusableApproval`),
+ * which the caller checks against the registry before it gets here.
+ */
+export async function grantToolPermission(pool: Queryable, input: {
+  ownerId: string; agentId: string; tool: string; toolVersion: string; via: string;
+}): Promise<ToolPermission> {
+  const { rows } = await pool.query(
+    `insert into core.tool_permissions (owner_id, agent_id, tool, tool_version, conversation_id, granted_via)
+     values ($1, $2, $3, $4, '', $5)
+     on conflict (owner_id, agent_id, tool, tool_version, conversation_id) do update set granted_via = excluded.granted_via
+     returning *`,
+    [input.ownerId, input.agentId, input.tool, input.toolVersion, input.via],
+  );
+  await emitActionEvent(pool, 'permission.granted', { id: rows[0].id, ownerId: input.ownerId, agentId: input.agentId, tool: input.tool }, null);
+  return view(rows[0]);
+}

@@ -2,8 +2,8 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type AgentsView } from '../../api';
-import { AgentSetup } from './AgentSetup';
-vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn() } }));
+import { AgentSetup, RememberedApprovals } from './AgentSetup';
+vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn(), rememberedApprovals: vi.fn().mockResolvedValue({ agent: 'demo', tools: [] }), setRememberedApproval: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
@@ -278,4 +278,26 @@ it('shows no thinking switch on an OpenAI-compatible host, and says it is up to 
   expect(await screen.findByRole('combobox', { name: 'Account' })).toBeInTheDocument();
   expect(screen.queryByRole('combobox', { name: 'Thinking' })).not.toBeInTheDocument();
   expect(screen.getByText('Up to the model')).toBeInTheDocument();
+});
+
+it('lowers a gated connection tool to remembered approval for this agent, and says why a destructive one cannot', async () => {
+  vi.mocked(api.rememberedApprovals).mockResolvedValue({ agent: 'demo', tools: [
+    { tool: 'mcp.github.create_issue', connection: 'github', rememberable: true, why: null, remembered: false },
+    { tool: 'mcp.github.delete_repo', connection: 'github', rememberable: false, why: 'It can delete or destroy something, so it asks you every time and is never remembered.', remembered: false },
+  ] });
+  vi.mocked(api.setRememberedApproval).mockResolvedValue({ agent: 'demo', tool: 'mcp.github.create_issue', remembered: true });
+  render(<RememberedApprovals agentId="demo" version="" disabled={false} />);
+  const group = await screen.findByRole('group', { name: 'Remembered approvals' });
+  const destructive = within(group).getByRole('checkbox', { name: /mcp\.github\.delete_repo/ });
+  expect(destructive).toBeDisabled();
+  expect(within(group).getByText(/never remembered/)).toBeInTheDocument();
+  fireEvent.click(within(group).getByRole('checkbox', { name: /mcp\.github\.create_issue/ }));
+  await waitFor(() => expect(api.setRememberedApproval).toHaveBeenCalledWith('demo', 'mcp.github.create_issue', true));
+});
+
+it('draws nothing for an agent holding no connection tool that asks first', async () => {
+  vi.mocked(api.rememberedApprovals).mockResolvedValue({ agent: 'demo', tools: [] });
+  const { container } = render(<RememberedApprovals agentId="demo" version="" disabled={false} />);
+  await waitFor(() => expect(api.rememberedApprovals).toHaveBeenCalled());
+  expect(container).toBeEmptyDOMElement();
 });

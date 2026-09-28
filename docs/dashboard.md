@@ -20,6 +20,17 @@ only the ticket, for a browser on another device. The first time, the link
 opens the first-run wizard (see [First run](onboarding.md)). Remote access and
 the session rules are in [Operations](operations.md).
 
+### Install buddi as an app
+
+The dashboard is an installable web app: Chrome and Edge offer "Install buddi"
+(Home's **Install app** hands you that prompt), and Safari has File → Add to
+Dock. Installed, it opens in its own window with the Blob as its icon. Home
+suggests it once after setup, with the bookmark shortcut beside it, until you
+choose Not now. On a Mac, `buddi dashboard --install-app` is the other way: a
+double-clickable app in ~/Applications that signs you in with a fresh link each
+time. An app keeps the address it was installed from, so the tailnet address
+installs as its own app.
+
 ## The rail
 
 The column on the left holds the places: **Home**, **Chat**, **Agents**,

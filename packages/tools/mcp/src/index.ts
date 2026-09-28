@@ -4,7 +4,8 @@
  *
  * A built-in plugin with no tools of its own at boot. Every tool it brings is
  * a reviewed connection's, registered while buddi runs as
- * `mcp.<connection>.<tool>` through `ctx.buddi.tools` (host API 1.6). It owns
+ * `mcp.<connection>.<tool>` through `ctx.buddi.tools` (host API 1.6), and
+ * each connection's host declared through `ctx.buddi.network` (1.7). It owns
  * the `mcp` schema (connections and their reviewed tools) and one vault entry
  * per signed-in connection.
  *
@@ -15,7 +16,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginManifest, ToolsArea } from '@buddi/core/plugin';
+import type { NetworkArea, PluginManifest, ToolsArea } from '@buddi/core/plugin';
 import { ConnectionsService, type ConnectionsDeps } from './service.js';
 
 export const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
@@ -25,6 +26,7 @@ export const PLUGIN = 'mcp';
 /** What a manifest instance holds: the tools area its registry handed it, and the service once bound. */
 interface Handle {
   tools?: ToolsArea;
+  network?: NetworkArea;
   service?: ConnectionsService;
 }
 
@@ -44,7 +46,8 @@ export function createConnectionsManifest(): PluginManifest {
     tools: [],
     register: (host) => {
       handle.tools = host.tools;
-      handle.service?.attachTools(host.tools);
+      handle.network = host.network;
+      handle.service?.attachTools(host.tools, host.network);
     },
   };
   handles.set(manifest, handle);
@@ -65,7 +68,7 @@ export function bindConnections(manifests: readonly PluginManifest[], deps: Conn
   const handle = handles.get(found)!;
   if (handle.service) return handle.service;
   handle.service = new ConnectionsService(deps);
-  if (handle.tools) handle.service.attachTools(handle.tools);
+  if (handle.tools) handle.service.attachTools(handle.tools, handle.network);
   return handle.service;
 }
 
@@ -80,7 +83,11 @@ export {
   ConnectionError,
   ConnectionsService,
   NEEDS_CLIENT_ID,
+  RETRY_MINUTES,
+  changedSentence,
   reconnectSentence,
+  type ConnectionSignal,
+  type ReviewChanges,
   type ConnectionsDeps,
   type ConnectionView,
   type ReviewTool,

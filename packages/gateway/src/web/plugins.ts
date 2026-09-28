@@ -87,6 +87,12 @@ export interface PluginsDeps {
   pool?: Pool | undefined;
   /** Injected only by tests. A running gateway uses the real engine. */
   engine?: PluginsEngine | undefined;
+  /**
+   * The live registry, for the hosts a built-in plugin declared while buddi
+   * runs (`ctx.buddi.network`): Connections' services. Without one, the
+   * manifest's `network` is all there is.
+   */
+  registry?: { networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined } | undefined;
 }
 
 function engineOf(deps: PluginsDeps): PluginsEngine {
@@ -284,13 +290,16 @@ const INTERNAL_FAMILIES: ReadonlySet<string> = new Set([
  * do" is one list rather than two, and so an owner about to install something
  * called `web` can see why it will be refused.
  */
-function builtInView(env: NodeJS.ProcessEnv): Array<Record<string, unknown>> {
+function builtInView(env: NodeJS.ProcessEnv, registry?: PluginsDeps['registry']): Array<Record<string, unknown>> {
   return builtInManifests(env)
     .filter((manifest) => !INTERNAL_FAMILIES.has(manifest.name))
     .map((manifest) => ({
       name: manifest.name,
       version: manifest.version,
       contribution: contributionSummary(manifest),
+      // What leaves the machine: the manifest's hosts, and the live
+      // registry's runtime ones (a connection made this afternoon).
+      network: (registry?.networkOf(manifest.name) ?? manifest.network ?? []).map(({ host, why }) => ({ host, why })),
       ...(manifest.description === undefined || manifest.description.trim() === ''
         ? {}
         : { description: manifest.description }),
@@ -373,7 +382,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
   }
   let builtIn: Array<Record<string, unknown>> = [];
   try {
-    builtIn = builtInView(env);
+    builtIn = builtInView(env, deps.registry);
   } catch (err) {
     deps.log(`web: reading the built-in manifests failed: ${err instanceof Error ? err.message : String(err)}`);
   }

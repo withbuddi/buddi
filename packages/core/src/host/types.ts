@@ -45,6 +45,8 @@ export interface BuddiHost {
   pages: PagesArea;
   /** This plugin's own tools, added and removed while buddi runs. Since 1.6. */
   tools: ToolsArea;
+  /** The hosts this plugin talks to that it learns while buddi runs. Since 1.7. */
+  network: NetworkArea;
   /** Declared as `http`. */
   http?: HttpArea;
   /** Declared as `accounts`. */
@@ -158,7 +160,7 @@ export interface DirArea {
  * no call — the version, the plugin's name and its directory — for a plugin
  * that fixes something (a profile's place) before any context exists.
  */
-export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir' | 'channels' | 'tools'>;
+export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir' | 'channels' | 'tools' | 'network'>;
 
 /**
  * Tools added and removed while buddi runs (since 1.6), for a plugin whose
@@ -177,6 +179,25 @@ export interface ToolsArea {
   unregister(names: string[]): void;
   /** The names this plugin has registered at runtime and not removed, in order. */
   registered(): string[];
+}
+
+/**
+ * Hosts declared while buddi runs (since 1.7), beside the manifest's `network`:
+ * a plugin that learns where it talks at 3pm (a connection the owner made)
+ * says so here, and the "what leaves your machine" list on the Plugins page
+ * shows it from that moment. The same egress policy reads both: `http`
+ * treats a runtime host exactly as a manifest one.
+ *
+ * A host is a name (`mcp.notion.com`, or `*.example.com`), never a URL, a
+ * port or an address; `why` is one line the owner can weigh. Declaring a host
+ * the manifest already names changes nothing; declaring one again replaces its
+ * `why`. `undeclare` removes only what `declare` added.
+ */
+export interface NetworkArea {
+  declare(uses: ReadonlyArray<{ host: string; why: string }>): void;
+  undeclare(hosts: readonly string[]): void;
+  /** Everything declared: the manifest's first, then the runtime ones, in the order they came. */
+  declared(): Array<{ host: string; why: string; runtime: boolean }>;
 }
 
 /** The owner's decisions about this plugin's own tools. */

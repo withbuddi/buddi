@@ -903,6 +903,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       log,
       pool: deps.pool,
+      registry: deps.registry,
       ...(deps.plugins ? { engine: deps.plugins } : {}),
     });
     /**
@@ -941,7 +942,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
       }
       const answer = await connectionsRoute(
-        { service: deps.connections ?? connectionsOf(deps.registry.manifests()), registry: deps.registry, catalog: deps.catalog },
+        { service: deps.connections ?? connectionsOf(deps.registry.manifests()), registry: deps.registry, catalog: deps.catalog, pool: deps.pool, ownerId: deps.ctx.ownerId },
         { method, path, body, sessionId: session.id, origin: requestOrigin(req) },
       );
       return sendJson(res, answer.status, answer.body);

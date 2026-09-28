@@ -6,7 +6,7 @@ import '@testing-library/jest-dom/vitest';
 import { render, screen } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { api } from '../api';
-import { Rail } from './Rail';
+import { CONNECTION_DOT, Rail } from './Rail';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -31,6 +31,15 @@ describe('the Settings entry', () => {
     expect(dot).toHaveClass('ui-badge');
     expect(dot).toBeEmptyDOMElement();
     expect(api.owner).toHaveBeenCalled();
+  });
+
+  it('carries the same dot when a connection needs the owner', () => {
+    render(
+      <Tooltip.Provider>
+        <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} settingsDot={CONNECTION_DOT} />
+      </Tooltip.Provider>,
+    );
+    expect(screen.getByRole('link', { name: 'Settings, a connection needs you' })).toContainElement(screen.getByTestId('rail-dot'));
   });
 
   it('carries nothing otherwise', () => {

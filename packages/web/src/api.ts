@@ -1280,6 +1280,8 @@ export interface BuiltInPluginView {
   version: string;
   contribution: { tools: number; sentinels: number; views: number; agents: number };
   description?: string;
+  /** What leaves the machine: the hosts it declared, the connected services included. */
+  network?: Array<{ host: string; why: string }>;
 }
 
 export interface PluginsView {
@@ -1690,6 +1692,14 @@ export const api = {
   grantConnection: (id: string, agents: string[]) =>
     post<{ granted: string[]; failed: Array<{ agent: string; message: string }>; connection: ConnectionView }>(`/connections/${id}/grant`, { agents }),
   disconnect: (id: string) => del<{ id: string; name: string; touched: string[] }>(`/connections/${id}`),
+  /** The connections that need the owner, a sentence each: Home's line and the Settings dot. */
+  connectionSignals: () => get<{ signals: ConnectionSignal[] }>('/connections/signals'),
+  /** A connection's registered tools, and which gated ones may have their approval remembered. */
+  connectionTools: (id: string) => get<{ connection: string | null; tools: ConnectionToolView[] }>(`/connections/${id}/tools`),
+  /** An agent's gated connection tools, remembered or not. */
+  rememberedApprovals: (agentId: string) => get<{ agent: string; tools: RememberedApproval[] }>(`/connections/remembered/${encodeURIComponent(agentId)}`),
+  setRememberedApproval: (agent: string, tool: string, remember: boolean) =>
+    post<{ agent: string; tool: string; remembered: boolean }>('/connections/remembered', { agent, tool, remember }),
   /* ---- secrets: the owner vault (docs/owner-secrets.md §6) ---- */
   /** The page's one read: the secrets, the destinations the plugins register, buddi's own keys. */
   secrets: () => get<SecretsView>('/secrets'),
@@ -1942,7 +1952,33 @@ export type BrowserLaunchCheck =
  * Connections (docs/connections.md)
  * ------------------------------------------------------------------ */
 
-export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review';
+export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review' | 'needs-review';
+
+/** A connection that needs the owner (`GET /connections/signals`). */
+export interface ConnectionSignal {
+  id: string;
+  name: string;
+  state: 'needs-reconnect' | 'needs-review';
+  sentence: string;
+}
+
+/** One registered connection tool, as the grant screen offers remembering it. */
+export interface ConnectionToolView {
+  tool: string;
+  tier: 'auto' | 'gated';
+  rememberable: boolean;
+  /** Why it cannot be remembered, when it cannot. */
+  why: string | null;
+}
+
+/** One of an agent's gated connection tools (its Access page). */
+export interface RememberedApproval {
+  tool: string;
+  connection: string;
+  rememberable: boolean;
+  why: string | null;
+  remembered: boolean;
+}
 
 export interface ConnectionView {
   id: string;
@@ -1959,6 +1995,10 @@ export interface ConnectionView {
   serverName: string | null;
   serverVersion: string | null;
   reviewedAt: string | null;
+  /** While unreachable: since when (buddi retries it in the background). */
+  unreachableSince?: string | null;
+  /** Reviewed tools the server changed or dropped since: they wait for another review. */
+  heldTools?: number;
   /** Agents whose files grant this connection's tools. */
   agents: string[];
 }
@@ -1969,6 +2009,8 @@ export interface ConnectionCard {
   blurb: string;
   url: string;
   verified: boolean;
+  /** The service offers no dynamic registration: the owner brings a client id. */
+  clientIdRequired?: boolean;
 }
 
 export interface ConnectionsView {
@@ -1989,6 +2031,8 @@ export interface ConnectionReviewTool {
   destructive: boolean;
   annotated: boolean;
   problem: string | null;
+  /** Against the last review. */
+  change?: 'added' | 'changed' | null;
 }
 
 export interface ConnectionReview {
@@ -1999,4 +2043,6 @@ export interface ConnectionReview {
   hash: string;
   tools: ConnectionReviewTool[];
   annotatedNothing: boolean;
+  /** What changed since the last review, by the server's names; null on a first review. */
+  changes?: { added: string[]; changed: string[]; removed: string[] } | null;
 }

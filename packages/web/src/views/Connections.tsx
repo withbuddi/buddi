@@ -17,10 +17,11 @@ import {
   type ConnectionCard,
   type ConnectionReview,
   type ConnectionState,
+  type ConnectionToolView,
   type ConnectionView,
   type ConnectionsView,
 } from '../api';
-import { fmtRelative } from '../format';
+import { fmtRelative, fmtTime } from '../format';
 import { Button, Card, Empty, EmptyState, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
@@ -28,7 +29,11 @@ export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }
   'needs-reconnect': { label: 'Needs reconnect', tone: 'warning' },
   unreachable: { label: 'Unreachable', tone: 'critical' },
   'pending-review': { label: 'Not finished', tone: 'muted' },
+  'needs-review': { label: 'Changed its tools', tone: 'warning' },
 };
+
+/** Why a tool's approval is never remembered: the server said it destroys something. */
+export const NEVER_REMEMBERED = 'It can delete or destroy something, so it asks you every time and is never remembered.';
 
 /** What a tier means to the owner, in the words of an approval. */
 export function tierLabel(tool: { tier: 'auto' | 'gated'; destructive: boolean }): { label: string; tone: Tone } {
@@ -53,7 +58,7 @@ interface FlowStart {
   keepGrants?: boolean;
 }
 
-export function Connections({ embedded }: { embedded?: boolean } = {}): JSX.Element {
+export function Connections({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const view = useAsync(() => api.connections(), [], 30_000);
   const [flow, setFlow] = useState<FlowStart | null>(null);
   const data = view.data;
@@ -83,6 +88,7 @@ export function Connections({ embedded }: { embedded?: boolean } = {}): JSX.Elem
                     key={connection.id}
                     connection={connection}
                     agentName={agentName}
+                    timezone={timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
                     onFlow={setFlow}
                     onChanged={view.reload}
                   />
@@ -127,11 +133,13 @@ export function Connections({ embedded }: { embedded?: boolean } = {}): JSX.Elem
 function ConnectionRow({
   connection,
   agentName,
+  timezone,
   onFlow,
   onChanged,
 }: {
   connection: ConnectionView;
   agentName: (id: string) => string;
+  timezone: string;
   onFlow: (flow: FlowStart) => void;
   onChanged: () => void;
 }): JSX.Element {
@@ -175,6 +183,15 @@ function ConnectionRow({
       {connection.state === 'needs-reconnect' ? (
         <p className="ui-card-meta">Its sign-in ran out or was refused. Until you reconnect, each of its tools answers with one sentence instead of running.</p>
       ) : null}
+      {connection.state === 'needs-review' ? (
+        <p className="ui-card-meta">
+          It changed its tools since you reviewed them. The new and changed ones wait until you review it again
+          {connection.heldTools ? ` (${connection.heldTools} of the ones you kept ${connection.heldTools === 1 ? 'waits' : 'wait'})` : ''}; the others keep working.
+        </p>
+      ) : null}
+      {connection.state === 'unreachable' && connection.unreachableSince ? (
+        <p className="ui-card-meta">Unreachable since {fmtTime(connection.unreachableSince, timezone)}, retrying.</p>
+      ) : null}
       <ErrorBanner message={failure} />
       {confirming ? (
         <Notice tone="critical" role="alert" title={`Disconnect ${connection.name}?`}>
@@ -196,7 +213,11 @@ function ConnectionRow({
           {pending ? (
             <Button size="sm" variant="accent" onClick={() => onFlow({ step: connection.signedIn ? 'review' : 'consent', connection })}>Finish</Button>
           ) : null}
-          {!pending ? <Button size="sm" onClick={() => onFlow({ step: 'review', connection, keepGrants: true })}>Review again</Button> : null}
+          {!pending ? (
+            <Button size="sm" variant={connection.state === 'needs-review' ? 'accent' : undefined} onClick={() => onFlow({ step: 'review', connection, keepGrants: true })}>
+              Review again
+            </Button>
+          ) : null}
           {connection.authKind === 'oauth' && !pending ? (
             <Button size="sm" variant={connection.state === 'needs-reconnect' ? 'accent' : undefined} onClick={() => onFlow({ step: 'consent', connection, keepGrants: true })}>
               Reconnect
@@ -308,6 +329,7 @@ function AddressStep({
         <input required autoFocus={!card} spellCheck={false} value={url} placeholder="https://" onChange={(event) => setUrl(event.target.value)} />
       </Field>
       {card && !card.verified ? <p className="ui-card-meta">This address is the one {card.name} published; buddi has not checked it since.</p> : null}
+      {card?.clientIdRequired ? <p className="ui-card-meta">{card.name} does not let buddi register itself: you will need a client id from its developer settings.</p> : null}
       <ErrorBanner message={failure} />
       <Toolbar align="end">
         <Button type="submit" variant="accent" disabled={busy || url.trim() === ''}>{busy ? 'Opening…' : 'Continue'}</Button>
@@ -457,6 +479,16 @@ function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept
       {data.annotatedNothing ? (
         <Notice tone="warning">{connection.name} says nothing about what its tools do, so every one of them asks you first.</Notice>
       ) : null}
+      {data.changes && (data.changes.added.length + data.changes.changed.length + data.changes.removed.length) > 0 ? (
+        <Notice tone="warning" title={`${connection.name} changed its tools since your last review.`}>
+          <ul className="connections-changes" aria-label="What changed">
+            {data.changes.added.length > 0 ? <li>New: <span className="mono">{data.changes.added.join(', ')}</span></li> : null}
+            {data.changes.changed.length > 0 ? <li>Changed: <span className="mono">{data.changes.changed.join(', ')}</span></li> : null}
+            {data.changes.removed.length > 0 ? <li>Gone: <span className="mono">{data.changes.removed.join(', ')}</span></li> : null}
+          </ul>
+          <p>Until you keep this list, the new and changed tools wait; the others keep working.</p>
+        </Notice>
+      ) : null}
       {data.slugEditable ? (
         <Field label="Its name in buddi" hint={`Tools are called mcp.${chosen || '…'}.<tool>. Lower case, letters, digits, _ and -.`}>
           <input required spellCheck={false} maxLength={24} value={chosen} onChange={(event) => setSlug(event.target.value.toLowerCase())} />
@@ -473,8 +505,12 @@ function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept
                   <div className="ui-card-head">
                     <span className="mono">{fullName}</span>
                     {tool.problem ? <Pill tone="muted">Cannot be used</Pill> : <Pill tone={tier.tone}>{tier.label}</Pill>}
+                    {tool.change === 'added' ? <Tag>New</Tag> : tool.change === 'changed' ? <Tag>Changed</Tag> : null}
                   </div>
                   {tool.description ? <p className="ui-card-meta">{tool.description}</p> : null}
+                  {!tool.problem && tool.tier === 'gated' ? (
+                    <p className="ui-card-meta">{tool.destructive ? NEVER_REMEMBERED : 'You can remember its approval for an agent when you give it the tools, or later on the agent’s Access page.'}</p>
+                  ) : null}
                   {tool.problem ? <p className="ui-card-meta">Left out: {tool.problem}.</p> : null}
                 </div>
               </div>
@@ -503,6 +539,9 @@ function GrantStep({
 }): JSX.Element {
   const front = agents.find((a) => a.frontDesk) ?? agents[0];
   const [picked, setPicked] = useState<Set<string>>(() => new Set(front ? [front.id] : []));
+  const tools = useAsync(() => api.connectionTools(connection.id), [connection.id]);
+  const gated: ConnectionToolView[] = (tools.data?.tools ?? []).filter((t) => t.tier === 'gated');
+  const [remember, setRemember] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const toggle = (id: string, on: boolean): void => {
@@ -517,8 +556,12 @@ function GrantStep({
     setFailure(null);
     try {
       const result = await api.grantConnection(connection.id, [...picked]);
-      if (result.failed.length > 0) setFailure(result.failed.map((f) => `${f.agent}: ${f.message}`).join(' '));
-      else onDone();
+      if (result.failed.length > 0) { setFailure(result.failed.map((f) => `${f.agent}: ${f.message}`).join(' ')); return; }
+      // Remembered approval, per agent: the same row a card's "Always" writes.
+      for (const agent of result.granted) {
+        for (const tool of remember) await api.setRememberedApproval(agent, tool, true);
+      }
+      onDone();
     } catch (error) {
       setFailure(failureOf(error));
     } finally {
@@ -537,6 +580,29 @@ function GrantStep({
         ))}
       </div>
       <p className="ui-card-meta">No one is fine too: the connection waits here until you give it to someone.</p>
+      {gated.length > 0 ? (
+        <div className="ui-stack" data-gap="sm" role="group" aria-label="Remembered approval">
+          <p>These ask you first. Tick one to remember your approval for the agents above, so it asks only once.</p>
+          {gated.map((tool) => (
+            <Stack key={tool.tool} gap="sm">
+              <label className="backup-check">
+                <input
+                  type="checkbox"
+                  disabled={!tool.rememberable}
+                  checked={remember.has(tool.tool)}
+                  onChange={(event) => setRemember((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(tool.tool); else next.delete(tool.tool);
+                    return next;
+                  })}
+                />
+                <span className="mono">{tool.tool}</span>
+              </label>
+              {tool.why ? <p className="ui-card-meta">{tool.why}</p> : null}
+            </Stack>
+          ))}
+        </div>
+      ) : null}
       <ErrorBanner message={failure} />
       <Toolbar align="end">
         <Button onClick={onDone} disabled={busy}>Not now</Button>

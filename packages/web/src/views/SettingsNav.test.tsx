@@ -230,4 +230,9 @@ describe('dots', () => {
     expect(screen.getByTestId('settings-nav-dot')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'System, a newer buddi is ready' })).toBeInTheDocument();
   });
+
+  it('marks Connections when one needs a sign-in or another review', () => {
+    render(<SettingsNav entries={settingsEntries([])} active="profile" dots={{ connections: 'a connection needs you' }} navigate={() => {}} />);
+    expect(screen.getByRole('link', { name: 'Connections, a connection needs you' })).toContainElement(screen.getByTestId('settings-nav-dot'));
+  });
 });

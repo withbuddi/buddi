@@ -32,6 +32,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ROLE_OVERVIEW } from '../agents/roles.js';
 import { createCoreArtifactStore } from '../telegram/attachments.js';
 import { mintTicket } from './token.js';
+import { QUESTION_ASKED } from './attention.js';
 import { startWebServer, type WebServer, type WebServerDeps } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
@@ -448,6 +449,19 @@ suite('the dashboard chat API', () => {
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Error(`conversation ${conversationId} never settled`);
+  };
+
+  /** Wait until the log holds `kind` for this conversation: what the service records after a run. */
+  const logged = async (conversationId: string, kind: string): Promise<void> => {
+    for (let i = 0; i < 300; i += 1) {
+      const { rows } = await pool.query(
+        `select 1 from core.events where conversation_id = $1::uuid and kind = $2 limit 1`,
+        [conversationId, kind],
+      );
+      if (rows.length > 0) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(`conversation ${conversationId} never logged ${kind}`);
   };
 
   /* ---------------- reads ---------------- */
@@ -1345,6 +1359,9 @@ suite('the dashboard chat API', () => {
         await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'pay the bill' })
       ).json()) as any;
       await settled(conversationId);
+      // `run.finished` is the runtime's; the question is recorded by the chat
+      // service after the run returns, so "settled" alone raced it.
+      await logged(conversationId, QUESTION_ASKED);
 
       const held = await attention(client);
       expect(held.agents).toHaveLength(1);

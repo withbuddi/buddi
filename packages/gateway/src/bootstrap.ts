@@ -293,6 +293,9 @@ export async function createWiringAsync(
   // connection that cannot be read is a line in the log, never a stopped start.
   try {
     await wiring.connections?.boot();
+    // An unreachable connection is tried again in the background (1, 5, 15,
+    // 60 minutes, then hourly), on a timer that never keeps a process alive.
+    wiring.connections?.startBackground();
   } catch (error) {
     console.error(`connections: tools not registered: ${error instanceof Error ? error.message : String(error)}`);
   }

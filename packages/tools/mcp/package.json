@@ -17,7 +17,7 @@
   },
   "buddi": {
     "uses": [],
-    "hostApi": "^1.6"
+    "hostApi": "^1.7"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -65,6 +65,7 @@ import type {
   EnqueueRunInput,
   FileRow,
   FilesArea,
+  NetworkArea,
   ProposalsArea,
   ScheduleArea,
   SecretsArea,
@@ -84,8 +85,16 @@ export interface HostBinding {
   tools: Set<string>;
   /** `ctx.buddi.tools`, wired by the registry that bound this plugin. */
   toolsArea?: ToolsArea;
-  /** The hosts its manifest declares under `network`. */
-  network: readonly string[];
+  /**
+   * Every host it declared: its manifest's `network`, then what
+   * `ctx.buddi.network` added while buddi runs. One array, changed in place,
+   * so the `http` area built over it sees a host the moment it is declared.
+   */
+  network: string[];
+  /** The manifest's hosts, with their reasons. Fixed at register. */
+  manifestNetwork: ReadonlyArray<{ host: string; why: string }>;
+  /** The hosts `ctx.buddi.network.declare` added, and why. */
+  runtimeNetwork: Map<string, string>;
 }
 
 /**
@@ -103,6 +112,8 @@ export function hostBindingOf(manifest: PluginManifest): HostBinding {
     uses: parsed.uses,
     tools: new Set(manifest.tools.map((tool) => tool.name)),
     network: (manifest.network ?? []).map((use) => use.host),
+    manifestNetwork: (manifest.network ?? []).map((use) => ({ host: use.host, why: use.why })),
+    runtimeNetwork: new Map(),
   };
 }
 
@@ -362,6 +373,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
           : `http://127.0.0.1:${facts.previewPort}/preview/${encodeURIComponent(plugin)}/${encodeURIComponent(name)}/`,
     },
     tools: toolsAreaOf(binding),
+    network: networkAreaOf(binding),
   };
 
   if (declared.has('http')) {
@@ -456,7 +468,48 @@ export function registerHostOf(binding: HostBinding): RegisterHost {
     plugin: binding.plugin,
     dir: pluginDir(binding.plugin),
     tools: toolsAreaOf(binding),
+    network: networkAreaOf(binding),
     ...(binding.uses.includes('owner:channel') ? { channels: channelsArea(binding) } : {}),
+  };
+}
+
+/** A host as `network` takes it: a name or `*.name`, lower case, no scheme, port or path. */
+const NETWORK_HOST = /^(\*\.)?[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*$/;
+
+/**
+ * `ctx.buddi.network` (since 1.7): hosts declared while buddi runs, kept on
+ * the binding beside the manifest's, in the one array the `http` area reads.
+ */
+export function networkAreaOf(binding: HostBinding): NetworkArea {
+  const rebuild = (): void => {
+    const next = [...binding.manifestNetwork.map((use) => use.host)];
+    for (const host of binding.runtimeNetwork.keys()) if (!next.includes(host)) next.push(host);
+    binding.network.splice(0, binding.network.length, ...next);
+  };
+  return {
+    declare(uses) {
+      const checked = uses.map((use) => {
+        const host = String(use?.host ?? '').trim().toLowerCase();
+        const why = String(use?.why ?? '').trim();
+        if (host.length > 253 || !NETWORK_HOST.test(host)) {
+          throw new Error(`${binding.plugin} declared "${String(use?.host)}" under network, which is not a host name (write mcp.example.com or *.example.com)`);
+        }
+        if (why === '') throw new Error(`${binding.plugin} declared ${host} under network without saying why`);
+        return { host, why: why.slice(0, 200) };
+      });
+      for (const use of checked) binding.runtimeNetwork.set(use.host, use.why);
+      rebuild();
+    },
+    undeclare(hosts) {
+      for (const host of hosts) binding.runtimeNetwork.delete(String(host).trim().toLowerCase());
+      rebuild();
+    },
+    declared: () => [
+      ...binding.manifestNetwork.map((use) => ({ ...use, runtime: false })),
+      ...[...binding.runtimeNetwork]
+        .filter(([host]) => !binding.manifestNetwork.some((use) => use.host.toLowerCase() === host))
+        .map(([host, why]) => ({ host, why, runtime: true })),
+    ],
   };
 }
 
