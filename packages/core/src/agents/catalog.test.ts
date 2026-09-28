@@ -339,6 +339,50 @@ describe('resolveToolGrants', () => {
   });
 });
 
+describe('optional grants', () => {
+  const registry = registryOf();
+
+  it('skips a family nothing provides when the grant ends in ?', () => {
+    expect(resolveToolGrants(['notes.*', 'weather.*?', 'calendar.today?'], registry, 'a')).toEqual({
+      tools: ['notes.search'],
+      missingFamilies: [],
+    });
+    // The strict form, a proposed grant, accepts it too: nothing is claimed that is not here.
+    expect(resolveToolNames(['notes.search', 'weather.*?'], registry, 'a')).toEqual(['notes.search']);
+    // A connection namespace that is not connected right now, likewise.
+    expect(resolveToolGrants(['mcp.github.*?'], registry, 'a').missingFamilies).toEqual([]);
+  });
+
+  it('resolves like any grant once the family is here', () => {
+    expect(resolveToolGrants(['finance.*?'], registry, 'a').tools).toEqual([
+      'finance.list_accounts',
+      'finance.project_cashflow',
+    ]);
+    expect(resolveToolGrants(['finance.list_accounts?'], registry, 'a').tools).toEqual(['finance.list_accounts']);
+  });
+
+  it('still refuses a tool that does not exist in a family that is loaded', () => {
+    expect(() => resolveToolGrants(['finance.wire_money?'], registry, 'a')).toThrow(/matches no registered tool/);
+  });
+
+  it('reads only the last ? as the marker; any other ? is the one-character wildcard', () => {
+    expect(resolveToolGrants(['notes.sea?ch'], registry, 'a').tools).toEqual(['notes.search']);
+    expect(resolveToolGrants(['notes.searc??'], registry, 'a').tools).toEqual(['notes.search']);
+    // `notes.searc?` is the optional grant of `notes.searc`, which does not exist in a loaded family.
+    expect(() => resolveToolGrants(['notes.searc?'], registry, 'a')).toThrow(/matches no registered tool/);
+  });
+
+  it('loads an agent file whose optional family is missing, with the rest of its grant', () => {
+    const dir = catalogDir({
+      planner: agentFile('id: planner\nhandle: planner\nname: Planner\ndescription: Keeps the day.\ntools: [notes.*, weather.*?, calendar.*?]'),
+    });
+    const planner = loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'k' } }).resolve('planner');
+    expect(planner.heldBack).toBeUndefined();
+    expect(planner.tools).toEqual(['notes.search']);
+    expect(planner.available).toBe(true);
+  });
+});
+
 describe('loadAgentCatalog', () => {
   const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
     loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });

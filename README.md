@@ -74,11 +74,12 @@ unless you run this once:
 loginctl enable-linger $USER
 ```
 
-**Pre-releases.** Until 0.1 is out, releases are published under the `next`
-tag:
+**Pre-releases.** Until 0.1 is out, every pre-release is published as
+`latest`, so the plain install above is the newest one. After 0.1.0,
+pre-releases go under `next`:
 
 ```sh
-npm install -g @withbuddi/buddi@next
+npm install -g @withbuddi/buddi@next   # after 0.1.0 only
 ```
 
 To remove it: `buddi uninstall`, then `npm uninstall -g @withbuddi/buddi`.
@@ -325,7 +326,8 @@ The domain plugins (finance, developer, image) live in a separate repository,
 (web, gateway, typecheck, the rest), without a database. The full gate, with
 Postgres, runs on pull requests, nightly, on demand and before every release.
 A tag `v<version>` runs the gate, builds the tarball, publishes it to npm
-(pre-release versions under `next`, others under `latest`) and creates the
+(pre-release versions under `latest` until 0.1.0 exists and under `next`
+after it, others under `latest`) and creates the
 GitHub release.
 
 **Changelog.** Every change an owner or plugin author could notice gets a line

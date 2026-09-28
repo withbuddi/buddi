@@ -252,8 +252,15 @@ export interface HttpRequest {
    * names this request's host and header, applies the rule, and inserts the
    * header itself after the address checks — the value never passes through
    * the caller's hands. HTTPS only; `header` is `Authorization` when absent.
+   *
+   * `as: 'url'` (since 1.9): the secret *is* the address, as a calendar's
+   * private ICS link is (`http.url`). `url` then names only the host the
+   * caller expects (`https://calendar.google.com/`); core fetches the stored
+   * address instead, once it is HTTPS on that same host and passes the
+   * address rules. GET only, no body, no `header`; the binding names this
+   * plugin and the host, so no other plugin can fetch it.
    */
-  auth?: { secret: string; header?: string };
+  auth?: { secret: string; header?: string; as?: 'header' | 'url' };
   body?: string | Buffer;
   signal?: AbortSignal;
   /** How long the request may go silent. */

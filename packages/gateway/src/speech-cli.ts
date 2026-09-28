@@ -8,10 +8,18 @@
  * the same directory (`<data>/plugins-data/speech`), with the same pinned
  * URLs and checksums. A plugin cannot add a command of its own, so this thin
  * one lives here.
+ *
+ * No gateway is needed, and none is asked: the CLI hands the plugin an `http`
+ * area of its own (`cliHttpArea`), core's `createHttpArea` with its address
+ * rules on the socket, which additionally refuses any host the plugin's
+ * manifest does not declare under `network`. The plugin follows redirects
+ * itself, one hop at a time, each hop through this area again, so Hugging
+ * Face's hop to *.hf.co is allowed and a hop anywhere else is not.
  */
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readPluginsFile, resolveDataDir } from '@buddi/core';
+import { createHttpArea, readPluginsFile, resolveDataDir, type HttpArea, type HttpTransportFactory } from '@buddi/core';
+import { createHttpTransport } from '@buddi/runtime';
 import { recordFile } from './plugins/load.js';
 
 export type SpeechModel = 'whisper' | 'kokoro';
@@ -19,9 +27,43 @@ export const SPEECH_MODELS: readonly SpeechModel[] = ['whisper', 'kokoro'];
 
 interface InstallProgress { fraction: number; bytes: number; total: number }
 interface SpeechModule {
-  installLocal?: (kind: SpeechModel, options: { dir: string; onProgress?: (p: InstallProgress) => void }) => Promise<{ bytes: number; fetched: boolean; path: string }>;
+  installLocal?: (kind: SpeechModel, options: { dir: string; onProgress?: (p: InstallProgress) => void; http?: HttpArea }) => Promise<{ bytes: number; fetched: boolean; path: string }>;
   installedLocal?: (dir: string) => Record<SpeechModel, { label: string; installed: boolean; bytes: number; path: string; missing?: number }>;
   LOCAL_MODELS?: Record<SpeechModel, { label: string }>;
+  manifest?: { network?: readonly { host: string }[] };
+}
+
+function hostMatches(declared: string, host: string): boolean {
+  const pattern = declared.trim().toLowerCase();
+  if (pattern.startsWith('*.')) return host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1;
+  return pattern === host;
+}
+
+/**
+ * An `http` area for the speech plugin outside the gateway: core's own (no
+ * loopback, no private network, ports 80 and 443, checked again where the
+ * socket resolves), refusing a host the manifest does not declare.
+ */
+export function cliHttpArea(
+  network: readonly string[],
+  log: (line: string) => void,
+  transport: HttpTransportFactory = createHttpTransport,
+): HttpArea {
+  const area = createHttpArea({ plugin: 'speech', network, log, transport });
+  return {
+    request(req) {
+      let host: string;
+      try {
+        host = new URL(req.url).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      } catch {
+        return Promise.reject(new Error(`that is not a URL: ${JSON.stringify(String(req.url).slice(0, 120))}`));
+      }
+      if (!network.some((declared) => hostMatches(declared, host))) {
+        return Promise.reject(new Error(`refusing ${host}: the speech plugin does not declare it under network`));
+      }
+      return area.request(req);
+    },
+  };
 }
 
 export interface SpeechCliIo {
@@ -75,6 +117,7 @@ export async function runSpeechCli(
     return 1;
   }
   const state = mod.installedLocal(dir);
+  const http = cliHttpArea((mod.manifest?.network ?? []).map((n) => n.host), (line) => io.err(`speech: ${line}`));
   if (action === 'status') {
     for (const kind of SPEECH_MODELS) {
       const s = state[kind];
@@ -94,6 +137,7 @@ export async function runSpeechCli(
     try {
       const result = await mod.installLocal(kind, {
         dir,
+        http,
         onProgress: (p) => {
           const percent = Math.floor(p.fraction * 100);
           if (io.progress) {

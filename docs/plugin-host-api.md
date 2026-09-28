@@ -1,7 +1,7 @@
 ---
 title: The plugin host API
 status: reference
-updated: 2026-09-26
+updated: 2026-09-28
 ---
 
 # The plugin host API
@@ -40,6 +40,8 @@ Every plugin in both repositories is on the host. The areas each one declares
 | artifacts | buddi | `files:library` |
 | web | buddi | `http` |
 | weather (example) | buddi | `http` |
+| weather | buddi-plugins | `http`, `owner:notify` |
+| calendar | buddi-plugins | `http`, `secrets` |
 | browser | buddi | `secrets` |
 | host | buddi | `files:library` |
 | image | buddi-plugins | `accounts`, `files:library` |
@@ -86,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.8'; see §7
+  readonly version: string;            // '1.9'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -195,7 +197,14 @@ private address is refused where it is dialled. Redirects are not followed. A
 request to a host not in the manifest's `network` is logged with the plugin's
 name, and will be refused once every plugin declares its hosts. It is also
 where an owner secret bound to a header is inserted (owner-secrets §3), so a
-plugin that wants a token never holds it. `checkUrl` lives in
+plugin that wants a token never holds it. Since 1.9 a secret may be the whole
+address instead (`auth: { secret, as: 'url' }`, kind `http.url`): a private
+link whose credential is its path, like a calendar's ICS address. The request
+names only the host; core fetches the stored address once it is HTTPS on that
+host and passes the address rules, GET only. Its binding's target is `{
+plugin, host }`, the plugin filled in by the area, so only the plugin that
+stored the link can fetch it; `secrets.put` accepts that one core kind from a
+plugin that declares `http`. `checkUrl` lives in
 `@buddi/core/plugin`; `guardedLookup` lives in core but not in `/plugin`, and
 the gateway hands it to browser's proxy.
 
@@ -343,7 +352,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.8`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.9`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

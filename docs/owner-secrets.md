@@ -1,7 +1,7 @@
 ---
 title: Secrets the agent can use but never see
 status: reference
-updated: 2026-09-25
+updated: 2026-09-28
 ---
 
 # Secrets the agent can use but never see
@@ -57,6 +57,7 @@ and in that one `deliver` call, and nowhere else.
 | --- | --- | --- | --- |
 | `browser.field` | browser (extension and Playwright backends) | exact origin (scheme, host, port), or a wildcard origin | pre-approved |
 | `http.header` | core's `http` area | exact host and header name, HTTPS only | pre-approved |
+| `http.url` | core's `http` area (1.9) | the plugin that stored it and the exact host, HTTPS and GET only | pre-approved |
 | `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved per workspace |
 | `browser.native.type` | browser (macOS accessibility) | the app's bundle id | every time |
 | `browser.form.data` | browser | exact or wildcard origin, and field | every time, every use logged |
@@ -92,6 +93,13 @@ and in that one `deliver` call, and nowhere else.
 - **HTTP request header.** A plugin passes `auth: { secret: name }` to
   `ctx.buddi.http.request`; core inserts the header after the host check.
   For API tokens.
+- **A private address.** Some links are the credential: a calendar's secret
+  ICS address carries its token in the path. A plugin stores the link the
+  owner typed on its page with `secrets.put`, bound to `http.url` with
+  `{ plugin, host }`, and fetches it with `auth: { secret, as: 'url' }`
+  naming only the host. Core reads the value, checks it is HTTPS on that host
+  and passes the address rules, and sends one GET; the plugin never holds the
+  link, and no other plugin can fetch it. The calendar plugin is the first.
 - **Process environment.** `developer.start` and `developer.run` deliver
   every binding for their workspace into the child's environment, subject
   to each rule; the card on first use names the variables and the command.

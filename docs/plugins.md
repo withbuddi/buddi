@@ -138,6 +138,15 @@ and shows you the whole grant before it is written:
 "grant @buddi the weather tools"
 ```
 
+A grant ending in `?` holds only *if provided*: `weather.*?` gives the agent
+the weather tools when a plugin provides them and is skipped silently when none
+does. Without the `?`, a family nothing here provides holds the whole agent
+back until it is installed (the right answer for an agent that is nothing
+without it); with it, the agent loads with the rest of its grant. Only the last
+`?` is the marker (any other `?` is the glob's one character), and a tool that
+does not exist in a family that *is* loaded is still an error. The starter
+Planner grants `weather.*?` and `calendar.*?` this way.
+
 Then ask the agent something your tool answers. An `auto` tool runs inline; your
 `gated` one comes back as an approval card with the preview your `describe`
 rendered.
@@ -3102,7 +3111,7 @@ you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.8`; most members are from `1.0`, and the later minors' additions are the rows
+`1.9`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3205,7 +3214,7 @@ checks a request against, exactly like a manifest host.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. With `auth: { secret, header? }` one of the owner's secrets goes into one header of this request (docs/owner-secrets.md §3, `http.header`): core reads the secret by name, finds the binding that names this request's host and header, applies the rule, and inserts the header itself after the address checks — the value never passes through your hands. HTTPS only; `header` is `Authorization` when absent; a use waiting on the owner throws `SecretPendingError` with the action id, a refusal throws the refusal. |
+| `request` | `(req) => Promise<HttpResponse>` | yes | 1.0 | `{ url, method?, headers?, body?, signal?, idleTimeoutMs?, maxBytes? }` on the shared transport, behind the address guard: a URL naming this machine, its network or a port other than 80 and 443 is refused with a `BlockedError` before anything is sent, and names resolve through `guardedLookup` inside the socket, so a public name that answers with a private address is refused where it is dialled. Redirects are not followed. A host your `network` does not declare is logged with your name in 1.0, and will be refused once every plugin declares its hosts. With `auth: { secret, header? }` one of the owner's secrets goes into one header of this request (docs/owner-secrets.md §3, `http.header`): core reads the secret by name, finds the binding that names this request's host and header, applies the rule, and inserts the header itself after the address checks — the value never passes through your hands. HTTPS only; `header` is `Authorization` when absent; a use waiting on the owner throws `SecretPendingError` with the action id, a refusal throws the refusal. Since 1.9, `auth: { secret, as: 'url' }` makes the secret the whole address (`http.url`), for a private link whose credential is in its path, such as a calendar's ICS address: `url` names only the host you expect (`https://calendar.google.com/`), and core fetches the stored address instead once it is HTTPS on that same host and passes the address rules. GET only, with no body and no `header`; an error that would quote the address says `‹secret:NAME›`. The binding's target is `{ plugin, host }` with your name in it, filled in by the area, so no other plugin can fetch it. |
 
 #### `AccountsArea`
 
@@ -3254,7 +3263,7 @@ checks a request against, exactly like a manifest host.
 | `registerDestination` | `(destination) => void` | yes | 1.0 | Register one of your destinations (`{ kind, checkTarget, describe, deliver, maxRule }`, kind `<plugin>.<what>`). The manifest's `destinations` does the same at `register()`. |
 | `use` | `(name, kind, target) => Promise<SecretUseResult>` | yes | 1.0 | Deliver a bound secret into `target` of your destination `kind`: `{ done, use }`, `{ pending: actionId }` when the owner is asked, or `{ refused }`. Never the value. |
 | `list` | `() => Promise<SecretListing[]>` | yes | 1.0 | Secrets bound to your kinds: names, bindings, last use. No values. |
-| `put` | `(name, value, bindings) => Promise<void>` | yes | 1.0 | Owner only (an `ownerOnly` tool): store a secret the owner typed, bound to your kinds. |
+| `put` | `(name, value, bindings) => Promise<void>` | yes | 1.0 | Owner only (an `ownerOnly` tool): store a secret the owner typed, bound to your kinds. Since 1.9 a plugin that also declares `http` may bind it to core's `http.url` with `{ plugin: <your name>, host }`, and then fetch it with `http.request`'s `auth: { secret, as: 'url' }`; `rename`, `rebind` and `delete` treat that binding as yours. |
 | `rename` | `(name, to) => Promise<boolean>` | yes | 1.0 | Owner only. A secret bound only to your kinds. |
 | `rebind` | `(name, bindings) => Promise<boolean>` | yes | 1.0 | Owner only. Replace its bindings, your kinds only. |
 | `delete` | `(name) => Promise<boolean>` | yes | 1.0 | Owner only. The rows and the value. |

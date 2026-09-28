@@ -59,6 +59,7 @@ export function targetPlaceholder(kind: string): string {
   if (kind === 'browser.form.data') return 'the origin, then the field name — e.g. https://localhost:8443 card-number';
   if (kind === 'browser.native.type') return 'the app’s bundle id, e.g. com.bank.app';
   if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
+  if (kind === 'http.url') return 'the plugin, then the host — e.g. calendar calendar.google.com';
   if (kind === 'developer.env') return 'the workspace, then the variable name — e.g. cour des comptes ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'the account id, e.g. acct-1';
   return 'the place, as JSON — e.g. {"host":"localhost","header":"Authorization"}';
@@ -68,6 +69,7 @@ export function targetPlaceholder(kind: string): string {
 const TWO_PART_KINDS: Record<string, { hint: string; build: (first: string, second: string) => Record<string, string> }> = {
   'browser.form.data': { hint: 'an origin, then the field name', build: (origin, field) => ({ origin, field }) },
   'http.header': { hint: 'a host, then the header name', build: (host, header) => ({ host, header }) },
+  'http.url': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
   'developer.env': { hint: 'a workspace, then the variable name', build: (workspace, variable) => ({ workspace, variable }) },
 };
 

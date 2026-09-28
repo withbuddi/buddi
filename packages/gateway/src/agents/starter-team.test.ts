@@ -41,6 +41,24 @@ describe('the starter catalogue', () => {
     }
     expect(starterAgents().find((a) => a.id === 'scout')?.tools).toContain('web.*');
     expect(starterAgents().find((a) => a.id === 'keeper')?.tools).toEqual(['memory.*', 'reminder.*']);
+    // Weather and calendar only if provided: without those plugins Planner loads with the rest.
+    expect(starterAgents().find((a) => a.id === 'planner')?.tools).toEqual([
+      'memory.*', 'reminder.*', 'schedule.*', 'weather.*?', 'calendar.*?',
+    ]);
+  });
+
+  it('writes a brief that reads weather and meetings when it can and never names what is missing', () => {
+    const planner = starterAgents().find((a) => a.id === 'planner')!;
+    const prompt = starterMission(STARTER_PLUGIN, 'planner')!.prompt;
+    expect(prompt).toMatch(/weather for the home place and anything severe/);
+    expect(prompt).toMatch(/meetings with their times and the gaps/);
+    expect(prompt).toMatch(/one line of what to do\s+first/);
+    expect(prompt).toMatch(/never mention a missing plugin/);
+    const skill = planner.skills!.find((s) => s.name === 'writing-the-morning-brief')!.body;
+    expect(skill).toMatch(/`weather\.now`/);
+    expect(skill).toMatch(/`calendar\.today`/);
+    expect(skill).toMatch(/Never mention a plugin, a tool or a part you could not read/);
+    expect(planner.needs).toBe('Needs a brain; better with the Weather and Calendar plugins');
   });
 
   it('gives Planner, and only Planner, a morning brief at 08:00', () => {

@@ -100,6 +100,7 @@ export function scaffoldFiles(opts: ScaffoldOptions): Record<string, string> {
     LICENSE: licenseText(license, opts.license === undefined),
     'tsconfig.json': tsconfig(),
     'src/index.ts': indexTs(name, schema),
+    'src/version.ts': versionTs(),
     'src/index.test.ts': testTs(name),
     [`migrations/001_${schema}.sql`]: migrationSql(name, schema),
     'buddi.md': buddiMd(name, schema),
@@ -251,6 +252,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { EffectDescription, PluginManifest, ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
+import { VERSION } from './version.js';
 
 /**
  * Absolute, and resolved from the *built* file so it is right from \`dist\`.
@@ -382,8 +384,9 @@ export const forgetNote: ToolDefinition<z.infer<typeof forgetInput>, { deleted: 
 
 export const manifest: PluginManifest = {
   name: '${name}',
-  // Bumping this voids every standing approval for this plugin's tools.
-  version: '0.1.0',
+  // package.json's version (src/version.ts). Bumping it voids every standing
+  // approval for this plugin's tools.
+  version: VERSION,
   schema: '${schema}',
   migrationsDir: MIGRATIONS_DIR,
   tools: [listNotes, forgetNote],
@@ -403,6 +406,20 @@ export default manifest;
 `;
 }
 
+function versionTs(): string {
+  return `/**
+ * The manifest's version, read from this plugin's own package.json when the
+ * module loads, so the two can never drift. \`../package.json\` resolves from
+ * both \`src/\` (tests) and \`dist/\` (the built plugin); npm always packs it.
+ */
+import { readFileSync } from 'node:fs';
+
+export const VERSION: string = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
+`;
+}
+
 function testTs(name: string): string {
   return `/**
  * The manifest, through core's own validation.
@@ -413,11 +430,17 @@ function testTs(name: string): string {
  * the manifest here is therefore the cheapest possible proof that this plugin
  * will load — and it needs no database.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry } from '@buddi/core/testing';
 import { manifest } from './index.js';
 
 describe('${name} manifest', () => {
+  it("carries package.json's version", () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    expect(manifest.version).toBe(pkg.version);
+  });
+
   it('registers in a tool registry', () => {
     const registry = new ToolRegistry();
     expect(() => registry.register(manifest)).not.toThrow();
@@ -541,6 +564,7 @@ package.json is the plugin's name whatever the package is called.
 | | |
 | --- | --- |
 | \`src/index.ts\` | the manifest: one \`auto\` tool, one \`gated\` tool with \`describe\`, a source stub |
+| \`src/version.ts\` | the manifest's version, read from package.json so the two cannot drift |
 | \`migrations/001_${schema}.sql\` | the Postgres schema this plugin owns |
 | \`buddi.md\` | what the owner reads before anything is imported |
 | \`pnpm-workspace.yaml\` | the development link to core; not packed |

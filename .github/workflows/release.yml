@@ -48,6 +48,13 @@ jobs:
           # Until a stable version exists, a pre-release IS the latest buddi:
           # it goes out as `latest`, and its GitHub release is marked latest.
           # Once npm holds any version without a `-`, pre-releases go to `next`.
+          #
+          # `next` is therefore only meaningful after 0.1.0, and until then it
+          # is left alone (stale at whatever it last pointed to) and nothing
+          # advertises it. Moving it too is not possible from here: `npm
+          # publish` takes one `--tag` (a second one wins, it does not add), and
+          # trusted publishing authorises `npm publish` only, never `npm
+          # dist-tag add`, which would need a long-lived token in this repo.
           stable=$(npm view @withbuddi/buddi versions --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=[].concat(JSON.parse(s||"[]"));console.log(v.some(x=>!x.includes("-"))?"yes":"no")})')
           case "$v" in
             *-*) if [ "$stable" = "yes" ]; then echo "tag=next" >> "$GITHUB_OUTPUT"; echo "pre=--prerelease" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; echo "pre=--latest" >> "$GITHUB_OUTPUT"; fi;;

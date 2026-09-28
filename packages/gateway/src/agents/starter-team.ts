@@ -50,6 +50,8 @@ export interface StarterMission {
 interface StarterMeta {
   /** The card's one line. */
   text: string;
+  /** The card's muted line: what it needs, and what makes it better. `Needs a brain` when absent. */
+  needs?: string;
   avatar?: BundledMascot;
   mission?: StarterMission;
 }
@@ -62,14 +64,18 @@ const META: Record<string, StarterMeta> = {
   },
   planner: {
     text: 'Keeps your day: reminders, follow-ups it remembers, a brief every morning.',
+    needs: 'Needs a brain; better with the Weather and Calendar plugins',
     avatar: 'core',
     mission: {
       name: 'Morning brief',
       cron: '0 8 * * *',
       prompt:
-        'Write the owner\'s morning brief, following your writing-the-morning-brief skill: read your reminders ' +
-        '(what fires today and anything overdue), your missions that run today, and the follow-ups you noted, ' +
-        'then send at most five short lines. When nothing is due and nothing is waiting, stay silent.',
+        'Write the owner\'s morning brief, following your writing-the-morning-brief skill. In this order: today\'s ' +
+        'weather for the home place and anything severe; today\'s meetings with their times and the gaps between ' +
+        'them; reminders due today and anything overdue; your missions that run today; then one line of what to do ' +
+        'first. Skip any part whose tools you do not have, and never mention a missing plugin or tool in the brief. ' +
+        'Plain short lines, at most eight. When nothing is due, nothing is waiting and the day is unremarkable, ' +
+        'call mission.silent.',
     },
   },
   keeper: {
@@ -83,6 +89,8 @@ export const STARTER_IDS = ['scout', 'planner', 'keeper'] as const;
 
 export interface StarterAgent extends SuggestedAgent {
   mission?: StarterMission;
+  /** The card's muted line, when it says more than `Needs a brain`. */
+  needs?: string;
 }
 
 let cached: { dir: string; agents: StarterAgent[] } | null = null;
@@ -125,6 +133,7 @@ export function starterAgents(dir: string = starterDir()): StarterAgent[] {
       offer: { text: meta.text },
       ...(meta.avatar === undefined ? {} : { avatar: meta.avatar }),
       ...(meta.mission === undefined ? {} : { mission: meta.mission }),
+      ...(meta.needs === undefined ? {} : { needs: meta.needs }),
     };
   });
   cached = { dir, agents };

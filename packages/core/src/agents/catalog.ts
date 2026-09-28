@@ -410,6 +410,22 @@ const FAMILY_GRANT = /^([a-z][a-z0-9_-]*)\.(.+)$/;
 /** `<family>.<namespace>.<tool or glob>`: the namespace part, `mcp.github`. */
 const SUB_NAMESPACE_GRANT = /^([a-z][a-z0-9_-]*\.[A-Za-z0-9_-]+)\.[^.]+$/;
 
+/**
+ * `weather.*?`: a grant that holds only *if provided*. The one trailing `?` is
+ * the marker, not the glob's one-character wildcard, and it is stripped before
+ * the entry is matched. A family (or connection namespace) that nothing here
+ * provides is then skipped silently instead of holding the agent back, so a
+ * Planner written for weather and calendar still loads without either plugin.
+ * Anything else about the entry is as strict as ever: a tool that does not
+ * exist in a family that *is* loaded still throws.
+ */
+export function optionalGrant(entry: string): { pattern: string; optional: boolean } {
+  const trimmed = entry.trim();
+  return trimmed.length > 1 && trimmed.endsWith('?')
+    ? { pattern: trimmed.slice(0, -1), optional: true }
+    : { pattern: trimmed, optional: false };
+}
+
 /** What a grant list resolved to, and which families nothing here provides. */
 export interface ToolGrantResolution {
   /** Names resolved against the registry, in registry order. */
@@ -447,13 +463,16 @@ export function resolveToolGrants(
   const families = new Set(available.map((name) => name.split('.')[0]));
   const selected = new Set<string>();
   const missingFamilies: string[] = [];
-  for (const entry of declared) {
+  for (const declaredEntry of declared) {
+    const { pattern: entry, optional } = optionalGrant(declaredEntry);
     const matches = entry.includes('*') || entry.includes('?')
       ? available.filter((name) => globToRegExp(entry).test(name))
       : available.filter((name) => name === entry);
     if (matches.length === 0) {
-      const family = FAMILY_GRANT.exec(entry.trim())?.[1];
+      const family = FAMILY_GRANT.exec(entry)?.[1];
       if (family !== undefined && !families.has(family)) {
+        // `weather.*?`: not installed here, and the agent never needed it.
+        if (optional) continue;
         if (!missingFamilies.includes(family)) missingFamilies.push(family);
         continue;
       }
@@ -465,8 +484,9 @@ export function resolveToolGrants(
        * file. The agent is held back until it is back, and every other agent
        * loads.
        */
-      const namespace = SUB_NAMESPACE_GRANT.exec(entry.trim())?.[1];
+      const namespace = SUB_NAMESPACE_GRANT.exec(entry)?.[1];
       if (namespace !== undefined && !available.some((name) => name.startsWith(`${namespace}.`))) {
+        if (optional) continue;
         if (!missingFamilies.includes(namespace)) missingFamilies.push(namespace);
         continue;
       }

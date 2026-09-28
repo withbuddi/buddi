@@ -245,7 +245,7 @@ export async function readTeammates(deps: AgentOffersDeps): Promise<{ teammates:
       handle: agent.handle,
       name: agent.name,
       text: agent.offer?.text ?? agent.description,
-      needs: 'Needs a brain',
+      needs: agent.needs ?? 'Needs a brain',
       state: present.has(agent.id) ? 'added' : 'available',
     });
   }

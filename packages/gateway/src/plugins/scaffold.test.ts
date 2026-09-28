@@ -62,6 +62,7 @@ describe('what it writes', () => {
         'package.json',
         'src/index.test.ts',
         'src/index.ts',
+        'src/version.ts',
         'tsconfig.json',
       ].sort(),
     );

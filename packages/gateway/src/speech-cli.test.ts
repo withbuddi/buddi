@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runSpeechCli, speechDir } from './speech-cli.js';
+import { cliHttpArea, runSpeechCli, speechDir } from './speech-cli.js';
 
 let root: string;
 let env: NodeJS.ProcessEnv;
@@ -21,7 +21,9 @@ const SIZES = { whisper: 251846613, kokoro: 92364770 };
 export function installedLocal(dir) {
   return Object.fromEntries(Object.keys(LABELS).map((k) => [k, { label: LABELS[k], bytes: SIZES[k], path: path.join(dir, k), installed: existsSync(path.join(dir, k, 'ok')) }]));
 }
-export async function installLocal(kind, { dir, onProgress }) {
+export const manifest = { network: [{ host: 'huggingface.co' }] };
+export async function installLocal(kind, { dir, onProgress, http }) {
+  if (typeof http?.request !== 'function') throw new Error('no http area');
   if (kind === 'kokoro' && process.env.FAKE_FAIL) throw new Error('onnx/model_quantized.onnx did not match its checksum; nothing was kept.');
   for (const f of [0.25, 0.5, 1]) onProgress?.({ fraction: f, bytes: f * SIZES[kind], total: SIZES[kind] });
   await mkdir(path.join(dir, kind), { recursive: true });
@@ -79,5 +81,25 @@ describe('buddi speech', () => {
     } finally {
       delete process.env.FAKE_FAIL;
     }
+  });
+});
+
+describe('the CLI http area', () => {
+  const seen: string[] = [];
+  const transport = () => async (url: string) => {
+    seen.push(url);
+    return { ok: true, status: 200, statusText: '', headers: { get: () => null }, text: async () => '', json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+  const http = cliHttpArea(['huggingface.co', '*.hf.co'], () => {}, transport as never);
+
+  it('lets a declared host through, and a declared wildcard', async () => {
+    await http.request({ url: 'https://huggingface.co/a' });
+    await http.request({ url: 'https://us.aws.cdn.hf.co/b' });
+    expect(seen).toEqual(['https://huggingface.co/a', 'https://us.aws.cdn.hf.co/b']);
+  });
+
+  it('refuses an undeclared host, and an address on this machine even when declared', async () => {
+    await expect(http.request({ url: 'https://example.com/' })).rejects.toThrow(/does not declare it/);
+    await expect(cliHttpArea(['127.0.0.1'], () => {}, transport as never).request({ url: 'http://127.0.0.1/' })).rejects.toThrow(/127\.0\.0\.1/);
   });
 });

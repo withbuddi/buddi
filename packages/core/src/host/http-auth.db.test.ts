@@ -112,6 +112,47 @@ suite('ctx.buddi.http auth (postgres)', () => {
     resetPluginHost();
   });
 
+  it('a plugin keeps a private link as a secret it fetches and never reads (http.url, 1.9)', async () => {
+    configurePluginHost({ vault, httpTransport: transportFactory as never });
+    const calendar: PluginManifest = {
+      ...manifest,
+      name: 'calendar',
+      network: [{ host: 'calendar.example.test', why: 'the fixture calendar' }],
+    };
+    const link = 'https://calendar.example.test/ical/me/private-abcdef0123456789/basic.ics';
+    const asOwner = createPluginHost(hostBindingOf(calendar), facts({ agentId: 'owner' }));
+    // Only this plugin's name in the target is accepted, and only from the owner.
+    await expect(
+      asOwner.secrets!.put('Calendar: Work', link, [
+        { kind: 'http.url', target: { plugin: 'caller', host: 'calendar.example.test' }, rule: 'pre-approved' },
+      ]),
+    ).rejects.toThrow(/only to its own destinations/);
+    await expect(
+      createPluginHost(hostBindingOf(calendar), facts()).secrets!.put('Calendar: Work', link, [
+        { kind: 'http.url', target: { plugin: 'calendar', host: 'calendar.example.test' }, rule: 'pre-approved' },
+      ]),
+    ).rejects.toThrow(/Only the owner/);
+    await asOwner.secrets!.put('Calendar: Work', link, [
+      { kind: 'http.url', target: { plugin: 'calendar', host: 'calendar.example.test' }, rule: 'pre-approved' },
+    ]);
+
+    calls.length = 0;
+    const host = createPluginHost(hostBindingOf(calendar), facts());
+    await host.http!.request({ url: 'https://calendar.example.test/', auth: { secret: 'Calendar: Work', as: 'url' } });
+    expect(calls.map((c) => c.url)).toEqual([link]);
+
+    // Another plugin that declares http cannot fetch it: the binding names calendar.
+    const other = createPluginHost(hostBindingOf(manifest), facts());
+    await expect(
+      other.http!.request({ url: 'https://calendar.example.test/', auth: { secret: 'Calendar: Work', as: 'url' } }),
+    ).rejects.toThrow(/not bound/);
+    expect(calls).toHaveLength(1);
+
+    // The plugin may delete what it stored.
+    expect(await asOwner.secrets!.delete('Calendar: Work')).toBe(true);
+    resetPluginHost();
+  });
+
   it('plain HTTP is refused before the vault is opened', async () => {
     configurePluginHost({ vault, httpTransport: transportFactory as never });
     const host = createPluginHost(hostBindingOf(manifest), facts());

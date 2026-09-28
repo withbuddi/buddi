@@ -38,7 +38,7 @@ import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { localDateString, timezoneFromEnv } from '../time.js';
-import { createHttpArea, registerHttpHeaderDestination, type HttpTransportFactory } from './http.js';
+import { createHttpArea, isOwnUrlBinding, registerHttpHeaderDestination, registerHttpUrlDestination, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
 import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
 import {
@@ -161,6 +161,9 @@ export function configurePluginHost(more: PluginHostServices): void {
   // refuses another plugin's kind — and the Settings page lists it as one of
   // the kinds a binding may take.
   registerHttpHeaderDestination();
+  // And `http.url` (1.9): a secret that is a whole address, fetched only by
+  // the plugin its binding names.
+  registerHttpUrlDestination();
 }
 
 /** Forget them. Tests only. */
@@ -418,6 +421,32 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                 if ('pending' in result) return { pending: result.pending };
                 return { refused: result.refused };
               },
+              // A whole address (`http.url`, 1.9). The plugin in the target
+              // is this host's own, never the caller's claim.
+              async deliverUrlFor(name, requestHost) {
+                let value: string | undefined;
+                const result = await useOwnerSecret(
+                  {
+                    pool: facts.db,
+                    vault: services.vault,
+                    plugin: 'http',
+                    buddi: host,
+                    agentId: facts.agentId,
+                    conversationId: facts.conversationId,
+                    now: () => facts.now(),
+                    deliverInto: (delivered) => {
+                      value = delivered;
+                    },
+                  },
+                  { name, kind: 'http.url', target: { plugin, host: requestHost } },
+                );
+                if ('done' in result) {
+                  if (value === undefined) return { refused: `The destination did not take "${name}".` };
+                  return { ok: true, value };
+                }
+                if ('pending' in result) return { pending: result.pending };
+                return { refused: result.refused };
+              },
             },
     });
   }
@@ -629,8 +658,15 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
     // owner, and nothing else is the owner.
     if (facts.agentId !== OWNER_AGENT_ID) throw new Error(`Only the owner ${what}, from ${plugin}'s own page.`);
   };
-  const ownKinds = (bindings: readonly { kind: string }[]): void => {
-    const foreign = bindings.find((b) => !own(b.kind));
+  /*
+   * A plugin's own kinds, and one of core's: `http.url` naming this plugin
+   * (1.9), so a plugin that declares `http` can keep the private link the
+   * owner typed on its page as a secret it fetches without reading.
+   */
+  const ownBinding = (b: { kind: string; target?: unknown }): boolean =>
+    own(b.kind) || (binding.uses.includes('http') && isOwnUrlBinding({ kind: b.kind, target: b.target }, plugin));
+  const ownKinds = (bindings: readonly { kind: string; target?: unknown }[]): void => {
+    const foreign = bindings.find((b) => !ownBinding(b));
     if (foreign !== undefined) throw new Error(`${plugin} may bind a secret only to its own destinations, not ${foreign.kind}.`);
   };
   /*
@@ -642,7 +678,7 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
     const secret = await findSecret(facts.db, name);
     if (secret === null) return false;
     const bindings = await secretBindings(facts.db, secret.id);
-    if (bindings.length === 0 || bindings.some((b) => !own(b.kind))) {
+    if (bindings.length === 0 || bindings.some((b) => !ownBinding(b))) {
       throw new Error(`"${name}" is not ${plugin}'s alone to change; the owner changes it in Settings.`);
     }
     return true;
