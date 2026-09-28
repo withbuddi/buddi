@@ -183,3 +183,34 @@ describe('Codex profile for a native child (image plugin)', () => {
     release!(); await held;
   });
 });
+
+describe('ChatGPT image through the hosted tool (image plugin)', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9]);
+  function imageSse(): HttpTransport {
+    const body = [
+      { type: 'response.image_generation_call.partial_image', item_id: 'ig', partial_image_b64: 'AAAA' },
+      { type: 'response.output_item.done', item: { type: 'image_generation_call', id: 'ig', status: 'completed', result: png.toString('base64') } },
+      { type: 'response.completed', response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+    ].map(e => `data: ${JSON.stringify(e)}\n\n`).join('');
+    return vi.fn<HttpTransport>(async (_url, init) => {
+      init.onChunk?.(body, 200);
+      return { ok: true, status: 200, statusText: '', headers: { get: () => null }, text: async () => body, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) } satisfies TransportResponse;
+    });
+  }
+
+  it('refreshes, sends with the account token, and decodes the picture', async () => {
+    const f = fixture({ transport: imageSse() });
+    await f.vault.set(f.access.secretRef, JSON.stringify(tokens(1, f.clock.get() + 60_000)));
+    const out = await f.service.generateImage(f.access, 'gpt-5.5', { prompt: 'a fox', references: [], size: '1024x1024' });
+    expect(out.bytes.equals(png)).toBe(true);
+    const init = vi.mocked(f.transport).mock.calls[0]![1];
+    expect(init.headers).toMatchObject({ authorization: 'Bearer access-2', 'chatgpt-account-id': 'acct-1' });
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'gpt-5.5', tools: [{ type: 'image_generation', size: '1024x1024' }] });
+    expect(f.access.check).toHaveBeenCalled();
+  });
+
+  it('refuses with no credential', async () => {
+    const f = fixture({ transport: imageSse() });
+    await expect(f.service.generateImage(f.access, 'gpt-5.5', { prompt: 'x', references: [] })).rejects.toThrow('Connect this ChatGPT');
+  });
+});

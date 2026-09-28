@@ -18,7 +18,7 @@ import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/sto
 import type { ProposePolicyInput } from '../learning/policies.js';
 import type { CreateProposalResult } from '../learning/store.js';
 import type { ResolvedProvider } from '../provider.js';
-import type { CodexProfile, ProviderAccountListing } from '../provider-accounts.js';
+import type { CodexImage, CodexImageOptions, CodexProfile, ProviderAccountListing } from '../provider-accounts.js';
 import type { ToolContext, ToolDefinition } from '../tools.js';
 
 /** The host, bound to one plugin. See the file comment. */
@@ -284,8 +284,17 @@ export interface AccountsArea {
   list(): ProviderAccountListing[];
   /** An HTTP account's endpoint and key. Refused for an account not bound to this plugin. */
   resolve(accountId: string, model: string, signal?: AbortSignal): Promise<ResolvedProvider>;
-  /** Run `use` with a Codex account staged. Refused for an account not bound to this plugin. */
+  /**
+   * Run `use` with a Codex account staged. Refused for an account not bound to this plugin.
+   * @deprecated Since host API 1.8: a plugin that only needs a picture calls `generateCodexImage`.
+   */
   withCodexProfile<T>(accountId: string, use: (profile: CodexProfile) => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /**
+   * One picture from a Codex account's ChatGPT subscription, drawn by the
+   * Responses API's hosted image tool; the token never reaches the plugin.
+   * Refused for an account not bound to this plugin. Since host API 1.8.
+   */
+  generateCodexImage(accountId: string, options: CodexImageOptions): Promise<CodexImage>;
   /** Bind an account to this plugin. Only from the owner's own call (an `ownerOnly` tool). */
   bind(accountId: string): Promise<void>;
 }

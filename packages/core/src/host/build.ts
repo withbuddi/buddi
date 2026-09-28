@@ -716,6 +716,10 @@ function accountsArea(binding: HostBinding, facts: HostFacts): AccountsArea {
       await assertBound(accountId);
       return access().withCodexProfile(accountId, use, signal);
     },
+    async generateCodexImage(accountId, options) {
+      await assertBound(accountId);
+      return access().generateCodexImage(accountId, options);
+    },
     async bind(accountId) {
       // The binding is the owner's choice, made on the plugin's own page: the
       // act route invokes an `ownerOnly` tool as the owner, and nothing else

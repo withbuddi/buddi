@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CODEX_DEFAULT_MODEL, createCodexDirectAdapter, listCodexModels } from './codex-direct.js';
+import { CODEX_DEFAULT_MODEL, createCodexDirectAdapter, generateCodexImage, listCodexModels } from './codex-direct.js';
 import type { CompletionRequest } from './anthropic.js';
 import type { HttpTransport, TransportRequest, TransportResponse } from './transport.js';
 
@@ -220,5 +220,56 @@ describe('Codex direct adapter — prompt caching', () => {
     const send = streaming(200, sse({ type: 'response.completed', response: { status: 'completed', model: 'gpt-5.5', usage: { input_tokens: 5_000, output_tokens: 9, input_tokens_details: { cached_tokens: 4_608 } } } }));
     const out = await adapter(send).complete(request());
     expect(out.usage).toEqual({ input: 392, output: 9, cacheRead: 4_608 });
+  });
+});
+
+describe('Codex direct image', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const opts = (transport: HttpTransport) => ({ model: 'gpt-5.5', accessToken: 'tok-1', accountId: 'acct-1', transport });
+  const imageStream = () => sse(
+    { type: 'response.created', response: {} },
+    { type: 'response.image_generation_call.partial_image', item_id: 'ig1', partial_image_b64: 'AAAA' },
+    { type: 'response.output_item.done', item: { type: 'image_generation_call', id: 'ig1', status: 'completed', revised_prompt: 'a red fox', result: png.toString('base64') } },
+    completed(),
+  );
+
+  it('sends one forced image_generation tool and decodes the result', async () => {
+    const send = streaming(200, imageStream());
+    const out = await generateCodexImage(opts(send), { prompt: 'a fox', references: [{ bytes: Uint8Array.from([1, 2]), mime: 'image/jpeg' }], size: '1536x1024' });
+    expect(out.bytes.equals(png)).toBe(true);
+    expect(out).toMatchObject({ mime: 'image/png', revisedPrompt: 'a red fox' });
+    const [url, init] = send.mock.calls[0]!;
+    expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(init.headers).toMatchObject({ authorization: 'Bearer tok-1', 'chatgpt-account-id': 'acct-1', accept: 'text/event-stream' });
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({
+      model: 'gpt-5.5', store: false, stream: true,
+      tools: [{ type: 'image_generation', size: '1536x1024', quality: 'auto', output_format: 'png' }],
+      tool_choice: { type: 'image_generation' },
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'a fox' }, { type: 'input_image', image_url: 'data:image/jpeg;base64,AQI=' }] }],
+    });
+    expect(body.tools).toHaveLength(1);
+  });
+
+  it('falls back to tool_choice auto when the forced choice is refused', async () => {
+    let n = 0;
+    const send = vi.fn<HttpTransport>(async (url, init) => {
+      n += 1;
+      if (n === 1) return reply(400, JSON.stringify({ error: { message: "Unsupported value for 'tool_choice'" } }));
+      return streaming(200, imageStream())(url, init);
+    });
+    const out = await generateCodexImage(opts(send), { prompt: 'a fox', references: [] });
+    expect(out.bytes.equals(png)).toBe(true);
+    expect(JSON.parse(String(send.mock.calls[1]![1].body)).tool_choice).toBe('auto');
+  });
+
+  it('refuses a stream without a picture, quoting what the model said', async () => {
+    const send = streaming(200, sse({ type: 'response.output_text.delta', item_id: 'm', delta: 'I cannot draw that.' }, completed()));
+    await expect(generateCodexImage(opts(send), { prompt: 'x', references: [] })).rejects.toThrow(/without a picture: “I cannot draw that.”/);
+  });
+
+  it('classifies an HTTP failure without echoing it', async () => {
+    const send = vi.fn<HttpTransport>(async () => reply(429, JSON.stringify({ error: { code: 'usage_limit_reached', message: 'secret echo' } })));
+    await expect(generateCodexImage(opts(send), { prompt: 'x', references: [] })).rejects.toThrow(/plan’s limit/);
   });
 });

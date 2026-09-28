@@ -86,7 +86,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.7'; see §7
+  readonly version: string;            // '1.8'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -200,9 +200,17 @@ plugin that wants a token never holds it. `checkUrl` lives in
 the gateway hands it to browser's proxy.
 
 **accounts.** `list(): ProviderAccountListing[]`, `resolve(id, model,
-signal?): Promise<ResolvedProvider>`, `withCodexProfile(id, use, signal?)`.
-`resolve` and `withCodexProfile` are refused for an account the owner has not
-bound to this plugin; the binding is what the owner picks on the plugin's
+signal?): Promise<ResolvedProvider>`, `generateCodexImage(id, { prompt,
+references, size?, model?, signal? }): Promise<{ bytes, mime, revisedPrompt? }>`
+(1.8), and `withCodexProfile(id, use, signal?)`, deprecated since 1.8 and kept
+for compatibility. `generateCodexImage` is one picture from a ChatGPT
+subscription: the gateway sends a Responses request to the Codex backend whose
+one tool is the hosted `image_generation` (forced by `tool_choice`, or `auto`
+with an instruction when the backend refuses that) and reads the
+`image_generation_call` item's base64 `result` off the stream, under the
+account's lock and refresh, so the token never reaches the plugin.
+`resolve`, `generateCodexImage` and `withCodexProfile` are refused for an
+account the owner has not bound to this plugin; the binding is what the owner picks on the plugin's
 settings page, written through `accounts.bind(id)` from an `ownerOnly` tool.
 `list` never returns a key.
 
@@ -335,7 +343,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.7`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.8`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

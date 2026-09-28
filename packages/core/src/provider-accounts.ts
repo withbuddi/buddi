@@ -99,6 +99,11 @@ export interface ProviderAccountListing {
   /** A credential is in the vault (or none is needed). */
   configured: boolean;
   defaultModel: string;
+  /**
+   * An HTTP account's address (never a key), so a plugin can tell, say, a
+   * Gemini account from another compatible one. Absent for Codex. Since 1.8.
+   */
+  baseUrl?: string;
 }
 
 /**
@@ -111,6 +116,25 @@ export interface ProviderAccountListing {
 export interface CodexProfile {
   home: string;
   env: Record<string, string>;
+}
+
+/** One picture asked of a ChatGPT subscription (`generateCodexImage`). */
+export interface CodexImageOptions {
+  /** The picture's description. The host fences it as data for the image tool. */
+  prompt: string;
+  /** Reference pictures, as bytes. */
+  references: Array<{ bytes: Uint8Array; mime: string }>;
+  size?: '1024x1024' | '1024x1536' | '1536x1024';
+  /** The Responses model that calls the image tool; the account's default when omitted. */
+  model?: string;
+  signal?: AbortSignal;
+}
+
+/** What the image tool drew. `mime` is what the backend was asked for; sniff the bytes. */
+export interface CodexImage {
+  bytes: Buffer;
+  mime: string;
+  revisedPrompt?: string;
 }
 
 /**
@@ -138,4 +162,10 @@ export interface ProviderAccountsAccess {
    * is saved back; the profile is removed afterwards.
    */
   withCodexProfile<T>(accountId: string, use: (profile: CodexProfile) => Promise<T>, signal?: AbortSignal): Promise<T>;
+  /**
+   * One picture from this Codex account's ChatGPT subscription, made by the
+   * Responses API's hosted image tool under the account's lock. The token
+   * never leaves the host.
+   */
+  generateCodexImage(accountId: string, options: CodexImageOptions): Promise<CodexImage>;
 }

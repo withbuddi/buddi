@@ -525,6 +525,10 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
           if (!accounts) return Promise.reject(new Error('Provider accounts are not available in this process.'));
           return accounts.pluginAccess().withCodexProfile(id, use, signal);
         },
+        generateCodexImage: (id, options) => {
+          if (!accounts) return Promise.reject(new Error('Provider accounts are not available in this process.'));
+          return accounts.pluginAccess().generateCodexImage(id, options);
+        },
       },
       systemContext: (run) => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run),
       /*

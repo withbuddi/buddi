@@ -1,6 +1,6 @@
-import type { CodexProfile, Vault } from '@buddi/core';
+import type { CodexImage, CodexImageOptions, CodexProfile, Vault } from '@buddi/core';
 import {
-  CodexOAuthProtocol, createCodexDirectAdapter, listCodexModels, readCodexTokens, refreshDiscipline, stageCodexProfile,
+  CodexOAuthProtocol, createCodexDirectAdapter, generateCodexImage, listCodexModels, readCodexTokens, refreshDiscipline, stageCodexProfile,
   type AccountModels, type CodexTokens, type CompletionRequest, type CompletionResponse, type HttpTransport,
 } from '@buddi/runtime';
 
@@ -157,6 +157,23 @@ export class CodexAccounts {
     return this.#exclusive(access.id, async () => {
       const tokens = await this.#credential(access);
       return listCodexModels({ accessToken: tokens.accessToken, accountId: tokens.accountId, ...(this.deps.transport ? { transport: this.deps.transport } : {}) });
+    });
+  }
+
+  /**
+   * One picture through the hosted `image_generation` tool (the image
+   * plugin's `ctx.buddi.accounts.generateCodexImage`). Same exclusivity and
+   * refresh as a chat turn; the token stays here.
+   */
+  async generateImage(access: CodexAccountAccess, model: string, options: CodexImageOptions): Promise<CodexImage> {
+    return this.#exclusive(access.id, async (abort) => {
+      const tokens = await this.#credential(access);
+      await access.check();
+      const signal = options.signal ? AbortSignal.any([options.signal, abort]) : abort;
+      return generateCodexImage(
+        { model, accessToken: tokens.accessToken, accountId: tokens.accountId, ...(this.deps.transport ? { transport: this.deps.transport } : {}) },
+        { prompt: options.prompt, references: options.references, ...(options.size ? { size: options.size } : {}), signal },
+      );
     });
   }
 

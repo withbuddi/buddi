@@ -3102,7 +3102,7 @@ you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.7`; most members are from `1.0`, and the later minors' additions are the rows
+`1.8`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3211,9 +3211,10 @@ checks a request against, exactly like a manifest host.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `list` | `() => ProviderAccountListing[]` | yes | 1.0 | Every model account, never a key. |
+| `list` | `() => ProviderAccountListing[]` | yes | 1.0 | Every model account, never a key: `{ id, label, kind, enabled, configured, defaultModel, baseUrl? }`, where `baseUrl` (1.8) is an HTTP account's address. |
 | `resolve` | `(id, model, signal?) => Promise<ResolvedProvider>` | yes | 1.0 | An HTTP account's endpoint and key. Refused for an account the owner has not bound to you. |
-| `withCodexProfile` | `(id, use, signal?) => Promise<T>` | yes | 1.0 | Run `use` with a Codex account staged. Refused for an account the owner has not bound to you. |
+| `withCodexProfile` | `(id, use, signal?) => Promise<T>` | yes | 1.0 | Deprecated since 1.8: kept for compatibility; a picture needs `generateCodexImage`. Run `use` with a Codex account staged (a private `CODEX_HOME` for a `codex` child). Refused for an account the owner has not bound to you. |
+| `generateCodexImage` | `(id, { prompt, references, size?, model?, signal? }) => Promise<CodexImage>` | yes | 1.8 | One picture from a Codex account's ChatGPT subscription: the host sends a Responses request whose one tool is the hosted `image_generation` and hands back `{ bytes, mime, revisedPrompt? }`. `references` are `{ bytes, mime }`; `size` is `1024x1024`, `1024x1536` or `1536x1024`; `model` is the Responses model that calls the tool, the account's default when absent. The token never reaches you; the account's lock and refresh apply as for a chat. Refused for an account the owner has not bound to you. |
 | `bind` | `(id) => Promise<void>` | yes | 1.0 | Bind an account to you: the owner's pick on your settings page, from an `ownerOnly` tool. Refused from any other call. |
 
 #### `FilesArea`

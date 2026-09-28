@@ -26,9 +26,11 @@ What changes in buddi from one release to the next, newest first.
 - Plugins can add and remove tools while buddi runs (host API 1.6), and a tool may describe its input with JSON Schema; the first user is the coming Connections feature.
 - Connections: when a service changes its tools after your review, the new and changed ones wait while the rest keep working, and Review again shows what changed; a connection that needs a sign-in or a review says so on Home and with the dot on Settings; an unreachable one is retried in the background and says since when.
 - Connections: a tool that asks you first can have its approval remembered for one agent, on the Give screen or the agent's Access page; one the service says destroys something shows why it cannot.
+- Plugins can ask for one picture from a ChatGPT subscription account without seeing its sign-in (host API 1.8, `ctx.buddi.accounts.generateCodexImage`); `withCodexProfile` stays for compatibility and is deprecated. The account listing now carries an HTTP account's address.
 
 ### Changed
 
+- The image plugin makes pictures with a ChatGPT subscription directly, without the codex command, and draws with Gemini's Imagen or any service that offers an OpenAI-compatible images endpoint.
 - Your front desk and Agent Father may ask any agent, new ones included, without being added to a list; other agents keep their explicit 'Can ask' list. The Access page shows it and lets you narrow it.
 - The Agents page always shows the starter team under your agents, not behind a button.
 - First run: after your assistant says hello, buddi introduces the phone step before offering Telegram, and the hello no longer ends with a question you cannot answer there.

@@ -96,7 +96,7 @@ export type {
 } from '../learning/types.js';
 export type { ProposePolicyInput } from '../learning/policies.js';
 export type { CreateProposalResult } from '../learning/store.js';
-export type { CodexProfile, ProviderAccountListing, ProviderAccountsAccess } from '../provider-accounts.js';
+export type { CodexImage, CodexImageOptions, CodexProfile, ProviderAccountListing, ProviderAccountsAccess } from '../provider-accounts.js';
 export type { ResolvedProvider } from '../provider.js';
 export type { SurfaceProfile } from '../surfaces.js';
 export type { ArtifactKind, ArtifactSource } from '../artifacts/store.js';

@@ -98,7 +98,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.7');
+    expect(host.version).toBe('1.8');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -332,17 +332,23 @@ suite('ctx.buddi', () => {
       withCodexProfile: async () => {
         throw new Error('not here');
       },
+      generateCodexImage: async (id) => {
+        resolved.push(`image:${id}`);
+        return { bytes: Buffer.from('png'), mime: 'image/png' };
+      },
     };
     const binding = hostBindingOf(plugin('image', { uses: ['accounts'] }));
     const asAgent = createPluginHost(binding, ctx({ providerAccounts }));
     await expect(asAgent.accounts!.resolve('work', 'gpt-image-1')).rejects.toThrow(/has not given image/);
+    await expect(asAgent.accounts!.generateCodexImage('work', { prompt: 'a fox', references: [] })).rejects.toThrow(/has not given image/);
     await expect(asAgent.accounts!.bind('work')).rejects.toThrow(/Only the owner/);
 
     const asOwner = createPluginHost(binding, ctx({ providerAccounts, agentId: 'owner' }));
     await expect(asOwner.accounts!.bind('nope')).rejects.toThrow(/no model account/);
     await asOwner.accounts!.bind('work');
     await asAgent.accounts!.resolve('work', 'gpt-image-1');
-    expect(resolved).toEqual(['work']);
+    expect((await asAgent.accounts!.generateCodexImage('work', { prompt: 'a fox', references: [] })).mime).toBe('image/png');
+    expect(resolved).toEqual(['work', 'image:work']);
     expect(asAgent.accounts!.list()[0]).not.toHaveProperty('secret');
   });
 

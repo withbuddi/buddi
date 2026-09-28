@@ -537,6 +537,7 @@ export class ProviderAccounts {
     return {
       list: () => this.view().accounts.map((a) => ({
         id: a.id, label: a.label, kind: a.kind, enabled: a.enabled, configured: a.configured, defaultModel: a.defaultModel,
+        ...(a.kind !== 'codex' && a.baseUrl ? { baseUrl: a.baseUrl } : {}),
       })),
       resolve: async (id, model, signal) => {
         const row = await this.#row(id);
@@ -550,6 +551,17 @@ export class ProviderAccounts {
         if (!row.enabled || row.deleting) throw new ProviderAccountError(409, `Provider account “${row.label}” is disabled.`);
         const lease = await this.#codexCompletionAccess(row, signal);
         try { return await this.codex.withProfile(lease.access, use); }
+        finally { await lease.release(); }
+      },
+      generateCodexImage: async (id, options) => {
+        const row = await this.#row(id);
+        if (row.kind !== 'codex') throw new ProviderAccountError(400, 'This is not a Codex account.');
+        if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
+        if (!row.enabled || row.deleting) throw new ProviderAccountError(409, `Provider account “${row.label}” is disabled.`);
+        const model = options.model?.trim() || row.defaultModel;
+        if (model.length > 150 || /[\x00-\x20\x7f]/.test(model)) throw new ProviderAccountError(400, 'Enter a valid model id.');
+        const lease = await this.#codexCompletionAccess(row, options.signal);
+        try { return await this.codex.generateImage(lease.access, model, options); }
         finally { await lease.release(); }
       },
     };
