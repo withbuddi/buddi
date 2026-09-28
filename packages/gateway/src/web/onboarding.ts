@@ -838,7 +838,7 @@ function settleThinking(deps: OnboardingDeps, file: string, agentId: string, acc
  * The owner gave their name a minute ago and the assistant was named by them
  * in the same thread; a first message that opens with "what should I call
  * you?" is the installation forgetting, in front of the person who just told
- * it. The three asks stay the page's words — they are the script — and this
+ * it. The asks stay the page's words — they are the script — and this
  * puts what the *server* knows in front of them.
  */
 export async function withFirstRunFacts(deps: OnboardingDeps, instruction: string): Promise<string> {
@@ -850,11 +850,12 @@ export async function withFirstRunFacts(deps: OnboardingDeps, instruction: strin
     ...(assistant === '' ? [] : [`You are ${assistant}.`]),
   ];
   // The model is told the setup is behind it, because the alternative is an
-  // assistant re-asking what the owner answered a minute ago — and asking it
-  // as a form, which on this screen is a box nobody came here to fill in.
+  // assistant re-asking what the owner answered a minute ago. And it is told
+  // where it is: a setup page with no composer, so a question would be one
+  // the owner has no way to answer there.
   const settled =
     'The setup is finished; do not ask about your name, the owner\'s name or onboarding. ' +
-    'Ask your one question in plain words in the message, not with a form.';
+    'This message is shown on a setup page where the owner cannot reply yet, so introduce yourself in two or three sentences and do not ask a question.';
   return [...facts, instruction, settled].join(' ');
 }
 

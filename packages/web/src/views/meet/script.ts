@@ -52,7 +52,7 @@ export const FACES = ['🙂', '📚', '🧭', '🦊', '🛟', '🌿', '🛠️',
 
 /** What the assistant is asked to say before the owner has said anything. */
 export const OPENING_INSTRUCTION =
-  'Introduce yourself by name, say one thing you can do today, and ask one question.';
+  'Introduce yourself by name and say one thing you can do today.';
 
 export const SCRIPT = {
   opening: [
@@ -274,8 +274,16 @@ export const SCRIPT = {
       "Your assistant isn't answering. The AI you picked may be down; try again, or pick another brain above.",
     again: 'Pick another brain',
   },
+  /**
+   * buddi, under the assistant's hello: whose that was, where it is answered,
+   * and the one step left. The phone is introduced before it is offered.
+   */
   offers: {
-    phone: 'Talk to me from your phone',
+    said: (name: string): string =>
+      `That was ${name}. You can answer it on the next page. One more thing before that: you can also talk to it from your phone, through Telegram; a code pairs the two.`,
+    /** A rerun on an installation whose phone is already paired: nothing to offer. */
+    paired: (name: string): string => `That was ${name}. You can answer it on the next page. Your phone is already paired.`,
+    phone: 'Set up Telegram',
     notNow: 'Not now',
   },
   /** The end of the thread: it carries on somewhere the owner can find it. */

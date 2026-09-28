@@ -2981,6 +2981,25 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
   const [patient, setPatient] = useState(false);
   const [running, setRunning] = useState(true);
   const [offers, setOffers] = useState<'open' | 'phone' | 'gone'>('open');
+  /**
+   * Whether a phone is already paired: a rerun on an installation that has
+   * one offers nothing about Telegram. Null until asked; a failed ask is "no".
+   */
+  const [phonePaired, setPhonePaired] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.telegram())
+      .then((status) => {
+        if (!cancelled) setPhonePaired(status?.paired === true);
+      })
+      .catch(() => {
+        if (!cancelled) setPhonePaired(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   /** The owner is finished here, and the thread says where it carries on. */
   const [closing, setClosing] = useState(false);
   const still = useStill();
@@ -3168,19 +3187,30 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
       ) : null}
 
       {/*
+        buddi speaks after the hello: whose that was, that it is answered on
+        the next page, and the phone step before the phone is offered. Drawn
+        once the paired state is known, so a rerun never flashes an offer it
+        then withdraws.
+      */}
+      {spoken && phonePaired !== null && !silent ? (
+        <Buddi>
+          <Said>{phonePaired ? SCRIPT.offers.paired(assistant?.name ?? '') : SCRIPT.offers.said(assistant?.name ?? '')}</Said>
+        </Buddi>
+      ) : null}
+
+      {/*
         An offer is a question, and a question is answered in the dock.
         The chips, and then the phone's own step, take the composer's place
         while they are open — the way the name, the clock, the brain and the
         assistant each did — so there is never a second thing to fill in
         underneath the thing the owner is filling in.
       */}
-      {spoken && offers === 'open' ? (
+      {spoken && phonePaired !== null && offers === 'open' ? (
         <Ask
           actions={
             <>
-              <Button onClick={() => setOffers('phone')}>{SCRIPT.offers.phone}</Button>
               <Button
-                variant="accent"
+                variant={phonePaired ? 'accent' : 'default'}
                 onClick={() => {
                   setOffers('gone');
                   setClosing(true);
@@ -3188,6 +3218,11 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
               >
                 {SCRIPT.offers.notNow}
               </Button>
+              {phonePaired ? null : (
+                <Button variant="accent" onClick={() => setOffers('phone')}>
+                  {SCRIPT.offers.phone}
+                </Button>
+              )}
             </>
           }
         />

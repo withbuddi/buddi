@@ -19,6 +19,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- First run: after your assistant says hello, buddi introduces the phone step before offering Telegram, and the hello no longer ends with a question you cannot answer there.
 - Agent replies share one layout with the moment before them: the agent's mark on the left, then the name and the text; while it works, the mark moves and the text says so in place.
 - Home: what needs you is a deck of cards you read in full and move through with Done, with the list one toggle away; the conversations to continue sit as chips under the composer.
 - The install guide and the computer-control part of the browser guide now say what buddi does, how to set it up, what leaves your machine and where the limits are, instead of reading like a plan.

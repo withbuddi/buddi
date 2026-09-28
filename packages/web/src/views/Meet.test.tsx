@@ -992,8 +992,29 @@ describe('the switch', () => {
     // Nothing is completed from here: the server recorded that when it claimed
     // the opening turn, which is the moment nothing was left to set up.
     expect(api.completeOnboarding).not.toHaveBeenCalled();
-    expect(screen.getByText(SCRIPT.offers.phone)).toBeInTheDocument();
-    expect(screen.getByText(SCRIPT.offers.notNow)).toBeInTheDocument();
+    // buddi speaks after the hello, by the assistant's name, and introduces
+    // the phone before offering it.
+    expect(await screen.findByText(SCRIPT.offers.said('Ada'))).toBeInTheDocument();
+    expect(SCRIPT.offers.said('Ada')).toMatch(/^That was Ada\. You can answer it on the next page\./);
+    expect(screen.getByRole('button', { name: 'Set up Telegram' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Not now' })).toBeInTheDocument();
+  });
+
+  it('says the phone is already paired on a rerun, and offers no Telegram', async () => {
+    ready();
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
+    vi.mocked(chatApi.conversation).mockResolvedValue({
+      id: 'c1',
+      agentId: 'ada',
+      messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: "I'm Ada." }] }],
+    } as never);
+    render(meet());
+    expect(await screen.findByText(SCRIPT.offers.paired('Ada'))).toBeInTheDocument();
+    expect(SCRIPT.offers.paired('Ada')).toContain('Your phone is already paired.');
+    expect(screen.queryByText(SCRIPT.offers.said('Ada'))).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SCRIPT.offers.phone })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: SCRIPT.offers.notNow })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('link', { name: SCRIPT.done.open }).length).toBeGreaterThan(0));
   });
 
   it('rejoins the conversation the record already names instead of opening another', async () => {
@@ -1224,6 +1245,8 @@ describe('the way out', () => {
     spoken();
     vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'b' });
     vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link: 't.me/b?start=ABC', expiresAt: new Date(Date.now() + 600_000).toISOString() });
+    // Not paired when the offer is made; paired once the phone says hello.
+    vi.mocked(api.telegram).mockResolvedValueOnce({ configured: true, running: true, paired: false });
     vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
     render(meet(vi.fn()));
     fireEvent.click(await screen.findByText(SCRIPT.offers.phone));

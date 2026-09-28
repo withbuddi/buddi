@@ -198,9 +198,10 @@ runnable agent answers, and the picker says what the files disagree about.
 
 The thread does not change. A typing indicator appears under the assistant's
 name and face, and the assistant speaks first, on the model, with a first
-message it is prompted to make: introduce itself by the name it was given,
-say one thing it can do today, and ask one question. buddi's scripted bubbles
-stop here.
+message it is prompted to make: introduce itself by the name it was given
+and say one thing it can do today, in two or three sentences. It is told the
+message is shown on a setup page where the owner cannot reply yet, so it does
+not ask a question.
 
 The onboarding record is marked done when the first assistant message has
 arrived. If the model never answers, the
@@ -208,17 +209,23 @@ thread says so in buddi's voice ("Your assistant isn't answering. The AI you
 picked may be down; try again, or pick another brain above.") and offers the
 brain cards again.
 
-**Offers, in the assistant's first message**
+**buddi, after the hello, and the phone**
 
-The assistant's first message ends with two offer chips, the same chip style
-the chat already has for offers:
+Under the assistant's hello, buddi speaks once more: "That was <name>. You
+can answer it on the next page. One more thing before that: you can also talk
+to it from your phone, through Telegram; a code pairs the two." The dock then
+offers **Set up Telegram** (primary) and **Not now**, with "Open buddi" as the
+quiet link.
 
-- **Talk to me from your phone** — opens the Telegram card in the thread:
+- **Set up Telegram** — opens the Telegram card in the thread:
   "Two minutes: open Telegram, message @BotFather, send /newbot, paste the
   token it gives you here." A field for the token. Once saved, buddi shows a
   QR code and the deep link: "Scan this with your phone and press Start."
   The pairing completes when the phone says hello; the thread confirms it.
-- **Not now** — dismisses the chips. Nothing else is offered on first run.
+- **Not now** — ends the thread. Nothing else is offered on first run.
+
+When a phone is already paired (a rerun), the last sentence is "Your phone is
+already paired." and only Not now and Open buddi show.
 
 Either way the thread ends with "You're all set", and the dock holds one line,
 "Opening buddi…", and the "Open buddi" button — no composer, because the board

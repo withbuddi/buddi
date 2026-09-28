@@ -478,8 +478,9 @@ it('puts the two names it knows in front of the opening instruction', async () =
   // And it is told the setup is behind it, in both senses: nothing to ask
   // about, and nothing to ask *with* except words.
   expect(said).toContain('The setup is finished; do not ask about your name, the owner\'s name or onboarding.');
-  expect(said).toContain('Ask your one question in plain words in the message, not with a form.');
-  // And an installation that knows neither still gets the three asks, whole.
+  // And where it is: a page the owner cannot answer on, so no question.
+  expect(said).toContain('This message is shown on a setup page where the owner cannot reply yet, so introduce yourself in two or three sentences and do not ask a question.');
+  // And an installation that knows neither still gets the asks, whole.
   const anonymous = { query: vi.fn(async () => ({ rows: [{ preferred_name: null, timezone: null, language: null, about: null, display_name: null }] })) };
   const empty = reloadableCatalog(() => loadGatewayCatalog({ dir: agentsDir(), env }));
   expect(
