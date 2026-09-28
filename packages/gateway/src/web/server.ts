@@ -959,7 +959,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             },
           }),
         },
-        { method, path, body },
+        { method, path, body, preview: url.searchParams.get('preview') },
       );
       return sendJson(res, answer.status, answer.body);
     }

@@ -39,7 +39,7 @@ import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
 import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
-import { TipCard } from './parts/TipCard';
+import { TipCard, previewTipOf } from './parts/TipCard';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -50,8 +50,11 @@ export function Home({
   attention,
   update,
   connectionSignals = [],
+  hash = '',
 }: {
   timezone: string;
+  /** The page's hash, for `#/?tip=<id>` previews. */
+  hash?: string;
   navigate: (route: string) => void;
   agents: ChatAgent[];
   defaultAgentId?: string | null;
@@ -132,7 +135,7 @@ export function Home({
       {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
       <KeepClose />
       {/* One quiet tip a day, when something in buddi has gone unused. */}
-      <TipCard navigate={navigate} />
+      <TipCard navigate={navigate} preview={previewTipOf(hash)} />
 
       {update && update.updateAvailable && !update.checkout && update.latest ? (
         <Notice tone="accent">

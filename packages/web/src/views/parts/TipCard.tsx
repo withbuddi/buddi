@@ -11,8 +11,16 @@ import { api, type TipView } from '../../api';
 import { Button, Notice, Spacer, Toolbar, useAsync } from '../../ui';
 import { Icon } from '../../ui/Icon';
 
-export function TipCard({ navigate }: { navigate: (route: string) => void }): JSX.Element | null {
-  const current = useAsync(() => api.currentTip(), []);
+/** `#/?tip=<id>` on Home shows that one tip as it would look, touching no state. */
+export function previewTipOf(hash: string): string | undefined {
+  const at = hash.indexOf('?');
+  if (at === -1) return undefined;
+  const id = new URLSearchParams(hash.slice(at + 1)).get('tip');
+  return id && /^[a-z0-9-]{1,40}$/.test(id) ? id : undefined;
+}
+
+export function TipCard({ navigate, preview }: { navigate: (route: string) => void; preview?: string }): JSX.Element | null {
+  const current = useAsync(() => api.currentTip(preview), [preview]);
   const [gone, setGone] = useState<string | null>(null);
   const tip = current.data?.tip ?? null;
   if (!tip || gone === tip.id) return null;
@@ -21,6 +29,7 @@ export function TipCard({ navigate }: { navigate: (route: string) => void }): JS
   // only means the tip may be back tomorrow.
   const leave = (how: 'dismiss' | 'later'): void => {
     setGone(tip.id);
+    if (preview) return;
     void (how === 'dismiss' ? api.dismissTip(tip.id) : api.laterTip(tip.id)).catch(() => {});
   };
 

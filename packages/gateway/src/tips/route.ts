@@ -45,7 +45,7 @@ export async function tipsEnabled(store: SettingsStore): Promise<boolean> {
 
 export async function tipsRoute(
   deps: TipsRouteDeps,
-  request: { method: string; path: string; body?: Record<string, unknown> },
+  request: { method: string; path: string; body?: Record<string, unknown>; preview?: string | null },
 ): Promise<TipsReply> {
   const { method, path } = request;
   const body = request.body ?? {};
@@ -64,6 +64,15 @@ export async function tipsRoute(
 
   if (path === '/api/tips/current') {
     if (method !== 'GET') return { status: 405, body: { error: 'GET only.' } };
+    // `?preview=<id>` shows one rule's card as it would look, touching no state:
+    // for eyeballing copy and layout on Home (`#/?tip=<id>`).
+    const preview = request.preview ?? null;
+    if (preview !== null) {
+      const rule = rules.find((r) => r.id === preview);
+      return rule
+        ? { status: 200, body: { tip: { id: rule.id, text: rule.text, action: { ...rule.action } }, enabled: true, preview: true } }
+        : { status: 404, body: { error: `No tip called "${preview}". Known: ${rules.map((r) => r.id).join(', ')}.` } };
+    }
     if (!(await tipsEnabled(deps.store))) return { status: 200, body: { tip: null, enabled: false } };
     const previous = await readState(deps.store);
     const { tip, state } = pickTip(rules, await deps.facts(), previous, today);

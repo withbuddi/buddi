@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A tip can be previewed on Home with `#/?tip=<id>` (the ids are in the tips rules), touching nothing, so its copy and layout can be checked before its day comes.
 - Home may show one tip a day when something in buddi has gone unused, a second agent, a group, a mission, voice; each is one sentence with one action, 'Not this again' removes it for good, and Settings → Notifications turns tips off.
 - First run has Start over at the foot of every step; what you already connected stays in Settings.
 - Install buddi as an app: browsers offer it, Home suggests it once, and the dashboard opens in its own window with the Blob as its icon.

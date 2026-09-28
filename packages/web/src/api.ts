@@ -1667,7 +1667,7 @@ export const api = {
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
   /* ---- tips on Home (docs/dashboard.md, Home) ---- */
   /** Today's tip, or null: at most one a day, none while tips are off. */
-  currentTip: () => get<{ tip: TipView | null; enabled: boolean }>('/tips/current'),
+  currentTip: (preview?: string) => get<{ tip: TipView | null; enabled: boolean; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
   /** "Not this again": the tip never comes back. */
   dismissTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/dismiss`),
   /** ×: not now; it may come back after its cooldown. */
