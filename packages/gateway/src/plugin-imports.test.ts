@@ -38,6 +38,7 @@ const RUNTIME_IN_TESTS: Readonly<Record<string, string>> = {
   'packages/tools/web/src/tools.db.test.ts': 'runs the tools over the real transport',
   'packages/tools/web/src/providers.test.ts': 'checks the tool name and variable the runtime also reads',
   'packages/tools/browser/src/driver.integration.test.ts': 'runs the browser under the real agent loop',
+  'packages/tools/mcp/src/service.db.test.ts': 'signs in with the shared OAuth module the gateway hands the plugin',
 };
 
 const SOURCE = /\.(ts|tsx|mts|cts|js|mjs|cjs)$/;

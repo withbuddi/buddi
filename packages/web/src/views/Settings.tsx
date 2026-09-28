@@ -24,6 +24,7 @@ import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
 import { Secrets } from './Secrets';
+import { Connections } from './Connections';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
@@ -82,6 +83,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'accounts' ? <Providers embedded /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
           {section === 'secrets' ? <Secrets embedded timezone={timezone} /> : null}
+          {section === 'connections' ? <Connections embedded /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
           {section === 'plugins' ? <Plugins /> : null}

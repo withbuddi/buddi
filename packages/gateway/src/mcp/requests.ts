@@ -34,7 +34,14 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { describeOwnerAgentEdit, updateAgentFromOwner } from '../agents/platform.js';
 
-export const MCP_PLUGIN = 'mcp';
+/**
+ * The plugin name of the MCP *server*'s owner-only writes. Its tools keep
+ * their `mcp.<kind>` names (they are what `buddi mcp` and the action ledger
+ * know), but the plugin itself is not `mcp`: that name, and the `mcp.`
+ * namespace a plugin may register into while buddi runs, belong to
+ * Connections (`@buddi/tool-mcp`), whose tools are `mcp.<connection>.<tool>`.
+ */
+export const MCP_PLUGIN = 'mcp-server';
 
 /** The kinds `POST /api/mcp/request` accepts, one tool each. */
 export const MCP_REQUEST_KINDS = [

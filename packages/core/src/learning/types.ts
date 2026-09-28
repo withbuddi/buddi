@@ -20,11 +20,12 @@ export type ProposalState = 'open' | 'kept' | 'discarded' | 'expired';
  *
  * `web` a page or a search result, `mail` a message, `file` a document or a
  * command's output, `chat` somebody other than the owner speaking, `finding`
- * a watcher's data, `other` a tool that marked its own output untrusted
- * without declaring what it is.
+ * a watcher's data, `mcp` a message from a connected service (a remote MCP
+ * server's tool result, docs/connections.md), `other` a tool that marked its
+ * own output untrusted without declaring what it is.
  */
-export type UntrustedKind = 'web' | 'mail' | 'file' | 'chat' | 'finding' | 'other';
-export const UNTRUSTED_KINDS: readonly UntrustedKind[] = ['web', 'mail', 'file', 'chat', 'finding', 'other'];
+export type UntrustedKind = 'web' | 'mail' | 'file' | 'chat' | 'finding' | 'mcp' | 'other';
+export const UNTRUSTED_KINDS: readonly UntrustedKind[] = ['web', 'mail', 'file', 'chat', 'finding', 'mcp', 'other'];
 
 /** One untrusted input that was in the run's context. */
 export interface UntrustedSource {

@@ -512,7 +512,7 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   timeoutMs?: number;
   reusableApproval?: boolean;   // the owner may remember their yes
   producesArtifacts?: boolean;  // its output names files it saved
-  untrusted?: UntrustedKind;    // its output is a page, a mail, a file, a chat
+  untrusted?: UntrustedKind;    // its output is a page, a mail, a file, a chat, a connected service's answer
   sequential?: boolean;         // dependent calls are skipped after it fails
   waitsForOwner?: boolean;      // a success ends the run: the owner decides next
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
@@ -2827,7 +2827,7 @@ version each arrived in — is §9b.
 | `reusableApproval` | `boolean` | no | Opt-in: the owner may remember their approval for this tool/agent/version. A delegate can never use one — a gated call with this set is refused at `delegationDepth > 0` — and neither can a tool with a `tierFor`: a permission is keyed on the tool, and the whole point of `tierFor` is that one tool has many costs. |
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
-| `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'other'` | no | This tool's output is text someone other than the owner wrote. A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
+| `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'mcp' \| 'other'` | no | This tool's output is text someone other than the owner wrote (`'mcp'`: a message from a connected service, what every Connections tool declares). A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
 | `input` | `ZodType<I>` | no | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. Give exactly one of `input` and `inputSchema`; a hand-written tool gives this one. |
 | `inputSchema` | `JSONSchema7` | no | The arguments as a JSON Schema, kept as written (host API 1.6): for tools that arrive described that way, a remote MCP server's. Validated with Ajv before anything runs, handed to the model as is, and canonicalised into the approval envelope exactly as zod's arguments are. The top level must be `type: "object"` with no `anyOf`, `oneOf` or `allOf`; drafts 07, 2019-09 and 2020-12 (the default); no remote `$ref`, no `$data`, at most 64 KiB. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |

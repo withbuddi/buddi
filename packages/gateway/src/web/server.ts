@@ -93,6 +93,8 @@ import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry 
 import { getAction, inRecovery, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
+import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
+import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
 import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
@@ -286,6 +288,11 @@ export interface WebServerDeps {
   askApproval?: ((action: ActionRecord) => Promise<void>) | undefined;
   /** Where the built UI lives. Defaults to `packages/web/dist`. */
   assetsDir?: string | undefined;
+  /**
+   * Settings → Connections (docs/connections.md). Defaults to the service
+   * bound to the registry's connections plugin; a test passes its own.
+   */
+  connections?: ConnectionsService | undefined;
   /**
    * Idle session lifetimes, by scope. Injected only by tests — the defaults in
    * `sessions.ts` are the product, and nothing reads this from the environment.
@@ -700,6 +707,22 @@ export function createWebApp(deps: WebServerDeps): Server {
     // for as long as that session is used.
     const scope = requestScope(req);
 
+    /*
+     * Where a connected service's consent page sends the owner back
+     * (docs/connections.md). The page itself, before the session gate: the
+     * session cookie is SameSite=Strict and does not ride a redirect from
+     * another site, and minting a fresh session here would orphan the one
+     * the sign-in was bound to. It is the dashboard's own shell and nothing
+     * else; it hands `code` and `state` to `POST /api/connections/callback`,
+     * a same-site request that carries the cookie and the CSRF pair, and the
+     * state is checked there against the session that started the sign-in.
+     */
+    if ((method === 'GET' || method === 'HEAD') && url.pathname === CONNECTIONS_CALLBACK_PATH) {
+      const served = await serveAsset(res, assetsDir, '/index.html');
+      if (!served.served) sendText(res, 503, BUILD_MISSING);
+      return;
+    }
+
     // The ticket exchange. Only ever on a GET, and only ever on a page URL: a ticket is handed out as a link somebody
     // opens, never as a query on an API call. So under /api/ the parameter is
     // just a parameter, and a poller that happens to use the same name cannot
@@ -905,6 +928,24 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       ...(deps.telegram ? { telegram: deps.telegram } : {}),
     });
+
+    // Settings → Connections: every method, one module (web/connections.ts).
+    if (path === '/api/connections' || path.startsWith('/api/connections/')) {
+      let body: Record<string, unknown> = {};
+      if (method !== 'GET' && method !== 'HEAD' && method !== 'DELETE') {
+        try {
+          const parsed = await readJsonBody(req);
+          body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+        } catch {
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+      }
+      const answer = await connectionsRoute(
+        { service: deps.connections ?? connectionsOf(deps.registry.manifests()), registry: deps.registry, catalog: deps.catalog },
+        { method, path, body, sessionId: session.id, origin: requestOrigin(req) },
+      );
+      return sendJson(res, answer.status, answer.body);
+    }
 
     if (method === 'GET' || method === 'HEAD') {
       /*

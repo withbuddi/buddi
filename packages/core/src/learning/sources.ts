@@ -52,6 +52,7 @@ const FENCE = /<<<([^<>]*UNTRUSTED[^<>]*)>>>/g;
 function fenceKind(label: string): UntrustedKind {
   if (/MAIL/i.test(label)) return 'mail';
   if (/FINDING/i.test(label)) return 'finding';
+  if (/CONNECTED SERVICE/i.test(label)) return 'mcp';
   if (/PAGE|WEB/i.test(label)) return 'web';
   if (/CHAT|MESSAGE/i.test(label)) return 'chat';
   return 'other';
@@ -167,6 +168,7 @@ export function describeUntrustedSource(source: UntrustedSource): string {
     file: 'file',
     chat: 'chat message',
     finding: 'watcher data',
+    mcp: 'message from a connected service',
     other: 'untrusted output',
   };
   return `${what[source.kind]}${source.ref ? ` ${source.ref}` : ''} (${source.via})`;

@@ -30,6 +30,8 @@ unbuilt specs are kept outside this repository.
 - [Goals](goals.md): a target with a clock.
 - [Learning](learning.md): buddi proposes, the owner keeps.
 - [Owner secrets](owner-secrets.md): used, never seen.
+- [Connections](connections.md): services that speak MCP, their tools given to
+  your agents.
 - [The developer plugin](developer.md): an agent that works in a workspace.
 - [Speech](speech.md): agents listen to a recording and answer with a voice.
 - [Built-in system context](system-context.md).

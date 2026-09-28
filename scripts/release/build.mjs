@@ -16,7 +16,7 @@ const stage = await mkdtemp(path.join(os.tmpdir(), 'buddi-release-'));
 // Platform plugins only. A domain plugin — finance is the first — is the owner's
 // own: it lives in its own repository (buddi-plugins), is installed with
 // `buddi plugins install`, and is never in the tarball.
-const directories = ['core', 'runtime', 'gateway', 'cli', 'install', 'tools/artifacts', 'tools/browser', 'tools/host', 'tools/email', 'tools/memory', 'tools/web'];
+const directories = ['core', 'runtime', 'gateway', 'cli', 'install', 'tools/artifacts', 'tools/browser', 'tools/host', 'tools/email', 'tools/mcp', 'tools/memory', 'tools/web'];
 const packages = [];
 for (const dir of directories) {
   const source = path.join(root, 'packages', dir);

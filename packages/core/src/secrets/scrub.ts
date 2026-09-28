@@ -387,6 +387,9 @@ function scrubValue(value: unknown, seen: Set<object>): unknown {
  * the process in tool output and logs, so it is scrubbed under its own name.
  * The `<vault>` marker is never treated as a value.
  */
+/** The vault names a connection's OAuth envelope is kept under (`MCP_CONNECTION_<id>`). */
+export const MCP_CONNECTION_SECRET = /^MCP_CONNECTION_[A-Za-z0-9_]+$/;
+
 export async function loadScrubEntries(
   pool: { query(sql: string, params?: unknown[]): Promise<{ rows: any[] }> },
   vault: Vault | undefined,
@@ -409,6 +412,24 @@ export async function loadScrubEntries(
         if (value !== null && value.trim() !== '') entries.push({ name, value: value.trim() });
       } catch {
         // As above.
+      }
+    }
+    // A connected service's tokens (docs/connections.md): one vault entry per
+    // connection, an OAuth envelope. The tokens inside it are what could leak,
+    // so each is scrubbed under the entry's name.
+    let names: string[] = [];
+    try { names = await vault.list(); } catch { names = []; }
+    for (const name of names) {
+      if (!MCP_CONNECTION_SECRET.test(name)) continue;
+      try {
+        const raw = await vault.get(name);
+        if (raw === null) continue;
+        const envelope = JSON.parse(raw) as { accessToken?: unknown; refreshToken?: unknown };
+        for (const token of [envelope.accessToken, envelope.refreshToken]) {
+          if (typeof token === 'string' && token.length >= 8) entries.push({ name, value: token });
+        }
+      } catch {
+        // Unreadable or locked: not in this round.
       }
     }
   }

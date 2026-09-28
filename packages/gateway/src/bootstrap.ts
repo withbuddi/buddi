@@ -12,8 +12,10 @@ import { systemContext } from './system-context.js';
 import {
   DATABASE_URL_VAR,
   KNOWN_SECRETS,
+  compileJsonSchema,
   configurePluginHost,
   createPool,
+  invalidateSecretScrubber,
   createVault,
   loadScrubEntries,
   setSecretScrubSource,
@@ -33,7 +35,8 @@ import {
   type ToolRegistry,
   type Vault,
 } from '@buddi/core';
-import { createHttpTransport, createProvider, type RuntimeProvider } from '@buddi/runtime';
+import { createHttpTransport, createOAuthPort, createProvider, defaultHttpTransport, type RuntimeProvider } from '@buddi/runtime';
+import { bindConnections, type ConnectionsService } from '@buddi/tool-mcp';
 import { ProviderSettings } from './providers.js';
 import { ProviderAccounts } from './provider-accounts.js';
 import { config as loadDotenv } from 'dotenv';
@@ -199,6 +202,8 @@ export interface Wiring {
   ctx: CoreToolContext;
   /** Where secrets came from this boot. Absent when nothing hydrated them. */
   secrets?: SecretHydration;
+  /** Settings → Connections: remote MCP servers and their tools (docs/connections.md). */
+  connections?: ConnectionsService;
 }
 
 /**
@@ -283,6 +288,13 @@ export async function createWiringAsync(
     if (recorded !== undefined) wiring.reloadCatalog();
   } catch {
     // Reading a preference may never be the thing that stops a start.
+  }
+  // Every reviewed connection's tools, before any surface takes a turn. A
+  // connection that cannot be read is a line in the log, never a stopped start.
+  try {
+    await wiring.connections?.boot();
+  } catch (error) {
+    console.error(`connections: tools not registered: ${error instanceof Error ? error.message : String(error)}`);
   }
   const selected = wiring.catalog.defaultAgent();
   // The first automaton, before any sync sink (a plugin's buddi.log, the
@@ -439,6 +451,24 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   // The `platform.*` family writes agent files and then reloads this same
   // façade, which is why it is bound here and not at construction: it needs the
   // catalog it is about to replace.
+  /*
+   * Connections (docs/connections.md): the service behind the plugin
+   * registered above, with the vault its sign-ins live in and the one shared
+   * outbound transport. Its tools are registered by `boot`, after the
+   * database answers (`createWiringAsync`).
+   */
+  let vault: Vault | undefined;
+  try { vault = createVault({ env }); } catch { vault = undefined; }
+  const connections = bindConnections(registry.manifests(), {
+    pool,
+    vault,
+    transport: defaultHttpTransport,
+    oauth: createOAuthPort({ transport: defaultHttpTransport }),
+    compileSchema: (schema) => compileJsonSchema(schema).dispose(),
+    tokensChanged: invalidateSecretScrubber,
+    now,
+    log: (line) => console.error(line),
+  });
   bindPlatformTools(registry, {
     catalog,
     reload: () => catalog.reload(),
@@ -464,6 +494,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
     pool,
     registry,
     catalog,
+    ...(connections ? { connections } : {}),
     reloadCatalog: () => catalog.reload(),
     reloadProviders: () => { adapters.clear(); catalog.reload(); },
     useProviderAccounts: (service: ProviderAccounts) => { accounts = service; adapters.clear(); catalog.reload(); },

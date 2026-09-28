@@ -1116,7 +1116,7 @@ try {
      * for to know the upgrade is over.
      */
     const manifests = ['cli', 'core', 'gateway', 'install', 'runtime', 'web',
-      'tools/artifacts', 'tools/browser', 'tools/email', 'tools/host', 'tools/memory', 'tools/web']
+      'tools/artifacts', 'tools/browser', 'tools/email', 'tools/host', 'tools/mcp', 'tools/memory', 'tools/web']
       .map(inner => path.join(dir, 'package/packages', inner, 'package.json'));
     // And the copies npm made of them when the release was assembled with
     // `--install-links`: `<root>/node_modules/@buddi/*` is what a `require`

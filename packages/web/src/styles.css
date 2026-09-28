@@ -3631,3 +3631,12 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .nt-kind select { min-width: 12em; }
 .nt-times { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end; }
 .nt-state[data-tone='critical'] { color: var(--critical); }
+
+/* Settings → Connections: the service cards, a row that wraps. */
+.connections-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-3);
+}
+.connections-tool { align-items: flex-start; }
+.connections-callback { max-width: 40rem; margin: var(--space-6) auto; }

@@ -7,10 +7,12 @@
  * the acceptance names: a four-digit PIN does not blank every year in a page.
  */
 import { describe, expect, it } from 'vitest';
+import { createMemoryVault } from '../vault/index.js';
 import {
   SecretAutomaton,
   encodingsOf,
   findSecretMatches,
+  loadScrubEntries,
   primeSecretScrubber,
   scrubDeep,
   scrubText,
@@ -190,5 +192,18 @@ describe('findSecretMatches', () => {
       { name: 'PNC password', count: 2 },
     ]);
     setSecretScrubSource(null);
+  });
+});
+describe('loadScrubEntries: connections', () => {
+  it('scrubs a connected service\'s tokens under the vault entry\'s name, never the envelope', async () => {
+    const vault = createMemoryVault();
+    await vault.set('MCP_CONNECTION_abc123', JSON.stringify({ version: 1, state: 'ready', accessToken: 'mcp-access-token-1', refreshToken: 'mcp-refresh-token-1', expiresAt: 1 }));
+    await vault.set('MCP_CONNECTION_broken', 'not json');
+    const pool = { query: async () => ({ rows: [] }) };
+    const entries = await loadScrubEntries(pool, vault, {});
+    expect(entries).toEqual([
+      { name: 'MCP_CONNECTION_abc123', value: 'mcp-access-token-1' },
+      { name: 'MCP_CONNECTION_abc123', value: 'mcp-refresh-token-1' },
+    ]);
   });
 });

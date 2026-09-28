@@ -33,6 +33,7 @@ import { manifest as webManifest } from '@buddi/tool-web';
 import { createBrowserManifest } from '@buddi/tool-browser';
 import { browserHost } from '../browser-host.js';
 import { createHostManifest, hostService } from '@buddi/tool-host';
+import { createConnectionsManifest } from '@buddi/tool-mcp';
 import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createSystemManifest } from '../system-context.js';
@@ -139,6 +140,10 @@ function buildRegistry(env: NodeJS.ProcessEnv, external: readonly PluginManifest
   registry.register(webManifest);
   registry.register(createBrowserManifest(browserHost(env)));
   registry.register(createHostManifest(hostService(env)));
+  // Connections (docs/connections.md): no tools at boot. A reviewed
+  // connection's tools are registered while buddi runs, as
+  // `mcp.<connection>.<tool>`, once the gateway binds the service.
+  registry.register(createConnectionsManifest());
   // Everything the owner installed, from `plugins.json`. Empty in any process
   // that did not await `loadPluginsOnce` — a unit test, a fixture — which is
   // the honest answer for a process that never read the owner's record.

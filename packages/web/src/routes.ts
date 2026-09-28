@@ -235,6 +235,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'accounts', label: 'Model accounts', group: 'access' },
   { id: 'computer', label: 'Computer & browser', group: 'access' },
   { id: 'secrets', label: 'Keys and secrets', group: 'access' },
+  { id: 'connections', label: 'Connections', group: 'access' },
   { id: 'watchers', label: 'Watchers', group: 'running' },
   { id: 'backup', label: 'Backup', group: 'running' },
   { id: 'system', label: 'System', group: 'running' },

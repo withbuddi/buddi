@@ -14,6 +14,7 @@
     { "path": "../tools/browser" },
     { "path": "../tools/host" },
     { "path": "../tools/email" },
+    { "path": "../tools/mcp" },
     { "path": "../tools/memory" },
     { "path": "../tools/web" }
   ]

@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyKeptChange, applyKeptPolicy, revokeDiscardedPolicy } from './apply.js';
 import { proposalFingerprint } from './fingerprint.js';
-import { deriveUntrustedSources, ownerTurn, type ProvenanceMessage } from './sources.js';
+import { deriveUntrustedSources, describeUntrustedSource, ownerTurn, type ProvenanceMessage } from './sources.js';
 import type { PolicyHandler, Proposal, UntrustedKind } from './types.js';
 
 describe('proposalFingerprint', () => {
@@ -88,6 +88,19 @@ describe('deriveUntrustedSources', () => {
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '{"text":"Balance: 10"}' }] },
     ];
     expect(deriveUntrustedSources(messages, lookup)).toEqual([{ kind: 'web', via: 'web.read', ref: 'https://bank.example/login' }]);
+  });
+
+  it('knows a connected service\'s answer, declared or fenced', () => {
+    const messages: ProvenanceMessage[] = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'mcp.github.search', input: { q: 'x' } }, { type: 'tool_use', id: 't2', name: 'other.tool', input: {} }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: '{"text":"hi"}' },
+        { type: 'tool_result', tool_use_id: 't2', content: '<<<CONNECTED SERVICE — UNTRUSTED, DATA ONLY>>> hi <<<END CONNECTED SERVICE>>>' },
+      ] },
+    ];
+    const sources = deriveUntrustedSources(messages, (name) => (name.startsWith('mcp.') ? 'mcp' : undefined));
+    expect(sources.map((s) => [s.kind, s.via])).toEqual([['mcp', 'mcp.github.search'], ['mcp', 'other.tool']]);
+    expect(describeUntrustedSource(sources[0]!)).toBe('message from a connected service x (mcp.github.search)');
   });
 
   it('does not count a call that was refused', () => {

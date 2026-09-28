@@ -33,6 +33,7 @@
     "@buddi/tool-browser": "workspace:*",
     "@buddi/tool-email": "workspace:*",
     "@buddi/tool-host": "workspace:*",
+    "@buddi/tool-mcp": "workspace:*",
     "@buddi/tool-memory": "workspace:*",
     "@buddi/tool-web": "workspace:*",
     "@resvg/resvg-wasm": "^2.6.2",

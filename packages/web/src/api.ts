@@ -1676,6 +1676,20 @@ export const api = {
     ),
 
   host: (agentId?: string, conversationId?: string) => get<HostState>('/host', { agentId, conversationId }),
+  /* ---- Connections: remote MCP servers (docs/connections.md) ---- */
+  connections: () => get<ConnectionsView>('/connections'),
+  connection: (id: string) => get<ConnectionView>(`/connections/${id}`),
+  addConnection: (url: string, name?: string) =>
+    post<{ connection: ConnectionView; signIn: 'none' | 'dynamic' | 'manual' }>('/connections', { url, ...(name ? { name } : {}) }),
+  connectionConsent: (id: string, clientId?: string) =>
+    post<{ authorizeUrl: string; redirectUri: string }>(`/connections/${id}/consent`, clientId ? { clientId } : {}),
+  connectionCallback: (input: { state: string; code?: string; error?: string }) =>
+    post<{ id: string; reconnected: boolean; name: string }>('/connections/callback', input),
+  connectionReview: (id: string) => get<ConnectionReview>(`/connections/${id}/review`),
+  saveConnectionReview: (id: string, input: { slug?: string; hash: string }) => post<ConnectionView>(`/connections/${id}/review`, input),
+  grantConnection: (id: string, agents: string[]) =>
+    post<{ granted: string[]; failed: Array<{ agent: string; message: string }>; connection: ConnectionView }>(`/connections/${id}/grant`, { agents }),
+  disconnect: (id: string) => del<{ id: string; name: string; touched: string[] }>(`/connections/${id}`),
   /* ---- secrets: the owner vault (docs/owner-secrets.md §6) ---- */
   /** The page's one read: the secrets, the destinations the plugins register, buddi's own keys. */
   secrets: () => get<SecretsView>('/secrets'),
@@ -1923,3 +1937,66 @@ export interface BrowserInstallProgress {
 export type BrowserLaunchCheck =
   | { ok: true }
   | { ok: false; message: string; command?: string; problem?: 'missing-libraries' | 'no-sandbox' | 'no-browser' };
+
+/* ------------------------------------------------------------------ *
+ * Connections (docs/connections.md)
+ * ------------------------------------------------------------------ */
+
+export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review';
+
+export interface ConnectionView {
+  id: string;
+  slug: string | null;
+  name: string;
+  url: string;
+  host: string;
+  state: ConnectionState;
+  authKind: 'none' | 'oauth';
+  signedIn: boolean;
+  toolCount: number;
+  /** `mcp.<slug>.*`, what an agent's grant names; null before review. */
+  grant: string | null;
+  serverName: string | null;
+  serverVersion: string | null;
+  reviewedAt: string | null;
+  /** Agents whose files grant this connection's tools. */
+  agents: string[];
+}
+
+export interface ConnectionCard {
+  id: string;
+  name: string;
+  blurb: string;
+  url: string;
+  verified: boolean;
+}
+
+export interface ConnectionsView {
+  connections: ConnectionView[];
+  catalog: ConnectionCard[];
+  /** Who may be given a connection's tools, the front desk first. */
+  agents: Array<{ id: string; name: string; handle: string; frontDesk: boolean }>;
+  /** Whether this installation has a vault to keep sign-ins in. */
+  vault: boolean;
+  callbackPath: string;
+}
+
+export interface ConnectionReviewTool {
+  name: string;
+  fullName: string;
+  description: string;
+  tier: 'auto' | 'gated';
+  destructive: boolean;
+  annotated: boolean;
+  problem: string | null;
+}
+
+export interface ConnectionReview {
+  connection: ConnectionView;
+  slug: string;
+  slugEditable: boolean;
+  host: string;
+  hash: string;
+  tools: ConnectionReviewTool[];
+  annotatedNothing: boolean;
+}
