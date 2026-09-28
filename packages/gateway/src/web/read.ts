@@ -11,7 +11,7 @@
  */
 import { addUsage, usageView, type UsageView } from './usage-view.js';
 import path from 'node:path';
-import { readDelegates } from '../agents/delegation.js';
+import { readDelegatesFile } from '../agents/delegation.js';
 import {
   getActiveSchedule,
   listJobs,
@@ -30,6 +30,7 @@ import {
   sentinelIsEnabled,
   sentinelSwitches,
   toActionRecord,
+  delegateScope,
   type AgentCatalog,
   type AgentHoldBack,
   type CatalogAgent,
@@ -833,6 +834,12 @@ export interface AgentView {
   skills: Array<{ name: string; provenance: string; file: string }>;
   /** Who it may hand work to: its allowlist, restricted to agents that exist. */
   delegates: string[];
+  /**
+   * Set when it may ask everyone rather than a list: `front-desk` or `maker`
+   * when that role opens it by default (no file), `list` when its file says
+   * `"*"`. `delegates` is empty then.
+   */
+  asksEveryone?: 'front-desk' | 'maker' | 'list';
   /** True when the file is a shipped example, which the dashboard will not edit. */
   isExample: boolean;
   /**
@@ -849,8 +856,16 @@ export interface AgentView {
   provider: { kind: string; model: string; credentialKind: string; credentialEnv: string };
 }
 
-function safeDelegates(agentId: string, agentsDir: string): string[] {
-  try { return readDelegates(agentId, agentsDir); } catch { return []; }
+function safeDelegates(agentId: string, agentsDir: string): string[] | undefined {
+  try { return readDelegatesFile(agentId, agentsDir); } catch { return []; }
+}
+
+/** The Access page's view of an allowlist: everyone (and why), or the ids that exist. */
+function delegationView(catalog: AgentCatalog, agent: CatalogAgent): Pick<AgentView, 'delegates' | 'asksEveryone'> {
+  const scope = delegateScope(agent, safeDelegates(agent.id, path.dirname(path.dirname(agent.file))));
+  return scope.kind === 'everyone'
+    ? { delegates: [], asksEveryone: scope.because }
+    : { delegates: scope.ids.filter((id) => catalog.get(id) !== undefined) };
 }
 
 export function readAgents(catalog: AgentCatalog, pictures: ReadonlyMap<string, string> = new Map()): AgentView[] {
@@ -890,7 +905,7 @@ function agentView(catalog: AgentCatalog, agent: CatalogAgent, pictures: Readonl
           provenance: s.provenance,
           file: s.file,
         })),
-        delegates: safeDelegates(agent.id, path.dirname(path.dirname(agent.file))).filter((id) => catalog.get(id) !== undefined),
+        ...delegationView(catalog, agent),
         isExample: agent.source === 'example',
         ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
         provider: {

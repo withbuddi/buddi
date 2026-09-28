@@ -1,9 +1,9 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type AgentsView } from '../../api';
 import { AgentSetup, RememberedApprovals } from './AgentSetup';
-vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn(), rememberedApprovals: vi.fn().mockResolvedValue({ agent: 'demo', tools: [] }), setRememberedApproval: vi.fn() } }));
+vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn(), rememberedApprovals: vi.fn().mockResolvedValue({ agent: 'demo', tools: [] }), setRememberedApproval: vi.fn(), setDelegates: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));
@@ -300,4 +300,32 @@ it('draws nothing for an agent holding no connection tool that asks first', asyn
   const { container } = render(<RememberedApprovals agentId="demo" version="" disabled={false} />);
   await waitFor(() => expect(api.rememberedApprovals).toHaveBeenCalled());
   expect(container).toBeEmptyDOMElement();
+});
+
+describe('Can ask', () => {
+  const desk = { ...view.agents[0]!, id: 'desk', handle: 'desk', name: 'Desk', roles: ['front-desk'], tools: ['agent.delegate'], delegates: [], asksEveryone: 'front-desk' as const, isDefault: false };
+  const ledger = { ...view.agents[0]!, id: 'ledger', handle: 'ledger', name: 'Ledger', roles: [], tools: ['agent.delegate'], delegates: [], isDefault: false };
+  const withTeam = { ...view, agents: [view.agents[0]!, desk, ledger], engines: ['desk', 'ledger'].map((id) => ({ ...view.engines[0]!, id })).concat(view.engines) } as unknown as AgentsView;
+  beforeEach(() => { vi.mocked(api.agents).mockResolvedValue(withTeam); vi.mocked(api.agentTools).mockImplementation(async (id: string) => ({ ...tools, id })); });
+
+  it('says the front desk asks everyone, and turns into the picker on "Limit to…"', async () => {
+    vi.mocked(api.setDelegates).mockResolvedValue({ delegates: ['ledger'] });
+    render(<AgentSetup agentId="desk" section="access" />);
+    expect(await screen.findByText(/Can ask: everyone, as the front desk/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Agents this one may ask' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Limit to…' }));
+    const list = screen.getByRole('list', { name: 'Agents this one may ask' });
+    expect(screen.getByText(/New teammates must be added here/)).toBeInTheDocument();
+    fireEvent.click(within(list).getByLabelText(/Demo/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save who it can ask' }));
+    await waitFor(() => expect(api.setDelegates).toHaveBeenCalledWith('desk', ['ledger']));
+  });
+
+  it('shows the explicit picker for any other agent, as before', async () => {
+    render(<AgentSetup agentId="ledger" section="access" />);
+    expect(await screen.findByRole('list', { name: 'Agents this one may ask' })).toBeInTheDocument();
+    expect(screen.getByText(/New teammates must be added here/)).toBeInTheDocument();
+    expect(screen.queryByText(/Can ask: everyone/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Limit to…' })).not.toBeInTheDocument();
+  });
 });

@@ -214,6 +214,8 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
+import { tipsRoute } from '../tips/route.js';
+import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
@@ -929,6 +931,38 @@ export function createWebApp(deps: WebServerDeps): Server {
       env: deps.env ?? process.env,
       ...(deps.telegram ? { telegram: deps.telegram } : {}),
     });
+
+    // Tips on Home: one quiet card a day, the switch, the pages seen (tips/route.ts).
+    if (path === '/api/tips' || path.startsWith('/api/tips/')) {
+      let body: Record<string, unknown> = {};
+      if (method === 'POST' || method === 'PUT') {
+        try {
+          const parsed = await readJsonBody(req);
+          body = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+        } catch {
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+      }
+      const answer = await tipsRoute(
+        {
+          store: webSettingsStore(deps.pool),
+          now: deps.now,
+          timezone: deps.timezone,
+          facts: () => readFacts({
+            pool: deps.pool,
+            now: deps.now,
+            agents: () => deps.catalog.list(),
+            plugins: () => deps.registry.manifests().map((m) => m.name),
+            mailboxSet: async () => {
+              const answer = await runPageQuery(pagesDeps(), 'email', 'triage_offer', new URLSearchParams()).catch(() => null);
+              return answer?.status === 200 && (answer.body as { data?: { wanted?: unknown } } | null)?.data?.wanted === true;
+            },
+          }),
+        },
+        { method, path, body },
+      );
+      return sendJson(res, answer.status, answer.body);
+    }
 
     // Settings → Connections: every method, one module (web/connections.ts).
     if (path === '/api/connections' || path.startsWith('/api/connections/')) {

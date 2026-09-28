@@ -98,6 +98,13 @@ function safeJson(text: string): unknown {
   }
 }
 
+/** One tip on Home: a sentence and one action. */
+export interface TipView {
+  id: string;
+  text: string;
+  action: { label: string; route: string };
+}
+
 export function get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -712,8 +719,13 @@ export interface AgentRow {
   /** The uploaded picture's URL, when there is one; `avatar` stays the fallback. */
   picture?: string;
   skills: Array<{ name: string; provenance: string; file: string }>;
-  /** Who it may hand work to. */
+  /** Who it may hand work to. Empty when `asksEveryone` is set. */
   delegates: string[];
+  /**
+   * Set when it may ask every agent rather than a list: the front desk and the
+   * maker by default (`front-desk`, `maker`), or a list that says `"*"`.
+   */
+  asksEveryone?: 'front-desk' | 'maker' | 'list';
   /** A shipped example: read-only until Agent Father makes a private copy. */
   isExample: boolean;
   /** Set when a granted tool family is not installed here; `tools` is empty. */
@@ -1653,6 +1665,17 @@ export const api = {
   notificationSettings: () => get<NotificationSettingsView>('/notifications/settings'),
   saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
+  /* ---- tips on Home (docs/dashboard.md, Home) ---- */
+  /** Today's tip, or null: at most one a day, none while tips are off. */
+  currentTip: () => get<{ tip: TipView | null; enabled: boolean }>('/tips/current'),
+  /** "Not this again": the tip never comes back. */
+  dismissTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/dismiss`),
+  /** ×: not now; it may come back after its cooldown. */
+  laterTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/later`),
+  /** The dashboard opened a page; the gateway keeps one mark a day per page. */
+  tipsSeenPage: (page: string) => post<{ ok: true }>('/tips/seen-page', { page }),
+  tipsSettings: () => get<{ enabled: boolean }>('/tips/settings'),
+  saveTipsSettings: (enabled: boolean) => put<{ enabled: boolean }>('/tips/settings', { enabled }),
   /** `active` while the page is in front, `away` when it leaves (docs/notifications.md). */
   presence: (state: 'active' | 'away') => post<{ ok: true }>('/presence', { state }),
   /* ---- the owner ---- */
@@ -1665,7 +1688,7 @@ export const api = {
   forgetPreference: (body: { key: string; scope: string }) => post<null>('/memory/preferences/forget', body),
   updateNote: (id: string, change: { content?: string; scope?: string; kind?: string }) => post<MemoryNote>(`/memory/notes/${encodeURIComponent(id)}`, change),
   forgetNote: (id: string) => post<null>(`/memory/notes/${encodeURIComponent(id)}/forget`),
-  setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[] }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
+  setDelegates: (id: string, delegates: string[]) => post<{ delegates: string[]; asksEveryone?: 'front-desk' | 'maker' | 'list' }>(`/agents/${encodeURIComponent(id)}/delegates`, { delegates }),
   agentProfile: (id: string) => get<AgentProfile>(`/agents/${encodeURIComponent(id)}/profile`),
   /** Every skill the agent loads; learned ones with their version and provenance. */
   agentSkills: (id: string) =>

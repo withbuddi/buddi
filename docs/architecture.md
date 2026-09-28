@@ -208,8 +208,14 @@ Around the contract:
   the new agent answers everywhere without a restart.
 - **Delegation.** `agent.delegate` asks a colleague a question in a fresh
   conversation of its own. Who an agent may ask is `delegates.json` next to its
-  file, read at every call; the Access tab shows and edits that same file, and
-  the agent's prompt lists it by id and handle. A call to anyone else is refused
+  file, read at every call; the Access tab's **Can ask** shows and edits that
+  same file, and the agent's prompt lists it by id and handle. `"*"` in the file
+  means everyone. An agent claiming `front-desk` or `maker` with no file asks
+  everyone: every other agent, new ones included, minus any agent holding the
+  write tools; its Access tab says "Can ask: everyone, as the front desk" (or
+  "as the maker"), and **Limit to…** turns it into the explicit picker, whose
+  list then narrows it. Every other agent asks only its list, and new teammates
+  must be added to it there. A call to anyone else is refused
   with the list: "@buddi may delegate to @dev, @ledger; @art is not on its
   list. The owner adds it on @buddi's Access page." An allowed colleague's
   handle is taken for its id. The files the colleague makes belong to the

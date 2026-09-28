@@ -18,6 +18,8 @@ import { checkDelegates } from '../agents/platform.js';
 import { DELEGATES_FILE } from '../agents/delegation.js';
 import { writeFilesAtomic } from '../agents/platform-files.js';
 import { join as pathJoin } from 'node:path';
+import { rmSync } from 'node:fs';
+import { DELEGATE_EVERYONE, openDelegationRole } from '@buddi/core';
 import {
   cancelJob,
   cancelReminder,
@@ -513,12 +515,16 @@ export { toActionRecord };
  * none may hold the platform write tools, because delegation is a corridor.
  * Only a private agent's file is written; a shipped example is refused with
  * the way to get a private copy.
+ *
+ * `["*"]` means everyone. On a front-desk or maker agent that is its default,
+ * so the file is removed rather than written — the role keeps it open, and a
+ * later list narrows it again. On any other agent `"*"` is written as is.
  */
 export async function setDelegatesFromWeb(
   deps: { catalog: import('@buddi/core').AgentCatalog & { reload?: () => void }; agentsDir: string; examplesDir: string; reload?: () => void },
   agentId: string,
   delegates: unknown,
-): Promise<WriteResult<{ delegates: string[] }>> {
+): Promise<WriteResult<{ delegates: string[]; asksEveryone?: 'front-desk' | 'maker' | 'list' }>> {
   if (!Array.isArray(delegates) || !delegates.every((d) => typeof d === 'string')) return fail(400, 'Expected a list of agent ids.');
   const agent = deps.catalog.get(agentId);
   if (!agent) return fail(404, 'No such agent.');
@@ -529,8 +535,16 @@ export async function setDelegatesFromWeb(
   } catch (err) {
     return fail(400, err instanceof Error ? err.message : String(err));
   }
+  const file = pathJoin(deps.agentsDir, agent.id, DELEGATES_FILE);
+  const role = openDelegationRole(agent.roles);
+  if (checked.includes(DELEGATE_EVERYONE)) {
+    if (role !== undefined) rmSync(file, { force: true });
+    else writeFilesAtomic([{ path: file, content: `${JSON.stringify([DELEGATE_EVERYONE], null, 2)}\n` }]);
+    try { deps.reload?.(); } catch { /* the next load will say if it cannot be read */ }
+    return { ok: true, status: 200, body: { delegates: [], asksEveryone: role ?? 'list' } };
+  }
   const unique = [...new Set(checked)];
-  writeFilesAtomic([{ path: pathJoin(deps.agentsDir, agent.id, DELEGATES_FILE), content: `${JSON.stringify(unique, null, 2)}\n` }]);
+  writeFilesAtomic([{ path: file, content: `${JSON.stringify(unique, null, 2)}\n` }]);
   try { deps.reload?.(); } catch { /* the file is written; the next load will say if it cannot be read */ }
   return { ok: true, status: 200, body: { delegates: unique } };
 }

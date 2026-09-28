@@ -37,6 +37,7 @@ import type { AgentDefinition, ThinkingSetting } from '../agent.js';
 import { resolveProvider, type ProviderKind, type ProviderProblem, type ProviderRef } from '../provider.js';
 import { localDateString, timezoneFromEnv } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
+import { resolveDelegates } from './delegates.js';
 import { providerFromEnv } from './provider-from-env.js';
 import type { AgentSource } from './search-path.js';
 import {
@@ -352,8 +353,19 @@ export interface LoadAgentCatalogOptions {
    * agent is allowed to ask — with their ids, which is what the tool takes.
    * It is a *description* of authorization, never the authorization itself;
    * the delegate tool checks the file again at the point of use.
+   *
+   * `undefined` means the agent has no file, which is not the same as an empty
+   * one: a front-desk or maker agent with no file asks everyone (see
+   * `delegates.ts`), and `"*"` in a list means everyone too.
    */
-  delegatesFor?: (agentId: string, agentsDir: string) => readonly string[];
+  delegatesFor?: (agentId: string, agentsDir: string) => readonly string[] | undefined;
+  /**
+   * Whether an agent holding these (resolved) tools may be reached by
+   * delegation at all. Consulted only where "everyone" is expanded, so an
+   * open allowlist never names an agent the host refuses at the point of use.
+   * Absent: every agent may be.
+   */
+  delegateTargetAllowed?: (tools: readonly string[]) => boolean;
   /**
    * Directory of shared skills for the single-directory form. Defaults to
    * `skills/` next to the agents directory (so `<repo>/agents` pairs with
@@ -751,6 +763,8 @@ function buildAgent(
   roster: readonly AgentRosterEntry[] = [],
   /** A hold-back the *loader* decided, before any grant was resolved. */
   refused?: AgentHoldBack,
+  /** The ids an open allowlist ("everyone") resolves to. */
+  openTargets: readonly string[] = [],
 ): CatalogAgent {
   const { tools: granted, missingFamilies } = resolveToolGrants(
     frontmatter.tools,
@@ -799,7 +813,8 @@ function buildAgent(
    * An id the file names that no agent answers to is dropped rather than
    * printed: the prompt must not promise a colleague that does not exist.
    */
-  const delegates = [...new Set(opts.delegatesFor?.(frontmatter.id, path.dirname(path.dirname(file))) ?? [])]
+  const stored = opts.delegatesFor?.(frontmatter.id, path.dirname(path.dirname(file)));
+  const delegates = resolveDelegates({ id: frontmatter.id, roles: frontmatter.roles ?? [] }, stored, openTargets)
     .map((id) => roster.find((entry) => entry.id === id))
     .filter((entry): entry is AgentRosterEntry => entry !== undefined);
   const systemPromptTemplate = [
@@ -1061,8 +1076,25 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
   const byHandle = new Map<string, CatalogAgent>();
   const claimed: Array<{ id: string; order: number }> = [];
 
+  /*
+   * Who "everyone" is for an open allowlist: the roster, minus any agent the
+   * host says may not be reached by delegation (one that can write the
+   * installation). A grant that cannot be resolved is left out: it throws
+   * properly in `buildAgent`, and an open list must not guess.
+   */
+  const openTargets = loadable
+    .filter(({ frontmatter }) => {
+      if (opts.delegateTargetAllowed === undefined) return true;
+      try {
+        return opts.delegateTargetAllowed(resolveToolGrants(frontmatter.tools, opts.registry, frontmatter.id).tools);
+      } catch {
+        return false;
+      }
+    })
+    .map(({ frontmatter }) => frontmatter.id);
+
   for (const { frontmatter, body, file, source, order } of loadable) {
-    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster);
+    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster, undefined, openTargets);
     agents.set(agent.id, agent);
     byHandle.set(agent.handle.toLowerCase(), agent);
     if (agent.isDefault) claimed.push({ id: agent.id, order });

@@ -48,7 +48,7 @@ import {
   type Tier,
   type ToolRegistry,
 } from '@buddi/core';
-import { readDelegates } from '../agents/delegation.js';
+import { readDelegatesFile, resolveAllowlist } from '../agents/delegation.js';
 import { ROLE_MAKER } from '../agents/roles.js';
 
 /** One granted tool, with the only fact about it that is a privilege. */
@@ -319,7 +319,8 @@ function delegatesOf(agent: CatalogAgent, catalog: AgentCatalog): ProfileDelegat
   const agentsDir = path.dirname(path.dirname(agent.file));
   let ids: string[];
   try {
-    ids = readDelegates(agent.id, agentsDir);
+    // Resolved the way the tool resolves it: a front desk asks everyone.
+    ids = resolveAllowlist(agent.id, catalog, readDelegatesFile(agent.id, agentsDir));
   } catch {
     // A malformed allowlist fails the *load*, so this process would not be
     // serving at all. If one appeared since, the panel says nobody rather than

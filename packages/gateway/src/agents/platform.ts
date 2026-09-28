@@ -81,6 +81,7 @@ import {
   setSchedule,
   upsertMission,
   type MisfirePolicy,
+  DELEGATE_EVERYONE,
 } from '@buddi/core';
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
@@ -443,6 +444,8 @@ export function checkDelegates(
   const known = catalog.list();
   return delegates.map((raw) => {
     const wanted = raw.trim().replace(/^@/, '');
+    // "Everyone": resolved at the point of use, where writers are left out.
+    if (wanted === DELEGATE_EVERYONE) return DELEGATE_EVERYONE;
     if (wanted === selfId) refuse('self-delegate', `an agent cannot delegate to itself ("${selfId}")`);
     const match =
       known.find((a) => a.id === wanted) ?? known.find((a) => a.handle.toLowerCase() === wanted.toLowerCase());

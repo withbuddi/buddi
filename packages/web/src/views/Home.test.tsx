@@ -29,6 +29,7 @@ vi.mock('../api', async (importOriginal) => {
       version: vi.fn(),
       notifications: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
+      currentTip: vi.fn(async () => ({ tip: null, enabled: true })),
     },
     chatApi: {
       ...original.chatApi,
@@ -100,6 +101,16 @@ describe('the upgrade notice', () => {
   it('says nothing before the version is known', async () => {
     await home(undefined);
     expect(screen.queryByText(/A newer buddi is ready/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the tip', () => {
+  it('sits under the greeting, above the notices', async () => {
+    vi.mocked(api.currentTip).mockResolvedValueOnce({ tip: { id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }, enabled: true });
+    await home(NEWER);
+    const tip = screen.getByText('Put them in a group.');
+    const upgrade = screen.getByText(/A newer buddi is ready:/);
+    expect(tip.compareDocumentPosition(upgrade) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

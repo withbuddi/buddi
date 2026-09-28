@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createSecretsManifest,
+  DELEGATE_EVERYONE,
   loadAgentCatalog,
   migrationNotice,
   pluginsFilePath,
@@ -38,7 +39,7 @@ import { externalManifests } from '../plugins/load.js';
 import { createCanvasManifest } from './canvas.js';
 import { createSystemManifest } from '../system-context.js';
 import { recordedDefaultAgent } from './default-agent.js';
-import { createDelegationManifest, readDelegates } from './delegation.js';
+import { createDelegationManifest, readDelegates, readDelegatesFile } from './delegation.js';
 import { createOwnerManifest } from './owner-tools.js';
 import { createPlatformManifest } from './platform.js';
 import { createMcpManifest } from '../mcp/requests.js';
@@ -268,7 +269,9 @@ export function assertNoDelegationToWriters(catalog: AgentCatalog): void {
     // `delegates.json` sits next to `agent.md`, whichever half of the search
     // path the agent came from.
     const agentsDir = path.dirname(path.dirname(agent.file));
-    for (const targetId of readDelegates(agent.id, agentsDir)) {
+    // Only the ids a list names: "everyone" (`"*"`, or a front desk's open
+    // default) never includes a writer, so it cannot open the corridor.
+    for (const targetId of readDelegates(agent.id, agentsDir).filter((id) => id !== DELEGATE_EVERYONE)) {
       const held = writeToolsIn(catalog.get(targetId)?.tools ?? []);
       if (held.length > 0) {
         throw new Error(delegateToWriterRefusal(agent.id, targetId, held));
@@ -372,15 +375,18 @@ export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (fami
  * examples do not share an `agents/`, and reaching for a single default
  * directory would print one agent's colleagues in another's prompt, or none.
  */
-function delegatesForPrompt(): (agentId: string, agentsDir: string) => readonly string[] {
+function delegatesForPrompt(): (agentId: string, agentsDir: string) => readonly string[] | undefined {
   return (agentId, agentsDir) => {
     try {
-      return readDelegates(agentId, agentsDir);
+      return readDelegatesFile(agentId, agentsDir);
     } catch {
       return [];
     }
   };
 }
+
+/** An open allowlist never reaches an agent that can write the installation. */
+const delegateTargetAllowed = (tools: readonly string[]): boolean => writeToolsIn(tools).length === 0;
 
 export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatalog {
   const env = opts.env ?? process.env;
@@ -389,7 +395,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(), ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(), delegateTargetAllowed, ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -405,7 +411,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     env,
     providerSelection: opts.providerSelection,
     pluginForFamily,
-    delegatesFor: delegatesForPrompt(),
+    delegatesFor: delegatesForPrompt(), delegateTargetAllowed,
     // The owner's recorded choice, which core prefers over any file flag.
     ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }),
   });

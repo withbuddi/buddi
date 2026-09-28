@@ -307,3 +307,23 @@ export function placeOf(hash: string): string {
   if (plugin) return pluginPageRoute(plugin.plugin, plugin.page);
   return HOME_ROUTE;
 }
+
+/**
+ * Chat, with the "New group" sheet open: where the group tip on Home points.
+ * The shell opens the sheet and puts the hash back to plain Chat.
+ */
+export const NEW_GROUP_ROUTE = '#/chat?group=new';
+
+/**
+ * The page name a hash is reported under for the tips (`POST /api/tips/seen-page`):
+ * the place, and for Settings and plugin places the section too. Never an id:
+ * which agent or conversation is open is not what the tips need.
+ */
+export function tipsPageOf(hash: string): string | null {
+  const path = hash.replace(/^#\/?/, '').split('?')[0]!.toLowerCase();
+  if (path === '') return 'home';
+  const [first, second] = path.split('/');
+  if (!first || !/^[a-z0-9-]+$/.test(first)) return null;
+  if ((first === 'settings' || first === 'p') && second && /^[a-z0-9.-]+$/.test(second)) return `${first}/${second}`;
+  return first;
+}

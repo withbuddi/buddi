@@ -148,6 +148,29 @@ function agentFile(id: string, over: { tools?: string; description?: string } = 
   ].join('\n');
 }
 
+describe('the front desk and the maker ask everyone', () => {
+  const dir = (extra: Record<string, string> = {}): string =>
+    agentsDirWith({
+      'desk/agent.md': agentFile('desk', { tools: 'agent.delegate' }).replace('tools:', 'roles: [front-desk]\ntools:'),
+      'ledger/agent.md': agentFile('ledger', { description: 'Keeps the books' }),
+      'maker/agent.md': agentFile('maker', { tools: 'agent.delegate, platform.create_agent' }).replace('tools:', 'roles: [maker]\ntools:'),
+      ...extra,
+    });
+
+  it('offers every colleague that does not write the installation, with no list', () => {
+    const catalog = loadGatewayCatalog({ env: {}, dir: dir() });
+    const prompt = catalog.get('desk')!.systemPromptTemplate;
+    expect(prompt).toContain('`ledger` (@ledger)');
+    expect(prompt).not.toContain('`maker` (@maker)');
+    expect(catalog.get('maker')!.systemPromptTemplate).toContain('`desk` (@desk)');
+  });
+
+  it('is narrowed by an explicit list', () => {
+    const prompt = loadGatewayCatalog({ env: {}, dir: dir({ 'desk/delegates.json': '[]' }) }).get('desk')!.systemPromptTemplate;
+    expect(prompt).toContain('You may not delegate to anyone');
+  });
+});
+
 describe('the delegate roster in an agent\'s context', () => {
   const dir = (): string =>
     agentsDirWith({

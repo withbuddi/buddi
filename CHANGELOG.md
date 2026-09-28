@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Home may show one tip a day when something in buddi has gone unused, a second agent, a group, a mission, voice; each is one sentence with one action, 'Not this again' removes it for good, and Settings → Notifications turns tips off.
 - First run has Start over at the foot of every step; what you already connected stays in Settings.
 - Install buddi as an app: browsers offer it, Home suggests it once, and the dashboard opens in its own window with the Blob as its icon.
 - buddi's Blob moves: it breathes on Home and the first-run page, thinks while an agent works in the chat and in the corner button, and on Telegram a thinking-Blob sticker replaces the hourglass until the answer arrives. Reduced-motion settings keep the still.
@@ -24,6 +25,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Your front desk and Agent Father may ask any agent, new ones included, without being added to a list; other agents keep their explicit 'Can ask' list. The Access page shows it and lets you narrow it.
 - The Agents page always shows the starter team under your agents, not behind a button.
 - First run: after your assistant says hello, buddi introduces the phone step before offering Telegram, and the hello no longer ends with a question you cannot answer there.
 - Agent replies share one layout with the moment before them: the agent's mark on the left, then the name and the text; while it works, the mark moves and the text says so in place.

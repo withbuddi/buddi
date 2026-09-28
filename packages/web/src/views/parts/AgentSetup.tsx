@@ -853,9 +853,17 @@ function AccountChoice({
 const WRITER_TOOLS = ['platform.create_agent', 'platform.update_agent', 'platform.write_skill', 'platform.delete_agent', 'platform.accept_plugin_agent', 'platform.accept_plugin_skill'];
 const isWriter = (a: AgentRow): boolean => a.tools.some((t) => WRITER_TOOLS.includes(t));
 
+/** The roles that may ask everyone by default (core's `OPEN_DELEGATION_ROLES`). */
+const OPEN_ROLES = ['front-desk', 'maker'] as const;
+const EVERYONE_AS: Record<string, string> = { 'front-desk': 'Can ask: everyone, as the front desk', maker: 'Can ask: everyone, as the maker', list: 'Can ask: everyone' };
+
 /**
  * Who this agent may ask, and who may ask it. The first is the owner's to
  * change here; the second is read from everybody else's list.
+ *
+ * The front desk and the maker ask everyone unless the owner limits them: that
+ * state is a sentence and a "Limit to…" action, which opens the same picker
+ * every other agent has.
  */
 function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[]; onSaved: () => void }): JSX.Element {
   const [chosen, setChosen] = useState<string[]>(agent.delegates);
@@ -863,16 +871,33 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
   const [failure, setFailure] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [base, setBase] = useState<string[]>(agent.delegates);
+  const [everyone, setEveryone] = useState<AgentRow['asksEveryone']>(agent.asksEveryone);
+  const [limiting, setLimiting] = useState(false);
   const others = all.filter((a) => a.id !== agent.id);
-  const dirty = [...chosen].sort().join(',') !== [...base].sort().join(',');
-  const askedBy = all.filter((a) => a.id !== agent.id && a.delegates.includes(agent.id));
+  const openRole = OPEN_ROLES.find((r) => agent.roles?.includes(r));
+  const picking = everyone === undefined || limiting;
+  const dirty = limiting || [...chosen].sort().join(',') !== [...base].sort().join(',');
+  const askedBy = all.filter((a) => a.id !== agent.id && (a.delegates.includes(agent.id) || (a.asksEveryone !== undefined && !isWriter(agent))));
   const toggle = (id: string): void => setChosen((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
-  const save = async (): Promise<void> => {
+  const send = async (list: string[]): Promise<void> => {
     setBusy(true); setFailure(null); setSaved(false);
-    try { const result = await api.setDelegates(agent.id, chosen); setBase(result.delegates); setChosen(result.delegates); setSaved(true); onSaved(); }
+    try {
+      const result = await api.setDelegates(agent.id, list);
+      setBase(result.delegates); setChosen(result.delegates); setEveryone(result.asksEveryone); setLimiting(false); setSaved(true); onSaved();
+    }
     catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
+  const limit = (): void => {
+    // Start from everyone it can reach now, so limiting is unticking.
+    setChosen(others.filter((a) => !isWriter(a)).map((a) => a.id));
+    setLimiting(true); setSaved(false);
+  };
+  const status = dirty
+    ? 'Not saved yet.'
+    : saved ? 'Saved. Applies to the next run.'
+    : !picking ? 'Asks everyone.'
+    : chosen.length === 0 ? 'Asks nobody.' : `May ask ${chosen.length} agent${chosen.length === 1 ? '' : 's'}.`;
   return (
     <Section
       title="Delegation"
@@ -881,11 +906,16 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
       foot={
         agent.isExample ? undefined : (
           <>
-            <span className={dirty ? 'warning' : 'muted'}>
-              {dirty ? 'Not saved yet.' : saved ? 'Saved. Applies to the next run.' : chosen.length === 0 ? 'Asks nobody.' : `May ask ${chosen.length} agent${chosen.length === 1 ? '' : 's'}.`}
-            </span>
+            <span className={dirty ? 'warning' : 'muted'}>{status}</span>
             <span className="ui-toolbar-spacer" />
-            <Button variant="accent" disabled={!dirty || busy} onClick={() => void save()}>Save who it can ask</Button>
+            {picking && openRole !== undefined ? (
+              <Button disabled={busy} onClick={() => void send(['*'])}>Let it ask everyone</Button>
+            ) : null}
+            {picking ? (
+              <Button variant="accent" disabled={!dirty || busy} onClick={() => void send(chosen)}>Save who it can ask</Button>
+            ) : (
+              <Button variant="accent" disabled={busy} onClick={limit}>Limit to…</Button>
+            )}
           </>
         )
       }
@@ -896,9 +926,13 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
             <Notice tone="warning">This agent ships with buddi, so its allowlist is read-only here. Ask Agent Father to make it yours, then it can change.</Notice>
           ) : null}
           <ErrorBanner message={failure} />
-          {others.length === 0 ? (
+          {!picking ? (
+            <p className="ui-card-meta">{EVERYONE_AS[everyone ?? 'list']}. New agents are included without being added here; agents that make and change agents are never reachable by delegation.</p>
+          ) : others.length === 0 ? (
             <Empty>Nobody else is installed.</Empty>
           ) : (
+            <>
+            <p className="ui-card-meta">Only the agents ticked here. New teammates must be added here before it can ask them.</p>
             <ul className="ui-list delegate-list" aria-label="Agents this one may ask">
               {others.map((a) => {
                 const writer = isWriter(a);
@@ -919,6 +953,7 @@ function Delegation({ agent, all, onSaved }: { agent: AgentRow; all: AgentRow[];
                 );
               })}
             </ul>
+            </>
           )}
         </Section>
 

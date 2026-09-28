@@ -153,6 +153,8 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
         </Stack>
       </Section>
 
+      <TipsSwitch />
+
       <Section title="The last twenty" panel flush>
         <ErrorBanner message={recent.error} />
         {!recent.data ? (
@@ -173,6 +175,44 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
         )}
       </Section>
     </Stack>
+  );
+}
+
+/**
+ * Tips on Home: one quiet card a day when something in buddi has gone
+ * unused. Saved the moment it is changed.
+ */
+export function TipsSwitch(): JSX.Element {
+  const view = useAsync(() => api.tipsSettings(), []);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const on = enabled ?? view.data?.enabled ?? true;
+
+  const change = (next: boolean): void => {
+    setBusy(true);
+    setFailed(null);
+    setEnabled(next);
+    api
+      .saveTipsSettings(next)
+      .then((saved) => setEnabled(saved.enabled))
+      .catch((error: unknown) => { setEnabled(!next); setFailed(error instanceof ApiError ? error.message : String(error)); })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Section title="Tips" panel>
+      <Stack gap="sm">
+        <ErrorBanner message={view.error ?? failed} />
+        <label className="backup-check">
+          <input type="checkbox" checked={on} disabled={busy || !view.data} onChange={(event) => change(event.target.checked)} />
+          <span>Tips on Home</span>
+        </label>
+        <p className="ui-field-hint">
+          When something in buddi has gone unused, Home may say so in one sentence, at most once a day.
+        </p>
+      </Stack>
+    </Section>
   );
 }
 

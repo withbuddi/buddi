@@ -9,7 +9,9 @@
  *    rather than a frontmatter key: an allowlist is authorization, and the file
  *    that the model's persona lives in is not where authorization belongs. No
  *    file means no delegation, which is the fail-closed default for every agent
- *    that never asked for one.
+ *    that never asked for one — except the front desk and the maker, which ask
+ *    everyone unless a file narrows them, and `"*"` in a file means everyone
+ *    (`@buddi/core`'s `delegates.ts` holds the rule).
  *  - **what the nested run uses** — the process catalog and the resolved
  *    provider, bound *after* the registry exists. The registry is built before
  *    the catalog (agent files are resolved against the registry), so the tool
@@ -22,7 +24,7 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { PluginManifest, ToolRegistry } from '@buddi/core';
+import { delegateScope, resolveDelegates, type PluginManifest, type ToolRegistry } from '@buddi/core';
 import {
   createDelegateTool,
   type DelegateCatalog,
@@ -46,12 +48,20 @@ export const DELEGATES_FILE = 'delegates.json';
  * refusal, never as a silently empty allowlist that looks like policy.
  */
 export function readDelegates(agentId: string, agentsDir: string = AGENTS_DIR): string[] {
+  return readDelegatesFile(agentId, agentsDir) ?? [];
+}
+
+/**
+ * The same file, telling "no file" (`undefined`) apart from an empty list: a
+ * front-desk or maker agent with no file asks everyone, with `[]` nobody.
+ */
+export function readDelegatesFile(agentId: string, agentsDir: string = AGENTS_DIR): string[] | undefined {
   const file = path.join(agentsDir, agentId, DELEGATES_FILE);
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
   } catch {
-    return [];
+    return undefined;
   }
   let parsed: unknown;
   try {
@@ -121,11 +131,45 @@ export interface DelegationManifestOptions {
  */
 export function delegateAllowlist(
   agentId: string,
-  catalog: { get(id: string): { definition(now: Date): { tools: string[] } } | undefined },
+  catalog: AllowlistCatalog,
   agentsDir: string = AGENTS_DIR,
 ): string[] {
-  return readDelegates(agentId, agentsDir).filter((targetId) => {
-    const held = writeToolsIn(catalog.get(targetId)?.definition(new Date()).tools ?? []);
+  return resolveAllowlist(agentId, catalog, readDelegatesFile(agentId, agentsDir));
+}
+
+/** What resolving an allowlist reads from the catalog. `DelegateCatalog` and `AgentCatalog` both fit. */
+export interface AllowlistCatalog {
+  get(id: string): { definition(now: Date): { tools: string[] } } | undefined;
+  list(): ReadonlyArray<{ id: string }>;
+}
+
+function rolesOf(catalog: AllowlistCatalog, agentId: string): string[] {
+  const roles = (catalog.get(agentId) as { roles?: unknown } | undefined)?.roles;
+  return Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string') : [];
+}
+
+function writesHeldBy(catalog: AllowlistCatalog, id: string): string[] {
+  return writeToolsIn(catalog.get(id)?.definition(new Date()).tools ?? []);
+}
+
+/**
+ * The allowlist as delegation applies it, from the stored file (`undefined`:
+ * none). An open list ("everyone", by role or by `"*"`) is every other agent
+ * in the catalog that does not write the installation — a writer is simply not
+ * in "everyone". An explicit list that names a writer is refused, loudly.
+ */
+export function resolveAllowlist(
+  agentId: string,
+  catalog: AllowlistCatalog,
+  stored: readonly string[] | undefined,
+): string[] {
+  const agent = { id: agentId, roles: rolesOf(catalog, agentId) };
+  if (delegateScope(agent, stored).kind === 'everyone') {
+    const everyone = catalog.list().map((a) => a.id).filter((id) => writesHeldBy(catalog, id).length === 0);
+    return resolveDelegates(agent, stored, everyone);
+  }
+  return resolveDelegates(agent, stored, []).filter((targetId) => {
+    const held = writesHeldBy(catalog, targetId);
     if (held.length === 0) return true;
     throw new Error(delegateToWriterRefusal(agentId, targetId, held));
   });
@@ -172,13 +216,9 @@ export function createDelegationManifest(
          */
         allowlistFor: (agentId) => {
           const catalog = boundOrThrow(registry).catalog;
-          return readDelegates(agentId, dirFor(agentId, catalog)).filter((targetId) => {
-            // `DelegateCatalog` exposes the grant through the definition it
-            // would run with, which is the same resolved list the loader built.
-            const held = writeToolsIn(catalog.get(targetId)?.definition(new Date()).tools ?? []);
-            if (held.length === 0) return true;
-            throw new Error(delegateToWriterRefusal(agentId, targetId, held));
-          });
+          // `DelegateCatalog` exposes the grant through the definition it
+          // would run with, which is the same resolved list the loader built.
+          return resolveAllowlist(agentId, catalog, readDelegatesFile(agentId, dirFor(agentId, catalog)));
         },
       }),
     ],

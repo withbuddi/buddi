@@ -22,6 +22,7 @@ import {
   CHAT_ROUTE,
   FILES_ROUTE,
   HOME_ROUTE,
+  NEW_GROUP_ROUTE,
   PLACES,
   SETTINGS_ROUTE,
   WELCOME_ROUTE,
@@ -33,6 +34,7 @@ import {
   parsePluginPageRoute,
   parseWelcomeRoute,
   placeOf,
+  tipsPageOf,
 } from './routes';
 import { AgentRail } from './shell/AgentRail';
 import { AskDock, showsAskDock } from './shell/AskDock';
@@ -101,6 +103,9 @@ export function useThemeChoice(): [ThemeChoice, (choice: ThemeChoice) => void] {
   const choose = useCallback((theme: ThemeChoice) => setAppearance({ theme }), [setAppearance]);
   return [appearance.theme, choose];
 }
+
+/** Pages already reported to the tips today, by this tab: page → day. */
+const reportedPages = new Map<string, string>();
 
 export function App(): JSX.Element {
   const [hash, navigate] = useHash();
@@ -311,6 +316,21 @@ export function App(): JSX.Element {
     const handle = window.setInterval(refresh, 20_000);
     return () => window.clearInterval(handle);
   }, []);
+
+  // The tips learn which pages were opened: one report per page per day.
+  useEffect(() => {
+    if (!signedIn) return;
+    if (hash === NEW_GROUP_ROUTE) {
+      setNewGroup(true);
+      navigate(CHAT_ROUTE, true);
+      return;
+    }
+    const page = tipsPageOf(hash);
+    const day = new Date().toDateString();
+    if (!page || reportedPages.get(page) === day) return;
+    reportedPages.set(page, day);
+    void api.tipsSeenPage(page).catch(() => {});
+  }, [hash, signedIn, navigate]);
 
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);

@@ -13,8 +13,9 @@
  * Authorization is in code and fails closed (docs/architecture.md, "Trust model"):
  *
  *  - the caller must be known (`ctx.agentId`) — an anonymous run delegates nothing;
- *  - the target must appear in the caller's allowlist, which the host reads from
- *    a file next to the agent; no allowlist means no delegation, ever;
+ *  - the target must appear in the caller's allowlist, which the host resolves
+ *    from a file next to the agent; no allowlist means no delegation, except for
+ *    the front desk and the maker, whom the host lets ask everyone by default;
  *  - the target must exist in the catalog — an unknown id is refused, never
  *    coerced to the default agent;
  *  - depth is capped: a delegated run carries `delegationDepth`, and the tool
@@ -376,6 +377,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition<DelegateI
       'Any files or images it makes are attached to your turn: the owner sees them under your reply, ' +
       'and you see an image yourself when your model takes images. ' +
       'Use it when a question belongs to a specialist you are allowed to ask. ' +
+      'The front desk and the maker may ask any agent, new ones included; every other agent asks only the colleagues on its own list. ' +
       '`agent` is a catalog **id**, never a handle and never a guess: the ids you may pass are ' +
       'listed under "Colleagues you may ask" in your wiring section. ' +
       'Quote the answer back to the owner and attribute it by the handle the result ' +

@@ -73,6 +73,17 @@ needs me, what is my team up to, what is coming.
 - Blocks plugins add, such as Goals, and "What buddi learned this week" when
   there is a digest.
 
+**Tips.** When something in buddi has gone unused for a while, a second
+agent, a group, a mission, voice, the browser, a mailbox nobody reads,
+Home may show one quiet card under the composer: one sentence and one action.
+At most one tip a day, never during first run, and never about a plugin that
+is not installed. "Not this again" removes that tip for good; the × puts it off
+for a week. A tip whose reason goes away disappears on its own. Settings →
+Notifications → Tips on Home turns them off. The rules are data, one entry
+each in `packages/gateway/src/tips/rules.ts`; what they decide on is read from
+the installation, plus the pages the dashboard reports it opened, once a day
+each.
+
 Try it: approve a waiting card from Needs you without opening the chat.
 
 ## Chat
@@ -134,7 +145,8 @@ An agent's own page has the same things for that agent, plus Conversations,
 Memory, Skills and **Setup**. Setup has three parts: **Identity** (name,
 handle, face, description, persona), **Brain** (the account and model, turn
 budget, language, and thinking where the provider honours the switch: Anthropic and OpenAI; on an OpenAI-compatible host it is up to the model) and **Access** (roles, the tools it may call, and
-who it may ask).
+who it may ask: the front desk and the maker ask everyone until you limit them,
+any other agent only the colleagues ticked there).
 
 Try it: move an agent to another model under Setup → Brain.
 
