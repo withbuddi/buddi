@@ -60,6 +60,15 @@ export const SCRIPT = {
     'Nothing you tell me leaves this machine, except what your assistant sends to the AI you pick in a minute.',
   ],
   later: 'Set up later',
+  /** Back to the first question; nothing already connected is undone. */
+  startOver: {
+    link: 'Start over',
+    /** Said before the first question again, only when something stays. */
+    said: (kept: string): string =>
+      `Starting again. What you already connected stays in Settings: ${kept}.`,
+    telegram: 'Telegram',
+    browser: 'the browser',
+  },
   name: {
     ask: 'First, what should we call you?',
     placeholder: 'Your first name',

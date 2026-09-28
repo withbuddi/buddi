@@ -66,7 +66,9 @@ import {
   rememberedRestore,
   reopen,
   thread,
+  usableAccounts,
   type BrainAnswer,
+  type BrowserAnswer,
   type MeetAnswers,
   type QuestionId,
 } from './meet/machine';
@@ -381,6 +383,18 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * land back on "what should we call you?".
    */
   const [restore, setRestore] = useState<RestoreState>(() => (rememberedRestore() ? 'running' : 'idle'));
+  /**
+   * Start over: what the server already holds and the new thread will meet
+   * again as answered, the way a reload replays a finished step. Empty until
+   * the owner starts over.
+   */
+  const [kept, setKept] = useState<{ brain?: BrainAnswer; browser?: BrowserAnswer }>({});
+  /** What stays in Settings, named once above the first question again. */
+  const [keptSaid, setKeptSaid] = useState<string[]>([]);
+  /** Bumped by Start over, so every question and card mounts afresh. */
+  const [round, setRound] = useState(0);
+  /** The brain the thread last knew, so starting over can meet it again. */
+  const lastBrain = useRef<BrainAnswer | undefined>(undefined);
 
   /** The zone this browser is in, which is what the question offers. */
   const browserZone = useMemo(() => {
@@ -487,8 +501,25 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     void api.onboardingStep(STEP_OF[id], learned).catch(() => {});
   };
 
+  /**
+   * After Start over, a step the server already holds is met as answered —
+   * the account as connected, the browser as there — with its "change" link,
+   * exactly as a reload replays it.
+   */
+  const withKept = (next: MeetAnswers): MeetAnswers => {
+    let out = next;
+    for (;;) {
+      const at = firstOpen(out);
+      if (at === 'brain' && kept.brain) out = { ...out, brain: kept.brain };
+      else if (at === 'browser' && kept.browser) out = { ...out, browser: kept.browser };
+      else return out;
+    }
+  };
+
   /** One answer saved: keep it, record the step, move on. */
-  const settle = (id: QuestionId, next: MeetAnswers): void => {
+  const settle = (id: QuestionId, given: MeetAnswers): void => {
+    const next = withKept(given);
+    if (next.brain) lastBrain.current = next.brain;
     setTrouble(null);
     setAnswers(next);
     // The account chosen here is recorded with the step, so a reload knows
@@ -502,6 +533,46 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
     setAnswers((current) => reopen(current, id));
     setOpen(id);
   };
+
+  /*
+   * Start over: back to the first question with an empty thread.
+   *
+   * Unmounting the open question is what cancels anything in flight — a
+   * sign-in waiting for its code cancels itself when its card goes. Nothing
+   * saved is undone, so there is nothing to confirm: buddi says what stays,
+   * once, and meets it again as answered when the thread gets there.
+   */
+  const startOver = (): void => {
+    const brainNow = answers.brain ?? lastBrain.current;
+    const browserNow = answers.browser;
+    setTrouble(null);
+    setKept({});
+    setKeptSaid([]);
+    setAnswers({});
+    setOpen('name');
+    setRound((at) => at + 1);
+    void (async () => {
+      const [accountView, telegram, browserView] = await Promise.all([
+        Promise.resolve().then(() => api.providerAccounts()).catch(() => undefined),
+        Promise.resolve().then(() => api.telegram()).catch(() => undefined),
+        Promise.resolve().then(() => api.browser()).catch(() => undefined),
+      ]);
+      const usable = usableAccounts(accountView);
+      const brain = brainNow && usable.some((account) => account.id === brainNow.accountId) ? brainNow : undefined;
+      const browser: BrowserAnswer | undefined =
+        browserNow === 'installed' || browserView?.browser?.engine === 'chromium' ? 'chromium' : undefined;
+      if (accountView) setAccounts(accountView);
+      setKept({ ...(brain ? { brain } : {}), ...(browser ? { browser } : {}) });
+      setKeptSaid([
+        ...new Set(usable.map((account) => account.label)),
+        ...(telegram?.paired ? [SCRIPT.startOver.telegram] : []),
+        ...(browser ? [SCRIPT.startOver.browser] : []),
+      ]);
+    })();
+  };
+  /** From the second question on, and during anything under way after it. */
+  const offerStartOver =
+    restore === 'idle' && !carriesOn && !closed && open !== null && (open !== 'name' || Object.keys(answers).length > 0);
 
   /*
    * Leaving happens only when the server agrees it happened: a dashboard that
@@ -595,9 +666,15 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                 onTrouble={setTrouble}
               />
 
+              {keptSaid.length > 0 ? (
+                <Buddi>
+                  <Said>{SCRIPT.startOver.said(keptSaid.join(', '))}</Said>
+                </Buddi>
+              ) : null}
+
               {shown.map((id) => (
                 <Question
-                  key={id}
+                  key={`${round}-${id}`}
                   id={id}
                   openNow={open === id}
                   answers={answers}
@@ -647,9 +724,16 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
               {SCRIPT.done.open}
             </a>
           ) : (
-            <button className="meet-later" type="button" disabled={leaving} onClick={later}>
-              {SCRIPT.later}
-            </button>
+            <span className="meet-quiet">
+              <button className="meet-later" type="button" disabled={leaving} onClick={later}>
+                {SCRIPT.later}
+              </button>
+              {offerStartOver ? (
+                <button className="meet-later" type="button" disabled={leaving} onClick={startOver}>
+                  {SCRIPT.startOver.link}
+                </button>
+              ) : null}
+            </span>
           )}
           <div className="meet-dock-actions" ref={setDockActions} />
           </div>
@@ -1064,8 +1148,8 @@ function BrainAsk(props: QuestionProps): JSX.Element {
    * id, so nothing is assigned twice.
    */
   const bind = async (brain: BrainAnswer): Promise<string | null> => {
-    const assistant = answers.assistant;
-    if (assistant) {
+    // The installation's assistant, even when a Start over emptied the answer.
+    if (answers.assistant ?? props.existing) {
       try {
         // One call: the assistant moves, and so does anything shipped that
         // was following its choice of AI.
@@ -2253,6 +2337,22 @@ function ClaudeCard({
   const [trouble, setTrouble] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<{ id: string; revision: number; url: string; attemptId: string } | null>(null);
   const [code, setCode] = useState('');
+  /** The sign-in still waiting for its code, to cancel if the owner leaves. */
+  const pending = useRef<{ id: string; revision: number } | null>(null);
+  useEffect(
+    () => () => {
+      const open = pending.current;
+      pending.current = null;
+      if (open) void api.anthropicAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
+    },
+    [],
+  );
+  const leave = (): void => {
+    const open = pending.current;
+    pending.current = null;
+    if (open) void api.anthropicAccountAction(open.id, 'cancel-login', open.revision).catch(() => {});
+    onBack();
+  };
   // The catalogue's default for a new Claude account, as the server's model
   // list names it; the constant only when it named none. The model list after
   // the sign-in is where it changes.
@@ -2284,6 +2384,7 @@ function ClaudeCard({
           verificationUrl?: string;
           attemptId?: string;
         };
+        pending.current = { id: row.id, revision: row.revision + 1 };
         setAttempt({
           id: row.id,
           revision: row.revision + 1,
@@ -2303,6 +2404,8 @@ function ClaudeCard({
 
   const finish = (): void => {
     if (!attempt || code.trim() === '') return;
+    // Finishing is not leaving: the attempt is spent either way.
+    pending.current = null;
     setWorking(true);
     void (async () => {
       try {
@@ -2343,7 +2446,7 @@ function ClaudeCard({
           <Ask
             actions={
               <>
-                <Back onClick={onBack} disabled={working} />
+                <Back onClick={leave} disabled={working} />
                 <ButtonLink href={attempt.url} target="_blank" rel="noreferrer">
                   {SCRIPT.brain.claude.open}
                 </ButtonLink>
@@ -2362,7 +2465,7 @@ function ClaudeCard({
         <Ask
           actions={
             <>
-              <Back onClick={onBack} disabled={busy || working} />
+              <Back onClick={leave} disabled={busy || working} />
               <Button variant="accent" disabled={busy || working} onClick={start}>
                 {SCRIPT.brain.claude.start}
               </Button>

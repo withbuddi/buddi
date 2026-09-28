@@ -3228,6 +3228,8 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
 .meet-later:disabled { cursor: default; opacity: 0.5; }
+/* The quiet links, side by side: Set up later, then Start over. */
+.meet-quiet { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
 
 @media (max-width: 700px) {
   .meet { padding: var(--space-3); }

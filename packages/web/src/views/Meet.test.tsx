@@ -1234,6 +1234,57 @@ describe('set up later', () => {
   });
 });
 
+describe('start over', () => {
+  it('is not offered on the first question, and is from the second', async () => {
+    vi.mocked(api.setOwner).mockResolvedValue(owner({ preferredName: 'Amen' }));
+    render(meet());
+    const field = await screen.findByPlaceholderText(SCRIPT.name.placeholder);
+    expect(screen.queryByRole('button', { name: SCRIPT.startOver.link })).not.toBeInTheDocument();
+    fireEvent.change(field, { target: { value: 'Amen' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.name.submit }));
+    expect(await screen.findByRole('button', { name: SCRIPT.startOver.link })).toBeInTheDocument();
+  });
+
+  it('cancels a Claude sign-in waiting for its code and asks the first question again', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(
+      accounts([{ id: 'claude', label: 'Claude', kind: 'anthropic', auth: 'anthropic-oauth', configured: false }], { anthropicOAuthEnabled: true }),
+    );
+    vi.mocked(api.anthropicAccountAction).mockResolvedValue({ verificationUrl: 'consent-page', attemptId: 't1' } as never);
+    vi.mocked(api.telegram).mockResolvedValue({ configured: false, running: false, paired: false });
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.claude.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.claude.start }));
+    expect(await screen.findByText(SCRIPT.brain.claude.waiting)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.startOver.link }));
+    await waitFor(() => expect(api.anthropicAccountAction).toHaveBeenCalledWith('claude', 'cancel-login', 2));
+    expect(await screen.findByPlaceholderText(SCRIPT.name.placeholder)).toHaveValue('');
+    expect(screen.queryByText(SCRIPT.brain.ask)).not.toBeInTheDocument();
+    // Nothing was connected, so buddi says nothing about what stays.
+    await waitFor(() => expect(api.telegram).toHaveBeenCalled());
+    expect(screen.queryByText(/Starting again/)).not.toBeInTheDocument();
+  });
+
+  it('names what stays in Settings, and meets the connected brain as answered', async () => {
+    vi.mocked(api.onboarding).mockResolvedValue(view({ state: 'in-progress', stepsDone: ['you', 'model'], details: { accountId: 'a0' }, needs: { owner: false, model: false, agent: true } }));
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{ label: 'Claude', defaultModel: 'claude-sonnet-5' }]));
+    vi.mocked(api.telegram).mockResolvedValue({ configured: true, running: true, paired: true });
+    vi.mocked(api.setOwner).mockImplementation(async (body) => owner({ preferredName: 'Amen', timezone: 'UTC', ...body }));
+    render(meet());
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.startOver.link }));
+    expect(await screen.findByText(SCRIPT.startOver.said(`Claude, ${SCRIPT.startOver.telegram}`))).toBeInTheDocument();
+    fireEvent.change(await screen.findByPlaceholderText(SCRIPT.name.placeholder), { target: { value: 'Amen' } });
+    fireEvent.click(screen.getByRole('button', { name: SCRIPT.name.submit }));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.clock.yes }));
+    // The brain is not asked again: it is there, with its change link.
+    expect(await screen.findByText(SCRIPT.brain.works('claude-sonnet-5'))).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: SCRIPT.brain.ask })).not.toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.assistant.ask)).toBeInTheDocument();
+  });
+});
+
 describe('every word of it', () => {
   it('renders nothing from the list of words that are ours, not theirs', async () => {
     const { container } = render(meet());

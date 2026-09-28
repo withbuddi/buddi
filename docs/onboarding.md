@@ -27,6 +27,10 @@ a bubble on the owner's side, so the thread reads back as a conversation.
   throughout) at its left, the step's secondary actions ("Pick another",
   "Back", "Not now") and then the primary at its right, on one line. Fields
   sit above that row.
+- From the second question on, "Start over" sits beside "Set up later": it
+  cancels any sign-in under way and asks the first question again, while what
+  is already connected (a model account, a paired Telegram, the browser) stays
+  in Settings, is named once, and is met again as answered.
 - While an answer is being saved and tried, buddi's typing dots show with a
   line saying what it is doing ("Checking that key…"), until the verdict.
 - The screen is the chat layout the owner will use afterwards: same column
