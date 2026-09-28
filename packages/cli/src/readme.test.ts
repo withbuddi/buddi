@@ -164,3 +164,19 @@ describe('docs/cli.md', () => {
     );
   });
 });
+
+/**
+ * withbuddi.com builds its docs from these files and refuses a page without a
+ * title, so a docs push without one breaks the site. Every page but the index
+ * opens with frontmatter naming its title.
+ */
+describe('docs frontmatter', () => {
+  it('gives every page but README.md a title', async () => {
+    const { readdirSync } = await import('node:fs');
+    const dir = path.join(REPO_ROOT, 'docs');
+    const missing = readdirSync(dir)
+      .filter((name) => name.endsWith('.md') && name !== 'README.md')
+      .filter((name) => !/^---\n[\s\S]*?^title:\s*\S/m.test(readFileSync(path.join(dir, name), 'utf8').split(/\n---\n/)[0] + '\n'));
+    expect(missing).toEqual([]);
+  });
+});

@@ -1,3 +1,9 @@
+---
+title: "Connections: services your agents can use"
+status: reference
+updated: 2026-09-28
+---
+
 # Connections
 
 A connection is a service that speaks MCP, the Model Context Protocol:
