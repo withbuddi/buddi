@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Installed as an app, buddi opens even when the gateway is out of reach and says what to check, Tailscale or the Mac, then comes back on its own when it answers.
 - A lightbulb on Home opens the Tips list: what is due, what was dismissed with a way back, and the switch.
 - Running as an installed app, the owner menu has Reload; after an upgrade it reads Reload to update in any mode.
 - A tip can be previewed on Home with `#/?tip=<id>` (the ids are in the tips rules), touching nothing, so its copy and layout can be checked before its day comes.

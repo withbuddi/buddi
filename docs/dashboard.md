@@ -32,6 +32,12 @@ time. An app keeps the address it was installed from, so the tailnet address
 installs as its own app. The app has no reload button, so the owner menu at the
 foot of the rail has **Reload**; after an upgrade it reads **Reload to update**
 in any mode, with a dot on your initial.
+Installed, buddi also opens when the gateway is out of reach: instead of the
+browser's error it says buddi isn't answering at that address and what to
+check (on this Mac, `buddi status`; on the tailnet address, whether Tailscale
+is on and the Mac awake), asks again every ten seconds and comes back on its
+own. A page already open shows a thin "Lost buddi. Retrying…" bar after thirty
+seconds without an answer.
 
 ## The rail
 

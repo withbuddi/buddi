@@ -62,20 +62,75 @@ export function csrfToken(): string {
   return any.length === 1 && any[0]?.[1] ? decodeURIComponent(any[0][1]) : '';
 }
 
+/*
+ * Whether buddi answers at all, as the page's own requests find out.
+ *
+ * "Not answering" is narrow on purpose: no response (the tailnet is off, the
+ * Mac is asleep, nothing listens on the port), or a 502/503 that is not
+ * buddi's own — the proxy in front of it (`tailscale serve`) saying there is
+ * nobody behind it. A 503 buddi sends with a sentence is an answer. Anything
+ * that answers is proof of life. The shell reads this for the "Lost buddi"
+ * bar (src/shell/Unreachable.tsx).
+ */
+export const UNREACHABLE = "buddi isn't answering.";
+let downSince: number | null = null;
+const linkListeners = new Set<() => void>();
+
+function noteLink(up: boolean): void {
+  if (up === (downSince === null)) return;
+  downSince = up ? null : Date.now();
+  for (const listener of linkListeners) listener();
+}
+
+/** When the requests stopped getting answers, or null while they get them. */
+export function linkDownSince(): number | null {
+  return downSince;
+}
+
+/** Called whenever the link goes down or comes back. Returns the unsubscribe. */
+export function onLinkChange(listener: () => void): () => void {
+  linkListeners.add(listener);
+  return () => linkListeners.delete(listener);
+}
+
+/** For tests: a link that answers. */
+export function resetLink(): void {
+  downSince = null;
+}
+
+/** The error means nobody is there to answer, as opposed to an answer that says no. */
+export function isUnreachable(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 0 || error.status === 502 || error.status === 503) && error.message === UNREACHABLE;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    redirect: 'error',
-    headers: { Accept: 'application/json', ...(init.headers ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      credentials: 'same-origin',
+      redirect: 'error',
+      headers: { Accept: 'application/json', ...(init.headers ?? {}) },
+    });
+  } catch (error) {
+    // A request the page itself called off is not the network's doing.
+    if ((error as { name?: string } | null)?.name === 'AbortError' || init.signal?.aborted) throw error;
+    noteLink(false);
+    throw new ApiError(0, UNREACHABLE, error);
+  }
   if (res.status === 401) {
+    noteLink(true);
     throw new ApiError(401, 'This session has expired. Run `buddi dashboard` for a fresh link.');
   }
   const text = await res.text();
   const body: unknown = text === '' ? null : safeJson(text);
+  const stated = body && typeof body === 'object' && 'error' in body ? String((body as { error: unknown }).error) : undefined;
+  if ((res.status === 502 || res.status === 503) && stated === undefined) {
+    noteLink(false);
+    throw new ApiError(res.status, UNREACHABLE, body);
+  }
+  noteLink(true);
   if (!res.ok) {
-    const stated = body && typeof body === 'object' && 'error' in body ? String((body as { error: unknown }).error) : undefined;
     // A bare 403 on a write is the gateway's origin and CSRF gate: this page's
     // cookies no longer match the session it holds. A 403 that says why is
     // shown as it is.

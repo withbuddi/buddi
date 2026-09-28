@@ -8,9 +8,12 @@
  * about the build rather than a promise in a README.
  */
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
+import { precacheManifest } from './src/precache';
 
 /**
  * This build's own name: the package version plus the commit it was built
@@ -40,8 +43,14 @@ function buildManifest(): Plugin {
   };
 }
 
+/** Every file under `public/`, relative to it: the ones Vite copies as they are. */
+function publicFiles(): string[] {
+  const dir = fileURLToPath(new URL('./public', import.meta.url));
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((file) => file.split(path.sep).join('/'));
+}
+
 export default defineConfig({
-  plugins: [react(), buildManifest()],
+  plugins: [react(), buildManifest(), precacheManifest(WEB_BUILD, publicFiles)],
   define: { __BUDDI_WEB_BUILD__: JSON.stringify(WEB_BUILD) },
   // Assets are referenced relatively, so the page works wherever it is mounted.
   base: './',

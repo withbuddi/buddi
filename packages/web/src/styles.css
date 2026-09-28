@@ -3652,3 +3652,31 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .connections-tool { align-items: flex-start; }
 .connections-callback { max-width: 40rem; margin: var(--space-6) auto; }
+
+/* buddi isn't answering (src/shell/Unreachable.tsx): the whole window at boot. */
+.unreachable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 100%;
+  padding: var(--space-10) var(--space-4);
+  text-align: center;
+}
+.unreachable h1 { margin: 0; font-size: var(--text-xl); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.unreachable p { margin: 0; color: var(--text-muted); font-size: var(--text-md); }
+.unreachable-actions { margin-top: var(--space-2); }
+
+/* Lost buddi once the page is open: a thin line at the top, gone on recovery. */
+.lost-bar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 100;
+  padding: var(--space-1) var(--space-4);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+  text-align: center;
+}
