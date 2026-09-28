@@ -584,6 +584,109 @@ describe('the questions', () => {
     expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'nemotron:70b' });
   });
 
+  describe('a pasted key is tried before the model list', () => {
+    const TWO = {
+      models: [
+        { id: 'gemma4:31b', name: 'gemma4:31b', isDefault: false },
+        { id: 'nemotron:70b', name: 'nemotron:70b', isDefault: false },
+      ],
+      truncated: false,
+    };
+    const open = async (): Promise<void> => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      // Ollama Cloud lists its models to anyone; the list proves nothing.
+      vi.mocked(api.probeModels).mockResolvedValue(TWO);
+      vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'cloud' });
+      vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{ id: 'cloud', revision: 3 }]));
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.service.title));
+      fireEvent.change(await screen.findByLabelText(SCRIPT.brain.service.key), { target: { value: 'nonsense' } });
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.service.submit }));
+    };
+
+    it('refuses a wrong key where it was typed, with no picker and nothing left behind', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'authentication-error', message: 'Ollama Cloud did not accept this key.', httpStatus: 401 });
+      await open();
+      expect(await screen.findByText(SCRIPT.brain.key.refused)).toBeInTheDocument();
+      expect(screen.getByLabelText(SCRIPT.brain.service.address)).toHaveValue('ollama-cloud/v1');
+      expect(screen.getByLabelText(SCRIPT.brain.service.key)).toBeInTheDocument();
+      expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(SCRIPT.brain.model.label)).not.toBeInTheDocument();
+      expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toMatchObject({ defaultModel: 'gemma4:31b', auth: 'api-key' });
+      expect(api.removeProviderAccount).toHaveBeenCalledWith('cloud', 3);
+    });
+
+    it('keeps the list open with the reason when the key hit a limit', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'rate-limited', message: 'Ollama Cloud says this key has reached its limit.', httpStatus: 429 });
+      await open();
+      expect(await screen.findByText('Ollama Cloud says this key has reached its limit.')).toBeInTheDocument();
+      const picker = screen.getByLabelText(SCRIPT.brain.model.label);
+      expect(picker).toHaveValue('gemma4:31b');
+      fireEvent.change(picker, { target: { value: 'nemotron:70b' } });
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.model.retry }));
+      expect(await screen.findByText(SCRIPT.brain.works('nemotron:70b'))).toBeInTheDocument();
+      expect(api.probeModels).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers the picker once the key answered', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+      await open();
+      expect(await screen.findByText(SCRIPT.brain.model.ask)).toBeInTheDocument();
+      // The trial account is gone; the pick is saved for real.
+      expect(api.removeProviderAccount).toHaveBeenCalledWith('cloud', 3);
+      fireEvent.change(screen.getByLabelText(SCRIPT.brain.model.label), { target: { value: 'nemotron:70b' } });
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.model.submit }));
+      expect(await screen.findByText(SCRIPT.brain.works('nemotron:70b'))).toBeInTheDocument();
+      expect(vi.mocked(api.saveProviderAccount).mock.calls[1]![0]).toMatchObject({ defaultModel: 'nemotron:70b' });
+    });
+
+    const key = async (): Promise<void> => {
+      vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+      vi.mocked(api.probeModels).mockResolvedValue({
+        models: [
+          { id: 'gpt-5', name: 'gpt-5', isDefault: false },
+          { id: 'gpt-5-mini', name: 'gpt-5-mini', isDefault: false },
+        ],
+        truncated: false,
+      });
+      vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'k' });
+      vi.mocked(api.providerAccounts).mockResolvedValue(accounts([{ id: 'k' }]));
+      render(meet());
+      fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
+      fireEvent.change(await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder), { target: { value: 'sk-proj-fixture' } });
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
+    };
+
+    it('refuses a wrong key on the key card with no picker', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'access-denied', message: 'OpenAI says no.', httpStatus: 403 });
+      await key();
+      expect(await screen.findByText(SCRIPT.brain.key.refused)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(SCRIPT.brain.key.placeholder)).toHaveValue('sk-proj-fixture');
+      expect(screen.queryByLabelText(SCRIPT.brain.model.label)).not.toBeInTheDocument();
+      expect(api.removeProviderAccount).toHaveBeenCalledWith('k', 1);
+    });
+
+    it('offers the key card the list on a limit, and binds on the pick', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'rate-limited', message: 'OpenAI says this key has reached its limit for gpt-5.', httpStatus: 429 });
+      await key();
+      expect(await screen.findByText('OpenAI says this key has reached its limit for gpt-5.')).toBeInTheDocument();
+      const picker = screen.getByLabelText(SCRIPT.brain.model.label);
+      expect(picker).toHaveValue('gpt-5');
+      fireEvent.change(picker, { target: { value: 'gpt-5-mini' } });
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+      fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.model.retry }));
+      expect(await screen.findByText(SCRIPT.brain.works('gpt-5-mini'))).toBeInTheDocument();
+    });
+
+    it('goes straight on when the key card test passes', async () => {
+      vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' });
+      await key();
+      expect(await screen.findByText(SCRIPT.brain.works('gpt-5'))).toBeInTheDocument();
+      expect(screen.queryByLabelText(SCRIPT.brain.model.label)).not.toBeInTheDocument();
+    });
+  });
+
   it('asks Ollama the same question, and skips it when one model is pulled', async () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'local' });
@@ -645,7 +748,7 @@ describe('the questions', () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.probeModels).mockRejectedValue(new Error('no'));
     vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'one' });
-    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'invalid-key', message: 'refused' });
+    vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'authentication-error', message: 'refused', httpStatus: 401 });
     render(meet());
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
     const field = await screen.findByPlaceholderText(SCRIPT.brain.key.placeholder);
@@ -733,7 +836,7 @@ describe('the questions', () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.probeModels).mockRejectedValue(new Error('no'));
     vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'one' });
-    let verdict: (value: { state: string; message: string }) => void = () => {};
+    let verdict: (value: { state: string; message: string; httpStatus?: number }) => void = () => {};
     vi.mocked(api.testProviderAccount).mockReturnValue(new Promise((resolve) => (verdict = resolve)) as never);
     render(meet());
     fireEvent.click(await screen.findByText(SCRIPT.brain.cards.key.title));
@@ -741,7 +844,7 @@ describe('the questions', () => {
     fireEvent.click(screen.getByRole('button', { name: SCRIPT.brain.key.submit }));
     expect(await screen.findByText(SCRIPT.brain.checking.key)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: SCRIPT.brain.key.submit })).toBeDisabled();
-    verdict({ state: 'invalid-key', message: 'refused' });
+    verdict({ state: 'authentication-error', message: 'refused', httpStatus: 401 });
     expect(await screen.findByText(SCRIPT.brain.key.refused)).toBeInTheDocument();
     expect(screen.queryByText(SCRIPT.brain.checking.key)).not.toBeInTheDocument();
   });

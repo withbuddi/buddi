@@ -9,7 +9,7 @@ const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advic
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null,
 }] };
-beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providerAccounts).mockResolvedValue(view); vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'two' }); });
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(api.providerAccounts).mockResolvedValue(view); vi.mocked(api.saveProviderAccount).mockResolvedValue({ id: 'two' }); vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'connected', message: 'ok' }); });
 it('creates a separate Claude OAuth account without a pasted API key', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, anthropicOAuthEnabled: true });
   render(<Providers />);
@@ -282,4 +282,18 @@ it('starts the Gemini preset on the newest Flash when Google refuses Pro on its 
   expect(await screen.findByText(/free tier has no Pro allowance, so it starts on gemini-3\.8-flash/)).toBeInTheDocument();
   expect(vi.mocked(api.saveProviderAccount).mock.calls.at(-1)![0]).toMatchObject({ id: 'two', defaultModel: 'gemini-3.8-flash' });
   expect(api.testProviderAccount).toHaveBeenCalledTimes(2);
+});
+it('tries a pasted key before finishing, and refuses a wrong one where it was typed', async () => {
+  vi.mocked(api.testProviderAccount).mockResolvedValue({ state: 'authentication-error', message: 'Anthropic did not accept this key.', httpStatus: 401 });
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [...view.accounts, { ...view.accounts[0]!, id: 'two', revision: 4 }] });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fixture-wrong' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  expect(await screen.findByText(/That key was refused\. Check it and paste it again\./)).toBeInTheDocument();
+  expect(api.testProviderAccount).toHaveBeenCalledWith('two');
+  expect(api.removeProviderAccount).toHaveBeenCalledWith('two', 4);
+  // Still on the form, key field open.
+  expect(screen.getByLabelText('API key')).toBeInTheDocument();
+  expect(screen.queryByText(/Saved “/)).not.toBeInTheDocument();
 });

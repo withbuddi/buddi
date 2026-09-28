@@ -159,6 +159,8 @@ export const SCRIPT = {
       ask: 'Which one should it think with?',
       label: 'The model',
       submit: 'Use this one',
+      /** The key may be fine and the model wrong: the list stays, and this tries the pick. */
+      retry: 'Try again',
       /** Under "That works", for a brain with several models to pick from. */
       change: 'Think with another',
     },

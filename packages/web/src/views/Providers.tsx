@@ -8,7 +8,7 @@
  * can be read once.
  */
 import { useEffect, useRef, useState } from 'react';
-import { OLLAMA_CLOUD_MODEL, api, type ProviderAccount, type SaveProviderAccount } from '../api';
+import { OLLAMA_CLOUD_MODEL, api, keyRefused, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
 import { GEMINI_FALLBACK_MODEL, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
@@ -451,6 +451,9 @@ function uniqueLabel(base: string, taken: string[]): string {
   return base;
 }
 
+/** Said where the key was typed when the provider refused it (401/403). */
+const KEY_REFUSED = 'That key was refused. Check it and paste it again.';
+
 type Probe = { models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean };
 
 function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAuthEnabled, gemini }: {
@@ -533,24 +536,44 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           } catch { /* the save's own test says what is wrong with the key */ }
         }
         let created: { id: string } | undefined;
+        /** The key answered, but not on this model: the model step comes next, with the reason. */
+        let failed = false;
         const ok = await run(async () => {
           created = await api.saveProviderAccount({ label, kind, auth, baseUrl, defaultModel, enabled: true, ...(value.trim() ? { secret: value } : {}) });
-          if (!google) return created;
-          // A free Google AI key has no Pro allowance: a Pro refused for a
-          // limit is tried once more on the newest Flash.
+          if (auth !== 'api-key') return created;
+          // One small call before anything else: a service may list its
+          // models without a key (Ollama Cloud does), so a list proves nothing.
           const verdict = await api.testProviderAccount(created.id);
-          if (verdict.state === 'connected' || !flash || !limited(verdict)) return created;
-          const row = (await api.providerAccounts()).accounts.find((a) => a.id === created!.id);
-          if (!row) return created;
-          await api.saveProviderAccount({ ...accountSettings(row), defaultModel: flash });
-          const again = await api.testProviderAccount(created.id);
-          return again.state === 'connected'
-            ? { ...created, warning: `Account saved. Google's free tier has no Pro allowance, so it starts on ${flash}; turn on billing at Google to use Pro.` }
-            : created;
+          if (verdict.state === 'connected') return created;
+          if (keyRefused(verdict)) {
+            // Nothing left behind, or every retry adds one more copy.
+            const id = created.id;
+            created = undefined;
+            try {
+              const row = (await api.providerAccounts()).accounts.find((a) => a.id === id);
+              if (row) await api.removeProviderAccount(id, row.revision);
+            } catch { /* the sentence below matters more; the list can still remove it */ }
+            throw new Error(KEY_REFUSED);
+          }
+          if (google && flash && limited(verdict)) {
+            // A free Google AI key has no Pro allowance: a Pro refused for a
+            // limit is tried once more on the newest Flash.
+            const row = (await api.providerAccounts()).accounts.find((a) => a.id === created!.id);
+            if (row) {
+              await api.saveProviderAccount({ ...accountSettings(row), defaultModel: flash });
+              const again = await api.testProviderAccount(created.id);
+              if (again.state === 'connected') {
+                return { ...created, warning: `Account saved. Google's free tier has no Pro allowance, so it starts on ${flash}; turn on billing at Google to use Pro.` };
+              }
+            }
+          }
+          // A limit or a model this key cannot use: the key may be fine.
+          failed = true;
+          return { ...created, warning: `Account saved. ${verdict.message}` };
         }, 'Account saved.');
         if (!ok || !created) return;
         // A model picked here is the whole job; only a subscription has a next step.
-        if (google) setSavedId(created.id);
+        if (google || failed) setSavedId(created.id);
         else if (chosen || !subscription) onDone(created.id);
         else setSavedId(created.id);
       })();

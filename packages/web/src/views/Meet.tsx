@@ -36,6 +36,8 @@ import {
   type BackupJob,
   type BrowserInstallProgress,
   type BrowserLaunchCheck,
+  type ConnectionVerdict,
+  keyRefused,
   type OllamaProbe,
   type ProviderAccountsView,
   type VersionView,
@@ -1167,7 +1169,7 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     body: Parameters<typeof api.saveProviderAccount>[0],
     label: string,
     flash?: string,
-  ): Promise<void> => {
+  ): Promise<ConnectionVerdict | null> => {
     setBusy(true);
     setProblem(null);
     try {
@@ -1202,12 +1204,47 @@ function BrainAsk(props: QuestionProps): JSX.Element {
           /* the message below is the thing that matters; Settings can still remove it */
         }
         setProblem(verdict.message);
-        return;
+        return verdict;
       }
       const refused = await bind({ accountId: saved.id, label, model, ...(freeTier ? { freeTier } : {}) });
       if (refused) setProblem(refused);
+      return verdict;
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : String(err));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * One small call before the model list is offered. A service can list its
+   * models without a key (Ollama Cloud does), so a list is no proof the key
+   * works: the account is saved, tested on `body`'s model, and removed again
+   * whatever the verdict, so a retry or a Back leaves nothing behind. The
+   * picked model is then saved and tested for real by `adopt`.
+   */
+  const trial = async (body: Parameters<typeof api.saveProviderAccount>[0]): Promise<ConnectionVerdict | null> => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const saved = await api.saveProviderAccount(body);
+      let verdict: ConnectionVerdict;
+      try {
+        verdict = await api.testProviderAccount(saved.id);
+      } finally {
+        try {
+          const listed = (await api.providerAccounts()).accounts.find((account) => account.id === saved.id);
+          if (listed) await api.removeProviderAccount(saved.id, listed.revision);
+        } catch {
+          /* Settings can still remove it */
+        }
+      }
+      if (verdict.state !== 'connected') setProblem(verdict.message);
+      return verdict;
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.message : String(err));
+      return null;
     } finally {
       setBusy(false);
     }
@@ -1267,6 +1304,8 @@ function BrainAsk(props: QuestionProps): JSX.Element {
         address={ollama?.cloudBaseUrl ?? ''}
         onBack={() => setCard(null)}
         onOffer={offer}
+        onTrial={trial}
+        onUse={adopt}
       />
     );
   }
@@ -1459,8 +1498,14 @@ function CloudMark(): JSX.Element {
   );
 }
 
-/** Save, test and bind; `flash` is tried once when the first model is refused for a limit. */
-type Adopt = (body: Parameters<typeof api.saveProviderAccount>[0], label: string, flash?: string) => Promise<void>;
+/**
+ * Save, test and bind; `flash` is tried once when the first model is refused for a limit.
+ * Answers the test's verdict, or null when the save itself failed (the problem says why).
+ */
+type Adopt = (body: Parameters<typeof api.saveProviderAccount>[0], label: string, flash?: string) => Promise<ConnectionVerdict | null>;
+
+/** Save, test and remove again: whether the key answers before a model list is offered. */
+type Trial = (body: Parameters<typeof api.saveProviderAccount>[0]) => Promise<ConnectionVerdict | null>;
 
 /** Hand the models over, with what to do once one of them is chosen. */
 type Offer = (
@@ -1501,6 +1546,31 @@ function ModelChoice({
   );
 }
 
+/** The list, kept open in a card after a test failed for something other than the key. */
+function ModelSelect({
+  models,
+  picked,
+  disabled,
+  onPick,
+}: {
+  models: string[];
+  picked: string;
+  disabled: boolean;
+  onPick: (model: string) => void;
+}): JSX.Element {
+  return (
+    <Field label={SCRIPT.brain.model.label} grow>
+      <select value={picked} disabled={disabled} onChange={(event) => onPick(event.target.value)}>
+        {models.map((model) => (
+          <option key={model} value={model}>
+            {model}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
 /** A pasted key, and which AI it belongs to. */
 function KeyCard({
   busy,
@@ -1518,31 +1588,56 @@ function KeyCard({
   const [override, setOverride] = useState<'anthropic' | 'openai' | null>(null);
   /** Listing the key's models, before the save and the test even start. */
   const [probing, setProbing] = useState(false);
+  /** The key's own list, offered when the test failed for something other than the key. */
+  const [models, setModels] = useState<string[]>([]);
+  const [picked, setPicked] = useState('');
+  /** The test said 401/403: the key itself, not the model. */
+  const [refused, setRefused] = useState(false);
   const working = busy || probing;
+  const picking = !refused && problem !== null && models.length > 0;
   const kind = override ?? keyKind(secret);
   const submit = (): void => {
     const value = secret.trim();
     if (value === '' || working) return;
     setProbing(true);
+    setRefused(false);
     void (async () => {
       // The model list first, so the default buddi names is one this key can
       // actually reach rather than one this page believes in.
       let defaultModel = kind === 'anthropic' ? 'claude-sonnet-5' : 'gpt-5';
-      try {
-        const probed = await api.probeModels({ kind, auth: 'api-key', secret: value });
-        // Only a model the provider itself flags as the default displaces the
-        // sensible one. The first of a long list is not an answer, and these
-        // two providers have a well-known model worth starting on.
-        defaultModel = probed.models.find((model) => model.isDefault)?.id ?? defaultModel;
-      } catch {
-        // A key that cannot list models may still answer; the test below is
-        // the verdict that counts.
+      let listed = models;
+      if (picking && picked !== '') {
+        // The owner chose from the list after a limit or a missing model.
+        defaultModel = picked;
+      } else {
+        try {
+          const probed = await api.probeModels({ kind, auth: 'api-key', secret: value });
+          // Only a model the provider itself flags as the default displaces the
+          // sensible one. The first of a long list is not an answer, and these
+          // two providers have a well-known model worth starting on.
+          defaultModel = probed.models.find((model) => model.isDefault)?.id ?? defaultModel;
+          listed = probed.models.map((model) => model.id);
+        } catch {
+          // A key that cannot list models may still answer; the test below is
+          // the verdict that counts.
+          listed = [];
+        }
       }
       setProbing(false);
-      await onUse(
+      const verdict = await onUse(
         { label: kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai, kind, auth: 'api-key', baseUrl: '', defaultModel, enabled: true, secret: value },
         kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai,
       );
+      if (!verdict || verdict.state === 'connected') return;
+      if (keyRefused(verdict)) {
+        setRefused(true);
+        setModels([]);
+        return;
+      }
+      // A limit or a model this key cannot use: the key may be fine, so the
+      // list stays open with the model that was tried.
+      setModels(listed.includes(defaultModel) || listed.length === 0 ? listed : [defaultModel, ...listed]);
+      setPicked(defaultModel);
     })();
   };
   return (
@@ -1551,9 +1646,13 @@ function KeyCard({
         <Buddi>
           <Thinking line={SCRIPT.brain.checking.key} />
         </Buddi>
-      ) : problem ? (
+      ) : refused ? (
         <Buddi>
           <Said>{SCRIPT.brain.key.refused}</Said>
+        </Buddi>
+      ) : problem ? (
+        <Buddi>
+          <Said>{problem}</Said>
         </Buddi>
       ) : null}
       <Ask
@@ -1561,7 +1660,7 @@ function KeyCard({
           <>
             <Back onClick={onBack} disabled={working} />
             <Button variant="accent" disabled={working || secret.trim() === ''} onClick={submit}>
-              {SCRIPT.brain.key.submit}
+              {picking ? SCRIPT.brain.model.retry : SCRIPT.brain.key.submit}
             </Button>
           </>
         }
@@ -1574,7 +1673,11 @@ function KeyCard({
             spellCheck={false}
             placeholder={SCRIPT.brain.key.placeholder}
             value={secret}
-            onChange={(event) => setSecret(event.target.value)}
+            onChange={(event) => {
+              setSecret(event.target.value);
+              // Another key is another list.
+              setModels([]);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault();
@@ -1583,6 +1686,7 @@ function KeyCard({
             }}
           />
         </Field>
+        {picking ? <ModelSelect models={models} picked={picked} disabled={working} onPick={setPicked} /> : null}
         <button
           type="button"
           className="meet-quiet"
@@ -1798,6 +1902,8 @@ function ServiceCard({
   address: offered,
   onBack,
   onOffer,
+  onTrial,
+  onUse,
 }: {
   busy: boolean;
   problem: string | null;
@@ -1810,16 +1916,25 @@ function ServiceCard({
   address: string;
   onBack: () => void;
   onOffer: Offer;
+  onTrial: Trial;
+  onUse: Adopt;
 }): JSX.Element {
   const field = useOpened<HTMLInputElement>();
   const [address, setAddress] = useState(offered);
   const [secret, setSecret] = useState('');
   /** Asking the service for its models, before the save and the test start. */
   const [probing, setProbing] = useState(false);
+  /** The service's list, offered in the card when the test failed for something other than the key. */
+  const [models, setModels] = useState<string[]>([]);
+  const [picked, setPicked] = useState('');
+  /** The test said 401/403: the key itself, not the model. */
+  const [refused, setRefused] = useState(false);
   const working = busy || probing;
+  const picking = !refused && problem !== null && models.length > 0;
   const submit = (): void => {
     if (address.trim() === '' || working) return;
     setProbing(true);
+    setRefused(false);
     void (async () => {
       const auth = secret.trim() ? ('api-key' as const) : ('none' as const);
       const make = (defaultModel: string): Parameters<typeof api.saveProviderAccount>[0] => ({
@@ -1831,7 +1946,24 @@ function ServiceCard({
         enabled: true,
         ...(secret.trim() ? { secret: secret.trim() } : {}),
       });
-      let models: string[] = [];
+      /** A failed test: the key refused closes the list, anything else keeps it open on `tried`. */
+      const settle = (verdict: ConnectionVerdict | null, listed: string[], tried: string): void => {
+        if (!verdict || verdict.state === 'connected') return;
+        if (keyRefused(verdict)) {
+          setRefused(true);
+          setModels([]);
+          return;
+        }
+        setModels(listed);
+        setPicked(tried);
+      };
+      if (auth === 'api-key' && picking && picked !== '') {
+        // The owner chose from the list after a limit or a missing model.
+        setProbing(false);
+        settle(await onUse(make(picked), SCRIPT.brain.cards.service.title), models, picked);
+        return;
+      }
+      let listed: string[] = [];
       let flagged: string | undefined;
       try {
         const probed = await api.probeModels({
@@ -1840,7 +1972,7 @@ function ServiceCard({
           baseUrl: address.trim(),
           ...(secret.trim() ? { secret: secret.trim() } : {}),
         });
-        models = probed.models.map((model) => model.id);
+        listed = probed.models.map((model) => model.id);
         flagged = probed.models.find((model) => model.isDefault)?.id;
       } catch {
         /* Said below by the save or the test, in its own words. */
@@ -1848,7 +1980,22 @@ function ServiceCard({
       setProbing(false);
       // A service that names its own default has answered the question; one
       // that offers thirty has not, and buddi asks rather than guessing.
-      onOffer(flagged ? [flagged] : models, make, SCRIPT.brain.cards.service.title);
+      const candidates = flagged ? [flagged] : listed;
+      if (auth === 'none') {
+        onOffer(candidates, make, SCRIPT.brain.cards.service.title);
+        return;
+      }
+      // A key: some services list their models without one (Ollama Cloud
+      // does), so the list proves nothing. One small call on the first model
+      // decides before the picker is offered.
+      const first = candidates[0] ?? '';
+      if (candidates.length <= 1) {
+        settle(await onUse(make(first), SCRIPT.brain.cards.service.title), listed, first);
+        return;
+      }
+      const verdict = await onTrial(make(first));
+      if (verdict?.state === 'connected') onOffer(candidates, make, SCRIPT.brain.cards.service.title);
+      else settle(verdict, listed, first);
     })();
   };
   return (
@@ -1856,6 +2003,10 @@ function ServiceCard({
       {working ? (
         <Buddi>
           <Thinking line={SCRIPT.brain.checking.service} />
+        </Buddi>
+      ) : refused ? (
+        <Buddi>
+          <Said>{SCRIPT.brain.key.refused}</Said>
         </Buddi>
       ) : problem ? (
         <Buddi>
@@ -1867,7 +2018,7 @@ function ServiceCard({
           <>
             <Back onClick={onBack} disabled={working} />
             <Button variant="accent" disabled={working || address.trim() === ''} onClick={submit}>
-              {SCRIPT.brain.service.submit}
+              {picking ? SCRIPT.brain.model.retry : SCRIPT.brain.service.submit}
             </Button>
           </>
         }
@@ -1877,12 +2028,25 @@ function ServiceCard({
             ref={field}
             value={address}
             placeholder={SCRIPT.brain.service.addressPlaceholder}
-            onChange={(event) => setAddress(event.target.value)}
+            onChange={(event) => {
+              setAddress(event.target.value);
+              setModels([]);
+            }}
           />
         </Field>
         <Field label={SCRIPT.brain.service.key}>
-          <input type="password" autoComplete="off" spellCheck={false} value={secret} onChange={(event) => setSecret(event.target.value)} />
+          <input
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={secret}
+            onChange={(event) => {
+              setSecret(event.target.value);
+              setModels([]);
+            }}
+          />
         </Field>
+        {picking ? <ModelSelect models={models} picked={picked} disabled={working} onPick={setPicked} /> : null}
       </Ask>
     </>
   );

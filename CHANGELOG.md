@@ -24,6 +24,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A pasted key is tried with one small call before buddi offers the model list, so a wrong Ollama Cloud or compatible key is refused where you typed it, not on the first chat.
 - First run: the Claude sign-in step has a Back button while it waits for the code, so changing your mind is one click.
 - Notifications no longer cover the corner buddi button or its chat: they stack above it, and on a phone they drop from the top.
 - A delegation that came back after you approved something now opens on who was asked, the question, the answer, the files and how long it took, with the raw JSON folded under Details.

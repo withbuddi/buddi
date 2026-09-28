@@ -1441,6 +1441,17 @@ export const chatApi = {
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/stream`,
 };
 
+/** What a connection test answers. */
+export type ConnectionVerdict = { state: string; message: string; httpStatus?: number | null };
+
+/**
+ * Whether a connection test says the key itself was refused (401/403).
+ * A limit or an outage is not a refusal: the key may be fine and the model wrong.
+ */
+export function keyRefused(verdict: ConnectionVerdict): boolean {
+  return verdict.httpStatus === 401 || verdict.httpStatus === 403 || verdict.state === 'authentication-error' || verdict.state === 'access-denied';
+}
+
 export const api = {
   providers: () => get<ProvidersView>('/providers'),
   providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
@@ -1448,7 +1459,7 @@ export const api = {
     post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
   accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
-  testProviderAccount: (id: string) => post<{ state: string; message: string; httpStatus?: number | null }>(`/provider-accounts/${encodeURIComponent(id)}/test`),
+  testProviderAccount: (id: string) => post<ConnectionVerdict>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),
   codexAccountAction: (id: string, action: 'login' | 'cancel-login' | 'logout', revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/${action}`, { revision }),
   /** Ollama Cloud with a device key: start a connection, ask once whether it went through, or remove the key. */
