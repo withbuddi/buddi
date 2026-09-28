@@ -57,7 +57,7 @@ describe('Blob', () => {
   it('draws the still first and swaps in the loop once the player resolves', async () => {
     motion(false);
     player.hold();
-    render(<Blob state="working" size="xs" />);
+    render(<Blob state="working" size="md" />);
     const box = screen.getByTestId('blob');
     expect(box.querySelector('img')?.getAttribute('src')).toBe('./mascot/core.png');
     expect(box.getAttribute('data-playing')).toBeNull();
@@ -107,10 +107,18 @@ describe('Blob', () => {
     expect(screen.getByTestId('blob').querySelector('img')).not.toBeNull();
     expect(player.loadAnimation).not.toHaveBeenCalled();
   });
+
+  it('keeps the still below `sm`, where a loop could not be seen', async () => {
+    motion(false);
+    render(<Blob state="working" size="xs" />);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.getByTestId('blob').querySelector('img')).not.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
 
 describe('the working indicator', () => {
-  it('shows the thinking Blob beside the line', () => {
+  it('shows the thinking Blob avatar-sized, first in the line', () => {
     render(
       <Tooltip.Provider>
         <MessageList messages={[]} live={[]} now={0} onOpen={() => {}} working agentName="Playground" emptyHint="" />
@@ -118,6 +126,8 @@ describe('the working indicator', () => {
     );
     const blob = screen.getByTestId('working').querySelector('[data-testid="blob"]');
     expect(blob?.getAttribute('data-state')).toBe('working');
+    expect(blob?.getAttribute('data-size')).toBe('md');
+    expect(screen.getByRole('status').firstElementChild).toBe(blob);
     expect(screen.getByRole('status').textContent).toContain('Playground is working');
   });
 });

@@ -316,7 +316,7 @@ export function MessageList({
         <div className="wb-msg" data-role="assistant" data-testid="working">
           {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
           <span className="wb-working" role="status" aria-live="polite">
-            <Blob state="working" size="xs" />
+            <Blob state="working" size="md" />
             {workingLine ?? `${workingAs ?? agentName ?? 'The agent'} is working`}
             <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
           </span>

@@ -6,8 +6,9 @@
  * `lottie-web`'s light SVG build, a chunk of its own that the page never loads
  * otherwise — and the loop's JSON, and the loop takes the still's place in the
  * same box. The still stays when there is no loop for the role, when either
- * file fails, when the owner asks for reduced motion, or where `matchMedia`
- * does not exist to ask. A loop in a hidden tab is paused.
+ * file fails, when the owner asks for reduced motion, where `matchMedia`
+ * does not exist to ask, and at `xs`, where a breath is too small to see. A
+ * loop in a hidden tab is paused.
  */
 import { useEffect, useRef, useState } from 'react';
 import { mascotAnimUrl, mascotUrl, type MascotAnimState, type MascotRole } from '../views/meet/script';
@@ -80,7 +81,8 @@ export function Blob({
   const box = useRef<HTMLSpanElement>(null);
   const mayMove = useMayMove();
   const [playing, setPlaying] = useState(false);
-  const url = mascotAnimUrl(role, state);
+  // Below `sm` the motion does not read, so the still is all there is.
+  const url = size === 'xs' ? null : mascotAnimUrl(role, state);
 
   useEffect(() => {
     setPlaying(false);
@@ -157,15 +159,17 @@ async function glance(src: string): Promise<number[] | null> {
  * records that it was the Blob. Home's greeting face moves only when it is
  * — an owner's own photo must never be swapped for a cartoon — so the two
  * are compared at a glance: small enough to ignore the re-encoding, close
- * enough that nothing else passes. False until known, and wherever the page
- * may not move.
+ * enough that nothing else passes. The bundled still's own URL needs no
+ * glance: it is the Blob, known at once. False until known, and wherever the
+ * page may not move.
  */
 export function useIsBlobStill(picture: string | null, role: MascotRole = 'core'): boolean {
   const mayMove = useMayMove();
+  const bundled = picture !== null && isBundledStill(picture, role);
   const [same, setSame] = useState(false);
   useEffect(() => {
     setSame(false);
-    if (!picture || !mayMove || !mascotAnimUrl(role, 'idle')) return undefined;
+    if (!picture || bundled || !mayMove || !mascotAnimUrl(role, 'idle')) return undefined;
     let cancelled = false;
     void Promise.all([glance(picture), glance(mascotUrl(role))])
       .then(([a, b]) => {
@@ -179,6 +183,18 @@ export function useIsBlobStill(picture: string | null, role: MascotRole = 'core'
     return () => {
       cancelled = true;
     };
-  }, [picture, mayMove, role]);
-  return same;
+  }, [picture, bundled, mayMove, role]);
+  return mayMove && mascotAnimUrl(role, 'idle') !== null && (bundled || same);
+}
+
+/** Whether a URL is the role's bundled still itself, however it is written. */
+function isBundledStill(picture: string, role: MascotRole): boolean {
+  const still = mascotUrl(role);
+  if (picture === still) return true;
+  try {
+    const base = typeof window === 'undefined' ? 'http://localhost/' : window.location.href;
+    return new URL(picture, base).href === new URL(still, base).href;
+  } catch {
+    return false;
+  }
 }

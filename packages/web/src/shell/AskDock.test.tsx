@@ -149,6 +149,28 @@ describe('the dock', () => {
     expect(screen.getByRole('link', { name: 'Open in Chat' })).toHaveAttribute('href', '#/chat/concierge');
   });
 
+  it('rings the closed button and thinks in it while a reply streams, and stops when it lands', async () => {
+    vi.spyOn(chatApi, 'startConversation').mockResolvedValue({ conversationId: 'c-new' });
+    vi.spyOn(chatApi, 'send').mockResolvedValue({ conversationId: 'c-new', runId: 'r1' } as never);
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(transcript([]));
+    render(<Page />);
+    const fab = (): HTMLElement => screen.getByRole('button', { name: 'Ask Concierge' });
+    expect(fab()).not.toHaveAttribute('data-busy');
+
+    fireEvent.click(fab());
+    const box = screen.getByPlaceholderText('Message Concierge…');
+    fireEvent.change(box, { target: { value: 'What is on today?' } });
+    await act(async () => { fireEvent.keyDown(box, { key: 'Enter' }); });
+    emit('run.started', { agentId: 'concierge' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(fab()).toHaveAttribute('data-busy', 'true');
+    expect(fab().querySelector('[data-testid="blob"]')).toHaveAttribute('data-state', 'working');
+    emit('run.finished', {});
+    await waitFor(() => expect(fab()).not.toHaveAttribute('data-busy'));
+    expect(fab().querySelector('[data-testid="blob"]')).toHaveAttribute('data-state', 'idle');
+  });
+
   it('opens on `/` on a page without a composer, and Escape closes it back to the button', async () => {
     const navigate = vi.fn();
     render(<Page navigate={navigate} />);

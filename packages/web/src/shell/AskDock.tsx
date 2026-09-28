@@ -100,7 +100,7 @@ export function AskDock({
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
-        <button ref={button} type="button" className="wb-ask-fab" aria-label={label} onClick={() => onOpenChange(true)}>
+        <button ref={button} type="button" className="wb-ask-fab" data-busy={busy ? 'true' : undefined} aria-label={label} onClick={() => onOpenChange(true)}>
           <FrontDeskFace busy={busy} />
         </button>
       </Tooltip.Trigger>

@@ -211,7 +211,7 @@ function Thinking({ line }: { line?: string }): JSX.Element {
   return (
     <div className="wb-msg" data-role="assistant">
       <span className="wb-working" role="status" aria-live="polite">
-        <Blob state="working" size="xs" />
+        <Blob state="working" size="md" />
         {line}
         <span className="wb-dots" aria-hidden="true">
           <i />
@@ -235,7 +235,7 @@ function Buddi({ children }: { children: ReactNode }): JSX.Element {
     <div className="meet-turn">
       <div className="wb-msg-who">
         {/* The Blob speaks here, the same face as above the card. */}
-        <Blob state="idle" className="meet-turn-mark" />
+        <Blob state="idle" size="sm" className="meet-turn-mark" />
         <span>buddi</span>
       </div>
       {children}

@@ -33,6 +33,7 @@ What changes in buddi from one release to the next, newest first.
 - Finance: a statement line that is a pending charge now posting is no longer skipped as a duplicate; it settles the pending row, also when the posted line reads differently or is dated up to two days earlier. A deleted row never counts as already imported.
 - Home's update notice reads on one line.
 - The Gemini card starts a free Google AI key on the newest Flash when Google refuses Pro, and says why in plain words; a rate-limit answer from any provider now reads as a sentence about the key and the model, not about responses.
+- The moving Blob is drawn at a size where the motion shows: avatar-sized in the chat's thinking line and on first run, larger in the corner button.
 
 ## 0.1.0-pre.21 — 2026-09-27
 
