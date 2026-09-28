@@ -2,9 +2,9 @@
 # packaged install use (`pnpm release:pack`) and publishes it to npmjs.com
 # with provenance, through npm's trusted publishing (OIDC: no token lives in
 # this repository). A pre-release version (`v0.1.0-pre.14`) goes under the
-# `next` dist-tag, so `npm install @withbuddi/buddi` never resolves to it; a plain
+# `next` dist-tag once a stable version exists (until then it is `latest`), so after 0.1.0 `npm install @withbuddi/buddi` never resolves to one; a plain
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
-# the same run, marked pre-release for a pre-release version, with the
+# the same run, marked latest until a stable version exists, with the
 # tarball and the Linux install script attached.
 #
 # Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
@@ -45,7 +45,14 @@ jobs:
         run: |
           v="${GITHUB_REF_NAME#v}"
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          case "$v" in *-*) echo "tag=next" >> "$GITHUB_OUTPUT";; *) echo "tag=latest" >> "$GITHUB_OUTPUT";; esac
+          # Until a stable version exists, a pre-release IS the latest buddi:
+          # it goes out as `latest`, and its GitHub release is marked latest.
+          # Once npm holds any version without a `-`, pre-releases go to `next`.
+          stable=$(npm view @withbuddi/buddi versions --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=[].concat(JSON.parse(s||"[]"));console.log(v.some(x=>!x.includes("-"))?"yes":"no")})')
+          case "$v" in
+            *-*) if [ "$stable" = "yes" ]; then echo "tag=next" >> "$GITHUB_OUTPUT"; echo "pre=--prerelease" >> "$GITHUB_OUTPUT"; else echo "tag=latest" >> "$GITHUB_OUTPUT"; echo "pre=--latest" >> "$GITHUB_OUTPUT"; fi;;
+            *) echo "tag=latest" >> "$GITHUB_OUTPUT"; echo "pre=--latest" >> "$GITHUB_OUTPUT";;
+          esac
       - name: Build the tarball
         id: pack
         env:
@@ -63,7 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pre=""; case "${{ steps.v.outputs.version }}" in *-*) pre="--prerelease";; esac
+          pre="${{ steps.v.outputs.pre }}"
           # The version's section of CHANGELOG.md; a missing or empty one fails the release.
           section=$(node scripts/release/changelog.mjs section "${{ steps.v.outputs.version }}")
           notes="$section
