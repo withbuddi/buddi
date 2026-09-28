@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.22 — 2026-09-28
+
 ### Added
 
 - Installed as an app, buddi opens even when the gateway is out of reach and says what to check, Tailscale or the Mac, then comes back on its own when it answers.
