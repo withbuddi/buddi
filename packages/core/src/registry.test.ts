@@ -509,7 +509,7 @@ describe('tierFor: a tier decided per call', () => {
  * schema is what the registry owes every provider — whatever a plugin wrote.
  */
 describe('the tool input schema guarantee', () => {
-  function withInput(input: PluginManifest['tools'][number]['input']): PluginManifest {
+  function withInput(input: NonNullable<PluginManifest['tools'][number]['input']>): PluginManifest {
     return {
       name: 'demo',
       version: '0.0.1',

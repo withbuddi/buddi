@@ -312,8 +312,8 @@ template's read tool is the whole idea in one line:
 
 `buddi` is optional in the type only so that core's own contexts compile; core
 sets it on every context it hands a plugin, which is why the template writes
-`ctx.buddi!`. Six areas are always there, because they reach nothing beyond
-your plugin: your schema, your directory, your own tools' approvals. The other
+`ctx.buddi!`. Seven areas are always there, because they reach nothing beyond
+your plugin: your schema, your directory, your own tools and their approvals. The other
 seven exist only when you declare them (§1.3); one you did not declare is
 `undefined`, not a refusal.
 
@@ -2828,7 +2828,8 @@ version each arrived in — is §9b.
 | `ownerOnly` | `boolean` | no | The owner may call this from one of your pages; no model ever sees it. Left out of `registry.list()` — the one list every provider and every agent grant is built from — and refused by `invoke` for anyone but the owner's own path. For a write that stores a secret. |
 | `producesArtifacts` | `boolean` | no | This tool saves files and names them in its output as `artifacts: [{ id }]`. Only a tool that says so has its outputs recorded as produced. |
 | `untrusted` | `'web' \| 'mail' \| 'file' \| 'chat' \| 'finding' \| 'other'` | no | This tool's output is text someone other than the owner wrote. A run that called it is known to have had untrusted text in view, whatever the result looked like; a learning proposal made in that run is marked and lists the call as a source (docs/learning.md §3). Declare it on every tool that returns a page, a mail, a file or a chat. |
-| `input` | `ZodType<I>` | yes | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. |
+| `input` | `ZodType<I>` | no | The arguments. `zodToJsonSchema` turns it into the spec the provider sees, so `.describe()` every field. Give exactly one of `input` and `inputSchema`; a hand-written tool gives this one. |
+| `inputSchema` | `JSONSchema7` | no | The arguments as a JSON Schema, kept as written (host API 1.6): for tools that arrive described that way, a remote MCP server's. Validated with Ajv before anything runs, handed to the model as is, and canonicalised into the approval envelope exactly as zod's arguments are. The top level must be `type: "object"` with no `anyOf`, `oneOf` or `allOf`; drafts 07, 2019-09 and 2020-12 (the default); no remote `$ref`, no `$data`, at most 64 KiB. |
 | `execute` | `(input, ctx) => Promise<O>` | yes | The work. On a `gated` tool the only caller is `executeApproved`. |
 | `describe` | `(input, ctx) => EffectDescription` | no | The effect envelope and the owner-facing preview. Optional in the type, required in spirit for every `gated` tool; pure and read-only. |
 | `claim` | `(input, ctx) => Promise<void>` | no | For a `gated` tool whose subject someone else can edit while the owner decides: take exclusive hold of it in one conditional statement, immediately before the ledger row. A throw settles the approval `refused` and records no effect attempt. |
@@ -3071,13 +3072,13 @@ your manifest's name, schema, tools, `network` and `uses`, and puts it on every
 context it hands you: a tool's, a page query's, a metric's, a home block's, a
 preview's, a source's, a sentinel's. §1.1 is the idea; this is every member.
 
-Six areas are always there. The rest exist only when your manifest's `uses`
+Seven areas are always there. The rest exist only when your manifest's `uses`
 declares them, and `package.json`'s `buddi.uses` says the same (§1.3). An area
 you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.3`; most members are from `1.0`, and the later minors' additions are the rows
+`1.6`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3094,6 +3095,7 @@ that say otherwise.
 | `dir` | `DirArea` | yes | 1.0 | A directory of your own. |
 | `approvals` | `ApprovalsArea` | yes | 1.0 | The owner's decisions about your own tools. |
 | `pages` | `PagesArea` | yes | 1.0 | What a query or a tool asks about pages and previews. |
+| `tools` | `ToolsArea` | yes | 1.6 | Your own tools, added and removed while buddi runs. Also on the `register` hook's host. |
 | `http` | `HttpArea` | no | 1.0 | Declared as `http`. |
 | `accounts` | `AccountsArea` | no | 1.0 | Declared as `accounts`. |
 | `files` | `FilesArea` | no | 1.0 | Declared as `files` or `files:library`. |
@@ -3151,6 +3153,14 @@ that say otherwise.
 | --- | --- | --- | --- | --- |
 | `previewPort` | `() => number \| undefined` | yes | 1.0 | The port previews are served on, when they are. |
 | `previewUrl` | `(name) => string \| undefined` | yes | 1.0 | `http://127.0.0.1:<port>/preview/<plugin>/<name>/`, when there is a port. |
+
+#### `ToolsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `register` | `(definitions: ToolDefinition[]) => void` | yes | 1.6 | Add tools while buddi runs, for tools you cannot know at boot (a connection the owner made this afternoon). Each name must be `<plugin>.<what>` (letters, digits, `_`, `-`); every check a manifest's tools get applies — no name twice, tier and `tierFor` coherent, `untrusted` a known kind, an input a provider can take. All or nothing: one bad definition and none is added. Agents' `tools:` grants are resolved again for their next turn, so `mcp.github.*` covers a tool added after the agent loaded. |
+| `unregister` | `(names: string[]) => void` | yes | 1.6 | Remove tools you added with `register`. A manifest tool, or another plugin's, is refused; so is the whole call if one name is. An approval still pending on a removed tool is refused when it would execute. |
+| `registered` | `() => string[]` | yes | 1.6 | The names you have added at runtime and not removed, in order. |
 
 #### `HttpArea`
 

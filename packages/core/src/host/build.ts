@@ -68,6 +68,7 @@ import type {
   ProposalsArea,
   ScheduleArea,
   SecretsArea,
+  ToolsArea,
 } from './types.js';
 
 /** What `register()` fixes about a plugin, once. */
@@ -76,8 +77,13 @@ export interface HostBinding {
   version: string;
   schema: string;
   uses: readonly PluginUse[];
-  /** This plugin's tool names: `approvals` answers for these and no others. */
-  tools: ReadonlySet<string>;
+  /**
+   * This plugin's tool names: `approvals` answers for these and no others.
+   * The registry adds and removes the ones `ctx.buddi.tools` registers.
+   */
+  tools: Set<string>;
+  /** `ctx.buddi.tools`, wired by the registry that bound this plugin. */
+  toolsArea?: ToolsArea;
   /** The hosts its manifest declares under `network`. */
   network: readonly string[];
 }
@@ -355,6 +361,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
           ? undefined
           : `http://127.0.0.1:${facts.previewPort}/preview/${encodeURIComponent(plugin)}/${encodeURIComponent(name)}/`,
     },
+    tools: toolsAreaOf(binding),
   };
 
   if (declared.has('http')) {
@@ -448,7 +455,17 @@ export function registerHostOf(binding: HostBinding): RegisterHost {
     version: HOST_API_VERSION,
     plugin: binding.plugin,
     dir: pluginDir(binding.plugin),
+    tools: toolsAreaOf(binding),
     ...(binding.uses.includes('owner:channel') ? { channels: channelsArea(binding) } : {}),
+  };
+}
+
+/** `ctx.buddi.tools`: the registry's, or one that says there is none. */
+function toolsAreaOf(binding: HostBinding): ToolsArea {
+  return binding.toolsArea ?? {
+    register: () => { throw new Error(`${binding.plugin} is not bound to a tool registry; tools cannot be registered here`); },
+    unregister: () => { throw new Error(`${binding.plugin} is not bound to a tool registry; tools cannot be removed here`); },
+    registered: () => [],
   };
 }
 

@@ -1133,3 +1133,27 @@ describe('providerFromEnv', () => {
     );
   });
 });
+
+describe('tools registered while buddi runs', () => {
+  it('a glob grant picks up runtime tools on the next load, and drops removed ones', () => {
+    const registry = registryOf();
+    let host: import('../host/types.js').RegisterHost | undefined;
+    registry.register({ ...fakeManifest([], 'mcp'), register: (h) => { host = h; } });
+    const dir = catalogDir({
+      concierge: CONCIERGE,
+      'github-helper': agentFile(['id: github-helper', 'handle: gh', 'name: GitHub Helper', 'description: Repos.', 'tools: [notes.search, mcp.github.*]'].join('\n')),
+    });
+    const load = () => loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'x' } });
+    // Nothing of `mcp` is registered yet: held back as a missing family, not an error.
+    expect(load().get('github-helper')?.heldBack?.families).toEqual(['mcp']);
+    const tool = (name: string) => ({ name, description: name, tier: 'auto' as const, inputSchema: { type: 'object' }, execute: async () => ({}) });
+    host!.tools.register([tool('mcp.github.search'), tool('mcp.github.create_issue'), tool('mcp.linear.search')]);
+    expect(load().get('github-helper')?.tools).toEqual(['notes.search', 'mcp.github.search', 'mcp.github.create_issue']);
+    host!.tools.unregister(['mcp.github.create_issue']);
+    expect(load().get('github-helper')?.tools).toEqual(['notes.search', 'mcp.github.search']);
+    // GitHub disconnected, Linear still there: held back, not a broken catalog.
+    host!.tools.unregister(['mcp.github.search']);
+    expect(load().get('github-helper')?.heldBack?.families).toEqual(['mcp.github']);
+    expect(() => resolveToolNames(['mcp.github.*'], registry, 'x')).toThrow(/"mcp\.github\.\*"/);
+  });
+});

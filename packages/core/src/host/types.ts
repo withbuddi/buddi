@@ -4,7 +4,7 @@
  *
  * The rest of a context is the *call* — who called, in which conversation,
  * under which approval. This is the *host*: everything a plugin reaches beyond
- * its own arguments, in areas. Six are always present because they reach
+ * its own arguments, in areas. Seven are always present because they reach
  * nothing beyond the plugin itself; the rest exist only when the manifest
  * declares them in `uses`, and the owner read that list on the install card.
  *
@@ -19,7 +19,7 @@ import type { ProposePolicyInput } from '../learning/policies.js';
 import type { CreateProposalResult } from '../learning/store.js';
 import type { ResolvedProvider } from '../provider.js';
 import type { CodexProfile, ProviderAccountListing } from '../provider-accounts.js';
-import type { ToolContext } from '../tools.js';
+import type { ToolContext, ToolDefinition } from '../tools.js';
 
 /** The host, bound to one plugin. See the file comment. */
 export interface BuddiHost {
@@ -43,6 +43,8 @@ export interface BuddiHost {
   dir: DirArea;
   approvals: ApprovalsArea;
   pages: PagesArea;
+  /** This plugin's own tools, added and removed while buddi runs. Since 1.6. */
+  tools: ToolsArea;
   /** Declared as `http`. */
   http?: HttpArea;
   /** Declared as `accounts`. */
@@ -156,7 +158,26 @@ export interface DirArea {
  * no call — the version, the plugin's name and its directory — for a plugin
  * that fixes something (a profile's place) before any context exists.
  */
-export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir' | 'channels'>;
+export type RegisterHost = Pick<BuddiHost, 'version' | 'plugin' | 'dir' | 'channels' | 'tools'>;
+
+/**
+ * Tools added and removed while buddi runs (since 1.6), for a plugin whose
+ * tools are not known at boot: a connection made at 3pm brings its tools
+ * without a restart (buddi-planning/specs/mcp-client.md §7).
+ *
+ * Every name must be in the plugin's own namespace (`<plugin>.<what>`), and a
+ * plugin removes only what it added here, never a tool of its manifest. The
+ * registry's checks are the ones a manifest's tools get: name shape, tier,
+ * `untrusted`, the input schema, and no name registered twice. A batch is all
+ * or nothing. Agents' `tools:` grants are resolved again on their next turn,
+ * so `mcp.github.*` covers a tool registered after the agent was loaded.
+ */
+export interface ToolsArea {
+  register(definitions: ToolDefinition<any, any>[]): void;
+  unregister(names: string[]): void;
+  /** The names this plugin has registered at runtime and not removed, in order. */
+  registered(): string[];
+}
 
 /** The owner's decisions about this plugin's own tools. */
 export interface ApprovalsArea {

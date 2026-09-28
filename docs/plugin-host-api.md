@@ -78,7 +78,7 @@ the host gave them a directory.
 
 ## 4. The areas
 
-Six are always present because they reach nothing beyond the plugin
+Seven are always present because they reach nothing beyond the plugin
 itself. Eight must be declared (§5), and one member of an always-present
 area, `owner.notify`, must be declared too.
 
@@ -86,11 +86,11 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.5'; see §7
+  readonly version: string;            // '1.6'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
-  approvals: ApprovalsArea; pages: PagesArea;
+  approvals: ApprovalsArea; pages: PagesArea; tools: ToolsArea;
   http?: HttpArea; accounts?: AccountsArea; files?: FilesArea;
   memory?: MemoryArea; proposals?: ProposalsArea; schedule?: ScheduleArea;
   secrets?: SecretsArea; channels?: ChannelsArea;
@@ -129,6 +129,21 @@ Never another plugin's actions.
 **pages.** `previewPort(): number | undefined`, `previewUrl(name): string |
 undefined`. Page descriptors and queries stay in the manifest; this is only
 what a query or a tool asks of the host.
+
+**tools.** (1.6) `register(definitions: ToolDefinition[]): void`,
+`unregister(names: string[]): void`, `registered(): string[]`. Tools added
+and removed while buddi runs, for a plugin whose tools are not known at boot:
+a connection the owner makes at 3pm brings its tools without a restart
+(Connections, the MCP client). Names must be in the plugin's own namespace
+(`<plugin>.<what>`); the registry applies the checks a manifest's tools get
+(name shape, tier and `tierFor`, `untrusted`, the input schema, no name twice),
+and a batch is all or nothing. A plugin removes only what it added this way,
+never a manifest tool and never another plugin's. After a change the gateway
+reloads the agent catalog, so every agent's `tools:` grant is resolved again
+before its next turn: `mcp.github.*` covers a tool added after the agent
+loaded. Also on the `register` hook's host. A tool may describe its input with
+a JSON Schema (`inputSchema`) instead of zod, validated with Ajv and
+canonicalised into the approval envelope the same way (plugins.md §9).
 
 ### 4.2 Declared
 
@@ -308,7 +323,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.5`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.6`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.

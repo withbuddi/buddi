@@ -311,6 +311,20 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
   const catalog = reloadableCatalog(() => loadGatewayCatalog({ env, registry, providerSelection: accounts?.selection }));
   adoptProcessCatalog(env, catalog);
   /*
+   * A plugin may add or remove tools while buddi runs (`ctx.buddi.tools`,
+   * host API 1.6): a connection made at 3pm brings `mcp.github.*`. The
+   * catalog is rebuilt so every agent's `tools:` grant is resolved again and
+   * its next turn sees the change. A rebuild that fails keeps the previous
+   * catalog serving, as any reload does, and says why.
+   */
+  registry.onChange(() => {
+    try {
+      catalog.reload();
+    } catch (error) {
+      console.error(`agent catalog not reloaded after a tool change: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  /*
    * What `ctx.buddi` needs and no context carries (docs/plugin-host-api.md):
    * how the shared transport is made, which core may not import (the `http`
    * area makes one with its address guard as the socket's resolver), and the

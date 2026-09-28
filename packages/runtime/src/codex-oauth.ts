@@ -10,6 +10,7 @@
  *
  * Nothing here puts a response body, a token or a code into an error message.
  */
+import { OAuthClient, readOAuthTokens, validOAuthId as validId, validToken, type OAuthTokens } from './oauth.js';
 import { defaultHttpTransport, type HttpTransport } from './transport.js';
 
 export const CODEX_ISSUER = 'https://auth.openai.com';
@@ -34,13 +35,6 @@ export interface CodexDeviceStart {
 export type CodexDevicePoll = 'pending' | 'slow_down' | { code: string; verifier: string } | { denied: string };
 
 const INVALID = 'Invalid ChatGPT credential. Reconnect this account.';
-
-function validToken(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 16384 && !/[\s\x00-\x1f\x7f]/.test(value);
-}
-function validId(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9._:-]+$/.test(value);
-}
 
 /** A JWT's payload, unverified: the claims are routing hints, the token itself is the credential. */
 function jwtPayload(token: string | undefined): Record<string, unknown> | null {
@@ -76,14 +70,7 @@ export function readCodexTokens(raw: string): CodexTokens {
     if (Buffer.byteLength(value) > 64 * 1024) throw new Error();
     const data = JSON.parse(value) as Record<string, unknown>;
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
-    if (data.version === 1) {
-      const t = data as unknown as CodexTokens;
-      if (!['ready', 'refreshing'].includes(t.state) || !validToken(t.accessToken) || !validToken(t.refreshToken) ||
-        (t.idToken !== undefined && !validToken(t.idToken)) || !validId(t.accountId) ||
-        !Number.isFinite(t.expiresAt) || t.expiresAt < 0) throw new Error();
-      return { version: 1, state: t.state, accessToken: t.accessToken, refreshToken: t.refreshToken,
-        ...(t.idToken ? { idToken: t.idToken } : {}), accountId: t.accountId, expiresAt: t.expiresAt };
-    }
+    if (data.version === 1) return toCodex(readOAuthTokens(value, { invalidMessage: INVALID, requireRefreshToken: true, requireAccountId: true, keep: ['idToken'] }));
     const tokens = data.tokens as Record<string, unknown> | undefined;
     if (!tokens || typeof tokens !== 'object' || data.OPENAI_API_KEY ||
       (data.auth_mode !== undefined && data.auth_mode !== 'chatgpt') ||
@@ -106,8 +93,34 @@ export function codexAuthJson(tokens: CodexTokens, now = Date.now): string {
   });
 }
 
+/** The shared envelope, as the Codex shape: the id token rides in `extra`. */
+function toCodex(t: OAuthTokens): CodexTokens {
+  const idToken = t.extra?.idToken;
+  return { version: 1, state: t.state, accessToken: t.accessToken, refreshToken: t.refreshToken!,
+    ...(idToken ? { idToken } : {}), accountId: t.accountId!, expiresAt: t.expiresAt };
+}
+function fromCodex(t: CodexTokens): OAuthTokens {
+  return { version: 1, state: t.state, accessToken: t.accessToken, refreshToken: t.refreshToken, expiresAt: t.expiresAt,
+    accountId: t.accountId, ...(t.idToken ? { extra: { idToken: t.idToken } } : {}) };
+}
+
 export class CodexOAuthProtocol {
-  constructor(readonly transport: HttpTransport = defaultHttpTransport, readonly now = Date.now) {}
+  readonly #client: OAuthClient;
+  constructor(readonly transport: HttpTransport = defaultHttpTransport, readonly now = Date.now) {
+    this.#client = new OAuthClient({
+      tokenEndpoint: TOKEN_URL, clientId: CODEX_CLIENT_ID, format: 'form', transport, now,
+      requireRefreshToken: true,
+      expiryFallback: (data) => codexTokenExpiry(data.access_token as string),
+      messages: { exchange: 'ChatGPT sign-in could not complete. Start a fresh sign-in.', refresh: 'ChatGPT token refresh failed. Reconnect this account.' },
+      finish: (tokens, data, previous) => {
+        const idToken = validToken(data.id_token) ? data.id_token : previous?.extra?.idToken;
+        const accountId = codexAccountId(tokens.accessToken) ?? codexAccountId(idToken) ?? previous?.accountId;
+        if (!accountId) throw new Error();
+        const { scopes: _scopes, clientId: _clientId, ...rest } = tokens;
+        return { ...rest, accountId, ...(idToken ? { extra: { idToken } } : {}) };
+      },
+    });
+  }
 
   async #post(url: string, body: string, type: 'json' | 'form') {
     return this.transport(url, {
@@ -155,30 +168,11 @@ export class CodexOAuthProtocol {
     return { denied: code === 'access_denied' || code === 'expired_token' ? 'Sign-in was declined or expired on ChatGPT. Start again.' : 'ChatGPT did not approve the sign-in. Start again.' };
   }
 
-  async #token(body: Record<string, string>, previous?: CodexTokens): Promise<CodexTokens> {
-    try {
-      const res = await this.#post(TOKEN_URL, new URLSearchParams({ client_id: CODEX_CLIENT_ID, ...body }).toString(), 'form');
-      if (!res.ok) throw new Error();
-      const data = await res.json() as Record<string, unknown>;
-      if (!validToken(data.access_token)) throw new Error();
-      const refreshToken = data.refresh_token === undefined || data.refresh_token === null || data.refresh_token === '' ? previous?.refreshToken : data.refresh_token;
-      if (!validToken(refreshToken)) throw new Error();
-      const idToken = validToken(data.id_token) ? data.id_token : previous?.idToken;
-      const accountId = codexAccountId(data.access_token) ?? codexAccountId(idToken) ?? previous?.accountId;
-      if (!accountId) throw new Error();
-      const expiresIn = data.expires_in;
-      const expiresAt = typeof expiresIn === 'number' && Number.isFinite(expiresIn) && expiresIn > 0 && expiresIn <= 366 * 86400
-        ? this.now() + expiresIn * 1000 : codexTokenExpiry(data.access_token);
-      if (!expiresAt) throw new Error();
-      return { version: 1, state: 'ready', accessToken: data.access_token, refreshToken, ...(idToken ? { idToken } : {}), accountId, expiresAt };
-    } catch { throw new Error(previous ? 'ChatGPT token refresh failed. Reconnect this account.' : 'ChatGPT sign-in could not complete. Start a fresh sign-in.'); }
+  async exchange(input: { code: string; verifier: string }): Promise<CodexTokens> {
+    return toCodex(await this.#client.exchangeCode({ code: input.code, verifier: input.verifier, redirectUri: CODEX_DEVICE_REDIRECT }));
   }
 
-  exchange(input: { code: string; verifier: string }): Promise<CodexTokens> {
-    return this.#token({ grant_type: 'authorization_code', code: input.code, code_verifier: input.verifier, redirect_uri: CODEX_DEVICE_REDIRECT });
-  }
-
-  refresh(tokens: CodexTokens): Promise<CodexTokens> {
-    return this.#token({ grant_type: 'refresh_token', refresh_token: tokens.refreshToken, scope: 'openid profile email' }, tokens);
+  async refresh(tokens: CodexTokens): Promise<CodexTokens> {
+    return toCodex(await this.#client.refresh(fromCodex(tokens), { scope: 'openid profile email' }));
   }
 }

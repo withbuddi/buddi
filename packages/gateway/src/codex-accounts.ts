@@ -1,6 +1,6 @@
 import type { CodexProfile, Vault } from '@buddi/core';
 import {
-  CodexOAuthProtocol, createCodexDirectAdapter, listCodexModels, readCodexTokens, stageCodexProfile,
+  CodexOAuthProtocol, createCodexDirectAdapter, listCodexModels, readCodexTokens, refreshDiscipline, stageCodexProfile,
   type AccountModels, type CodexTokens, type CompletionRequest, type CompletionResponse, type HttpTransport,
 } from '@buddi/runtime';
 
@@ -64,20 +64,17 @@ export class CodexAccounts {
    * durable `refreshing` marker is written first so a crash or a failed save
    * never lets another process replay a consumed refresh token.
    */
-  async #credential(access: CodexAccountAccess): Promise<CodexTokens> {
-    const raw = await this.deps.vault.get(access.secretRef);
-    if (!raw) throw new Error('Connect this ChatGPT subscription account first.');
-    const tokens = readCodexTokens(raw);
-    if (tokens.state !== 'ready') throw new Error('ChatGPT token refresh was interrupted or failed. Reconnect this account.');
-    if (tokens.expiresAt > this.now() + REFRESH_SKEW_MS) return tokens;
-    await access.check();
-    await this.deps.vault.set(access.secretRef, JSON.stringify({ ...tokens, state: 'refreshing' }));
-    let rotated: CodexTokens;
-    try { rotated = await this.protocol.refresh(tokens); }
-    catch { throw new Error('ChatGPT token refresh failed. Reconnect this account.'); }
-    try { await this.deps.vault.set(access.secretRef, JSON.stringify(rotated)); }
-    catch { throw new Error('ChatGPT credentials rotated but could not be saved. Reconnect this account.'); }
-    return rotated;
+  #credential(access: CodexAccountAccess): Promise<CodexTokens> {
+    return refreshDiscipline(this.deps.vault, access.secretRef, { read: readCodexTokens, refresh: (t) => this.protocol.refresh(t) }, this.now, {
+      skewMs: REFRESH_SKEW_MS,
+      beforeRefresh: () => access.check(),
+      messages: {
+        missing: 'Connect this ChatGPT subscription account first.',
+        interrupted: 'ChatGPT token refresh was interrupted or failed. Reconnect this account.',
+        refreshFailed: 'ChatGPT token refresh failed. Reconnect this account.',
+        unsaved: 'ChatGPT credentials rotated but could not be saved. Reconnect this account.',
+      },
+    });
   }
 
   /**

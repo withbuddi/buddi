@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Vault } from '@buddi/core';
-import { AnthropicOAuthProtocol, createAnthropicLogin, parseAnthropicCode, readAnthropicTokens } from '@buddi/runtime';
+import { AnthropicOAuthProtocol, createAnthropicLogin, parseAnthropicCode, readAnthropicTokens, refreshDiscipline } from '@buddi/runtime';
 
 interface Pending {
   id: string; owner: string; revision: number; expiresAt: number;
@@ -34,17 +34,13 @@ export class AnthropicAccounts {
     catch { throw new Error('Could not save Claude credentials securely. Unlock the vault and reconnect.'); }
   }
   async credential(ref: string): Promise<string> {
-    const raw = await this.vault.get(ref);
-    if (!raw) throw new Error('Connect this Claude subscription account first.');
-    const tokens = readAnthropicTokens(raw);
-    if (tokens.state !== 'ready') throw new Error('Claude token refresh was interrupted or failed. Reconnect this account.');
-    if (tokens.expiresAt > this.now() + 5 * 60_000) return tokens.accessToken;
-    // A durable marker prevents another process replaying a consumed refresh
-    // token after a crash, timeout, or failure to save the rotated pair.
-    await this.vault.set(ref, JSON.stringify({ ...tokens, state: 'refreshing' }));
-    const rotated = await this.protocol.refresh(tokens);
-    try { await this.vault.set(ref, JSON.stringify(rotated)); }
-    catch { throw new Error('Claude credentials rotated but could not be saved. Reconnect this account.'); }
-    return rotated.accessToken;
+    const tokens = await refreshDiscipline(this.vault, ref, { read: readAnthropicTokens, refresh: (t) => this.protocol.refresh(t) }, this.now, {
+      messages: {
+        missing: 'Connect this Claude subscription account first.',
+        interrupted: 'Claude token refresh was interrupted or failed. Reconnect this account.',
+        unsaved: 'Claude credentials rotated but could not be saved. Reconnect this account.',
+      },
+    });
+    return tokens.accessToken;
   }
 }

@@ -103,7 +103,7 @@ describe('an interactive turn declaring the actions it offers', () => {
   });
 
   it('refuses a menu: at most three, at least one', () => {
-    const schema = tool({}).input;
+    const schema = tool({}).input!;
     const four = {
       actions: Array.from({ length: MAX_OFFERS + 1 }, (_, i) => ({
         label: `Do ${i}`,

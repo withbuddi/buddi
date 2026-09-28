@@ -9,7 +9,7 @@
  * `gated` tool definition narrowed to *require* the `describe` that the owner's
  * preview is rendered from.
  */
-import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core/plugin';
+import type { EffectDescription, ToolContext, ZodToolDefinition } from '@buddi/core/plugin';
 
 export type { EffectDescription, OwnerChoice, Source, SourceContext, ToolContext } from '@buddi/core/plugin';
 
@@ -21,7 +21,7 @@ export type { EffectDescription, OwnerChoice, Source, SourceContext, ToolContext
  * preview it wrote itself, so here it is required.
  */
 export interface GatedToolDefinition<I = unknown, O = unknown, E = unknown>
-  extends ToolDefinition<I, O> {
+  extends ZodToolDefinition<I, O> {
   tier: 'gated';
   describe(input: I, ctx: ToolContext): Promise<EffectDescription & { envelope: E }>;
   timeoutMs?: number;

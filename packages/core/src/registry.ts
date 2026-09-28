@@ -29,6 +29,7 @@ import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
 import { hostBindingOf, registerHostOf, withPluginHost, type HostBinding } from './host/build.js';
 import { registerSecretDestination } from './secrets/destinations.js';
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
+import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -73,9 +74,16 @@ export type ToolSpec = {
   name: string;
   description: string;
   tier: Tier;
-  /** JSON Schema derived from the tool's zod input schema. */
+  /** JSON Schema derived from the tool's zod input, or the tool's own JSON Schema as written. */
   inputSchema: Record<string, unknown>;
 };
+
+/** What core asks of a tool's input, zod or JSON Schema alike. */
+export interface InputValidator {
+  safeParse(value: unknown):
+    | { success: true; data: unknown }
+    | { success: false; error: { issues: Array<{ path: Array<string | number>; message: string }> } };
+}
 
 export type InvokeResult<O = unknown> =
   | { ok: true; output: O }
@@ -103,7 +111,15 @@ type Entry = {
   version: string;
   /** Derived once at registration — see `toolInputSchema`. */
   inputSchema: Record<string, unknown>;
+  /** The tool's zod schema, or its compiled JSON Schema: what `invoke` and the executor parse with. */
+  validator: InputValidator;
+  /** Registered through `ctx.buddi.tools` rather than the manifest; removable the same way. */
+  runtime?: { dispose?: () => void };
 };
+
+/** `<plugin>.<what>`, each part plain: what every provider's name mapping can carry. */
+const TOOL_NAME = /^[a-z][a-z0-9_-]*(?:\.[A-Za-z0-9_-]+)+$/;
+const MAX_TOOL_NAME = 128;
 
 /**
  * Every provider this platform speaks to requires a tool's parameters to be a
@@ -239,6 +255,26 @@ function describeSchema(schema: JsonSchema): string {
  * plugin can still be named.
  */
 export function toolInputSchema(tool: ToolDefinition<any, any>, plugin: string): JsonSchema {
+  if (tool.inputSchema !== undefined) {
+    /*
+     * Passed to the model as written: a server's schema is the server's
+     * description of its tool, and rewriting it is exactly what JSON Schema
+     * inputs exist to avoid. It must already be what every provider accepts —
+     * an object at the top, no union there — or it is refused here, naming it.
+     */
+    const schema = tool.inputSchema as JsonSchema;
+    if (!isPlainObject(schema) || schema.type !== 'object' || unionBranches(schema) || Array.isArray(schema.allOf)) {
+      throw new Error(
+        `tool ${tool.name} (plugin ${plugin}) declares an input schema that is not a plain object schema: ` +
+          `${isPlainObject(schema) ? describeSchema(schema) : 'not an object'}. The top level must be ` +
+          `type "object" with no anyOf, oneOf or allOf — every model provider requires it.`,
+      );
+    }
+    return JSON.parse(JSON.stringify(schema)) as JsonSchema;
+  }
+  if (tool.input === undefined) {
+    throw new Error(`tool ${tool.name} (plugin ${plugin}) declares no input: give it a zod \`input\` or a JSON Schema \`inputSchema\``);
+  }
   const schema = zodToJsonSchema(tool.input, {
     target: 'jsonSchema7',
     $refStrategy: 'none',
@@ -285,35 +321,7 @@ export class ToolRegistry {
     // naming an area this build does not have is a startup error naming the
     // plugin, like every other check here.
     const binding = hostBindingOf(manifest);
-    const schemas = new Map<string, Record<string, unknown>>();
-    for (const tool of manifest.tools) {
-      const existing = this.#tools.get(tool.name);
-      if (existing) {
-        throw new Error(
-          `tool name collision: ${tool.name} (${existing.plugin} and ${manifest.name})`,
-        );
-      }
-      /*
-       * `draft` is a statement that this build runs the tool at all — not a
-       * cost one call can weigh — so deciding per call is meaningless under
-       * it, and a plugin that wrote both has misunderstood one of them.
-       * Caught here, where the plugin can still be named.
-       */
-      if (tool.tierFor !== undefined && tool.tier === 'draft') {
-        throw new Error(
-          `tool ${tool.name} (plugin ${manifest.name}) declares tier 'draft' and a tierFor; ` +
-            `a draft tool never executes, so there is nothing to decide per call`,
-        );
-      }
-      if (tool.untrusted !== undefined && !UNTRUSTED_KINDS.includes(tool.untrusted)) {
-        throw new Error(
-          `tool ${tool.name} (plugin ${manifest.name}) declares untrusted "${String(tool.untrusted)}"; ` +
-            `expected one of ${UNTRUSTED_KINDS.join(', ')}`,
-        );
-      }
-      // The provider contract, checked where the plugin can still be named.
-      schemas.set(tool.name, toolInputSchema(tool, manifest.name));
-    }
+    const checked = this.#checkTools(manifest.name, manifest.tools);
     // View descriptors are the one contribution that leaves this process and is
     // read by code that cannot check it — the browser draws what it is handed.
     // So they are parsed here, at load, and a bad one is a startup error naming
@@ -365,6 +373,12 @@ export class ToolRegistry {
       for (const destination of manifest.destinations) registerSecretDestination(manifest.name, destination);
     }
     this.#manifests.set(manifest.name, manifest);
+    binding.toolsArea = {
+      register: (definitions) => this.#addRuntimeTools(manifest.name, definitions),
+      unregister: (names) => this.#removeRuntimeTools(manifest.name, names),
+      registered: () =>
+        [...this.#tools.values()].filter((e) => e.plugin === manifest.name && e.runtime).map((e) => e.tool.name),
+    };
     this.#bindings.set(manifest.name, binding);
     if (metrics) {
       this.#metrics.set(
@@ -386,15 +400,156 @@ export class ToolRegistry {
       );
       this.#pageTools.set(manifest.name, new Set(contributions.tools));
     }
-    for (const tool of manifest.tools) {
-      this.#tools.set(tool.name, {
-        tool,
-        plugin: manifest.name,
-        version: manifest.version,
-        inputSchema: schemas.get(tool.name)!,
-      });
+    for (const entry of checked) {
+      this.#tools.set(entry.tool.name, { ...entry, plugin: manifest.name, version: manifest.version });
     }
+    this.#changed();
     manifest.register?.(registerHostOf(binding));
+  }
+
+  /**
+   * The per-tool checks, for a manifest's tools and for runtime ones alike:
+   * no name registered twice (in the registry or in this batch), tier and
+   * `tierFor` coherent, `untrusted` a known kind, and an input a provider can
+   * take. Nothing is stored; a batch that fails anywhere stores nothing.
+   */
+  #checkTools(plugin: string, tools: readonly ToolDefinition<any, any>[]): Array<Pick<Entry, 'tool' | 'inputSchema' | 'validator'>> {
+    const seen = new Set<string>();
+    const out: Array<Pick<Entry, 'tool' | 'inputSchema' | 'validator'>> = [];
+    try {
+      for (const tool of tools) {
+        const existing = this.#tools.get(tool.name);
+        if (existing || seen.has(tool.name)) {
+          throw new Error(`tool name collision: ${tool.name} (${existing?.plugin ?? plugin} and ${plugin})`);
+        }
+        seen.add(tool.name);
+        /*
+         * `draft` is a statement that this build runs the tool at all — not a
+         * cost one call can weigh — so deciding per call is meaningless under
+         * it, and a plugin that wrote both has misunderstood one of them.
+         * Caught here, where the plugin can still be named.
+         */
+        if (tool.tierFor !== undefined && tool.tier === 'draft') {
+          throw new Error(
+            `tool ${tool.name} (plugin ${plugin}) declares tier 'draft' and a tierFor; ` +
+              `a draft tool never executes, so there is nothing to decide per call`,
+          );
+        }
+        if (tool.untrusted !== undefined && !UNTRUSTED_KINDS.includes(tool.untrusted)) {
+          throw new Error(
+            `tool ${tool.name} (plugin ${plugin}) declares untrusted "${String(tool.untrusted)}"; ` +
+              `expected one of ${UNTRUSTED_KINDS.join(', ')}`,
+          );
+        }
+        if (tool.input !== undefined && tool.inputSchema !== undefined) {
+          throw new Error(`tool ${tool.name} (plugin ${plugin}) declares both a zod input and a JSON Schema inputSchema; give one`);
+        }
+        // The provider contract, checked where the plugin can still be named.
+        const inputSchema = toolInputSchema(tool, plugin);
+        let validator: InputValidator;
+        if (tool.inputSchema !== undefined) {
+          try {
+            validator = compileJsonSchema(tool.inputSchema);
+          } catch (err) {
+            throw new Error(`tool ${tool.name} (plugin ${plugin}): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else {
+          validator = tool.input! as unknown as InputValidator;
+        }
+        out.push({ tool, inputSchema, validator });
+      }
+    } catch (err) {
+      for (const done of out) (done.validator as Partial<JsonSchemaValidator>).dispose?.();
+      throw err;
+    }
+    return out;
+  }
+
+  /** `ctx.buddi.tools.register`: see `ToolsArea`. */
+  #addRuntimeTools(plugin: string, definitions: readonly ToolDefinition<any, any>[]): void {
+    const manifest = this.#manifests.get(plugin);
+    const binding = this.#bindings.get(plugin);
+    if (!manifest || !binding) throw new Error(`plugin ${plugin} is not registered`);
+    if (!Array.isArray(definitions)) throw new Error(`${plugin}: tools.register takes an array of tool definitions`);
+    for (const tool of definitions) {
+      const name = typeof tool?.name === 'string' ? tool.name : '';
+      if (!name.startsWith(`${plugin}.`) || name.length > MAX_TOOL_NAME || !TOOL_NAME.test(name)) {
+        throw new Error(
+          `${plugin} may register tools only in its own namespace (${plugin}.<what>, letters, digits, _ and -), not ${JSON.stringify(name)}`,
+        );
+      }
+      if (typeof tool.description !== 'string' || typeof tool.execute !== 'function' || typeof tool.tier !== 'string') {
+        throw new Error(`${plugin}: tool ${name} needs a description, a tier and an execute function`);
+      }
+    }
+    const checked = this.#checkTools(plugin, definitions);
+    for (const entry of checked) {
+      this.#tools.set(entry.tool.name, {
+        ...entry,
+        plugin,
+        version: manifest.version,
+        runtime: { dispose: (entry.validator as Partial<JsonSchemaValidator>).dispose },
+      });
+      binding.tools.add(entry.tool.name);
+    }
+    if (checked.length > 0) this.#changed();
+  }
+
+  /** `ctx.buddi.tools.unregister`: only what this plugin registered at runtime. */
+  #removeRuntimeTools(plugin: string, names: readonly string[]): void {
+    const binding = this.#bindings.get(plugin);
+    if (!binding) throw new Error(`plugin ${plugin} is not registered`);
+    if (!Array.isArray(names)) throw new Error(`${plugin}: tools.unregister takes an array of tool names`);
+    for (const name of names) {
+      const entry = this.#tools.get(name);
+      if (!entry || entry.plugin !== plugin || !entry.runtime) {
+        throw new Error(`${plugin} may remove only tools it registered at runtime, and ${JSON.stringify(name)} is not one`);
+      }
+    }
+    for (const name of new Set(names)) {
+      const entry = this.#tools.get(name)!;
+      this.#tools.delete(name);
+      binding.tools.delete(name);
+      entry.runtime?.dispose?.();
+    }
+    if (names.length > 0) this.#changed();
+  }
+
+  readonly #listeners = new Set<() => void>();
+  #revision = 0;
+  #notifyScheduled = false;
+
+  /** Bumped whenever the set of tools changes. */
+  get revision(): number {
+    return this.#revision;
+  }
+
+  /**
+   * Called after the set of tools changed (a plugin registered, or added or
+   * removed tools at runtime), once per burst: listeners run on a microtask,
+   * so a plugin that removes and re-adds a connection's tools causes one
+   * catalog reload, not two. Returns an unsubscribe. A throwing listener is
+   * contained.
+   */
+  onChange(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  #changed(): void {
+    this.#revision += 1;
+    if (this.#notifyScheduled || this.#listeners.size === 0) return;
+    this.#notifyScheduled = true;
+    queueMicrotask(() => {
+      this.#notifyScheduled = false;
+      for (const listener of this.#listeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.error(`tool registry listener failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    });
   }
 
   manifests(): PluginManifest[] {
@@ -554,7 +709,7 @@ export class ToolRegistry {
       version,
       ...(tool.reusableApproval ? { reusableApproval: true } : {}),
       ...(tool.producesArtifacts ? { producesArtifacts: true } : {}),
-      input: tool.input,
+      input: entry.validator,
       ...(tool.timeoutMs === undefined ? {} : { timeoutMs: tool.timeoutMs }),
       ...(tool.describe ? { describe: (input: unknown, ctx: CoreToolContext) => tool.describe!(input, host(ctx)) } : {}),
       // `claim` travels with the rest. A tool declares it so that a lost race
@@ -591,7 +746,7 @@ export class ToolRegistry {
       return { ok: false, reason: 'unknown-tool', message: `unknown tool: ${name}` };
     }
 
-    const parsed = tool.input.safeParse(rawArgs);
+    const parsed = entry.validator.safeParse(rawArgs);
     if (!parsed.success) {
       return {
         ok: false,

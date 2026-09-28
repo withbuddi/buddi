@@ -395,6 +395,8 @@ function globToRegExp(pattern: string): RegExp {
  * could be installed would make them resolve, so they stay load errors.
  */
 const FAMILY_GRANT = /^([a-z][a-z0-9_-]*)\.(.+)$/;
+/** `<family>.<namespace>.<tool or glob>`: the namespace part, `mcp.github`. */
+const SUB_NAMESPACE_GRANT = /^([a-z][a-z0-9_-]*\.[A-Za-z0-9_-]+)\.[^.]+$/;
 
 /** What a grant list resolved to, and which families nothing here provides. */
 export interface ToolGrantResolution {
@@ -443,6 +445,19 @@ export function resolveToolGrants(
         if (!missingFamilies.includes(family)) missingFamilies.push(family);
         continue;
       }
+      /*
+       * A namespace inside a family, `mcp.github.*`: a plugin that registers
+       * tools while buddi runs (`ctx.buddi.tools`) has one per connection, and
+       * a connection that is not there right now is the same state of the
+       * installation as a plugin that is not installed — not a mistake in the
+       * file. The agent is held back until it is back, and every other agent
+       * loads.
+       */
+      const namespace = SUB_NAMESPACE_GRANT.exec(entry.trim())?.[1];
+      if (namespace !== undefined && !available.some((name) => name.startsWith(`${namespace}.`))) {
+        if (!missingFamilies.includes(namespace)) missingFamilies.push(namespace);
+        continue;
+      }
       throw new AgentCatalogError(
         'unresolvable-tool',
         `agent "${agentId}" declares tool "${entry}", which matches no registered tool ` +
@@ -469,7 +484,9 @@ export function resolveToolNames(
   const available = registry.list().map((t) => t.name);
   const { tools, missingFamilies } = resolveToolGrants(declared, registry, agentId);
   if (missingFamilies.length > 0) {
-    const entry = declared.find((d) => missingFamilies.includes(FAMILY_GRANT.exec(d.trim())?.[1] ?? ''));
+    const entry = declared.find((d) =>
+      missingFamilies.includes(FAMILY_GRANT.exec(d.trim())?.[1] ?? '') ||
+      missingFamilies.includes(SUB_NAMESPACE_GRANT.exec(d.trim())?.[1] ?? ''));
     throw new AgentCatalogError(
       'unresolvable-tool',
       `agent "${agentId}" declares tool "${entry}", which matches no registered tool ` +

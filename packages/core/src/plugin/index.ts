@@ -58,7 +58,10 @@ export type {
   Tier,
   ToolContext,
   ToolDefinition,
+  ZodToolDefinition,
+  JsonSchemaToolDefinition,
 } from '../tools.js';
+export type { JSONSchema7 } from '../json-schema.js';
 export type {
   Finding,
   Sentinel,
@@ -134,4 +137,5 @@ export type {
   SecretUseOutcome,
   SecretUseResult,
   SecretsArea,
+  ToolsArea,
 } from '../host/types.js';

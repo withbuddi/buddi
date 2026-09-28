@@ -26,7 +26,7 @@
  *    describing "a cashflow chart" would be putting finance into the platform
  *    through the back door.
  */
-import type { PluginManifest, ToolDefinition } from '@buddi/core';
+import type { PluginManifest, ToolDefinition, ZodToolDefinition } from '@buddi/core';
 import { z } from 'zod';
 
 /** Plugin family name. Two tools, no schema, no tables. */
@@ -145,7 +145,7 @@ export type CanvasShowInput = z.infer<typeof canvasShowInput>;
  * model gets wrong: draw only what a tool result does not already show, and
  * only when the shape carries meaning the sentence cannot.
  */
-export const canvasShow: ToolDefinition<CanvasShowInput, { shown: true; renderer: string }> = {
+export const canvasShow: ZodToolDefinition<CanvasShowInput, { shown: true; renderer: string }> = {
   name: 'canvas.show',
   description:
     'Draw something on the canvas beside this conversation, when you have worked out something worth seeing that no single tool result already shows — three cards compared, a table you assembled from two reads, a trend you computed. The canvas already draws tool results by itself, so do NOT use this to re-show a result you just got: that is duplication, and the automatic version is drawn from the real data. Do not use it as decoration, and never for one number or a sentence — say those. Choose the shape by what the data is: timeseries for something over time, bars for parts of a whole or one figure per name, table for rows and columns, keyvalue for a handful of labelled figures, document for a passage worth reading beside the chat, structured only when nothing else fits. Every figure must come from a tool result or from the owner; never draw a number you invented.',

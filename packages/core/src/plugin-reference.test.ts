@@ -68,6 +68,7 @@ export const DOCUMENTED: Record<string, string> = {
       'ScheduleArea',
       'SecretsArea',
       'ChannelsArea',
+      'ToolsArea',
     ].map((name) => [name, path.join('host', 'types.ts')]),
   ),
 };

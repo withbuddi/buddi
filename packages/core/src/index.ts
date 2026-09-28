@@ -7,6 +7,7 @@ export * from './metrics.js';
 export * from './pages.js';
 export * from './surfaces.js';
 export * from './registry.js';
+export * from './json-schema.js';
 export * from './agent.js';
 export * from './agents/index.js';
 export * from './artifacts/index.js';

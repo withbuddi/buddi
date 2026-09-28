@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { PluginManifest, ToolDefinition } from '../tools.js';
+import type { PluginManifest, ToolDefinition, ZodToolDefinition } from '../tools.js';
 import { contributionHeadline, contributionOf, humanPeriod, renderContribution } from './contribution.js';
 import {
   parsePluginsFile,
@@ -36,7 +36,7 @@ function tool(
   name: string,
   tier: 'auto' | 'gated',
   description: string,
-  extra: Partial<ToolDefinition<any, any>> = {},
+  extra: Partial<ZodToolDefinition<any, any>> = {},
 ): ToolDefinition<any, any> {
   return {
     name,

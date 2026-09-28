@@ -16,6 +16,7 @@ What changes in buddi from one release to the next, newest first.
 - Goals page: each goal with recorded values shows a chart under its figures, a line over its window or a bar per week for a goal counted per week, with the target dashed.
 - Home: a message folded across agents says who else sent it, "Finance Advisor · also Mail Triage".
 - The finance plugin proposes Ledger, a cash-flow advisor with the plugin's tools, skills and its daily check and Friday recap, so installing finance comes with someone to use it; the Add-a-teammate card lights up.
+- Plugins can add and remove tools while buddi runs (host API 1.6), and a tool may describe its input with JSON Schema; the first user is the coming Connections feature.
 
 ### Changed
 
@@ -25,6 +26,7 @@ What changes in buddi from one release to the next, newest first.
 - Home: what needs you is a deck of cards you read in full and move through with Done, with the list one toggle away; the conversations to continue sit as chips under the composer.
 - The install guide and the computer-control part of the browser guide now say what buddi does, how to set it up, what leaves your machine and where the limits are, instead of reading like a plan.
 - The agent's face in a reply's label is 32 px, per the design kit, so the working Blob is seen in the chat.
+- The Claude and ChatGPT sign-ins share one OAuth module with the refresh discipline written once.
 
 ### Fixed
 

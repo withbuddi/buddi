@@ -16,6 +16,7 @@ import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/typ
 import type { ProviderAccountsAccess } from './provider-accounts.js';
 import type { BuddiHost, RegisterHost, SecretDestination } from './host/types.js';
 import type { PluginUse } from './plugin/uses.js';
+import type { JSONSchema7 } from './json-schema.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
 export type Tier = 'auto' | 'draft' | 'gated' | 'session';
@@ -353,7 +354,16 @@ export interface ToolDefinition<I = unknown, O = unknown> {
    * the platform's own.
    */
   untrusted?: UntrustedKind;
-  input: ZodType<I>;
+  /** The input as a zod schema. Exactly one of `input` and `inputSchema`. */
+  input?: ZodType<I>;
+  /**
+   * The input as a JSON Schema, kept as written: what a remote MCP server's
+   * tool brings (buddi-planning/specs/mcp-client.md §3). Validated with Ajv
+   * (`json-schema.ts`), handed to the model as is, and its validated
+   * arguments canonicalised exactly as zod's. Its top level must be
+   * `type: "object"` with no `anyOf`/`oneOf`/`allOf`. Since host API 1.6.
+   */
+  inputSchema?: JSONSchema7;
   execute(input: I, ctx: ToolContext): Promise<O>;
   /**
    * Render the effect envelope and the owner-facing preview for one proposed
@@ -395,6 +405,18 @@ export interface ToolDefinition<I = unknown, O = unknown> {
   waitsForOwner?: boolean;
   /** Optional ephemeral image for the next model call; never stored as base64. */
   image?(output: O, ctx: ToolContext): Promise<{ mime: string; data: string } | undefined>;
+}
+
+/** A tool whose input is a zod schema: every tool a plugin writes by hand. */
+export interface ZodToolDefinition<I = unknown, O = unknown> extends ToolDefinition<I, O> {
+  input: ZodType<I>;
+  inputSchema?: undefined;
+}
+
+/** A tool whose input is a JSON Schema (`inputSchema`). Since host API 1.6. */
+export interface JsonSchemaToolDefinition<I = unknown, O = unknown> extends ToolDefinition<I, O> {
+  input?: undefined;
+  inputSchema: JSONSchema7;
 }
 
 /**

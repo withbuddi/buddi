@@ -16,5 +16,6 @@ export * from './codex-oauth.js';
 export * from './codex-direct.js';
 export * from './codex-profile.js';
 export * from './provider-models.js';
+export * from './oauth.js';
 export { AnthropicOAuthProtocol, createAnthropicLogin, parseAnthropicCode, readAnthropicTokens, type AnthropicTokens } from './anthropic-oauth.js';
 export * from './ollama-signing.js';
