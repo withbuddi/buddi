@@ -725,7 +725,26 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 /* The agent speaks under its own name, once per run of turns. */
 .wb-msg-who { display: inline-flex; align-items: center; gap: 6px; }
 .wb-msg[data-role='user'] .wb-msg-who { display: none; }
-.wb-msg-who .ui-avatar { width: 18px; height: 18px; font-size: var(--text-2xs); }
+/* The face beside the name, the kit's `xs` avatar. It holds its box whether it
+   is still or moving, so a turn never shifts when the agent starts talking. */
+.wb-msg-mark { position: relative; display: inline-flex; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 5px; }
+.wb-msg-mark > .ui-avatar { width: 100%; height: 100%; font-size: var(--text-2xs); border-radius: inherit; }
+.wb-msg-mark > .wb-msg-blob { width: 100%; height: 100%; }
+/* A face that is not the Blob says "working" the way the corner button does:
+   a ring breathing out of it. Still, the ring simply stays. */
+.wb-msg-mark[data-moving='ring']::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--space-0) * -1);
+  border: var(--space-0) solid var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation: wb-ask-ring 1.8s var(--ease) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wb-msg-mark[data-moving='ring']::after { animation: none; opacity: 0.5; }
+}
 .wb-msg-role { color: var(--text-faint); font-weight: var(--weight-normal); }
 /* A note the room itself wrote: one quiet centred line, nobody's bubble. */
 .wb-msg-room { align-items: center; color: var(--text-faint); font-size: var(--text-xs); text-align: center; padding: 2px 0; }
@@ -3038,8 +3057,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .meet-head-version { font-size: var(--text-xs); color: var(--text-faint); }
 .meet-turn-mark { flex: 0 0 auto; }
-/* The thinking Blob, level with the working line rather than on its baseline. */
-.wb-working > .ui-blob { align-self: center; margin-right: var(--space-2); }
 
 .meet-board {
   width: 100%;

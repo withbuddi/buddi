@@ -26,7 +26,8 @@ import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
 import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
-import { AgentAvatar, Blob, Icon } from '../ui';
+import { Avatar, Blob, Icon } from '../ui';
+import { useIsBlobStill } from '../ui/Blob';
 
 /**
  * The answer as it is being written: what has arrived of this turn's thinking
@@ -58,6 +59,7 @@ export function MessageList({
   working = false,
   partial = null,
   agents,
+  agentId,
   speakers,
   coordinatorId,
   workingAs,
@@ -86,6 +88,8 @@ export function MessageList({
   partial?: LiveTurnView | null;
   /** Every agent, so an `@handle` in an answer opens that agent. */
   agents?: ChatAgent[];
+  /** The agent this thread is with, for the face beside its name. */
+  agentId?: string;
   /** In a room: every agent, so a turn can carry its speaker's face and name. */
   speakers?: ChatAgent[];
   coordinatorId?: string;
@@ -132,6 +136,29 @@ export function MessageList({
 
   const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
   const stops = budgetStops(shown, runs ?? []);
+
+  // The face beside a name: the member in a room, else the thread's agent.
+  const roster = speakers ?? agents ?? [];
+  const faceOf = (name: string | undefined): ChatAgent | null =>
+    (agentId && !speakers ? roster.find((a) => a.id === agentId) : undefined) ?? roster.find((a) => a.name === name) ?? null;
+  const thisAgent = agentId ? roster.find((a) => a.id === agentId) ?? null : null;
+
+  /*
+   * The turn still being taken: its words so far, its calls in flight, or —
+   * before either — one muted line saying the agent is on it. One element for
+   * all three, so the first word lands where the line was. The mark over it
+   * moves until then.
+   */
+  const busy = working || live.length > 0;
+  const pending = busy || Boolean(writing);
+  const answering = Boolean(writing) && partial!.text !== '';
+  const moving = busy && !answering;
+  const lastShown = shown.at(-1);
+  const liveHead = lastShown?.role !== 'assistant' || Boolean(workingAs);
+  const liveName = workingAs ?? agentName ?? 'Assistant';
+  // A turn carrying on under a name already shown: that heading's mark moves.
+  const heads = shown.filter((message, index) => index === 0 || (speakers ? (shown[index - 1]?.speaker ?? null) !== (message.speaker ?? null) : shown[index - 1]!.role !== message.role));
+  const carriedHead = pending && !liveHead ? heads.at(-1)?.id ?? null : null;
 
   return (
     <MarkdownAgents.Provider value={agents ?? speakers ?? []}>
@@ -220,11 +247,13 @@ export function MessageList({
               <div className="wb-msg-added" data-testid="added-while-working">added while working</div>
             ) : null}
             {opensTurn && !mine && !interjected ? (
-              <div className="wb-msg-who">
-                {who && speakers ? <AgentAvatar agents={speakers} id={who.id} size="sm" /> : null}
-                <span>{who ? who.name : (agentName ?? 'Assistant')}</span>
+              <TurnHead
+                name={who ? who.name : (agentName ?? 'Assistant')}
+                face={who ?? thisAgent ?? faceOf(agentName)}
+                moving={moving && carriedHead === message.id}
+              >
                 {who && coordinatorId === who.id ? <span className="wb-msg-role">coordinator</span> : null}
-              </div>
+              </TurnHead>
             ) : null}
             {/* The files a message carries sit together, before its words: the
                 thing you handed over, then what you said about it. */}
@@ -298,48 +327,65 @@ export function MessageList({
         );
       })}
 
-      {writing ? (
+      {pending ? (
         <div className="wb-msg" data-role="assistant" data-testid="live-turn">
-          {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
-          {partial.thinking !== '' && !plain ? (
+          {liveHead ? <TurnHead name={liveName} face={faceOf(liveName) ?? thisAgent} moving={moving} /> : null}
+          {writing && partial.thinking !== '' && !plain ? (
             <Thought
               text={partial.thinking}
               live={partial.text === ''}
               seconds={secondsBetween(partial.thinkingStartedAt, partial.textStartedAt ?? now)}
             />
           ) : null}
-          {partial.text !== '' ? <div className="wb-bubble" data-live="true" data-rich="true"><Markdown text={partial.text} /><span className="wb-caret" aria-hidden="true" /></div> : null}
+          {answering ? <div className="wb-bubble" data-live="true" data-rich="true"><Markdown text={partial!.text} /><span className="wb-caret" aria-hidden="true" /></div> : null}
+          {working && live.length === 0 && !writing ? (
+            <span className="wb-working" role="status" aria-live="polite" data-testid="working">
+              {workingLine ?? `${workingAs ?? agentName ?? 'The agent'} is working`}
+              <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
+            </span>
+          ) : null}
+          {live.map((call) => (
+            <ToolRow
+              key={call.toolUseId}
+              label={labelFor(call.name)}
+              tool={call.name}
+              ok={null}
+              running
+              elapsed={Math.max(0, Math.round((now - call.startedAt) / 1000))}
+              opens={false}
+              onOpen={() => onOpen(call.toolUseId)}
+            />
+          ))}
         </div>
       ) : null}
-
-      {working && live.length === 0 && !writing ? (
-        <div className="wb-msg" data-role="assistant" data-testid="working">
-          {shown.at(-1)?.role !== 'assistant' || workingAs ? <div className="wb-msg-who">{workingAs ?? agentName ?? 'Assistant'}</div> : null}
-          <span className="wb-working" role="status" aria-live="polite">
-            <Blob state="working" size="md" />
-            {workingLine ?? `${workingAs ?? agentName ?? 'The agent'} is working`}
-            <span className="wb-dots" aria-hidden="true"><i /><i /><i /></span>
-          </span>
-        </div>
-      ) : null}
-
-      {live.map((call) => (
-        <div key={call.toolUseId} className="wb-msg" data-role="assistant">
-          <ToolRow
-            label={labelFor(call.name)}
-            tool={call.name}
-            ok={null}
-            running
-            elapsed={Math.max(0, Math.round((now - call.startedAt) / 1000))}
-            opens={false}
-            onOpen={() => onOpen(call.toolUseId)}
-          />
-        </div>
-      ))}
       {children}
       <div ref={bottom} />
     </div>
     </MarkdownAgents.Provider>
+  );
+}
+
+/**
+ * The first line of an agent's turn, as the kit draws it: the agent's face,
+ * small, then its name. While the agent works and has not said a word, the
+ * face moves — the Blob's own loop when the face is the Blob, else a ring
+ * breathing out of the picture — and it goes still when the words arrive.
+ */
+function TurnHead({ name, face, moving = false, children }: { name: string; face: ChatAgent | null; moving?: boolean; children?: ReactNode }): JSX.Element {
+  const picture = face?.picture ?? null;
+  const isBlob = useIsBlobStill(moving ? picture : null);
+  return (
+    <div className="wb-msg-who" data-testid="turn-head">
+      <span className="wb-msg-mark" data-moving={moving ? (isBlob && picture ? 'blob' : 'ring') : undefined}>
+        {moving && isBlob && picture ? (
+          <Blob state="working" still={picture} className="wb-msg-blob" />
+        ) : (
+          <Avatar id={face?.id ?? name} name={face?.name ?? name} unavailable={face ? !face.available : false} {...(face ? { face } : {})} />
+        )}
+      </span>
+      <span>{name}</span>
+      {children}
+    </div>
   );
 }
 

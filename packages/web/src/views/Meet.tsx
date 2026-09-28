@@ -208,10 +208,14 @@ function Said({ children, at = 0 }: { children: ReactNode; at?: number }): JSX.E
  * does, with the verdict.
  */
 function Thinking({ line }: { line?: string }): JSX.Element {
+  const { report } = useContext(MeetBusy);
+  useEffect(() => {
+    report(true);
+    return () => report(false);
+  }, [report]);
   return (
     <div className="wb-msg" data-role="assistant">
       <span className="wb-working" role="status" aria-live="polite">
-        <Blob state="working" size="md" />
         {line}
         <span className="wb-dots" aria-hidden="true">
           <i />
@@ -223,6 +227,16 @@ function Thinking({ line }: { line?: string }): JSX.Element {
   );
 }
 
+/** How many of buddi's working lines are up, so the face over them can move. */
+const MeetBusy = createContext<{ busy: number; report: (on: boolean) => void }>({ busy: 0, report: () => {} });
+
+function MeetBusyProvider({ children }: { children: ReactNode }): JSX.Element {
+  const [busy, setBusy] = useState(0);
+  const report = useCallback((on: boolean) => setBusy((n) => Math.max(0, n + (on ? 1 : -1))), []);
+  const value = useMemo(() => ({ busy, report }), [busy, report]);
+  return <MeetBusy.Provider value={value}>{children}</MeetBusy.Provider>;
+}
+
 /**
  * buddi's name and face, over a run of its bubbles.
  *
@@ -231,11 +245,27 @@ function Thinking({ line }: { line?: string }): JSX.Element {
  * every page afterwards. Initials would be a stand-in for a face we have.
  */
 function Buddi({ children }: { children: ReactNode }): JSX.Element {
+  const { busy } = useContext(MeetBusy);
+  const head = useRef<HTMLDivElement>(null);
+  const [moving, setMoving] = useState(false);
+  // While buddi works, the one name showing over the latest run moves: turns
+  // after the first in a run hide theirs, so a working line under a hidden
+  // name is told by the name above it.
+  useEffect(() => {
+    const mine = head.current;
+    const thread = mine?.closest('.meet-thread');
+    if (busy === 0 || !mine || !thread) {
+      setMoving(false);
+      return;
+    }
+    const shown = [...thread.querySelectorAll<HTMLElement>('.meet-turn > .wb-msg-who')].filter((h) => getComputedStyle(h).display !== 'none');
+    setMoving(shown.at(-1) === mine);
+  }, [busy]);
   return (
     <div className="meet-turn">
-      <div className="wb-msg-who">
-        {/* The Blob speaks here, the same face as above the card. */}
-        <Blob state="idle" size="sm" className="meet-turn-mark" />
+      <div className="wb-msg-who" ref={head}>
+        {/* The Blob speaks here, the same face as above the card; it moves while buddi works. */}
+        <Blob state={moving ? 'working' : 'idle'} size="sm" className="meet-turn-mark" />
         <span>buddi</span>
       </div>
       {children}
@@ -648,6 +678,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
         <div className="meet-board">
         <div className="meet-scroll thin-scroll" ref={scroller}>
           <div className="meet-thread" data-testid="meet-thread">
+            <MeetBusyProvider>
               <Buddi>
                 {SCRIPT.opening.map((line, at) => (
                   <Said key={line} at={at}>
@@ -704,6 +735,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
                 <Said>{trouble}</Said>
               </Buddi>
             ) : null}
+            </MeetBusyProvider>
           </div>
         </div>
 
@@ -3102,6 +3134,7 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
         working={running}
         agents={agents}
         agentName={assistant?.name ?? ''}
+        {...(assistant ? { agentId: assistant.id } : {})}
         emptyHint={SCRIPT.handover.waiting}
         plain
         workingLine={SCRIPT.handover.looking(assistant?.name ?? '')}

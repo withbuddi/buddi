@@ -118,16 +118,21 @@ describe('Blob', () => {
 });
 
 describe('the working indicator', () => {
-  it('shows the thinking Blob avatar-sized, first in the line', () => {
+  it('moves the Blob in the turn head, where the agent\'s face is the Blob', async () => {
+    motion(false);
+    const buddi = { id: 'buddi', handle: 'buddi', name: 'Buddi', description: '', available: true, roles: [], provider: '', model: '', picture: './mascot/core.png' };
     render(
       <Tooltip.Provider>
-        <MessageList messages={[]} live={[]} now={0} onOpen={() => {}} working agentName="Playground" emptyHint="" />
+        <MessageList messages={[]} live={[]} now={0} onOpen={() => {}} working agents={[buddi]} agentId="buddi" agentName="Buddi" emptyHint="" />
       </Tooltip.Provider>,
     );
-    const blob = screen.getByTestId('working').querySelector('[data-testid="blob"]');
-    expect(blob?.getAttribute('data-state')).toBe('working');
-    expect(blob?.getAttribute('data-size')).toBe('md');
-    expect(screen.getByRole('status').firstElementChild).toBe(blob);
-    expect(screen.getByRole('status').textContent).toContain('Playground is working');
+    const blob = await waitFor(() => {
+      const found = screen.getByTestId('turn-head').querySelector('[data-testid="blob"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(blob.getAttribute('data-state')).toBe('working');
+    expect(screen.getByRole('status').querySelector('[data-testid="blob"]')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Buddi is working');
   });
 });

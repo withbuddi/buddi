@@ -352,6 +352,7 @@ function DockThread({
           partial={partial}
           agents={agents}
           agentName={agent.name}
+          agentId={agent.id}
           onOpen={() => navigate(route)}
           onReadAloud={(messageId, text) => {
             setVoiceNote(null);

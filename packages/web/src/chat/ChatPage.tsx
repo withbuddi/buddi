@@ -1282,7 +1282,7 @@ export function ChatPage({
             setActiveTab(toolUseId);
             if (narrow) onOpenCanvas?.();
           }}
-          {...(agent ? { agentName: agent.name } : {})}
+          {...(agent ? { agentName: agent.name, agentId: agent.id } : {})}
           {...(opening ? { empty: opening } : {})}
           emptyHint={agent ? `Nothing here yet. Ask ${agent.name} for something.` : 'Loading agents…'}
         >
