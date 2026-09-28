@@ -366,8 +366,8 @@ export function MessageList({
 }
 
 /**
- * The first line of an agent's turn, as the kit draws it: the agent's face,
- * small, then its name. While the agent works and has not said a word, the
+ * The first line of an agent's turn, as the kit draws it: the agent's face at
+ * 32px (the Blob's `sm`, large enough for its loop to read), then its name. While the agent works and has not said a word, the
  * face moves — the Blob's own loop when the face is the Blob, else a ring
  * breathing out of the picture — and it goes still when the words arrive.
  */
@@ -378,7 +378,7 @@ function TurnHead({ name, face, moving = false, children }: { name: string; face
     <div className="wb-msg-who" data-testid="turn-head">
       <span className="wb-msg-mark" data-moving={moving ? (isBlob && picture ? 'blob' : 'ring') : undefined}>
         {moving && isBlob && picture ? (
-          <Blob state="working" still={picture} className="wb-msg-blob" />
+          <Blob state="working" size="sm" still={picture} className="wb-msg-blob" />
         ) : (
           <Avatar id={face?.id ?? name} name={face?.name ?? name} unavailable={face ? !face.available : false} {...(face ? { face } : {})} />
         )}

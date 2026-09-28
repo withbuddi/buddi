@@ -723,12 +723,13 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 
 /* The agent speaks under its own name, once per run of turns. */
-.wb-msg-who { display: inline-flex; align-items: center; gap: 6px; }
+.wb-msg-who { display: inline-flex; align-items: center; gap: var(--space-2); line-height: 1; }
 .wb-msg[data-role='user'] .wb-msg-who { display: none; }
-/* The face beside the name, the kit's `xs` avatar. It holds its box whether it
-   is still or moving, so a turn never shifts when the agent starts talking. */
-.wb-msg-mark { position: relative; display: inline-flex; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 5px; }
-.wb-msg-mark > .ui-avatar { width: 100%; height: 100%; font-size: var(--text-2xs); border-radius: inherit; }
+/* The face beside the name, 32px as the kit draws it (the Blob's `sm` box), so
+   the working Blob reads. It holds its box whether it is still or moving, so a
+   turn never shifts when the agent starts talking. */
+.wb-msg-mark { position: relative; display: inline-flex; flex: 0 0 auto; width: var(--space-8); height: var(--space-8); border-radius: var(--radius); }
+.wb-msg-mark > .ui-avatar { width: 100%; height: 100%; border-radius: inherit; }
 .wb-msg-mark > .wb-msg-blob { width: 100%; height: 100%; }
 /* A face that is not the Blob says "working" the way the corner button does:
    a ring breathing out of it. Still, the ring simply stays. */

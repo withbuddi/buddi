@@ -30,7 +30,9 @@ describe('an agent turn', () => {
     const turn = screen.getByText('Two meetings.').closest('.wb-msg')!;
     const head = turn.querySelector('[data-testid="turn-head"]')!;
     expect(head).toBe(turn.firstElementChild);
+    // The face is the 32px avatar (no size given), as the kit's label draws it.
     expect(head.querySelector('.ui-avatar')).not.toBeNull();
+    expect(head.querySelector('.ui-avatar')!.hasAttribute('data-size')).toBe(false);
     expect(head.textContent).toContain('Ada');
     expect(head.querySelector('[data-moving]')).toBeNull();
   });

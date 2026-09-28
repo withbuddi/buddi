@@ -132,6 +132,9 @@ describe('the working indicator', () => {
       return found!;
     });
     expect(blob.getAttribute('data-state')).toBe('working');
+    // The label's face is 32px, the Blob's `sm`, so the loop plays there.
+    expect(blob.getAttribute('data-size')).toBe('sm');
+    await waitFor(() => expect(player.loadAnimation).toHaveBeenCalled());
     expect(screen.getByRole('status').querySelector('[data-testid="blob"]')).toBeNull();
     expect(screen.getByRole('status').textContent).toContain('Buddi is working');
   });
