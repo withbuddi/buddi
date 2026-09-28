@@ -1,0 +1,26 @@
+# Rebuild withbuddi.com when the docs change. The site pulls docs/ from this
+# repository at build time, so a docs push must start a site build. The deploy
+# hook is a secret URL from Cloudflare (buddi-site → Settings → Builds → Deploy
+# hooks), stored as SITE_DEPLOY_HOOK; without it this workflow does nothing.
+name: site-docs
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    env:
+      HOOK: ${{ secrets.SITE_DEPLOY_HOOK }}
+    steps:
+      - name: Ask Cloudflare to rebuild the site
+        if: env.HOOK != ''
+        run: curl -fsS -X POST "$HOOK" -o /dev/null && echo "site rebuild requested"
+      - name: No hook configured
+        if: env.HOOK == ''
+        run: echo "SITE_DEPLOY_HOOK is not set; the site rebuilds on its own pushes only."
