@@ -65,6 +65,31 @@ export interface UpgradeFile {
 export interface VersionDeps {
   env: NodeJS.ProcessEnv;
   log: (line: string) => void;
+  /** The built dashboard this gateway serves; its `build.json` names the build. */
+  assetsDir?: string | undefined;
+}
+
+/**
+ * The dashboard build being served, from the `build.json` Vite writes beside
+ * it. The page compares it with its own build and offers a reload when they
+ * differ. Read on every call: an upgrade or rebuild replaces it under a
+ * running gateway, which is the whole point. Absent or unreadable is undefined.
+ */
+async function servedWebBuild(assetsDir: string | undefined): Promise<string | undefined> {
+  if (!assetsDir) return undefined;
+  try {
+    const parsed = JSON.parse(await readFile(path.join(assetsDir, 'build.json'), 'utf8')) as { web?: unknown };
+    return typeof parsed.web === 'string' && parsed.web !== '' ? parsed.web : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A 200 answer with the served dashboard build beside it, when there is one. */
+async function withWeb(reply: RouteReply, deps: VersionDeps): Promise<RouteReply> {
+  if (reply.status !== 200 || typeof reply.body !== 'object' || reply.body === null) return reply;
+  const web = await servedWebBuild(deps.assetsDir);
+  return web === undefined ? reply : { ...reply, body: { ...(reply.body as object), web } };
 }
 
 /* ------------------------------------------------------------------ *
@@ -240,6 +265,10 @@ function dressed(reply: RouteReply): RouteReply {
  * one version, no check, no history, and the line saying what to run instead.
  */
 export async function versionRoute(deps: VersionDeps): Promise<RouteReply> {
+  return withWeb(await versionReply(deps), deps);
+}
+
+async function versionReply(deps: VersionDeps): Promise<RouteReply> {
   const socket = supervisorSocket(deps.env);
   if (!socket) {
     return {

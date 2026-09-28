@@ -29,7 +29,9 @@ suggests it once after setup, with the bookmark shortcut beside it, until you
 choose Not now. On a Mac, `buddi dashboard --install-app` is the other way: a
 double-clickable app in ~/Applications that signs you in with a fresh link each
 time. An app keeps the address it was installed from, so the tailnet address
-installs as its own app.
+installs as its own app. The app has no reload button, so the owner menu at the
+foot of the rail has **Reload**; after an upgrade it reads **Reload to update**
+in any mode, with a dot on your initial.
 
 ## The rail
 
@@ -82,7 +84,10 @@ for a week. A tip whose reason goes away disappears on its own. Settings →
 Notifications → Tips on Home turns them off. The rules are data, one entry
 each in `packages/gateway/src/tips/rules.ts`; what they decide on is read from
 the installation, plus the pages the dashboard reports it opened, once a day
-each.
+each. The lightbulb left of the Blob opens the Tips list: every tip with where it
+stands (due today, waiting, not needed now, dismissed with Bring back, shown on
+a day), and the same Tips on Home switch; a dot marks one due today while tips
+are off.
 
 Try it: approve a waiting card from Needs you without opening the chat.
 

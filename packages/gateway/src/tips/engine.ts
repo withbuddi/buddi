@@ -27,6 +27,8 @@ export interface TipRuleState {
   shownAt?: string;
   laterAt?: string;
   dismissed?: boolean;
+  /** The day of "Not this again", when it was said since this was kept. */
+  dismissedAt?: string;
 }
 
 export type TipsState = Record<string, TipRuleState>;
@@ -117,9 +119,63 @@ export function pickTip(
   return { tip: viewOf(chosen.rule), state };
 }
 
-/** "Not this again": never again. */
-export function dismissTip(previous: TipsState, id: string): TipsState {
-  return { ...previous, [id]: { ...previous[id], dismissed: true } };
+/** "Not this again": never again, until the Tips list brings it back. */
+export function dismissTip(previous: TipsState, id: string, today?: string): TipsState {
+  return { ...previous, [id]: { ...previous[id], dismissed: true, ...(today ? { dismissedAt: today } : {}) } };
+}
+
+/** "Bring back": the dismissal is forgotten; holds and cooldowns stay. */
+export function restoreTip(previous: TipsState, id: string): TipsState {
+  const { dismissed: _d, dismissedAt: _at, ...rest } = previous[id] ?? {};
+  const next = { ...previous };
+  if (Object.keys(rest).length) next[id] = rest;
+  else delete next[id];
+  return next;
+}
+
+export type TipStatus = 'today' | 'holding' | 'quiet' | 'dismissed' | 'shown';
+
+/** One row of the Tips list. */
+export interface TipListRow extends TipView {
+  status: TipStatus;
+  dismissedAt?: string;
+  holdsSince?: string;
+  shownAt?: string;
+}
+
+/**
+ * Every rule and where it stands, reading the state without changing it:
+ *
+ * - `today`: the engine would show it now and it has not been shown today;
+ * - `shown`: shown (or put off) today or within its cooldown;
+ * - `dismissed`: "Not this again";
+ * - `holding`: its condition holds, waiting its day;
+ * - `quiet`: its condition does not hold.
+ */
+export function listTips(rules: readonly TipRule[], facts: Facts, previous: TipsState, today: string): TipListRow[] {
+  const { tip, state } = pickTip(rules, facts, previous, today);
+  return rules.map((rule) => {
+    const before = previous[rule.id] ?? {};
+    const after = state[rule.id] ?? {};
+    const row: TipListRow = viewOf(rule) as TipListRow;
+    const last = [before.shownAt, before.laterAt].filter((d): d is string => !!d).sort().pop();
+    if (before.shownAt) row.shownAt = before.shownAt;
+    if (before.dismissed) {
+      row.status = 'dismissed';
+      if (before.dismissedAt) row.dismissedAt = before.dismissedAt;
+    } else if (tip?.id === rule.id && before.shownAt !== today) {
+      row.status = 'today';
+    } else if (last && (last === today || daysBetween(last, today) < rule.cooldownDays)) {
+      row.status = 'shown';
+      row.shownAt = before.shownAt ?? last;
+    } else if (!applies(rule, facts)) {
+      row.status = 'quiet';
+    } else {
+      row.status = 'holding';
+    }
+    if (after.firstHeld && (row.status === 'holding' || row.status === 'today')) row.holdsSince = after.firstHeld;
+    return row;
+  });
 }
 
 /** ×: not today, and not before its cooldown has passed. */

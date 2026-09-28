@@ -899,7 +899,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     /** Talking to buddi on the dashboard: the speech plugin's two tools, as the owner. */
     const speechDeps = (): SpeechRouteDeps => ({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now, agents: () => deps.catalog.list() });
     /** The same, for the version and upgrade routes. */
-    const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log });
+    const versionDeps = (): VersionDeps => ({ env: deps.env ?? process.env, log, assetsDir });
     /** The same, for the plugin routes, plus the pool migrations and a purge need. */
     const pluginDeps = (): PluginsDeps => ({
       env: deps.env ?? process.env,

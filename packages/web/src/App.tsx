@@ -60,6 +60,7 @@ import { NARROW_QUERY, useMediaQuery } from './useMediaQuery';
 import { Meet } from './views/Meet';
 import { MascotProvider } from './views/parts/Avatar';
 import { RecoveryBanner, useRecovery } from './views/Recovery';
+import { buildDiffers } from './build';
 
 export { PLACES };
 
@@ -162,6 +163,8 @@ export function App(): JSX.Element {
    */
   const version = useAsync<VersionView>(() => Promise.resolve().then(() => api.version()), [], 60 * 60_000).data;
   const update = version && !version.checkout && version.updateAvailable ? version : null;
+  /* The same read says which dashboard build is served; a different one than this page's means reload. */
+  const stale = buildDiffers(version?.web);
   /*
    * Connections that need the owner (a sign-in ran out, the tools changed):
    * the same dot on Settings, and a line on Home. One small read a minute.
@@ -395,6 +398,7 @@ export function App(): JSX.Element {
             plugins={pluginPages.rail}
             updateAvailable={update !== null}
             settingsDot={connectionSignals.length > 0 ? CONNECTION_DOT : undefined}
+            stale={stale}
             version={version && !version.checkout ? { current: version.current, latest: version.latest, updateAvailable: version.updateAvailable } : version ? { current: version.current, updateAvailable: false } : undefined}
           />
 

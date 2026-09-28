@@ -63,8 +63,10 @@ async function fakeSupervisor(): Promise<{ socket: string; seen: string[]; bodie
   return { socket, seen, bodies };
 }
 
-async function dashboard(env: NodeJS.ProcessEnv): Promise<WebServer> {
+async function dashboard(env: NodeJS.ProcessEnv, assetsDir?: string): Promise<WebServer> {
   const app = await startWebServer({
+    // An empty dashboard by default, so the served build is only there when a test puts it there.
+    assetsDir: assetsDir ?? await mkdtemp(path.join(tmpdir(), 'buddi-web-')),
     // Only what `/api/session` touches: it asks whether this installation is
     // in recovery, and these tests care about the version beside that answer.
     pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
@@ -242,4 +244,20 @@ it('reports a checkout as a checkout, and refuses to upgrade one', async () => {
     expect(refused.status).toBe(409);
     expect((await refused.json() as { error: string }).error).toContain('git pull');
   }
+});
+
+it('says which dashboard build it serves, from build.json, supervised or not', async () => {
+  const assets = await mkdtemp(path.join(tmpdir(), 'buddi-web-'));
+  await writeFile(path.join(assets, 'build.json'), JSON.stringify({ web: '0.1.0+abc1234' }), 'utf8');
+  const { socket } = await fakeSupervisor();
+  for (const env of [{ BUDDI_SUPERVISOR_SOCKET: socket }, {}]) {
+    const app = await dashboard(env, assets);
+    const { origin, headers } = await open(app);
+    expect(await (await fetch(`${origin}/api/version`, { headers })).json()).toMatchObject({ web: '0.1.0+abc1234' });
+  }
+  // A rebuild under a running gateway is seen on the next read.
+  await writeFile(path.join(assets, 'build.json'), JSON.stringify({ web: '0.1.1+def5678' }), 'utf8');
+  const app = await dashboard({}, assets);
+  const { origin, headers } = await open(app);
+  expect(await (await fetch(`${origin}/api/version`, { headers })).json()).toMatchObject({ web: '0.1.1+def5678' });
 });

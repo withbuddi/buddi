@@ -40,6 +40,7 @@ import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
+import { TipsButton } from './parts/TipsButton';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -127,7 +128,10 @@ export function Home({
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
           </div>
-          <Mascot size="lg" anim="idle" />
+          <div className="home-hero-side">
+            <TipsButton navigate={navigate} />
+            <Mascot size="lg" anim="idle" />
+          </div>
         </header>
       </div>
     <div className="home">

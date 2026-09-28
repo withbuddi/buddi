@@ -9,13 +9,17 @@
  * Settings carries a dot, without a number, when a newer buddi is ready.
  *
  * Under a hairline at the foot, the owner's initial: a small menu with the
- * quick theme switch, the way to Appearance, and the running version.
+ * quick theme switch, the way to Appearance, and the running version. Running
+ * as an installed app, which has no reload button of its own, it also has
+ * Reload; after an upgrade, in any mode, that reads Reload to update, with the
+ * accent and a dot on the initial.
  *
  * Icons are drawn, not typed: no emoji stands in for a place here.
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { api } from '../api';
+import { isStandalone } from '../build';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { pageIcon } from '../pages/icons';
@@ -35,6 +39,8 @@ export function Rail({
   updateAvailable = false,
   settingsDot,
   version,
+  stale = false,
+  reload,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -54,6 +60,10 @@ export function Rail({
   settingsDot?: string | undefined;
   /** The running version, and the newer one when the daily check found it. */
   version?: RailVersion | undefined;
+  /** The gateway serves a newer dashboard build than this page: offer the reload. */
+  stale?: boolean;
+  /** How the page reloads; the browser's own by default. */
+  reload?: () => void;
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -103,7 +113,7 @@ export function Rail({
         {ICONS[SETTINGS_ROUTE]}
       </RailLink>
 
-      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} />
+      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} stale={stale} reload={reload} />
     </nav>
   );
 }
@@ -125,21 +135,30 @@ function OwnerMenu({
   onTheme,
   onNavigate,
   version,
+  stale,
+  reload = () => window.location.reload(),
 }: {
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
   onNavigate: (route: string) => void;
   version?: RailVersion | undefined;
+  stale: boolean;
+  reload?: () => void;
 }): JSX.Element {
   const owner = useAsync(() => api.owner(), []);
   const name = owner.data?.preferredName?.trim() || null;
   const initial = (name ?? 'You').slice(0, 1).toUpperCase();
+  // An installed app has no toolbar, so no reload button: this is it.
+  const [standalone] = useState(isStandalone);
+  const [hint] = useState(reloadHint);
+  const who = name ? `You: ${name}` : 'You';
   return (
     <div className="rail-owner">
       <DropdownMenu.Root modal={false}>
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="rail-owner-btn" aria-label={name ? `You: ${name}` : 'You'}>
+          <button type="button" className="rail-owner-btn" aria-label={stale ? `${who}, reload to update` : who}>
             <span className="rail-owner-face" aria-hidden="true">{initial}</span>
+            {stale ? <span className="ui-badge rail-dot" data-kind="dot" data-testid="owner-dot" aria-hidden="true" /> : null}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -160,6 +179,12 @@ function OwnerMenu({
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
               Change appearance
             </DropdownMenu.Item>
+            {standalone || stale ? (
+              <DropdownMenu.Item className="ui-menu-item rail-owner-reload" data-update={stale ? 'true' : undefined} onSelect={() => reload()}>
+                <span>{stale ? 'Reload to update' : 'Reload'}</span>
+                {hint ? <kbd className="rail-owner-kbd">{hint}</kbd> : null}
+              </DropdownMenu.Item>
+            ) : null}
             {version ? (
               <>
                 <DropdownMenu.Separator className="ui-menu-sep" />
@@ -180,6 +205,13 @@ function OwnerMenu({
       </DropdownMenu.Root>
     </div>
   );
+}
+
+/** The reload shortcut on a desktop keyboard; none on a phone or tablet. */
+function reloadHint(): string | null {
+  const agent = window.navigator.userAgent;
+  if (/iPhone|iPad|Android|Mobile/.test(agent)) return null;
+  return /Mac/.test(agent) ? '⌘R' : 'Ctrl+R';
 }
 
 function RailLink({

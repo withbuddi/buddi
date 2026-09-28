@@ -146,6 +146,12 @@ suite('tips against Postgres', () => {
 
     expect((await call('POST', '/second-agent/dismiss', {})).body).toEqual({ ok: true });
     expect((await call('GET', '/current')).body.tip).toBeNull();
+    const listed = await call('GET', '');
+    expect(listed.status).toBe(200);
+    expect(listed.body.tips.find((t: any) => t.id === 'second-agent')).toMatchObject({ status: 'dismissed', dismissedAt: '2026-09-28' });
+    expect((await call('POST', '/second-agent/restore', {})).body).toEqual({ ok: true });
+    expect((await call('GET', '')).body.tips.find((t: any) => t.id === 'second-agent').status).toBe('shown');
+    await call('POST', '/second-agent/dismiss', {});
     expect((await call('PUT', '/settings', { enabled: false })).body).toEqual({ enabled: false });
     expect((await call('GET', '/current')).body).toEqual({ tip: null, enabled: false });
     expect((await call('POST', '/seen-page', { page: 'home' })).status).toBe(200);

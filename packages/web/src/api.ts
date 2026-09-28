@@ -105,6 +105,14 @@ export interface TipView {
   action: { label: string; route: string };
 }
 
+/** One row of the Tips list: a tip and where it stands today. */
+export interface TipListRow extends TipView {
+  status: 'today' | 'holding' | 'quiet' | 'dismissed' | 'shown';
+  dismissedAt?: string;
+  holdsSince?: string;
+  shownAt?: string;
+}
+
 export function get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -1092,6 +1100,8 @@ export interface VersionView {
   supervised: boolean;
   /** A developer checkout, which upgrades with git rather than with this page. */
   checkout: boolean;
+  /** The dashboard build the gateway is serving (`build.json`), to compare with this page's own. */
+  web?: string;
 }
 
 /** An upgrade in flight, as the supervisor reports it while it still can. */
@@ -1668,6 +1678,10 @@ export const api = {
   /* ---- tips on Home (docs/dashboard.md, Home) ---- */
   /** Today's tip, or null: at most one a day, none while tips are off. */
   currentTip: (preview?: string) => get<{ tip: TipView | null; enabled: boolean; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),
+  /** Every tip and where it stands; reads only, and reads while tips are off too. */
+  tips: () => get<{ tips: TipListRow[]; enabled: boolean }>('/tips'),
+  /** "Bring back": forget a dismissal. */
+  restoreTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/restore`),
   /** "Not this again": the tip never comes back. */
   dismissTip: (id: string) => post<{ ok: true }>(`/tips/${encodeURIComponent(id)}/dismiss`),
   /** ×: not now; it may come back after its cooldown. */

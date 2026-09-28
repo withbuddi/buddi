@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { facts } from '../__fixtures__/tip-facts.js';
-import { daysBetween, dayIn, dismissTip, laterTip, pickTip, type TipsState } from './engine.js';
+import { daysBetween, dayIn, dismissTip, laterTip, listTips, pickTip, restoreTip, type TipsState } from './engine.js';
 import type { Facts } from './facts.js';
 import type { TipRule } from './rules.js';
 
@@ -95,6 +95,30 @@ describe('pickTip', () => {
 
   it('treats a rule that throws as not holding', () => {
     expect(pickTip([rule('a', () => { throw new Error('no'); })], facts(), {}, '2026-09-01').tip).toBeNull();
+  });
+});
+
+describe('listTips', () => {
+  it('says where each rule stands, and changes nothing', () => {
+    const rules = [rule('a', always, { cooldownDays: 3 }), rule('b', (f) => f.groups > 0), rule('c', always, { holdsForDays: 2 })];
+    const state: TipsState = { a: { firstHeld: '2026-08-20', laterAt: '2026-08-30' } };
+    const frozen = structuredClone(state);
+    const rows = listTips(rules, facts(), state, '2026-09-01');
+    expect(rows.map((r) => [r.id, r.status])).toEqual([['a', 'shown'], ['b', 'quiet'], ['c', 'holding']]);
+    expect(rows[0]!.shownAt).toBe('2026-08-30');
+    expect(rows[2]!.holdsSince).toBe('2026-09-01');
+    expect(state).toEqual(frozen);
+    // Past its cooldown, a is today's.
+    expect(listTips(rules, facts(), state, '2026-09-02')[0]).toMatchObject({ status: 'today', holdsSince: '2026-08-20' });
+  });
+
+  it('keeps the day of a dismissal, and restore forgets it', () => {
+    const dismissed = dismissTip({ a: { firstHeld: '2026-09-01' } }, 'a', '2026-09-02');
+    expect(listTips([rule('a', always)], facts(), dismissed, '2026-09-03')[0]).toMatchObject({ status: 'dismissed', dismissedAt: '2026-09-02' });
+    const back = restoreTip(dismissed, 'a');
+    expect(back).toEqual({ a: { firstHeld: '2026-09-01' } });
+    expect(pickTip([rule('a', always)], facts(), back, '2026-09-03').tip?.id).toBe('a');
+    expect(restoreTip(dismissTip({}, 'b'), 'b')).toEqual({});
   });
 });
 

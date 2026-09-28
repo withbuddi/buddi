@@ -70,4 +70,33 @@ describe('tips routes', () => {
     expect(Object.keys(pages)).toHaveLength(TIPS_PAGES_CAP);
     expect(pages['settings/notifications']).toBeUndefined();
   });
+
+  it('lists every rule and where it stands, without marking anything shown', async () => {
+    const { store } = setup({ groups: 1 });
+    const RULES3: TipRule[] = [...RULES, { id: 'c', when: () => true, holdsForDays: 3, text: 'Tip c.', action: { label: 'Do c', route: '#/c' }, cooldownDays: 7 }];
+    const deps = { store, facts: async () => facts({ groups: 1 }), now: () => new Date('2026-09-01T10:00:00Z'), timezone: 'UTC', rules: RULES3 };
+    const list = async () => (await tipsRoute(deps, { method: 'GET', path: '/api/tips' })).body as { tips: any[]; enabled: boolean };
+    const first = await list();
+    expect(first.enabled).toBe(true);
+    expect(first.tips.map((t) => [t.id, t.status])).toEqual([['a', 'quiet'], ['b', 'today'], ['c', 'holding']]);
+    expect(first.tips[1]).toMatchObject({ text: 'Tip b.', action: { label: 'Do b', route: '#/b' }, holdsSince: '2026-09-01' });
+    expect(store.data.has(TIPS_STATE_KEY)).toBe(false);
+    expect((await tipsRoute(deps, { method: 'POST', path: '/api/tips' })).status).toBe(405);
+
+    // Shown, then dismissed with its day, then brought back.
+    await tipsRoute(deps, { method: 'GET', path: '/api/tips/current' });
+    expect((await list()).tips[1]).toMatchObject({ status: 'shown', shownAt: '2026-09-01' });
+    await tipsRoute(deps, { method: 'POST', path: '/api/tips/b/dismiss' });
+    expect((await list()).tips[1]).toMatchObject({ status: 'dismissed', dismissedAt: '2026-09-01' });
+    expect(await tipsRoute(deps, { method: 'POST', path: '/api/tips/b/restore' })).toEqual({ status: 200, body: { ok: true } });
+    expect((store.data.get(TIPS_STATE_KEY) as any).b).toEqual({ firstHeld: '2026-09-01', shownAt: '2026-09-01' });
+    expect((await list()).tips[1].status).toBe('shown');
+    expect((await tipsRoute(deps, { method: 'POST', path: '/api/tips/nope/restore' })).status).toBe(404);
+
+    // Off: the list still reads.
+    await tipsRoute(deps, { method: 'PUT', path: '/api/tips/settings', body: { enabled: false } });
+    const off = await list();
+    expect(off.enabled).toBe(false);
+    expect(off.tips).toHaveLength(3);
+  });
 });

@@ -30,6 +30,7 @@ vi.mock('../api', async (importOriginal) => {
       notifications: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
       currentTip: vi.fn(async () => ({ tip: null, enabled: true })),
+      tips: vi.fn(async () => ({ tips: [], enabled: true })),
     },
     chatApi: {
       ...original.chatApi,
@@ -105,6 +106,15 @@ describe('the upgrade notice', () => {
 });
 
 describe('the tip', () => {
+  it('puts the Tips lightbulb on the greeting row, before the Blob', async () => {
+    await home(undefined);
+    const bulb = screen.getByRole('button', { name: 'Tips' });
+    expect(bulb.closest('.home-hero')).not.toBeNull();
+    // First in the side cluster; the Blob follows it.
+    expect(bulb.parentElement?.className).toBe('home-hero-side');
+    expect(bulb.parentElement?.firstElementChild).toBe(bulb);
+  });
+
   it('sits under the greeting, above the notices', async () => {
     vi.mocked(api.currentTip).mockResolvedValueOnce({ tip: { id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }, enabled: true });
     await home(NEWER);
