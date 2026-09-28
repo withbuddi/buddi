@@ -2718,6 +2718,21 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .teammates-lede { margin: 0 0 var(--space-3); color: var(--text-muted); font-size: var(--text-md); line-height: var(--leading); }
 .teammates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-3); }
 .teammate > .ui-card { height: 100%; }
+.teammates-added { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; min-width: 0; }
+.teammates-added li { min-width: 0; max-width: 100%; }
+.teammates-added-chip {
+  display: inline-flex;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+.teammates-added-chip:hover { border-color: var(--accent); color: var(--accent); }
+.teammates-added-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 .teammate-needs { margin: 0; color: var(--text-faint); font-size: var(--text-sm); }
 .teammate-reason { color: var(--text-muted); font-size: var(--text-sm); }
 .teammate[data-state='unavailable'] > .ui-card { background: var(--surface-sunken); }

@@ -18,7 +18,7 @@ import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { useThisMachine } from '../useThisMachine';
 import { PluginAgentOffers, useAgentOffers } from './parts/AgentOffer';
-import { ADD_TEAMMATE_TITLE, AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
+import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { Memory } from './Memory';
 import { AgentSkills } from './parts/AgentSkills';
 import { Reminders } from './Reminders';
@@ -56,25 +56,15 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
   // A new agent is a conversation with the maker, found by its role: the same
   // door the profile's "Ask the maker to change this" opens, nothing made here.
   const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));
-  // The starter team shows on its own while the team is day one; after that it
-  // waits behind the "Add a teammate" button.
+  // The starter team is always on the Team tab: first thing on day one, under
+  // the owner's agents after that.
   const dayOne = onlyDeskAndMaker(agents, defaultAgentId);
-  const [teammatesOpen, setTeammatesOpen] = useState(false);
   return (
     <div className="ui-page">
       <PageHeader
         title="Agents"
         lede={`Your team. Each one is a file on ${thisMachine} — what it can reach is listed on its page.`}
-        actions={
-          <>
-            {dayOne ? null : (
-              <Button aria-expanded={teammatesOpen} onClick={() => { setTeammatesOpen((open) => !open); if (tab !== 'team') navigate(AGENTS_ROUTE); }}>
-                {ADD_TEAMMATE_TITLE}
-              </Button>
-            )}
-            {maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
-          </>
-        }
+        actions={maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
       />
       <Tabs>
         {INDEX_TABS.map((t) => (
@@ -87,6 +77,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
       {tab === 'offers' ? <PluginAgentOffers offers={agentOffers.offers} reload={agentOffers.reload} /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
+      {tab === 'team' && dayOne ? <AddTeammate navigate={navigate} standing /> : null}
       {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
@@ -128,7 +119,7 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
           </div>
         )
       ) : null}
-      {tab === 'team' && (dayOne || teammatesOpen) ? <AddTeammate navigate={navigate} /> : null}
+      {tab === 'team' && !dayOne ? <AddTeammate navigate={navigate} standing /> : null}
       {location ? (
         <Sheet title={agents.find((a) => a.id === location.agentId)?.name ?? location.agentId} size="wide" onClose={() => navigate(AGENTS_ROUTE)}>
           <AgentPage

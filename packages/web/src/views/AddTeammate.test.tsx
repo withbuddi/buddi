@@ -1,7 +1,7 @@
 /**
  * "Add a teammate": on day one — nobody but the front desk and the maker — the
  * Agents page and Home show the starter team and the plugin agents; after
- * that the Agents page keeps them one button away and Home says nothing. Add
+ * that the Agents page keeps them under the team and Home says nothing. Add
  * is the one accept every offer uses; a greyed card says why and where to fix
  * it; the × is the dismiss Home's offers use.
  */
@@ -114,11 +114,36 @@ describe('Add a teammate on the Agents page', () => {
     expect(screen.queryByTestId('teammate-scout')).toBeNull();
   });
 
-  it('waits behind the Add a teammate button once there is a colleague', async () => {
+  it('shows under the team once there is a colleague, with no toggle in the header', async () => {
     render(<AgentsHarness agents={[desk, ledger, father]} />);
-    expect(screen.queryByTestId('teammates')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Add a teammate' }));
     expect(await screen.findByTestId('teammates')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add a teammate' })).toBeNull();
+    expect(screen.getByText(/Each one keeps its own memory and tools/)).toBeInTheDocument();
+    // After the owner's agents: the roster card comes before the section.
+    const roster = screen.getByRole('link', { name: 'Finance Advisor' });
+    const section = screen.getByTestId('teammates');
+    expect(roster.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('puts the cards to add first and the added ones last as chips', async () => {
+    const [scout, planner, ...rest] = TEAM;
+    vi.mocked(api.teammates).mockResolvedValue({ teammates: [{ ...scout!, state: 'added' }, planner!, ...rest] });
+    render(<AgentsHarness agents={[desk, ledger, father]} />);
+    const grid = await screen.findByTestId('teammates');
+    expect(within(grid).queryByTestId('teammate-scout')).toBeNull();
+    expect(within(grid).getByTestId('teammate-planner')).toBeInTheDocument();
+    const chips = screen.getByTestId('teammates-added');
+    const chip = within(chips).getByRole('link', { name: 'Added · open @scout' });
+    expect(chip).toHaveAttribute('href', '#/agents/scout');
+    expect(grid.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('says the starter team is complete when every card is added', async () => {
+    vi.mocked(api.teammates).mockResolvedValue({ teammates: TEAM.map((row) => ({ ...row, state: 'added' as const })) });
+    render(<AgentsHarness agents={[desk, ledger, father]} />);
+    expect(await screen.findByText('Your starter team is complete. Agent Father can make others.')).toBeInTheDocument();
+    expect(screen.queryByTestId('teammates')).toBeNull();
+    expect(screen.queryByTestId('teammates-added')).toBeNull();
   });
 });
 

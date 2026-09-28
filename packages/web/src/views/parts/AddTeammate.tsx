@@ -27,7 +27,7 @@ const ROLE_FRONT_DESK = 'front-desk';
 
 /**
  * Whether the team is still day one: nobody but the front desk and the maker.
- * The cards show on their own only then; after that they are a button away.
+ * Home shows the cards only then; the Agents page always shows them.
  */
 export function onlyDeskAndMaker(agents: readonly ChatAgent[], defaultAgentId: string | null | undefined): boolean {
   return (
@@ -42,8 +42,18 @@ const FIX: Record<NonNullable<TeammateRow['fix']>, { label: string; route: strin
   accounts: { label: 'Accounts', route: settingsRoute('accounts') },
 };
 
-/** The section: title, the one line, and a card per teammate. Nothing when every card is dismissed. */
-export function AddTeammate({ navigate }: { navigate: (route: string) => void }): JSX.Element | null {
+export const ADD_TEAMMATE_COMPLETE = 'Your starter team is complete. Agent Father can make others.';
+
+/**
+ * The section: title, the one line, and a card per teammate. Nothing when
+ * every card is dismissed.
+ *
+ * `standing` is the Agents page, where the section is always there under the
+ * team: the cards still to add come first, the ones already added close it as
+ * compact "Added · open @handle" chips, and when nothing is left to add the
+ * section says the starter team is complete. Home's day one draws every card.
+ */
+export function AddTeammate({ navigate, standing = false }: { navigate: (route: string) => void; standing?: boolean }): JSX.Element | null {
   const read = useAsync(() => api.teammates(), []);
   const [gone, setGone] = useState<Set<string>>(new Set());
   const rows = (read.data?.teammates ?? []).filter((row) => !gone.has(`${row.plugin}/${row.agent}`));
@@ -52,14 +62,34 @@ export function AddTeammate({ navigate }: { navigate: (route: string) => void })
     setGone((current) => new Set(current).add(`${row.plugin}/${row.agent}`));
     void api.dismissAgentOffer(row.plugin, row.agent).then(read.reload, read.reload);
   };
+  const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
+  const toAdd = standing ? rows.filter((row) => row.state !== 'added') : rows;
+  const added = standing ? rows.filter((row) => row.state === 'added') : [];
   return (
     <Section title={ADD_TEAMMATE_TITLE}>
-      <p className="teammates-lede">{ADD_TEAMMATE_LEDE}</p>
-      <div className="teammates-grid" data-testid="teammates">
-        {rows.map((row) => (
-          <TeammateCard key={`${row.plugin}/${row.agent}`} row={row} navigate={navigate} onDismiss={() => dismiss(row)} />
-        ))}
-      </div>
+      {toAdd.length === 0 ? (
+        <p className="teammates-lede" data-testid="teammates-complete">{ADD_TEAMMATE_COMPLETE}</p>
+      ) : (
+        <>
+          <p className="teammates-lede">{ADD_TEAMMATE_LEDE}</p>
+          <div className="teammates-grid" data-testid="teammates">
+            {toAdd.map((row) => (
+              <TeammateCard key={`${row.plugin}/${row.agent}`} row={row} navigate={navigate} onDismiss={() => dismiss(row)} />
+            ))}
+          </div>
+          {added.length > 0 ? (
+            <ul className="teammates-added" data-testid="teammates-added">
+              {added.map((row) => (
+                <li key={`${row.plugin}/${row.agent}`}>
+                  <a className="teammates-added-chip" href={agentRoute(row.agent)} onClick={go(agentRoute(row.agent))}>
+                    Added · open @{row.handle}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
+      )}
     </Section>
   );
 }
