@@ -40,7 +40,7 @@ import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
-import { TipsButton } from './parts/TipsButton';
+import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -116,6 +116,7 @@ export function Home({
   // Six, not eight and not all of them: a row of chips is read at a glance or
   // not at all, and the rest are one click away on a page built to hold them.
   const onOffer = allOffers.slice(0, HOME_OFFERS);
+  const tips = useTips();
   const moreOffers = allOffers.length - onOffer.length;
 
   return (
@@ -129,17 +130,19 @@ export function Home({
             <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
           </div>
           <div className="home-hero-side">
-            <TipsButton navigate={navigate} />
+            <TipsButton tips={tips} />
             <Mascot size="lg" anim="idle" />
           </div>
         </header>
       </div>
     <div className="home">
+      {/* Every tip as a card, while the lightbulb is on. */}
+      <TipsSection tips={tips} navigate={navigate} />
       {/* The front desk, first: writing to it is the commonest thing done here. */}
       {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
       <KeepClose />
       {/* One quiet tip a day, when something in buddi has gone unused. */}
-      <TipCard navigate={navigate} preview={previewTipOf(hash)} />
+      <TipCard navigate={navigate} preview={previewTipOf(hash)} hidden={tips.open} />
 
       {update && update.updateAvailable && !update.checkout && update.latest ? (
         <Notice tone="accent">

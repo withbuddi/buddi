@@ -90,10 +90,11 @@ for a week. A tip whose reason goes away disappears on its own. Settings →
 Notifications → Tips on Home turns them off. The rules are data, one entry
 each in `packages/gateway/src/tips/rules.ts`; what they decide on is read from
 the installation, plus the pages the dashboard reports it opened, once a day
-each. The lightbulb left of the Blob opens the Tips list: every tip with where it
-stands (due today, waiting, not needed now, dismissed with Bring back, shown on
-a day), and the same Tips on Home switch; a dot marks one due today while tips
-are off.
+each. The lightbulb left of the Blob opens a Tips section under the greeting:
+one card per tip with where it stands (due today, waiting, not needed now,
+dismissed with Bring back, shown on a day), and the same Tips on Home switch;
+while it is open the day's tip card is hidden, and the browser remembers it
+open. A dot marks one due today while tips are off.
 
 Try it: approve a waiting card from Needs you without opening the chat.
 

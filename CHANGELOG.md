@@ -7,7 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - Installed as an app, buddi opens even when the gateway is out of reach and says what to check, Tailscale or the Mac, then comes back on its own when it answers.
-- A lightbulb on Home opens the Tips list: what is due, what was dismissed with a way back, and the switch.
+- A lightbulb on the greeting row opens a section of tip cards on Home: what is due, what was dismissed with a way back, and the switch.
 - Running as an installed app, the owner menu has Reload; after an upgrade it reads Reload to update in any mode.
 - A tip can be previewed on Home with `#/?tip=<id>` (the ids are in the tips rules), touching nothing, so its copy and layout can be checked before its day comes.
 - Home may show one tip a day when something in buddi has gone unused, a second agent, a group, a mission, voice; each is one sentence with one action, 'Not this again' removes it for good, and Settings → Notifications turns tips off.

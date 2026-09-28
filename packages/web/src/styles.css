@@ -2522,13 +2522,15 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .home-hero-side { display: flex; align-items: center; gap: var(--space-3); flex: 0 0 auto; }
 .home-tips-btn { position: relative; }
 .home-tips-dot { position: absolute; top: var(--space-1); right: var(--space-1); width: var(--space-2); height: var(--space-2); border-radius: 50%; background: var(--accent); }
-.tips-list { display: flex; flex-direction: column; }
-.tips-row { display: flex; flex-direction: column; gap: var(--space-2); padding-block: var(--space-3); border-bottom: 1px solid var(--line); }
-.tips-row:first-child { padding-top: 0; }
-.tips-row-text { margin: 0; line-height: var(--leading); }
-.tips-row[data-status='dismissed'] .tips-row-text, .tips-row[data-status='quiet'] .tips-row-text { color: var(--text-muted); }
-.tips-row-status { font-size: var(--text-sm); }
-.tips-foot { margin-top: auto; padding-top: var(--space-3); }
+.home-tips-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+/* The Tips section under the greeting: three cards across, then two, then one. */
+.tips-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+@media (max-width: 1080px) { .tips-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .tips-grid { grid-template-columns: minmax(0, 1fr); } }
+.tips-card { display: flex; min-width: 0; }
+.tips-card > .ui-card { flex: 1 1 auto; }
+.tips-card-text { margin: 0; flex: 1 1 auto; line-height: var(--leading); }
+.tips-card[data-status='dismissed'] .tips-card-text, .tips-card[data-status='quiet'] .tips-card-text { color: var(--text-muted); }
 .home-date { margin: 0; color: var(--text-muted); font-size: var(--text-md); font-weight: var(--weight-medium); }
 .home-greeting {
   margin: 0;

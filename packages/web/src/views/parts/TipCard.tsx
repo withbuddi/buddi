@@ -19,11 +19,12 @@ export function previewTipOf(hash: string): string | undefined {
   return id && /^[a-z0-9-]{1,40}$/.test(id) ? id : undefined;
 }
 
-export function TipCard({ navigate, preview }: { navigate: (route: string) => void; preview?: string }): JSX.Element | null {
+/** `hidden` while the Tips section is open, so the tip is not shown twice; it stays mounted and is not fetched again. */
+export function TipCard({ navigate, preview, hidden }: { navigate: (route: string) => void; preview?: string; hidden?: boolean }): JSX.Element | null {
   const current = useAsync(() => api.currentTip(preview), [preview]);
   const [gone, setGone] = useState<string | null>(null);
   const tip = current.data?.tip ?? null;
-  if (!tip || gone === tip.id) return null;
+  if (!tip || gone === tip.id || hidden) return null;
 
   // It leaves at once; the gateway is told on the side, and a failed call
   // only means the tip may be back tomorrow.

@@ -1,9 +1,9 @@
-/** The lightbulb on Home: the Tips list, its statuses, "Bring back" and the switch. */
+/** The lightbulb on Home and the Tips section it opens: the cards, their statuses, "Bring back" and the switch. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { api, type TipListRow } from '../../api';
-import { TipsButton } from './TipsButton';
+import { TIPS_OPEN_KEY, TipsButton, TipsSection, useTips } from './TipsButton';
 
 vi.mock('../../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../api')>();
@@ -30,19 +30,34 @@ const ROWS: TipListRow[] = [
   row('e', 'shown', { shownAt: '2026-09-27' }),
 ];
 
+function Harness({ navigate }: { navigate: (route: string) => void }): JSX.Element {
+  const tips = useTips();
+  return (
+    <>
+      <TipsButton tips={tips} />
+      <TipsSection tips={tips} navigate={navigate} />
+    </>
+  );
+}
+
 async function mount(enabled = true, rows = ROWS, navigate = vi.fn()): Promise<void> {
   vi.mocked(api.tips).mockResolvedValue({ tips: rows, enabled });
-  await act(async () => { render(<TipsButton navigate={navigate} />); });
+  await act(async () => { render(<Harness navigate={navigate} />); });
 }
+
+const bulb = (): HTMLElement => screen.getByRole('button', { name: /^Tips/ });
 
 async function openSheet(): Promise<HTMLElement> {
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Tips/ })); });
-  return screen.getByRole('dialog');
+  await act(async () => { fireEvent.click(bulb()); });
+  return screen.getByTestId('tips-section');
 }
 
-const rowOf = (sheet: HTMLElement, id: string): HTMLElement => sheet.querySelector(`[data-tip="${id}"]`) as HTMLElement;
+const rowOf = (section: HTMLElement, id: string): HTMLElement => section.querySelector(`[data-tip="${id}"]`) as HTMLElement;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  window.localStorage.clear();
+});
 
 describe('TipsButton', () => {
   it('is a quiet icon button called Tips, with no dot while Home shows the tip', async () => {
@@ -63,17 +78,42 @@ describe('TipsButton', () => {
     expect(screen.queryByTestId('tips-dot')).not.toBeInTheDocument();
   });
 
-  it('lists every tip with its status word and action', async () => {
+  it('toggles the section, shows pressed while open, and remembers it', async () => {
+    await mount();
+    expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
+    expect(bulb()).toHaveAttribute('aria-pressed', 'false');
+    await openSheet();
+    expect(bulb()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(TIPS_OPEN_KEY)).toBe('1');
+    await act(async () => { fireEvent.click(bulb()); });
+    expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(TIPS_OPEN_KEY)).toBeNull();
+  });
+
+  it('opens already when it was left open, and Close shuts it', async () => {
+    window.localStorage.setItem(TIPS_OPEN_KEY, '1');
+    await mount();
+    const section = screen.getByTestId('tips-section');
+    await act(async () => { fireEvent.click(within(section).getByRole('button', { name: 'Close' })); });
+    expect(screen.queryByTestId('tips-section')).not.toBeInTheDocument();
+    expect(bulb()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('shows every tip as a card with its status pill and action', async () => {
     const navigate = vi.fn();
     await mount(true, ROWS, navigate);
     const sheet = await openSheet();
-    expect(within(sheet).getByText('Tips', { selector: 'h2' })).toBeInTheDocument();
-    expect(within(rowOf(sheet, 'a')).getByText('Due today')).toBeInTheDocument();
+    expect(within(sheet).getByText('Tips', { selector: 'h3' })).toBeInTheDocument();
+    expect(sheet.querySelectorAll('.ui-card')).toHaveLength(5);
+    expect(within(rowOf(sheet, 'a')).getByText('Due today')).toHaveAttribute('data-tone', 'accent');
+    expect(within(rowOf(sheet, 'b')).getByText('Waiting')).toHaveAttribute('data-tone', 'muted');
     expect(within(rowOf(sheet, 'b')).getByText('Waiting')).toBeInTheDocument();
     expect(within(rowOf(sheet, 'c')).getByText('Not needed now')).toBeInTheDocument();
     expect(within(rowOf(sheet, 'd')).getByText('Dismissed')).toBeInTheDocument();
     expect(within(rowOf(sheet, 'e')).getByText('Shown on Sep 27')).toBeInTheDocument();
     expect(within(sheet).getAllByRole('button', { name: 'Bring back' })).toHaveLength(1);
+    expect(within(rowOf(sheet, 'd')).queryByRole('button', { name: 'Do d' })).not.toBeInTheDocument();
     fireEvent.click(within(rowOf(sheet, 'b')).getByRole('button', { name: 'Do b' }));
     expect(navigate).toHaveBeenCalledWith('#/b');
   });
@@ -86,7 +126,7 @@ describe('TipsButton', () => {
     await act(async () => { fireEvent.click(within(rowOf(sheet, 'd')).getByRole('button', { name: 'Bring back' })); });
     expect(api.restoreTip).toHaveBeenCalledWith('d');
     expect(vi.mocked(api.tips).mock.calls.length).toBeGreaterThan(calls);
-    expect(within(rowOf(screen.getByRole('dialog'), 'd')).getByText('Waiting')).toBeInTheDocument();
+    expect(within(rowOf(screen.getByTestId('tips-section'), 'd')).getByText('Waiting')).toBeInTheDocument();
   });
 
   it('the switch reads while tips are off, and saves at once', async () => {

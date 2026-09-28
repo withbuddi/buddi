@@ -122,6 +122,17 @@ describe('the tip', () => {
     const upgrade = screen.getByText(/A newer buddi is ready:/);
     expect(tip.compareDocumentPosition(upgrade) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it('opens the Tips section under the greeting and hides the tip card while it is open', async () => {
+    vi.mocked(api.currentTip).mockResolvedValueOnce({ tip: { id: 'make-group', text: 'Put them in a group.', action: { label: 'Make a group', route: '#/chat?group=new' } }, enabled: true });
+    await home(undefined);
+    expect(screen.getByText('Put them in a group.')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tips' })); });
+    expect(screen.getByTestId('tips-section').closest('.home')).not.toBeNull();
+    expect(screen.queryByText('Put them in a group.')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tips' })); });
+    expect(screen.getByText('Put them in a group.')).toBeInTheDocument();
+  });
 });
 
 describe('connections that need the owner', () => {
