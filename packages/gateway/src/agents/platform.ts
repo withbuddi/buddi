@@ -77,8 +77,10 @@ import {
   type GroupCandidate,
   type GroupRow,
   type CatalogAgent,
+  parseCron,
   setSchedule,
   upsertMission,
+  type MisfirePolicy,
 } from '@buddi/core';
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
@@ -1365,6 +1367,30 @@ export interface AcceptPluginAgentEnvelope extends Omit<CreateAgentEnvelope, 'to
    * named in its preview. Absent for every plugin proposal.
    */
   mission?: { id: string; name: string; cron: string; timezone: string; prompt: string };
+  /**
+   * The missions a plugin's proposal declares (`SuggestedAgent.missions`) —
+   * Ledger's daily check and Friday recap — run as the new agent in the
+   * owner's timezone, created by the same approval and each named in its
+   * preview. Kept beside `mission` rather than folded into it so a starter
+   * accept already waiting keeps the envelope it was approved with.
+   */
+  missions?: AcceptedMission[];
+}
+
+/** One mission an accepted agent arrives with, as the approval creates it. */
+export interface AcceptedMission {
+  id: string;
+  name: string;
+  cron: string;
+  timezone: string;
+  prompt: string;
+  alwaysDeliver?: boolean;
+  misfirePolicy?: MisfirePolicy;
+}
+
+/** Every mission an accept creates: the starter's one, then the plugin's. */
+function acceptedMissions(envelope: AcceptPluginAgentEnvelope): AcceptedMission[] {
+  return [...(envelope.mission ? [envelope.mission] : []), ...(envelope.missions ?? [])];
 }
 
 const acceptAgentInput = z
@@ -1477,6 +1503,41 @@ function buildAcceptAgentEnvelope(
     };
   });
   const mission = starterMission(proposal.plugin, suggestion.id);
+  const missions = (suggestion.missions ?? []).map((m): AcceptedMission => {
+    const slug = m.id.trim();
+    if (!KEBAB.test(slug)) {
+      refuse(
+        'bad-name',
+        `${proposal.plugin} proposes a mission called "${m.id}", which is not a usable mission id ` +
+          '(kebab-case, like daily-check)',
+      );
+    }
+    try {
+      parseCron(m.cron);
+    } catch (err) {
+      refuse(
+        'would-not-load',
+        `${proposal.plugin} proposes a mission "${slug}" whose schedule does not parse: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (m.misfirePolicy === 'skip-after-deadline') {
+      refuse(
+        'would-not-load',
+        `${proposal.plugin} proposes a mission "${slug}" that skips after a deadline it cannot name; ` +
+          'pick another misfire policy',
+      );
+    }
+    return {
+      id: agentMissionId(base.id, slug),
+      name: m.name,
+      cron: m.cron,
+      timezone: deps.timezone,
+      prompt: m.prompt,
+      ...(m.alwaysDeliver === undefined ? {} : { alwaysDeliver: m.alwaysDeliver }),
+      ...(m.misfirePolicy === undefined ? {} : { misfirePolicy: m.misfirePolicy }),
+    };
+  });
   return {
     ...base,
     tool: 'platform.accept_plugin_agent',
@@ -1495,6 +1556,7 @@ function buildAcceptAgentEnvelope(
             prompt: mission.prompt,
           },
         }),
+    ...(missions.length === 0 ? {} : { missions }),
   };
 }
 
@@ -1571,6 +1633,18 @@ export function renderAcceptAgentPreview(
           `It also starts one mission of its own: ${envelope.mission.name}, ` +
             `${describeCadence(envelope.mission.cron, envelope.mission.timezone)}. It speaks only when it has ` +
             'something to say, and you can pause it under Agents → Missions.',
+          '',
+        ]),
+    ...(envelope.missions === undefined || envelope.missions.length === 0
+      ? []
+      : [
+          `It also starts ${envelope.missions.length} mission${envelope.missions.length === 1 ? '' : 's'} of its own ` +
+            '(pause any of them under Agents → Missions):',
+          ...envelope.missions.map(
+            (m) =>
+              `  ${m.name}, ${describeCadence(m.cron, m.timezone)} — ` +
+              (m.alwaysDeliver ? 'always sends its message' : 'speaks only when it has something to say'),
+          ),
           '',
         ]),
     `Once you approve, this file is YOURS: it is written into ${path.dirname(envelope.file)} and`,
@@ -2424,18 +2498,24 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       const pictured = ctx.db ? await storeBundledMascot(ctx.db, envelope.id, suggestion.avatar) : false;
       // A starter agent's first mission, approved with it: run as the new
       // agent, so it is its own (`schedule.list_mine`) and it can stop it.
-      const mission = envelope.mission;
-      if (mission && ctx.db) {
-        await upsertMission(ctx.db, {
+      // A plugin's declared missions (Ledger's) are created the same way.
+      const missions = ctx.db ? acceptedMissions(envelope) : [];
+      for (const mission of missions) {
+        await upsertMission(ctx.db!, {
           id: mission.id,
           name: mission.name,
           agentId: envelope.id,
           prompt: mission.prompt,
           enabled: true,
-          alwaysDeliver: false,
+          alwaysDeliver: mission.alwaysDeliver ?? false,
         });
-        await setSchedule(ctx.db, mission.id, { cron: mission.cron, timezone: mission.timezone, misfirePolicy: 'coalesce' });
+        await setSchedule(ctx.db!, mission.id, {
+          cron: mission.cron,
+          timezone: mission.timezone,
+          misfirePolicy: mission.misfirePolicy ?? 'coalesce',
+        });
       }
+      const mission = envelope.mission;
       return {
         ok: true,
         id: envelope.id,
@@ -2444,6 +2524,7 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         tools: envelope.tools,
         ...(pictured ? { picture: suggestion.avatar } : {}),
         ...(mission && ctx.db ? { mission: mission.id } : {}),
+        ...(ctx.db && (envelope.missions?.length ?? 0) > 0 ? { missions: envelope.missions!.map((m) => m.id) } : {}),
         fromPlugin: envelope.fromPlugin,
         skills: envelope.skills.map((s) => s.name),
         account: envelope.account,

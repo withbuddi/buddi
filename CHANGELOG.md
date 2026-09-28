@@ -13,6 +13,7 @@ What changes in buddi from one release to the next, newest first.
 - Plugin pages can draw a small chart, a line or bars with a dashed target line, and a screen reader hears it as a sentence.
 - Goals page: each goal with recorded values shows a chart under its figures, a line over its window or a bar per week for a goal counted per week, with the target dashed.
 - Home: a message folded across agents says who else sent it, "Finance Advisor · also Mail Triage".
+- The finance plugin proposes Ledger, a cash-flow advisor with the plugin's tools, skills and its daily check and Friday recap, so installing finance comes with someone to use it; the Add-a-teammate card lights up.
 
 ### Changed
 

@@ -1469,6 +1469,9 @@ export interface SuggestedAgent {
   maxTurns?: number;
   language?: 'mirror' | 'en' | 'fr';
   skills?: SuggestedSkill[];   // written into this agent's own skills/
+  missions?: SuggestedAgentMission[]; // created with it, run as it
+  offer?: { text: string; query?: string };
+  avatar?: BundledMascot;
 }
 ```
 
@@ -2982,6 +2985,7 @@ closed when it is absent rather than guess.
 | `maxTurns` | `number` | no | Turn budget per run. Omitted, the default of 40 applies; a run that reaches the budget stops and says so. |
 | `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
 | `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
+| `missions` | `SuggestedAgentMission[]` | no | Missions it arrives with: `{ id, name, cron, prompt, misfirePolicy?, alwaysDeliver? }`, a `SuggestedMission` without the addressing. The same approval creates each as `agent:<agent id>:<id>`, run as the new agent in the owner's timezone, and the preview names every one. `skip-after-deadline` is refused. The finance plugin's Ledger arrives with its daily check and Friday recap. |
 | `offer` | `{ text, query? }` | no | Offer it on Home while no agent has its id: `text` is the card's one line; `query` names one of your page queries whose answer carries `wanted: true` while the offer is worth making. Accepting is the same gated `platform.accept_plugin_agent`; the owner may dismiss it. A page can offer it in place with the `agent-offer` component. |
 | `avatar` | `BundledMascot` | no | The face it arrives with: one of the bundled Buddi Blob mascots (`core`, `coding`, `finance`, `garage`, `mail`, `maker`, `playground`, `research`), stored as the agent's picture when the owner accepts. Without one it shows its initials until the owner picks a face. |
 

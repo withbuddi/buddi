@@ -52,6 +52,7 @@ export type {
   Source,
   SourceContext,
   SuggestedAgent,
+  SuggestedAgentMission,
   SuggestedMission,
   SuggestedSkill,
   Tier,

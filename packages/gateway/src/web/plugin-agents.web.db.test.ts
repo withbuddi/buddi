@@ -20,6 +20,8 @@ import {
   createPool,
   ensureOwner,
   getAction,
+  getActiveSchedule,
+  getMission,
   listPendingActions,
   loadAgentCatalog,
   readWebSetting,
@@ -75,6 +77,17 @@ const GARDEN: PluginManifest = {
       persona: 'You are the gardener.',
       tools: ['garden.*'],
       avatar: 'garage',
+      missions: [
+        { id: 'morning-round', name: 'Morning round', cron: '0 7 * * *', prompt: 'Walk the beds.' },
+        {
+          id: 'sunday-log',
+          name: 'Sunday log',
+          cron: '0 18 * * SUN',
+          prompt: 'Write the week up.',
+          alwaysDeliver: true,
+          misfirePolicy: 'latest-only',
+        },
+      ],
     },
     {
       id: 'weeder',
@@ -182,6 +195,27 @@ suite('accepting a proposed agent from the dashboard', () => {
     expect(deps.agents().some((a) => a.id === 'gardener')).toBe(true);
     // With the mascot its proposal names, in the store an upload uses.
     expect(await pictureOf('gardener')).toBe(1);
+    // With the missions its proposal declares, run as it, named in the preview.
+    expect(action?.preview).toContain('Morning round, every day at 07:00 UTC');
+    expect(action?.preview).toContain('Sunday log');
+    expect(await getMission(pool, 'agent:gardener:morning-round')).toMatchObject({
+      name: 'Morning round',
+      agentId: 'gardener',
+      enabled: true,
+      alwaysDeliver: false,
+    });
+    expect(await getActiveSchedule(pool, 'agent:gardener:morning-round')).toMatchObject({
+      cron: '0 7 * * *',
+      timezone: 'UTC',
+      misfirePolicy: 'coalesce',
+    });
+    expect(await getMission(pool, 'agent:gardener:sunday-log')).toMatchObject({ agentId: 'gardener', alwaysDeliver: true });
+    expect(await getActiveSchedule(pool, 'agent:gardener:sunday-log')).toMatchObject({
+      cron: '0 18 * * SUN',
+      misfirePolicy: 'latest-only',
+    });
+    // The weeder declares none, and gets none.
+    expect(await getMission(pool, 'agent:weeder:morning-round')).toBeNull();
   });
 
   it('answers "already there" on a second call, not a second agent', async () => {

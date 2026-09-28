@@ -156,6 +156,8 @@ export interface PluginTeammate {
   needs: string;
   /** Why it is greyed while its plugin does not offer it. */
   reason: string;
+  /** Why it is greyed when the plugin is there but says it is not wanted now. */
+  covered?: string;
   fix: TeammateFix;
 }
 
@@ -178,6 +180,7 @@ export const PLUGIN_TEAMMATES: readonly PluginTeammate[] = [
     text: 'Reads statements, tracks spending, a weekly recap.',
     needs: 'Needs the finance plugin',
     reason: 'From the finance plugin',
+    covered: 'You already have a cash-flow advisor',
     fix: 'plugins',
   },
   {

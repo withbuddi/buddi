@@ -264,6 +264,10 @@ export async function readTeammates(deps: AgentOffersDeps): Promise<{ teammates:
       teammates.push({ ...card, state: 'added' });
     } else if (proposal && (await wanted(deps, entry.plugin, proposal.agent.offer?.query))) {
       teammates.push({ ...card, state: 'available' });
+    } else if (proposal && entry.covered) {
+      // The plugin is there and says the agent is not wanted now: an agent of
+      // the owner's own already holds the role. Say that, not "from the plugin".
+      teammates.push({ ...card, state: 'unavailable', reason: entry.covered, fix: entry.fix });
     } else {
       teammates.push({ ...card, state: 'unavailable', reason: entry.reason, fix: entry.fix });
     }

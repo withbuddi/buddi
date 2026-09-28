@@ -552,6 +552,14 @@ export interface SuggestedAgent {
    */
   offer?: { text: string; query?: string };
   /**
+   * Missions it arrives with (optional), created by the same approval that
+   * creates the agent and run as it, in the owner's timezone: the finance
+   * plugin's Ledger comes with its daily check and Friday recap. Each becomes
+   * `agent:<agent id>:<id>`, the agent's own (`schedule.list_mine`), and the
+   * preview names every one. Nothing is scheduled until the owner approves.
+   */
+  missions?: SuggestedAgentMission[];
+  /**
    * One of the mascots the dashboard ships (`packages/web/public/mascot/`),
    * by name. When the proposal is accepted the gateway keeps that picture as
    * the new agent's own, as if the owner had uploaded it. Optional; an agent
@@ -559,6 +567,17 @@ export interface SuggestedAgent {
    */
   avatar?: BundledMascot;
 }
+
+/**
+ * A mission a proposed agent arrives with. The shape of a `SuggestedMission`
+ * without the addressing: it runs as the agent it arrives with, so it names no
+ * role and no agent, and it runs in the owner's timezone. `id` is kebab-case,
+ * the slug of the mission id (`agent:<agent>:<id>`).
+ */
+export type SuggestedAgentMission = Pick<
+  SuggestedMission,
+  'id' | 'name' | 'cron' | 'prompt' | 'misfirePolicy' | 'alwaysDeliver'
+>;
 
 /** The mascots the dashboard ships, by file name (`mascot/<name>.png`). */
 export const BUNDLED_MASCOTS = ['core', 'coding', 'finance', 'garage', 'mail', 'maker', 'playground', 'research'] as const;
