@@ -8,14 +8,22 @@
  * the stickers' `file_id`s are remembered (`telegram.stickers` in
  * `core.web_settings`), so the files are uploaded once per bot.
  *
+ * The set is made the documented way: each `.tgs` goes up through
+ * `uploadStickerFile` first, and `createNewStickerSet` names the returned
+ * `file_id`s. (Attaching the `.tgs` inline to `createNewStickerSet` was refused
+ * as "wrong file type" where the same file uploaded fine on its own.) A set that
+ * already exists, from an earlier partial attempt, is read and reused as is.
+ *
  * Every failure here is cosmetic. A transient one (the network) is retried the
- * next time; a refusal (Telegram answered no) is logged once and remembered,
- * and this installation keeps the text placeholder from then on.
+ * next time; a refusal (Telegram answered no) is logged once and remembered
+ * with the buddi version that met it, and that version keeps the text
+ * placeholder. A different version (an upgrade, or another dev build) tries once more.
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readWebSetting, writeWebSetting, type Queryable } from '@buddi/core';
 import { TelegramApiError, type TelegramApi, type TelegramStickerSet } from './api.js';
+import { currentVersion } from '../web/version.js';
 
 export const STICKERS_SETTING = 'telegram.stickers';
 
@@ -41,15 +49,21 @@ interface Stored {
   fileIds?: Partial<Record<StickerState, string>>;
   /** Telegram's refusal, verbatim: the text placeholder is used from then on. */
   refused?: string;
+  /** When the refusal came, and the buddi version that met it: only that version honours it. */
+  refusedAt?: string;
+  refusedVersion?: string;
 }
 
 export interface MascotStickerDeps {
-  api: Pick<TelegramApi, 'getStickerSet' | 'createNewStickerSet' | 'addStickerToSet'>;
+  api: Pick<TelegramApi, 'getStickerSet' | 'uploadStickerFile' | 'createNewStickerSet' | 'addStickerToSet'>;
   pool: Queryable;
   botUsername: string;
   /** The Telegram user who owns the set: the paired owner of this chat. */
   ownerUserId: (chatId: string) => Promise<string | undefined>;
   readTgs?: (state: StickerState) => Buffer;
+  /** The running buddi version (`currentVersion()` by default); a stored refusal holds only for it. */
+  version?: () => Promise<string>;
+  now?: () => Date;
   log?: (line: string) => void;
 }
 
@@ -71,11 +85,18 @@ export class MascotStickers {
   /** The `file_id` to send for a state, making the set first if need be; undefined means use text. */
   async fileId(state: StickerState, chatId: string): Promise<string | undefined> {
     const known = this.#known ?? (await this.#read());
-    if (known?.refused) return undefined;
-    const id = known?.fileIds?.[state];
+    if (known?.refused && known.refusedVersion === (await this.#version())) return undefined;
+    const id = known?.refused ? undefined : known?.fileIds?.[state];
     if (id) return id;
     this.#making ??= this.#make(chatId).finally(() => { this.#making = null; });
     return (await this.#making)?.fileIds?.[state];
+  }
+
+  #running: Promise<string> | null = null;
+
+  #version(): Promise<string> {
+    this.#running ??= (this.#deps.version ?? (() => currentVersion()))().catch(() => '0.0.0');
+    return this.#running;
   }
 
   async #read(): Promise<Stored | null> {
@@ -103,13 +124,14 @@ export class MascotStickers {
         if (err instanceof TelegramApiError && err.status === 400) return null; // no such set yet
         throw err;
       });
+      const upload = async (state: StickerState): Promise<string> =>
+        (await api.uploadStickerFile(userId, read(state), 'animated')).file_id;
       if (!set) {
-        await api.createNewStickerSet({
-          user_id: userId,
-          name: this.#name,
-          title: 'buddi',
-          stickers: STATES.map((state) => ({ sticker: read(state), format: 'animated' as const, emoji_list: [STICKER_EMOJI[state]] })),
-        });
+        const stickers = [];
+        for (const state of STATES) {
+          stickers.push({ sticker: await upload(state), format: 'animated' as const, emoji_list: [STICKER_EMOJI[state]] });
+        }
+        await api.createNewStickerSet({ user_id: userId, name: this.#name, title: 'buddi', stickers });
         set = await api.getStickerSet(this.#name);
       } else {
         // A set made earlier, but missing a state (a newer release adds one): add it.
@@ -118,7 +140,7 @@ export class MascotStickers {
           await api.addStickerToSet({
             user_id: userId,
             name: this.#name,
-            sticker: { sticker: read(state), format: 'animated', emoji_list: [STICKER_EMOJI[state]] },
+            sticker: { sticker: await upload(state), format: 'animated', emoji_list: [STICKER_EMOJI[state]] },
           });
         }
         if (missing.length > 0) set = await api.getStickerSet(this.#name);
@@ -128,11 +150,18 @@ export class MascotStickers {
         const id = idOf(set, state);
         if (id) fileIds[state] = id;
       }
-      return await this.#remember({ set: this.#name, fileIds });
+      const stored = await this.#remember({ set: this.#name, fileIds });
+      this.#log(`telegram: sticker set ${this.#name} ready`);
+      return stored;
     } catch (err) {
       if (err instanceof TelegramApiError && err.status >= 400 && err.status < 500 && err.status !== 429) {
         this.#log(`telegram: the sticker set ${this.#name} was refused (${err.description}); the working placeholder stays text`);
-        return this.#remember({ set: this.#name, refused: err.description });
+        return this.#remember({
+          set: this.#name,
+          refused: err.description,
+          refusedAt: (this.#deps.now?.() ?? new Date()).toISOString(),
+          refusedVersion: await this.#version(),
+        });
       }
       this.#log(`telegram: the sticker set could not be made yet: ${err instanceof Error ? err.message : String(err)}`);
       return null;
