@@ -724,6 +724,12 @@ export interface TelegramSurfaceOptions {
   typingIntervalMs?: number;
   /** Minimum gap between placeholder edits. Default 1.5s (Telegram rate limits). */
   progressIntervalMs?: number;
+  /**
+   * The thinking Blob's sticker `file_id` for a chat (`stickers.ts`), sent in
+   * place of the text placeholder and deleted once the answer lands. Absent,
+   * or undefined for a chat: the text placeholder, as before.
+   */
+  workingSticker?: (chatId: string) => Promise<string | undefined>;
   /** Pause between the messages of a first-run burst. Default `BURST_GAP_MS`. */
   burstGapMs?: number;
   /** Clock, injected in tests. */
@@ -2701,9 +2707,22 @@ export class TelegramSurface {
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
     const placeholder = placeholderOverride ?? placeholderText(agentName);
-    // An explicit bubble, posted before the provider is called: the owner sees
-    // that the question landed, and the same bubble becomes the answer.
-    const placeholderId = await this.#opts.api
+    // The thinking Blob first, when this bot has its sticker: it cannot become
+    // the answer, so the answer lands as a new message and the sticker goes.
+    // A named placeholder (`placeholderOverride`) says something the Blob
+    // cannot, and stays text.
+    const stickerId = placeholderOverride === undefined ? await this.#sendWorkingSticker(chatId) : undefined;
+    let stickerDropped = false;
+    const dropSticker = async (): Promise<void> => {
+      if (stickerId === undefined || stickerDropped) return;
+      stickerDropped = true;
+      await this.#opts.api.deleteMessage(chatId, stickerId).catch((err) => {
+        this.#log(`telegram: the working sticker could not be deleted: ${message(err)}`);
+      });
+    };
+    // Otherwise an explicit bubble, posted before the provider is called: the
+    // owner sees that the question landed, and the same bubble becomes the answer.
+    const placeholderId = stickerId !== undefined ? undefined : await this.#opts.api
       .sendMessage(chatId, placeholder)
       .catch((err) => {
         this.#log(`telegram: placeholder failed: ${message(err)}`);
@@ -2731,6 +2750,7 @@ export class TelegramSurface {
         progress.silence();
         await progress.settle();
       },
+      landed: dropSticker,
     });
 
     try {
@@ -2793,6 +2813,22 @@ export class TelegramSurface {
       ).catch(() => {});
     } finally {
       stopTyping();
+      // Whatever the turn ended as — a voice note, a failure — the Blob goes.
+      await dropSticker();
+    }
+  }
+
+  /** The working sticker, sent; its message id, or undefined for the text placeholder. */
+  async #sendWorkingSticker(chatId: string): Promise<number | undefined> {
+    const resolve = this.#opts.workingSticker;
+    if (!resolve) return undefined;
+    try {
+      const fileId = await resolve(chatId);
+      if (!fileId) return undefined;
+      return await this.#opts.api.sendSticker(chatId, fileId);
+    } catch (err) {
+      this.#log(`telegram: the working sticker failed, sending text: ${message(err)}`);
+      return undefined;
     }
   }
 

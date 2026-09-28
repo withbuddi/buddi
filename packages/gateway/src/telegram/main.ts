@@ -67,6 +67,7 @@ import { bindOwnerTools } from '../agents/owner-tools.js';
 import { createWiringAsync, loadEnvironment } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
 import { syncProfilePhoto } from './profile-photo.js';
+import { MascotStickers } from './stickers.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
 import { createEngagementHooks } from '../missions/engagement.js';
 import { recapMissionId } from '../missions/recap.js';
@@ -455,6 +456,18 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     // The bot's own @username, so Telegram's mention of it is stripped before
     // the owner's `@handle` is read.
     ...(me.username ? { botUsername: me.username } : {}),
+    // The thinking Blob in place of the ⏳ line, from a sticker set the bot
+    // makes on the paired owner's behalf the first time a run needs it.
+    ...(me.username ? { workingSticker: workingStickerFor(new MascotStickers({
+      api,
+      pool,
+      botUsername: me.username,
+      ownerUserId: async (chatId) => {
+        const identities = await listSurfaceIdentities(pool, SURFACE);
+        return (identities.find((identity) => identity.externalChatId === chatId) ?? identities[0])?.externalUserId;
+      },
+      log,
+    })) } : {}),
     artifacts,
     log,
     setChatMenu,
@@ -803,4 +816,9 @@ if (invokedDirectly()) {
     console.error(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
     process.exit(1);
   });
+}
+
+/** The surface's `workingSticker`: the thinking Blob's `file_id` for a chat. */
+function workingStickerFor(stickers: MascotStickers): (chatId: string) => Promise<string | undefined> {
+  return (chatId) => stickers.fileId('working', chatId);
 }

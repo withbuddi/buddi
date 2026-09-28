@@ -23,11 +23,14 @@ import { openChatStream } from '../chat/stream';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, UploadedAttachment } from '../chat/types';
 import { readAloudPreference, saveReadAloud, stopPlayback } from '../chat/voice';
 import { CHAT_ROUTE, HOME_ROUTE, chatRoute, parseWelcomeRoute, placeOf } from '../routes';
-import { Button, ButtonLink, Dock, ErrorBanner, Mark } from '../ui';
-import { mascotUrl } from '../views/meet/script';
+import { Blob, Button, ButtonLink, Dock, ErrorBanner, Mark } from '../ui';
 
-/** The dock's conversation, for this page load: closing the dock keeps it. */
-let remembered: { agentId: string; conversationId: string } | null = null;
+/**
+ * The dock's conversation, for this page load: closing the dock keeps it.
+ * `lastEventId` is where its stream stood when the dock closed, so the corner
+ * button can go on listening for the end of a reply from there.
+ */
+let remembered: { agentId: string; conversationId: string; lastEventId?: string | null } | null = null;
 
 /** For tests: forget the dock's conversation. */
 export function forgetAskDockThread(): void {
@@ -57,6 +60,21 @@ export function AskDock({
   const button = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(open);
   const label = `Ask ${agent.name}`;
+  /** A reply is on its way in the dock: the corner Blob thinks until it lands. */
+  const [busy, setBusy] = useState(false);
+
+  // Closed mid-reply: listen on from where the dock left off, for the run's end.
+  useEffect(() => {
+    if (open || !busy || !remembered) return undefined;
+    const handle = openChatStream({
+      url: chatApi.streamUrl(remembered.conversationId),
+      lastEventId: remembered.lastEventId ?? null,
+      onEvent: (event: ChatEvent) => {
+        if (event.name === 'run.finished') setBusy(false);
+      },
+    });
+    return () => handle.close();
+  }, [open, busy]);
 
   // Alt+/ toggles it from anywhere, fields included: a chord is never typing.
   useEffect(() => {
@@ -76,14 +94,14 @@ export function AskDock({
   }, [open]);
 
   if (open) {
-    return <DockThread agent={agent} agents={agents} navigate={navigate} onClose={() => onOpenChange(false)} />;
+    return <DockThread agent={agent} agents={agents} navigate={navigate} onClose={() => onOpenChange(false)} onBusy={setBusy} />;
   }
 
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <button ref={button} type="button" className="wb-ask-fab" aria-label={label} onClick={() => onOpenChange(true)}>
-          <FrontDeskFace />
+          <FrontDeskFace busy={busy} />
         </button>
       </Tooltip.Trigger>
       <Tooltip.Portal>
@@ -95,11 +113,11 @@ export function AskDock({
   );
 }
 
-/** The Blob, as first run draws it; the mark if the picture will not load. */
-function FrontDeskFace(): JSX.Element {
+/** The Blob, as first run draws it, thinking while a reply streams; the mark if the picture will not load. */
+function FrontDeskFace({ busy }: { busy: boolean }): JSX.Element {
   const [broken, setBroken] = useState(false);
   if (broken) return <Mark size="lg" />;
-  return <img className="wb-ask-fab-face" src={mascotUrl('core')} alt="" aria-hidden="true" onError={() => setBroken(true)} />;
+  return <Blob state={busy ? 'working' : 'idle'} className="wb-ask-fab-face" onStillError={() => setBroken(true)} />;
 }
 
 function DockThread({
@@ -107,11 +125,13 @@ function DockThread({
   agents,
   navigate,
   onClose,
+  onBusy,
 }: {
   agent: ChatAgent;
   agents: ChatAgent[];
   navigate: (route: string) => void;
   onClose: () => void;
+  onBusy: (busy: boolean) => void;
 }): JSX.Element {
   const composer = useRef<ComposerHandle>(null);
   const [conversationId, setConversationId] = useState<string | null>(
@@ -231,8 +251,16 @@ function DockThread({
         }
       },
     });
-    return () => handle.close();
+    return () => {
+      if (remembered && remembered.conversationId === conversationId) remembered.lastEventId = handle.lastEventId();
+      handle.close();
+    };
   }, [conversationId, refresh]);
+
+  // The corner button's Blob follows the reply, before and after the dock closes.
+  useEffect(() => {
+    onBusy(running || sending);
+  }, [running, sending, onBusy]);
 
   // Elapsed counters on tool rows tick while something is running.
   useEffect(() => {

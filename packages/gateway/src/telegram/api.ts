@@ -215,6 +215,57 @@ export type TelegramCommandScope =
   | { type: 'default' }
   | { type: 'chat'; chat_id: string | number };
 
+export type StickerFormat = 'static' | 'animated' | 'video';
+
+/** One sticker of a set, as `getStickerSet` lists it. */
+export interface TelegramSticker {
+  file_id: string;
+  file_unique_id?: string;
+  emoji?: string;
+  is_animated?: boolean;
+}
+
+export interface TelegramStickerSet {
+  name: string;
+  title: string;
+  stickers: TelegramSticker[];
+}
+
+/** A sticker for a set: its bytes to attach, or a `file_id` already uploaded. */
+export interface InputStickerUpload {
+  sticker: Buffer | string;
+  format: StickerFormat;
+  emoji_list: string[];
+}
+
+interface MultipartFile {
+  field: string;
+  filename: string;
+  contentType: string;
+  bytes: Buffer;
+}
+
+function stickerFilename(format: StickerFormat): string {
+  return format === 'animated' ? 'sticker.tgs' : format === 'video' ? 'sticker.webm' : 'sticker.webp';
+}
+
+function stickerMime(format: StickerFormat): string {
+  return format === 'animated' ? 'application/x-tgsticker' : format === 'video' ? 'video/webm' : 'image/webp';
+}
+
+/** An `InputSticker` for the wire; bytes become an `attach://` file of the same request. */
+function describeSticker(sticker: InputStickerUpload, index: number, files: MultipartFile[]): Record<string, unknown> {
+  let ref: string;
+  if (typeof sticker.sticker === 'string') {
+    ref = sticker.sticker;
+  } else {
+    const field = `sticker${index}`;
+    files.push({ field, filename: stickerFilename(sticker.format), contentType: stickerMime(sticker.format), bytes: sticker.sticker });
+    ref = `attach://${field}`;
+  }
+  return { sticker: ref, format: sticker.format, emoji_list: sticker.emoji_list };
+}
+
 /** A Bot API call that came back `ok: false`, or a non-2xx HTTP response. */
 export class TelegramApiError extends Error {
   override readonly name = 'TelegramApiError';
@@ -588,6 +639,98 @@ export class TelegramApi {
       ...(text ? { text } : {}),
       ...(opts.showAlert ? { show_alert: true } : {}),
     });
+  }
+
+  /** Send a sticker by a `file_id` Telegram already holds. The message id, for deleting it later. */
+  async sendSticker(
+    chatId: string | number,
+    sticker: string,
+    opts: { emoji?: string; disableNotification?: boolean } = {},
+  ): Promise<number | undefined> {
+    const sent = await this.call<{ message_id?: number }>('sendSticker', {
+      chat_id: chatId,
+      sticker,
+      ...(opts.emoji ? { emoji: opts.emoji } : {}),
+      ...(opts.disableNotification ? { disable_notification: true } : {}),
+    });
+    return typeof sent?.message_id === 'number' ? sent.message_id : undefined;
+  }
+
+  /** A sticker set by name; Telegram answers 400 `STICKERSET_INVALID` when there is none. */
+  getStickerSet(name: string): Promise<TelegramStickerSet> {
+    return this.call<TelegramStickerSet>('getStickerSet', { name });
+  }
+
+  /**
+   * Upload one sticker file (a `.tgs` for `animated`) for later use in a set.
+   * `user_id` is the set's owner: Telegram files the upload under that user.
+   */
+  async uploadStickerFile(userId: number | string, bytes: Buffer, format: StickerFormat = 'animated'): Promise<TelegramFile> {
+    return this.#multipart<TelegramFile>('uploadStickerFile', { user_id: String(userId), sticker_format: format }, [
+      { field: 'sticker', filename: stickerFilename(format), contentType: stickerMime(format), bytes },
+    ]);
+  }
+
+  /**
+   * Create a sticker set owned by `user_id` on the bot's behalf (Bot API 7.2+:
+   * each sticker carries its own format). A sticker given as bytes is attached
+   * to the same request; one given as a string is a `file_id` already uploaded.
+   * The name must end in `_by_<bot username>`.
+   */
+  async createNewStickerSet(input: {
+    user_id: number | string;
+    name: string;
+    title: string;
+    stickers: readonly InputStickerUpload[];
+  }): Promise<true> {
+    const files: MultipartFile[] = [];
+    const stickers = input.stickers.map((sticker, i) => describeSticker(sticker, i, files));
+    return this.#multipart<true>('createNewStickerSet', {
+      user_id: String(input.user_id),
+      name: input.name,
+      title: input.title,
+      stickers: JSON.stringify(stickers),
+    }, files);
+  }
+
+  /** Add one sticker to a set the bot created. */
+  async addStickerToSet(input: { user_id: number | string; name: string; sticker: InputStickerUpload }): Promise<true> {
+    const files: MultipartFile[] = [];
+    const sticker = describeSticker(input.sticker, 0, files);
+    return this.#multipart<true>('addStickerToSet', {
+      user_id: String(input.user_id),
+      name: input.name,
+      sticker: JSON.stringify(sticker),
+    }, files);
+  }
+
+  /** multipart/form-data with any fields and files, answering `result` as it is. */
+  async #multipart<T>(method: string, fields: Record<string, string>, files: readonly MultipartFile[]): Promise<T> {
+    const boundary = `buddi${randomUUID().replace(/-/g, '')}`;
+    const parts: Buffer[] = [];
+    for (const [name, value] of Object.entries(fields)) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
+    }
+    for (const file of files) {
+      const filename = file.filename.replace(/["\r\n\\]/g, '_');
+      parts.push(Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${filename}"\r\n` +
+        `Content-Type: ${file.contentType}\r\n\r\n`,
+      ));
+      parts.push(file.bytes, Buffer.from('\r\n'));
+    }
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const res = await this.#fetch(`${this.#baseUrl}/bot${this.#token}/${method}`, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body: Buffer.concat(parts),
+    });
+    const raw = await res.text();
+    let parsed: any;
+    try { parsed = raw === '' ? {} : JSON.parse(raw); }
+    catch { throw new TelegramApiError(method, res.status, `unparseable response: ${raw.slice(0, 200)}`); }
+    if (!res.ok || parsed?.ok !== true) throw failure(method, res.status, parsed);
+    return parsed.result as T;
   }
 
   async deleteMessage(chatId: string | number, messageId: number): Promise<void> {

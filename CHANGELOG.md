@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- buddi's Blob moves: it breathes on Home and the first-run page, thinks while an agent works in the chat and in the corner button, and on Telegram a thinking-Blob sticker replaces the hourglass until the answer arrives. Reduced-motion settings keep the still.
 - Add a teammate: the Agents page and Home offer a starter team, Scout for research, Planner for your day with a morning brief, Keeper for one domain's history, plus the plugin agents when their plugin is there, each added in one tap through Agent Father. The Groups heading now says what it needs instead of hiding.
 - Settings → Speech: with no language listed, listening and speaking take the one your profile answers in, and the page says "From your profile: French." Plugins read it with `ctx.buddi.owner.language()` (host API 1.5).
 - Settings → Speech: Off as the service for listening or speaking, which keeps that side off even with Whisper or Kokoro installed on this computer.
@@ -22,6 +23,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- First run: the Claude sign-in step has a Back button while it waits for the code, so changing your mind is one click.
 - Notifications no longer cover the corner buddi button or its chat: they stack above it, and on a phone they drop from the top.
 - A delegation that came back after you approved something now opens on who was asked, the question, the answer, the files and how long it took, with the raw JSON folded under Details.
 - The same reminder from two agents is one line on Home: a message about the same thing as one from the last two days is folded into it, says "also from" the other agent, and reaches your phone once.

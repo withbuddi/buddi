@@ -101,7 +101,10 @@ What the chat looks like, with an agent called ledger. Buttons are in
 brackets.
 
 **A question.** The answer replaces the "Working on it" line as it is
-written.
+written. Once the bot has made its sticker set (`buddi_working_by_<bot
+username>`, on the paired owner's behalf, the first time it is needed), a
+thinking-Blob sticker stands in for that line and is deleted when the answer
+arrives as its own message; if the sticker cannot be sent, the line comes back.
 
 ```text
 You:    What did I spend on food last month?

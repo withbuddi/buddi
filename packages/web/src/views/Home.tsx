@@ -119,7 +119,7 @@ export function Home({
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
           </div>
-          <Mascot size="lg" />
+          <Mascot size="lg" anim="idle" />
         </header>
       </div>
     <div className="home">

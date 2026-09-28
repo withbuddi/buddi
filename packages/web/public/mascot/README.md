@@ -23,3 +23,8 @@ upload's 1 MB cap and loads fast on first run:
 the first assistant's face; the one chosen is uploaded through
 `/api/agents/:id/avatar` and becomes that agent's picture. To refresh them,
 re-export from the design repo — never edit them here.
+
+`anim/core-idle.json` and `anim/core-working.json` are the Lottie loops
+`buddi-blob__core__{idle,working}__v0.1.json` from `assets/anim/`, unchanged;
+`ui/Blob.tsx` plays them. Their `.tgs` twins ship in the gateway
+(`packages/gateway/assets/mascot/`) for the Telegram sticker.

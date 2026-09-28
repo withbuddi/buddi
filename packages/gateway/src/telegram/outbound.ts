@@ -403,6 +403,11 @@ export interface StreamOptions {
    * first, so the stream's text is never overwritten by an older line.
    */
   takeOver?: () => Promise<void>;
+  /**
+   * Awaited once, right after the answer's first message has landed: the
+   * working sticker, when one stood in for the placeholder, is taken away.
+   */
+  landed?: () => Promise<void>;
   /** Send `typing` when the stream is made. Off when the caller already types. */
   typing?: boolean;
   /** Applied to the accumulated text before it is shown. Default `toPlainText`. */
@@ -505,6 +510,7 @@ export class StreamedAnswer {
         } else {
           await this.#deps.api.editMessageText(this.#chatId, this.#messageId, view);
         }
+        if (first) await this.#land();
       } catch (err) {
         if (err instanceof TelegramApiError && err.retryAfter !== undefined) {
           this.#pausedUntil = this.#now() + err.retryAfter * 1000;
@@ -531,6 +537,15 @@ export class StreamedAnswer {
     const wait = this.#pausedUntil - this.#now();
     if (wait > 0) await sleep(wait);
     await landAnswer(this.#deps, this.#chatId, this.#messageId, reply, keyboard);
+    await this.#land();
+  }
+
+  #landed = false;
+
+  async #land(): Promise<void> {
+    if (this.#landed || !this.#opts.landed) return;
+    this.#landed = true;
+    await this.#opts.landed().catch(() => {});
   }
 }
 

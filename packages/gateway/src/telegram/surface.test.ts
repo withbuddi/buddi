@@ -520,7 +520,7 @@ function fakeApi(
     const result =
       method === 'getUpdates'
         ? (updateQueue.shift() ?? [])
-        : method === 'sendMessage' || method === 'sendVoice'
+        : method === 'sendMessage' || method === 'sendVoice' || method === 'sendSticker'
           ? { message_id: nextMessageId++ }
           : method === 'getFile'
             ? {
@@ -679,6 +679,7 @@ function surfaceWith(
     proposals?: { handleCallback(query: any): Promise<void> };
     speech?: SpeechHooks;
     timezone?: string;
+    workingSticker?: (chatId: string) => Promise<string | undefined>;
   } = {},
 ) {
   const { api, sent } = fakeApi(extra.failOn, extra.files ?? {});
@@ -706,6 +707,7 @@ function surfaceWith(
     ...(extra.proposals ? { proposals: extra.proposals } : {}),
     ...(extra.speech ? { speech: extra.speech } : {}),
     ...(extra.timezone ? { timezone: extra.timezone } : {}),
+    ...(extra.workingSticker ? { workingSticker: extra.workingSticker } : {}),
   });
   return { surface, sent, run, api, store };
 }
@@ -1490,6 +1492,68 @@ describe('TelegramSurface progress bubble', () => {
     expect(edits.at(-1)?.body.text).toBe('You have $12 left.');
     // One bubble: the placeholder, nothing else sent.
     expect(sent.filter((s) => s.method === 'sendMessage')).toHaveLength(1);
+  });
+
+  it('shows the thinking sticker while the run works, then the answer as a new message and the sticker gone', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const run = vi.fn(async (req?: any) => {
+      req.onTextDelta?.('You have ');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      req.onTextDelta?.('$12 left');
+      return 'You have $12 left.';
+    });
+    const workingSticker = vi.fn(async () => 'blob-file-id');
+    const { surface, sent } = surfaceWith(db, run, { workingSticker });
+    await surface.processUpdates([message(109, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+
+    const methods = sent.map((s) => s.method).filter((m) => m !== 'sendChatAction');
+    expect(methods.slice(0, 3)).toEqual(['sendSticker', 'sendMessage', 'deleteMessage']);
+    const sticker = sent.find((s) => s.method === 'sendSticker')!;
+    expect(sticker.body).toMatchObject({ chat_id: String(OWNER), sticker: 'blob-file-id' });
+    // No ⏳ line: the sticker stood in for it.
+    expect(sent.some((s) => s.method === 'sendMessage' && String(s.body.text).startsWith('⏳'))).toBe(false);
+    // The answer is its own message, and the stream edits that one, never the sticker.
+    const answer = sent.find((s) => s.method === 'sendMessage')!;
+    expect(answer.body.text).toBe('You have ');
+    expect(sent.find((s) => s.method === 'deleteMessage')?.body.message_id).toBe(100);
+    const edits = sent.filter((s) => s.method === 'editMessageText');
+    expect(edits.every((e) => e.body.message_id === 101)).toBe(true);
+    expect(edits.at(-1)?.body.text).toBe('You have $12 left.');
+    expect(sent.filter((s) => s.method === 'deleteMessage')).toHaveLength(1);
+  });
+
+  it('takes the sticker away once the answer lands when nothing streamed', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db, undefined, { workingSticker: async () => 'blob-file-id' });
+    await surface.processUpdates([message(110, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    const methods = sent.map((s) => s.method).filter((m) => m !== 'sendChatAction');
+    expect(methods).toEqual(['sendSticker', 'sendMessage', 'deleteMessage']);
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe('reply');
+  });
+
+  it('falls back to the text placeholder when the sticker cannot be sent', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db, undefined, {
+      workingSticker: async () => 'blob-file-id',
+      failOn: (method) => method === 'sendSticker',
+    });
+    await surface.processUpdates([message(111, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    const placeholder = sent.find((s) => s.method === 'sendMessage');
+    expect(placeholder?.body.text).toBe(FINANCE_PLACEHOLDER);
+    expect(sent.filter((s) => s.method === 'editMessageText').at(-1)?.body.text).toBe('reply');
+    expect(sent.some((s) => s.method === 'deleteMessage')).toBe(false);
+  });
+
+  it('keeps the agent-named placeholder when there is no sticker for the chat', async () => {
+    const db = alreadyGreeted(withOwner(new FakeDb()));
+    const { surface, sent } = surfaceWith(db, undefined, { workingSticker: async () => undefined });
+    await surface.processUpdates([message(112, OWNER, OWNER, 'hello')]);
+    await surface.drain();
+    expect(sent.some((s) => s.method === 'sendSticker')).toBe(false);
+    expect(sent.find((s) => s.method === 'sendMessage')?.body.text).toBe(FINANCE_PLACEHOLDER);
   });
 
   it('sends a table the run drew after its text, as monospace HTML', async () => {

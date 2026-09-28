@@ -44,7 +44,7 @@ import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
+import { Blob, Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
@@ -207,6 +207,7 @@ function Thinking({ line }: { line?: string }): JSX.Element {
   return (
     <div className="wb-msg" data-role="assistant">
       <span className="wb-working" role="status" aria-live="polite">
+        <Blob state="working" size="xs" />
         {line}
         <span className="wb-dots" aria-hidden="true">
           <i />
@@ -230,7 +231,7 @@ function Buddi({ children }: { children: ReactNode }): JSX.Element {
     <div className="meet-turn">
       <div className="wb-msg-who">
         {/* The Blob speaks here, the same face as above the card. */}
-        <img className="meet-turn-mark" src={mascotUrl('core')} alt="" aria-hidden="true" />
+        <Blob state="idle" className="meet-turn-mark" />
         <span>buddi</span>
       </div>
       {children}
@@ -2342,6 +2343,7 @@ function ClaudeCard({
           <Ask
             actions={
               <>
+                <Back onClick={onBack} disabled={working} />
                 <ButtonLink href={attempt.url} target="_blank" rel="noreferrer">
                   {SCRIPT.brain.claude.open}
                 </ButtonLink>

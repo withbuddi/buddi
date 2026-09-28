@@ -348,6 +348,14 @@ fieldset:disabled { opacity: 0.6; }
 .ui-empty-state-line { margin: 0; max-width: 42ch; font-size: var(--text-md); line-height: var(--leading); }
 .ui-empty-state-action { margin-top: var(--space-2); }
 
+/* The Blob: its still at once, its Lottie loop in the same box once loaded. */
+.ui-blob { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; }
+.ui-blob[data-size='xs'] { width: var(--space-5); height: var(--space-5); }
+.ui-blob[data-size='sm'] { width: var(--space-8); height: var(--space-8); }
+.ui-blob[data-size='md'] { width: var(--space-12); height: var(--space-12); }
+.ui-blob[data-size='lg'] { width: calc(var(--space-12) * 2); height: calc(var(--space-12) * 2); }
+.ui-blob > img, .ui-blob > svg { display: block; width: 100%; height: 100%; object-fit: contain; }
+
 /* The default agent's uploaded face, where a page has room to be friendly. */
 .ui-mascot {
   display: inline-flex;
@@ -362,6 +370,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-mascot[data-size='sm'] { width: 40px; height: 40px; border-radius: var(--radius-lg); }
 .ui-mascot[data-size='lg'] { width: 88px; height: 88px; border-radius: var(--radius-2xl); box-shadow: var(--shadow-float); }
 .ui-mascot img { width: 100%; height: 100%; object-fit: cover; }
+.ui-mascot .ui-mascot-blob { width: 100%; height: 100%; }
 
 /* A warm empty state: cream, rounded, a title and one way forward. */
 .ui-empty[data-warm='true'] {

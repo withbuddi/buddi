@@ -43,7 +43,10 @@ it keeps its conversation until you reload or press **New**.
 The page the dashboard opens on. It answers three questions in order: what
 needs me, what is my team up to, what is coming.
 
-- **The greeting** says the day and counts what needs you.
+- **The greeting** says the day and counts what needs you. When the front
+  desk's face is the Blob, it breathes there, as it does on the first-run
+  page; it thinks beside "is working" in the chat and in the corner button.
+  With reduced motion set on your computer, it stays a still picture.
 - **The composer** under it writes to your front desk (the default agent),
   with files and voice like the chat; sending opens the new conversation
   where the answer arrives, and its last three conversations sit below as

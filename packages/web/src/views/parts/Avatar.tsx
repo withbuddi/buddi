@@ -14,6 +14,8 @@ import type { ChatAgent } from '../../chat/types';
 import { accentAttrs, accentOf } from '../../shell/accent';
 import { tintOf } from '../../shell/AgentRail';
 import { monogram } from '../../shell/roster';
+import { Blob, useIsBlobStill } from '../../ui/Blob';
+import type { MascotAnimState } from '../meet/script';
 
 export type Face = Pick<ChatAgent, 'avatar' | 'accent' | 'picture'> & {
   roles?: readonly string[] | undefined;
@@ -120,13 +122,20 @@ export function MascotProvider({ picture, children }: { picture: string | null |
   return <MascotContext.Provider value={picture ?? null}>{children}</MascotContext.Provider>;
 }
 
-export function Mascot({ size }: { size?: 'sm' | 'lg' | undefined }): JSX.Element | null {
+/**
+ * `anim` lets the face move — only when the picture is the bundled Blob, whose
+ * loop it then plays in the same box (see `useIsBlobStill`).
+ */
+export function Mascot({ size, anim }: { size?: 'sm' | 'lg' | undefined; anim?: MascotAnimState }): JSX.Element | null {
   const picture = useContext(MascotContext);
   const [broken, setBroken] = useState<string | null>(null);
+  const isBlob = useIsBlobStill(anim ? picture : null);
   if (!picture || picture === broken) return null;
   return (
     <span className="ui-mascot" data-size={size} data-testid="mascot" aria-hidden="true">
-      <img src={picture} alt="" onError={() => setBroken(picture)} />
+      {anim && isBlob
+        ? <Blob state={anim} still={picture} className="ui-mascot-blob" onStillError={() => setBroken(picture)} />
+        : <img src={picture} alt="" onError={() => setBroken(picture)} />}
     </span>
   );
 }

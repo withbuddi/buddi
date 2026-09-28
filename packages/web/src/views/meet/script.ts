@@ -37,6 +37,16 @@ export type MascotRole = (typeof MASCOTS)[number];
 /** Where a bundled mascot is served, relative to the page (the build's `base` is `./`). */
 export const mascotUrl = (role: MascotRole): string => `./mascot/${role}.png`;
 
+/** The Blob's moving states, drawn as Lottie loops (`public/mascot/anim/`, copies of the design repo's). */
+export type MascotAnimState = 'idle' | 'working';
+
+/** The roles that have loops so far; any other role keeps its still. */
+const ANIMATED_ROLES: readonly MascotRole[] = ['core'];
+
+/** Where a role's loop is served, or null when that role has none yet. */
+export const mascotAnimUrl = (role: MascotRole, state: MascotAnimState): string | null =>
+  ANIMATED_ROLES.includes(role) ? `./mascot/anim/${role}-${state}.json` : null;
+
 /** The emoji faces, offered under the mascots. */
 export const FACES = ['🙂', '📚', '🧭', '🦊', '🛟', '🌿', '🛠️', '🎧'] as const;
 
