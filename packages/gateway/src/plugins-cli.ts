@@ -65,14 +65,16 @@ import {
 } from './plugins/stage.js';
 import { updatePlugin } from './plugins/update.js';
 import { verifyInstalledHash } from './plugins/hash.js';
-import { assertScaffoldName, schemaFor, writeScaffold } from './plugins/scaffold.js';
+import { assertScaffoldName, DEFAULT_LICENSE, schemaFor, writeScaffold } from './plugins/scaffold.js';
 import { assertBuilt, defaultDevDeps, watchDist } from './plugins/dev.js';
 
 export const USAGE = `buddi plugins — what this installation has installed
 
-  buddi plugins init <name> [--dir <path>] write a new plugin: manifest, one auto tool, one gated
+  buddi plugins init <name> [--dir <path>] [--license <spdx>]
+                                          write a new plugin: manifest, one auto tool, one gated
                                           tool, a migration, a buddi.md and a test. Refuses a
-                                          directory that already exists.
+                                          directory that already exists. License: Apache-2.0
+                                          unless --license names another.
   buddi plugins dev <dir>                 watch <dir>/dist and, when it changes, restart the
                                           service (or say to restart buddi): plugins load at start
   buddi plugins list [--json]             what is installed, its version, and whether it is healthy
@@ -126,9 +128,11 @@ export interface ParsedPluginsArgs {
   registry?: string;
   /** Where `init` writes the scaffold. Default: `./<name>`. */
   dir?: string;
+  /** The SPDX license `init` writes. Default: Apache-2.0. */
+  license?: string;
 }
 
-const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir'] as const;
+const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir', '--license'] as const;
 const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift', '--json'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
@@ -165,6 +169,7 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     ...(values.has('--version') ? { version: values.get('--version') as string } : {}),
     ...(values.has('--registry') ? { registry: values.get('--registry') as string } : {}),
     ...(values.has('--dir') ? { dir: values.get('--dir') as string } : {}),
+    ...(values.has('--license') ? { license: values.get('--license') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
   if (flags.has('--json') && head !== 'list') throw new Error('buddi plugins: --json only applies to list');
@@ -402,6 +407,7 @@ function renderStaged(staged: StagedPlugin): string[] {
     lines.push(`    ${dependency} — WANTS TO RUN CODE AT INSTALL. It was installed with --ignore-scripts,`);
     lines.push('      so it has not run; approving this plugin does not run it either.');
   }
+  lines.push(...renderStagedName(staged));
   if (staged.scripts.length > 0) {
     lines.push(`  it declares the lifecycle script${staged.scripts.length === 1 ? '' : 's'} ${staged.scripts.join(', ')}; none was run`);
   }
@@ -416,6 +422,24 @@ function renderStaged(staged: StagedPlugin): string[] {
   }
   lines.push('');
   lines.push(...wrap(TRUST_SENTENCE, 86).map((line) => `  ${line}`));
+  return lines;
+}
+
+/** Which name it installs under, and a word about a core it asked npm for. */
+export function renderStagedName(
+  staged: Pick<StagedPlugin, 'declaredName' | 'nameFromManifest' | 'coreAsDependency' | 'source'>,
+): string[] {
+  const lines: string[] = [];
+  if (staged.source.kind !== 'directory') {
+    lines.push(
+      staged.nameFromManifest === true
+        ? '  installs as the name its manifest gives, read when you approve (its package.json declares no buddi.name)'
+        : `  installs as ${staged.declaredName}`,
+    );
+  }
+  if (staged.coreAsDependency === true) {
+    lines.push("  it asks npm for buddi's core; buddi provides its own");
+  }
   return lines;
 }
 
@@ -754,9 +778,16 @@ function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessE
     name: checked,
     coreVersion: runningCoreVersion(),
     ...(coreDir === undefined ? {} : { coreDir }),
+    ...(args.license === undefined ? {} : { license: args.license }),
   });
   console.log(`${checked} — a new plugin in ${dir}\n`);
   for (const file of written) console.log(`  ${file}`);
+  console.log('');
+  console.log(
+    args.license === undefined
+      ? `License: ${DEFAULT_LICENSE}, the default (--license <spdx> picks another). LICENSE is a placeholder to fill in.`
+      : `License: ${args.license}. LICENSE is a placeholder to fill in.`,
+  );
   console.log('');
   console.log(`It owns the Postgres schema "${schemaFor(checked)}" and contributes two tools:`);
   console.log(`  ${checked}.list_notes    tier auto    a read of its own schema, runs when asked`);

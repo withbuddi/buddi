@@ -4,7 +4,9 @@
  * The ten-minute path in `docs/plugins.md` starts here. Everything this writes
  * is something a plugin author would otherwise have to copy out of the guide by
  * hand and get subtly wrong: the `buddi` field that ties a package name to a
- * manifest name, the peer on `@buddi/core` (never a normal dependency), the
+ * manifest name, the peer on `@buddi/core` (never a normal dependency, and
+ * never a `link:` in anything `npm pack` ships — the development link is a
+ * pnpm override in `pnpm-workspace.yaml`, which is not packed), the
  * absolute `migrationsDir` resolved from the *built* file, one tool at each of
  * the two tiers a plugin should ship, and a `buddi.md` whose `Schema:` and
  * `Hosts:` lines already agree with the manifest so the first install shows no
@@ -56,29 +58,53 @@ export interface ScaffoldOptions {
   coreVersion: string;
   /**
    * An absolute path to the `@buddi/core` package of this installation, when
-   * there is one on disk. Core is not published yet, so the scaffold satisfies
-   * the peer with a `link:` devDependency pointing at it — exactly what the
-   * finance plugin does. Omitted, the devDependency is the published range and
-   * the README says to fix it up.
+   * there is one on disk. Core is not published, so for development the
+   * scaffold points the (optional) peer at it with a pnpm override in
+   * `pnpm-workspace.yaml` — a file `npm pack` never ships, so the tarball
+   * carries no `link:`. Omitted, the override is left commented out and the
+   * README says to fill it in.
    */
   coreDir?: string;
+  /**
+   * The SPDX identifier for `license` and the LICENSE placeholder. The author
+   * picks it (`--license`); when they do not, it is Apache-2.0, buddi's own,
+   * and the LICENSE file says that was a default.
+   */
+  license?: string;
+}
+
+/** The license a scaffold gets when the author names none. */
+export const DEFAULT_LICENSE = 'Apache-2.0';
+
+/** An SPDX expression, loosely: identifiers, `+`, `.`, `-`, parentheses, AND/OR/WITH. */
+export function assertLicense(license: string): string {
+  const trimmed = license.trim();
+  if (!/^[A-Za-z0-9.+\-() ]+$/.test(trimmed) || trimmed.length > 100) {
+    throw new InstallRefusal(
+      'bad-license',
+      `"${license}" is not an SPDX license identifier such as Apache-2.0, MIT or UNLICENSED.`,
+    );
+  }
+  return trimmed;
 }
 
 /** Every file the scaffold writes, keyed by its path relative to the root. */
 export function scaffoldFiles(opts: ScaffoldOptions): Record<string, string> {
   const name = assertScaffoldName(opts.name);
   const schema = schemaFor(name);
-  const peer = `^${opts.coreVersion}`;
-  const link = opts.coreDir === undefined ? peer : `link:${opts.coreDir}`;
+  const peer = `>=${opts.coreVersion}`;
+  const license = assertLicense(opts.license ?? DEFAULT_LICENSE);
   return {
-    'package.json': packageJson(name, peer, link),
+    'package.json': packageJson(name, peer, license),
+    'pnpm-workspace.yaml': pnpmWorkspace(opts.coreDir),
+    LICENSE: licenseText(license, opts.license === undefined),
     'tsconfig.json': tsconfig(),
     'src/index.ts': indexTs(name, schema),
     'src/index.test.ts': testTs(name),
     [`migrations/001_${schema}.sql`]: migrationSql(name, schema),
     'buddi.md': buddiMd(name, schema),
     'README.md': readmeMd(name, schema, opts.coreDir),
-    '.gitignore': 'node_modules/\ndist/\n',
+    '.gitignore': 'node_modules/\ndist/\n*.tsbuildinfo\n*.tgz\n',
   };
 }
 
@@ -106,37 +132,83 @@ export function writeScaffold(dir: string, opts: ScaffoldOptions): string[] {
  * The files
  * ------------------------------------------------------------------ */
 
-function packageJson(name: string, peer: string, link: string): string {
+function packageJson(name: string, peer: string, license: string): string {
   return `${JSON.stringify(
     {
       name: `buddi-plugin-${name}`,
       version: '0.1.0',
       description: `A buddi plugin: ${name}.`,
       keywords: ['buddi-plugin'],
+      license,
       type: 'module',
       main: './dist/index.js',
       types: './dist/index.d.ts',
       exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
-      buddi: { manifest: 'manifest', core: peer, uses: [], hostApi: '^1.0' },
+      buddi: { name, manifest: 'manifest', core: peer, uses: [], hostApi: '^1.0' },
       scripts: {
         build: 'tsc -p tsconfig.json',
         typecheck: 'tsc -p tsconfig.json --emitDeclarationOnly',
         test: 'vitest run',
+        // `npm pack`, `pnpm pack` and `npm publish` all build first.
+        prepack: 'tsc -p tsconfig.json',
       },
       dependencies: { pg: '^8.13.1', zod: '^3.24.1' },
+      // Buddi provides core to an installed plugin; nobody installs it from a
+      // registry. Optional, so no package manager goes looking for it.
       peerDependencies: { '@buddi/core': peer },
+      peerDependenciesMeta: { '@buddi/core': { optional: true } },
       devDependencies: {
-        '@buddi/core': link,
         '@types/node': '^22.10.2',
         '@types/pg': '^8.11.10',
         typescript: '^5.6.3',
         vitest: '^2.1.8',
       },
-      files: ['dist', 'migrations', 'buddi.md'],
+      // Source maps point at src/, which is not shipped.
+      files: ['dist', '!dist/**/*.map', '!dist/**/*.tsbuildinfo', 'migrations', 'buddi.md'],
     },
     null,
     2,
   )}\n`;
+}
+
+/**
+ * The development link to core, where `npm pack` cannot see it.
+ *
+ * pnpm reads `overrides` from here and links the optional peer for `pnpm
+ * install`, `pnpm build` and `pnpm test`; the packed tarball has only the peer
+ * range. `allowBuilds` lets vitest's esbuild unpack its binary.
+ */
+function pnpmWorkspace(coreDir: string | undefined): string {
+  const override =
+    coreDir === undefined
+      ? `# Point core at a built buddi checkout for development (never shipped):
+# overrides:
+#   '@buddi/core': 'link:/path/to/buddi/packages/core'
+`
+      : `# The core this plugin is developed against. Never shipped: npm pack does not
+# include this file, and an installed plugin gets the core of the buddi that
+# installs it.
+overrides:
+  '@buddi/core': ${JSON.stringify(`link:${coreDir}`)}
+`;
+  return `${override}allowBuilds:
+  esbuild: true
+`;
+}
+
+function licenseText(license: string, defaulted: boolean): string {
+  const chosen = defaulted
+    ? `buddi plugins init chose ${license}, buddi's own license, because no --license was given.
+Change "license" in package.json and this file together if you want another.`
+    : `Licensed under ${license}, as chosen with buddi plugins init --license.`;
+  return `${chosen}
+
+Replace this placeholder with the full text of the license before you publish
+(for Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0.txt), and put your
+name and the year here:
+
+Copyright [yyyy] [name of copyright owner]
+`;
 }
 
 function tsconfig(): string {
@@ -414,13 +486,12 @@ Hosts: none
 function readmeMd(name: string, schema: string, coreDir: string | undefined): string {
   const core =
     coreDir === undefined
-      ? 'Point the `@buddi/core` devDependency at a published version, or at a buddi\ncheckout: `"@buddi/core": "link:/path/to/buddi/packages/core"`.'
-      : `The \`@buddi/core\` devDependency is a \`link:\` at the installation this was
-scaffolded from (\`${coreDir}\`). That checkout must be built (\`pnpm -r build\`)
-before this compiles: the link points at the package, and its types and entry
-point are in its \`dist\`. When core is published the devDependency becomes the
-published range and nothing else changes — the peer range is already the
-contract.`;
+      ? 'Core is an optional peer, and nothing installs it for you. For development, uncomment\nthe override in `pnpm-workspace.yaml` and point it at a built buddi checkout\n(`link:/path/to/buddi/packages/core`).'
+      : `Core is an optional peer. For development, \`pnpm-workspace.yaml\` points it at
+the installation this was scaffolded from (\`${coreDir}\`) with a pnpm override;
+that file is never packed, so what you publish carries the peer range and no
+link. The linked core must be built (\`pnpm -r build\` in a checkout) before
+this compiles: its types and entry point are in its \`dist\`.`;
   return `# buddi-plugin-${name}
 
 A [buddi](https://github.com/withbuddi/buddi) plugin. It exports a
@@ -453,6 +524,18 @@ Plugins page (or in the agent's own \`tools:\` line).
 While you are working on it, \`buddi plugins dev .\` watches \`dist\` and tells you
 — or the service — to restart when the build changes.
 
+## Publish it
+
+\`\`\`sh
+npm pack      # builds first (prepack) and writes buddi-plugin-${name}-0.1.0.tgz
+buddi plugins install ./buddi-plugin-${name}-0.1.0.tgz   # exactly what you would publish
+npm publish --provenance --access public
+\`\`\`
+
+Publish under a name or scope you own (\`@you/buddi-plugin-${name}\`), never
+under \`@buddi\`: buddi does not own that scope on npm. \`buddi.name\` in
+package.json is the plugin's name whatever the package is called.
+
 ## What is here
 
 | | |
@@ -460,6 +543,8 @@ While you are working on it, \`buddi plugins dev .\` watches \`dist\` and tells 
 | \`src/index.ts\` | the manifest: one \`auto\` tool, one \`gated\` tool with \`describe\`, a source stub |
 | \`migrations/001_${schema}.sql\` | the Postgres schema this plugin owns |
 | \`buddi.md\` | what the owner reads before anything is imported |
+| \`pnpm-workspace.yaml\` | the development link to core; not packed |
+| \`LICENSE\` | a placeholder: put the full license text here |
 
 The guide is \`docs/plugins.md\` in the buddi repository. Read it before you ship:
 the tiers, the effect envelope and what a gated \`execute\` owes the owner are all

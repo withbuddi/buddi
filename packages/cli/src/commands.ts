@@ -409,8 +409,11 @@ export const COMMANDS: readonly CommandEntry[] = [
     name: 'plugins init',
     group: 'Agents',
     summary: 'Write a new plugin you can build and install.',
-    usage: 'buddi plugins init <name> [--dir <path>]',
-    flags: [{ flag: '--dir <path>', meaning: 'Write it here instead of ./<name>.' }],
+    usage: 'buddi plugins init <name> [--dir <path>] [--license <spdx>]',
+    flags: [
+      { flag: '--dir <path>', meaning: 'Write it here instead of ./<name>.' },
+      { flag: '--license <spdx>', meaning: 'The license it carries. Apache-2.0 unless you name another.' },
+    ],
     example: 'buddi plugins init weather',
     applies: 'both',
   },

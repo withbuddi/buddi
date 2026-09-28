@@ -13,7 +13,9 @@
  *    integrity hash, publisher, its `buddi` field, its scripts;
  *  - fetches it (`npm pack`) and extracts it into a staging directory;
  *  - installs its dependencies with `--ignore-scripts`, because a dependency's
- *    `postinstall` is arbitrary code and no approval exists yet;
+ *    `postinstall` is arbitrary code and no approval exists yet — from a
+ *    package.json with its development half and every mention of
+ *    `@buddi/core` taken out, so npm never asks any registry for core;
  *  - points the staged tree's `@buddi/core` at the core this gateway is
  *    running, because a plugin holding a second copy of core would register
  *    tools into a registry nobody reads and talk to a pool nobody owns;
@@ -108,8 +110,23 @@ export interface StagedPlugin {
    * the developer's own and change every time they build.
    */
   stagedHash: string;
-  /** The name its manifest must answer to: `buddi.name`, or the package name. */
+  /**
+   * The name its manifest must answer to: `buddi.name`, or the package name
+   * when it declares none (and then `nameFromManifest` is set).
+   */
   declaredName: string;
+  /**
+   * It declares no `buddi.name`, so it installs under whatever name its
+   * manifest gives, read at approval — unless a different package is already
+   * installed under that name. Absent on a stage written before this existed,
+   * which keeps the old rule: the package name must be the manifest's.
+   */
+  nameFromManifest?: boolean;
+  /**
+   * It lists `@buddi/core` as an ordinary dependency. npm was not asked for it
+   * — buddi provides its own — and the card says so.
+   */
+  coreAsDependency?: boolean;
   /** The `buddi` field of package.json, if any. */
   buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string };
   /**
@@ -627,11 +644,15 @@ export async function stagePlugin(
     }
     // The name its manifest has to answer to. A published package is usually
     // `buddi-plugin-weather` while its manifest is `weather`, so the package
-    // may say which name is its own; if it does not, the two must match.
-    const declaredName =
-      typeof pkg.buddi?.name === 'string' && pkg.buddi.name.trim() !== ''
-        ? (pkg.buddi.name as string).trim()
-        : (pkg.name as string);
+    // may say which name is its own, and then the two must match. If it does
+    // not, the manifest's name is the plugin's, read at approval
+    // (`assertNameMatches` in approve.ts keeps it off another plugin's name).
+    const nameFromManifest = !(typeof pkg.buddi?.name === 'string' && pkg.buddi.name.trim() !== '');
+    const declaredName = nameFromManifest ? (pkg.name as string) : (pkg.buddi.name as string).trim();
+    const coreAsDependency =
+      typeof pkg.dependencies === 'object' &&
+      pkg.dependencies !== null &&
+      Object.hasOwn(pkg.dependencies, CORE_PACKAGE);
 
     /*
      * What it reaches in buddi, and which buddi it was built for — both read
@@ -656,12 +677,14 @@ export async function stagePlugin(
     if (parsed.kind !== 'directory' && opts.skipDependencies !== true) {
       phase('installing-dependencies');
       const registry = parsed.kind === 'registry' ? parsed.registry : undefined;
-      const declared = Object.keys(pkg.dependencies ?? {}).filter((d) => d !== '@buddi/core');
+      const declared = Object.keys(pkg.dependencies ?? {}).filter((d) => d !== CORE_PACKAGE);
       if (declared.length > 0) {
-        await npm.install(packageDir, { ...(registry === undefined ? {} : { registry }) });
+        await installWithoutCore(packageDir, dir, pkg, () =>
+          npm.install(packageDir, { ...(registry === undefined ? {} : { registry }) }),
+        );
       }
     }
-    if (parsed.kind !== 'directory') linkCore(packageDir);
+    if (parsed.kind !== 'directory') linkNestedCores(packageDir, linkCore(packageDir));
 
     phase('reading');
     /*
@@ -691,6 +714,8 @@ export async function stagePlugin(
       integrity,
       stagedHash,
       declaredName,
+      ...(nameFromManifest ? { nameFromManifest: true } : {}),
+      ...(coreAsDependency ? { coreAsDependency: true } : {}),
       ...(pkg.buddi === undefined
         ? {}
         : {
@@ -725,6 +750,132 @@ export async function stagePlugin(
     if (err instanceof StageRefusal || err instanceof InstallRefusal) throw err;
     throw err;
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * What npm is allowed to read
+ * ------------------------------------------------------------------ */
+
+export const CORE_PACKAGE = '@buddi/core';
+
+/** An `overrides` object with every key naming core taken out, at any depth. */
+function withoutCoreOverrides(overrides: unknown): Record<string, unknown> {
+  if (typeof overrides !== 'object' || overrides === null || Array.isArray(overrides)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(overrides as Record<string, unknown>)) {
+    if (key === CORE_PACKAGE || key.startsWith(`${CORE_PACKAGE}@`)) continue;
+    out[key] = typeof value === 'object' && value !== null ? withoutCoreOverrides(value) : value;
+  }
+  return out;
+}
+
+/**
+ * The package.json `npm install` reads in a stage. Pure: the author's file is
+ * restored byte for byte once npm is done.
+ *
+ * npm reads more of a package.json than `--omit` suggests. `--omit=dev` still
+ * parses devDependencies, so a `link:` to the author's checkout fails the
+ * whole install; `--omit=peer` still *resolves* peers, so an unpublished core
+ * is a 404 — and a published one would be fetched, from whoever owns the name
+ * on that registry. So npm is given a file with no devDependencies, no
+ * `@buddi/core` anywhere a dependency can be named, and an override that
+ * points core at `corePlaceholder`, a local directory: a dependency of the
+ * plugin that asks for core itself is answered from disk too. Buddi links its
+ * own core in afterwards (`linkCore`).
+ */
+export function packageJsonForInstall(
+  pkg: Record<string, any>,
+  corePlaceholder: string,
+): { pkg: Record<string, any>; coreRemovedFrom: string[] } {
+  const out = JSON.parse(JSON.stringify(pkg)) as Record<string, any>;
+  delete out.devDependencies;
+  const coreRemovedFrom: string[] = [];
+  for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
+    const deps = out[field];
+    if (typeof deps === 'object' && deps !== null && Object.hasOwn(deps, CORE_PACKAGE)) {
+      delete deps[CORE_PACKAGE];
+      coreRemovedFrom.push(field);
+    }
+  }
+  if (typeof out.peerDependenciesMeta === 'object' && out.peerDependenciesMeta !== null) {
+    delete out.peerDependenciesMeta[CORE_PACKAGE];
+  }
+  for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    if (Array.isArray(out[field])) out[field] = out[field].filter((d: unknown) => d !== CORE_PACKAGE);
+  }
+  out.overrides = { ...withoutCoreOverrides(out.overrides), [CORE_PACKAGE]: `file:${corePlaceholder}` };
+  return { pkg: out, coreRemovedFrom };
+}
+
+/**
+ * Run `install` with the package.json npm is allowed to read, then put the
+ * author's back. The placeholder core npm may have been pointed at lives in
+ * the stage directory, outside the package, and is gone when this returns.
+ */
+async function installWithoutCore(
+  packageDir: string,
+  stage: string,
+  pkg: Record<string, any>,
+  install: () => Promise<void>,
+): Promise<void> {
+  const file = path.join(packageDir, 'package.json');
+  const original = readFileSync(file);
+  const placeholder = path.join(stage, 'core-placeholder');
+  mkdirSync(placeholder, { recursive: true });
+  writeFileSync(
+    path.join(placeholder, 'package.json'),
+    `${JSON.stringify({ name: CORE_PACKAGE, version: runningCoreVersion(), private: true })}\n`,
+  );
+  try {
+    writeFileSync(file, `${JSON.stringify(packageJsonForInstall(pkg, placeholder).pkg, null, 2)}\n`);
+    await install();
+  } finally {
+    writeFileSync(file, original);
+    rmSync(placeholder, { recursive: true, force: true });
+  }
+}
+
+/** The version of the core this gateway runs, or `0.0.0` when it cannot tell. */
+function runningCoreVersion(): string {
+  const dir = resolveCoreDir();
+  if (dir === undefined) return '0.0.0';
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { version?: unknown };
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/**
+ * Every `node_modules/@buddi/core` below the package's own, which only a
+ * dependency asking for core can have put there: each becomes the same
+ * plugin-only core `linkCore` writes at the top.
+ */
+function linkNestedCores(packageDir: string, coreDir: string | undefined): void {
+  const visit = (modules: string, depth: number): void => {
+    if (depth > 32 || !lstatOrUndefined(modules)?.isDirectory()) return;
+    for (const entry of readdirSync(modules, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const full = path.join(modules, entry.name);
+      const packages = entry.name.startsWith('@')
+        ? readdirSync(full, { withFileTypes: true })
+            .filter((e) => e.isDirectory() || e.isSymbolicLink())
+            .map((e) => ({ name: `${entry.name}/${e.name}`, dir: path.join(full, e.name) }))
+        : [{ name: entry.name, dir: full }];
+      for (const pkg of packages) {
+        if (!lstatOrUndefined(pkg.dir)?.isDirectory()) continue;
+        const nested = path.join(pkg.dir, 'node_modules');
+        const core = path.join(nested, '@buddi', 'core');
+        if (lstatOrUndefined(core) !== undefined) {
+          rmSync(core, { recursive: true, force: true });
+          if (coreDir !== undefined) writePluginOnlyCore(core, coreDir);
+        }
+        visit(nested, depth + 1);
+      }
+    }
+  };
+  visit(path.join(packageDir, 'node_modules'), 0);
 }
 
 /** Does this package directory still look like the one that was staged? */

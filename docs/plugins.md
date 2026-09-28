@@ -1,7 +1,7 @@
 ---
 title: "Writing a plugin"
 status: reference
-updated: 2026-09-25
+updated: 2026-09-28
 ---
 
 # Writing a plugin
@@ -82,10 +82,11 @@ is exactly what runs at startup — it derives a JSON Schema from every zod inpu
 and refuses one no provider would accept, refuses a colliding tool name, and
 parses every view descriptor. It needs no database.
 
-If `@buddi/core` will not resolve, the scaffold's devDependency is a `link:` at
-the core your installation is running and that checkout has to be **built**
-(`pnpm -r build` there): the link points at the package, and its types and entry
-point are in its `dist`.
+If `@buddi/core` will not resolve: core is an optional peer, and the scaffold's
+`pnpm-workspace.yaml` points it at the core your installation is running with a
+pnpm override (`'@buddi/core': "link:<that core>"`). That checkout has to be
+**built** (`pnpm -r build` there): its types and entry point are in its `dist`.
+The file is never packed, so nothing you publish names a link.
 
 ### 3. Install it from the directory
 
@@ -169,16 +170,24 @@ buddi plugins install ./buddi-plugin-weather-0.1.0.tgz
 buddi plugins approve <id> --integrity sha512-…
 ```
 
-A tarball install of the scaffold as written does not work yet: see "Known, not
-fixed" in §8 for the three changes it needs.
+`npm pack` runs the scaffold's `prepack`, which builds, and ships `dist` without
+source maps or build info, `migrations`, `buddi.md` and `LICENSE`. Installing
+that tarball yourself is the check that what you would publish installs.
 
-Then publish, when you want other people to have it:
+Then publish, when you want other people to have it, from CI or your machine
+with provenance, so the registry records where it was built:
 
 ```bash
-npm publish --access public
-buddi plugins install buddi-plugin-weather          # on somebody else's machine
+npm publish --provenance --access public
+buddi plugins install @you/buddi-plugin-weather     # on somebody else's machine
 buddi plugins approve <id> --integrity sha512-…
 ```
+
+Publish under a scope you own (`@you/…`) or an unscoped name you hold. **Never
+`@buddi`**: buddi does not own that scope on npm, and nothing of yours belongs
+in it. The package name is yours to choose because `buddi.name` says what the
+plugin is called; the scaffold writes it. A package that declares none installs
+under its manifest's name, which the card says it will read at approval.
 
 Three things make a published plugin installable by a stranger, and the scaffold
 writes all three: the `keywords: ["buddi-plugin"]` they search for, the
@@ -438,8 +447,8 @@ name, the first time your plugin is imported. It is buddi's, not yours, so it is
 left out of the staged hash.
 
 A directory install and `buddi plugins dev <dir>` are your own checkout, and
-keep the `link:` your `package.json` names, whole, so your tests can import
-`@buddi/core/testing`. There nothing stops an import of an internal at
+keep the core it resolves (the scaffold's pnpm override), whole, so your tests
+can import `@buddi/core/testing`. There nothing stops an import of an internal at
 resolution; the import test is what does. `plugins dev` itself only watches
 `<dir>/dist` and, on a rebuild, restarts the service when there is one, or
 prints the line telling you to restart buddi yourself.
@@ -2416,10 +2425,20 @@ and why, so you can check it or do it by hand.
   "version": "1.0.0",
   "main": "./dist/index.js",
   "keywords": ["buddi-plugin"],
-  "buddi": { "manifest": "manifest", "core": "^0.1.0", "uses": [], "hostApi": "^1.0" },
-  "peerDependencies": { "@buddi/core": "^0.1.0" }
+  "license": "Apache-2.0",
+  "buddi": { "name": "weather", "manifest": "manifest", "core": ">=0.1.0", "uses": [], "hostApi": "^1.0" },
+  "scripts": { "prepack": "tsc -p tsconfig.json" },
+  "peerDependencies": { "@buddi/core": ">=0.1.0" },
+  "peerDependenciesMeta": { "@buddi/core": { "optional": true } },
+  "files": ["dist", "!dist/**/*.map", "!dist/**/*.tsbuildinfo", "migrations", "buddi.md"]
 }
 ```
+
+Core is nowhere in `devDependencies`: the development link lives in
+`pnpm-workspace.yaml` as a pnpm override, which `npm pack` never ships. The
+peer is optional so no package manager goes looking for core on a registry.
+`buddi plugins init --license <spdx>` picks the license; without it the
+scaffold writes Apache-2.0 and a LICENSE placeholder that says so.
 
 `buddi.uses` is the list the install card reads, and must equal the manifest's
 `uses` (§1.3); `buddi.hostApi` is the host version you were built against
@@ -2458,25 +2477,21 @@ Anything else in the file is shown verbatim. There is no schema to learn: what
 matters is that an owner can read it and that it agrees with your manifest,
 because those two are compared and any difference costs them a second approval.
 
-### Known, not fixed: a tarball of the scaffold does not install
+### npm is never asked for core
 
-A directory install of the scaffold works. A real tarball install of it — `npm
-pack`, then `buddi plugins install ./buddi-plugin-<name>-0.1.0.tgz` — does not
-yet, and needs three changes the scaffold and the template do not make:
+A stage runs `npm install` on a package.json with the development half taken
+out: no `devDependencies` (a `link:` there is your checkout, not a specifier
+npm can follow), no `@buddi/core` in `dependencies`, `peerDependencies` or
+`optionalDependencies`, and an override that answers any request for core —
+yours or a dependency's — from a local placeholder. The author's package.json
+is put back, byte for byte, the moment npm is done; the integrity you approve
+is the tarball's and never changes. Buddi then links its own core.
 
-1. **the `link:` devDependency removed.** It points at a checkout on the
-   author's machine, `link:` is not a specifier npm reads, and the stage's
-   `npm install` does not get past it.
-2. **the peer resolution fixed.** `@buddi/core` is not published, so an `npm
-   install` that tries to satisfy the peer from the registry fails before
-   staging gets to write the narrowed core.
-3. **`buddi.name` in the scaffold's `package.json`.** The package is
-   `buddi-plugin-<name>` and the manifest `<name>`; a directory source is
-   exempt from the name rule, a tarball is not, so without `buddi.name` the
-   install refuses.
-
-Found while the host API was built (2026-09-24), and older than it. Until it is
-fixed, a plugin of your own installs from its directory.
+The `@buddi` scope on npm is not buddi's. If somebody published
+`@buddi/core` there, an install that let npm resolve it would run their code
+in every stage; this one never asks. A package that lists core as an ordinary
+dependency still stages, and its card says "it asks npm for buddi's core;
+buddi provides its own".
 
 ### Install is two halves, and nothing runs in the first
 
@@ -2484,7 +2499,8 @@ Importing a module executes it, so an install splits at exactly that line.
 
 **Stage.** `npm view` for the exact version, the integrity hash and the
 publisher; `npm pack` to fetch it; extract; `npm install --ignore-scripts
---omit=dev` for its dependencies; write the narrowed `@buddi/core`. Then read
+--omit=dev --omit=peer` for its dependencies, never asking for core (above);
+write the narrowed `@buddi/core`. Then read
 *static metadata only* — `package.json` (its `buddi.uses` and `buddi.hostApi`
 among it), the integrity hash and publisher, your `buddi.md`, and which
 packages in the installed tree declare `preinstall`/`install`/`postinstall` or
@@ -2659,13 +2675,15 @@ own claim, labelled as one.
 A published package is usually called `buddi-plugin-weather` while its manifest
 is `weather`, so the rule is written down rather than guessed:
 
-> The manifest's `name` must equal the package's `name`, or the `buddi.name`
-> the package declares in its `package.json`.
+> When the package declares `buddi.name`, the manifest's `name` must equal it.
+> When it declares none, the manifest's `name` is the plugin's — the card says
+> it is read at approval — unless a different package is already installed
+> under that name.
 
-An install refuses when it does neither. Otherwise a package called
-`buddi-plugin-weather` could carry a manifest called `finance`, take that name
-in the record, take that schema, and be granted to an agent under a name the
-owner never installed. A directory source is exempt: the owner typed a path to
+An install refuses otherwise. Without that a package called
+`buddi-plugin-weather` could carry a manifest called `finance`, take the
+installed finance's place in the record, take its schema, and inherit its
+grants. Re-installing or upgrading the same package is not a different one. A directory source is exempt: the owner typed a path to
 a build on their own disk, and the identity of that build is the path.
 
 The name also decides a directory: `<data>/plugins/<name>`, with a scoped name
@@ -2784,7 +2802,7 @@ version each arrived in — is §9b.
 
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
-| `name` | `string` | yes | The plugin family: `finance`, `weather`. It names the tools, the record entry and the directory under `<data>/plugins`. It must equal the package's `name` or its `buddi.name`. |
+| `name` | `string` | yes | The plugin family: `finance`, `weather`. It names the tools, the record entry and the directory under `<data>/plugins`. It must equal the package's `buddi.name` when it declares one; without one it is the plugin's name unless another package is installed under it. |
 | `version` | `string` | yes | Part of the approved args hash. Bumping it voids every standing approval for this plugin's tools. |
 | `schema` | `string` | yes | The one Postgres schema this plugin owns. Checked against `^[a-z_][a-z0-9_]*$`; `core` and another plugin's schema are refused. |
 | `migrationsDir` | `string` | yes | **Absolute** path to a directory of `*.sql`, resolved from the *built* file. `''` means this plugin owns no tables. |

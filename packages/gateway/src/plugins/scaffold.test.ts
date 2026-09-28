@@ -54,7 +54,9 @@ describe('what it writes', () => {
     expect(Object.keys(files).sort()).toEqual(
       [
         '.gitignore',
+        'LICENSE',
         'README.md',
+        'pnpm-workspace.yaml',
         'buddi.md',
         'migrations/001_my_notes.sql',
         'package.json',
@@ -65,22 +67,46 @@ describe('what it writes', () => {
     );
   });
 
-  it('declares core as a peer at the running version, and links it for development', () => {
+  it('declares core as an optional peer, and links it for development where npm pack cannot see it', () => {
     const pkg = JSON.parse(files['package.json'] as string) as Record<string, any>;
-    expect(pkg.peerDependencies['@buddi/core']).toBe('^0.2.3');
+    expect(pkg.peerDependencies['@buddi/core']).toBe('>=0.2.3');
+    expect(pkg.peerDependenciesMeta['@buddi/core']).toEqual({ optional: true });
     expect(pkg.dependencies['@buddi/core']).toBeUndefined();
-    expect(pkg.devDependencies['@buddi/core']).toBe('link:/opt/buddi/core');
+    expect(pkg.devDependencies['@buddi/core']).toBeUndefined();
+    // Nothing npm pack ships names a link.
+    expect(files['package.json']).not.toContain('link:');
+    expect(files['pnpm-workspace.yaml']).toContain(`'@buddi/core': "link:/opt/buddi/core"`);
+    expect(pkg.files).not.toContain('pnpm-workspace.yaml');
   });
 
-  it('falls back to the published range when there is no core on disk', () => {
+  it('leaves the development link to fill in when there is no core on disk', () => {
     const bundled = scaffoldFiles({ name: 'weather', coreVersion: '0.1.0' });
-    const pkg = JSON.parse(bundled['package.json'] as string) as Record<string, any>;
-    expect(pkg.devDependencies['@buddi/core']).toBe('^0.1.0');
+    expect(bundled['pnpm-workspace.yaml']).toContain("#   '@buddi/core': 'link:");
+    expect(bundled['pnpm-workspace.yaml']).not.toMatch(/^overrides:/m);
+  });
+
+  it('packs cleanly: builds first, and ships no build info or source maps', () => {
+    const pkg = JSON.parse(files['package.json'] as string) as Record<string, any>;
+    expect(pkg.scripts.prepack).toBe('tsc -p tsconfig.json');
+    expect(pkg.files).toEqual(['dist', '!dist/**/*.map', '!dist/**/*.tsbuildinfo', 'migrations', 'buddi.md']);
+  });
+
+  it('carries a license: Apache-2.0 by default, or the one the author names', () => {
+    const pkg = JSON.parse(files['package.json'] as string) as Record<string, any>;
+    expect(pkg.license).toBe('Apache-2.0');
+    expect(files.LICENSE).toContain('because no --license was given');
+    const mit = scaffoldFiles({ name: 'weather', coreVersion: '0.1.0', license: 'MIT' });
+    expect(JSON.parse(mit['package.json'] as string).license).toBe('MIT');
+    expect(mit.LICENSE).toContain('Licensed under MIT');
+    expect(() => scaffoldFiles({ name: 'weather', coreVersion: '0.1.0', license: 'MIT; rm -rf' })).toThrow(
+      InstallRefusal,
+    );
   });
 
   it('ties the published package name to the manifest name through the buddi field', () => {
     const pkg = JSON.parse(files['package.json'] as string) as Record<string, any>;
     expect(pkg.name).toBe('buddi-plugin-my-notes');
+    expect(pkg.buddi.name).toBe('my-notes');
     expect(pkg.buddi.manifest).toBe('manifest');
     expect(pkg.keywords).toContain('buddi-plugin');
     // The two things an install reads off disk have to be shipped.

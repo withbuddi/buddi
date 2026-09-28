@@ -1325,6 +1325,13 @@ export interface StagedPluginView {
   /** The name of the file the owner uploaded, when this stage came from one. */
   uploadedName?: string;
   dependencies: { count: number; withScripts: string[] };
+  /**
+   * The plugin name it declares (`buddi.name`, or its package name). Absent
+   * when it declares none: the manifest's name is read at approval.
+   */
+  installsAs?: string;
+  /** It lists @buddi/core as a dependency; buddi provides its own instead. */
+  coreAsDependency?: boolean;
   /** The package's own words about itself, from its buddi.md. Never checked. */
   claims: { schema?: string; hosts: string[]; text: string; missing: boolean };
   /** Lifecycle scripts the package itself declares. */

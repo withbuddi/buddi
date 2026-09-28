@@ -52,7 +52,11 @@ export interface NpmRunner {
    * path. The spec is always exact by the time it gets here.
    */
   pack(spec: string, destination: string, opts?: { registry?: string }): Promise<string>;
-  /** `npm install --ignore-scripts --omit=dev --no-audit --no-fund` in `dir`. */
+  /**
+   * `npm install --ignore-scripts --omit=dev --omit=peer --no-audit --no-fund`
+   * in `dir`. Staging has already rewritten `dir/package.json` so that npm has
+   * no way to ask for `@buddi/core` (see `prepareForInstall` in `stage.ts`).
+   */
   install(dir: string, opts?: { registry?: string }): Promise<void>;
 }
 
@@ -149,9 +153,15 @@ export function createNpmRunner(opts: { binary?: string; timeoutMs?: number } = 
             // Not negotiable: this runs before the owner has approved anything.
             '--ignore-scripts',
             '--omit=dev',
+            // Buddi provides the one peer a plugin has, @buddi/core; staging
+            // links it after this. npm still *resolves* peers under
+            // --omit=peer, which is why the package.json it reads carries an
+            // override for core as well (stage.ts, `prepareForInstall`).
+            '--omit=peer',
             '--no-audit',
             '--no-fund',
             '--no-package-lock',
+            '--no-update-notifier',
             ...registryArgs(installOpts?.registry),
           ],
           { cwd: dir, timeout: timeout * 5, maxBuffer },

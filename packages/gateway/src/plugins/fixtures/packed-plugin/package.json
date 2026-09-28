@@ -1,0 +1,28 @@
+{
+  "name": "@someone/buddi-plugin-packed",
+  "version": "1.0.0",
+  "description": "A fixture plugin packed with npm pack, the way an author ships one.",
+  "type": "module",
+  "main": "index.js",
+  "keywords": [
+    "buddi-plugin"
+  ],
+  "buddi": {
+    "manifest": "manifest",
+    "core": ">=0.1.0"
+  },
+  "dependencies": {
+    "tiny-dep": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@buddi/core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@buddi/core": "link:../../nowhere/buddi/packages/core",
+    "typescript": "^5.6.3"
+  },
+  "files": [
+    "index.js",
+    "buddi.md"
+  ]
+}

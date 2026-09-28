@@ -554,6 +554,19 @@ function Staged({
                   </span>
                 ),
               },
+              ...(staged.source.kind === 'directory'
+                ? []
+                : [
+                    {
+                      label: 'Installs as',
+                      value:
+                        staged.installsAs ??
+                        'the name its manifest gives, read when you approve — it declares no buddi.name',
+                    },
+                  ]),
+              ...(staged.coreAsDependency
+                ? [{ label: 'Core', value: "It asks npm for buddi's core; buddi provides its own." }]
+                : []),
               ...(staged.stagedHash
                 ? [
                     {

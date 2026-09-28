@@ -30,7 +30,7 @@
  * Nothing here restarts anything: an installed plugin is registered by the
  * next process start, and the caller is told so with `restartNeeded`.
  */
-import { existsSync, realpathSync, renameSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, renameSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
   migrate,
@@ -176,7 +176,7 @@ async function approveOne(
 
   // The first import of this plugin's code, ever.
   const plan = await planInstall(staged.packageDir, env);
-  assertNameMatches(staged, plan);
+  assertNameMatches(staged, plan, env);
   const drift = driftBetween(staged.claims, plan.manifest);
   const stagedPlan: StagedPlan = {
     contribution: plan.contribution,
@@ -213,20 +213,27 @@ async function approveOne(
 }
 
 /**
- * The manifest has to answer to the name of the package it came in.
+ * The manifest's name has to be one this package may install under.
  *
  * Otherwise a package called `buddi-plugin-weather` can carry a manifest
- * called `finance`, take that name in the record, take that schema, and be
- * granted to an agent under a name the owner never installed. The escape hatch
- * is written down rather than guessed at: `package.json` may declare
- * `buddi.name`, which is the name its manifest uses, and that is the name that
- * must match.
+ * called `finance`, take the place of the finance the owner installed, take
+ * its schema, and inherit its grants. Two ways to be allowed a name:
+ *
+ *  - `package.json` declares `buddi.name`. Then the manifest must say the
+ *    same, or nothing installs.
+ *  - it declares none. Then the manifest's name is the plugin's — the card
+ *    said it would be read here — as long as no *other* package is installed
+ *    under it. Re-installing or upgrading the same package is not "other".
  *
  * A directory source is exempt: the owner typed a path to a build on their own
  * disk, and the identity of that build is the path, not a registry name.
  */
-function assertNameMatches(staged: StagedPlugin, plan: InstallPlan): void {
+function assertNameMatches(staged: StagedPlugin, plan: InstallPlan, env: NodeJS.ProcessEnv): void {
   if (staged.source.kind === 'directory') return;
+  if (staged.nameFromManifest === true) {
+    assertNameIsFree(staged, plan.manifest.name, env);
+    return;
+  }
   const declared = staged.declaredName ?? staged.name;
   if (plan.manifest.name === declared) return;
   throw new InstallRefusal(
@@ -234,6 +241,35 @@ function assertNameMatches(staged: StagedPlugin, plan: InstallPlan): void {
     `the package ${staged.name} ${staged.version} says its plugin is called "${declared}", and the ` +
       `manifest it exports calls itself "${plan.manifest.name}". A package installs under its own name ` +
       'or under the "buddi": {"name": …} it declares, and this one does neither. Nothing was installed.',
+  );
+}
+
+/**
+ * A package with no `buddi.name` does not install over another package.
+ *
+ * The installed plugin of that name, if any, is identified by the npm name in
+ * the package.json it was installed from; when that cannot be read, the name
+ * is treated as taken; uninstalling it first is the way through.
+ */
+function assertNameIsFree(staged: StagedPlugin, name: string, env: NodeJS.ProcessEnv): void {
+  const file = pluginsFilePath({ ownerRoot: agentSearchPath(env).ownerRoot, env });
+  const existing = readPluginsFile(file).plugins.find((p) => p.name === name);
+  if (existing === undefined) return;
+  let installedFrom: string | undefined;
+  try {
+    const dir = existing.source.kind === 'directory' ? existing.source.path : installedPackageDir(name, env);
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: unknown };
+    if (typeof pkg.name === 'string') installedFrom = pkg.name;
+  } catch {
+    // Unreadable is not the same package.
+  }
+  if (installedFrom === staged.name) return;
+  throw new InstallRefusal(
+    'name-taken',
+    `the package ${staged.name} ${staged.version} declares no "buddi": {"name": …}, so it would install ` +
+      `under the name its manifest gives, "${name}" — and "${name}" is already installed from ` +
+      `${installedFrom === undefined ? 'a package buddi cannot identify' : `the package ${installedFrom}`}. ` +
+      'A package does not take another plugin\'s name. Nothing was installed.',
   );
 }
 

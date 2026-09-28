@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 # The buddi command line
@@ -137,8 +137,9 @@ Your agents, what they have scheduled, and the plugins they use.
   - `--yes`: Remove it. Its database schema is kept.
   - `--detach-agents`: Also take its tools out of the agents that were given them.
   - `--purge --confirm <name>`: Also drop its schema and everything in it. This cannot be undone.
-- `buddi plugins init <name> [--dir <path>]`: Write a new plugin you can build and install.
+- `buddi plugins init <name> [--dir <path>] [--license <spdx>]`: Write a new plugin you can build and install.
   - `--dir <path>`: Write it here instead of ./<name>.
+  - `--license <spdx>`: The license it carries. Apache-2.0 unless you name another.
 - `buddi plugins dev <dir>`: Watch a plugin's dist/ and restart buddi when it changes.
 
 ## Reach

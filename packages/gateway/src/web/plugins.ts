@@ -156,6 +156,13 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     /** The hash of the unpacked tree, which is what approval re-checks. */
     stagedHash: staged.stagedHash,
     dependencies: staged.dependencies,
+    /**
+     * The name it installs under: `buddi.name`, or absent when the package
+     * declares none and the manifest's name is read at approval.
+     */
+    ...(staged.nameFromManifest === true ? {} : { installsAs: staged.declaredName }),
+    /** It lists @buddi/core as a dependency; npm was not asked for it. */
+    ...(staged.coreAsDependency === true ? { coreAsDependency: true } : {}),
     claims: {
       ...(staged.claims.schema === undefined ? {} : { schema: staged.claims.schema }),
       hosts: staged.claims.hosts,
