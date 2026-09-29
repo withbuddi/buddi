@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.23 — 2026-09-29
+
 ### Added
 
 - A plugin says who made it: the install card and the Plugins page show the author from its manifest.
