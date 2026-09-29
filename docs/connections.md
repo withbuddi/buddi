@@ -25,9 +25,20 @@ for the block another MCP client takes. Connecting is four short screens.
    address. buddi opens the server, reads its name and what it offers, and
    finds out whether it wants you to sign in. Nothing else is sent.
 2. **Sign in.** A service that answered without asking skips this screen.
-   Otherwise there are up to three ways in, as a row of choices when more
+   Otherwise there are up to four ways in, as a row of choices when more
    than one applies:
 
+   - **Device**, for a service where buddi has its own app (GitHub): no
+     token to make, no settings page to visit. The screen shows a code, large,
+     with Copy, and **Open github.com/login/device**; your click opens the
+     page, you type the code there and say yes. buddi waits for the approval
+     itself (at the pace the service asks for, a quarter of an hour at most),
+     then tries the sign-in on the server, keeps it and moves on to the
+     review. It is kept the way a pasted token is (one of your secrets, sent
+     only to that server as `Authorization: Bearer …`), or, when the service
+     hands out a renewable sign-in, in the vault, renewed before it expires.
+     A code you decline or let expire is one sentence and **Start again**.
+     The app is a public client id buddi ships with the card, with no secret.
    - **Sign in**, when the service lets buddi register itself with its
      sign-in server (nothing is pre-registered anywhere, and there is no key
      to paste). buddi fetches the service's consent page first; your click
@@ -47,7 +58,8 @@ for the block another MCP client takes. Connecting is four short screens.
      screen shows. buddi asks for it before it opens anything; the button
      then opens the service's page.
 
-   GitHub opens on Token, and Sign in is its first choice for the others.
+   GitHub opens on Device (Token and Client id stay there), and Sign in is
+   the first choice for the others.
    A server that wants no sign-in at all needs none of these.
 3. **Review.** Every tool the server lists, one row each: the name buddi
    gives it, the server's own description, and its tier. Read it before you
@@ -80,7 +92,8 @@ HTTP), and a block that names several servers at once.
 (it says so and exits 3 when buddi is not running):
 
 ```
-buddi connections add github --token --to buddi
+buddi connections add github --to buddi
+buddi connections add github --token
 buddi connections add https://mcp.example.com/mcp --name Example
 buddi connections add --json '{ "mcpServers": { "linear": { "url": "https://mcp.linear.app/mcp" } } }'
 buddi connections list
@@ -90,7 +103,10 @@ buddi connections remove github
 ```
 
 `add` takes a card (`github`, `notion`…), an `https://` address, or a
-config block with `--json`. It signs in the way the card recommends:
+config block with `--json`. It signs in the way the card recommends. For
+GitHub that is a code: it prints the code and `https://github.com/login/device`,
+opens the page when you press Enter (`open` on macOS, `xdg-open` on Linux;
+if that fails, open it yourself), and waits until you have said yes there.
 `--token` asks for the token with the terminal's echo off (`--token-stdin`
 reads it from a pipe), `--client-id` takes a client id, and otherwise it
 prints the service's consent link. Open it in any browser; the page sends

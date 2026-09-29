@@ -473,11 +473,11 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'connections add',
     group: 'Agents',
-    summary: 'Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard.',
+    summary: 'Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard. GitHub signs in with a code you type on github.com.',
     usage: "buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]",
     flags: [
       { flag: '--name <name>', meaning: 'What the connection is called on the dashboard.' },
-      { flag: '--token', meaning: 'Sign in with a token you made on the service\'s site, typed with the echo off. buddi tries it before it keeps it.' },
+      { flag: '--token', meaning: 'Sign in with a token you made on the service\'s site, typed with the echo off, instead of a code. buddi tries it before it keeps it.' },
       { flag: '--token-stdin', meaning: 'The same, with the token piped on stdin.' },
       { flag: '--client-id <id>', meaning: 'Sign in with a client id from an app you created in the service\'s developer settings.' },
       { flag: "--json '<mcpServers json>'", meaning: 'The block another MCP client takes: it gives the address, the name and a header token. A command server is refused.' },
@@ -485,7 +485,7 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--slug <slug>', meaning: 'The connection\'s name in buddi, which every tool carries: mcp.<slug>.<tool>.' },
       { flag: '--to <agent,agent>', meaning: 'Give the tools to these agents without asking. --to nobody keeps the connection waiting.' },
     ],
-    example: 'buddi connections add github --token --to buddi',
+    example: 'buddi connections add github --to buddi',
     exitCodes: [NOT_RUNNING],
     applies: 'both',
     jsonTakesValue: true,

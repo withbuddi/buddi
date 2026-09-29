@@ -70,6 +70,12 @@ export class Fake {
   refuseRefresh = false;
   /** The MCP server does not answer at all (a refused connection). */
   down = false;
+  /**
+   * What the device token endpoint answers, one poll each (the last repeats):
+   * GitHub's way, a 200 with `error`, for everything but `approve`.
+   */
+  deviceScript: Array<'pending' | 'slow_down' | 'approve' | 'deny' | 'expire'> = ['approve'];
+  readonly deviceRequests: Array<Record<string, string>> = [];
   /** How many `tools/list` requests the server has answered. */
   lists = 0;
   issued = 0;
@@ -133,9 +139,24 @@ export class Fake {
       this.registered.push(body);
       return reply(201, JSON.stringify({ client_id: `client-${this.registered.length}` }));
     }
+    if (u.pathname === '/device/code' && init.method === 'POST') {
+      const params = Object.fromEntries(new URLSearchParams(String(init.body)));
+      this.deviceRequests.push(params);
+      return reply(200, JSON.stringify({
+        device_code: 'device-secret-1', user_code: 'WDJB-MJHT', verification_uri: `${AS_ORIGIN}/device`, expires_in: 900, interval: 5,
+      }));
+    }
     if (u.pathname === '/token' && init.method === 'POST') {
       const params = Object.fromEntries(new URLSearchParams(String(init.body)));
       this.tokenRequests.push(params);
+      if (params.grant_type === 'urn:ietf:params:oauth:grant-type:device_code') {
+        const step = this.deviceScript.length > 1 ? this.deviceScript.shift()! : this.deviceScript[0]!;
+        if (params.device_code !== 'device-secret-1') return reply(200, '{"error":"incorrect_device_code"}');
+        if (step === 'pending') return reply(200, '{"error":"authorization_pending"}');
+        if (step === 'slow_down') return reply(200, '{"error":"slow_down","interval":10}');
+        if (step === 'deny') return reply(200, '{"error":"access_denied"}');
+        if (step === 'expire') return reply(200, '{"error":"expired_token"}');
+      }
       if (params.grant_type === 'authorization_code' && params.code !== 'good-code') return reply(400, '{"error":"invalid_grant"}');
       if (params.grant_type === 'refresh_token' && this.refuseRefresh) return reply(400, '{"error":"invalid_grant"}');
       this.issued += 1;

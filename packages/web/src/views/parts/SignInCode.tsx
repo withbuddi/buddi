@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { Button, Field, Toolbar } from '../../ui';
 
-export function SignInCode({ code, label = 'Your code' }: { code: string; label?: string }): JSX.Element {
+export function SignInCode({ code, label = 'Your code', large = false }: { code: string; label?: string; large?: boolean }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const copy = async (): Promise<void> => {
     try {
@@ -20,7 +20,7 @@ export function SignInCode({ code, label = 'Your code' }: { code: string; label?
   return (
     <Toolbar valign="end">
       <Field label={label} grow>
-        <input readOnly value={code} spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
+        <input readOnly value={code} data-code={large ? 'large' : undefined} spellCheck={false} onFocus={(event) => event.currentTarget.select()} />
       </Field>
       <Button onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</Button>
     </Toolbar>

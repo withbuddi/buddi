@@ -1933,6 +1933,9 @@ export const api = {
   /** Sign in with a pasted token: the gateway tries it on the server before it keeps it. */
   connectionToken: (id: string, input: { token: string; header: string; prefix: string }) =>
     post<{ id: string; reconnected: boolean; name: string; connection: ConnectionView }>(`/connections/${id}/token`, input),
+  /** Ask for a device code; the connection's `device` says when it is approved. */
+  connectionDevice: (id: string) =>
+    post<{ userCode: string; verificationUri: string; expiresAt: string; interval: number; connection: ConnectionView }>(`/connections/${id}/device`, {}),
   connectionCallback: (input: { state: string; code?: string; error?: string }) =>
     post<{ id: string; reconnected: boolean; name: string; cli?: boolean }>('/connections/callback', input),
   connectionReview: (id: string) => get<ConnectionReview>(`/connections/${id}/review`),
@@ -2270,6 +2273,18 @@ export interface ConnectionView {
   heldTools?: number;
   /** Agents whose files grant this connection's tools. */
   agents: string[];
+  /** A device sign-in that is waiting, or ended in the last ten minutes. */
+  device?: ConnectionDevice;
+}
+
+/** A code the owner types on the service's site (the OAuth device flow). */
+export interface ConnectionDevice {
+  state: 'waiting' | 'done' | 'failed';
+  userCode: string;
+  verificationUri: string;
+  expiresAt: string;
+  /** Failed: why, in one sentence. */
+  reason?: string;
 }
 
 export interface ConnectionCard {
@@ -2281,7 +2296,13 @@ export interface ConnectionCard {
   /** The service offers no dynamic registration: the owner brings a client id. */
   clientIdRequired?: boolean;
   /** Which way of signing in the screen offers first, and where a token is made. */
-  auth?: { recommended: 'token' | 'oauth'; tokenPage?: string; tokenHint?: string };
+  auth?: {
+    recommended: 'device' | 'token' | 'oauth';
+    /** buddi's own app on the service: a code typed on its site. */
+    device?: { clientId: string; deviceEndpoint: string; scopes: string[] };
+    tokenPage?: string;
+    tokenHint?: string;
+  };
 }
 
 export interface ConnectionsView {

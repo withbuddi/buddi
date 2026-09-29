@@ -19,9 +19,10 @@ import {
   type Vault,
 } from '@buddi/core/testing';
 import { bindConnections, createConnectionsManifest } from './index.js';
-import { ConnectionError, type ConnectionsService } from './service.js';
+import { ConnectionError, type ConnectionsDeps, type ConnectionsService, type ConnectionView } from './service.js';
+import type { CatalogCard } from './catalog.js';
 import { SERVICE_OPEN } from './output.js';
-import { DEFAULT_TOOLS, Fake, MCP_URL } from './testing/fake.js';
+import { AS_ORIGIN, DEFAULT_TOOLS, Fake, MCP_URL } from './testing/fake.js';
 import { vaultRefFor } from './tokens.js';
 import type { HeaderTarget, SecretsPort } from './ports.js';
 
@@ -71,7 +72,7 @@ suite('connections (postgres + fake MCP server)', () => {
     await pool.query('truncate mcp.tools, mcp.connections cascade');
   });
 
-  function setup(fake: Fake, vault: Vault = createMemoryVault(), now?: () => Date): { registry: ToolRegistry; service: ConnectionsService; vault: Vault; secrets: MemorySecrets } {
+  function setup(fake: Fake, vault: Vault = createMemoryVault(), now?: () => Date, extra: Partial<ConnectionsDeps> = {}): { registry: ToolRegistry; service: ConnectionsService; vault: Vault; secrets: MemorySecrets } {
     const registry = new ToolRegistry();
     registry.register(createConnectionsManifest());
     const secrets = new MemorySecrets();
@@ -79,6 +80,7 @@ suite('connections (postgres + fake MCP server)', () => {
       pool, vault, secrets, transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }),
       compileSchema: (schema) => compileJsonSchema(schema).dispose(), log: () => {},
       ...(now ? { now } : {}),
+      ...extra,
     })!;
     return { registry, service, vault, secrets };
   }
@@ -462,6 +464,129 @@ suite('connections (postgres + fake MCP server)', () => {
     await service.retryDue();
     expect(await service.get(id)).toMatchObject({ state: 'connected', unreachableSince: null });
     expect(service.nextRetryAt(id)).toBeNull();
+    await service.close();
+  });
+
+  /* -------------------------------------------------------------- device */
+
+  const deviceCard = (clientId = 'buddi-app'): CatalogCard => ({
+    id: 'tracker', name: 'Tracker', blurb: '', url: MCP_URL, verified: true,
+    auth: { recommended: 'device', device: { clientId, deviceEndpoint: `${AS_ORIGIN}/device/code`, scopes: ['read', 'write'] } },
+  });
+
+  /** The service with the device card, and a sleep that records the waits and does not wait. */
+  function deviceSetup(fake: Fake, clientId?: string) {
+    const waits: number[] = [];
+    const sleep = (ms: number): Promise<void> => { waits.push(ms); return new Promise((resolve) => setImmediate(resolve)); };
+    return { ...setup(fake, createMemoryVault(), undefined, { catalog: [deviceCard(clientId)], sleep }), waits };
+  }
+
+  async function settled(service: ConnectionsService, id: string): Promise<ConnectionView> {
+    for (let i = 0; i < 500; i++) {
+      const view = await service.get(id);
+      if (view.device?.state !== 'waiting') return view;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error('the device sign-in never settled');
+  }
+
+  it('signs in with a device code: waits, slows down, keeps the token the way a pasted one is kept', async () => {
+    const fake = new Fake({ auth: true, json: true, registration: false });
+    fake.deviceScript = ['pending', 'slow_down', 'approve'];
+    const { registry, service, secrets, vault, waits } = deviceSetup(fake);
+    const { connection } = await service.add({ url: MCP_URL, name: 'Tracker' });
+
+    const started = await service.beginDevice(connection.id);
+    expect(started).toMatchObject({ userCode: 'WDJB-MJHT', verificationUri: `${AS_ORIGIN}/device`, interval: 5 });
+    expect(fake.deviceRequests).toEqual([{ client_id: 'buddi-app', scope: 'read write' }]);
+    expect(registry.networkOf('mcp')!.map((u) => u.host)).toEqual(['mcp.example.test', 'auth.example.test']);
+
+    const view = await settled(service, connection.id);
+    expect(view.device).toMatchObject({ state: 'done', userCode: 'WDJB-MJHT' });
+    expect(view).toMatchObject({ authKind: 'token', signedIn: true, state: 'pending-review' });
+    // The server's interval, then five more after slow_down (the server's 10 s wins when larger).
+    expect(waits).toEqual([5000, 5000, 10000]);
+    const polls = fake.tokenRequests.filter((r) => r.grant_type === 'urn:ietf:params:oauth:grant-type:device_code');
+    expect(polls).toHaveLength(3);
+    expect(polls[0]).toEqual({ client_id: 'buddi-app', device_code: 'device-secret-1', grant_type: 'urn:ietf:params:oauth:grant-type:device_code' });
+    const [, held] = [...secrets.held.entries()][0]!;
+    expect(held).toEqual({ value: fake.validToken, target: { host: 'mcp.example.test', header: 'Authorization' } });
+    expect(await vault.get(vaultRefFor(connection.id))).toBeNull();
+    expect(JSON.stringify(view)).not.toContain('device-secret-1');
+    expect(JSON.stringify(view)).not.toContain(fake.validToken);
+
+    const review = await service.review(connection.id);
+    await service.saveReview(connection.id, { slug: 'tracker', hash: review.hash });
+    expect(await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx())).toMatchObject({ ok: true });
+    expect(fake.calls.filter((c) => c.url === MCP_URL).at(-1)!.headers.authorization).toBe(`Bearer ${fake.validToken}`);
+
+    await service.disconnect(connection.id);
+    expect(secrets.held.size).toBe(0);
+    expect(registry.networkOf('mcp')).toEqual([]);
+    await service.close();
+  });
+
+  it('keeps a device sign-in with a refresh token as one that renews itself', async () => {
+    const fake = new Fake({ auth: true, json: true, registration: false, refresh: true, expiresIn: 60 });
+    const { registry, service, secrets, vault } = deviceSetup(fake);
+    const { connection } = await service.add({ url: MCP_URL, name: 'Tracker' });
+    await service.beginDevice(connection.id);
+    const view = await settled(service, connection.id);
+    expect(view).toMatchObject({ authKind: 'oauth', signedIn: true, device: { state: 'done' } });
+    expect(secrets.held.size).toBe(0);
+    const kept = JSON.parse((await vault.get(vaultRefFor(connection.id)))!) as Record<string, unknown>;
+    expect(kept).toMatchObject({ refreshToken: 'refresh-1', clientId: 'buddi-app', extra: { tokenEndpoint: `${AS_ORIGIN}/token` } });
+
+    // It expires within the five-minute skew: the next use renews it at the token endpoint.
+    const review = await service.review(connection.id);
+    expect(fake.tokenRequests.find((r) => r.grant_type === 'refresh_token')).toEqual({ grant_type: 'refresh_token', refresh_token: 'refresh-1', client_id: 'buddi-app' });
+    await service.saveReview(connection.id, { slug: 'tracker', hash: review.hash });
+    expect(await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx())).toMatchObject({ ok: true });
+    await service.close();
+  });
+
+  it('says why a device sign-in ended: declined, expired, or no app in this build', async () => {
+    const fake = new Fake({ auth: true, json: true, registration: false });
+    const { service, secrets } = deviceSetup(fake);
+    const { connection } = await service.add({ url: MCP_URL, name: 'Tracker' });
+
+    fake.deviceScript = ['pending', 'deny'];
+    await service.beginDevice(connection.id);
+    expect((await settled(service, connection.id)).device).toMatchObject({ state: 'failed', reason: 'The sign-in was declined on Tracker. Start again.' });
+
+    fake.deviceScript = ['expire'];
+    await service.beginDevice(connection.id);
+    expect((await settled(service, connection.id)).device).toMatchObject({ state: 'failed', reason: 'The code expired before it was approved on Tracker. Start again.' });
+    expect(secrets.held.size).toBe(0);
+    expect((await service.get(connection.id)).signedIn).toBe(false);
+
+    const placeholder = deviceSetup(fake, 'REPLACE_ME');
+    await expect(placeholder.service.beginDevice(connection.id)).rejects.toMatchObject({ status: 409, code: 'device-unavailable', message: 'buddi has no Tracker app id in this build yet.' });
+    const noCard = setup(fake, createMemoryVault(), undefined, { catalog: [] });
+    await expect(noCard.service.beginDevice(connection.id)).rejects.toMatchObject({ status: 409, code: 'device-unavailable' });
+    await service.close();
+  });
+
+  it('a new begin or a disconnect ends the wait of the one before', async () => {
+    const fake = new Fake({ auth: true, json: true, registration: false });
+    fake.deviceScript = ['pending'];
+    const { service, secrets } = deviceSetup(fake);
+    const { connection } = await service.add({ url: MCP_URL, name: 'Tracker' });
+    await service.beginDevice(connection.id);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const before = fake.tokenRequests.length;
+    fake.deviceScript = ['approve'];
+    await service.beginDevice(connection.id);
+    expect((await settled(service, connection.id)).device).toMatchObject({ state: 'done' });
+    expect(secrets.held.size).toBe(1);
+    expect(fake.tokenRequests.length).toBeGreaterThan(before);
+
+    fake.deviceScript = ['pending'];
+    await service.beginDevice(connection.id);
+    await service.disconnect(connection.id);
+    const after = fake.tokenRequests.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fake.tokenRequests.length).toBe(after);
     await service.close();
   });
 });

@@ -78,7 +78,7 @@ export function connectionsOf(manifests: readonly PluginManifest[]): Connections
   return found ? handles.get(found)!.service : undefined;
 }
 
-export { CATALOG, type CatalogCard } from './catalog.js';
+export { CATALOG, GITHUB_CLIENT_ID, PLACEHOLDER_CLIENT_ID, type CatalogCard, type DeviceAuth } from './catalog.js';
 export {
   ConnectionError,
   ConnectionsService,
@@ -93,6 +93,7 @@ export {
   type ReviewChanges,
   type ConnectionsDeps,
   type ConnectionView,
+  type DeviceView,
   type ReviewTool,
   type ReviewView,
   type SignIn,

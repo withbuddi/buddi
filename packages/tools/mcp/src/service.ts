@@ -15,8 +15,10 @@
  */
 import type { Pool } from 'pg';
 import { ToolRefusal, type JSONSchema7, type NetworkArea, type ToolContext, type ToolDefinition, type ToolsArea } from '@buddi/core/plugin';
-import type { DiscoveredAuthorization, HttpTransport, OAuthPort, SecretsPort, VaultPort } from './ports.js';
-import { checkServerUrl } from './fetch.js';
+import type { DiscoveredAuthorization, HttpTransport, OAuthPort, OAuthTokens, SecretsPort, VaultPort } from './ports.js';
+import { CATALOG, PLACEHOLDER_CLIENT_ID, type CatalogCard, type DeviceAuth } from './catalog.js';
+import { pollDevice, startDevice } from './device.js';
+import { checkServerUrl, isLoopbackHost } from './fetch.js';
 import { takeImage, toResult, type ServiceResult } from './output.js';
 import { listAllTools, openSession, Sessions, Unauthorized, type Opened } from './session.js';
 import {
@@ -69,6 +71,28 @@ export interface ConnectionsDeps {
   idleMs?: number;
   /** How often a connection's tool list is compared with its review, at most. An hour. */
   recheckMs?: number;
+  /** The cards, for a device sign-in's app (`CATALOG`). A test hands its own. */
+  catalog?: readonly CatalogCard[];
+  /** Wait between device polls; resolves early when `signal` aborts. A test hands one that does not wait. */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+/** A device sign-in (docs/connections.md, "Connect"), as `GET /api/connections/:id` shows it. */
+export interface DeviceView {
+  state: 'waiting' | 'done' | 'failed';
+  userCode: string;
+  verificationUri: string;
+  /** ISO time the code stops working. */
+  expiresAt: string;
+  /** Failed: why, in one sentence. */
+  reason?: string;
+}
+
+interface DeviceRun {
+  view: DeviceView;
+  controller: AbortController;
+  /** When it stopped waiting (ms), so a finished one is shown a while and then forgotten. */
+  endedAt?: number;
 }
 
 export interface ConnectionView {
@@ -92,6 +116,8 @@ export interface ConnectionView {
   unreachableSince: string | null;
   /** Reviewed tools the server changed or dropped since: they wait for another review. */
   heldTools: number;
+  /** A device sign-in that is waiting, or finished in the last ten minutes. */
+  device?: DeviceView;
 }
 
 /** What changed in a server's list since the owner's review, by the server's names. */
@@ -225,6 +251,9 @@ export class ConnectionsService {
   readonly #live = new Map<string, ConnectionRow>();
   readonly #pending = new Map<string, PendingConsent>();
   readonly #discovered = new Map<string, { at: number; value: DiscoveredAuthorization }>();
+  readonly #devices = new Map<string, DeviceRun>();
+  /** The device and token endpoints' hosts a device sign-in declared, by connection. */
+  readonly #deviceHosts = new Map<string, string[]>();
 
   constructor(readonly deps: ConnectionsDeps) {
     this.sessions = new Sessions(deps.idleMs);
@@ -281,7 +310,18 @@ export class ConnectionsService {
       serverName: row.serverName, serverVersion: row.serverVersion, reviewedAt: row.reviewedAt,
       unreachableSince: row.state === 'unreachable' ? row.unreachableSince : null,
       heldTools: mine.filter((t) => t.changed).length,
+      ...this.#deviceView(row.id),
     };
+  }
+
+  #deviceView(id: string): { device?: DeviceView } {
+    const run = this.#devices.get(id);
+    if (!run) return {};
+    if (run.endedAt !== undefined && Date.now() - run.endedAt > CONSENT_TTL_MS) {
+      this.#devices.delete(id);
+      return {};
+    }
+    return { device: { ...run.view } };
   }
 
   async list(): Promise<ConnectionView[]> {
@@ -473,6 +513,7 @@ export class ConnectionsService {
       throw new ConnectionError(400, 'The service came back without a sign-in code.');
     }
     const row = await this.#row(pending.connectionId);
+    this.#cancelDevice(row.id);
     let tokens;
     try {
       tokens = await this.deps.oauth.exchange({
@@ -526,9 +567,13 @@ export class ConnectionsService {
     if (token.length > 8192 || !/^[\x21-\x7e]+$/.test(token)) {
       throw new ConnectionError(400, 'That does not look like a token: it is one word of plain characters, with no spaces or line breaks.');
     }
-    const value = `${prefix}${token}`;
-    const target = { host: hostnameOf(row), header };
-    // Tried before it is kept.
+    // A device sign-in still waiting would overwrite this one.
+    this.#cancelDevice(row.id);
+    return this.#keepToken(row, secrets, token, header, prefix);
+  }
+
+  /** Open the server with `<header>: <value>` and list its tools: nothing is kept before this answers. */
+  async #tryCredential(row: ConnectionRow, header: string, value: string, token: string): Promise<void> {
     let opened: Opened | undefined;
     try {
       opened = await openSession({
@@ -544,6 +589,12 @@ export class ConnectionsService {
     } finally {
       await opened?.close();
     }
+  }
+
+  /** The token path: tried, then an owner secret bound to this host's header, the connection signed in with it. */
+  async #keepToken(row: ConnectionRow, secrets: SecretsPort, token: string, header: string, prefix: string): Promise<{ id: string; reconnected: boolean; name: string }> {
+    const target = { host: hostnameOf(row), header };
+    await this.#tryCredential(row, header, `${prefix}${token}`, token);
     const name = tokenSecretFor(row.id);
     try {
       await secrets.put(name, token, target);
@@ -562,6 +613,181 @@ export class ConnectionsService {
     if (updated) this.#live.set(row.id, updated);
     this.#retries.delete(row.id);
     return { id: row.id, reconnected, name: row.name };
+  }
+
+  /* ---------------------------------------------------------------- *
+   * 2. Or a code typed on the service's site (the OAuth device flow)
+   * ---------------------------------------------------------------- */
+
+  /** The card whose address this connection is, with its device app. */
+  #deviceCard(row: ConnectionRow): { card: CatalogCard; device: DeviceAuth } | undefined {
+    const card = (this.deps.catalog ?? CATALOG).find((c) => sameAddress(c.url, row.url));
+    return card?.auth?.device ? { card, device: card.auth.device } : undefined;
+  }
+
+  /**
+   * Ask the service for a device code with buddi's public app, and wait for
+   * the owner to type it on the service's site. The wait is this service's:
+   * one per connection, replaced by a new begin, ended by a disconnect or the
+   * code's expiry. Approved, the token goes the way a pasted one goes
+   * (`#keepToken`: tried, then an owner secret sent as `Authorization:
+   * Bearer`), or, when the service gave a refresh token, into the vault as
+   * an OAuth sign-in that renews itself before it expires. The connection's
+   * view carries `device` meanwhile.
+   */
+  async beginDevice(id: string): Promise<{ userCode: string; verificationUri: string; expiresAt: string; interval: number }> {
+    if (!this.deps.secrets && !this.tokens.available) {
+      throw new ConnectionError(409, 'This installation has no vault, so a connection cannot keep its sign-in. Turn the vault on first.');
+    }
+    const row = await this.#row(id);
+    if (row.authKind === 'none') throw new ConnectionError(409, `${row.name} does not ask for a sign-in.`);
+    const found = this.#deviceCard(row);
+    if (!found) throw new ConnectionError(409, `buddi has no app on ${row.name} to sign in with a code. Use a token or the service's sign-in page.`, 'device-unavailable');
+    const { card, device } = found;
+    if (!device.clientId || device.clientId === PLACEHOLDER_CLIENT_ID) {
+      throw new ConnectionError(409, `buddi has no ${card.name} app id in this build yet.`, 'device-unavailable');
+    }
+    const discovered = await this.#discover(row);
+    const tokenEndpoint = discovered.authorizationServer.tokenEndpoint;
+    for (const endpoint of [device.deviceEndpoint, tokenEndpoint]) {
+      let url: URL;
+      try { url = new URL(endpoint); } catch { throw new ConnectionError(502, `${card.name}'s sign-in address is not one buddi can use.`); }
+      if (url.protocol !== 'https:' && !(this.deps.allowLoopbackHttp && url.protocol === 'http:' && isLoopbackHost(url.hostname))) {
+        throw new ConnectionError(502, `${card.name}'s sign-in address is not https, so buddi does not use it.`);
+      }
+    }
+    this.#declareDevice(row, card, [device.deviceEndpoint, tokenEndpoint]);
+    this.#cancelDevice(row.id);
+    let start;
+    try {
+      start = await startDevice(this.deps.transport, {
+        deviceEndpoint: device.deviceEndpoint, clientId: device.clientId, scopes: device.scopes, service: card.name, now: this.#now().getTime(),
+      });
+    } catch (err) {
+      throw new ConnectionError(502, short(err));
+    }
+    const run: DeviceRun = {
+      view: { state: 'waiting', userCode: start.userCode, verificationUri: start.verificationUri, expiresAt: new Date(start.expiresAt).toISOString() },
+      controller: new AbortController(),
+    };
+    this.#devices.set(row.id, run);
+    void this.#pollDevice(row.id, run, {
+      deviceCode: start.deviceCode, intervalMs: start.intervalMs, expiresAt: start.expiresAt,
+      clientId: device.clientId, tokenEndpoint, service: card.name,
+    });
+    return { userCode: start.userCode, verificationUri: start.verificationUri, expiresAt: run.view.expiresAt, interval: start.intervalMs / 1000 };
+  }
+
+  /** The device and token endpoints' hosts join the plugin's declared network. */
+  #declareDevice(row: ConnectionRow, card: CatalogCard, endpoints: readonly string[]): void {
+    const hosts = [...new Set(endpoints.map((e) => new URL(e).hostname.toLowerCase()))];
+    this.#deviceHosts.set(row.id, hosts);
+    if (!this.#network) return;
+    try {
+      this.#network.declare(hosts.map((host) => ({ host, why: `${card.name}'s sign-in for ${row.name}: a device code, and the token it becomes` })));
+    } catch (err) {
+      this.#log(`${hosts.join(', ')} could not be declared: ${short(err)}`);
+    }
+  }
+
+  #undeclareDevice(id: string): void {
+    const hosts = this.#deviceHosts.get(id);
+    this.#deviceHosts.delete(id);
+    if (!hosts || !this.#network) return;
+    const kept = new Set<string>();
+    for (const [other, list] of this.#deviceHosts) if (other !== id) list.forEach((h) => kept.add(h));
+    for (const row of this.#live.values()) if (row.id !== id) kept.add(hostnameOf(row));
+    const gone = hosts.filter((h) => !kept.has(h));
+    if (gone.length > 0) this.#network.undeclare(gone);
+  }
+
+  #cancelDevice(id: string): void {
+    const run = this.#devices.get(id);
+    if (!run) return;
+    run.controller.abort();
+    this.#devices.delete(id);
+  }
+
+  #sleep(ms: number, signal: AbortSignal): Promise<void> {
+    if (this.deps.sleep) return this.deps.sleep(ms, signal);
+    return new Promise((resolve) => {
+      if (signal.aborted) { resolve(); return; }
+      const timer = setTimeout(() => { signal.removeEventListener('abort', done); resolve(); }, ms);
+      timer.unref?.();
+      const done = (): void => { clearTimeout(timer); resolve(); };
+      signal.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  #endDevice(id: string, run: DeviceRun, outcome: { state: 'done' } | { state: 'failed'; reason: string }): void {
+    if (this.#devices.get(id) !== run) return;
+    run.view = { ...run.view, ...outcome };
+    run.endedAt = Date.now();
+  }
+
+  async #pollDevice(id: string, run: DeviceRun, p: {
+    deviceCode: string; intervalMs: number; expiresAt: number; clientId: string; tokenEndpoint: string; service: string;
+  }): Promise<void> {
+    const signal = run.controller.signal;
+    const expired = `The code expired before it was approved on ${p.service}. Start again.`;
+    let interval = p.intervalMs;
+    try {
+      for (;;) {
+        await this.#sleep(interval, signal);
+        if (signal.aborted) return;
+        if (this.#now().getTime() >= p.expiresAt) { this.#endDevice(id, run, { state: 'failed', reason: expired }); return; }
+        const poll = await pollDevice(this.deps.transport, {
+          tokenEndpoint: p.tokenEndpoint, clientId: p.clientId, deviceCode: p.deviceCode, now: this.#now().getTime(),
+        });
+        if (signal.aborted) return;
+        if (poll.kind === 'pending') continue;
+        if (poll.kind === 'slow_down') { interval = Math.max(interval + 5_000, poll.intervalMs ?? 0); continue; }
+        if (poll.kind === 'expired') { this.#endDevice(id, run, { state: 'failed', reason: expired }); return; }
+        if (poll.kind === 'denied') { this.#endDevice(id, run, { state: 'failed', reason: `The sign-in was declined on ${p.service}. Start again.` }); return; }
+        if (poll.kind === 'failed') { this.#endDevice(id, run, { state: 'failed', reason: `${p.service} did not finish the sign-in. Start again.` }); return; }
+        await this.#keepDevice(id, run, poll.tokens, p.tokenEndpoint);
+        return;
+      }
+    } catch (err) {
+      if (signal.aborted) return;
+      const reason = err instanceof ConnectionError && err.code === 'token-refused'
+        ? `${(this.#live.get(id)?.name) ?? 'The service'} did not accept the sign-in from ${p.service}. Start again.`
+        : err instanceof ConnectionError ? err.message : `The sign-in could not be kept: ${short(err)}`;
+      this.#endDevice(id, run, { state: 'failed', reason });
+      this.#log(`a device sign-in did not finish: ${reason}`);
+    }
+  }
+
+  /**
+   * An approved device sign-in, kept. With a refresh token (and a vault):
+   * tried on the server, then an OAuth sign-in in the vault that renews
+   * before it expires. Without: the token path, as if it had been pasted.
+   */
+  async #keepDevice(id: string, run: DeviceRun, tokens: OAuthTokens, tokenEndpoint: string): Promise<void> {
+    const row = await this.#row(id);
+    const secrets = this.deps.secrets;
+    if (run.controller.signal.aborted) return;
+    if ((tokens.refreshToken || !secrets) && this.tokens.available) {
+      await this.#tryCredential(row, DEFAULT_TOKEN_HEADER, `${DEFAULT_TOKEN_PREFIX}${tokens.accessToken}`, tokens.accessToken);
+      if (run.controller.signal.aborted) return;
+      const ref = vaultRefFor(row.id);
+      await this.tokens.save(ref, { ...tokens, state: 'ready', extra: { tokenEndpoint } });
+      if (row.authKind === 'token' && row.vaultRef) await secrets?.remove(row.vaultRef).catch(() => {});
+      const reconnected = row.slug !== null;
+      const updated = await updateConnection(this.deps.pool, row.id, {
+        clientId: tokens.clientId ?? null, clientSource: null, vaultRef: ref,
+        authKind: 'oauth', tokenHeader: null, tokenPrefix: null,
+        state: reconnected ? 'connected' : 'pending-review', unreachableSince: null,
+      });
+      await this.sessions.close(row.id);
+      if (updated) this.#live.set(row.id, updated);
+      this.#retries.delete(row.id);
+    } else if (secrets) {
+      await this.#keepToken(row, secrets, tokens.accessToken, DEFAULT_TOKEN_HEADER, DEFAULT_TOKEN_PREFIX);
+    } else {
+      throw new ConnectionError(409, 'This installation has no vault, so a connection cannot keep its sign-in. Turn the vault on first.');
+    }
+    this.#endDevice(id, run, { state: 'done' });
   }
 
   /* ---------------------------------------------------------------- *
@@ -675,6 +901,7 @@ export class ConnectionsService {
    */
   async disconnect(id: string): Promise<{ id: string; name: string; slug: string | null }> {
     const row = await this.#row(id);
+    this.#cancelDevice(id);
     await this.sessions.close(id);
     if (row.vaultRef) {
       try {
@@ -686,6 +913,7 @@ export class ConnectionsService {
     }
     this.#unregister(id);
     this.#undeclare(row);
+    this.#undeclareDevice(id);
     await deleteConnection(this.deps.pool, id);
     this.#live.delete(id);
     this.#discovered.delete(id);
@@ -945,6 +1173,7 @@ export class ConnectionsService {
   async close(): Promise<void> {
     if (this.#background) clearInterval(this.#background);
     this.#background = undefined;
+    for (const id of [...this.#devices.keys()]) this.#cancelDevice(id);
     await this.sessions.closeAll();
   }
 }
@@ -958,6 +1187,11 @@ function diff(stored: readonly ToolRow[], live: readonly ServerTool[]): ReviewCh
     changed: live.filter((t) => reviewed.has(t.name) && reviewed.get(t.name) !== toolHash(t)).map((t) => t.name),
     removed: stored.filter((t) => !listed.has(t.name)).map((t) => t.name),
   };
+}
+
+function sameAddress(a: string, b: string): boolean {
+  const norm = (text: string): string => text.trim().replace(/\/+$/, '').toLowerCase();
+  return norm(a) === norm(b);
 }
 
 function hostnameOf(row: Pick<ConnectionRow, 'url' | 'host'>): string {

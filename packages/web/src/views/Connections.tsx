@@ -9,7 +9,8 @@
  *
  * The four screens are one sheet, in the first-run wizard's voice: one
  * question per screen, the primary answer on the right. Signing in is the
- * service's own page, a token you paste, or a client id; "I have a config"
+ * service's own page, a code you type on its site (the device way, with
+ * buddi's own app), a token you paste, or a client id; "I have a config"
  * reads the block another MCP client takes into the same screens.
  */
 import { useEffect, useRef, useState } from 'react';
@@ -26,6 +27,7 @@ import {
 import { fmtRelative, fmtTime } from '../format';
 import { Button, Card, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
 import { parseConnectionConfig, type PastedConfig, type PastedHeader } from '@buddi/core/connection-config';
+import { SignInCode } from './parts/SignInCode';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
   connected: { label: 'Connected', tone: 'good' },
@@ -398,6 +400,7 @@ function AddressStep({
     }
   };
   const tokenFirst = card?.auth?.recommended === 'token';
+  const deviceFirst = card?.auth?.recommended === 'device' && card.auth.device !== undefined;
   return (
     <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); void open(); }}>
       {card ? (
@@ -409,7 +412,9 @@ function AddressStep({
         <input required autoFocus={!card && !pasted} spellCheck={false} value={url} placeholder="https://" onChange={(event) => setUrl(event.target.value)} />
       </Field>
       {card && !card.verified ? <p className="ui-card-meta">This address is the one {card.name} published; buddi has not checked it since.</p> : null}
-      {tokenFirst ? (
+      {deviceFirst ? (
+        <p className="ui-card-meta">{card!.name} signs in with a code you type on its site. The next screen shows it.</p>
+      ) : tokenFirst ? (
         <p className="ui-card-meta">{card!.name} signs in with a token you make on its site. The next screen links to the page.</p>
       ) : card?.clientIdRequired ? (
         <p className="ui-card-meta">{card.name} does not let buddi register itself: signing in needs a token, or a client id from its developer settings.</p>
@@ -433,20 +438,24 @@ function AddressStep({
 }
 
 type KnownSignIn = 'dynamic' | 'manual' | 'unknown';
-type SignInMode = 'oauth' | 'token' | 'client';
+type SignInMode = 'device' | 'oauth' | 'token' | 'client';
 
-const MODE_LABELS: Record<SignInMode, string> = { oauth: 'Sign in', token: 'Token', client: 'Client id' };
+const MODE_LABELS: Record<SignInMode, string> = { device: 'Device', oauth: 'Sign in', token: 'Token', client: 'Client id' };
 
 /**
  * The ways this service can be signed in to, from what its server said
  * (`signIn`) and whether a token can be kept: its own sign-in page when it
  * lets buddi register, a client id when it does not, a token either way.
  * Unknown (a reconnect) is taken as the sign-in page until the server says
- * otherwise.
+ * otherwise. A card with buddi's own app on the service adds a code typed on
+ * its site: first when the card recommends it, otherwise before Client id.
  */
-export function signInModes(signIn: KnownSignIn, tokens: boolean): SignInMode[] {
-  const modes: SignInMode[] = signIn === 'manual' ? ['token', 'client'] : ['oauth', 'token'];
-  return tokens ? modes : modes.filter((m) => m !== 'token');
+export function signInModes(signIn: KnownSignIn, tokens: boolean, device: 'first' | 'offered' | 'none' = 'none'): SignInMode[] {
+  const base: SignInMode[] = signIn === 'manual' ? ['token', 'client'] : ['oauth', 'token'];
+  const modes = tokens ? base : base.filter((m) => m !== 'token');
+  if (device === 'first') return ['device', ...modes];
+  if (device === 'offered') return [...modes.filter((m) => m !== 'client'), 'device', ...modes.filter((m) => m === 'client')];
+  return modes;
 }
 
 function ConsentStep({
@@ -469,8 +478,9 @@ function ConsentStep({
   onSignedIn: (connection: ConnectionView) => void;
 }): JSX.Element {
   const [known, setKnown] = useState<KnownSignIn>(signIn);
-  const modes = signInModes(known, tokens);
-  const preferToken = pasted !== undefined || connection.authKind === 'token' || card?.auth?.recommended === 'token';
+  const device = card?.auth?.device ? (card.auth.recommended === 'device' ? 'first' : 'offered') : 'none';
+  const modes = signInModes(known, tokens, device);
+  const preferToken = pasted !== undefined || (device !== 'first' && (connection.authKind === 'token' || card?.auth?.recommended === 'token'));
   const [chosen, setChosen] = useState<SignInMode>(() => (preferToken && modes.includes('token') ? 'token' : modes[0]!));
   const mode = modes.includes(chosen) ? chosen : modes[0]!;
   const [manualSentence, setManualSentence] = useState(MANUAL_SENTENCE);
@@ -596,9 +606,12 @@ function ConsentStep({
       {mode === 'token' ? (
         <TokenForm connection={connection} card={card} pasted={pasted} placeholder={placeholder} onSignedIn={onSignedIn} />
       ) : null}
-      {mode !== 'token' && waiting ? <Notice tone="accent" role="status">Waiting for you to say yes on {connection.name}’s page…</Notice> : null}
-      {mode !== 'token' && link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {connection.name}’s sign-in page</a></p> : null}
-      {mode !== 'token' ? <ErrorBanner message={failure} /> : null}
+      {mode === 'device' ? (
+        <DeviceSignIn connection={connection} service={card?.name ?? connection.name} pollMs={pollMs} onSignedIn={onSignedIn} />
+      ) : null}
+      {(mode === 'oauth' || mode === 'client') && waiting ? <Notice tone="accent" role="status">Waiting for you to say yes on {connection.name}’s page…</Notice> : null}
+      {(mode === 'oauth' || mode === 'client') && link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {connection.name}’s sign-in page</a></p> : null}
+      {mode === 'oauth' || mode === 'client' ? <ErrorBanner message={failure} /> : null}
       {mode === 'oauth' ? (
         <Toolbar align="end">
           <Button variant="accent" onClick={() => { if (consentUrl) openConsent(consentUrl); }} disabled={consentUrl === null}>
@@ -620,6 +633,113 @@ function ConsentStep({
         </Toolbar>
       ) : null}
     </div>
+  );
+}
+
+/** `https://github.com/login/device` as the words on its button: `github.com/login/device`. */
+function shortAddress(uri: string): string {
+  try {
+    const url = new URL(uri);
+    return `${url.host}${url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return uri;
+  }
+}
+
+/**
+ * A code typed on the service's site (the OAuth device flow, with buddi's own
+ * app): asked for as the mode opens, shown large with Copy, the site opened
+ * inside the click. The gateway waits for the approval; this screen asks the
+ * connection every two seconds and moves on by itself once it is kept.
+ */
+function DeviceSignIn({
+  connection,
+  service,
+  pollMs,
+  onSignedIn,
+}: {
+  connection: ConnectionView;
+  /** Whose site the code is typed on: the card's name. */
+  service: string;
+  pollMs: number;
+  onSignedIn: (connection: ConnectionView) => void;
+}): JSX.Element {
+  const [code, setCode] = useState<{ userCode: string; verificationUri: string } | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [link, setLink] = useState<string | null>(null);
+  const landed = useRef(onSignedIn);
+  landed.current = onSignedIn;
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: number | undefined;
+    setCode(null);
+    setFailure(null);
+    setLink(null);
+    const ask = async (): Promise<void> => {
+      if (stopped) return;
+      try {
+        const fresh = await api.connection(connection.id);
+        if (stopped) return;
+        if (fresh.device?.state === 'done') { landed.current(fresh); return; }
+        if (fresh.device?.state === 'failed') { setFailure(fresh.device.reason ?? 'The sign-in did not finish. Start again.'); return; }
+      } catch {
+        // Keep asking.
+      }
+      timer = window.setTimeout(() => void ask(), pollMs);
+    };
+    void (async () => {
+      try {
+        const started = await api.connectionDevice(connection.id);
+        if (stopped) return;
+        setCode({ userCode: started.userCode, verificationUri: started.verificationUri });
+        timer = window.setTimeout(() => void ask(), pollMs);
+      } catch (error) {
+        if (!stopped) setFailure(failureOf(error));
+      }
+    })();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [connection.id, pollMs, attempt]);
+
+  /** Opened inside the click, onto the page itself: never an empty tab. */
+  const openSite = (url: string): void => {
+    const tab = window.open(url, '_blank');
+    if (tab) {
+      tab.opener = null;
+      setLink(null);
+    } else {
+      setLink(url);
+    }
+  };
+
+  const address = code ? shortAddress(code.verificationUri) : '';
+  return (
+    <>
+      <p>
+        Type this code on {service}’s site and say yes there. buddi keeps the sign-in in its vault and sends it only to{' '}
+        <span className="mono">{connection.host}</span>. No agent ever sees it.
+      </p>
+      {code === null && failure === null ? <Empty>Asking {service} for a code…</Empty> : null}
+      {code && failure === null ? (
+        <>
+          <SignInCode code={code.userCode} label={`Your code for ${service}`} large />
+          <Notice tone="accent" role="status">Waiting for you to approve on {service}…</Notice>
+          {link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {address}</a></p> : null}
+          <Toolbar align="end">
+            <Button variant="accent" onClick={() => openSite(code.verificationUri)}>Open {address}</Button>
+          </Toolbar>
+        </>
+      ) : null}
+      {failure !== null ? (
+        <>
+          <ErrorBanner message={failure} />
+          <Toolbar align="end">
+            <Button variant="accent" onClick={() => setAttempt((n) => n + 1)}>Start again</Button>
+          </Toolbar>
+        </>
+      ) : null}
+    </>
   );
 }
 

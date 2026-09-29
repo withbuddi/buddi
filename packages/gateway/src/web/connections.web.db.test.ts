@@ -20,7 +20,7 @@ import { registerHttpHeaderDestination, secretDestination } from '@buddi/core';
 import { connectionSecrets } from '../owner-secrets.js';
 import { createOAuthPort } from '@buddi/runtime';
 import { bindConnections, manifest as connectionsManifest, vaultRefFor } from '@buddi/tool-mcp';
-import { Fake, MCP_URL } from '@buddi/tool-mcp/testing';
+import { AS_ORIGIN, Fake, MCP_URL } from '@buddi/tool-mcp/testing';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { bindPlatformTools } from '../agents/platform.js';
 import { mintTicket } from './token.js';
@@ -70,7 +70,9 @@ suite('connections routes', () => {
     registry.onChange(() => catalog.reload());
     bindPlatformTools(registry, { catalog, reload: () => catalog.reload(), agentsDir: path.join(dir, 'agents') });
     if (!secretDestination('http.header')) registerHttpHeaderDestination();
-    const connections = bindConnections(registry.manifests(), { pool, vault, secrets: connectionSecrets(pool, vault), transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }), log: () => {} });
+    const connections = bindConnections(registry.manifests(), { pool, vault, secrets: connectionSecrets(pool, vault), transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }), log: () => {},
+      catalog: [{ id: 'tracker', name: 'Tracker', blurb: '', url: MCP_URL, verified: true, auth: { recommended: 'device', device: { clientId: 'buddi-app', deviceEndpoint: `${AS_ORIGIN}/device/code`, scopes: ['read'] } } }],
+      sleep: () => new Promise((resolve) => setImmediate(resolve)) });
     server = createWebApp({
       pool,
       registry,
@@ -237,5 +239,24 @@ suite('connections routes', () => {
 
     expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
     expect((await pool.query(`select count(*)::int as n from core.secrets`)).rows[0].n).toBe(0);
+  });
+
+  it('signs in with a device code: the code and the address, then the view says done', async () => {
+    const owner = await signIn();
+    const added = await call(owner, 'POST', '', { url: MCP_URL, name: 'Tracker' });
+    const id = added.body.connection.id as string;
+    fake.deviceScript = ['pending', 'approve'];
+    expect((await call(owner, 'GET', `/${id}/device`)).status).toBe(405);
+    const started = await call(owner, 'POST', `/${id}/device`, {});
+    expect(started).toMatchObject({ status: 200, body: { userCode: 'WDJB-MJHT', verificationUri: `${AS_ORIGIN}/device`, interval: 5 } });
+    let view: any;
+    for (let i = 0; i < 200; i++) {
+      view = (await call(owner, 'GET', `/${id}`)).body;
+      if (view.device?.state !== 'waiting') break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(view).toMatchObject({ authKind: 'token', signedIn: true, device: { state: 'done', userCode: 'WDJB-MJHT' } });
+    expect(JSON.stringify(view)).not.toContain(fake.validToken);
+    expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
   });
 });

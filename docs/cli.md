@@ -150,9 +150,9 @@ Your agents, what they have scheduled, and the plugins they use.
 - `buddi connections list [--json]`: List the connected services: their state, their tools, and the agents that hold them.
   - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
   - JSON: [{ id, name, slug, state, host, url, signedIn, tools, heldTools, agents: [id] }]. state is connected, pending-review, needs-review, needs-reconnect or unreachable.
-- `buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]`: Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard.
+- `buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]`: Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard. GitHub signs in with a code you type on github.com.
   - `--name <name>`: What the connection is called on the dashboard.
-  - `--token`: Sign in with a token you made on the service's site, typed with the echo off. buddi tries it before it keeps it.
+  - `--token`: Sign in with a token you made on the service's site, typed with the echo off, instead of a code. buddi tries it before it keeps it.
   - `--token-stdin`: The same, with the token piped on stdin.
   - `--client-id <id>`: Sign in with a client id from an app you created in the service's developer settings.
   - `--json '<mcpServers json>'`: The block another MCP client takes: it gives the address, the name and a header token. A command server is refused.

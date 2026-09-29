@@ -6,7 +6,7 @@
 import { CONFIG_REFUSALS } from '@buddi/core/connection-config';
 import { describe, expect, it } from 'vitest';
 import { parseConnectionsArgs, UsageError } from './args.js';
-import { OPEN_IN_BROWSER, runConnections, type ConnectionView, type ConnectionsGateway, type ConnectionsIo } from './connections-cmd.js';
+import { OPEN_IN_BROWSER, openInBrowser, runConnections, type ConnectionView, type ConnectionsGateway, type ConnectionsIo } from './connections-cmd.js';
 import { GatewayError, GatewayUnavailable, NOT_RUNNING } from './mcp/gateway-client.js';
 
 const ID = '11111111-2222-3333-4444-555555555555';
@@ -69,6 +69,8 @@ function io(over: Partial<ConnectionsIo> = {}): ConnectionsIo & { lines: string[
     secret: async () => '',
     sleep: async (ms) => { clock += ms; },
     now: () => clock,
+    enter: () => ({ pressed: new Promise<boolean>(() => {}), cancel: () => {} }),
+    openUrl: () => {},
     ...over,
   };
 }
@@ -172,6 +174,79 @@ describe('buddi connections', () => {
     expect(asked).toBe(3);
     expect(gateway.calls.find((c) => c.method === 'POST' && c.path.endsWith('/review'))?.body).toEqual({ hash: 'h1', slug: 'notes' });
     expect(gateway.calls.some((c) => c.path.endsWith('/grant'))).toBe(false);
+  });
+
+  it('adds GitHub with a code: prints it and the address, opens it on Enter, waits for the approval', async () => {
+    const deviceListing = { ...listing(), catalog: [{ ...CATALOG[0]!, auth: { recommended: 'device', device: { clientId: 'Ov23' }, tokenPage: 'https://github.com/settings/tokens' } }] };
+    const device = { state: 'waiting' as const, userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: new Date(15 * 60_000).toISOString() };
+    let asked = 0;
+    const gateway = fakeGateway({
+      'GET /api/connections': () => deviceListing,
+      'POST /api/connections': () => ({ connection: view(), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/device`]: () => ({ userCode: device.userCode, verificationUri: device.verificationUri, expiresAt: device.expiresAt, interval: 5 }),
+      [`GET /api/connections/${ID}`]: () => (++asked < 3 ? view({ device }) : view({ authKind: 'token', signedIn: true, device: { ...device, state: 'done' } })),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, connection: view({ signedIn: true }) }),
+      [`POST /api/connections/${ID}/review`]: () => view({ slug: 'github', state: 'connected', signedIn: true }),
+    });
+    const opened: string[] = [];
+    let cancelled = false;
+    const out = io({
+      interactive: true,
+      enter: (question) => { out.lines.push(question); return { pressed: Promise.resolve(true), cancel: () => { cancelled = true; } }; },
+      openUrl: (url) => { opened.push(url); },
+    });
+    const code = await runConnections(
+      { action: 'add', address: 'github', token: false, tokenStdin: false, keep: true, to: [] },
+      { gateway, json: false, io: out, pollMs: 2000 },
+    );
+    expect(code).toBe(0);
+    expect(out.lines).toContain('  WDJB-MJHT');
+    expect(out.lines).toContain('Type it at https://github.com/login/device and say yes there.');
+    expect(out.lines).toContain('Press Enter to open it in your browser, or open it yourself. ');
+    expect(opened).toEqual(['https://github.com/login/device']);
+    expect(cancelled).toBe(true);
+    expect(out.lines).toContain('Signed in to GitHub.');
+    expect(asked).toBe(3);
+    expect(gateway.calls.some((c) => c.path.endsWith('/token'))).toBe(false);
+
+    // --token still forces the token path.
+    const forced = io({ secret: async () => SECRET, interactive: true });
+    const tokenGateway = fakeGateway({
+      'GET /api/connections': () => deviceListing,
+      'POST /api/connections': () => ({ connection: view(), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/token`]: () => ({ connection: view({ authKind: 'token', signedIn: true }) }),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, connection: view({ signedIn: true }) }),
+      [`POST /api/connections/${ID}/review`]: () => view({ slug: 'github', state: 'connected', signedIn: true }),
+    });
+    expect(await runConnections({ action: 'add', address: 'github', token: true, tokenStdin: false, keep: true, to: [] }, { gateway: tokenGateway, json: false, io: forced })).toBe(0);
+    expect(tokenGateway.calls.some((c) => c.path.endsWith('/device'))).toBe(false);
+  });
+
+  it('says why a code sign-in ended, and what to do when this build has no app', async () => {
+    const deviceListing = { ...listing(), catalog: [{ ...CATALOG[0]!, auth: { recommended: 'device', device: { clientId: 'Ov23' } } }] };
+    const device = { state: 'failed' as const, userCode: 'AAAA-BBBB', verificationUri: 'https://github.com/login/device', expiresAt: new Date(60_000).toISOString(), reason: 'The sign-in was declined on GitHub. Start again.' };
+    const gateway = fakeGateway({
+      'GET /api/connections': () => deviceListing,
+      'POST /api/connections': () => ({ connection: view(), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/device`]: () => ({ ...device, interval: 5 }),
+      [`GET /api/connections/${ID}`]: () => view({ device }),
+    });
+    const out = io();
+    expect(await runConnections({ action: 'add', address: 'github', token: false, tokenStdin: false, keep: true }, { gateway, json: false, io: out })).toBe(1);
+    expect(out.errors[0]).toBe('The sign-in was declined on GitHub. Start again.');
+
+    const none = fakeGateway({
+      'GET /api/connections': () => deviceListing,
+      'POST /api/connections': () => ({ connection: view(), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/device`]: () => { throw new GatewayError(409, 'buddi has no GitHub app id in this build yet.', { code: 'device-unavailable' }); },
+    });
+    const refused = io();
+    expect(await runConnections({ action: 'add', address: 'github', token: false, tokenStdin: false, keep: true }, { gateway: none, json: false, io: refused })).toBe(1);
+    expect(refused.errors[0]).toBe('buddi has no GitHub app id in this build yet. Run again with --token to sign in with a token instead.');
+  });
+
+  it('opens an address with the platform opener, and never fails when there is none', () => {
+    expect(() => openInBrowser('https://github.com/login/device', 'win32')).not.toThrow();
   });
 
   it('gives up on a sign-in after ten minutes', async () => {

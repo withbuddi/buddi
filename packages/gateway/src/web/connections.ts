@@ -6,6 +6,8 @@
  *   GET    /api/connections/:id             one connection
  *   POST   /api/connections/:id/consent     2. consent: { clientId?, cli? } → { authorizeUrl }
  *   POST   /api/connections/:id/token       2. or a token: { token, header?, prefix? }, tried before it is kept
+ *   POST   /api/connections/:id/device      2. or a code typed on the service's site → { userCode, verificationUri, expiresAt, interval };
+ *                                             GET /api/connections/:id carries `device` while it waits and once it ends
  *   POST   /api/connections/callback        the consent page came back: { state, code? | error? }
  *   GET    /api/connections/:id/review      3. review: the tools as buddi would take them
  *   POST   /api/connections/:id/review      3. keep them: { slug?, hash }
@@ -206,7 +208,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: done };
   }
-  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|review|grant|tools))?$`, 'i').exec(path);
+  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|device|review|grant|tools))?$`, 'i').exec(path);
   if (!one) return { status: 404, body: { error: 'no such route' } };
   const id = one[1]!.toLowerCase();
   const what = one[2];
@@ -244,6 +246,11 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
       ...(typeof body.prefix === 'string' ? { prefix: body.prefix } : {}),
     });
     return { status: 200, body: { ...done, connection: withAgents(deps, await service.get(id)) } };
+  }
+  if (what === 'device') {
+    if (method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
+    const started = await service.beginDevice(id);
+    return { status: 200, body: { ...started, connection: withAgents(deps, await service.get(id)) } };
   }
   if (what === 'tools') {
     if (method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };

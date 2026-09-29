@@ -8,10 +8,31 @@
  * `clientIdRequired` means the service's authorization server offers no
  * dynamic registration, so the owner creates a client id first (spec §2's
  * escape hatch). `auth` says which way of signing in the screen offers first:
- * `token` for a service where a personal token is the usual way (the owner
- * creates one on `tokenPage`), `oauth` for its own sign-in page. A card is only a filled-in address: the same review follows
- * whatever the server turns out to bring.
+ * `device` for a code the owner types on the service's site (the OAuth device
+ * flow, with buddi's own public app), `token` for a service where a personal
+ * token is the usual way (the owner creates one on `tokenPage`), `oauth` for
+ * its own sign-in page. A card is only a filled-in address: the same review
+ * follows whatever the server turns out to bring.
  */
+
+/** A device app id not filled in yet: the device way is offered, and starting it says so. */
+export const PLACEHOLDER_CLIENT_ID = 'REPLACE_ME';
+
+/**
+ * buddi's GitHub OAuth app: "buddi" under the withbuddi organisation on
+ * GitHub, with Device Flow enabled and expiring user tokens on. A public
+ * client id: the device flow needs no secret, so nothing here is one.
+ */
+export const GITHUB_CLIENT_ID = 'Ov23liBtuQozr2M6yvEL';
+
+/** The OAuth device flow (RFC 8628) with a public app buddi ships. */
+export interface DeviceAuth {
+  /** The app's public client id; `PLACEHOLDER_CLIENT_ID` until one is registered. */
+  clientId: string;
+  /** Where a device code is asked for. Services do not advertise it in their metadata. */
+  deviceEndpoint: string;
+  scopes: string[];
+}
 export interface CatalogCard {
   /** Stable, lower case: also the slug the review suggests. */
   id: string;
@@ -25,7 +46,9 @@ export interface CatalogCard {
   clientIdRequired?: boolean;
   /** How the sign-in step opens, and where a token is made. */
   auth?: {
-    recommended: 'token' | 'oauth';
+    recommended: 'device' | 'token' | 'oauth';
+    /** The device flow, when buddi has an app on the service. */
+    device?: DeviceAuth;
     /** The service's page for creating a token. */
     tokenPage?: string;
     /** One sentence under the token field. */
@@ -36,11 +59,13 @@ export interface CatalogCard {
 export const CATALOG: readonly CatalogCard[] = [
   // Verified 2026-09-28: 401 with resource metadata; the authorization server
   // (github.com/login/oauth) publishes no registration endpoint. Re-checked
-  // 2026-09-29; the server takes a personal access token as `Authorization: Bearer`.
+  // 2026-09-29; the server takes a personal access token as `Authorization: Bearer`,
+  // and so the device flow's token too. The device endpoint is not in the metadata.
   {
     id: 'github', name: 'GitHub', blurb: 'Repositories, issues and pull requests.', url: 'https://api.githubcopilot.com/mcp/', verified: true, clientIdRequired: true,
     auth: {
-      recommended: 'token',
+      recommended: 'device',
+      device: { clientId: GITHUB_CLIENT_ID, deviceEndpoint: 'https://github.com/login/device/code', scopes: ['repo', 'read:org', 'read:user'] },
       tokenPage: 'https://github.com/settings/personal-access-tokens/new',
       tokenHint: 'A fine-grained token with the repositories you want buddi to see. Read-only is fine to start.',
     },

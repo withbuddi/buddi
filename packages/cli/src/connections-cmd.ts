@@ -14,7 +14,11 @@
  * mints for the CLI (`cli: true`): the owner opens the link in any browser,
  * the service sends them to the dashboard's `/connections/callback`, and this
  * command polls the connection until it is signed in, ten minutes at most.
+ * A card that recommends the device way (GitHub) prints a code and the
+ * address to type it at; the gateway waits for the approval and this command
+ * polls the connection until its `device` says done or why not.
  */
+import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { parseConnectionConfig, type PastedConfig } from '@buddi/core/connection-config';
 import type { ConnectionsCommand } from './args.js';
@@ -39,6 +43,7 @@ export interface ConnectionView {
   unreachableSince: string | null;
   heldTools: number;
   agents: string[];
+  device?: { state: 'waiting' | 'done' | 'failed'; userCode: string; verificationUri: string; expiresAt: string; reason?: string };
 }
 
 interface CatalogCard {
@@ -46,7 +51,7 @@ interface CatalogCard {
   name: string;
   url: string;
   clientIdRequired?: boolean;
-  auth?: { recommended: 'token' | 'oauth'; tokenPage?: string; tokenHint?: string };
+  auth?: { recommended: 'device' | 'token' | 'oauth'; device?: { clientId: string }; tokenPage?: string; tokenHint?: string };
 }
 
 interface AgentChoice { id: string; name: string; handle: string; frontDesk: boolean }
@@ -98,6 +103,13 @@ export interface ConnectionsIo {
   secret(label: string): Promise<string>;
   sleep(ms: number): Promise<void>;
   now(): number;
+  /**
+   * Wait for Enter without holding up the command: `pressed` resolves true on
+   * Enter, false once `cancel` is called. Only asked at a terminal.
+   */
+  enter(question: string): { pressed: Promise<boolean>; cancel(): void };
+  /** Open an address in the browser. Never throws: a failure only means the owner opens it. */
+  openUrl(url: string): void;
 }
 
 export interface ConnectionsDeps {
@@ -126,7 +138,29 @@ function defaultIo(): ConnectionsIo {
     secret: promptHidden,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
+    enter: (question) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      let settle: (value: boolean) => void = () => {};
+      const pressed = new Promise<boolean>((resolve) => { settle = resolve; });
+      rl.question(question, () => { settle(true); rl.close(); });
+      rl.on('close', () => settle(false));
+      return { pressed, cancel: () => rl.close() };
+    },
+    openUrl: openInBrowser,
   };
+}
+
+/** `open` on macOS, `xdg-open` on Linux; elsewhere nothing, and the printed address is the answer. */
+export function openInBrowser(url: string, platform: NodeJS.Platform = process.platform): void {
+  const opener = platform === 'darwin' ? 'open' : platform === 'linux' ? 'xdg-open' : undefined;
+  if (!opener) return;
+  try {
+    const child = spawn(opener, [url], { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    // The owner opens it.
+  }
 }
 
 /** A stop with a sentence and an exit code; the sentence is already said. */
@@ -302,8 +336,11 @@ class Run {
     config: PastedConfig | undefined,
   ): Promise<ConnectionView> {
     const header = config?.header;
-    const wantsToken = cmd.token || cmd.tokenStdin || header !== undefined
-      || (!cmd.clientId && card?.auth?.recommended === 'token');
+    const forced = cmd.token || cmd.tokenStdin || header !== undefined;
+    if (!forced && !cmd.clientId && card?.auth?.recommended === 'device' && card.auth.device) {
+      return this.#device(view, card);
+    }
+    const wantsToken = forced || (!cmd.clientId && card?.auth?.recommended === 'token');
     if (wantsToken) return this.#token(view, cmd, card, header);
     if (signIn === 'manual' && !cmd.clientId) {
       this.io.err(`${view.name} does not let buddi register itself. Run again with --client-id <id> (an app you create in its developer settings, with the redirect address ${this.gateway.baseUrl}/connections/callback), or with --token.`);
@@ -340,6 +377,55 @@ class Run {
     });
     this.io.out(`${view.name} accepted the token; buddi keeps it as one of your secrets.`);
     return done.body.connection;
+  }
+
+  /**
+   * A code typed on the service's site: the gateway asks for it and waits for
+   * the approval; this prints it with the address, opens the address on
+   * Enter, and polls the connection until its `device` says done or why not.
+   */
+  async #device(view: ConnectionView, card: CatalogCard): Promise<ConnectionView> {
+    let started: { userCode: string; verificationUri: string; expiresAt: string };
+    try {
+      started = (await this.gateway.post<{ userCode: string; verificationUri: string; expiresAt: string }>(`/api/connections/${view.id}/device`, {})).body;
+    } catch (err) {
+      if (err instanceof GatewayError) {
+        this.io.err(`${err.message} Run again with --token to sign in with a token instead.`);
+        throw new Stop(1);
+      }
+      throw err;
+    }
+    this.io.out(`Sign in to ${card.name} with this code:`);
+    this.io.out('');
+    this.io.out(`  ${started.userCode}`);
+    this.io.out('');
+    this.io.out(`Type it at ${started.verificationUri} and say yes there.`);
+    const enter = this.io.interactive ? this.io.enter('Press Enter to open it in your browser, or open it yourself. ') : undefined;
+    void enter?.pressed.then((pressed) => { if (pressed) this.io.openUrl(started.verificationUri); });
+    try {
+      const until = Math.max(Date.parse(started.expiresAt) || 0, this.io.now()) + 30_000;
+      while (this.io.now() < until) {
+        await this.io.sleep(this.pollMs);
+        const fresh = await this.gateway.get<ConnectionView>(`/api/connections/${view.id}`).catch((err: unknown) => {
+          if (err instanceof GatewayUnavailable) throw err;
+          return undefined;
+        });
+        if (fresh?.device?.state === 'done') {
+          if (enter) this.io.out('');
+          this.io.out(`Signed in to ${fresh.name}.`);
+          return fresh;
+        }
+        if (fresh?.device?.state === 'failed') {
+          if (enter) this.io.out('');
+          this.io.err(fresh.device.reason ?? 'The sign-in did not finish. Start it again.');
+          throw new Stop(1);
+        }
+      }
+      this.io.err('The code expired before it was approved. Start it again.');
+      throw new Stop(1);
+    } finally {
+      enter?.cancel();
+    }
   }
 
   async #consent(view: ConnectionView, clientId: string | undefined): Promise<ConnectionView> {

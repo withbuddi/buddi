@@ -19,7 +19,7 @@ vi.mock('../api', async (importOriginal) => {
     api: {
       ...original.api,
       connections: vi.fn(), connection: vi.fn(), addConnection: vi.fn(), connectionConsent: vi.fn(), connectionCallback: vi.fn(),
-      connectionToken: vi.fn(),
+      connectionToken: vi.fn(), connectionDevice: vi.fn(),
       connectionReview: vi.fn(), saveConnectionReview: vi.fn(), grantConnection: vi.fn(), disconnect: vi.fn(),
       connectionTools: vi.fn(), setRememberedApproval: vi.fn(),
     },
@@ -177,6 +177,47 @@ describe('the four screens', () => {
     expect(await screen.findByText('mcp.github.search_issues')).toBeInTheDocument();
     expect(open).not.toHaveBeenCalled();
     open.mockRestore();
+  });
+
+  it('GitHub opens on Device: the code large with Copy, the site opened in the click, then review by itself', async () => {
+    const pending = connection({ slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
+    const card = { ...view().catalog[0]!, auth: { recommended: 'device' as const, device: { clientId: 'Ov23', deviceEndpoint: 'https://github.com/login/device/code', scopes: ['repo'] }, tokenPage: 'https://github.com/settings/tokens' } };
+    const device = { state: 'waiting' as const, userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: '2026-09-29T10:15:00Z' };
+    mocked.addConnection.mockResolvedValue({ connection: pending, signIn: 'manual' });
+    mocked.connectionDevice.mockResolvedValue({ userCode: 'WDJB-MJHT', verificationUri: 'https://github.com/login/device', expiresAt: device.expiresAt, interval: 5, connection: pending });
+    mocked.connection.mockResolvedValueOnce({ ...pending, device })
+      .mockResolvedValue({ ...pending, authKind: 'token', signedIn: true, device: { ...device, state: 'done' } });
+    mocked.connectionReview.mockResolvedValue(REVIEW);
+    const tab = { opener: {} as unknown };
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
+    render(<ConnectFlow start={{ step: 'address', card }} agents={AGENTS} onClose={() => {}} pollMs={10} />);
+    expect(screen.getByText(/signs in with a code you type on its site/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    // Device first, Token still there, Client id last.
+    expect(await screen.findByRole('radio', { name: 'Device' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getAllByRole('radio').map((r) => r.textContent)).toEqual(['Device', 'Token', 'Client id']);
+    expect(await screen.findByDisplayValue('WDJB-MJHT')).toHaveAttribute('data-code', 'large');
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(screen.getByText('Waiting for you to approve on GitHub…')).toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open github.com/login/device' }));
+    expect(open).toHaveBeenCalledWith('https://github.com/login/device', '_blank');
+    expect(tab.opener).toBeNull();
+    expect(await screen.findByText('mcp.github.search_issues')).toBeInTheDocument();
+    expect(mocked.connectionDevice).toHaveBeenCalledTimes(1);
+    open.mockRestore();
+  });
+
+  it('a declined or expired code is one sentence and Start again', async () => {
+    const pending = connection({ slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
+    const card = { ...view().catalog[0]!, auth: { recommended: 'device' as const, device: { clientId: 'Ov23', deviceEndpoint: 'https://github.com/login/device/code', scopes: [] } } };
+    mocked.connectionDevice.mockResolvedValue({ userCode: 'AAAA-BBBB', verificationUri: 'https://github.com/login/device', expiresAt: '2026-09-29T10:15:00Z', interval: 5, connection: pending });
+    mocked.connection.mockResolvedValue({ ...pending, device: { state: 'failed', userCode: 'AAAA-BBBB', verificationUri: 'https://github.com/login/device', expiresAt: '2026-09-29T10:15:00Z', reason: 'The sign-in was declined on GitHub. Start again.' } });
+    render(<ConnectFlow start={{ step: 'consent', connection: pending, card }} agents={AGENTS} onClose={() => {}} pollMs={10} />);
+    expect(await screen.findByText('The sign-in was declined on GitHub. Start again.')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('AAAA-BBBB')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+    await waitFor(() => expect(mocked.connectionDevice).toHaveBeenCalledTimes(2));
   });
 
   it('reads a pasted config: address and name filled, the header waiting on the token screen, the box cleared', async () => {

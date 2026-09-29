@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- GitHub connects with a code instead of a token: Settings → Connections and `buddi connections add github` show a code and open github.com/login/device, you type it and say yes, and buddi signs in with its own GitHub app (the OAuth device flow). Token and Client id stay available; `--token` still forces the token.
 - `buddi connections list|add|review|give|remove` connects an MCP service from the terminal, through the running buddi and the same four steps as Settings → Connections; a sign-in on the service's page lands in any dashboard session, once, within ten minutes.
 - A plugin that ships a settings tab has a Settings action on its row (in place of Open when it has no page of its own), in its ⋯ menu and in its detail sheet, so setting one up after an install is one click.
 - Connections sign in with a token: paste one on the sign-in screen and buddi tries it on the server before it keeps it, as one of your secrets sent only to that server's host. GitHub opens on Token, with a link to the page where you make one.
