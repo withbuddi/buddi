@@ -89,7 +89,14 @@ async function navigate(request) {
 async function asset(request) {
   const cache = await caches.open(CACHE);
   const kept = await cache.match(request);
-  return kept || fetch(request);
+  if (kept) return kept;
+  try {
+    return await fetch(request);
+  } catch {
+    // The gateway is restarting or away: answer like a server would, so the
+    // page sees a failed request rather than a worker that threw.
+    return new Response('', { status: 503, statusText: 'buddi is not answering' });
+  }
 }
 
 self.addEventListener('fetch', (event) => {

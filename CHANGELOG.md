@@ -63,6 +63,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A plugin page part this dashboard does not know yet says so instead of drawing nothing, and the installed app's worker answers a failed fetch as an error rather than throwing while buddi restarts.
 - A plugin packed with npm installs: buddi no longer lets npm fetch its core package or read a plugin's development links, and the plugin template packs cleanly. Installing never asks npm for a package named @buddi/core.
 - The Connections page in the docs has its title, so withbuddi.com builds again; a test now refuses a docs page without one.
 - A pasted key is tried with one small call before buddi offers the model list, so a wrong Ollama Cloud or compatible key is refused where you typed it, not on the first chat.

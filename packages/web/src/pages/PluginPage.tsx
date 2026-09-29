@@ -1092,7 +1092,13 @@ function Piece({
     case 'agent-offer':
       return <AgentOfferPiece component={component} />;
     default:
-      return null;
+      // A component this build does not know: the plugin is newer than the
+      // page. Say so instead of drawing nothing; the build check reloads soon.
+      return (
+        <Notice tone="info">
+          This page uses a part this dashboard does not know yet. Reload buddi to see it.
+        </Notice>
+      );
   }
 }
 
