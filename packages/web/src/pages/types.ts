@@ -162,6 +162,29 @@ export interface ComponentCommon {
   empty?: string;
 }
 
+/** Where a calendar finds each event's parts: paths within one row. */
+export interface CalendarMap {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay?: string;
+  calendar?: string;
+  tone?: string;
+  location?: string;
+}
+
+/** The calendar arm, named so its renderer can take it. */
+export type CalendarComponent = ComponentCommon & {
+  kind: 'calendar';
+  query: QueryRef;
+  events: string;
+  map: CalendarMap;
+  views?: Array<'week' | 'month' | 'list'>;
+  default?: 'week' | 'month' | 'list';
+  hours?: [number, number];
+};
+
 export type ListComponent = ComponentCommon & {
   kind: 'list';
   query: QueryRef;
@@ -247,6 +270,8 @@ export type Component =
        */
       poll?: { seconds: number; while: Visibility };
     })
+  /** Dated events: week, month and list views; the page adds `from` and `to` to the query. */
+  | CalendarComponent
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })

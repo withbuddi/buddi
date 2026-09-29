@@ -1042,6 +1042,14 @@ means, the page knows how to draw a line, and this says which is which.
   `cards[0].name`. If a descriptor needs arithmetic, the *tool* should be
   returning the number — the owner cannot audit a calculation that happens in a
   chart.
+- **`calendar` is dated events.** `{ kind: 'calendar', query, events, map,
+  views?, default?, hours? }`: a week of hours, a month of days or a list of
+  days behind a switch, drawn from the design kit. `map` names each event's
+  `id`, `title`, `start`, `end` (ISO instants, or dates for an all-day event,
+  `end` the day after) and optionally `allDay`, `calendar`, `tone` (0–3) and
+  `location`. The page adds `from` and `to` (dates, `to` exclusive) to the
+  query as the owner moves, so the query must declare both. Needs host API
+  `^1.11`; docs/plugin-pages.md §4.
 - **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
   of the form's *own values* first — a path that names a field on the form
   reads what the owner has just typed — and of the loaded data otherwise, so
@@ -1254,7 +1262,7 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
   flag; a parameter your schema does not declare is refused, not ignored.
 - **The components are a fixed set**, each a shape: `section`, `notice`,
   `link`, `progress`, `chart`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
-  `repeat`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
+  `repeat`, `calendar`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
   carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
   in §2.5.
 - **`repeat` is how a row becomes a sub-tree.** `{ kind: 'repeat', query,

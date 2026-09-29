@@ -88,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.10'; see §7
+  readonly version: string;            // '1.11'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -352,7 +352,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.10`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.11`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -360,6 +360,10 @@ asks for more than this buddi has is refused at stage time with both numbers.
 1.10 adds no method: it is the first buddi that draws the `tiles` renderer
 and Home glances (`placement: 'glance'`), and an older one refuses a
 descriptor it cannot parse. A plugin contributing either asks for `^1.10`.
+
+1.11 adds no method either: it is the first buddi that draws the `calendar`
+page component (docs/plugin-pages.md §4). A plugin whose pages use one asks
+for `^1.11`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

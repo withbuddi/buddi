@@ -362,6 +362,46 @@ describe('page descriptors', () => {
     ).toThrow(/body\.0\.list/);
   });
 
+  it('takes a calendar whose query takes the range, and refuses one that does not', () => {
+    const calendar = (over: Record<string, unknown> = {}): unknown =>
+      page({
+        body: [
+          {
+            kind: 'calendar',
+            query: { query: 'agenda', params: { calendars: { param: 'calendars' } } },
+            events: 'events',
+            map: { id: 'id', title: 'title', start: 'start', end: 'end', allDay: 'allDay', calendar: 'calendar', tone: 'tone', location: 'location' },
+            views: ['week', 'month', 'list'],
+            default: 'week',
+            hours: [7, 21],
+            ...over,
+          },
+        ],
+      });
+    const ranged = (params: z.AnyZodObject) =>
+      (pages: unknown[]) =>
+        parsePageContributions({ plugin: 'demo', pages, queries: [{ name: 'agenda', params, produce: async () => ({}) }] }).pages;
+    const withRange = ranged(z.object({ from: z.string().optional(), to: z.string().optional(), calendars: z.string().optional() }));
+    expect(withRange([calendar()])[0]!.body[0]).toMatchObject({ kind: 'calendar', views: ['week', 'month', 'list'] });
+    expect(withRange([calendar({ views: undefined, default: undefined, hours: undefined })])).toHaveLength(1);
+    // The query must take the days the page asks for.
+    expect(() => ranged(z.object({ calendars: z.string().optional() }))([calendar()])).toThrow(
+      /page board, body\[0\]: the calendar's query agenda must take `from` and `to`/,
+    );
+    // It opens on a view it offers.
+    expect(() => withRange([calendar({ views: ['month', 'list'], default: 'week' })])).toThrow(/opens on week, which is not one of its views/);
+    // No view it does not have, none twice, and a map that names its start.
+    expect(() => withRange([calendar({ views: ['day'] })])).toThrow(/body\.0\.views\.0/);
+    expect(() => withRange([calendar({ views: ['week', 'week'] })])).toThrow(/names each view once/);
+    expect(() => withRange([calendar({ map: { id: 'id', title: 'title', end: 'end' } })])).toThrow(/body\.0\.map\.start/);
+    expect(() => withRange([calendar({ map: { id: 'id', title: 'title', start: 'start', end: 'end', colour: 'c' } })])).toThrow(/body\.0\.map/);
+    // Hours are a part of a day, in order, and at least four of them.
+    expect(() => withRange([calendar({ hours: [21, 7] })])).toThrow(/at least four hours/);
+    expect(() => withRange([calendar({ hours: [7, 25] })])).toThrow(/body\.0\.hours/);
+    // A calendar names a query like anything else that reads.
+    expect(() => parse([calendar()], { queries: ['items'] })).toThrow(/no query called agenda/);
+  });
+
   it('refuses two queries with the same name', () => {
     expect(() =>
       parsePageContributions({

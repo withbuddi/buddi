@@ -139,6 +139,8 @@ type Component =
   | { kind: 'list-detail'; list: Component & { kind: 'list' }; param: string; selection?: 'route' | 'local'; detail: Component[] }
   /** The same sub-tree once per row, with that row as its data. */
   | { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] }
+  /** Dated events: week, month and list views behind a switch; the page adds `from` and `to` (YYYY-MM-DD, `to` exclusive) to the query. */
+  | { kind: 'calendar'; query: QueryRef; events: string; map: CalendarMap; views?: Array<'week' | 'month' | 'list'>; default?: 'week' | 'month' | 'list'; hours?: [number, number] }
   | { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] }
   /** One button, anywhere; its `ValueRef` args resolve against the row it stands in. */
   | { kind: 'button'; action: ToolRef }
@@ -159,6 +161,8 @@ interface ToolRef { tool: string; label: string; args?: Record<string, ValueRef 
 type RouteRef = { page: string; item?: ValueRef } | { chat: ValueRef }
 interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: PillRef; pills?: PillRef[]; to?: RouteRef }
 interface Selection { key: string; disabledWhen?: Visibility }
+/** Paths within an event row. `start`/`end`: ISO instants, or YYYY-MM-DD for all-day (`end` the day after); `tone`: a number, the calendar's index. */
+interface CalendarMap { id: string; title: string; start: string; end: string; allDay?: string; calendar?: string; tone?: string; location?: string }
 /** `label` and `confirm` may carry `{field}` placeholders read from the row. */
 interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
 /** `all` offers it over every enabled row when nothing is ticked. */
@@ -215,6 +219,7 @@ What each one is for, in email's terms:
 | `progress` | (Speech) A model download: a bar and "7 of 252 MB · 2%", then "Installed, 252 MB" |
 | `chart` | (Goals) A goal's values over its window as a line with the target dashed; a frequency goal's weeks as bars |
 | select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
+| `calendar` | (Calendar) The rail page: the week's hours, the month's days, or the days as a list, from the linked calendars |
 
 A `chart` is small on purpose: a trend beside the numbers, drawn inline in
 the dashboard's own colours, with two ticks a side, the first and last x
@@ -224,6 +229,22 @@ on zero. A screen reader hears a sentence instead of the drawing: how many
 points, from when to when, each series' latest, lowest and highest, and the
 target. A chart with hover, zoom, annotations or many series is a canvas
 view (`timeseries`), not a page component.
+
+A `calendar` is the design kit's Calendar screen. **Week**: seven columns
+from Monday, all-day events as chips at the top, timed ones as blocks placed
+by the hour (side by side where they overlap) in a grid that scrolls through
+the day with `hours` (7–21 unless it says) in view. **Month**: six weeks of
+days, three events a day then "+N"; choosing a day lists it in a panel under
+the grid. **List**: one panel per day for seven days, "Today · Mon 28 Sep",
+with `empty` (default "Nothing.") on a day with nothing. ‹ Today › and the
+range's name sit above; ←/→ move the range and T comes back to today. Times
+are drawn in the owner's zone. `tone` picks one of four pinned colours
+(modulo four). The page asks the calendar's query — that query alone, as a
+`repeat`'s `poll` does — with `from` and `to` added to its parameters each
+time the range changes, so the query must declare both: a descriptor whose
+query does not is refused at load, and so is a `default` that is not one of
+its `views`. The chosen view is remembered per page in the browser; with none
+chosen a phone (under 720 px) opens on the list. Needs host API `^1.11`.
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.

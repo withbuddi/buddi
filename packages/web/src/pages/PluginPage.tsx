@@ -61,6 +61,8 @@ import {
 import { AgentOffer } from '../views/parts/AgentOffer';
 import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
+import { todayIn, toEvents } from './calendar';
+import { CalendarView, useCalendarState } from './CalendarPiece';
 import type {
   ArgRef,
   ColumnMap,
@@ -337,9 +339,11 @@ function usePageQuery(
   ref: QueryRef | undefined,
   data: unknown,
   pollMs?: number,
+  /** Parameters the component itself adds: a calendar's `from` and `to`. */
+  extra?: Record<string, string>,
 ): { data: unknown; error: string | null; loading: boolean } {
   const scope = useScope();
-  const params = ref ? resolveParams(ref.params, data, scope) : {};
+  const params = ref ? { ...resolveParams(ref.params, data, scope), ...extra } : {};
   const key = JSON.stringify([ref?.query ?? null, params, scope.version]);
   const state = useAsync<unknown>(
     () => (ref ? api.pageQuery(scope.plugin, ref.query, params).then((body) => body.data) : Promise.resolve(undefined)),
@@ -1073,6 +1077,8 @@ function Piece({
       return <ListDetailPiece component={component} data={data} />;
     case 'repeat':
       return <RepeatPiece component={component} data={data} />;
+    case 'calendar':
+      return <CalendarPiece component={component} data={data} />;
     case 'expand':
       return <ExpandPiece component={component} data={data} />;
     case 'button':
@@ -2104,6 +2110,44 @@ function RepeatPiece({ component, data }: { component: Of<'repeat'>; data: unkno
           ))}
         </Stack>
       )}
+    </PieceSection>
+  );
+}
+
+/**
+ * A calendar: its own range is two parameters of its own query, so moving a
+ * week asks that query again and nothing else on the page — the `repeat` and
+ * `poll` rule. The last answer stays drawn while the next one loads.
+ */
+function CalendarPiece({ component, data }: { component: Of<'calendar'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const state = useCalendarState({
+    ...(component.views ? { views: component.views } : {}),
+    ...(component.default ? { default: component.default } : {}),
+    today: todayIn(scope.timezone),
+    storageKey: `buddi.calendar-view:${scope.plugin}/${scope.page}`,
+  });
+  const query = usePageQuery(component.query, data, undefined, { from: state.from, to: state.to });
+  const events = useMemo(
+    () =>
+      toEvents(
+        rowsOf(query.data, component.events),
+        component.map,
+        scope.timezone,
+        `plugin ${scope.plugin}, page ${scope.page}, calendar`,
+      ),
+    [query.data, component.events, component.map, scope.timezone, scope.plugin, scope.page],
+  );
+  return (
+    <PieceSection title={component.title} note={component.note}>
+      <ErrorBanner message={query.error} />
+      <CalendarView
+        state={state}
+        events={events}
+        hours={component.hours}
+        empty={component.empty ?? 'Nothing.'}
+        label={component.title ?? 'Calendar'}
+      />
     </PieceSection>
   );
 }

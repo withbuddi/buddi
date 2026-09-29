@@ -73,6 +73,7 @@ export type {
 export type { ViewDescriptor, ViewMap, RendererName, TilesMap, TileIcon, TileLink } from '../views.js';
 export { TILE_ICONS } from '../views.js';
 export type {
+  CalendarMap,
   Component,
   Field,
   FieldAction,

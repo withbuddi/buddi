@@ -274,6 +274,26 @@ export interface ListItem {
   to?: RouteRef;
 }
 
+/**
+ * Where a calendar finds each event's parts: paths within one row.
+ *
+ * `start` and `end` are ISO instants for a timed event, drawn in the owner's
+ * zone, or `YYYY-MM-DD` dates for an all-day one (`end` the day after its
+ * last, as in iCalendar). `allDay` says which when the row carries a flag;
+ * `tone` a number, the calendar's index, picks one of four colours;
+ * `calendar` names it for the screen reader and the row.
+ */
+export interface CalendarMap {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  allDay?: string;
+  calendar?: string;
+  tone?: string;
+  location?: string;
+}
+
 /** Rows the owner may tick, and the ones they may not. */
 export interface Selection {
   /** Path within a row to the value an action is given. */
@@ -554,6 +574,24 @@ export type Component =
        */
       poll?: { seconds: number; while: Visibility };
     })
+  /**
+   * Dated events as a calendar: a week of hours, a month of days, or a list
+   * of days, behind a switch. `events` is the path to the array in the
+   * query's answer and `map` where each event's parts are. The page adds
+   * `from` and `to` to the query's parameters — `YYYY-MM-DD`, `to` the day
+   * after the last one shown — and asks again, this query alone, as the owner
+   * moves through the weeks; the query must take both. `hours` is the part of
+   * the day a week shows without scrolling, 7 to 21 unless it says.
+   */
+  | (ComponentCommon & {
+      kind: 'calendar';
+      query: QueryRef;
+      events: string;
+      map: CalendarMap;
+      views?: Array<'week' | 'month' | 'list'>;
+      default?: 'week' | 'month' | 'list';
+      hours?: [number, number];
+    })
   /** A fold. `label` may be a path, so a row's own words are on it. */
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   /**
@@ -742,6 +780,8 @@ const fieldSchema = z
   )
   .refine((field) => field.multiple !== true || field.type === 'select', '`multiple` is for a select field only');
 
+const calendarViewSchema = z.enum(['week', 'month', 'list']);
+
 const common = {
   when: visibilitySchema.optional(),
   title: label.optional(),
@@ -910,6 +950,37 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         key: viewPathSchema,
         body: z.array(componentSchema).max(24),
         poll: z.object({ seconds: z.number().int().min(1).max(60), while: visibilitySchema }).strict().optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('calendar'),
+        query: queryRefSchema,
+        events: viewPathSchema,
+        map: z
+          .object({
+            id: viewPathSchema,
+            title: viewPathSchema,
+            start: viewPathSchema,
+            end: viewPathSchema,
+            allDay: viewPathSchema.optional(),
+            calendar: viewPathSchema.optional(),
+            tone: viewPathSchema.optional(),
+            location: viewPathSchema.optional(),
+          })
+          .strict(),
+        views: z
+          .array(calendarViewSchema)
+          .min(1)
+          .max(3)
+          .refine((views) => new Set(views).size === views.length, 'a calendar names each view once')
+          .optional(),
+        default: calendarViewSchema.optional(),
+        hours: z
+          .tuple([z.number().int().min(0).max(23), z.number().int().min(1).max(24)])
+          .refine(([from, to]) => to - from >= 4, 'a calendar shows at least four hours: `hours` is [from, to], from before to')
+          .optional(),
       })
       .strict(),
     z
@@ -1166,6 +1237,29 @@ function agentOffers(root: unknown, at: string): Array<{ agent: string; at: stri
   return found;
 }
 
+/** Every `calendar` in a tree, with where it was. */
+function calendarsIn(root: unknown, at: string): Array<{ component: Extract<Component, { kind: 'calendar' }>; at: string }> {
+  const found: Array<{ component: Extract<Component, { kind: 'calendar' }>; at: string }> = [];
+  const stack: Array<{ value: unknown; at: string }> = [{ value: root, at }];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const { value, at: where } = stack.pop() as { value: unknown; at: string };
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => stack.push({ value: child, at: `${where}[${index}]` }));
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.kind === 'calendar') found.push({ component: record as unknown as Extract<Component, { kind: 'calendar' }>, at: where });
+    for (const [key, child] of Object.entries(record)) {
+      if (DATA_KEYED.has(key) || NOT_COMPONENTS.has(key)) continue;
+      stack.push({ value: child, at: `${where}${where === '' ? '' : '.'}${key}` });
+    }
+  }
+  return found;
+}
+
 /** Is this a zod schema at all? Duck-typed: core does not own the plugin's zod. */
 function isZodSchema(value: unknown): value is ZodTypeAny {
   return (
@@ -1306,6 +1400,30 @@ export function parsePageContributions(opts: {
         throw new Error(
           `plugin ${plugin}: page ${page.id}, ${offer.at}: offers ${offer.agent}, which this plugin does not propose — ` +
             `it proposes ${proposed.size === 0 ? 'no agent' : [...proposed].join(', ')}`,
+        );
+      }
+    }
+  }
+
+  /*
+   * A calendar opens on one of the views it offers, and asks a query that
+   * takes the range it shows: the page adds `from` and `to`, and a strict
+   * schema that does not declare them refuses every week the owner opens.
+   */
+  const byName = new Map(queries.map((query) => [query.name, query]));
+  for (const page of pages) {
+    for (const { component, at } of calendarsIn(page.body, 'body')) {
+      if (component.default !== undefined && component.views !== undefined && !component.views.includes(component.default)) {
+        throw new Error(
+          `plugin ${plugin}: page ${page.id}, ${at}: opens on ${component.default}, which is not one of its views (${component.views.join(', ')})`,
+        );
+      }
+      const query = byName.get(component.query.query);
+      const shape = (query?.params as unknown as { shape?: Record<string, unknown> } | undefined)?.shape;
+      if (query !== undefined && (shape === undefined || !('from' in shape) || !('to' in shape))) {
+        throw new Error(
+          `plugin ${plugin}: page ${page.id}, ${at}: the calendar's query ${query.name} must take \`from\` and \`to\` — ` +
+            'the page asks it for the days it shows',
         );
       }
     }

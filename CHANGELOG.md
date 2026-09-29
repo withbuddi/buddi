@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Plugin pages can show a calendar: week, month and list views drawn from the design kit; the Calendar page uses it.
 - Focus modes for notifications: Do not disturb or Urgent only, for an hour, until tomorrow or until you turn it off, from the owner menu or /focus on Telegram, plus schedules that replace quiet hours; when a focus ends, one message says what waited.
 - An agent's tool grant can end in `?` (`weather.*?`) to mean "if provided": a family no installed plugin provides is skipped instead of holding the agent back.
 - Planner's morning brief reads today's weather for your home place and today's meetings with their gaps when the Weather and Calendar plugins are installed, then ends with what to do first; without them it leaves those lines out and never mentions them. A Planner added earlier gains this by adding `weather.*?, calendar.*?` to its tools.

@@ -25,6 +25,7 @@
 import type {
   ArgRef as CoreArgRef,
   BulkAction as CoreBulkAction,
+  CalendarMap as CoreCalendarMap,
   Component as CoreComponent,
   ComponentCommon as CoreComponentCommon,
   Field as CoreField,
@@ -49,6 +50,8 @@ import type {
 import type {
   ArgRef,
   BulkAction,
+  CalendarComponent,
+  CalendarMap,
   Component,
   ComponentCommon,
   Field,
@@ -122,6 +125,9 @@ interface Conformance {
   listItem: Exact<CoreListItem, ListItem>;
   selection: Exact<CoreSelection, Selection>;
   groupBy: Exact<CoreGroupBy, GroupBy>;
+  calendarMap: Exact<CoreCalendarMap, CalendarMap>;
+  /** The web's `CalendarComponent` is core's calendar arm, named for its renderer. */
+  calendarComponent: Exact<Extract<CoreComponent, { kind: 'calendar' }>, CalendarComponent>;
   optionsFrom: Exact<CoreOptionsFrom, OptionsFrom>;
   field: Exact<CoreField, Field>;
   fieldAction: Exact<CoreFieldAction, FieldAction>;
@@ -153,6 +159,8 @@ export const CONTRACTS_AGREE: Conformance = {
   listItem: true,
   selection: true,
   groupBy: true,
+  calendarMap: true,
+  calendarComponent: true,
   optionsFrom: true,
   field: true,
   fieldAction: true,
@@ -179,6 +187,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   search: true,
   'list-detail': true,
   repeat: true,
+  calendar: true,
   expand: true,
   button: true,
   approval: true,
@@ -212,6 +221,7 @@ export const CHECKED_TYPES = [
   'ListItem',
   'Selection',
   'GroupBy',
+  'CalendarMap',
   'OptionsFrom',
   'Field',
   'FieldAction',
@@ -234,6 +244,7 @@ export const NOT_MIRRORED: Record<string, string> = {
 export const WEB_TYPES: Record<string, string> = {
   PluginPageDescriptor: 'PageDescriptor',
   ListComponent: 'Component',
+  CalendarComponent: 'Component',
   PageActResult: 'the act route’s reply, which core does not declare',
   PluginWorkspaceFiles: 'WorkspaceFiles, plus the plugin the route carries',
 };
