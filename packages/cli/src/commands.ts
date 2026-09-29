@@ -43,6 +43,8 @@ export interface CommandEntry {
   applies: Applies;
   /** Present when `--json` works: the fields it prints. */
   json?: string;
+  /** `--json` is an input here (`connections add --json '<config>'`), not the output switch. */
+  jsonTakesValue?: true;
   /** What a hidden command answers where it does not apply. */
   elsewhere?: string;
 }
@@ -50,6 +52,8 @@ export interface CommandEntry {
 const JSON_FLAG: CommandFlag = { flag: '--json', meaning: 'Print JSON instead of text. BUDDI_JSON=1 does the same.' };
 
 const NEEDS_DATABASE = { code: 3, meaning: 'The database is not reachable, or not configured.' };
+
+const NOT_RUNNING = { code: 3, meaning: 'buddi is not running: these commands go through the running gateway.' };
 
 const CHECKOUT_ONLY = (what: string, instead: string): string =>
   `buddi ${what} is for a source checkout. ${instead}`;
@@ -453,6 +457,72 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi plugins dev <dir>',
     flags: [],
     example: 'buddi plugins dev ./weather',
+    applies: 'both',
+  },
+  {
+    name: 'connections list',
+    group: 'Agents',
+    summary: 'List the connected services: their state, their tools, and the agents that hold them.',
+    usage: 'buddi connections list [--json]',
+    flags: [JSON_FLAG],
+    example: 'buddi connections list',
+    exitCodes: [NOT_RUNNING],
+    applies: 'both',
+    json: '[{ id, name, slug, state, host, url, signedIn, tools, heldTools, agents: [id] }]. state is connected, pending-review, needs-review, needs-reconnect or unreachable.',
+  },
+  {
+    name: 'connections add',
+    group: 'Agents',
+    summary: 'Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard.',
+    usage: "buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]",
+    flags: [
+      { flag: '--name <name>', meaning: 'What the connection is called on the dashboard.' },
+      { flag: '--token', meaning: 'Sign in with a token you made on the service\'s site, typed with the echo off. buddi tries it before it keeps it.' },
+      { flag: '--token-stdin', meaning: 'The same, with the token piped on stdin.' },
+      { flag: '--client-id <id>', meaning: 'Sign in with a client id from an app you created in the service\'s developer settings.' },
+      { flag: "--json '<mcpServers json>'", meaning: 'The block another MCP client takes: it gives the address, the name and a header token. A command server is refused.' },
+      { flag: '--keep', meaning: 'Keep the tools without asking once they are printed.' },
+      { flag: '--slug <slug>', meaning: 'The connection\'s name in buddi, which every tool carries: mcp.<slug>.<tool>.' },
+      { flag: '--to <agent,agent>', meaning: 'Give the tools to these agents without asking. --to nobody keeps the connection waiting.' },
+    ],
+    example: 'buddi connections add github --token --to buddi',
+    exitCodes: [NOT_RUNNING],
+    applies: 'both',
+    jsonTakesValue: true,
+  },
+  {
+    name: 'connections review',
+    group: 'Agents',
+    summary: 'Print every tool a connection brings with its tier, and keep them with --keep.',
+    usage: 'buddi connections review <name> [--keep] [--slug <slug>] [--json]',
+    flags: [
+      { flag: '--keep', meaning: 'Keep the list as printed.' },
+      { flag: '--slug <slug>', meaning: 'Its name in buddi, on the first review only.' },
+      JSON_FLAG,
+    ],
+    example: 'buddi connections review github',
+    exitCodes: [NOT_RUNNING],
+    applies: 'both',
+    json: '{ connection, slug, slugEditable, host, hash, tools: [{ name, fullName, description, tier, destructive, annotated, problem, change }], annotatedNothing, changes }. tier is auto or gated.',
+  },
+  {
+    name: 'connections give',
+    group: 'Agents',
+    summary: 'Give a connection\'s tools to agents: mcp.<name>.* on their tools line, as the dashboard writes it.',
+    usage: 'buddi connections give <name> --to <agent,agent>',
+    flags: [{ flag: '--to <agent,agent>', meaning: 'The agents, by handle or id.' }],
+    example: 'buddi connections give github --to buddi,ledger',
+    exitCodes: [NOT_RUNNING],
+    applies: 'both',
+  },
+  {
+    name: 'connections remove',
+    group: 'Agents',
+    summary: 'Disconnect a service: its sign-in is deleted and its tools leave every agent.',
+    usage: 'buddi connections remove <name> [--yes]',
+    flags: [{ flag: '--yes', meaning: 'Do not ask first.' }],
+    example: 'buddi connections remove github --yes',
+    exitCodes: [NOT_RUNNING],
     applies: 'both',
   },
 

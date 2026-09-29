@@ -1934,7 +1934,7 @@ export const api = {
   connectionToken: (id: string, input: { token: string; header: string; prefix: string }) =>
     post<{ id: string; reconnected: boolean; name: string; connection: ConnectionView }>(`/connections/${id}/token`, input),
   connectionCallback: (input: { state: string; code?: string; error?: string }) =>
-    post<{ id: string; reconnected: boolean; name: string }>('/connections/callback', input),
+    post<{ id: string; reconnected: boolean; name: string; cli?: boolean }>('/connections/callback', input),
   connectionReview: (id: string) => get<ConnectionReview>(`/connections/${id}/review`),
   saveConnectionReview: (id: string, input: { slug?: string; hash: string }) => post<ConnectionView>(`/connections/${id}/review`, input),
   grantConnection: (id: string, agents: string[]) =>

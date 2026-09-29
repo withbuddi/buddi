@@ -147,6 +147,27 @@ Your agents, what they have scheduled, and the plugins they use.
   - `--license <spdx>`: The license it carries. Apache-2.0 unless you name another.
   - `--author <name>`: Who made it, shown on the install card. Asked otherwise, with git config user.name as the default.
 - `buddi plugins dev <dir>`: Watch a plugin's dist/ and restart buddi when it changes.
+- `buddi connections list [--json]`: List the connected services: their state, their tools, and the agents that hold them.
+  - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+  - JSON: [{ id, name, slug, state, host, url, signedIn, tools, heldTools, agents: [id] }]. state is connected, pending-review, needs-review, needs-reconnect or unreachable.
+- `buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]`: Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard.
+  - `--name <name>`: What the connection is called on the dashboard.
+  - `--token`: Sign in with a token you made on the service's site, typed with the echo off. buddi tries it before it keeps it.
+  - `--token-stdin`: The same, with the token piped on stdin.
+  - `--client-id <id>`: Sign in with a client id from an app you created in the service's developer settings.
+  - `--json '<mcpServers json>'`: The block another MCP client takes: it gives the address, the name and a header token. A command server is refused.
+  - `--keep`: Keep the tools without asking once they are printed.
+  - `--slug <slug>`: The connection's name in buddi, which every tool carries: mcp.<slug>.<tool>.
+  - `--to <agent,agent>`: Give the tools to these agents without asking. --to nobody keeps the connection waiting.
+- `buddi connections review <name> [--keep] [--slug <slug>] [--json]`: Print every tool a connection brings with its tier, and keep them with --keep.
+  - `--keep`: Keep the list as printed.
+  - `--slug <slug>`: Its name in buddi, on the first review only.
+  - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+  - JSON: { connection, slug, slugEditable, host, hash, tools: [{ name, fullName, description, tier, destructive, annotated, problem, change }], annotatedNothing, changes }. tier is auto or gated.
+- `buddi connections give <name> --to <agent,agent>`: Give a connection's tools to agents: mcp.<name>.* on their tools line, as the dashboard writes it.
+  - `--to <agent,agent>`: The agents, by handle or id.
+- `buddi connections remove <name> [--yes]`: Disconnect a service: its sign-in is deleted and its tools leave every agent.
+  - `--yes`: Do not ask first.
 
 ## Reach
 

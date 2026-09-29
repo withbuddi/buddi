@@ -1,0 +1,244 @@
+/**
+ * `buddi connections` against a fake gateway: every write is one of the
+ * dashboard's routes, a sign-in on the service's page is a CLI consent the
+ * command waits for, a token is never printed, and nothing running is exit 3.
+ */
+import { CONFIG_REFUSALS } from '@buddi/core/connection-config';
+import { describe, expect, it } from 'vitest';
+import { parseConnectionsArgs, UsageError } from './args.js';
+import { OPEN_IN_BROWSER, runConnections, type ConnectionView, type ConnectionsGateway, type ConnectionsIo } from './connections-cmd.js';
+import { GatewayError, GatewayUnavailable, NOT_RUNNING } from './mcp/gateway-client.js';
+
+const ID = '11111111-2222-3333-4444-555555555555';
+const SECRET = 'ghp_not-a-real-token-123';
+
+function view(over: Partial<ConnectionView> = {}): ConnectionView {
+  return {
+    id: ID, slug: null, name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', host: 'api.githubcopilot.com',
+    state: 'pending-review', authKind: 'oauth', signedIn: false, toolCount: 0, grant: null, unreachableSince: null,
+    heldTools: 0, agents: [], ...over,
+  };
+}
+
+const CATALOG = [
+  { id: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', clientIdRequired: true, auth: { recommended: 'token', tokenPage: 'https://github.com/settings/tokens' } },
+  { id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', auth: { recommended: 'oauth' } },
+];
+const AGENTS = [
+  { id: 'buddi', name: 'Buddi', handle: '@buddi', frontDesk: true },
+  { id: 'ledger', name: 'Ledger', handle: '@ledger', frontDesk: false },
+];
+const REVIEW = {
+  slug: 'github', slugEditable: true, host: 'api.githubcopilot.com', hash: 'h1', annotatedNothing: false, changes: null,
+  tools: [
+    { name: 'search', fullName: 'mcp.github.search', description: 'Search.', tier: 'auto', destructive: false, annotated: true, problem: null, change: null },
+    { name: 'delete_repo', fullName: 'mcp.github.delete_repo', description: 'Delete a repository.', tier: 'gated', destructive: true, annotated: true, problem: null, change: null },
+  ],
+};
+
+interface Call { method: string; path: string; body?: unknown }
+
+function fakeGateway(handlers: Record<string, (body?: unknown) => unknown>): ConnectionsGateway & { calls: Call[] } {
+  const calls: Call[] = [];
+  const answer = (method: string, path: string, body?: unknown): unknown => {
+    calls.push({ method, path, ...(body !== undefined ? { body } : {}) });
+    const handler = handlers[`${method} ${path}`];
+    if (!handler) throw new Error(`unexpected ${method} ${path}`);
+    return handler(body);
+  };
+  return {
+    calls,
+    baseUrl: 'http://127.0.0.1:4317',
+    get: async <T>(path: string) => answer('GET', path) as T,
+    post: async <T>(path: string, body: unknown) => ({ status: 200, body: answer('POST', path, body) as T }),
+    delete: async <T>(path: string) => ({ status: 200, body: answer('DELETE', path) as T }),
+  };
+}
+
+function io(over: Partial<ConnectionsIo> = {}): ConnectionsIo & { lines: string[]; errors: string[] } {
+  const lines: string[] = [];
+  const errors: string[] = [];
+  let clock = 0;
+  return {
+    lines, errors,
+    out: (l) => lines.push(l),
+    err: (l) => errors.push(l),
+    interactive: false,
+    confirm: async () => false,
+    ask: async () => '',
+    secret: async () => '',
+    sleep: async (ms) => { clock += ms; },
+    now: () => clock,
+    ...over,
+  };
+}
+
+const listing = (connections: ConnectionView[] = []) => ({ connections, catalog: CATALOG, agents: AGENTS, callbackPath: '/connections/callback' });
+
+describe('parseConnectionsArgs', () => {
+  it('reads each verb and its flags', () => {
+    expect(parseConnectionsArgs([])).toEqual({ action: 'list' });
+    expect(parseConnectionsArgs(['add', 'github', '--token', '--keep', '--to', 'buddi,ledger'])).toEqual({
+      action: 'add', address: 'github', token: true, tokenStdin: false, keep: true, to: ['buddi', 'ledger'],
+    });
+    expect(parseConnectionsArgs(['add', '--json', '{"url":"https://x.test"}', '--to', 'nobody'])).toMatchObject({ config: '{"url":"https://x.test"}', to: [] });
+    expect(parseConnectionsArgs(['give', 'github', '--to=ledger'])).toEqual({ action: 'give', name: 'github', to: ['ledger'] });
+    expect(parseConnectionsArgs(['remove', 'github', '-y'])).toEqual({ action: 'remove', name: 'github', yes: true });
+  });
+
+  it('refuses what does not fit', () => {
+    expect(() => parseConnectionsArgs(['add'])).toThrow(UsageError);
+    expect(() => parseConnectionsArgs(['add', 'github', '--token', '--client-id', 'x'])).toThrow(/one way to sign in/);
+    expect(() => parseConnectionsArgs(['give', 'github'])).toThrow(/--to/);
+    expect(() => parseConnectionsArgs(['remove', 'github', '--keep'])).toThrow(/unknown option/);
+    expect(() => parseConnectionsArgs(['frob'])).toThrow(/unknown connections action/);
+  });
+});
+
+describe('buddi connections', () => {
+  it('says buddi is not running, and exits 3', async () => {
+    const out = io();
+    const gateway = fakeGateway({ 'GET /api/connections': () => { throw new GatewayUnavailable(); } });
+    expect(await runConnections({ action: 'list' }, { gateway, json: false, io: out })).toBe(3);
+    expect(out.errors).toEqual([NOT_RUNNING]);
+    const off = io();
+    expect(await runConnections({ action: 'list' }, { gateway: { off: 'The dashboard is off.' }, json: false, io: off })).toBe(3);
+  });
+
+  it('lists each connection with its state, tools and agents; --json too', async () => {
+    const connected = view({ slug: 'github', state: 'connected', signedIn: true, authKind: 'token', toolCount: 2, agents: ['buddi'] });
+    const gateway = fakeGateway({ 'GET /api/connections': () => listing([connected]) });
+    const text = io();
+    expect(await runConnections({ action: 'list' }, { gateway, json: false, io: text })).toBe(0);
+    expect(text.lines[0]).toMatch(/^github {2}GitHub \(api\.githubcopilot\.com\) {2}connected {2}2 tools {2}given to Buddi$/);
+    const json = io();
+    await runConnections({ action: 'list' }, { gateway, json: true, io: json });
+    expect(JSON.parse(json.lines.join('\n'))).toEqual([expect.objectContaining({ slug: 'github', tools: 2, agents: ['buddi'], state: 'connected' })]);
+  });
+
+  it('adds a card with a token: typed unseen, tried by the gateway, reviewed, kept and given', async () => {
+    const signed = view({ authKind: 'token', signedIn: true });
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing(),
+      'POST /api/connections': () => ({ connection: view(), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/token`]: () => ({ connection: signed }),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, connection: signed }),
+      [`POST /api/connections/${ID}/review`]: () => view({ slug: 'github', state: 'connected', signedIn: true }),
+      [`POST /api/connections/${ID}/grant`]: (body) => ({ granted: (body as { agents: string[] }).agents, failed: [] }),
+    });
+    const questions: string[] = [];
+    const out = io({
+      interactive: true,
+      secret: async () => SECRET,
+      confirm: async (q) => { questions.push(q); return true; },
+      ask: async (q) => { questions.push(q); return ''; },
+    });
+    const code = await runConnections(
+      { action: 'add', address: 'github', token: false, tokenStdin: false, keep: false },
+      { gateway, json: false, io: out },
+    );
+    expect(code).toBe(0);
+    expect(gateway.calls.find((c) => c.path.endsWith('/token'))?.body).toEqual({ token: SECRET });
+    expect(gateway.calls.find((c) => c.path === '/api/connections' && c.method === 'POST')?.body).toEqual({ url: CATALOG[0]!.url, name: 'GitHub' });
+    expect(out.lines.join('\n')).toContain('GitHub recommends a token.');
+    expect(out.lines.join('\n')).toMatch(/mcp\.github\.delete_repo +asks every time/);
+    expect(out.lines.join('\n')).toMatch(/mcp\.github\.search +runs on its own/);
+    expect(questions[0]).toBe('Keep these tools as mcp.github.*?');
+    // The front desk is the default answer.
+    expect(gateway.calls.find((c) => c.path.endsWith('/grant'))?.body).toEqual({ agents: ['buddi'] });
+    expect(out.lines.at(-1)).toBe('Gave mcp.github.* to Buddi.');
+    expect([...out.lines, ...out.errors].join('\n')).not.toContain(SECRET);
+  });
+
+  it('signs in on the service\'s page through a CLI consent, and waits for it', async () => {
+    let asked = 0;
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing(),
+      'POST /api/connections': () => ({ connection: view({ name: 'Notion', host: 'mcp.notion.com' }), signIn: 'dynamic' }),
+      [`POST /api/connections/${ID}/consent`]: () => ({ authorizeUrl: 'https://auth.notion.test/authorize?state=s', redirectUri: 'http://127.0.0.1:4317/connections/callback' }),
+      [`GET /api/connections/${ID}`]: () => (++asked < 3 ? view({ name: 'Notion' }) : view({ name: 'Notion', signedIn: true })),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, slug: 'notion', tools: [], connection: view({ name: 'Notion', signedIn: true }) }),
+      [`POST /api/connections/${ID}/review`]: () => view({ name: 'Notion', slug: 'notes', state: 'connected', signedIn: true }),
+    });
+    const out = io();
+    const code = await runConnections(
+      { action: 'add', address: 'notion', token: false, tokenStdin: false, keep: true, slug: 'notes', to: [] },
+      { gateway, json: false, io: out, pollMs: 1000 },
+    );
+    expect(code).toBe(0);
+    expect(gateway.calls.find((c) => c.path.endsWith('/consent'))?.body).toEqual({ cli: true });
+    expect(out.lines).toContain('  https://auth.notion.test/authorize?state=s');
+    expect(out.lines).toContain(OPEN_IN_BROWSER);
+    expect(asked).toBe(3);
+    expect(gateway.calls.find((c) => c.method === 'POST' && c.path.endsWith('/review'))?.body).toEqual({ hash: 'h1', slug: 'notes' });
+    expect(gateway.calls.some((c) => c.path.endsWith('/grant'))).toBe(false);
+  });
+
+  it('gives up on a sign-in after ten minutes', async () => {
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing(),
+      'POST /api/connections': () => ({ connection: view({ name: 'Notion' }), signIn: 'dynamic' }),
+      [`POST /api/connections/${ID}/consent`]: () => ({ authorizeUrl: 'https://auth.test/a', redirectUri: 'x' }),
+      [`GET /api/connections/${ID}`]: () => view({ name: 'Notion' }),
+    });
+    const out = io();
+    expect(await runConnections({ action: 'add', address: 'notion', token: false, tokenStdin: false, keep: true }, { gateway, json: false, io: out, pollMs: 60_000 })).toBe(1);
+    expect(out.errors[0]).toMatch(/within ten minutes/);
+  });
+
+  it('refuses a config that runs a program, with the dashboard\'s sentence', async () => {
+    const gateway = fakeGateway({});
+    const out = io();
+    const config = JSON.stringify({ mcpServers: { gh: { command: 'npx', args: ['x'] } } });
+    expect(await runConnections({ action: 'add', config, token: false, tokenStdin: false, keep: false }, { gateway, json: false, io: out })).toBe(2);
+    expect(out.errors).toEqual([CONFIG_REFUSALS.command]);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it('takes the header of a pasted config as the token', async () => {
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing(),
+      'POST /api/connections': () => ({ connection: view({ name: 'x' }), signIn: 'manual' }),
+      [`POST /api/connections/${ID}/token`]: () => { throw new GatewayError(400, 'x did not accept that token.', { code: 'token-refused' }); },
+    });
+    const out = io();
+    const config = JSON.stringify({ mcpServers: { x: { url: 'https://x.test/mcp', headers: { 'X-API-Key': SECRET } } } });
+    expect(await runConnections({ action: 'add', config, token: false, tokenStdin: false, keep: false }, { gateway, json: false, io: out })).toBe(1);
+    expect(gateway.calls.find((c) => c.path.endsWith('/token'))?.body).toEqual({ token: SECRET, header: 'X-API-Key', prefix: '' });
+    expect(out.errors[0]).toBe('x did not accept that token.');
+    expect([...out.lines, ...out.errors].join('\n')).not.toContain(SECRET);
+  });
+
+  it('gives and removes through the dashboard\'s routes; remove asks unless --yes', async () => {
+    const connected = view({ slug: 'github', state: 'connected', signedIn: true, agents: ['buddi'] });
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing([connected]),
+      [`POST /api/connections/${ID}/grant`]: (body) => ({ granted: (body as { agents: string[] }).agents, failed: [] }),
+      [`DELETE /api/connections/${ID}`]: () => ({ id: ID, name: 'GitHub', touched: ['buddi'] }),
+    });
+    const give = io();
+    expect(await runConnections({ action: 'give', name: 'github', to: ['@ledger'] }, { gateway, json: false, io: give })).toBe(0);
+    expect(gateway.calls.at(-1)).toEqual({ method: 'POST', path: `/api/connections/${ID}/grant`, body: { agents: ['ledger'] } });
+    const unknown = io();
+    expect(await runConnections({ action: 'give', name: 'github', to: ['nemo'] }, { gateway, json: false, io: unknown })).toBe(2);
+
+    const refused = io();
+    expect(await runConnections({ action: 'remove', name: 'github', yes: false }, { gateway, json: false, io: refused })).toBe(1);
+    expect(gateway.calls.some((c) => c.method === 'DELETE')).toBe(false);
+    const removed = io();
+    expect(await runConnections({ action: 'remove', name: 'GitHub', yes: true }, { gateway, json: false, io: removed })).toBe(0);
+    expect(removed.lines[0]).toBe('Disconnected GitHub; its sign-in is deleted. Its tools were taken from Buddi.');
+  });
+
+  it('prints a review as JSON and keeps nothing without --keep', async () => {
+    const connected = view({ slug: 'github', state: 'needs-review', signedIn: true });
+    const gateway = fakeGateway({
+      'GET /api/connections': () => listing([connected]),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, slugEditable: false, connection: connected }),
+    });
+    const out = io();
+    expect(await runConnections({ action: 'review', name: 'github', keep: false }, { gateway, json: true, io: out })).toBe(0);
+    expect(JSON.parse(out.lines.join('\n'))).toMatchObject({ slug: 'github', hash: 'h1', tools: [{ tier: 'auto' }, { destructive: true }] });
+    expect(gateway.calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+});

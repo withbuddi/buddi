@@ -33,6 +33,10 @@
       "types": "./dist/semver.d.ts",
       "default": "./dist/semver.js"
     },
+    "./connection-config": {
+      "types": "./dist/connection-config.d.ts",
+      "default": "./dist/connection-config.js"
+    },
     "./uninstall": {
       "types": "./dist/uninstall.d.ts",
       "default": "./dist/uninstall.js"

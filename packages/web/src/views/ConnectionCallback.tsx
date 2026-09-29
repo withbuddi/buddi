@@ -2,7 +2,7 @@
  * `/connections/callback`: where a connected service's consent page sends the
  * owner back (docs/connections.md). This tab hands the answer to the gateway,
  * which checks the state against the dashboard session that started the
- * sign-in, spends it once, and keeps the tokens in the vault; then it tells
+ * sign-in (or accepts one `buddi connections add` started in a terminal), spends it once, and keeps the tokens in the vault; then it tells
  * the tab that is waiting and closes itself.
  */
 import { useEffect, useRef, useState } from 'react';
@@ -11,7 +11,7 @@ import { ButtonLink, Notice, Stack } from '../ui';
 import { CONNECTIONS_CHANNEL } from './Connections';
 
 export function ConnectionCallback({ search = location.search }: { search?: string }): JSX.Element {
-  const [outcome, setOutcome] = useState<{ ok: true; name: string } | { ok: false; message: string } | null>(null);
+  const [outcome, setOutcome] = useState<{ ok: true; name: string; cli: boolean } | { ok: false; message: string } | null>(null);
   const sent = useRef(false);
   useEffect(() => {
     if (sent.current) return;
@@ -24,7 +24,7 @@ export function ConnectionCallback({ search = location.search }: { search?: stri
     const error = params.get('error') ?? undefined;
     api.connectionCallback({ state, ...(code ? { code } : {}), ...(error ? { error } : {}) })
       .then((done) => {
-        setOutcome({ ok: true, name: done.name });
+        setOutcome({ ok: true, name: done.name, cli: done.cli === true });
         try {
           const channel = new BroadcastChannel(CONNECTIONS_CHANNEL);
           channel.postMessage({ id: done.id });
@@ -41,7 +41,7 @@ export function ConnectionCallback({ search = location.search }: { search?: stri
         {outcome === null ? <Notice tone="accent" role="status">Finishing the sign-in…</Notice> : null}
         {outcome?.ok ? (
           <Notice tone="good" role="status" title={`Signed in to ${outcome.name}`}>
-            buddi keeps the sign-in in its vault. You can close this tab; the other one carries on.
+            buddi keeps the sign-in in its vault. You can close this tab; {outcome.cli ? 'the terminal carries on.' : 'the other one carries on.'}
           </Notice>
         ) : null}
         {outcome && !outcome.ok ? <Notice tone="critical" role="alert" title="Nothing was connected">{outcome.message}</Notice> : null}

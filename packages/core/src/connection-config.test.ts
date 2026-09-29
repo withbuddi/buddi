@@ -1,6 +1,6 @@
 /** "I have a config": the blocks other MCP clients take, read into the connect screens. */
 import { describe, expect, it } from 'vitest';
-import { CONFIG_REFUSALS, parseConnectionConfig } from './connection-config';
+import { CONFIG_REFUSALS, parseConnectionConfig } from './connection-config.js';
 
 describe('parseConnectionConfig', () => {
   it('reads the mcpServers shape: address, name, and the header as a token with its prefix', () => {

@@ -164,6 +164,13 @@ suite('connections routes', () => {
     expect(landed).toMatchObject({ status: 200, body: { id, reconnected: false } });
     expect(await vault.get(vaultRefFor(id))).not.toBeNull();
 
+    // A consent `buddi connections add` started is owned by the CLI: it lands
+    // in whichever owner session the callback page opens in, and only once.
+    const cli = await call(owner, 'POST', `/${id}/consent`, { cli: true });
+    const cliState = new URL(cli.body.authorizeUrl).searchParams.get('state')!;
+    expect(await call(other, 'POST', '/callback', { state: cliState, code: 'good-code' })).toMatchObject({ status: 200, body: { id, cli: true } });
+    expect((await call(owner, 'POST', '/callback', { state: cliState, code: 'good-code' })).status).toBe(400);
+
     const review = await call(owner, 'GET', `/${id}/review`);
     expect(review.status).toBe(200);
     expect(review.body.tools.map((t: { fullName: string; tier: string }) => `${t.fullName}:${t.tier}`)).toEqual([

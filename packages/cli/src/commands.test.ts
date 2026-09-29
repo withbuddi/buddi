@@ -108,6 +108,11 @@ const PARSED: string[][] = [
   ['reminders', 'cancel', 'x'],
   ...['status', 'stop', 'resume'].map((a) => ['nudges', a]),
   ...['list', 'staged'].map((a) => ['plugins', a]),
+  ['connections', 'list'],
+  ['connections', 'add', 'github'],
+  ['connections', 'review', 'github'],
+  ['connections', 'give', 'github', '--to', 'buddi'],
+  ['connections', 'remove', 'github'],
   ...['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'disable', 'enable', 'uninstall'].map((a) => ['plugins', a, 'x']),
 ];
 
@@ -177,6 +182,8 @@ describe('the command table', () => {
       'reminders',
       'plugins list',
       'plugins describe',
+      'connections list',
+      'connections review',
       'telegram devices',
       'backup list',
       'jobs',

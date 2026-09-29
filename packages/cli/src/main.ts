@@ -266,6 +266,15 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
     case 'dashboard':
       await loadEnvironment();
       return runDashboard(command.action);
+    case 'connections': {
+      // Only `.env`, like `buddi mcp`: the dashboard's host and port. The
+      // connections live in the running gateway, and every subcommand goes
+      // through its routes (connections-cmd.ts).
+      loadEnv();
+      const { runConnections } = await import('./connections-cmd.js');
+      const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
+      return runConnections(command.command, { gateway: gatewayFromEnvironment(process.env), json });
+    }
     case 'mcp':
       // Only `.env`: the dashboard's host and port, and the credential names
       // whose values are cut from every result. No database, no plugins, and
@@ -502,7 +511,7 @@ export async function main(
   const entry = entryFor(argv);
   let args = argv;
   let json = false;
-  if (argv.includes('--json')) {
+  if (argv.includes('--json') && entry?.jsonTakesValue !== true) {
     if (entry === undefined || entry.json === undefined) {
       const named = entry?.name ? `buddi ${entry.name}` : `buddi ${commandWords(argv).join(' ')}`.trim();
       console.error(`${named} has no --json output. Run buddi help for the commands that do.`);

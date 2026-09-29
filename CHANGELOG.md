@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- `buddi connections list|add|review|give|remove` connects an MCP service from the terminal, through the running buddi and the same four steps as Settings → Connections; a sign-in on the service's page lands in any dashboard session, once, within ten minutes.
 - A plugin that ships a settings tab has a Settings action on its row (in place of Open when it has no page of its own), in its ⋯ menu and in its detail sheet, so setting one up after an install is one click.
 - Connections sign in with a token: paste one on the sign-in screen and buddi tries it on the server before it keeps it, as one of your secrets sent only to that server's host. GitHub opens on Token, with a link to the page where you make one.
 - "I have a config" on Settings → Connections reads the `mcpServers` block another MCP client uses: it fills the address and name, and a header becomes the token. A local `command` and SSE-only servers are refused with a sentence.

@@ -142,6 +142,19 @@ suite('connections (postgres + fake MCP server)', () => {
     await service.close();
   });
 
+  it('a consent the CLI started is finished by any owner session, once', async () => {
+    const fake = new Fake({ auth: true, json: true });
+    const { service } = setup(fake);
+    const added = await service.add({ url: MCP_URL, name: 'Tracker' });
+    const { authorizeUrl } = await service.beginConsent(added.connection.id, { sessionId: 'cli', redirectUri: REDIRECT, cli: true });
+    const state = new URL(authorizeUrl).searchParams.get('state')!;
+    const done = await service.finishConsent({ sessionId: 'browser', state, code: 'good-code' });
+    expect(done).toMatchObject({ id: added.connection.id, cli: true, reconnected: false });
+    expect((await service.get(added.connection.id)).signedIn).toBe(true);
+    await expect(service.finishConsent({ sessionId: 'browser', state, code: 'good-code' })).rejects.toMatchObject({ status: 400 });
+    await service.close();
+  });
+
   it('signs in: discovery, dynamic registration, PKCE and a state bound to the session, used once', async () => {
     const fake = new Fake({ auth: true, json: true });
     const { registry, service, vault } = setup(fake);

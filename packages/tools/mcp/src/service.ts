@@ -156,8 +156,29 @@ export function tokenSecretFor(connectionId: string): string {
   return `MCP_TOKEN_${connectionId.replace(/-/g, '')}`;
 }
 
+/**
+ * A sign-in waiting for the service's consent page to come back.
+ *
+ * Its state is a one-shot secret: spent on the first callback that names it,
+ * gone after ten minutes, and only ever presented through the owner's own
+ * `POST /api/connections/callback` (behind the dashboard's session, origin
+ * and CSRF gate). A consent the dashboard started is also bound to the
+ * dashboard session that asked for it, so a sign-in lands only in the tab
+ * that is waiting for it.
+ *
+ * `buddi connections add` has no browser session to bind to: the terminal
+ * prints the consent link, the owner opens it in any browser, and the service
+ * sends them to the dashboard's `/connections/callback` like any other. So a
+ * consent the CLI starts (`cli: true`) is owned by the CLI instead: it is
+ * finished by whichever owner session the callback page arrives in, still
+ * once, still within ten minutes, still only by the owner, and the CLI learns
+ * of it by polling `GET /api/connections/:id` until `signedIn`. A dashboard
+ * consent never takes this path: its session binding is unchanged.
+ */
 interface PendingConsent {
   sessionId: string;
+  /** Started by `buddi connections add`: any owner session may finish it (see above). */
+  cli: boolean;
   connectionId: string;
   verifier: string;
   redirectUri: string;
@@ -378,10 +399,11 @@ export class ConnectionsService {
   /**
    * Register buddi with the service's authorization server (or take the
    * client id the owner typed), and hand back the consent page's address,
-   * with PKCE and a state bound to this dashboard session. Reconnect is this,
+   * with PKCE and a state bound to this dashboard session (or owned by the
+   * CLI, `cli`: see `PendingConsent`). Reconnect is this,
    * on a connection that keeps its tools.
    */
-  async beginConsent(id: string, input: { sessionId: string; redirectUri: string; clientId?: string }): Promise<{ authorizeUrl: string }> {
+  async beginConsent(id: string, input: { sessionId: string; redirectUri: string; clientId?: string; cli?: boolean }): Promise<{ authorizeUrl: string }> {
     this.#sweep();
     if (!this.tokens.available) throw new ConnectionError(409, 'This installation has no vault, so a connection cannot keep its sign-in. Turn the vault on first.');
     const row = await this.#row(id);
@@ -415,7 +437,7 @@ export class ConnectionsService {
     const pkce = this.deps.oauth.pkce();
     const state = this.deps.oauth.state();
     this.#pending.set(state, {
-      sessionId: input.sessionId, connectionId: row.id, verifier: pkce.verifier, redirectUri: input.redirectUri,
+      sessionId: input.sessionId, cli: input.cli === true, connectionId: row.id, verifier: pkce.verifier, redirectUri: input.redirectUri,
       clientId, ...(clientSecret ? { clientSecret } : {}), clientSource,
       tokenEndpoint: as.tokenEndpoint, resource: discovered.resource, scopes: discovered.scopes,
       expiresAt: Date.now() + CONSENT_TTL_MS,
@@ -435,15 +457,15 @@ export class ConnectionsService {
 
   /**
    * The consent page came back to `/connections/callback`: check the state
-   * (this session's, unexpired, used once), exchange the code, keep the tokens
+   * (this session's or the CLI's, unexpired, used once), exchange the code, keep the tokens
    * in the vault. A connection that was reviewed before is connected again
    * with its tools as they were.
    */
-  async finishConsent(input: { sessionId: string; state: string; code?: string; error?: string }): Promise<{ id: string; reconnected: boolean; name: string }> {
+  async finishConsent(input: { sessionId: string; state: string; code?: string; error?: string }): Promise<{ id: string; reconnected: boolean; name: string; cli: boolean }> {
     const pending = typeof input.state === 'string' ? this.#pending.get(input.state) : undefined;
     if (!pending) throw new ConnectionError(400, 'This sign-in is no longer waiting. Start it again from Settings → Connections.');
     this.#pending.delete(input.state);
-    if (pending.sessionId !== input.sessionId) throw new ConnectionError(403, 'This sign-in was started from another dashboard session. Start it again here.');
+    if (!pending.cli && pending.sessionId !== input.sessionId) throw new ConnectionError(403, 'This sign-in was started from another dashboard session. Start it again here.');
     if (pending.expiresAt < Date.now()) throw new ConnectionError(400, 'This sign-in took longer than ten minutes. Start it again.');
     if (input.error) throw new ConnectionError(400, 'The service\'s consent page was declined, so nothing was connected.');
     const code = input.code;
@@ -475,7 +497,7 @@ export class ConnectionsService {
     });
     await this.sessions.close(row.id);
     if (updated) this.#live.set(row.id, updated);
-    return { id: row.id, reconnected, name: row.name };
+    return { id: row.id, reconnected, name: row.name, cli: pending.cli };
   }
 
   /**

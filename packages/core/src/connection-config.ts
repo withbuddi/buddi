@@ -8,6 +8,11 @@
  * `Bearer ` or `Basic ` as the words before it when the value starts with
  * one. Nothing here keeps, logs or shows the value; the caller hands it to
  * the token screen and clears the box.
+ *
+ * Shared by the dashboard's paste box and `buddi connections add --json`, so
+ * both read a block and refuse one with the same sentences. A leaf module
+ * (no imports), reached through the `@buddi/core/connection-config` subpath
+ * so the dashboard bundle loads nothing else from core.
  */
 
 export interface PastedHeader {

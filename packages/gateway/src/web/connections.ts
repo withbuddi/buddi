@@ -4,7 +4,7 @@
  *   GET    /api/connections                 the list, the cards, the agents
  *   POST   /api/connections                 1. address: { url, name? }
  *   GET    /api/connections/:id             one connection
- *   POST   /api/connections/:id/consent     2. consent: { clientId? } → { authorizeUrl }
+ *   POST   /api/connections/:id/consent     2. consent: { clientId?, cli? } → { authorizeUrl }
  *   POST   /api/connections/:id/token       2. or a token: { token, header?, prefix? }, tried before it is kept
  *   POST   /api/connections/callback        the consent page came back: { state, code? | error? }
  *   GET    /api/connections/:id/review      3. review: the tools as buddi would take them
@@ -18,8 +18,12 @@
  *
  * Every one is an owner route behind the dashboard's session, origin and CSRF
  * gate, like every other. The consent state is bound to the dashboard session
- * that asked for it; the redirect is the dashboard's own
- * `/connections/callback`, on the origin the owner is using.
+ * that asked for it, or, with `cli: true` (`buddi connections add`), owned by
+ * the CLI and finished by whichever owner session the callback page opens in
+ * (the design is at `PendingConsent` in @buddi/tool-mcp's service.ts); the
+ * redirect is the dashboard's own `/connections/callback`, on the origin the
+ * owner is using. `buddi connections` reaches these routes as the owner the
+ * way `buddi mcp` does (packages/cli/src/mcp/gateway-client.ts).
  *
  * Grants go through `updateAgentFromOwner`, the one path Agent Father's and
  * the agent editor's writes take: nothing is granted silently, and nothing is
@@ -226,6 +230,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     const started = await service.beginConsent(id, {
       sessionId: req.sessionId,
       redirectUri,
+      ...(body.cli === true ? { cli: true } : {}),
       ...(typeof body.clientId === 'string' && body.clientId.trim() ? { clientId: body.clientId } : {}),
     });
     return { status: 200, body: { ...started, redirectUri } };

@@ -25,7 +25,7 @@ import {
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { Button, Card, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
-import { parseConnectionConfig, type PastedConfig, type PastedHeader } from './connection-config';
+import { parseConnectionConfig, type PastedConfig, type PastedHeader } from '@buddi/core/connection-config';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
   connected: { label: 'Connected', tone: 'good' },

@@ -106,6 +106,8 @@ export type Command =
   | { kind: 'speech'; action: 'install' | 'status'; model?: 'whisper' | 'kokoro' }
   /** buddi as an MCP server over stdio, for Claude Code or any MCP client. */
   | { kind: 'mcp' }
+  /** Settings → Connections from the terminal, through the running gateway. */
+  | { kind: 'connections'; command: ConnectionsCommand }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
   /** Global pause control (docs/architecture.md, "Queue, concurrency, recovery"). */
@@ -147,6 +149,121 @@ export type Command =
       files?: boolean;
       scheduleAction?: BackupScheduleAction;
     };
+
+export const CONNECTIONS_ACTIONS = ['list', 'add', 'review', 'give', 'remove'] as const;
+export type ConnectionsAction = (typeof CONNECTIONS_ACTIONS)[number];
+
+/**
+ * `buddi connections …` (docs/connections.md, "From the terminal"). `--json`
+ * on `list` and `review` is the output switch and `main` has taken it off by
+ * now; on `add` it is the pasted `mcpServers` block, a value.
+ */
+export type ConnectionsCommand =
+  | { action: 'list' }
+  | {
+      action: 'add';
+      /** A card id or an https:// address; absent when `config` gives it. */
+      address?: string;
+      /** `--json '<mcpServers json>'`. */
+      config?: string;
+      name?: string;
+      /** `--token`: read one with the terminal's echo off. */
+      token: boolean;
+      /** `--token-stdin`: read one from a pipe. */
+      tokenStdin: boolean;
+      clientId?: string;
+      keep: boolean;
+      slug?: string;
+      /** `--to`: agent ids or handles; `[]` is `--to nobody`. */
+      to?: string[];
+    }
+  | { action: 'review'; name: string; keep: boolean; slug?: string }
+  | { action: 'give'; name: string; to: string[] }
+  | { action: 'remove'; name: string; yes: boolean };
+
+/** `--to a,b` or `--to nobody`. */
+function agentList(value: string): string[] {
+  const list = value.split(',').map((w) => w.trim()).filter(Boolean);
+  if (list.length === 0) throw new UsageError('--to needs agents, comma-separated, or nobody');
+  return list.length === 1 && list[0]!.toLowerCase() === 'nobody' ? [] : list;
+}
+
+export function parseConnectionsArgs(argv: string[]): ConnectionsCommand {
+  const [first, ...rest] = argv;
+  const action = first ?? 'list';
+  if (!(CONNECTIONS_ACTIONS as readonly string[]).includes(action)) {
+    throw new UsageError(`unknown connections action: ${action} (expected ${CONNECTIONS_ACTIONS.join(', ')})`);
+  }
+  const positional: string[] = [];
+  const flags = new Map<string, string | true>();
+  const valued = new Set(['--name', '--client-id', '--json', '--slug', '--to']);
+  const allowed: Record<ConnectionsAction, string[]> = {
+    list: [],
+    add: ['--name', '--token', '--token-stdin', '--client-id', '--json', '--keep', '--slug', '--to'],
+    review: ['--keep', '--slug'],
+    give: ['--to'],
+    remove: ['--yes', '-y'],
+  };
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i]!;
+    if (!arg.startsWith('-')) { positional.push(arg); continue; }
+    const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    if (!allowed[action as ConnectionsAction].includes(flag)) {
+      const known = allowed[action as ConnectionsAction];
+      throw new UsageError(`unknown option for buddi connections ${action}: ${flag}${known.length ? ` (expected ${known.filter((f) => f !== '-y').join(', ')})` : ''}`);
+    }
+    if (valued.has(flag)) {
+      const value = inline ?? rest[++i];
+      if (value === undefined || value === '') throw new UsageError(`${flag} needs a value`);
+      flags.set(flag, value);
+    } else {
+      flags.set(flag, true);
+    }
+  }
+  const text = (flag: string): string | undefined => { const v = flags.get(flag); return typeof v === 'string' ? v : undefined; };
+  const one = (what: string): string => {
+    if (positional.length === 0) throw new UsageError(`buddi connections ${action} needs ${what}`);
+    if (positional.length > 1) throw new UsageError(`unexpected argument: ${positional[1]}`);
+    return positional[0]!;
+  };
+  switch (action as ConnectionsAction) {
+    case 'list':
+      if (positional.length > 0) throw new UsageError(`unexpected argument: ${positional[0]}`);
+      return { action: 'list' };
+    case 'add': {
+      const config = text('--json');
+      if (positional.length > 1) throw new UsageError(`unexpected argument: ${positional[1]}`);
+      const address = positional[0];
+      if (address === undefined && config === undefined) throw new UsageError('buddi connections add needs a card (github, notion…) or an https:// address, or --json \'<mcpServers json>\'');
+      if (address !== undefined && config !== undefined) throw new UsageError('give either an address or --json, not both');
+      const ways = ['--token', '--token-stdin', '--client-id'].filter((f) => flags.has(f));
+      if (ways.length > 1) throw new UsageError(`choose one way to sign in: ${ways.join(' or ')}`);
+      const to = text('--to');
+      return {
+        action: 'add',
+        ...(address !== undefined ? { address } : {}),
+        ...(config !== undefined ? { config } : {}),
+        ...(text('--name') ? { name: text('--name')! } : {}),
+        token: flags.has('--token'),
+        tokenStdin: flags.has('--token-stdin'),
+        ...(text('--client-id') ? { clientId: text('--client-id')! } : {}),
+        keep: flags.has('--keep'),
+        ...(text('--slug') ? { slug: text('--slug')! } : {}),
+        ...(to !== undefined ? { to: agentList(to) } : {}),
+      };
+    }
+    case 'review':
+      return { action: 'review', name: one('a connection\'s name'), keep: flags.has('--keep'), ...(text('--slug') ? { slug: text('--slug')! } : {}) };
+    case 'give': {
+      const name = one('a connection\'s name');
+      const to = text('--to');
+      if (to === undefined) throw new UsageError('buddi connections give needs --to <agent,agent> (or --to nobody)');
+      return { action: 'give', name, to: agentList(to) };
+    }
+    case 'remove':
+      return { action: 'remove', name: one('a connection\'s name'), yes: flags.has('--yes') || flags.has('-y') };
+  }
+}
 
 /** Commands the gateway's chat CLI owns; it re-parses the whole slice. */
 const CHAT_COMMANDS = new Set(['chat', 'ask', 'agents']);
@@ -272,6 +389,8 @@ export function parseArgs(argv: string[]): Command {
     // prompts with the terminal's echo off instead.
     return { kind: 'vault', action: action as VaultAction, ...(name ? { name } : {}) };
   }
+
+  if (head === 'connections') return { kind: 'connections', command: parseConnectionsArgs(rest) };
 
   if (head === 'mcp') {
     if (rest.length > 0) throw new UsageError(`unexpected argument: ${rest[0]}`);

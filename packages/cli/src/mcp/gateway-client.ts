@@ -94,6 +94,12 @@ export class GatewayClient implements Gateway {
     return { status: res.status, body: (await this.#read(res)) as T };
   }
 
+  /** A delete, as the dashboard's Disconnect sends it: no body, the same CSRF pair. */
+  async delete<T = unknown>(path: string): Promise<{ status: number; body: T }> {
+    const res = await this.#request(path, 'DELETE');
+    return { status: res.status, body: (await this.#read(res)) as T };
+  }
+
   async #send(path: string, method: string, headers: Record<string, string>, body?: string): Promise<TransportResponse> {
     try {
       return await this.#transport(`${this.#base}${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
@@ -109,7 +115,7 @@ export class GatewayClient implements Gateway {
     const session = this.#session!;
     const headers: Record<string, string> = { cookie: `${session.cookie}=${session.id}; ${csrfCookieName(portOf(new URL(this.#base)))}=${session.csrf}` };
     if (method !== 'GET') {
-      headers['content-type'] = 'application/json';
+      if (body !== undefined) headers['content-type'] = 'application/json';
       headers.origin = this.#base;
       headers[CSRF_HEADER] = session.csrf;
     }
@@ -146,7 +152,7 @@ export class GatewayClient implements Gateway {
       id = cookieOf(res) ?? id;
       const body = res.ok ? ((await res.json().catch(() => null)) as { csrf?: unknown } | null) : null;
       if (!id || typeof body?.csrf !== 'string') {
-        throw new GatewayError(res.status, 'buddi answered but would not open a session for this client. Is the dashboard bound somewhere `buddi mcp` cannot sign in?');
+        throw new GatewayError(res.status, 'buddi answered but would not open a session for this client. Is the dashboard bound somewhere this command cannot sign in?');
       }
       this.#session = { id, csrf: body.csrf, cookie: sessionCookieName(portOf(new URL(this.#base))) };
     })().catch((err: unknown) => {
@@ -181,7 +187,7 @@ export class GatewayClient implements Gateway {
 export function gatewayFromEnvironment(env: NodeJS.ProcessEnv = process.env): GatewayClient | { off: string } {
   const config = webConfig(env);
   if (!config.enabled) {
-    return { off: `The dashboard is off (${WEB_ENABLED_VAR}=0), and \`buddi mcp\` reaches buddi through it. Turn it back on and restart the service.` };
+    return { off: `The dashboard is off (${WEB_ENABLED_VAR}=0), and this command reaches buddi through it. Turn it back on and restart the service.` };
   }
   const open = isLoopback(config.host) && env.BUDDI_WEB_REQUIRE_AUTH !== '1';
   return new GatewayClient({

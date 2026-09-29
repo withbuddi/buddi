@@ -74,6 +74,35 @@ It refuses what buddi cannot connect: a `command` (a server that runs as a
 program on this computer), a `"type": "sse"` server (buddi speaks Streamable
 HTTP), and a block that names several servers at once.
 
+### From the terminal
+
+`buddi connections` walks the same four steps, through the running buddi
+(it says so and exits 3 when buddi is not running):
+
+```
+buddi connections add github --token --to buddi
+buddi connections add https://mcp.example.com/mcp --name Example
+buddi connections add --json '{ "mcpServers": { "linear": { "url": "https://mcp.linear.app/mcp" } } }'
+buddi connections list
+buddi connections review github [--keep]
+buddi connections give github --to buddi,ledger
+buddi connections remove github
+```
+
+`add` takes a card (`github`, `notion`…), an `https://` address, or a
+config block with `--json`. It signs in the way the card recommends:
+`--token` asks for the token with the terminal's echo off (`--token-stdin`
+reads it from a pipe), `--client-id` takes a client id, and otherwise it
+prints the service's consent link. Open it in any browser; the page sends
+you back to your dashboard and the command carries on (it waits ten minutes
+at most). That sign-in belongs to the command rather than to a dashboard
+tab, so it lands in whichever dashboard session the page opens in, still
+once and only for you. Then it prints every tool with its tier and asks
+"Keep these tools?" (`--keep` answers yes, `--slug` names the connection),
+and asks which agents get them, your front desk first (`--to` answers,
+`--to nobody` keeps it waiting). Every step goes through the dashboard's
+own routes, so the result is the same as the screens'.
+
 ## What an agent gets
 
 Each tool is named `mcp.<connection>.<tool>`: `mcp.github.search_issues`,
