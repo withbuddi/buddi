@@ -1696,6 +1696,14 @@ export const api = {
   /** Hide one Home glance, or show it again. */
   setGlanceHidden: (id: string, hidden: boolean) =>
     post<{ id: string; hidden: boolean }>(`/home/glances/${encodeURIComponent(id)}/hidden`, { hidden }),
+  /** The plugin rail pages the owner hid, as `<plugin>:<page>`. */
+  rail: () => get<{ hidden: string[] }>('/rail'),
+  /** Hide one plugin rail page from the rail, or show it again. */
+  setRailHidden: (plugin: string, page: string, hidden: boolean) =>
+    post<{ plugin: string; page: string; hidden: boolean }>(
+      `/rail/pages/${encodeURIComponent(plugin)}/${encodeURIComponent(page)}/hidden`,
+      { hidden },
+    ),
   snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
   agents: () => get<AgentsView>('/agents'),
   /**

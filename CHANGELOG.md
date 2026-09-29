@@ -11,12 +11,15 @@ What changes in buddi from one release to the next, newest first.
 - Planner's morning brief reads today's weather for your home place and today's meetings with their gaps when the Weather and Calendar plugins are installed, then ends with what to do first; without them it leaves those lines out and never mentions them. A Planner added earlier gains this by adding `weather.*?, calendar.*?` to its tools.
 - Plugins can keep a private link, such as a calendar's secret ICS address, as an owner secret they fetch without ever reading it (host API 1.9, `auth: { secret, as: 'url' }`, kind `http.url`).
 - Plugins can draw results as tiles on the canvas and add a one-line glance next to Home's greeting; Weather shows its forecast as daily tiles and the temperature at home beside the date, and Calendar your next meeting.
+- A Calendar page in the rail shows today and the week ahead from your linked calendars.
+- Settings → Appearance chooses which plugin pages sit in the rail.
 
 ### Changed
 
 - `buddi plugins init` writes a plugin whose manifest version is read from its package.json (`src/version.ts`), so the installed card can no longer show a stale version.
 - `buddi speech install` downloads through an `http` area of its own, with the same address rules as the gateway, refusing any host the speech plugin does not declare.
 - Until 0.1.0, pre-releases are installed with plain `npm install -g @withbuddi/buddi`; the `next` tag is only meaningful after 0.1.0.
+- After buddi restarts on a new build, the dashboard knows within seconds and reloads itself when you are not in the middle of something.
 
 ## 0.1.0-pre.22 — 2026-09-28
 

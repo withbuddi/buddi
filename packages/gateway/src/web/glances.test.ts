@@ -39,7 +39,7 @@ describe('Home glances', () => {
   it('draws each glance in order, resolving its link, cutting long text and dropping failures', async () => {
     const pool = fakePool();
     const registry = registryWith(glances);
-    const views = await readGlances({ pool, registry, ctx: {} as never });
+    const views = await readGlances({ pool: pool as never, registry, ctx: {} as never });
     expect(views.map((g) => g.id)).toEqual(['weather.now', 'weather.long']);
     expect(views[0]).toEqual({
       id: 'weather.now', title: 'Weather at home', plugin: 'weather', icon: 'cloud', text: '18°C Lyon',
@@ -55,11 +55,11 @@ describe('Home glances', () => {
   it('remembers a hidden glance, shows it again, and refuses an id nobody contributes', async () => {
     const pool = fakePool();
     const registry = registryWith(glances);
-    expect((await setGlanceHidden({ pool, registry }, 'weather.now', true)).status).toBe(200);
+    expect((await setGlanceHidden({ pool: pool as never, registry }, 'weather.now', true)).status).toBe(200);
     expect(pool.rows.get('home')).toEqual({ hiddenGlances: ['weather.now'] });
-    expect((await readGlances({ pool, registry, ctx: {} as never }))[0]!.hidden).toBe(true);
-    await setGlanceHidden({ pool, registry }, 'weather.now', false);
-    expect((await readGlances({ pool, registry, ctx: {} as never }))[0]!.hidden).toBe(false);
-    expect((await setGlanceHidden({ pool, registry }, 'weather.block', true)).status).toBe(404);
+    expect((await readGlances({ pool: pool as never, registry, ctx: {} as never }))[0]!.hidden).toBe(true);
+    await setGlanceHidden({ pool: pool as never, registry }, 'weather.now', false);
+    expect((await readGlances({ pool: pool as never, registry, ctx: {} as never }))[0]!.hidden).toBe(false);
+    expect((await setGlanceHidden({ pool: pool as never, registry }, 'weather.block', true)).status).toBe(404);
   });
 });

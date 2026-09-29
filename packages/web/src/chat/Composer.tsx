@@ -484,7 +484,8 @@ export const Composer = forwardRef<ComposerHandle, {
   }, [listening]);
 
   return (
-    <div className="wb-composer" data-testid="composer">
+    // `data-busy`: something here a reload would lose (the shell's auto-reload waits, `shell/freshness.ts`).
+    <div className="wb-composer" data-testid="composer" data-busy={text.trim() !== '' || holdingFiles || listening ? 'true' : undefined}>
       <div className="wb-composer-box" data-focused={focused || listening} data-disabled={disabled} data-listening={listening || undefined}>
         {attachments.length > 0 ? (
           <div className="wb-composer-files" role="list" aria-label="Files to send">

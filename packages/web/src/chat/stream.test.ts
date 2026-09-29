@@ -90,6 +90,30 @@ describe('resuming', () => {
     handle.close();
   });
 
+  it('says it reconnected when it opens again after a drop, and not on the first open', async () => {
+    let connection = 0;
+    const fetchImpl = (async () => {
+      connection += 1;
+      return sseResponse([`id: ${connection}\nevent: ping\ndata: {}\n\n`]);
+    }) as unknown as typeof fetch;
+    const reconnects: number[] = [];
+    let waits = 0;
+    const handle = openChatStream({
+      url: '/stream',
+      onEvent: () => {},
+      onReconnect: () => reconnects.push(connection),
+      fetchImpl,
+      retryMs: 0,
+      wait: async () => {
+        waits += 1;
+        if (waits >= 3) handle.close();
+      },
+    });
+    await settle();
+    expect(reconnects).toEqual([2, 3]);
+    handle.close();
+  });
+
   it('starts from an id it was given, for a page that reloaded mid-run', async () => {
     const headers: Array<Record<string, string>> = [];
     const fetchImpl = (async (_url: string, init?: RequestInit) => {

@@ -17,7 +17,7 @@
  * Loading a newly installed plugin needs a restart, which is the supervisor's
  * job. A checkout has no supervisor, so it gets the command instead.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ApiError,
   api,
@@ -31,8 +31,9 @@ import {
   type StagedPluginView,
 } from '../api';
 import { fmtRelative } from '../format';
-import { AGENTS_ROUTE } from '../routes';
-import { Button, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
+import { AGENTS_ROUTE, pluginPageRoute } from '../routes';
+import type { PluginPageDescriptor } from '../pages/types';
+import { Button, ButtonLink, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 
 /** How often a running stage is asked where it has got to. */
@@ -151,7 +152,54 @@ function useStageJob(id: string | null): { job: PluginJob | undefined; error: st
   return { job, error };
 }
 
-export function Plugins(): JSX.Element {
+/**
+ * "Open" for each rail page a plugin contributes: the way to a page the owner
+ * took off the rail (Settings → Appearance → In the rail), and a shortcut to
+ * one that is still there.
+ */
+function OpenPages({
+  plugin,
+  pages,
+  navigate,
+}: {
+  plugin: string;
+  pages: PluginPageDescriptor[];
+  navigate?: ((route: string) => void) | undefined;
+}): JSX.Element | null {
+  const own = pages.filter((page) => page.plugin === plugin);
+  if (own.length === 0) return null;
+  return (
+    <>
+      {own.map((page) => {
+        const route = pluginPageRoute(page.plugin, page.id);
+        return (
+          <ButtonLink
+            key={page.id}
+            size="sm"
+            href={route}
+            aria-label={`Open ${page.title}`}
+            onClick={(event) => {
+              if (!navigate) return;
+              event.preventDefault();
+              navigate(route);
+            }}
+          >
+            {own.length === 1 ? 'Open' : `Open ${page.title}`}
+          </ButtonLink>
+        );
+      })}
+    </>
+  );
+}
+
+export function Plugins({
+  railPages = [],
+  navigate,
+}: {
+  /** The plugin pages whose place is the rail, hidden or not: each plugin's card opens its own. */
+  railPages?: PluginPageDescriptor[];
+  navigate?: (route: string) => void;
+} = {}): JSX.Element {
   const view = useAsync(() => api.plugins(), [], 20_000);
   const [jobId, setJobId] = useState<string | null>(null);
   const { job, error: jobError } = useStageJob(jobId);
@@ -166,6 +214,8 @@ export function Plugins(): JSX.Element {
 
   const data = view.data;
   const checkout = data?.checkout ?? true;
+  const openFor = (name: string): ReactNode =>
+    railPages.some((page) => page.plugin === name) ? <OpenPages plugin={name} pages={railPages} navigate={navigate} /> : undefined;
 
   return (
     <Stack gap="lg">
@@ -229,7 +279,7 @@ export function Plugins(): JSX.Element {
           <Stack divided>
             {data.installed.map((plugin) => (
               <Section key={plugin.name}>
-                <Installed plugin={plugin} onChanged={() => view.reload()} onFailed={setFailed} />
+                <Installed plugin={plugin} onChanged={() => view.reload()} onFailed={setFailed} open={openFor(plugin.name)} />
               </Section>
             ))}
           </Stack>
@@ -241,7 +291,7 @@ export function Plugins(): JSX.Element {
           <Stack divided>
             {(data?.builtIn ?? []).map((plugin) => (
               <Section key={plugin.name}>
-                <BuiltIn plugin={plugin} />
+                <BuiltIn plugin={plugin} open={openFor(plugin.name)} />
               </Section>
             ))}
           </Stack>
@@ -261,9 +311,10 @@ export function Plugins(): JSX.Element {
  * Nothing to approve and nothing to remove, so it is a name, a version and
  * what it contributes: the part of the tool list that came with the box.
  */
-function BuiltIn({ plugin }: { plugin: BuiltInPluginView }): JSX.Element {
+function BuiltIn({ plugin, open }: { plugin: BuiltInPluginView; open?: ReactNode }): JSX.Element {
   return (
     <Stack gap="sm">
+      {open ? <Toolbar align="end">{open}</Toolbar> : null}
       <KV
         items={[
           {
@@ -757,10 +808,13 @@ function Installed({
   plugin,
   onChanged,
   onFailed,
+  open,
 }: {
   plugin: InstalledPluginView;
   onChanged: () => void;
   onFailed: (message: string) => void;
+  /** Its rail pages' Open buttons, when it has any. */
+  open?: ReactNode;
 }): JSX.Element {
   const [removing, setRemoving] = useState(false);
   const [purge, setPurge] = useState(false);
@@ -795,6 +849,7 @@ function Installed({
             <Button size="sm" disabled={busy} onClick={() => act(api.updatePlugin(plugin.name))}>
               Update
             </Button>
+            {open}
           </Toolbar>
         }
       >

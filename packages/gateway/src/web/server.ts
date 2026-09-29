@@ -227,6 +227,7 @@ import {
   type VersionDeps,
 } from './version.js';
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
+import { readRail, setRailPageHidden } from './rail.js';
 import { BUILD_MISSING, serveAsset } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
@@ -1285,6 +1286,9 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/pages':
           return reply(res, listPageDescriptors(pagesDeps()));
+        // Which plugin rail pages the owner hid (Settings → Appearance → In the rail).
+        case '/api/rail':
+          return sendJson(res, 200, await readRail(deps.pool));
         case '/api/agent-offers':
           // Agents a plugin offers on Home while nobody has them. Accepting
           // is the Plugins page's own accept route, below.
@@ -2093,6 +2097,21 @@ export function createWebApp(deps: WebServerDeps): Server {
       const result = await setGlanceHidden(
         { pool: deps.pool, registry: deps.registry },
         decodeURIComponent(glanceHidden[1] as string),
+        body.hidden,
+      );
+      return sendJson(res, result.status, result.body);
+    }
+
+    /* One plugin rail page, hidden from the rail or shown again (Settings → Appearance). */
+    const railHidden = /^\/api\/rail\/pages\/([^/]+)\/([^/]+)\/hidden$/.exec(path);
+    if (railHidden) {
+      if (typeof body.hidden !== 'boolean') {
+        return sendJson(res, 400, { error: '`hidden` must be true or false' });
+      }
+      const result = await setRailPageHidden(
+        { pool: deps.pool, registry: deps.registry },
+        decodeURIComponent(railHidden[1] as string),
+        decodeURIComponent(railHidden[2] as string),
         body.hidden,
       );
       return sendJson(res, result.status, result.body);

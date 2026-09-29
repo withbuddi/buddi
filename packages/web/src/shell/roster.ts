@@ -28,6 +28,7 @@
 import { useEffect, useState } from 'react';
 import { get } from '../api';
 import { openChatStream } from '../chat/stream';
+import { announceReconnect } from './freshness';
 import type { ChatAgent } from '../chat/types';
 
 /** One agent's claim on the owner, exactly as the attention endpoint sends it. */
@@ -141,7 +142,9 @@ export function useAttention(): Map<string, AgentAttention> {
         });
     };
     refresh();
-    const handle = openChatStream({ url: ATTENTION_STREAM, onEvent: () => refresh() });
+    // The shell's one always-open stream: when it comes back after a drop,
+    // the gateway may have restarted onto a new build (`freshness.ts`).
+    const handle = openChatStream({ url: ATTENTION_STREAM, onEvent: () => refresh(), onReconnect: announceReconnect });
     return () => {
       cancelled = true;
       handle.close();

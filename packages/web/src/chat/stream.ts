@@ -35,6 +35,8 @@ export interface StreamOptions {
   url: string;
   onEvent: (event: ChatEvent) => void;
   onStatus?: (status: StreamStatus) => void;
+  /** The stream opened again after a drop or a failed try (the gateway restarted, the network came back). Not a first open that just worked. */
+  onReconnect?: () => void;
   /** Injectable for tests; defaults to the page's own `fetch`. */
   fetchImpl?: typeof fetch;
   /** Injectable for tests; defaults to `setTimeout`. */
@@ -104,6 +106,7 @@ export function openChatStream(options: StreamOptions): StreamHandle {
 
   let lastEventId = options.lastEventId ?? null;
   let stopped = false;
+  let dropped = false;
   let controller: AbortController | null = null;
 
   const loop = async (): Promise<void> => {
@@ -122,6 +125,7 @@ export function openChatStream(options: StreamOptions): StreamHandle {
         });
         if (!response.ok || !response.body) throw new Error(`stream ${response.status}`);
         options.onStatus?.('open');
+        if (dropped) options.onReconnect?.();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -143,6 +147,7 @@ export function openChatStream(options: StreamOptions): StreamHandle {
         // A drop is ordinary. Say nothing, wait, resume.
       }
       if (stopped) break;
+      dropped = true;
       options.onStatus?.('closed');
       await wait(retryMs);
     }

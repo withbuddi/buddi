@@ -31,7 +31,12 @@ double-clickable app in ~/Applications that signs you in with a fresh link each
 time. An app keeps the address it was installed from, so the tailnet address
 installs as its own app. The app has no reload button, so the owner menu at the
 foot of the rail has **Reload**; after an upgrade it reads **Reload to update**
-in any mode, with a dot on your initial.
+in any mode, with a dot on your initial. The page asks which build buddi serves
+every five minutes and right after its live connection comes back (a restart
+drops it). On a new build it reloads itself, where you were, when the tab is
+hidden or you have been idle for a minute with every composer empty, nothing
+recording and no sheet open; otherwise the dot and **Reload to update** wait
+for you.
 Installed, buddi also opens when the gateway is out of reach: instead of the
 browser's error it says buddi isn't answering at that address and what to
 check (on this Mac, `buddi status`; on the tailnet address, whether Tailscale
@@ -43,7 +48,9 @@ seconds without an answer.
 
 The column on the left holds the places: **Home**, **Chat**, **Agents**,
 **Activity**, **Files**, then the pages plugins add (such as **Mail** and
-**Goals**), and **Settings** at the foot. The place you are on is filled and
+**Calendar**), and **Settings** at the foot. Settings → Appearance → In the rail
+chooses which plugin pages sit there; all are on until you turn one off, and a
+page taken off the rail still opens from Settings → Plugins (**Open**). The place you are on is filled and
 marked. Home carries the rail's only count: the things waiting on you. Settings
 carries a dot, without a number, when a newer buddi is ready.
 
@@ -202,7 +209,9 @@ Try it: open a goal that is behind and ask its agent why.
 A list of sections in four groups.
 
 - **Profile**: your name and how the agents address you.
-- **Appearance**: theme, background and page width, kept in this browser.
+- **Appearance**: theme, background and page width, kept in this browser;
+  which plugin pages sit in the rail and which Home glances show, kept by the
+  installation.
 - **Notifications**: where messages go, the focus schedules, the end of the
   day, and the last twenty sent. Also where Telegram is paired.
 - **Memory**: what the agents have kept about you, and the means to correct it.

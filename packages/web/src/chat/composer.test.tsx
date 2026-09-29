@@ -25,6 +25,16 @@ function dropFile(file: File): void {
 }
 
 describe('the composer', () => {
+  it('marks itself busy while it holds text, so the page is not reloaded under it', () => {
+    render(<Composer disabled={false} running={false} onSend={() => {}} onStop={() => {}} agentName="Ada" />);
+    const root = screen.getByTestId('composer');
+    expect(root.getAttribute('data-busy')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half a thought' } });
+    expect(root.getAttribute('data-busy')).toBe('true');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '  ' } });
+    expect(root.getAttribute('data-busy')).toBeNull();
+  });
+
   it('uploads a dropped file and sends the message with its artifact id', async () => {
     const uploads: FormData[] = [];
     vi.stubGlobal(

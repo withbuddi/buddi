@@ -46,6 +46,7 @@ import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
 import type { GroupView } from './chat/types';
 import { CONNECTION_DOT, Rail } from './shell/Rail';
+import { shownOnRail, useRailHidden } from './shell/railHidden';
 import { useAsync } from './ui';
 import { rememberDefaultAgent } from './shell/accent';
 import { groupAgents, useAttention } from './shell/roster';
@@ -61,6 +62,7 @@ import { Meet } from './views/Meet';
 import { MascotProvider } from './views/parts/Avatar';
 import { RecoveryBanner, useRecovery } from './views/Recovery';
 import { buildDiffers } from './build';
+import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
 
 export { PLACES };
 
@@ -155,16 +157,23 @@ export function App(): JSX.Element {
    * — and an installation with none is served an empty list.
    */
   const pluginPages = usePluginPages();
+  /* The rail pages the owner hid in Settings → Appearance stay off the rail (still open from Settings → Plugins). */
+  const railHidden = useRailHidden();
   /*
    * Whether a newer buddi is known. Read once here, for the rail's dot and
-   * Home's notice, rather than once by each. The supervisor asks the registry
-   * once a day, so an hour between reads is plenty. A checkout never has one
-   * to offer: it upgrades with git.
+   * Home's notice, rather than once by each. A checkout never has one to
+   * offer: it upgrades with git. Read every five minutes, because the same
+   * answer names the dashboard build the gateway serves (below).
    */
-  const version = useAsync<VersionView>(() => Promise.resolve().then(() => api.version()), [], 60 * 60_000).data;
+  const versionRead = useAsync<VersionView>(() => Promise.resolve().then(() => api.version()), [], BUILD_CHECK_MS);
+  const version = versionRead.data;
+  // …and again the moment the live stream is back: a restart onto a new build drops it.
+  useCheckOnReconnect(versionRead.reload);
   const update = version && !version.checkout && version.updateAvailable ? version : null;
   /* The same read says which dashboard build is served; a different one than this page's means reload. */
   const stale = buildDiffers(version?.web);
+  // Reload onto it by itself when the tab is hidden or the owner is idle with nothing in progress.
+  useAutoReload(version?.web);
   /*
    * Connections that need the owner (a sign-in ran out, the tools changed):
    * the same dot on Settings, and a line on Home. One small read a minute.
@@ -395,7 +404,7 @@ export function App(): JSX.Element {
             onNavigate={navigate}
             theme={theme}
             onTheme={setTheme}
-            plugins={pluginPages.rail}
+            plugins={shownOnRail(pluginPages.rail, railHidden)}
             updateAvailable={update !== null}
             settingsDot={connectionSignals.length > 0 ? CONNECTION_DOT : undefined}
             stale={stale}

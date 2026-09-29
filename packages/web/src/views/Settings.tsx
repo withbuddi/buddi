@@ -34,6 +34,8 @@ import { Plugins } from './Plugins';
 import { Notifications } from './Notifications';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
+import { railKey, setRailHidden, useRailHidden } from '../shell/railHidden';
+import type { PluginPageDescriptor } from '../pages/types';
 
 export function Settings({ hash, timezone, navigate, agents, pluginPages }: PlaceProps): JSX.Element {
   const section = settingsSectionOf(hash);
@@ -81,7 +83,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
             />
           ) : null}
           {section === 'you' ? <You embedded /> : null}
-          {section === 'appearance' ? <AppearanceSection /> : null}
+          {section === 'appearance' ? <AppearanceSection railPages={plugins.rail} /> : null}
           {section === 'notifications' ? <Notifications timezone={timezone} /> : null}
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
@@ -91,7 +93,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'connections' ? <Connections embedded timezone={timezone} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
-          {section === 'plugins' ? <Plugins /> : null}
+          {section === 'plugins' ? <Plugins railPages={plugins.rail} navigate={navigate} /> : null}
           {section === 'system' ? <System timezone={timezone} /> : null}
         </div>
       </div>
@@ -103,7 +105,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
  * How the dashboard looks in this browser. Kept here, not on the server: a
  * second browser keeps its own choice, and nothing about it is reported.
  */
-function AppearanceSection(): JSX.Element {
+function AppearanceSection({ railPages }: { railPages: PluginPageDescriptor[] }): JSX.Element {
   const [appearance, set] = useAppearance();
   return (
     <Section title="Appearance" aside="Kept in this browser only. Another browser keeps its own." panel>
@@ -132,6 +134,7 @@ function AppearanceSection(): JSX.Element {
             onChange={(width) => set({ width })}
           />
         </PrefRow>
+        <RailPagesPref pages={railPages} />
         <HomeGlancesPref />
       </Stack>
     </Section>
@@ -166,6 +169,39 @@ function HomeGlancesPref(): JSX.Element | null {
           <label key={glance.id} className="backup-check">
             <input type="checkbox" checked={!glance.hidden} disabled={busy === glance.id} onChange={(event) => toggle(glance.id, event.target.checked)} />
             <span>{glance.title}</span>
+          </label>
+        ))}
+      </Stack>
+    </div>
+  );
+}
+
+/**
+ * Settings → Appearance → In the rail: every page the plugins put in the rail
+ * (Mail, Calendar), with a switch each, all on until the owner turns one off.
+ * Kept by the installation, like the glances. A page taken off the rail is
+ * still opened from Settings → Plugins.
+ */
+export function RailPagesPref({ pages }: { pages: PluginPageDescriptor[] }): JSX.Element | null {
+  const hidden = useRailHidden();
+  const [failed, setFailed] = useState<string | null>(null);
+  if (pages.length === 0) return null;
+  const toggle = (page: PluginPageDescriptor, shown: boolean): void => {
+    setFailed(null);
+    setRailHidden(page, !shown).catch((err: unknown) => setFailed(err instanceof Error ? err.message : String(err)));
+  };
+  return (
+    <div className="pref-row ui-section">
+      <div className="pref-text">
+        <span className="pref-label">In the rail</span>
+        <span className="ui-field-hint">The plugin pages beside Home and Chat. One you turn off still opens from Settings → Plugins. Kept for every browser.</span>
+      </div>
+      <Stack gap="sm">
+        <ErrorBanner message={failed} />
+        {pages.map((page) => (
+          <label key={railKey(page)} className="backup-check">
+            <input type="checkbox" checked={!hidden.has(railKey(page))} onChange={(event) => toggle(page, event.target.checked)} />
+            <span>{page.title}</span>
           </label>
         ))}
       </Stack>

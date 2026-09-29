@@ -12,6 +12,7 @@
  *
  * Skipped unless DATABASE_URL is set; the owner's own database is untouched.
  */
+import type { HomeBlock } from '@buddi/core';
 import {
   ToolRegistry,
   createGoal,
@@ -407,7 +408,7 @@ suite('the Goals page reads (postgres)', () => {
 
     const list = await read('goals');
     const detail = await read('goal', { id: goal.id });
-    const home = await createGoalHome(registry).produce(ctx);
+    const home = (await createGoalHome(registry).produce(ctx)) as HomeBlock | null;
     const status = await registry.invoke('goal.status', { id: goal.id }, { ...ctx, agentId: HOLDER });
     expect(status.ok).toBe(true);
     const fromChat = (status.ok === true ? (status.output as any) : null).goals[0];
@@ -509,7 +510,7 @@ suite('the Goals page reads (postgres)', () => {
   });
 
   describe('the Home block', () => {
-    const block = () => createGoalHome(registry).produce(ctx);
+    const block = async () => (await createGoalHome(registry).produce(ctx)) as HomeBlock | null;
 
     it('is nothing at all until there is an open goal', async () => {
       expect(await block()).toBeNull();

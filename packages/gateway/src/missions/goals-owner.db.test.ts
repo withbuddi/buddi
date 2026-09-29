@@ -479,7 +479,7 @@ suite('goals the owner measures (postgres)', () => {
   async function home(): Promise<HomeBlock | null> {
     const block = registry.home().find((b) => b.id === 'goal.goals');
     if (!block) throw new Error('no home block');
-    return block.produce(pageQueryContext(ctx));
+    return (await block.produce(pageQueryContext(ctx))) as HomeBlock | null;
   }
 
   it('shows an owner metric’s own values on the page, and draws them on the canvas with the target', async () => {
