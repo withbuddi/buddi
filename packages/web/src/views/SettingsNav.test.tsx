@@ -221,7 +221,7 @@ describe('on a narrow window', () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/settings/backup'));
     // Radix registers each of the fourteen items as the menu opens, which jsdom
     // takes its time over (the canvas's overflow menu is slow the same way).
-  }, 60_000); // a large open menu in jsdom is slow on a CI runner; the assertions are the same
+  }, 180_000); // a large open menu in jsdom is slow on a CI runner (it passed 60 s once); the assertions are the same
 });
 
 describe('dots', () => {
