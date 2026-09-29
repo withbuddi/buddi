@@ -3,7 +3,7 @@ import path from 'node:path';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { describe, expect, it } from 'vitest';
-import { CHART_BOX, Chart, chartGeometry, chartSummary } from './Chart';
+import { CHART_BOX, CHART_BOX_WIDE, Chart, chartGeometry, chartSummary, mixedGeometry } from './Chart';
 
 const { top, bottom, left, right, width, height } = CHART_BOX;
 const floor = height - bottom;
@@ -43,6 +43,35 @@ describe('chartGeometry', () => {
     const g = chartGeometry({ xs: ['a'], series: [{ label: 'v', values: [7] }] });
     expect(g.lines[0]).toBe(`M${(left + width - right) / 2},${(top + floor) / 2}`);
     expect(g.xLabels).toHaveLength(1);
+  });
+});
+
+describe('mixedGeometry', () => {
+  const xs = ['00', '01', '02', '03'];
+  const geometry = mixedGeometry({
+    xs,
+    series: [
+      { label: 'Temperature', values: [10, 12, null, 14], type: 'line' },
+      { label: 'Rain', values: [0, 50, 100, 20], type: 'bar', unit: 'percent' },
+    ],
+  });
+  const box = CHART_BOX_WIDE;
+  const slot = (box.width - box.left - box.right) / xs.length;
+
+  it('stands each point over its bar, in the middle of the slot, and breaks the line at a gap', () => {
+    const moves = geometry.lines[0]!.split(' ').map((part) => [part[0], Number(part.slice(1).split(',')[0])]);
+    expect(moves).toEqual([['M', box.left + slot / 2], ['L', box.left + slot * 1.5], ['M', box.left + slot * 3.5]]);
+    expect(geometry.lines[1]).toBe('');
+    // Zero is no bar; 100% reaches the top of the plot.
+    expect(geometry.bars.map((bar) => bar.index)).toEqual([1, 2, 3]);
+    expect(geometry.bars[1]!.y).toBe(box.top);
+    expect(geometry.bars[1]!.x + geometry.bars[1]!.width / 2).toBeCloseTo(box.left + slot * 2.5, 0);
+  });
+
+  it('puts the line on the left scale and 0–100% on the right', () => {
+    expect(geometry.ticks.map((tick) => tick.value)).toEqual([10, 12, 14]);
+    expect(geometry.rightTicks!.map((tick) => [tick.value, tick.percent])).toEqual([[0, true], [50, true], [100, true]]);
+    expect(geometry.rightTicks![0]!.y).toBe(box.height - box.bottom);
   });
 });
 

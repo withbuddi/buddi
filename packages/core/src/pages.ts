@@ -39,9 +39,11 @@ import {
   columnMapSchema,
   toneSchema,
   unitSchema,
+  tileIconSchema,
   valueRefSchema,
   viewPathSchema,
   type ColumnMap,
+  type TileIcon,
   type Tone,
   type Unit,
   type ValueRef,
@@ -109,7 +111,9 @@ export type PageIcon =
   | 'bell'
   | 'plug'
   | 'key'
-  | 'globe';
+  | 'globe'
+  | 'sun'
+  | 'cloud';
 
 /** One screen: where it lives, and what is on it. */
 export interface PageDescriptor {
@@ -294,6 +298,46 @@ export interface CalendarMap {
   location?: string;
 }
 
+/**
+ * How tiles lie: `grid` wraps as the canvas does, `row` shares the width
+ * between all of them (a week, ten days), `strip` keeps each narrow and
+ * scrolls sideways (the hours of a day).
+ */
+export type TilesLayout = 'grid' | 'row' | 'strip';
+
+/**
+ * One series of a two-kind chart: a line or bars, each on its own scale.
+ * The line's scale is on the left and follows its values; the bars' is on the
+ * right, from zero, and `unit: 'percent'` fixes it at 0–100 and writes `%`.
+ */
+export interface ChartSeries {
+  y: string;
+  type: 'line' | 'bar';
+  label: string;
+  unit?: 'percent';
+}
+
+/** One tab of a `tabs`: its words, and what it shows. */
+export interface PageTab {
+  id: string;
+  label: string;
+  body: Component[];
+}
+
+/**
+ * The choice at the left of a `tabs` bar — which place, which account —
+ * written into the page parameter `param`, which any query below reads as
+ * `{ param }`. The first option is chosen until the owner picks; with one
+ * option or none there is no choice, and nothing is drawn.
+ */
+export interface TabsPick {
+  param: string;
+  /** The group's accessible name: "Place". */
+  label: string;
+  options?: Array<{ value: string; label: string }>;
+  optionsFrom?: OptionsFrom;
+}
+
 /** Rows the owner may tick, and the ones they may not. */
 export interface Selection {
   /** Path within a row to the value an action is given. */
@@ -471,14 +515,19 @@ export type Component =
    * names what `y` measures, for the axis and the summary a screen reader
    * hears. Drawn inline, in the page's own colours; a descriptor never says
    * how it looks.
+   *
+   * `series` in place of `y` and `type` draws a line and bars together, each
+   * on its own scale — a day's temperature over its chance of rain — across
+   * the width of the page.
    */
   | (ComponentCommon & {
       kind: 'chart';
       query: QueryRef;
       rows?: string;
       x: string;
-      y: string | string[];
+      y?: string | string[];
       type?: 'line' | 'bar';
+      series?: ChartSeries[];
       label?: string;
       target?: ValueRef;
     })
@@ -591,6 +640,51 @@ export type Component =
       views?: Array<'week' | 'month' | 'list'>;
       default?: 'week' | 'month' | 'list';
       hours?: [number, number];
+    })
+  /**
+   * A row of small cards, one per item — the canvas `tiles`, on a page: a
+   * glyph, a value, a label on top and up to two small lines. `items` is the
+   * path to the array in the query's answer; every other path is read within
+   * one item, and `icon` may instead be one of the pinned glyphs as a
+   * constant. `select` makes each card a button that writes the item's `key`
+   * into the page parameter `param` — the day whose hours show below — and
+   * marks the chosen one; the first is chosen until the owner picks.
+   */
+  | (ComponentCommon & {
+      kind: 'tiles';
+      query: QueryRef;
+      items: string;
+      icon: { path: string } | { const: TileIcon };
+      value: string;
+      label: string;
+      lines?: string[];
+      tone?: string;
+      layout?: TilesLayout;
+      select?: { param: string; key: string };
+    })
+  /**
+   * Now, large: one glyph, one big value and its word, and a few facts
+   * beside — the head of a weather page, a balance and what moved it. Every
+   * path is read in the query's answer; `icon` as a tile's.
+   */
+  | (ComponentCommon & {
+      kind: 'hero';
+      query: QueryRef;
+      icon: { path: string } | { const: TileIcon };
+      value: string;
+      title: string;
+      facts: Array<{ label: string; path: string }>;
+    })
+  /**
+   * Views of one thing behind a switch at the right of a bar — Today, Week,
+   * 10 days — each tab its own components, drawn only while it is chosen.
+   * `pick`, when given, is a second switch at the left of the same bar.
+   */
+  | (ComponentCommon & {
+      kind: 'tabs';
+      tabs: PageTab[];
+      default?: string;
+      pick?: TabsPick;
     })
   /** A fold. `label` may be a path, so a row's own words are on it. */
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
@@ -731,6 +825,16 @@ const listItemSchema = z
   })
   .strict();
 
+const optionsFromSchema = z
+  .object({
+    query: queryRefSchema,
+    rows: viewPathSchema,
+    value: viewPathSchema,
+    label: viewPathSchema,
+    dependsOn: z.array(z.string().regex(PAGE_NAME, 'a field name is a name')).max(8).optional(),
+  })
+  .strict();
+
 const fieldSchema = z
   .object({
     name: z.string().regex(PAGE_NAME, 'a field name is a name: letters, digits and underscores'),
@@ -744,16 +848,7 @@ const fieldSchema = z
     step: z.number().optional(),
     hint: sentence.optional(),
     from: viewPathSchema.optional(),
-    optionsFrom: z
-      .object({
-        query: queryRefSchema,
-        rows: viewPathSchema,
-        value: viewPathSchema,
-        label: viewPathSchema,
-        dependsOn: z.array(z.string().regex(PAGE_NAME, 'a field name is a name')).max(8).optional(),
-      })
-      .strict()
-      .optional(),
+    optionsFrom: optionsFromSchema.optional(),
     when: visibilitySchema.optional(),
     disabledWhen: visibilitySchema.optional(),
     action: z
@@ -781,6 +876,9 @@ const fieldSchema = z
   .refine((field) => field.multiple !== true || field.type === 'select', '`multiple` is for a select field only');
 
 const calendarViewSchema = z.enum(['week', 'month', 'list']);
+
+/** A tile's or a hero's glyph: a path read at run time, or one of the pinned set now. */
+const glyphRefSchema = z.union([z.object({ path: viewPathSchema }).strict(), z.object({ const: tileIconSchema }).strict()]);
 
 const common = {
   when: visibilitySchema.optional(),
@@ -855,8 +953,17 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
         query: queryRefSchema,
         rows: viewPathSchema.optional(),
         x: viewPathSchema,
-        y: z.union([viewPathSchema, z.array(viewPathSchema).min(1).max(4)]),
+        y: z.union([viewPathSchema, z.array(viewPathSchema).min(1).max(4)]).optional(),
         type: z.enum(['line', 'bar']).optional(),
+        series: z
+          .array(
+            z
+              .object({ y: viewPathSchema, type: z.enum(['line', 'bar']), label, unit: z.literal('percent').optional() })
+              .strict(),
+          )
+          .min(1)
+          .max(4)
+          .optional(),
         label: label.optional(),
         target: valueRefSchema.optional(),
       })
@@ -986,6 +1093,68 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
     z
       .object({
         ...common,
+        kind: z.literal('tiles'),
+        query: queryRefSchema,
+        items: viewPathSchema,
+        icon: glyphRefSchema,
+        value: viewPathSchema,
+        label: viewPathSchema,
+        lines: z.array(viewPathSchema).max(2).optional(),
+        tone: viewPathSchema.optional(),
+        layout: z.enum(['grid', 'row', 'strip']).optional(),
+        select: z
+          .object({ param: z.string().regex(PAGE_NAME, 'a page parameter is a name'), key: viewPathSchema })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('hero'),
+        query: queryRefSchema,
+        icon: glyphRefSchema,
+        value: viewPathSchema,
+        title: viewPathSchema,
+        facts: z.array(z.object({ label, path: viewPathSchema }).strict()).max(8),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('tabs'),
+        tabs: z
+          .array(
+            z
+              .object({
+                id: z.string().regex(PAGE_ID, 'a tab id is lower-kebab-case'),
+                label,
+                body: z.array(componentSchema).max(24),
+              })
+              .strict(),
+          )
+          .min(2)
+          .max(6)
+          .refine((tabs) => new Set(tabs.map((tab) => tab.id)).size === tabs.length, 'each tab has its own id'),
+        default: z.string().regex(PAGE_ID).optional(),
+        pick: z
+          .object({
+            param: z.string().regex(PAGE_NAME, 'a page parameter is a name'),
+            label,
+            options: z.array(z.object({ value: z.string().max(200), label }).strict()).min(1).max(12).optional(),
+            optionsFrom: optionsFromSchema.optional(),
+          })
+          .strict()
+          .refine(
+            (pick) => (pick.options === undefined) !== (pick.optionsFrom === undefined),
+            'a pick takes its choices from `options` or from `optionsFrom`, one of the two',
+          )
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
         kind: z.literal('expand'),
         query: queryRefSchema,
         label: z.union([label, valueRefSchema]),
@@ -1025,7 +1194,7 @@ export const pageDescriptorSchema = z
     id: z.string().regex(PAGE_ID, 'a page id is lower-kebab-case'),
     title: label,
     place: z.enum(['rail', 'settings']),
-    icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe']).optional(),
+    icon: z.enum(['mail', 'money', 'calendar', 'people', 'file', 'chart', 'bell', 'plug', 'key', 'globe', 'sun', 'cloud']).optional(),
     order: z.number().int().min(-999).max(999).optional(),
     data: queryRefSchema.optional(),
     body: z.array(componentSchema).min(1).max(24),
@@ -1260,6 +1429,33 @@ function calendarsIn(root: unknown, at: string): Array<{ component: Extract<Comp
   return found;
 }
 
+/** Every component of one kind in a tree, with where it was. */
+function componentsIn<K extends Component['kind']>(
+  root: unknown,
+  at: string,
+  kind: K,
+): Array<{ component: Extract<Component, { kind: K }>; at: string }> {
+  const found: Array<{ component: Extract<Component, { kind: K }>; at: string }> = [];
+  const stack: Array<{ value: unknown; at: string }> = [{ value: root, at }];
+  const seen = new Set<object>();
+  while (stack.length > 0) {
+    const { value, at: where } = stack.pop() as { value: unknown; at: string };
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => stack.push({ value: child, at: `${where}[${index}]` }));
+      continue;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.kind === kind) found.push({ component: record as unknown as Extract<Component, { kind: K }>, at: where });
+    for (const [key, child] of Object.entries(record)) {
+      if (DATA_KEYED.has(key) || NOT_COMPONENTS.has(key)) continue;
+      stack.push({ value: child, at: `${where}${where === '' ? '' : '.'}${key}` });
+    }
+  }
+  return found;
+}
+
 /** Is this a zod schema at all? Duck-typed: core does not own the plugin's zod. */
 function isZodSchema(value: unknown): value is ZodTypeAny {
   return (
@@ -1424,6 +1620,32 @@ export function parsePageContributions(opts: {
         throw new Error(
           `plugin ${plugin}: page ${page.id}, ${at}: the calendar's query ${query.name} must take \`from\` and \`to\` — ` +
             'the page asks it for the days it shows',
+        );
+      }
+    }
+  }
+
+  /*
+   * A chart says what it draws one way: `y` (and `type`), or `series`. A tab
+   * bar opens on a tab it has. Checked here for the reason `key` is.
+   */
+  for (const page of pages) {
+    for (const { component, at } of componentsIn(page.body, 'body', 'chart')) {
+      if ((component.y === undefined) === (component.series === undefined)) {
+        throw new Error(
+          `plugin ${plugin}: page ${page.id}, ${at}: a chart takes \`y\` or \`series\`, one of the two`,
+        );
+      }
+      if (component.series !== undefined && component.type !== undefined) {
+        throw new Error(`plugin ${plugin}: page ${page.id}, ${at}: with \`series\`, each series says its own type`);
+      }
+    }
+    for (const { component, at } of componentsIn(page.body, 'body', 'tabs')) {
+      if (component.default !== undefined && !component.tabs.some((tab) => tab.id === component.default)) {
+        throw new Error(
+          `plugin ${plugin}: page ${page.id}, ${at}: opens on ${component.default}, which is not one of its tabs (${component.tabs
+            .map((tab) => tab.id)
+            .join(', ')})`,
         );
       }
     }

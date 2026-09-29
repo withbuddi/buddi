@@ -14,9 +14,9 @@
  * Everything here is a *shape*. Nothing in this directory — types, components
  * or tests — is allowed to know the name of a plugin, a tool or a query.
  */
-import type { ColumnMap, Tone, Unit, ValueRef } from '../canvas/types';
+import type { ColumnMap, TileIcon, Tone, Unit, ValueRef } from '../canvas/types';
 
-export type { ColumnMap, Tone, Unit, ValueRef };
+export type { ColumnMap, TileIcon, Tone, Unit, ValueRef };
 
 export type PageIcon =
   | 'mail'
@@ -28,7 +28,9 @@ export type PageIcon =
   | 'bell'
   | 'plug'
   | 'key'
-  | 'globe';
+  | 'globe'
+  | 'sun'
+  | 'cloud';
 
 /** A condition over the data: `equals` one value, or `in` a set, optionally `not`. */
 export interface Visibility {
@@ -174,6 +176,46 @@ export interface CalendarMap {
   location?: string;
 }
 
+/** How tiles lie: wrapping, sharing the width, or scrolling sideways. */
+export type TilesLayout = 'grid' | 'row' | 'strip';
+
+/** One series of a two-kind chart; the bars' scale is 0–100 with `unit: 'percent'`. */
+export interface ChartSeries {
+  y: string;
+  type: 'line' | 'bar';
+  label: string;
+  unit?: 'percent';
+}
+
+/** One tab of a `tabs`. */
+export interface PageTab {
+  id: string;
+  label: string;
+  body: Component[];
+}
+
+/** The choice at the left of a `tabs` bar, written into page parameter `param`. */
+export interface TabsPick {
+  param: string;
+  label: string;
+  options?: Array<{ value: string; label: string }>;
+  optionsFrom?: OptionsFrom;
+}
+
+/** The tiles arm, named so its renderer can take it. */
+export type TilesComponent = ComponentCommon & {
+  kind: 'tiles';
+  query: QueryRef;
+  items: string;
+  icon: { path: string } | { const: TileIcon };
+  value: string;
+  label: string;
+  lines?: string[];
+  tone?: string;
+  layout?: TilesLayout;
+  select?: { param: string; key: string };
+};
+
 /** The calendar arm, named so its renderer can take it. */
 export type CalendarComponent = ComponentCommon & {
   kind: 'calendar';
@@ -212,8 +254,9 @@ export type Component =
       query: QueryRef;
       rows?: string;
       x: string;
-      y: string | string[];
+      y?: string | string[];
       type?: 'line' | 'bar';
+      series?: ChartSeries[];
       label?: string;
       target?: ValueRef;
     })
@@ -272,6 +315,16 @@ export type Component =
     })
   /** Dated events: week, month and list views; the page adds `from` and `to` to the query. */
   | CalendarComponent
+  | TilesComponent
+  | (ComponentCommon & {
+      kind: 'hero';
+      query: QueryRef;
+      icon: { path: string } | { const: TileIcon };
+      value: string;
+      title: string;
+      facts: Array<{ label: string; path: string }>;
+    })
+  | (ComponentCommon & { kind: 'tabs'; tabs: PageTab[]; default?: string; pick?: TabsPick })
   | (ComponentCommon & { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] })
   | (ComponentCommon & { kind: 'button'; action: ToolRef })
   | (ComponentCommon & { kind: 'approval'; path: string })

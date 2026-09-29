@@ -8,6 +8,11 @@
  * is hidden from screen readers; what they hear is the summary under it,
  * which says the same thing in words: how many points, from when to when, the
  * latest, the range and the target.
+ *
+ * `mixed` draws lines and bars together, each on its own scale — the line's
+ * on the left, following its values; the bars' on the right, from zero, and
+ * 0–100 for a percent series — in a wider box, across the width it is given:
+ * a day's temperature over its chance of rain.
  */
 import { niceTicks } from '../canvas/format';
 
@@ -15,17 +20,23 @@ export interface ChartSeries {
   label: string;
   /** One per x; `null` where the row had no number, which breaks the line. */
   values: Array<number | null>;
+  /** In a `mixed` chart, how this one is drawn, and whether its scale is 0–100. */
+  type?: 'line' | 'bar';
+  unit?: 'percent';
 }
 
 export interface ChartInput {
   xs: readonly string[];
   series: readonly ChartSeries[];
-  type?: 'line' | 'bar';
+  type?: 'line' | 'bar' | 'mixed';
   target?: number | null;
 }
 
 /** The chart's own coordinates; it scales to its box. */
 export const CHART_BOX = { width: 480, height: 160, top: 10, right: 10, bottom: 22, left: 40 } as const;
+
+/** A `mixed` chart's: wide, with room on the right for the bars' scale. */
+export const CHART_BOX_WIDE = { width: 1200, height: 180, top: 10, right: 40, bottom: 22, left: 40 } as const;
 
 export interface ChartGeometry {
   /** One `d` per series, for a line chart. */
@@ -33,8 +44,79 @@ export interface ChartGeometry {
   bars: Array<{ series: number; index: number; x: number; y: number; width: number; height: number }>;
   targetY: number | null;
   ticks: Array<{ value: number; y: number }>;
-  /** The first and the last x, and the middle one when there are enough. */
+  /** The first and the last x, and the middle one when there are enough; every few in a `mixed` chart. */
   xLabels: Array<{ index: number; x: number }>;
+  /** The bars' own scale, on the right, in a `mixed` chart. */
+  rightTicks?: Array<{ value: number; y: number; percent: boolean }>;
+}
+
+/**
+ * A `mixed` chart's coordinates. Every series sits in the middle of its
+ * slot, so a line's points stand over the bars of the same x.
+ */
+export function mixedGeometry({ xs, series }: ChartInput): ChartGeometry {
+  const box = CHART_BOX_WIDE;
+  const plotW = box.width - box.left - box.right;
+  const plotH = box.height - box.top - box.bottom;
+  const finite = (values: Array<number | null>): number[] => values.filter((v): v is number => v !== null && Number.isFinite(v));
+  const lined = series.filter((s) => s.type !== 'bar');
+  const barred = series.filter((s) => s.type === 'bar');
+  const numbers = lined.flatMap((s) => finite(s.values));
+  const rawMin = numbers.length > 0 ? Math.min(...numbers) : 0;
+  const rawMax = numbers.length > 0 ? Math.max(...numbers) : 1;
+  let min = rawMin;
+  let max = rawMax;
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  } else {
+    const pad = (max - min) * 0.08;
+    min -= pad;
+    max += pad;
+  }
+  const y = (value: number): number => round(box.top + plotH - ((value - min) / (max - min)) * plotH);
+  const percent = barred.length > 0 && barred.every((s) => s.unit === 'percent');
+  const barMax = percent ? 100 : Math.max(1, ...barred.flatMap((s) => finite(s.values)));
+  const yBar = (value: number): number => round(box.top + plotH - (Math.max(0, value) / barMax) * plotH);
+  const n = xs.length;
+  const slot = n > 0 ? plotW / n : plotW;
+  const xAt = (index: number): number => round(box.left + slot * (index + 0.5));
+
+  const lines = series.map((s) => {
+    if (s.type === 'bar') return '';
+    let pen = 'M';
+    const parts: string[] = [];
+    s.values.forEach((value, index) => {
+      if (value === null || !Number.isFinite(value)) {
+        pen = 'M';
+        return;
+      }
+      parts.push(`${pen}${xAt(index)},${y(value)}`);
+      pen = 'L';
+    });
+    return parts.join(' ');
+  });
+
+  const bars: ChartGeometry['bars'] = [];
+  const width = (slot * 0.6) / Math.max(1, barred.length);
+  const floor = box.height - box.bottom;
+  let seen = 0;
+  series.forEach((s, si) => {
+    if (s.type !== 'bar') return;
+    const offset = seen++;
+    s.values.forEach((value, index) => {
+      if (value === null || !Number.isFinite(value) || value <= 0) return;
+      const top = yBar(value);
+      bars.push({ series: si, index, x: round(xAt(index) - slot * 0.3 + width * offset), y: top, width: round(width), height: round(floor - top) });
+    });
+  });
+
+  const ticks = numbers.length > 0 ? niceTicks(rawMin, rawMax, 2).map((value) => ({ value, y: y(value) })) : [];
+  const rightTicks =
+    barred.length === 0 ? [] : (percent ? [0, 50, 100] : niceTicks(0, barMax, 2)).map((value) => ({ value, y: yBar(value), percent }));
+  const every = Math.max(1, Math.ceil(n / 8));
+  const xLabels = xs.flatMap((_, index) => (index % every === 0 ? [{ index, x: xAt(index) }] : []));
+  return { lines, bars, targetY: null, ticks, xLabels, rightTicks };
 }
 
 /** Values to coordinates: the part worth testing on its own. */
@@ -138,8 +220,9 @@ export function Chart({
   formatX = (x) => x,
   formatY = (v) => String(v),
 }: ChartInput & { label?: string; formatX?: (x: string) => string; formatY?: (y: number) => string }): JSX.Element {
-  const box = CHART_BOX;
-  const geometry = chartGeometry({ xs, series, type, target });
+  const mixed = type === 'mixed';
+  const box = mixed ? CHART_BOX_WIDE : CHART_BOX;
+  const geometry = mixed ? mixedGeometry({ xs, series }) : chartGeometry({ xs, series, type, target });
   const summary = chartSummary({ xs, series, type, target, ...(label ? { label } : {}), formatX, formatY });
   return (
     <figure className="ui-chart" data-type={type}>
@@ -149,6 +232,11 @@ export function Chart({
             <line className="ui-chart-grid" x1={box.left} x2={box.width - box.right} y1={tick.y} y2={tick.y} />
             <text x={box.left - 6} y={tick.y} textAnchor="end" dominantBaseline="middle">{formatY(tick.value)}</text>
           </g>
+        ))}
+        {(geometry.rightTicks ?? []).map((tick) => (
+          <text key={`r-${tick.value}`} x={box.width - box.right + 6} y={tick.y} textAnchor="start" dominantBaseline="middle">
+            {tick.percent ? `${tick.value}%` : formatY(tick.value)}
+          </text>
         ))}
         <line className="ui-chart-axis" x1={box.left} x2={box.width - box.right} y1={box.height - box.bottom} y2={box.height - box.bottom} />
         {geometry.bars.map((bar) => (
@@ -163,7 +251,9 @@ export function Chart({
             key={label.index}
             x={label.x}
             y={box.height - 6}
-            textAnchor={geometry.xLabels.length > 1 && label.index === 0 ? 'start' : label.index === xs.length - 1 && xs.length > 1 ? 'end' : 'middle'}
+            textAnchor={
+              mixed ? 'middle' : geometry.xLabels.length > 1 && label.index === 0 ? 'start' : label.index === xs.length - 1 && xs.length > 1 ? 'end' : 'middle'
+            }
           >
             {formatX(xs[label.index]!)}
           </text>
@@ -173,7 +263,7 @@ export function Chart({
       {series.length > 1 ? (
         <ul className="ui-chart-legend" aria-hidden="true">
           {series.map((s, index) => (
-            <li key={s.label} data-series={index}>{s.label}</li>
+            <li key={s.label} data-series={index} data-type={mixed ? (s.type ?? 'line') : undefined}>{s.label}</li>
           ))}
         </ul>
       ) : null}

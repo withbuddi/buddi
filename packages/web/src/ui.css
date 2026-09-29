@@ -785,6 +785,12 @@ fieldset:disabled { opacity: 0.6; }
 .ui-chart-legend li[data-series='1']::before { background: var(--warning); }
 .ui-chart-legend li[data-series='2']::before { background: var(--good); }
 .ui-chart-legend li[data-series='3']::before { background: var(--text-faint); }
+/* Mixed: a line over bars, each on its own scale, across the width it is given. */
+.ui-chart[data-type='mixed'] svg { max-width: none; }
+.ui-chart[data-type='mixed'] [data-series].ui-chart-line { stroke: var(--chart-line); }
+.ui-chart[data-type='mixed'] [data-series].ui-chart-bar { fill: var(--chart-bar); opacity: 0.5; }
+.ui-chart[data-type='mixed'] .ui-chart-legend li[data-type='line']::before { background: var(--chart-line); }
+.ui-chart[data-type='mixed'] .ui-chart-legend li[data-type='bar']::before { border-radius: var(--radius-sm); background: var(--chart-bar); opacity: 0.5; }
 
 .ui-toasts {
   position: fixed;

@@ -1405,6 +1405,97 @@ describe('a chart', () => {
   });
 });
 
+describe('a forecast page: tabs with a pick, a hero, tiles and a two-kind chart', () => {
+  const HOURS = (date: string) => ['00:00', '06:00', '12:00', '18:00'].map((time, i) => ({ time: `${date} ${time}`, icon: i === 2 ? 'sun' : 'cloud', value: `${10 + i}°`, rain: `Rain ${i * 10}%`, temp: 10 + i, chance: i * 10 }));
+  const page: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'sky',
+    title: 'Sky',
+    place: 'rail',
+    icon: 'cloud',
+    body: [
+      {
+        kind: 'tabs',
+        pick: { param: 'place', label: 'Place', optionsFrom: { query: { query: 'places' }, rows: 'places', value: 'id', label: 'label' } },
+        tabs: [
+          {
+            id: 'today',
+            label: 'Today',
+            body: [
+              { kind: 'hero', query: { query: 'today', params: { place: { param: 'place' } } }, icon: { path: 'icon' }, value: 'now', title: 'sky', facts: [{ label: 'Feels like', path: 'feels' }, { label: 'Wind', path: 'wind' }, { label: 'Missing', path: 'nope' }] },
+              { kind: 'chart', title: 'By the hour', query: { query: 'hours', params: { place: { param: 'place' } } }, rows: 'hours', x: 'time', series: [{ y: 'temp', type: 'line', label: 'Temperature' }, { y: 'chance', type: 'bar', label: 'Chance of rain', unit: 'percent' }] },
+            ],
+          },
+          {
+            id: 'week',
+            label: 'Week',
+            body: [
+              { kind: 'tiles', query: { query: 'days', params: { place: { param: 'place' } } }, items: 'days', icon: { path: 'icon' }, value: 'value', label: 'label', lines: ['rain'], layout: 'row', select: { param: 'date', key: 'date' } },
+              { kind: 'tiles', title: 'By the hour', query: { query: 'hours', params: { place: { param: 'place' }, date: { param: 'date' } } }, items: 'hours', icon: { path: 'icon' }, value: 'value', label: 'time', lines: ['rain'], layout: 'strip' },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const asked: Array<[string, Record<string, string> | undefined]> = [];
+  beforeEach(() => {
+    asked.length = 0;
+    vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string, params?: Record<string, string>) => {
+      asked.push([query, params]);
+      const place = params?.place ?? 'home';
+      if (query === 'places') return Promise.resolve({ data: { places: [{ id: 'home', label: 'Home' }, { id: 'work', label: 'Work' }] } });
+      if (query === 'today') return Promise.resolve({ data: { icon: place === 'home' ? 'sun' : 'storm', now: place === 'home' ? '18°' : '24°', sky: 'Clear', feels: '17°', wind: '12 km/h' } });
+      if (query === 'days') return Promise.resolve({ data: { days: ['2026-09-28', '2026-09-29', '2026-09-30'].map((date, i) => ({ date, icon: 'sun', value: `2${i}° / 1${i}°`, label: i === 0 ? 'Today' : date, rain: `Rain ${i}0%` })) } });
+      if (query === 'hours') return Promise.resolve({ data: { hours: HOURS(params?.date ?? '2026-09-28') } });
+      return Promise.resolve({ data: DATA[query] });
+    }) as typeof api.pageQuery);
+  });
+
+  it('opens on the first tab and the first place: the hero with its facts, and a line over percent bars', async () => {
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    const hero = await screen.findByLabelText('18°, Clear, Feels like 17°, Wind 12 km/h');
+    expect(hero.querySelector('.pg-hero-value')).toHaveTextContent('18°');
+    // A fact whose path answers nothing is left out, not drawn empty.
+    expect(within(hero).queryByText('Missing')).not.toBeInTheDocument();
+    const figure = (await screen.findByText(/^Chart, 4 points/)).closest('figure')!;
+    expect(figure).toHaveAttribute('data-type', 'mixed');
+    expect(figure.querySelectorAll('.ui-chart-line')).toHaveLength(1);
+    // Zero is no bar; the right scale reads 0–100%.
+    expect(figure.querySelectorAll('.ui-chart-bar')).toHaveLength(3);
+    expect(within(figure as HTMLElement).getByText('100%')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Home' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('asks again for the place the owner picks, and draws only the chosen tab', async () => {
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    await screen.findByLabelText(/^18°/);
+    fireEvent.click(screen.getByRole('radio', { name: 'Work' }));
+    expect(await screen.findByLabelText(/^24°/)).toBeInTheDocument();
+    expect(asked).toContainEqual(['today', { place: 'work' }]);
+    expect(asked.some(([query]) => query === 'days')).toBe(false);
+    fireEvent.click(screen.getByRole('radio', { name: 'Week' }));
+    expect(await screen.findByRole('button', { name: 'Today, 20° / 10°, Rain 00%' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByLabelText(/^24°/)).not.toBeInTheDocument();
+    expect(asked).toContainEqual(['days', { place: 'work' }]);
+  });
+
+  it('writes the picked tile into the page parameter, which the strip below reads', async () => {
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'Week' }));
+    const tuesday = await screen.findByRole('button', { name: /^2026-09-29, 21°/ });
+    const list = tuesday.closest('ul')!;
+    expect(list).toHaveAttribute('data-layout', 'row');
+    // Until the owner picks, the first day is chosen, and the strip below is its hours.
+    expect(await screen.findByText('2026-09-28 12:00, 12°, Rain 20%')).toBeInTheDocument();
+    fireEvent.click(tuesday);
+    await waitFor(() => expect(tuesday).toHaveAttribute('aria-pressed', 'true'));
+    expect(await screen.findByText('2026-09-29 12:00, 12°, Rain 20%')).toBeInTheDocument();
+    expect(asked).toContainEqual(['hours', { date: '2026-09-29' }]);
+    expect(screen.getByText('2026-09-29 12:00, 12°, Rain 20%').closest('ul')).toHaveAttribute('data-layout', 'strip');
+  });
+});
+
 describe('a form three to a row', () => {
   it('passes `columns` to the grid, and leaves the default grid alone', async () => {
     vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>

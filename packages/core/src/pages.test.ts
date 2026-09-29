@@ -402,6 +402,62 @@ describe('page descriptors', () => {
     expect(() => parse([calendar()], { queries: ['items'] })).toThrow(/no query called agenda/);
   });
 
+  it('takes tabs with a pick over a hero, tiles and a two-kind chart, and refuses what they cannot mean', () => {
+    const q = ['places', 'today', 'days', 'hours'];
+    const tabs = (over: Record<string, unknown> = {}, today: unknown[] = []): unknown =>
+      page({
+        icon: 'cloud',
+        body: [
+          {
+            kind: 'tabs',
+            pick: { param: 'place', label: 'Place', optionsFrom: { query: { query: 'places' }, rows: 'places', value: 'id', label: 'label' } },
+            default: 'today',
+            tabs: [
+              {
+                id: 'today',
+                label: 'Today',
+                body: [
+                  { kind: 'hero', query: { query: 'today', params: { place: { param: 'place' } } }, icon: { path: 'icon' }, value: 'now', title: 'sky', facts: [{ label: 'Wind', path: 'wind' }] },
+                  { kind: 'chart', query: { query: 'hours' }, rows: 'hours', x: 'time', series: [{ y: 'temp', type: 'line', label: 'Temperature' }, { y: 'rain', type: 'bar', label: 'Rain', unit: 'percent' }] },
+                  ...today,
+                ],
+              },
+              {
+                id: 'week',
+                label: 'Week',
+                body: [{ kind: 'tiles', query: { query: 'days' }, items: 'days', icon: { const: 'sun' }, value: 'value', label: 'label', lines: ['rain', 'wind'], layout: 'row', select: { param: 'date', key: 'date' } }],
+              },
+            ],
+            ...over,
+          },
+        ],
+      });
+    const [parsed] = parse([tabs()], { queries: q });
+    expect(parsed!.icon).toBe('cloud');
+    expect(parsed!.body[0]).toMatchObject({ kind: 'tabs', tabs: [{ id: 'today' }, { id: 'week' }] });
+    // A tab bar opens on a tab it has; ids are its own; at least two tabs.
+    expect(() => parse([tabs({ default: 'month' })], { queries: q })).toThrow(/opens on month, which is not one of its tabs \(today, week\)/);
+    expect(() => parse([tabs({ tabs: [{ id: 'a', label: 'A', body: [] }, { id: 'a', label: 'B', body: [] }] })], { queries: q })).toThrow(/each tab has its own id/);
+    expect(() => parse([tabs({ tabs: [{ id: 'a', label: 'A', body: [] }] })], { queries: q })).toThrow(/body\.0\.tabs/);
+    // A pick's choices come from one place, and its query is checked like any other.
+    expect(() => parse([tabs({ pick: { param: 'place', label: 'Place' } })], { queries: q })).toThrow(/`options` or from `optionsFrom`/);
+    expect(() => parse([tabs()], { queries: ['today', 'days', 'hours'] })).toThrow(/no query called places/);
+    // A chart takes `y` or `series`, and with `series` each says its type.
+    const chart = (over: Record<string, unknown>) => tabs({}, [{ kind: 'chart', query: { query: 'hours' }, x: 'time', ...over }]);
+    expect(() => parse([chart({})], { queries: q })).toThrow(/a chart takes `y` or `series`, one of the two/);
+    expect(() => parse([chart({ y: 'temp', series: [{ y: 'rain', type: 'bar', label: 'Rain' }] })], { queries: q })).toThrow(/one of the two/);
+    expect(() => parse([chart({ type: 'bar', series: [{ y: 'rain', type: 'bar', label: 'Rain' }] })], { queries: q })).toThrow(/each series says its own type/);
+    expect(() => parse([chart({ series: [{ y: 'rain', type: 'area', label: 'Rain' }] })], { queries: q })).toThrow(/series\.0\.type/);
+    // Tiles: a pinned glyph or a path, a known layout, two lines at most.
+    const tile = (over: Record<string, unknown>) => tabs({}, [{ kind: 'tiles', query: { query: 'days' }, items: 'days', icon: { const: 'sun' }, value: 'v', label: 'l', ...over }]);
+    expect(() => parse([tile({ icon: { const: 'rocket' } })], { queries: q })).toThrow(/icon/);
+    expect(() => parse([tile({ layout: 'carousel' })], { queries: q })).toThrow(/layout/);
+    expect(() => parse([tile({ lines: ['a', 'b', 'c'] })], { queries: q })).toThrow(/lines/);
+    expect(() => parse([tile({ select: { param: 'date' } })], { queries: q })).toThrow(/select\.key/);
+    // A hero's facts are labelled paths.
+    expect(() => parse([tabs({}, [{ kind: 'hero', query: { query: 'today' }, icon: { path: 'icon' }, value: 'now', title: 'sky', facts: [{ path: 'wind' }] }])], { queries: q })).toThrow(/facts\.0\.label/);
+  });
+
   it('refuses two queries with the same name', () => {
     expect(() =>
       parsePageContributions({

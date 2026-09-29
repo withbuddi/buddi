@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A Weather page in the rail: today by the hour, the week, and ten days ahead, per place, drawn from the design kit; plugin pages can show tiles, a hero and a two-series chart.
 - Plugin pages can show a calendar: week, month and list views drawn from the design kit; the Calendar page uses it.
 - Focus modes for notifications: Do not disturb or Urgent only, for an hour, until tomorrow or until you turn it off, from the owner menu or /focus on Telegram, plus schedules that replace quiet hours; when a focus ends, one message says what waited.
 - An agent's tool grant can end in `?` (`weather.*?`) to mean "if provided": a family no installed plugin provides is skipped instead of holding the agent back.

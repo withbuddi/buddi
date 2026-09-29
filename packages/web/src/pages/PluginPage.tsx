@@ -23,7 +23,9 @@ import { createContext, useContext, useEffect, useId, useMemo, useState, type Re
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtDay, fmtValue } from '../canvas/format';
-import { asNumber, readPath, readRef } from '../canvas/resolve';
+import { asNumber, readPath, readRef, resolveTiles, tileIcon } from '../canvas/resolve';
+import { Tiles } from '../canvas/views/Tiles';
+import { tileGlyph } from '../canvas/tileIcons';
 import { chatRoute, pluginPageRoute, pluginSettingsRoute, proposalsRoute } from '../routes';
 import {
   Button,
@@ -52,6 +54,7 @@ import {
   Stack,
   Stat,
   Stats,
+  Segment,
   Table,
   Toolbar,
   useAsync,
@@ -1079,6 +1082,12 @@ function Piece({
       return <RepeatPiece component={component} data={data} />;
     case 'calendar':
       return <CalendarPiece component={component} data={data} />;
+    case 'tiles':
+      return <TilesPiece component={component} data={data} />;
+    case 'hero':
+      return <HeroPiece component={component} data={data} />;
+    case 'tabs':
+      return <TabsPiece component={component} data={data} />;
     case 'expand':
       return <ExpandPiece component={component} data={data} />;
     case 'button':
@@ -1243,12 +1252,14 @@ function ProgressPiece({ component, data }: { component: Of<'progress'>; data: u
 function ChartPiece({ component, data }: { component: Of<'chart'>; data: unknown }): JSX.Element {
   const query = usePageQuery(component.query, data);
   const rows = component.rows === undefined ? (Array.isArray(query.data) ? (query.data as unknown[]) : []) : rowsOf(query.data, component.rows);
-  const paths = Array.isArray(component.y) ? component.y : [component.y];
   const xs = rows.map((row) => String(readPath(row, component.x) ?? ''));
-  const series = paths.map((path) => ({
-    label: paths.length === 1 ? component.label ?? path : path,
-    values: rows.map((row) => asNumber(readPath(row, path)) ?? null),
-  }));
+  const values = (path: string): Array<number | null> => rows.map((row) => asNumber(readPath(row, path)) ?? null);
+  // `series` draws a line and bars together, each on its own scale; else `y`, one kind.
+  const mixed = component.series !== undefined;
+  const paths = component.y === undefined ? [] : Array.isArray(component.y) ? component.y : [component.y];
+  const series = mixed
+    ? component.series!.map((s) => ({ label: s.label, values: values(s.y), type: s.type, ...(s.unit ? { unit: s.unit } : {}) }))
+    : paths.map((path) => ({ label: paths.length === 1 ? component.label ?? path : path, values: values(path) }));
   const target = component.target ? asNumber(readRef(query.data, component.target)) ?? null : null;
   return (
     <PieceSection title={component.title} note={component.note}>
@@ -1259,7 +1270,7 @@ function ChartPiece({ component, data }: { component: Of<'chart'>; data: unknown
         <Chart
           xs={xs}
           series={series}
-          type={component.type ?? 'line'}
+          type={mixed ? 'mixed' : component.type ?? 'line'}
           target={target}
           {...(component.label ? { label: component.label } : {})}
           formatX={(x) => (/^\d{4}-\d{2}-\d{2}/.test(x) ? fmtDay(x) : x)}
@@ -2155,6 +2166,133 @@ function CalendarPiece({ component, data }: { component: Of<'calendar'>; data: u
         label={component.title ?? 'Calendar'}
       />
     </PieceSection>
+  );
+}
+
+/**
+ * The canvas tiles, on a page: one card per item of the query's answer. With
+ * `select`, each card is a button that writes the item's key into the page
+ * parameter, and the chosen one is marked — the first until the owner picks,
+ * written into the parameter as soon as it is drawn.
+ */
+function TilesPiece({ component, data }: { component: Of<'tiles'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const query = usePageQuery(component.query, data);
+  const map = {
+    items: '$',
+    icon: component.icon,
+    value: component.value,
+    label: component.label,
+    ...(component.lines ? { lines: component.lines } : {}),
+    ...(component.tone ? { tone: component.tone } : {}),
+  };
+  // One item at a time, so a card and its key stay together when an item draws no card.
+  const cards = rowsOf(query.data, component.items).flatMap((item) => {
+    const tile = resolveTiles([item], map).tiles[0];
+    return tile ? [{ tile, key: component.select ? String(readPath(item, component.select.key) ?? '') : '' }] : [];
+  });
+  const select = component.select;
+  const chosen = select ? Math.max(0, cards.findIndex((card) => card.key === scope.params[select.param])) : null;
+  /*
+   * The first card is chosen until the owner picks, and its key is in the
+   * parameter too, so what reads it below — the hours of the chosen day — is
+   * about the card that is marked rather than about nothing.
+   */
+  const firstKey = cards[0]?.key ?? '';
+  const held = select ? scope.params[select.param] : undefined;
+  const heldShown = cards.some((card) => card.key === held);
+  useEffect(() => {
+    if (select && firstKey !== '' && !heldShown) scope.setParams({ [select.param]: firstKey });
+  }, [select?.param, firstKey, heldShown]);
+  return (
+    <PieceSection title={component.title} note={component.note}>
+      <ErrorBanner message={query.error} />
+      {query.data === undefined ? (
+        <Empty>Loading…</Empty>
+      ) : cards.length === 0 ? (
+        <EmptyPiece text={component.empty ?? 'Nothing to show.'} />
+      ) : (
+        <Tiles
+          props={{ tiles: cards.map((card) => card.tile), notice: false, empty: '' }}
+          {...(component.layout ? { layout: component.layout } : {})}
+          {...(select
+            ? { selected: chosen, onPick: (index: number) => scope.setParams({ [select.param]: cards[index]?.key || null }) }
+            : {})}
+        />
+      )}
+    </PieceSection>
+  );
+}
+
+/** Now, large: the glyph, the value and its word, and the facts beside past a hairline. */
+function HeroPiece({ component, data }: { component: Of<'hero'>; data: unknown }): JSX.Element {
+  const query = usePageQuery(component.query, data);
+  const text = (path: string): string => {
+    const value = readPath(query.data, path);
+    return value === undefined || value === null ? '' : String(value);
+  };
+  if (query.data === undefined || query.data === null) {
+    return (
+      <>
+        <ErrorBanner message={query.error} />
+        <Empty>{query.loading ? 'Loading…' : (component.empty ?? 'Nothing to show.')}</Empty>
+      </>
+    );
+  }
+  const value = text(component.value);
+  const title = text(component.title);
+  const facts = component.facts.map((fact) => ({ label: fact.label, value: text(fact.path) })).filter((fact) => fact.value !== '');
+  return (
+    <section className="pg-hero" aria-label={[value, title, ...facts.map((fact) => `${fact.label} ${fact.value}`)].filter(Boolean).join(', ')}>
+      <div className="pg-hero-main" aria-hidden="true">
+        <span className="pg-hero-icon">
+          <Icon name={tileGlyph(tileIcon(readRef(query.data, component.icon)))} size={44} />
+        </span>
+        <span className="pg-hero-value">{value}</span>
+        {title ? <span className="pg-hero-title">{title}</span> : null}
+      </div>
+      {facts.length > 0 ? (
+        <dl className="pg-hero-facts" aria-hidden="true">
+          {facts.map((fact) => (
+            <div key={fact.label} className="pg-hero-fact">
+              <dt>{fact.label}</dt>
+              <dd>{fact.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Views behind a switch at the right of a bar, and the pick at its left: the
+ * pick writes a page parameter the queries below read, the switch draws one
+ * tab's components and leaves the others unasked.
+ */
+function TabsPiece({ component, data }: { component: Of<'tabs'>; data: unknown }): JSX.Element {
+  const scope = useScope();
+  const [tab, setTab] = useState(component.default ?? component.tabs[0]!.id);
+  const pick = component.pick;
+  const { options } = useFieldOptions(
+    { name: pick?.param ?? '', label: pick?.label ?? '', type: 'select', ...(pick?.options ? { options: pick.options } : {}), ...(pick?.optionsFrom ? { optionsFrom: pick.optionsFrom } : {}) },
+    {},
+    data,
+  );
+  const current = pick ? (options.some((o) => o.value === scope.params[pick.param]) ? scope.params[pick.param]! : options[0]?.value ?? '') : '';
+  const shown = component.tabs.find((t) => t.id === tab) ?? component.tabs[0]!;
+  return (
+    <div className="pg-tabs">
+      <div className="pg-tabs-bar">
+        {pick && options.length > 1 ? (
+          <Segment label={pick.label} options={options} value={current} onChange={(value) => scope.setParams({ [pick.param]: value })} />
+        ) : null}
+        <Segment label={component.title ?? 'View'} options={component.tabs.map((t) => ({ value: t.id, label: t.label }))} value={shown.id} onChange={setTab} />
+      </div>
+      {shown.body.map((child, index) => (
+        <Piece key={`${shown.id}-${index}`} component={child} data={data} />
+      ))}
+    </div>
   );
 }
 

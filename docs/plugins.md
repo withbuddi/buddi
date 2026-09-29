@@ -1050,6 +1050,15 @@ means, the page knows how to draw a line, and this says which is which.
   `location`. The page adds `from` and `to` (dates, `to` exclusive) to the
   query as the owner moves, so the query must declare both. Needs host API
   `^1.11`; docs/plugin-pages.md §4.
+- **`tabs`, `hero` and `tiles` are a forecast.** `{ kind: 'tabs', tabs,
+  default?, pick? }` draws views behind a switch, only the chosen one asked
+  for, with `pick` (options, or `optionsFrom`) a second switch written into a
+  page parameter the queries below read. `hero` is one big value with its
+  glyph, word and labelled facts; `tiles` the canvas card on a page, laid out
+  as a `grid`, a `row` or a sideways `strip`, with `select` writing the
+  picked item's key into a parameter. A `chart` with `series` draws a line
+  over bars, each on its own scale. Needs host API `^1.12`;
+  docs/plugin-pages.md §4.
 - **A form is a conversation.** `Field.when` and `Field.disabledWhen` are asked
   of the form's *own values* first — a path that names a field on the form
   reads what the owner has just typed — and of the loaded data otherwise, so
@@ -1262,7 +1271,7 @@ full contract is `docs/plugin-pages.md`; the shape of it is:
   flag; a parameter your schema does not declare is refused, not ignored.
 - **The components are a fixed set**, each a shape: `section`, `notice`,
   `link`, `progress`, `chart`, `stats`, `list`, `table`, `detail`, `form`, `search`, `list-detail`,
-  `repeat`, `calendar`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
+  `repeat`, `calendar`, `tiles`, `hero`, `tabs`, `expand`, `button`, `approval`, `artifact`, `editor`. Every one may
   carry `title`, `note`, `empty` and `when`. Paths are view paths, exactly as
   in §2.5.
 - **`repeat` is how a row becomes a sub-tree.** `{ kind: 'repeat', query,

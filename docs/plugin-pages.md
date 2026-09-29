@@ -72,7 +72,7 @@ export interface PageDescriptor {
   /** Where it lives. `rail` gives it a rail entry; `settings` a settings tab. */
   place: 'rail' | 'settings';
   /** One of a pinned set the dashboard draws; never an arbitrary image. */
-  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file' | 'chart' | 'bell' | 'plug' | 'key' | 'globe';
+  icon?: 'mail' | 'money' | 'calendar' | 'people' | 'file' | 'chart' | 'bell' | 'plug' | 'key' | 'globe' | 'sun' | 'cloud';
   /** Rail order among plugin entries; core places are fixed. */
   order?: number;
   body: Component[];
@@ -125,8 +125,9 @@ type Component =
   | { kind: 'link'; label: string; to: RouteRef }
   /** A bar: `value` a fraction 0–1, or a count of bytes against `total`; `label` the line above; `done` the line instead of the bar once it is full. */
   | { kind: 'progress'; value: ValueRef; total?: ValueRef; label?: string | ValueRef; done?: string | ValueRef }
-  /** A small inline chart of a query's rows: a line (default) or bars; `y` one path or up to four; `rows` left out when the answer is the array; `target` a dashed line, read from the answer. */
-  | { kind: 'chart'; query: QueryRef; rows?: string; x: string; y: string | string[]; type?: 'line' | 'bar'; label?: string; target?: ValueRef }
+  /** A small inline chart of a query's rows: a line (default) or bars; `y` one path or up to four; `rows` left out when the answer is the array; `target` a dashed line, read from the answer.
+      `series` instead of `y` and `type`: a line and bars together, each on its own scale, across the page's width. */
+  | { kind: 'chart'; query: QueryRef; rows?: string; x: string; y?: string | string[]; type?: 'line' | 'bar'; series?: ChartSeries[]; label?: string; target?: ValueRef }
   | { kind: 'stats'; query: QueryRef; items: Array<{ label: string; value: ValueRef; unit?: Unit; tone?: Tone }> }
   | { kind: 'list'; query: QueryRef; rows: string; item: ListItem; select?: Selection; actions?: RowAction[]; bulk?: BulkAction[]; groupBy?: GroupBy; collapsed?: { label: string; rows: string } }
   /** A column may carry `pill: { tone }` — a state, in the tone the row names;
@@ -141,6 +142,12 @@ type Component =
   | { kind: 'repeat'; query: QueryRef; rows: string; key: string; body: Component[] }
   /** Dated events: week, month and list views behind a switch; the page adds `from` and `to` (YYYY-MM-DD, `to` exclusive) to the query. */
   | { kind: 'calendar'; query: QueryRef; events: string; map: CalendarMap; views?: Array<'week' | 'month' | 'list'>; default?: 'week' | 'month' | 'list'; hours?: [number, number] }
+  /** The canvas tiles on a page: one card per item; `layout` grid (wraps), row (shares the width) or strip (scrolls sideways); `select` writes the picked item's `key` into page parameter `param`. */
+  | { kind: 'tiles'; query: QueryRef; items: string; icon: { path: string } | { const: TileIcon }; value: string; label: string; lines?: string[]; tone?: string; layout?: 'grid' | 'row' | 'strip'; select?: { param: string; key: string } }
+  /** Now, large: a glyph, a big value and its word, and labelled facts beside; every path read in the query's answer. */
+  | { kind: 'hero'; query: QueryRef; icon: { path: string } | { const: TileIcon }; value: string; title: string; facts: Array<{ label: string; path: string }> }
+  /** Two to six views behind a switch at the right of a bar, only the chosen one drawn; `pick` a second switch at its left, written into a page parameter. */
+  | { kind: 'tabs'; tabs: Array<{ id: string; label: string; body: Component[] }>; default?: string; pick?: TabsPick }
   | { kind: 'expand'; query: QueryRef; label: string | ValueRef; body: Component[] }
   /** One button, anywhere; its `ValueRef` args resolve against the row it stands in. */
   | { kind: 'button'; action: ToolRef }
@@ -163,6 +170,10 @@ interface ListItem { title: ValueRef; sub?: ValueRef; meta?: ValueRef[]; pill?: 
 interface Selection { key: string; disabledWhen?: Visibility }
 /** Paths within an event row. `start`/`end`: ISO instants, or YYYY-MM-DD for all-day (`end` the day after); `tone`: a number, the calendar's index. */
 interface CalendarMap { id: string; title: string; start: string; end: string; allDay?: string; calendar?: string; tone?: string; location?: string }
+/** One series of a two-kind chart; the bars' scale is on the right, 0–100 with `unit: 'percent'`. */
+interface ChartSeries { y: string; type: 'line' | 'bar'; label: string; unit?: 'percent' }
+/** Which place, which account: the first option until the owner picks; with one option, nothing is drawn. */
+interface TabsPick { param: string; label: string; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom }
 /** `label` and `confirm` may carry `{field}` placeholders read from the row. */
 interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
 /** `all` offers it over every enabled row when nothing is ticked. */
@@ -220,6 +231,10 @@ What each one is for, in email's terms:
 | `chart` | (Goals) A goal's values over its window as a line with the target dashed; a frequency goal's weeks as bars |
 | select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
 | `calendar` | (Calendar) The rail page: the week's hours, the month's days, or the days as a list, from the linked calendars |
+| `tabs` with `pick` | (Weather) The rail page: Home · Work at the left, Today · Week · 10 days at the right |
+| `hero` | (Weather) Now: the sky's glyph, the temperature and its word; feels like, high and low, wind, rain, sunrise and sunset beside |
+| `tiles` | (Weather) The next 24 hours as a strip; the week as a row whose picked day shows its hours below; ten days as a row |
+| `chart` with `series` | (Weather) The temperature as a line over the chance of rain as bars |
 
 A `chart` is small on purpose: a trend beside the numbers, drawn inline in
 the dashboard's own colours, with two ticks a side, the first and last x
@@ -245,6 +260,31 @@ time the range changes, so the query must declare both: a descriptor whose
 query does not is refused at load, and so is a `default` that is not one of
 its `views`. The chosen view is remembered per page in the browser; with none
 chosen a phone (under 720 px) opens on the list. Needs host API `^1.11`.
+
+`tabs`, `hero`, `tiles` and a chart's `series` are the design kit's Weather
+screen, and need host API `^1.12`. **`tabs`**: a bar with the pick's segment
+at the left (drawn only when it has two options or more) and the tabs'
+segment at the right; under it, the chosen tab's components and no others —
+a tab not shown asks nothing. The pick writes its value into the page
+parameter `param`, which a query below reads as `{ param }`; until the owner
+picks, the parameter is unset and the query's own default answers, so the
+first option should be what that default is. The chosen tab is not kept
+across visits. **`hero`**: a raised panel, the glyph and the big value side
+by side with the `title` under them, and the facts in a row past a hairline;
+a fact whose path answers nothing is left out. **`tiles`**: the canvas card
+(`views.ts`), one per item, whose accessible name is the card read as one
+sentence. `grid` wraps as on the canvas; in `row` and `strip` the card is
+centred with the label on top — `row` shares the width between all the
+cards, `strip` keeps each narrow and scrolls sideways. With `select`, each
+card is a button that writes the item's `key` into page parameter `param`
+and is marked while chosen; the first card is until the owner picks.
+**`chart` with `series`**: one line and bars (or several of each), each
+kind on its own scale — the line's on the left following its values, the
+bars' on the right from zero, 0–100% when every bar series says `unit:
+'percent'` — every point over its bar, an x label every few, across the
+page's width, with a legend. A chart names `y` or `series`, never both, and
+with `series` no `type`; a tab bar's `default` is one of its tabs. Each is
+refused at load otherwise.
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.

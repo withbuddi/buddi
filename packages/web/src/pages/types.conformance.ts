@@ -26,6 +26,7 @@ import type {
   ArgRef as CoreArgRef,
   BulkAction as CoreBulkAction,
   CalendarMap as CoreCalendarMap,
+  ChartSeries as CoreChartSeries,
   Component as CoreComponent,
   ComponentCommon as CoreComponentCommon,
   Field as CoreField,
@@ -36,6 +37,7 @@ import type {
   PageDescriptor as CorePageDescriptor,
   PageIcon as CorePageIcon,
   PagePlay as CorePagePlay,
+  PageTab as CorePageTab,
   ParamRef as CoreParamRef,
   PillRef as CorePillRef,
   QueryRef as CoreQueryRef,
@@ -43,6 +45,8 @@ import type {
   RowAction as CoreRowAction,
   SectionAction as CoreSectionAction,
   Selection as CoreSelection,
+  TabsPick as CoreTabsPick,
+  TilesLayout as CoreTilesLayout,
   ToolRef as CoreToolRef,
   Visibility as CoreVisibility,
   WorkspaceFiles as CoreWorkspaceFiles,
@@ -52,6 +56,7 @@ import type {
   BulkAction,
   CalendarComponent,
   CalendarMap,
+  ChartSeries,
   Component,
   ComponentCommon,
   Field,
@@ -62,6 +67,7 @@ import type {
   OptionsFrom,
   PageIcon,
   PagePlay,
+  PageTab,
   ParamRef,
   PillRef,
   PluginPageDescriptor,
@@ -70,6 +76,9 @@ import type {
   RowAction,
   SectionAction,
   Selection,
+  TabsPick,
+  TilesComponent,
+  TilesLayout,
   ToolRef,
   Visibility,
   WorkspaceFiles,
@@ -128,6 +137,12 @@ interface Conformance {
   calendarMap: Exact<CoreCalendarMap, CalendarMap>;
   /** The web's `CalendarComponent` is core's calendar arm, named for its renderer. */
   calendarComponent: Exact<Extract<CoreComponent, { kind: 'calendar' }>, CalendarComponent>;
+  /** The web's `TilesComponent` is core's tiles arm, named for its renderer. */
+  tilesComponent: Exact<Extract<CoreComponent, { kind: 'tiles' }>, TilesComponent>;
+  tilesLayout: Same<CoreTilesLayout, TilesLayout>;
+  chartSeries: Exact<CoreChartSeries, ChartSeries>;
+  pageTab: Exact<CorePageTab, PageTab>;
+  tabsPick: Exact<CoreTabsPick, TabsPick>;
   optionsFrom: Exact<CoreOptionsFrom, OptionsFrom>;
   field: Exact<CoreField, Field>;
   fieldAction: Exact<CoreFieldAction, FieldAction>;
@@ -161,6 +176,11 @@ export const CONTRACTS_AGREE: Conformance = {
   groupBy: true,
   calendarMap: true,
   calendarComponent: true,
+  tilesComponent: true,
+  tilesLayout: true,
+  chartSeries: true,
+  pageTab: true,
+  tabsPick: true,
   optionsFrom: true,
   field: true,
   fieldAction: true,
@@ -188,6 +208,9 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   'list-detail': true,
   repeat: true,
   calendar: true,
+  tiles: true,
+  hero: true,
+  tabs: true,
   expand: true,
   button: true,
   approval: true,
@@ -222,6 +245,10 @@ export const CHECKED_TYPES = [
   'Selection',
   'GroupBy',
   'CalendarMap',
+  'ChartSeries',
+  'PageTab',
+  'TabsPick',
+  'TilesLayout',
   'OptionsFrom',
   'Field',
   'FieldAction',
@@ -245,6 +272,7 @@ export const WEB_TYPES: Record<string, string> = {
   PluginPageDescriptor: 'PageDescriptor',
   ListComponent: 'Component',
   CalendarComponent: 'Component',
+  TilesComponent: 'Component',
   PageActResult: 'the act route’s reply, which core does not declare',
   PluginWorkspaceFiles: 'WorkspaceFiles, plus the plugin the route carries',
 };

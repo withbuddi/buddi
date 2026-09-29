@@ -74,6 +74,7 @@ export type { ViewDescriptor, ViewMap, RendererName, TilesMap, TileIcon, TileLin
 export { TILE_ICONS } from '../views.js';
 export type {
   CalendarMap,
+  ChartSeries,
   Component,
   Field,
   FieldAction,
@@ -82,7 +83,10 @@ export type {
   PagePlay,
   PageIcon,
   PageQuery,
+  PageTab,
   QueryRef,
+  TabsPick,
+  TilesLayout,
   WorkspaceFiles,
 } from '../pages.js';
 export type { HomeBlock, HomeBlockContribution, HomeContribution, HomeGlance, HomeGlanceContribution, HomeRow, HomeStat } from '../home.js';
