@@ -45,7 +45,7 @@ import {
   type StagedPluginView,
 } from '../api';
 import { fmtRelative } from '../format';
-import { AGENTS_ROUTE, parsePluginsInstall, parsePluginsTab, pluginPageRoute, settingsRoute } from '../routes';
+import { AGENTS_ROUTE, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { announcePagesChanged } from '../pages/usePages';
 import {
@@ -320,11 +320,14 @@ type Asking = { kind: 'disable' | 'remove'; name: string };
 
 export function Plugins({
   railPages = [],
+  settingsPages = [],
   navigate,
   hash = '',
 }: {
   /** The plugin pages whose place is the rail, hidden or not: each plugin's row opens its own. */
   railPages?: PluginPageDescriptor[];
+  /** The plugin pages whose place is Settings: a plugin with one gets a Settings action. */
+  settingsPages?: PluginPageDescriptor[];
   navigate?: (route: string) => void;
   /** The hash this section was opened on: `?tab=browse`, or a market link's `?install=`. */
   hash?: string;
@@ -426,6 +429,12 @@ export function Plugins({
     const page = railPages.find((p) => p.plugin === name);
     if (page && navigate) navigate(pluginPageRoute(page.plugin, page.id));
   };
+  /** Its settings page, when it ships one: the way to set a plugin up. */
+  const settingsFor = (name: string): (() => void) | undefined => {
+    const page = settingsPages.find((p) => p.plugin === name);
+    if (!page || !navigate) return undefined;
+    return () => navigate(pluginSettingsRoute(page.plugin, page.id));
+  };
   const updates = (market?.plugins ?? []).filter((entry) => entry.update).length;
 
   /** Disable or enable: it takes effect at once, so the rail reads its pages again. */
@@ -484,6 +493,7 @@ export function Plugins({
       onEnable={() => enable(openedPlugin.name)}
       onRemove={() => setAsking({ kind: 'remove', name: openedPlugin.name })}
       onUpdate={(version) => update(openedPlugin.name, version)}
+      onSettings={openedPlugin.enabled === false ? undefined : settingsFor(openedPlugin.name)}
       busy={stagingBusy}
     />
   ) : openedEntry ? (
@@ -580,6 +590,7 @@ export function Plugins({
                   busy={stagingBusy}
                   onDetails={() => setOpened({ kind: 'installed', name: plugin.name })}
                   onOpen={() => goToPage(plugin.name)}
+                  onSettings={plugin.enabled === false ? undefined : settingsFor(plugin.name)}
                   onDisable={() => setAsking({ kind: 'disable', name: plugin.name })}
                   onEnable={() => enable(plugin.name)}
                   onRemove={() => setAsking({ kind: 'remove', name: plugin.name })}
@@ -1054,6 +1065,7 @@ function InstalledRow({
   busy,
   onDetails,
   onOpen,
+  onSettings,
   onDisable,
   onEnable,
   onRemove,
@@ -1068,6 +1080,8 @@ function InstalledRow({
   busy: boolean;
   onDetails: () => void;
   onOpen: () => void;
+  /** Its settings page, when it ships one and is on. */
+  onSettings?: (() => void) | undefined;
   onDisable: () => void;
   onEnable: () => void;
   onRemove: () => void;
@@ -1096,12 +1110,26 @@ function InstalledRow({
             </Button>
           ) : null}
           {open}
+          {/* A plugin with no page of its own but a settings tab is set up there. */}
+          {!canOpen && onSettings ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={(event) => {
+                event.stopPropagation(); // the row underneath opens the detail
+                onSettings();
+              }}
+            >
+              Settings
+            </Button>
+          ) : null}
           <StatePill plugin={plugin} />
           <ActionMenu
             label={`More for ${plugin.name}`}
             items={[
               { label: 'Details', onSelect: onDetails },
               canOpen ? { label: 'Open its page', onSelect: onOpen } : null,
+              onSettings ? { label: 'Its settings', onSelect: onSettings } : null,
               disabled
                 ? { label: 'Enable', hint: 'all of it comes back', onSelect: onEnable }
                 : { label: 'Disable…', hint: 'keeps its data', onSelect: onDisable },
@@ -1218,6 +1246,7 @@ function InstalledSheet({
   canOpen,
   busy,
   onOpen,
+  onSettings,
   onClose,
   onDisable,
   onEnable,
@@ -1231,6 +1260,7 @@ function InstalledSheet({
   canOpen: boolean;
   busy: boolean;
   onOpen: () => void;
+  onSettings?: (() => void) | undefined;
   onClose: () => void;
   onDisable: () => void;
   onEnable: () => void;
@@ -1277,6 +1307,11 @@ function InstalledSheet({
             Remove…
           </Button>
           <Spacer />
+          {onSettings ? (
+            <Button variant="ghost" onClick={onSettings}>
+              Settings
+            </Button>
+          ) : null}
           {canOpen ? <Button onClick={onOpen}>Open</Button> : null}
           {disabled ? (
             <Button onClick={onEnable}>Enable</Button>

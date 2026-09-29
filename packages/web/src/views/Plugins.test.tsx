@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
-import { pluginPageRoute } from '../routes';
+import { pluginPageRoute, pluginSettingsRoute } from '../routes';
 import { Plugins } from './Plugins';
 
 vi.mock('../api', async (load) => {
@@ -574,6 +574,20 @@ describe('the plugins section', () => {
     );
     fireEvent.click(await screen.findByRole('link', { name: 'Open Weather' }));
     expect(navigate).toHaveBeenCalledWith(pluginPageRoute('weather', 'today'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('offers Settings on the row of a plugin with a settings tab and no page, and goes there', async () => {
+    const navigate = vi.fn();
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [{ ...INSTALLED, name: 'speech' }] }));
+    render(
+      <Plugins
+        navigate={navigate}
+        settingsPages={[{ plugin: 'speech', id: 'settings', title: 'Speech' } as never]}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    expect(navigate).toHaveBeenCalledWith(pluginSettingsRoute('speech', 'settings'));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
