@@ -16,6 +16,11 @@
  *
  * Loading a newly installed plugin needs a restart, which is the supervisor's
  * job. A checkout has no supervisor, so it gets the command instead.
+ *
+ * Browse is the second tab: the plugin list from withbuddi.com, asked for
+ * through the gateway only when the tab is opened. Its Install stages the
+ * listed version, and from there it is the same card and the same two yeses.
+ * A market link (`?install=<npm>@<version>`) stages its spec once on arrival.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
@@ -24,6 +29,9 @@ import {
   type ApprovalRow,
   type BuiltInPluginView,
   type InstalledPluginView,
+  type MarketCategory,
+  type MarketEntryView,
+  type MarketView,
   type PluginAuthorView,
   type PluginJob,
   type PluginPlan,
@@ -32,10 +40,10 @@ import {
   type StagedPluginView,
 } from '../api';
 import { fmtRelative } from '../format';
-import { AGENTS_ROUTE, pluginPageRoute } from '../routes';
+import { AGENTS_ROUTE, parsePluginsInstall, parsePluginsTab, pluginPageRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { announcePagesChanged } from '../pages/usePages';
-import { Button, ButtonLink, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
+import { Button, ButtonLink, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Tab, Tabs, Toolbar, useAsync, EmptyState } from '../ui';
 import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 
 /** How often a running stage is asked where it has got to. */
@@ -215,19 +223,99 @@ function OpenPages({
   );
 }
 
+type PluginsTab = 'installed' | 'browse';
+
+const PLUGINS_ROUTE = settingsRoute('plugins');
+const TAB_ROUTES: Record<PluginsTab, string> = { installed: PLUGINS_ROUTE, browse: `${PLUGINS_ROUTE}?tab=browse` };
+
 export function Plugins({
   railPages = [],
   navigate,
+  hash = '',
 }: {
   /** The plugin pages whose place is the rail, hidden or not: each plugin's card opens its own. */
   railPages?: PluginPageDescriptor[];
   navigate?: (route: string) => void;
+  /** The hash this section was opened on: `?tab=browse`, or a market link's `?install=`. */
+  hash?: string;
 } = {}): JSX.Element {
   const view = useAsync(() => api.plugins(), [], 20_000);
   const [jobId, setJobId] = useState<string | null>(null);
   const { job, error: jobError } = useStageJob(jobId);
   const [failed, setFailed] = useState<string | null>(null);
   const [installed, setInstalled] = useState<string | null>(null);
+  const [tab, setTab] = useState<PluginsTab>(() => parsePluginsTab(hash));
+  useEffect(() => setTab(parsePluginsTab(hash)), [hash]);
+
+  /*
+   * The market list is asked for the first time Browse opens, and not before:
+   * it is the one thing on this page that reaches past this machine. Once
+   * loaded it stays for the visit, and the Installed tab uses it to name the
+   * version an Update would bring.
+   */
+  const [market, setMarket] = useState<MarketView | null>(null);
+  const [marketLoading, setMarketLoading] = useState(false);
+  const loadMarket = (refresh: boolean): void => {
+    setMarketLoading(true);
+    api
+      .market(refresh)
+      .then(setMarket)
+      .catch((error: unknown) =>
+        setMarket({ plugins: [], unavailable: error instanceof ApiError ? error.message : String(error) }),
+      )
+      .finally(() => setMarketLoading(false));
+  };
+  useEffect(() => {
+    if (tab === 'browse' && market === null && !marketLoading) loadMarket(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  const onStaged = (id: string): void => {
+    setFailed(null);
+    setInstalled(null);
+    setJobId(id);
+  };
+  const fail = (error: unknown): void => setFailed(error instanceof ApiError ? error.message : String(error));
+  const [marketBusy, setMarketBusy] = useState(false);
+  /** Install or update from a listing: stage it, then read the card on Installed. */
+  const fromMarket = (work: Promise<{ job: PluginJob }>): void => {
+    setMarketBusy(true);
+    work
+      .then((answer) => {
+        onStaged(answer.job.id);
+        setTab('installed');
+      })
+      .catch(fail)
+      .finally(() => setMarketBusy(false));
+  };
+
+  /*
+   * A market link stages its spec once, on arrival, and the query is taken
+   * off the hash so a reload or a back button does not stage it again.
+   */
+  const linked = useRef<string | null>(null);
+  useEffect(() => {
+    const spec = parsePluginsInstall(hash);
+    if (spec === null || linked.current === spec) return;
+    linked.current = spec;
+    setTab('installed');
+    fromMarket(api.stagePlugin(spec));
+    try {
+      window.history.replaceState(window.history.state, '', PLUGINS_ROUTE);
+    } catch {
+      // A history the browser will not rewrite leaves the query; the ref still stages once.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hash]);
+
+  const choose = (next: PluginsTab) => (event: { preventDefault: () => void }): void => {
+    event.preventDefault();
+    setTab(next);
+    navigate?.(TAB_ROUTES[next]);
+  };
+  const updateFor = (plugin: InstalledPluginView): string | undefined =>
+    market?.plugins.find((entry) => entry.installed !== undefined && (entry.installed.name ?? entry.name) === plugin.name)
+      ?.update;
 
   // A finished stage puts a card on the page, which comes from the list.
   useEffect(() => {
@@ -240,8 +328,37 @@ export function Plugins({
   const openFor = (name: string): ReactNode =>
     railPages.some((page) => page.plugin === name) ? <OpenPages plugin={name} pages={railPages} navigate={navigate} /> : undefined;
 
+  const tabs = (
+    <Tabs label="Plugins">
+      <Tab href={TAB_ROUTES.installed} active={tab === 'installed'} onClick={choose('installed')}>
+        Installed
+      </Tab>
+      <Tab href={TAB_ROUTES.browse} active={tab === 'browse'} onClick={choose('browse')}>
+        Browse
+      </Tab>
+    </Tabs>
+  );
+
+  if (tab === 'browse') {
+    return (
+      <Stack gap="lg">
+        {tabs}
+        <ErrorBanner message={failed} />
+        <Browse
+          market={market}
+          loading={marketLoading}
+          busy={marketBusy}
+          onRetry={() => loadMarket(true)}
+          onInstall={(entry) => fromMarket(api.stagePlugin(`${entry.npm}@${entry.version}`))}
+          onUpdate={(entry, version) => fromMarket(api.updatePlugin(entry.installed?.name ?? entry.name, version))}
+        />
+      </Stack>
+    );
+  }
+
   return (
     <Stack gap="lg">
+      {tabs}
       <ErrorBanner message={view.error ?? failed ?? jobError} />
       {data?.unavailable ? <Notice tone="warning">{data.unavailable}</Notice> : null}
 
@@ -255,11 +372,7 @@ export function Plugins({
           <Section>
             <Install
               busy={job !== undefined && job.phase !== 'done' && job.phase !== 'failed'}
-              onStaged={(id) => {
-                setFailed(null);
-                setInstalled(null);
-                setJobId(id);
-              }}
+              onStaged={onStaged}
               onFailed={setFailed}
             />
           </Section>
@@ -302,7 +415,13 @@ export function Plugins({
           <Stack divided>
             {data.installed.map((plugin) => (
               <Section key={plugin.name}>
-                <Installed plugin={plugin} onChanged={() => view.reload()} onFailed={setFailed} open={openFor(plugin.name)} />
+                <Installed
+                  plugin={plugin}
+                  update={updateFor(plugin)}
+                  onChanged={() => view.reload()}
+                  onFailed={setFailed}
+                  open={openFor(plugin.name)}
+                />
               </Section>
             ))}
           </Stack>
@@ -835,11 +954,14 @@ function Unlock({ plugin, unlock }: { plugin?: string; unlock: PluginUnlock }): 
 
 function Installed({
   plugin,
+  update,
   onChanged,
   onFailed,
   open,
 }: {
   plugin: InstalledPluginView;
+  /** A newer version withbuddi.com lists, when Browse was opened and found one. */
+  update?: string | undefined;
   onChanged: () => void;
   onFailed: (message: string) => void;
   /** Its rail pages' Open buttons, when it has any. */
@@ -929,8 +1051,8 @@ function Installed({
                 Disable…
               </Button>
             )}
-            <Button size="sm" disabled={busy} onClick={() => act(api.updatePlugin(plugin.name))}>
-              Update
+            <Button size="sm" disabled={busy} onClick={() => act(api.updatePlugin(plugin.name, update))}>
+              {update ? `Update to ${update}` : 'Update'}
             </Button>
             {open}
           </Toolbar>
@@ -1016,6 +1138,194 @@ function Installed({
           </Toolbar>
         </Stack>
       ) : null}
+    </Stack>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Browse: the list withbuddi.com keeps
+ * ------------------------------------------------------------------ */
+
+/** The shelves under "All plugins", in this order. */
+const CATEGORIES: Array<{ id: MarketCategory; title: string }> = [
+  { id: 'days', title: 'Your days' },
+  { id: 'money', title: 'Money' },
+  { id: 'home', title: 'Home' },
+  { id: 'voice', title: 'Voice' },
+  { id: 'work', title: 'Work' },
+  { id: 'other', title: 'Other' },
+];
+
+const CATEGORY_WORDS: Record<MarketCategory, string> = {
+  days: 'your days',
+  money: 'money',
+  home: 'home',
+  voice: 'voice',
+  work: 'work',
+  other: 'other',
+};
+
+function matches(entry: MarketEntryView, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (q === '') return true;
+  return [entry.title, entry.summary, entry.npm].some((text) => text.toLowerCase().includes(q));
+}
+
+/** "Paid · 14 days to try · its maker's page", only for a plugin that is not free. */
+function PriceLine({ pricing }: { pricing: MarketEntryView['pricing'] }): JSX.Element | null {
+  if (pricing.kind === 'free') return null;
+  return (
+    <p className="ui-card-meta">
+      {pricing.kind === 'paid' ? 'Paid' : 'A subscription'}
+      {pricing.trialDays ? ` · ${pricing.trialDays} days to try` : ''}
+      {pricing.note ? ` · ${pricing.note}` : ''}
+      {pricing.vendor ? (
+        <>
+          {' · '}
+          <a href={pricing.vendor} target="_blank" rel="noopener noreferrer">
+            its maker&apos;s page
+          </a>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
+/** One listing: what it is, who made it, what it reaches, and the one button. */
+function MarketCard({
+  entry,
+  busy,
+  onInstall,
+  onUpdate,
+}: {
+  entry: MarketEntryView;
+  busy: boolean;
+  onInstall: (entry: MarketEntryView) => void;
+  onUpdate: (entry: MarketEntryView, version: string) => void;
+}): JSX.Element {
+  const hosts = (entry.claims?.manifest?.network ?? []).map((use) => use.host);
+  const reaches = (entry.usesWords ?? []).map((use) => use.words);
+  return (
+    <Card title={entry.title}>
+      <Stack gap="sm">
+        <AuthorLine author={entry.author} />
+        <p>{entry.summary}</p>
+        <Toolbar>
+          <Pill tone="muted">{CATEGORY_WORDS[entry.category]}</Pill>
+          {entry.trust === 'by-buddi' ? (
+            <Pill tone="accent">by buddi</Pill>
+          ) : (
+            <Pill tone="good">reviewed {entry.reviewed?.version ?? entry.version}</Pill>
+          )}
+          {entry.installed ? <Pill tone="muted">installed {entry.installed.version}</Pill> : null}
+        </Toolbar>
+        <PriceLine pricing={entry.pricing} />
+        {hosts.length > 0 ? (
+          <p className="ui-card-meta">
+            Talks to <span className="mono">{hosts.join(', ')}</span>.
+          </p>
+        ) : null}
+        {reaches.length > 0 ? <p className="ui-card-meta">Reaches in buddi: it {reaches.join('; ')}.</p> : null}
+        {entry.update ? (
+          <Toolbar align="end">
+            <Button variant="accent" disabled={busy} onClick={() => onUpdate(entry, entry.update as string)}>
+              Update to {entry.update}
+            </Button>
+          </Toolbar>
+        ) : entry.installed ? null : (
+          <Toolbar align="end">
+            <Button variant="accent" disabled={busy} onClick={() => onInstall(entry)}>
+              Install
+            </Button>
+          </Toolbar>
+        )}
+      </Stack>
+    </Card>
+  );
+}
+
+function Browse({
+  market,
+  loading,
+  busy,
+  onRetry,
+  onInstall,
+  onUpdate,
+}: {
+  market: MarketView | null;
+  loading: boolean;
+  busy: boolean;
+  onRetry: () => void;
+  onInstall: (entry: MarketEntryView) => void;
+  onUpdate: (entry: MarketEntryView, version: string) => void;
+}): JSX.Element {
+  const [query, setQuery] = useState('');
+  const card = (entry: MarketEntryView): JSX.Element => (
+    <MarketCard key={entry.npm} entry={entry} busy={busy} onInstall={onInstall} onUpdate={onUpdate} />
+  );
+  const shown = (market?.plugins ?? []).filter((entry) => matches(entry, query));
+  const recommended = shown.filter((entry) => entry.trust === 'by-buddi' && !entry.installed);
+  return (
+    <Stack gap="lg">
+      <Notice>Opening this tab fetched the list from withbuddi.com. Nothing else leaves.</Notice>
+      {market === null || (loading && market.unavailable) ? (
+        <Empty>Asking withbuddi.com…</Empty>
+      ) : market.unavailable ? (
+        <Stack gap="sm">
+          <Notice tone="warning">{market.unavailable}</Notice>
+          <Toolbar align="end">
+            <Button variant="accent" disabled={loading} onClick={onRetry}>
+              Try again
+            </Button>
+          </Toolbar>
+        </Stack>
+      ) : (
+        <>
+          {market.stale ? (
+            <Stack gap="sm">
+              <Notice tone="warning">
+                withbuddi.com did not answer, so this is the list as it was
+                {market.fetchedAt ? ` ${fmtRelative(market.fetchedAt)}` : ' last time'}.
+              </Notice>
+              <Toolbar align="end">
+                <Button disabled={loading} onClick={onRetry}>
+                  Try again
+                </Button>
+              </Toolbar>
+            </Stack>
+          ) : null}
+          <Field label="Search plugins">
+            <input
+              type="search"
+              value={query}
+              placeholder="weather, money, calendar…"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </Field>
+          {recommended.length > 0 ? (
+            <Section title="Recommended">
+              <div className="plugin-market-grid">{recommended.map(card)}</div>
+            </Section>
+          ) : null}
+          <Section title="All plugins" panel>
+            {shown.length === 0 ? (
+              <Empty>
+                {query.trim() === '' ? 'withbuddi.com lists no plugins yet.' : `Nothing listed matches "${query.trim()}".`}
+              </Empty>
+            ) : (
+              <Stack divided>
+                {CATEGORIES.filter((category) => shown.some((entry) => entry.category === category.id)).map((category) => (
+                  <Section key={category.id} title={category.title}>
+                    <div className="plugin-market-grid">
+                      {shown.filter((entry) => entry.category === category.id).map(card)}
+                    </div>
+                  </Section>
+                ))}
+              </Stack>
+            )}
+          </Section>
+        </>
+      )}
     </Stack>
   );
 }

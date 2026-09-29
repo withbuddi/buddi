@@ -89,8 +89,9 @@ needs me, what is my team up to, what is coming.
   there is a digest.
 
 **Tips.** When something in buddi has gone unused for a while, a second
-agent, a group, a mission, voice, the browser, a mailbox nobody reads,
-Home may show one quiet card under the composer: one sentence and one action.
+agent, a group, a mission, voice, the browser, a mailbox nobody reads, or no
+recommended plugin at all (finance, image, speech, weather, calendar), which
+points at Browse, Home may show one quiet card under the composer: one sentence and one action.
 At most one tip a day, never during first run, and never about a plugin that
 is not installed. "Not this again" removes that tip for good; the × puts it off
 for a week. A tip whose reason goes away disappears on its own. Settings →
@@ -223,8 +224,19 @@ A list of sections in four groups.
 - **Watchers**: the checks plugins run on a schedule, with a switch each.
 - **Backup**: nightly backups, one now, a check, the passphrase, and restore.
 - **System**: the version and upgrade, pausing the queue, this host.
-- **All plugins**: what is installed, and installing one. A plugin's own
-  settings tabs follow it (see [Plugin pages](plugin-pages.md)).
+- **All plugins**: two tabs. **Installed** is what is installed, and
+  installing one. **Browse** is the plugin list from withbuddi.com, fetched
+  through buddi only when you open the tab and kept a day: a search field, a
+  **Recommended** shelf of the plugins buddi publishes that you do not have,
+  then every listing by category (Your days, Money, Home, Voice, Work, Other)
+  with who made it, how it is trusted, its price when it has one, the hosts it
+  talks to and what it reaches in buddi. **Install** stages the listed version
+  and takes you to Installed, where the staged card and its approvals are the
+  same as any install; a newer listed version shows **Update to <version>**,
+  there and on the installed row. A link from withbuddi.com,
+  `#/settings/plugins?install=<npm name>@<version>`, opens Installed and stages
+  that version at once; `#/settings/plugins?tab=browse` opens Browse. A
+  plugin's own settings tabs follow it (see [Plugin pages](plugin-pages.md)).
 
 ## Notifications on the dashboard
 

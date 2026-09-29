@@ -93,7 +93,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'connections' ? <Connections embedded timezone={timezone} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
-          {section === 'plugins' ? <Plugins railPages={plugins.rail} navigate={navigate} /> : null}
+          {section === 'plugins' ? <Plugins railPages={plugins.rail} navigate={navigate} hash={hash} /> : null}
           {section === 'system' ? <System timezone={timezone} /> : null}
         </div>
       </div>

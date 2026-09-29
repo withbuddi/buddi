@@ -29,6 +29,7 @@ import {
   authorOfPackageJson,
   contributionOf,
   OWNER_AGENT_ID,
+  isPluginUse,
   PLUGIN_USE_WORDS,
   pluginUsesChange,
   pluginsFilePath,
@@ -142,6 +143,15 @@ function refusalReply(err: unknown): RouteReply {
  * `dir` and `packageDir` are where this installation put the package, and the
  * page has no use for either. They stay here.
  */
+/**
+ * The words the staged card uses for each area a plugin reaches, from a list
+ * that may come from somewhere else (a market entry): anything not an area
+ * buddi knows is left out rather than guessed at.
+ */
+export function usesWords(uses: readonly unknown[]): Array<{ use: string; words: string }> {
+  return uses.filter(isPluginUse).map((use) => ({ use, words: PLUGIN_USE_WORDS[use] }));
+}
+
 function stagedUses(staged: StagedPlugin): {
   areas: Array<{ use: string; words: string; added: boolean }>;
   dropped: Array<{ use: string; words: string }>;
@@ -362,7 +372,7 @@ function unlocksOf(
  * page that drew an empty list would be saying the opposite of what happened.
  * So the sentence comes back with it and the page shows that instead.
  */
-function installedRecord(env: NodeJS.ProcessEnv): {
+export function installedRecord(env: NodeJS.ProcessEnv): {
   plugins: InstalledPlugin[];
   unavailable?: string;
 } {

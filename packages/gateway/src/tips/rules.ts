@@ -32,6 +32,9 @@ export interface TipRule {
   installs?: boolean;
 }
 
+/** The plugins the market's Recommended shelf offers; the tip is quiet once any is here. */
+export const RECOMMENDED_PLUGINS = ['finance', 'image', 'speech', 'weather', 'calendar'] as const;
+
 export const TIPS: readonly TipRule[] = [
   {
     id: 'second-agent',
@@ -83,5 +86,13 @@ export const TIPS: readonly TipRule[] = [
     action: { label: 'Ask buddi to open a website', route: '#/chat' },
     cooldownDays: 7,
     plugin: 'browser',
+  },
+  {
+    id: 'recommended-plugins',
+    when: (f) => f.daysSinceInstall >= 0 && !RECOMMENDED_PLUGINS.some((name) => f.plugins.has(name)),
+    holdsForDays: 0,
+    text: 'I can do more with a plugin or two: weather and your calendar for the morning, your money, a voice. Each one is read before it is installed.',
+    action: { label: 'Browse plugins', route: '#/settings/plugins?tab=browse' },
+    cooldownDays: 14,
   },
 ];

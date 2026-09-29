@@ -29,6 +29,10 @@ const RULE_CASES: Record<string, { fires: Partial<Facts>; quiet: Partial<Facts> 
     fires: { missions: 0, daysSinceInstall: 7 },
     quiet: { missions: 0, daysSinceInstall: 6 },
   },
+  'recommended-plugins': {
+    fires: { plugins: new Set(['browser', 'email']), speechInstalled: false },
+    quiet: { plugins: new Set(['browser', 'email', 'weather']) },
+  },
   'open-website': {
     fires: { browserUsed: false, toolsUsed: new Set() },
     quiet: { browserUsed: true },

@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { api, type PluginsView, type StagedPluginView } from '../api';
+import { api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
 import { Plugins } from './Plugins';
 
@@ -20,6 +20,7 @@ vi.mock('../api', async (load) => {
     ...real,
     api: {
       plugins: vi.fn(),
+      market: vi.fn(),
       stagePlugin: vi.fn(),
       pluginJob: vi.fn(),
       approveStaged: vi.fn(),
@@ -493,5 +494,150 @@ describe('the plugins section', () => {
     expect(await screen.findByText('Enabled.')).toBeInTheDocument();
     expect(pagesChanged).toHaveBeenCalledTimes(2);
     window.removeEventListener(PAGES_CHANGED_EVENT, pagesChanged);
+  });
+});
+
+/**
+ * Browse: the list from withbuddi.com, asked for only when the tab opens.
+ * Its Install stages the listed version; the card and the approvals are the
+ * ones above, unchanged.
+ */
+describe('browsing the market', () => {
+  const listing = (over: Partial<MarketEntryView>): MarketEntryView => ({
+    name: 'weather',
+    npm: '@withbuddi/plugin-weather',
+    version: '0.1.0',
+    title: 'Weather',
+    summary: 'The weather for the places you save.',
+    category: 'days',
+    trust: 'by-buddi',
+    pricing: { kind: 'free' },
+    author: { name: 'withbuddi' },
+    claims: { manifest: { network: [{ host: 'api.open-meteo.com' }] } },
+    usesWords: [{ use: 'http', words: 'sends web requests' }],
+    ...over,
+  });
+  const WEATHER = listing({});
+  const FINANCE = listing({
+    name: 'finance',
+    npm: '@withbuddi/plugin-finance',
+    version: '1.2.0',
+    title: 'Finance',
+    summary: 'Your accounts and what you owe.',
+    category: 'money',
+    installed: { version: '1.0.0', name: 'finance' },
+    update: '1.2.0',
+  });
+  const GARDEN = listing({
+    name: 'garden',
+    npm: 'buddi-plugin-garden',
+    title: 'Garden',
+    summary: 'When to water.',
+    category: 'home',
+    trust: 'reviewed',
+    reviewed: { version: '0.1.0' },
+    pricing: { kind: 'subscription', trialDays: 14, vendor: 'https://garden.example' },
+  });
+  const INSTALLED_FINANCE: InstalledPluginView = {
+    name: 'finance',
+    version: '1.0.0',
+    source: { kind: 'registry', name: '@withbuddi/plugin-finance', version: '1.0.0' },
+    installedAt: new Date().toISOString(),
+    contribution: { tools: 3, sentinels: 0, views: 0, agents: 0 },
+    unlocks: [],
+    loaded: true,
+  };
+
+  it('asks withbuddi.com only when Browse opens, and shows the shelves', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({ fetchedAt: new Date().toISOString(), plugins: [WEATHER, FINANCE, GARDEN] });
+    render(<Plugins />);
+    await screen.findByText(TRUST);
+    expect(api.market).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Browse' }));
+    expect(await screen.findByText('Opening this tab fetched the list from withbuddi.com. Nothing else leaves.')).toBeInTheDocument();
+    await screen.findByText('Recommended');
+    expect(api.market).toHaveBeenCalledTimes(1);
+    expect(api.market).toHaveBeenCalledWith(false);
+    for (const heading of ['All plugins', 'Your days', 'Money', 'Home']) expect(screen.getByText(heading)).toBeInTheDocument();
+    expect(screen.queryByText('Voice')).toBeNull();
+    // Weather twice (Recommended and Your days); finance is installed, so not recommended.
+    expect(screen.getAllByText('Weather')).toHaveLength(2);
+    expect(screen.getAllByText('Finance')).toHaveLength(1);
+    expect(screen.getByText('installed 1.0.0')).toBeInTheDocument();
+    expect(screen.getByText('reviewed 0.1.0')).toBeInTheDocument();
+    expect(screen.getByText(/A subscription · 14 days to try/)).toBeInTheDocument();
+    expect(screen.getAllByText('api.open-meteo.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Reaches in buddi: it sends web requests.').length).toBeGreaterThan(0);
+  });
+
+  it('stages the listed version and goes back to Installed to read the card', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({ plugins: [WEATHER] });
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    const [install] = await screen.findAllByRole('button', { name: 'Install' });
+    fireEvent.click(install as HTMLElement);
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.1.0'));
+    expect(await screen.findByText(TRUST)).toBeInTheDocument();
+    expect(await screen.findByText(/Fetching the package/)).toBeInTheDocument();
+  });
+
+  it('updates to the listed version', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [INSTALLED_FINANCE] }));
+    vi.mocked(api.market).mockResolvedValue({ plugins: [FINANCE] });
+    vi.mocked(api.updatePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update to 1.2.0' }));
+    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', '1.2.0'));
+    // Back on Installed, the row names the version too.
+    expect(await screen.findByRole('button', { name: 'Update to 1.2.0' })).toBeInTheDocument();
+  });
+
+  it('filters by title, summary and npm name', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({ plugins: [WEATHER, GARDEN] });
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    await screen.findByText('Garden');
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'water' } });
+    expect(screen.queryByText('Weather')).toBeNull();
+    expect(screen.getByText('Garden')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'plugin-weather' } });
+    expect(screen.queryByText('Garden')).toBeNull();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'nothing like it' } });
+    expect(screen.getByText('Nothing listed matches "nothing like it".')).toBeInTheDocument();
+  });
+
+  it('says when withbuddi.com could not be reached, and tries again past the copy', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({ plugins: [], unavailable: 'buddi could not reach withbuddi.com: offline' });
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    expect(await screen.findByText('buddi could not reach withbuddi.com: offline')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(api.market).toHaveBeenLastCalledWith(true));
+  });
+
+  it('does not ask the market from the Installed tab, and keeps the plain Update', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [INSTALLED_FINANCE] }));
+    render(<Plugins />);
+    expect(await screen.findByRole('button', { name: 'Update' })).toBeInTheDocument();
+    expect(api.market).not.toHaveBeenCalled();
+  });
+
+  it('stages a market link once, on the Installed tab', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    const hash = '#/settings/plugins?install=%40withbuddi%2Fplugin-weather%400.1.0';
+    const { rerender } = render(<Plugins hash={hash} />);
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.1.0'));
+    rerender(<Plugins hash={hash} />);
+    expect(await screen.findByText(TRUST)).toBeInTheDocument();
+    expect(api.stagePlugin).toHaveBeenCalledTimes(1);
+    expect(api.market).not.toHaveBeenCalled();
+    expect(window.location.hash).toBe('#/settings/plugins');
   });
 });

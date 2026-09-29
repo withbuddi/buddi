@@ -198,6 +198,34 @@ export function parseProposalsFilter(hash: string): string | null {
   }
 }
 
+/** The query of a `#/settings/plugins?…` hash, or null for any other hash. */
+function pluginsQuery(hash: string): URLSearchParams | null {
+  const match = /^#\/settings\/plugins\?(.*)$/.exec(hash);
+  if (!match) return null;
+  try {
+    return new URLSearchParams(match[1]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The spec a market "Install in buddi" link asks for:
+ * `#/settings/plugins?install=<npm>@<version>`. Staging it is the whole act;
+ * the staged card and its approvals are the same as any install.
+ */
+export function parsePluginsInstall(hash: string): string | null {
+  const spec = pluginsQuery(hash)?.get('install')?.trim();
+  return spec ? spec : null;
+}
+
+/** Which tab of Settings → Plugins a hash opens: `?tab=browse`, else Installed. */
+export function parsePluginsTab(hash: string): 'installed' | 'browse' {
+  const query = pluginsQuery(hash);
+  if (query?.get('install')) return 'installed';
+  return query?.get('tab') === 'browse' ? 'browse' : 'installed';
+}
+
 /** The primary places, in rail order. */
 export const PLACES = [
   { route: HOME_ROUTE, label: 'Home' },

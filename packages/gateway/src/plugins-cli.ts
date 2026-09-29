@@ -40,6 +40,7 @@ import {
   pluginUsesChange,
   type InstalledPlugin,
   type PluginContribution,
+  type PluginManifest,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { loadEnvironment } from './bootstrap.js';
@@ -48,10 +49,12 @@ import {
   isBuiltInPlugin,
   loadInstalledPlugins,
   loadManifest,
+  manifestProblem,
   recordFile,
   type LoadedPlugins,
 } from './plugins/load.js';
-import { acceptAgentSteps, InstallRefusal, renderAgentDrift } from './plugins/install.js';
+import { acceptAgentSteps, entryPointOf, InstallRefusal, renderAgentDrift } from './plugins/install.js';
+import { driftBetween } from './plugins/claims.js';
 import { applyUninstall, planUninstall, UninstallRefusal } from './plugins/uninstall.js';
 import { approveStaged } from './plugins/approve.js';
 import {
@@ -83,6 +86,9 @@ export const USAGE = `buddi plugins — what this installation has installed
                                           service (or say to restart buddi): plugins load at start
   buddi plugins list [--json]             what is installed, its version, and whether it is healthy
   buddi plugins info <name>               what it is, what it brought, and what it proposes
+  buddi plugins describe <spec> [--json]  stage it, read its manifest, print what it brings, delete
+                                          the stage. Installs nothing: no record, no schema, no
+                                          tools. --json is what a market listing's claims are.
   buddi plugins install <spec>            STAGE it and read what it claims (imports nothing)
   buddi plugins install <spec> --yes --integrity <hash>
                                           approve it: import it, plan it, install it.
@@ -112,6 +118,7 @@ export interface ParsedPluginsArgs {
     | 'help'
     | 'list'
     | 'info'
+    | 'describe'
     | 'init'
     | 'dev'
     | 'install'
@@ -127,7 +134,7 @@ export interface ParsedPluginsArgs {
   detachAgents: boolean;
   purge: boolean;
   acknowledgeDrift: boolean;
-  /** `list --json`. */
+  /** `list --json`, `describe --json`. */
   json?: boolean;
   /** Passed back at approval. Absent means "the hash this run just showed me". */
   integrity?: string;
@@ -184,14 +191,17 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     ...(values.has('--author') ? { author: values.get('--author') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
-  if (flags.has('--json') && head !== 'list') throw new Error('buddi plugins: --json only applies to list');
+  if (flags.has('--json') && head !== 'list' && head !== 'describe') {
+    throw new Error('buddi plugins: --json only applies to list and describe');
+  }
   if (head === 'list') return { command: 'list', ...base };
   if (head === 'staged') return { command: 'staged', ...base };
-  if (['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'disable', 'enable', 'uninstall'].includes(head)) {
+  if (['info', 'describe', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'disable', 'enable', 'uninstall'].includes(head)) {
     const target = positional[0];
     if (target === undefined) {
       const what =
         head === 'install' ? 'plugin to install (a directory, a .tgz, or an npm package)'
+        : head === 'describe' ? 'plugin to describe (a directory, a .tgz, or an npm package)'
         : head === 'approve' || head === 'reject' ? 'staging id'
         : head === 'init' ? 'name for the new plugin'
         : head === 'dev' ? "plugin directory to watch (the one whose dist/ you are building)"
@@ -767,6 +777,140 @@ async function commandUninstall(
 }
 
 /* ------------------------------------------------------------------ *
+ * Describing one: what a market listing says it brings
+ * ------------------------------------------------------------------ */
+
+/**
+ * The shape `describe --json` prints: what the market's check job writes into
+ * an entry's `claims`, so the listing can never claim less than the code does.
+ * Pure over the stage and the imported manifest.
+ */
+export function describeJson(staged: StagedPlugin, manifest: PluginManifest): Record<string, unknown> {
+  const contribution = contributionOf(manifest);
+  return {
+    package: {
+      name: staged.source.kind === 'registry' ? staged.source.name : packageNameOf(staged),
+      version: staged.version,
+      integrity: staged.integrity,
+      ...(staged.publisher === undefined ? {} : { publisher: staged.publisher }),
+      ...(packageLicenseOf(staged) === undefined ? {} : { license: packageLicenseOf(staged) }),
+      ...(staged.author === undefined ? {} : { author: staged.author }),
+      buddiName: staged.declaredName,
+      ...(staged.buddi?.hostApi === undefined ? {} : { hostApi: staged.buddi.hostApi }),
+      uses: staged.uses ?? [],
+      dependencies: staged.dependencies,
+      scripts: staged.scripts,
+    },
+    claims: {
+      ...(staged.claims.schema === undefined ? {} : { schema: staged.claims.schema }),
+      hosts: staged.claims.hosts,
+      missing: staged.claims.missing,
+    },
+    manifest: {
+      name: manifest.name,
+      version: manifest.version,
+      schema: manifest.schema,
+      ...(manifest.description === undefined ? {} : { description: manifest.description }),
+      ...(manifest.author === undefined ? {} : { author: manifest.author }),
+      uses: contribution.uses,
+      network: contribution.network,
+      tools: contribution.tools.map((tool) => ({
+        name: tool.name,
+        tier: tool.tier,
+        ownerOnly: tool.ownerOnly === true,
+        description: tool.description,
+      })),
+      sentinels: contribution.sentinels.map((s) => ({ name: s.id, every: s.every })),
+      sources: contribution.sources.map((s) => ({ name: s.id, every: s.every })),
+      missions: contribution.missions.map((m) => ({ id: m.id, name: m.name, cron: m.cron, agent: m.agent })),
+      agents: contribution.agents.map((a) => ({ id: a.id, handle: a.handle, name: a.name, tools: a.tools })),
+      skills: contribution.skills,
+      pages: (manifest.pages ?? []).map((p) => ({ id: p.id, title: p.title, place: p.place })),
+      views: contribution.views,
+      home: (manifest.home ?? []).length,
+    },
+    drift: driftBetween(staged.claims, manifest),
+  };
+}
+
+function packageJsonOf(staged: StagedPlugin): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(path.join(staged.packageDir, 'package.json'), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function packageNameOf(staged: StagedPlugin): string {
+  const name = packageJsonOf(staged).name;
+  return typeof name === 'string' ? name : staged.name;
+}
+
+function packageLicenseOf(staged: StagedPlugin): string | undefined {
+  const license = packageJsonOf(staged).license;
+  return typeof license === 'string' ? license : undefined;
+}
+
+/**
+ * Stage, import the manifest, print, delete the stage.
+ *
+ * The manifest is imported, so the plugin's top-level code runs in this
+ * process, and the command says so. What never happens: the record is not
+ * written, no migration runs, no tool is registered and nothing is moved out
+ * of staging.
+ */
+export async function describeSpec(
+  spec: string,
+  opts: { env?: NodeJS.ProcessEnv; registry?: string; json?: boolean; log?: (line: string) => void } = {},
+): Promise<number> {
+  const env = opts.env ?? process.env;
+  const log = opts.log ?? ((line: string): void => console.log(line));
+  const staged = await stagePlugin(spec, {
+    env,
+    ...(opts.registry === undefined ? {} : { registry: opts.registry }),
+    ...(opts.json === true
+      ? {}
+      : {
+          onPhase: (phase) => {
+            if (phase === 'fetching') log('fetching…');
+            if (phase === 'installing-dependencies') log('installing its dependencies (--ignore-scripts)…');
+          },
+        }),
+  });
+  try {
+    const entry = entryPointOf(staged.packageDir);
+    const loaded = await loadManifest(entry, undefined, env);
+    if (!loaded.ok) throw new InstallRefusal('not-a-plugin', `${spec} is not a usable plugin: ${loaded.message}`);
+    const problem = manifestProblem(loaded.manifest, undefined, env);
+    if (problem !== undefined) throw new InstallRefusal('not-a-plugin', problem);
+    const manifest = loaded.manifest;
+    if (opts.json === true) {
+      log(JSON.stringify(describeJson(staged, manifest), null, 2));
+      return 0;
+    }
+    // The card is drawn from package.json; a package naming no author there
+    // still names one in its manifest, and here the manifest has been read.
+    const author = staged.author ?? manifest.author;
+    log(renderStaged({ ...staged, ...(author === undefined ? {} : { author }) }).join('\n'));
+    log('');
+    log(renderContribution(contributionOf(manifest)).join('\n'));
+    const drift = driftBetween(staged.claims, manifest);
+    if (drift.length > 0) {
+      log('');
+      log('ITS PROSE AND ITS CODE DO NOT AGREE');
+      for (const difference of drift) log(`  ${difference}`);
+    }
+    log('');
+    log('Its manifest was imported to read it, so its top-level code ran in this process. Nothing');
+    log('was installed: no record was written, no schema touched, no tool registered. The stage');
+    log('was deleted.');
+    return 0;
+  } finally {
+    rejectStaged(staged.id, env);
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Starting one, and working on one
  * ------------------------------------------------------------------ */
 
@@ -956,6 +1100,14 @@ export async function main(argv: string[] = process.argv.slice(2), hooks: Plugin
   try {
     if (args.command === 'init') return await commandInit(args.target as string, args, process.env);
     if (args.command === 'dev') return await commandDev(args.target as string);
+    // Describing reads a package and deletes the stage; it needs no database.
+    if (args.command === 'describe') {
+      return await describeSpec(args.target as string, {
+        env: process.env,
+        json: args.json === true,
+        ...(args.registry === undefined ? {} : { registry: args.registry }),
+      });
+    }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     return 1;

@@ -206,6 +206,29 @@ writes all three: the `keywords: ["buddi-plugin"]` they search for, the
 what is staged, what is hashed, what the two approvals are, and what uninstall
 does.
 
+**Getting listed on withbuddi.com.** The market at withbuddi.com/plugins, and
+the Browse tab in every buddi, are built from the public repository
+`withbuddi/buddi-market`. To be listed, open a pull request there adding
+`plugins/<name>/entry.json` with your npm name, the version, a category, and
+optionally an icon and screenshots. A check job downloads that version, checks
+its integrity and provenance, and writes what it brings into the entry from the
+code itself, so a listing cannot claim less than the plugin does. Merging is the
+review; a new version is a pull request bumping the version.
+
+What the check job writes is what this command prints, and you can run it
+yourself first:
+
+```bash
+buddi plugins describe @you/buddi-plugin-weather@0.1.0          # the card and what it brings
+buddi plugins describe @you/buddi-plugin-weather@0.1.0 --json   # the entry's claims
+```
+
+`describe` stages the package exactly as `install` does (an npm package, a
+`.tgz` or a directory), imports its manifest to read it, prints, and deletes the
+stage. It writes no record, touches no schema and registers no tool, but
+reading the manifest does run the plugin's top-level code in that process, as
+approving would.
+
 ### Where to go next
 
 | If you want to… | Read |

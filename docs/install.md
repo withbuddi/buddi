@@ -470,7 +470,9 @@ browser. Nothing about it is macOS-only.
 
 **What leaves the machine.** The install itself makes two outbound calls, both
 to the npm registry, both through buddi's shared transport, both listed on the
-security screen: the daily version check and a plugin install. A folder copy of
+security screen: the daily version check and a plugin install. Settings →
+Plugins → Browse makes one more: the plugin list from withbuddi.com, when you
+open Browse. A folder copy of
 your backups goes wherever that folder syncs, and only encrypted.
 
 ---

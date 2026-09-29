@@ -4,6 +4,14 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Settings → Plugins has a Browse tab: the plugin list from withbuddi.com, fetched only when you open it and kept a day, with a Recommended shelf of the plugins buddi publishes, a search, and every listing by category. Install stages the listed version onto the usual card.
+- A newer version listed on withbuddi.com shows as "Update to <version>" in Browse and on the installed plugin's row, once Browse has been opened.
+- A link to `#/settings/plugins?install=<npm name>@<version>`, which withbuddi.com's "Install in buddi" opens, stages that version at once.
+- `buddi plugins describe <spec> [--json]` stages a plugin, reads its manifest, prints what it brings and deletes the stage; `--json` is what a market listing's claims are made of.
+- A Home tip points at Browse on an installation with none of the recommended plugins.
+
 ### Fixed
 
 - Disabling or enabling a plugin takes effect at once, no restart: its pages leave the rail, its tools leave the agents, its watchers stop.

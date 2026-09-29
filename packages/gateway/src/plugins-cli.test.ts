@@ -4,12 +4,14 @@
  * silently. `--purge` is in this set, and a `--purge` that was accepted when it
  * was meant as `--purged` would drop a schema.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { REPO_ROOT } from './agents/catalog.js';
-import { TRUST_SENTENCE } from './plugins/stage.js';
-import { needsIntegrityFirst, parsePluginsArgs, USAGE } from './plugins-cli.js';
+import { listStaged, TRUST_SENTENCE } from './plugins/stage.js';
+import { describeSpec, needsIntegrityFirst, parsePluginsArgs, USAGE } from './plugins-cli.js';
 import type { StagedPlugin } from './plugins/stage.js';
 
 describe('buddi plugins', () => {
@@ -139,6 +141,84 @@ describe('--yes and the hash it has to carry', () => {
 describe('buddi plugins list --json', () => {
   it('is read on list, and refused elsewhere', () => {
     expect(parsePluginsArgs(['list', '--json']).json).toBe(true);
-    expect(() => parsePluginsArgs(['info', 'finance', '--json'])).toThrow(/--json only applies to list/);
+    expect(() => parsePluginsArgs(['info', 'finance', '--json'])).toThrow(/--json only applies to list and describe/);
+  });
+});
+
+/**
+ * `describe` is what a market listing's claims are made of: it stages, imports
+ * the manifest, prints, and deletes the stage. It never writes the record.
+ */
+describe('buddi plugins describe', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const FIXTURE = path.join(HERE, 'plugins', 'fixtures', 'marker-plugin');
+  let root: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), 'buddi-describe-'));
+    mkdirSync(path.join(root, 'agents'), { recursive: true });
+    mkdirSync(path.join(root, 'skills'), { recursive: true });
+    env = {
+      ...process.env,
+      BUDDI_DATA_DIR: path.join(root, 'data'),
+      BUDDI_AGENTS_DIR: path.join(root, 'agents'),
+      BUDDI_SKILLS_DIR: path.join(root, 'skills'),
+      BUDDI_PLUGINS_FILE: path.join(root, 'plugins.json'),
+    };
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it('parses, and takes --json', () => {
+    expect(parsePluginsArgs(['describe', '@withbuddi/plugin-weather@0.1.0', '--json'])).toMatchObject({
+      command: 'describe',
+      target: '@withbuddi/plugin-weather@0.1.0',
+      json: true,
+    });
+    expect(() => parsePluginsArgs(['describe'])).toThrow(/plugin to describe/);
+    expect(USAGE).toContain('buddi plugins describe');
+  });
+
+  it('prints the listing shape, and leaves no record and no stage behind', async () => {
+    const lines: string[] = [];
+    const code = await describeSpec(FIXTURE, { env, json: true, log: (line) => lines.push(line) });
+    expect(code).toBe(0);
+    const out = JSON.parse(lines.join('\n'));
+    expect(out.package).toMatchObject({
+      name: 'buddi-plugin-fixture-marker',
+      version: '1.0.0',
+      buddiName: 'fixture-marker',
+      uses: [],
+      dependencies: { count: expect.any(Number) },
+      scripts: [],
+    });
+    expect(out.claims).toEqual({ schema: 'fixture_marker', hosts: ['example.invalid'], missing: false });
+    expect(out.manifest).toMatchObject({
+      name: 'fixture-marker',
+      schema: 'fixture_marker',
+      author: { name: 'A fixture maker' },
+      network: [{ host: 'example.invalid' }],
+      tools: [{ name: 'fixture-marker.echo', tier: 'auto', ownerOnly: false }],
+      sentinels: [],
+      missions: [],
+      agents: [],
+      pages: [],
+      views: 0,
+      home: 0,
+    });
+    expect(out.drift).toEqual([]);
+    expect(existsSync(path.join(root, 'plugins.json'))).toBe(false);
+    expect(listStaged(env)).toEqual([]);
+  });
+
+  it('prints the card and the contribution for a person', async () => {
+    const lines: string[] = [];
+    await describeSpec(FIXTURE, { env, log: (line) => lines.push(line) });
+    const text = lines.join('\n');
+    expect(text).toContain('buddi-plugin-fixture-marker 1.0.0');
+    expect(text).toContain('by        A fixture maker (https://example.invalid/maker)');
+    expect(text).toContain('fixture-marker.echo');
+    expect(text).toContain('Nothing\nwas installed');
+    expect(listStaged(env)).toEqual([]);
   });
 });

@@ -216,6 +216,7 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
+import { marketRoute } from './market.js';
 import { tipsRoute } from '../tips/route.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
@@ -1376,6 +1377,12 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/plugins':
           return reply(res, await listPlugins(pluginDeps()));
+        /*
+         * The plugin list from withbuddi.com. Fetched here only when asked —
+         * the Browse tab opening — and kept a day; never at start or on a timer.
+         */
+        case '/api/market':
+          return reply(res, await marketRoute({ env: deps.env ?? process.env, log }, url));
         case '/api/secrets':
           return reply(res, await listSecrets(secretsDeps()));
         case '/api/secrets/uses':

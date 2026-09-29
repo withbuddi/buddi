@@ -1436,6 +1436,44 @@ export interface PluginsView {
   unavailable?: string;
 }
 
+/** The market's categories, in the order Browse draws them. */
+export type MarketCategory = 'days' | 'money' | 'home' | 'voice' | 'work' | 'other';
+
+/**
+ * One listing from withbuddi.com/plugins/index.json, as the gateway passes it
+ * on: the entry as the site wrote it, plus what this installation knows about
+ * it (`installed`, `update`, `usesWords`).
+ */
+export interface MarketEntryView {
+  name: string;
+  npm: string;
+  version: string;
+  title: string;
+  summary: string;
+  category: MarketCategory;
+  trust: 'by-buddi' | 'reviewed';
+  pricing: { kind: 'free' | 'paid' | 'subscription'; vendor?: string; trialDays?: number; note?: string };
+  author?: PluginAuthorView;
+  page?: string;
+  reviewed?: { version: string; on?: string; covered?: string };
+  claims?: { manifest?: { network?: Array<{ host: string; why?: string }> } };
+  /** The areas it reaches in buddi, in the staged card's words. */
+  usesWords?: Array<{ use: string; words: string }>;
+  /** Set when it is installed here: the installed version and the name it is installed under. */
+  installed?: { version: string; name?: string };
+  /** The listed version, when it is newer than the installed one. */
+  update?: string;
+}
+
+export interface MarketView {
+  fetchedAt?: string;
+  /** The last copy, answered because withbuddi.com did not answer this time. */
+  stale?: boolean;
+  plugins: MarketEntryView[];
+  /** Why there is no list: withbuddi.com was not reachable and nothing was kept. */
+  unavailable?: string;
+}
+
 export interface PluginJob {
   id: string;
   kind: 'stage' | 'update';
@@ -1944,6 +1982,8 @@ export const api = {
   setBackupPassphrase: (passphrase: string) => put<{ passphrase: string }>('/backups/passphrase', { passphrase }),
   /* ---- plugins ---- */
   plugins: () => get<PluginsView>('/plugins'),
+  /** The plugin list from withbuddi.com, through the gateway; `refresh` asks again past its day-old copy. */
+  market: (refresh = false) => get<MarketView>(`/market${refresh ? '?refresh=1' : ''}`),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),
   /**
    * The same stage, from a .tgz on the owner's own machine.

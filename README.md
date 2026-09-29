@@ -239,9 +239,10 @@ nightly schedule in Settings → Backup, or with
 **What leaves.** Each agent's conversation, including what its tools returned,
 goes to the provider its file names, and nowhere else. A model is never
 switched for you, and delegating to another agent uses that agent's provider.
-Besides that, buddi makes two kinds of outbound call: a version check against
-the npm registry once a day, which you can turn off in Settings, and a plugin
-install when you ask for one. The dashboard loads nothing from the internet.
+Besides that, buddi makes three kinds of outbound call: a version check against
+the npm registry once a day, which you can turn off in Settings, a plugin
+install when you ask for one, and the plugin list from withbuddi.com, when you
+open Browse. The dashboard loads nothing from the internet.
 There is no telemetry.
 
 [docs/operations.md](docs/operations.md) has the details: what an archive
