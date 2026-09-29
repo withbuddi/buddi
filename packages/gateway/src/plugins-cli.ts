@@ -22,6 +22,8 @@
  * reading `plugins list` after `doctor` should not have to learn a second
  * vocabulary for the same idea.
  */
+import { execFileSync } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { realpathSync } from 'node:fs';
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -64,17 +66,19 @@ import {
   type StagedPlugin,
 } from './plugins/stage.js';
 import { updatePlugin } from './plugins/update.js';
+import { setPluginEnabled, toggleNotes } from './plugins/toggle.js';
 import { verifyInstalledHash } from './plugins/hash.js';
 import { assertScaffoldName, DEFAULT_LICENSE, schemaFor, writeScaffold } from './plugins/scaffold.js';
 import { assertBuilt, defaultDevDeps, watchDist } from './plugins/dev.js';
 
 export const USAGE = `buddi plugins — what this installation has installed
 
-  buddi plugins init <name> [--dir <path>] [--license <spdx>]
+  buddi plugins init <name> [--dir <path>] [--license <spdx>] [--author <name>]
                                           write a new plugin: manifest, one auto tool, one gated
                                           tool, a migration, a buddi.md and a test. Refuses a
                                           directory that already exists. License: Apache-2.0
-                                          unless --license names another.
+                                          unless --license names another. Author: asked, with
+                                          git config user.name as the default.
   buddi plugins dev <dir>                 watch <dir>/dist and, when it changes, restart the
                                           service (or say to restart buddi): plugins load at start
   buddi plugins list [--json]             what is installed, its version, and whether it is healthy
@@ -91,6 +95,9 @@ export const USAGE = `buddi plugins — what this installation has installed
   buddi plugins staged                    what is staged and waiting for you
   buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
   buddi plugins reject <id>               delete a stage and everything it fetched
+  buddi plugins disable <name>            stop loading it: its tools, pages and watchers stop at the
+                                          next start, its data stays, its missions pause
+  buddi plugins enable <name>             load it again at the next start and resume its missions
   buddi plugins uninstall <name>          what removing it would do (removes nothing)
   buddi plugins uninstall <name> --yes    remove it; its database schema is KEPT
       --detach-agents                     also take its tools out of agents that were granted them
@@ -112,6 +119,8 @@ export interface ParsedPluginsArgs {
     | 'staged'
     | 'approve'
     | 'reject'
+    | 'disable'
+    | 'enable'
     | 'uninstall';
   target?: string;
   yes: boolean;
@@ -130,9 +139,11 @@ export interface ParsedPluginsArgs {
   dir?: string;
   /** The SPDX license `init` writes. Default: Apache-2.0. */
   license?: string;
+  /** The author `init` writes. Default: asked, then `git config user.name`. */
+  author?: string;
 }
 
-const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir', '--license'] as const;
+const VALUE_FLAGS = ['--integrity', '--version', '--registry', '--confirm', '--dir', '--license', '--author'] as const;
 const BARE_FLAGS = ['--yes', '--detach-agents', '--purge', '--acknowledge-drift', '--json'] as const;
 
 export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
@@ -170,12 +181,13 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
     ...(values.has('--registry') ? { registry: values.get('--registry') as string } : {}),
     ...(values.has('--dir') ? { dir: values.get('--dir') as string } : {}),
     ...(values.has('--license') ? { license: values.get('--license') as string } : {}),
+    ...(values.has('--author') ? { author: values.get('--author') as string } : {}),
   };
   if (head === undefined || head === 'help' || head === '--help') return { command: 'help', ...base };
   if (flags.has('--json') && head !== 'list') throw new Error('buddi plugins: --json only applies to list');
   if (head === 'list') return { command: 'list', ...base };
   if (head === 'staged') return { command: 'staged', ...base };
-  if (['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'uninstall'].includes(head)) {
+  if (['info', 'init', 'dev', 'install', 'update', 'approve', 'reject', 'disable', 'enable', 'uninstall'].includes(head)) {
     const target = positional[0];
     if (target === undefined) {
       const what =
@@ -195,7 +207,8 @@ export function parsePluginsArgs(argv: string[]): ParsedPluginsArgs {
  * Health
  * ------------------------------------------------------------------ */
 
-export type Health = 'ok' | 'warn' | 'fail';
+/** `off`: installed and disabled by the owner, not loaded. */
+export type Health = 'ok' | 'warn' | 'fail' | 'off';
 
 export interface PluginRow {
   name: string;
@@ -309,6 +322,15 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json 
       detail: `installed but did not load: ${problem.message}`,
     });
   }
+  for (const record of plugins.disabled ?? []) {
+    rows.push({
+      name: record.name,
+      version: record.version,
+      origin: 'installed',
+      health: 'off',
+      detail: 'disabled — not loaded; its data is kept (buddi plugins enable ' + record.name + ')',
+    });
+  }
   if (json) {
     console.log(JSON.stringify(rows, null, 2));
     return plugins.problems.length > 0 ? 1 : 0;
@@ -316,10 +338,11 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json 
   console.log(`buddi plugins — record: ${file}\n`);
   console.log(renderRows(rows));
   console.log(
-    `\n${plugins.loaded.length} installed, ${rows.length - plugins.loaded.length - plugins.problems.length} built in` +
+    `\n${plugins.loaded.length} installed, ${rows.length - plugins.loaded.length - plugins.problems.length - (plugins.disabled?.length ?? 0)} built in` +
+      `${plugins.disabled?.length ? `, ${plugins.disabled.length} disabled` : ''}` +
       `${plugins.problems.length > 0 ? `, ${plugins.problems.length} broken` : ''}.`,
   );
-  if (plugins.loaded.length === 0 && plugins.problems.length === 0) {
+  if (plugins.loaded.length === 0 && plugins.problems.length === 0 && !plugins.disabled?.length) {
     console.log('Nothing is installed beyond what this build ships. `buddi plugins install <directory>`.');
   }
   return plugins.problems.length > 0 ? 1 : 0;
@@ -386,11 +409,19 @@ async function commandInfo(name: string, pool: Pool | undefined, env: NodeJS.Pro
  * Staging and the two approvals
  * ------------------------------------------------------------------ */
 
+/** "by <name> (<url>)", from package.json's author; nothing when it names none. */
+export function authorLine(author: StagedPlugin['author']): string | undefined {
+  if (author === undefined) return undefined;
+  return `  by        ${author.name}${author.url === undefined ? '' : ` (${author.url})`}`;
+}
+
 /** Everything the owner reads before the plugin has ever been imported. */
-function renderStaged(staged: StagedPlugin): string[] {
+export function renderStaged(staged: StagedPlugin): string[] {
   const lines: string[] = [];
   lines.push('');
   lines.push(`${staged.name} ${staged.version}`);
+  const by = authorLine(staged.author);
+  if (by !== undefined) lines.push(by);
   lines.push(`  from      ${describeSource(staged.source)}`);
   lines.push(`  published by ${staged.publisher ?? '(nobody: nothing was fetched from a registry)'}`);
   lines.push(`  integrity ${staged.integrity === '' ? '(none: a directory on this disk)' : staged.integrity}`);
@@ -756,6 +787,14 @@ export function runningCoreVersion(): string {
   return '0.1.0';
 }
 
+/** `disable` / `enable`: the record, the missions, and the restart it needs. */
+async function commandToggle(name: string, enabled: boolean, pool: Pool | undefined, env: NodeJS.ProcessEnv): Promise<number> {
+  const outcome = await setPluginEnabled(name, enabled, { env, ...(pool === undefined ? {} : { pool }) });
+  for (const note of toggleNotes(outcome)) console.log(note);
+  if (outcome.restartNeeded) console.log('Restart buddi to apply it: `buddi service restart`.');
+  return 0;
+}
+
 /**
  * `init` — the first ten minutes.
  *
@@ -763,7 +802,31 @@ export function runningCoreVersion(): string {
  * is already installable, so the sentence at the end is the whole rest of the
  * path and the owner can paste it.
  */
-function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessEnv): number {
+/** `git config user.name`, or nothing when git has none (or is not there). */
+export function gitUserName(): string | undefined {
+  try {
+    const name = execFileSync('git', ['config', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return name === '' ? undefined : name;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Who the scaffold names: --author, else asked at a terminal, else git's user.name. */
+async function authorForInit(args: ParsedPluginsArgs): Promise<string | undefined> {
+  if (args.author !== undefined) return args.author;
+  const fallback = gitUserName();
+  if (!process.stdin.isTTY) return fallback;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`Author${fallback === undefined ? '' : ` [${fallback}]`}: `)).trim();
+    return answer === '' ? fallback : answer;
+  } finally {
+    rl.close();
+  }
+}
+
+async function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessEnv): Promise<number> {
   const checked = assertScaffoldName(name);
   if (isBuiltInPlugin(checked, env)) {
     console.error(
@@ -774,11 +837,13 @@ function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessE
   }
   const dir = path.resolve(process.cwd(), args.dir ?? checked);
   const coreDir = resolveCoreDir();
+  const author = await authorForInit(args);
   const written = writeScaffold(dir, {
     name: checked,
     coreVersion: runningCoreVersion(),
     ...(coreDir === undefined ? {} : { coreDir }),
     ...(args.license === undefined ? {} : { license: args.license }),
+    ...(author === undefined ? {} : { author }),
   });
   console.log(`${checked} — a new plugin in ${dir}\n`);
   for (const file of written) console.log(`  ${file}`);
@@ -787,6 +852,11 @@ function commandInit(name: string, args: ParsedPluginsArgs, env: NodeJS.ProcessE
     args.license === undefined
       ? `License: ${DEFAULT_LICENSE}, the default (--license <spdx> picks another). LICENSE is a placeholder to fill in.`
       : `License: ${args.license}. LICENSE is a placeholder to fill in.`,
+  );
+  console.log(
+    author === undefined
+      ? 'Author: none (--author <name> names one; the install card shows it).'
+      : `Author: ${author}, in package.json and the manifest.`,
   );
   console.log('');
   console.log(`It owns the Postgres schema "${schemaFor(checked)}" and contributes two tools:`);
@@ -853,7 +923,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // they work on a machine whose database was never started — which is exactly
   // the machine somebody writes their first plugin on.
   try {
-    if (args.command === 'init') return commandInit(args.target as string, args, process.env);
+    if (args.command === 'init') return await commandInit(args.target as string, args, process.env);
     if (args.command === 'dev') return await commandDev(args.target as string);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -882,6 +952,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (args.command === 'update') return await commandUpdate(args.target as string, args, pool, process.env);
     if (args.command === 'approve') return await commandApprove(args.target as string, args, pool, process.env);
     if (args.command === 'reject') return commandReject(args.target as string, process.env);
+    if (args.command === 'disable' || args.command === 'enable') {
+      return await commandToggle(args.target as string, args.command === 'enable', pool, process.env);
+    }
     return await commandUninstall(args.target as string, args, pool, process.env);
   } catch (err) {
     if (err instanceof InstallRefusal || err instanceof UninstallRefusal || err instanceof StageRefusal) {

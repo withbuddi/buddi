@@ -39,6 +39,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
+  disabledPluginLine,
   GATED_TIERS,
   parseSkillFile,
   type AgentCatalog,
@@ -114,6 +115,8 @@ export interface AgentProfileView {
   unavailableReason?: string;
   /** Set when a granted tool family is not installed here. `tools` is empty. */
   heldBack?: AgentHoldBack;
+  /** Plugins granted to it that the owner disabled, each as its one line. */
+  disabled?: string[];
   roles: string[];
   engine: {
     provider: string;
@@ -207,6 +210,7 @@ export function readAgentProfile(
     available: agent.availability.ok,
     ...(agent.availability.ok ? {} : { unavailableReason: agent.availability.problem.message }),
     ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
+    ...(agent.disabledPlugins === undefined ? {} : { disabled: agent.disabledPlugins.map(disabledPluginLine) }),
     roles: [...agent.roles],
     engine: {
       provider: agent.provider.kind,

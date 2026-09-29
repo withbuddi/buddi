@@ -26,6 +26,7 @@ export const manifest = {
   name: 'fixture-marker',
   version: '1.0.0',
   description: 'A fixture: it remembers the first moment its code ran.',
+  author: { name: 'A fixture maker', url: 'https://example.invalid/maker' },
   schema: 'fixture_marker',
   // A real path, never `new URL('./migrations', import.meta.url).pathname`:
   // that form percent-encodes a space, so under a data directory called

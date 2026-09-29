@@ -33,6 +33,12 @@ export type Mission = {
    * recap is the deliberate exception — the owner asked for it every Friday.
    */
   alwaysDeliver: boolean;
+  /**
+   * Why it is paused when that is not the owner's `enabled` switch —
+   * "paused: finance is disabled". Null when not paused. A paused mission
+   * materializes nothing, like a disabled one.
+   */
+  pausedReason: string | null;
   createdAt: Date;
 };
 
@@ -72,6 +78,7 @@ export type MissionRow = {
   prompt: string;
   enabled: boolean;
   always_deliver: boolean;
+  paused_reason: string | null;
   created_at: Date;
 };
 
@@ -108,6 +115,7 @@ export function toMission(row: MissionRow): Mission {
     prompt: row.prompt,
     enabled: row.enabled,
     alwaysDeliver: row.always_deliver ?? false,
+    pausedReason: row.paused_reason ?? null,
     createdAt: row.created_at,
   };
 }

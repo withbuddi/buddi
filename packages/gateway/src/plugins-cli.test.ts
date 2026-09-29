@@ -62,8 +62,18 @@ describe('buddi plugins', () => {
     expect(() => parsePluginsArgs(['frobnicate'])).toThrow(/unknown command/);
   });
 
+  it('disables and enables by name', () => {
+    expect(parsePluginsArgs(['disable', 'finance'])).toMatchObject({ command: 'disable', target: 'finance' });
+    expect(parsePluginsArgs(['enable', 'finance'])).toMatchObject({ command: 'enable', target: 'finance' });
+    expect(() => parsePluginsArgs(['disable'])).toThrow(/plugin name/);
+  });
+
+  it('takes the author for init', () => {
+    expect(parsePluginsArgs(['init', 'garden', '--author', 'Ada'])).toMatchObject({ command: 'init', author: 'Ada' });
+  });
+
   it('documents every verb it parses', () => {
-    for (const verb of ['list', 'info', 'install', 'update', 'staged', 'approve', 'reject', 'uninstall']) {
+    for (const verb of ['list', 'info', 'install', 'update', 'staged', 'approve', 'reject', 'disable', 'enable', 'uninstall']) {
       expect(USAGE).toContain(`buddi plugins ${verb}`);
     }
   });

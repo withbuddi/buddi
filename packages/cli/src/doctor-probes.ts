@@ -653,6 +653,7 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         })),
         problems: plugins.problems.map((p) => ({ name: p.name, message: p.message })),
         changed,
+        disabled: (plugins.disabled ?? []).map((r) => r.name),
       });
     },
 

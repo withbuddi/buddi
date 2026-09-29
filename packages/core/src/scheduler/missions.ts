@@ -28,7 +28,7 @@ export type SetScheduleInput = {
   deadlineMinutes?: number | null;
 };
 
-const MISSION_COLUMNS = 'id, name, agent_id, prompt, enabled, always_deliver, created_at';
+const MISSION_COLUMNS = 'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, created_at';
 const SPEC_COLUMNS =
   'id, mission_id, revision, cron, timezone, misfire_policy, deadline_minutes, active, created_at';
 
@@ -165,4 +165,47 @@ export async function setMissionEnabled(
     [missionId, enabled],
   );
   return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
+}
+
+/** The reason a disabled plugin's missions carry: "paused: finance is disabled". */
+export function pluginPausedReason(plugin: string): string {
+  return `paused: ${plugin} is disabled`;
+}
+
+/**
+ * Pause the given missions because `plugin` is disabled. Only missions not
+ * already paused for another reason are touched; the owner's `enabled` switch
+ * is left alone. Returns the ids that were paused.
+ */
+export async function pausePluginMissions(
+  pool: Pool,
+  plugin: string,
+  missionIds: readonly string[],
+): Promise<string[]> {
+  if (missionIds.length === 0) return [];
+  const { rows } = await pool.query<{ id: string }>(
+    `update core.missions set paused_reason = $2
+      where id = any($1::text[]) and (paused_reason is null or paused_reason = $2)
+      returning id`,
+    [missionIds, pluginPausedReason(plugin)],
+  );
+  const paused = rows.map((r) => r.id).sort();
+  // A run already due would otherwise still fire, and its agent has lost the tools.
+  if (paused.length > 0) {
+    await pool.query(
+      `update core.occurrences set state = 'skipped', finished_at = now(), error = $2
+        where mission_id = any($1::text[]) and state = 'pending'`,
+      [paused, pluginPausedReason(plugin)],
+    );
+  }
+  return paused;
+}
+
+/** Resume every mission `pausePluginMissions` paused for `plugin`. Returns their ids. */
+export async function resumePluginMissions(pool: Pool, plugin: string): Promise<string[]> {
+  const { rows } = await pool.query<{ id: string }>(
+    `update core.missions set paused_reason = null where paused_reason = $1 returning id`,
+    [pluginPausedReason(plugin)],
+  );
+  return rows.map((r) => r.id).sort();
 }

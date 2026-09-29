@@ -173,6 +173,7 @@ const mission: Mission = {
   prompt: 'Find one genuinely useful thing.',
   enabled: true,
   alwaysDeliver: false,
+  pausedReason: null,
   createdAt: new Date('2026-09-01T00:00:00Z'),
 };
 

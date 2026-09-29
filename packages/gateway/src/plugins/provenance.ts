@@ -168,6 +168,14 @@ export function driftFor(opts: {
         'this plugin. It is yours; nothing will touch it.',
     };
   }
+  /*
+   * The versions, said so that equal ones do not read as a contradiction: a
+   * plugin can change what it proposes without bumping its version.
+   */
+  const versions =
+    provenance.version === opts.pluginVersion
+      ? `you accepted ${provenance.version} and the plugin still says ${opts.pluginVersion}, but its proposal changed`
+      : `you accepted ${provenance.version}, this is ${opts.pluginVersion}`;
   const edited = provenance.file !== '' && provenance.file !== sha256(readFileSync(opts.agentFile, 'utf8'));
   const changed = provenance.proposal !== proposalChecksum(opts.suggestion);
   if (edited && changed) {
@@ -175,7 +183,7 @@ export function driftFor(opts: {
       state: 'owner-edited-and-proposal-changed',
       message:
         `you edited your copy, and ${opts.suggestion.id} also changed in the plugin since you accepted ` +
-        `it (you accepted ${provenance.version}, this is ${opts.pluginVersion}). Your file is left exactly ` +
+        `it (${versions}). Your file is left exactly ` +
         'as you wrote it. Ask your agent to accept the new proposal if you want to compare it.',
     };
   }
@@ -189,8 +197,8 @@ export function driftFor(opts: {
     return {
       state: 'proposal-changed',
       message:
-        `the plugin proposes a different ${opts.suggestion.id} now (you accepted ${provenance.version}, ` +
-        `this is ${opts.pluginVersion}). Your copy is untouched — accepting again is an approval you make, ` +
+        `the plugin proposes a different ${opts.suggestion.id} now (${versions}). ` +
+        'Your copy is untouched — accepting again is an approval you make, ' +
         'grant and all.',
     };
   }

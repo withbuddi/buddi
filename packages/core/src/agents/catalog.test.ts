@@ -323,6 +323,7 @@ describe('resolveToolGrants', () => {
     expect(resolveToolGrants(['email.*', 'notes.search'], registry, 'a')).toEqual({
       tools: ['notes.search'],
       missingFamilies: ['email'],
+      disabledFamilies: [],
     });
     // The family is here; the name is not. No install would fix that.
     expect(() => resolveToolGrants(['finance.wire_money'], registry, 'a')).toThrow(
@@ -346,6 +347,7 @@ describe('optional grants', () => {
     expect(resolveToolGrants(['notes.*', 'weather.*?', 'calendar.today?'], registry, 'a')).toEqual({
       tools: ['notes.search'],
       missingFamilies: [],
+      disabledFamilies: [],
     });
     // The strict form, a proposed grant, accepts it too: nothing is claimed that is not here.
     expect(resolveToolNames(['notes.search', 'weather.*?'], registry, 'a')).toEqual(['notes.search']);
@@ -380,6 +382,34 @@ describe('optional grants', () => {
     expect(planner.heldBack).toBeUndefined();
     expect(planner.tools).toEqual(['notes.search']);
     expect(planner.available).toBe(true);
+  });
+});
+
+describe('grants to a disabled plugin', () => {
+  const registry = registryOf();
+
+  it('skips the family instead of holding the agent back, and names it', () => {
+    expect(resolveToolGrants(['notes.*', 'weather.*', 'weather.today'], registry, 'a', new Set(['weather']))).toEqual({
+      tools: ['notes.search'],
+      missingFamilies: [],
+      disabledFamilies: ['weather'],
+    });
+    // A family that is simply not installed still holds the agent back.
+    expect(resolveToolGrants(['mail.*'], registry, 'a', new Set(['weather'])).missingFamilies).toEqual(['mail']);
+  });
+
+  it('loads the agent with the rest of its grant, and says so on its summary and in its prompt', () => {
+    const dir = catalogDir({
+      planner: agentFile('id: planner\nhandle: planner\nname: Planner\ndescription: Keeps the day.\ntools: [notes.*, weather.*]'),
+    });
+    const catalog = loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'k' }, disabledPlugins: ['weather'] });
+    const planner = catalog.resolve('planner');
+    expect(planner.heldBack).toBeUndefined();
+    expect(planner.available).toBe(true);
+    expect(planner.tools).toEqual(['notes.search']);
+    expect(planner.disabledPlugins).toEqual(['weather']);
+    expect(catalog.list().find((a) => a.id === 'planner')?.disabledPlugins).toEqual(['weather']);
+    expect(planner.systemPromptTemplate).toContain('- weather is disabled, so its tools are out.');
   });
 });
 

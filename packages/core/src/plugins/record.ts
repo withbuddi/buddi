@@ -140,6 +140,8 @@ export function parsePluginsFile(text: string, file = PLUGINS_FILE): PluginsFile
       ...(provenance === undefined ? {} : { provenance }),
       // An entry still marked as being placed is one an install did not finish.
       ...(entry.placing === true ? { placing: true as const } : {}),
+      // Disabled by the owner: installed, kept, and not loaded.
+      ...(entry.enabled === false ? { enabled: false as const } : {}),
     };
   });
   const seen = new Set<string>();
@@ -192,4 +194,23 @@ export function removeInstalledPlugin(
     contents: { version: PLUGINS_FILE_VERSION, plugins },
     removed: plugins.length !== contents.plugins.length,
   };
+}
+
+/**
+ * Disable or enable one plugin's record. Returns the new contents, and whether
+ * the plugin is there at all. Enabled is written as the field's absence.
+ */
+export function setInstalledPluginEnabled(
+  contents: PluginsFile,
+  name: string,
+  enabled: boolean,
+): { contents: PluginsFile; found: boolean } {
+  let found = false;
+  const plugins = contents.plugins.map((plugin) => {
+    if (plugin.name !== name) return plugin;
+    found = true;
+    const { enabled: _was, ...rest } = plugin;
+    return enabled ? rest : { ...rest, enabled: false as const };
+  });
+  return { contents: { version: PLUGINS_FILE_VERSION, plugins }, found };
 }

@@ -16,6 +16,7 @@ import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/typ
 import type { ProviderAccountsAccess } from './provider-accounts.js';
 import type { BuddiHost, RegisterHost, SecretDestination } from './host/types.js';
 import type { PluginUse } from './plugin/uses.js';
+import type { PluginAuthor } from './plugin/author.js';
 import type { JSONSchema7 } from './json-schema.js';
 
 /** Auto executes directly; gated requires approval; session requires owner context. */
@@ -749,6 +750,13 @@ export interface PluginManifest {
    * should write one.
    */
   description?: string;
+  /**
+   * Who made this plugin (optional): a name of at most 80 characters and an
+   * `https:` URL, shown as "by <name>" on the install card and the Plugins
+   * page. Checked at `register()`. When package.json has an `author` too, the
+   * names must match, because the card was drawn from package.json.
+   */
+  author?: PluginAuthor;
   /**
    * Hosts this plugin intends to reach, declared for the pre-install summary.
    * Documentation, not a sandbox — see `NetworkUse`.

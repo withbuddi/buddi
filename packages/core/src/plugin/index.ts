@@ -28,6 +28,7 @@ export {
 export { AGENT_ONLY_FIELD, ToolRefusal, isToolRefusal } from '../tools.js';
 export { HOST_API_VERSION, hostApiProblem } from './version.js';
 export { NATIVE_BACKEND_ID, SEARCH_BACKEND_VAR, parseSearchBackend } from './search.js';
+export { AUTHOR_NAME_MAX, authorOfPackageJson, parsePluginAuthor, pluginAuthorMismatch } from './author.js';
 export {
   PLUGIN_USES,
   PLUGIN_USE_WORDS,
@@ -41,6 +42,7 @@ export {
 export type { AddressPolicy, BlockReason, CheckedUrl } from './url.js';
 export type { PageFile } from './page-file.js';
 export type { PluginUse } from './uses.js';
+export type { PluginAuthor } from './author.js';
 export type { NativeSearchEvent, NativeSearchRecord, SearchBackendChoice } from './search.js';
 export type {
   EffectDescription,

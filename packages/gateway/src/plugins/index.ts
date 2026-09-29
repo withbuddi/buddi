@@ -28,3 +28,4 @@ export * from './scaffold.js';
 export * from './dev.js';
 export * from './uninstall.js';
 export * from './provenance.js';
+export * from './toggle.js';

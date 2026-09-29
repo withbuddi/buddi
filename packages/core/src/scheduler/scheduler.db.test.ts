@@ -9,7 +9,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import { claimNextOccurrence, finishOccurrence, listOccurrences } from './claim.js';
 import { materializeOccurrences } from './materialize.js';
-import { getActiveSchedule, listMissions, setSchedule, upsertMission } from './missions.js';
+import {
+  getActiveSchedule,
+  getMission,
+  listMissions,
+  pausePluginMissions,
+  resumePluginMissions,
+  setSchedule,
+  upsertMission,
+} from './missions.js';
 import { runScheduler } from './runner.js';
 import type { Mission, Occurrence } from './types.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
@@ -183,6 +191,29 @@ suite('scheduler (postgres)', () => {
       await mission('m2'); // no schedule at all
 
       expect(await materializeOccurrences(pool, at('2026-09-13T05:30:00Z'))).toHaveLength(0);
+    });
+
+    it("pauses a disabled plugin's missions with a reason, and resumes only those", async () => {
+      await mission('m1');
+      await mission('m2');
+      await mission('m3');
+      await setSchedule(pool, 'm1', { cron: '0 * * * *', timezone: 'UTC', misfirePolicy: 'replay-all' });
+      await backdateSpec('m1', '2026-09-13T00:00:00Z');
+      await materializeOccurrences(pool, at('2026-09-13T02:30:00Z'));
+      // The owner switched m3 off themselves; the plugin's disable must not switch it back on.
+      await pool.query(`update core.missions set enabled = false where id = 'm3'`);
+
+      expect(await pausePluginMissions(pool, 'finance', ['m1', 'm3'])).toEqual(['m1', 'm3']);
+      expect((await getMission(pool, 'm1'))?.pausedReason).toBe('paused: finance is disabled');
+      expect((await getMission(pool, 'm2'))?.pausedReason).toBeNull();
+      // Nothing more is materialized, and what was already due does not fire.
+      expect(await materializeOccurrences(pool, at('2026-09-13T05:30:00Z'))).toHaveLength(0);
+      expect((await listOccurrences(pool, 'm1', 10)).every((o) => o.state === 'skipped')).toBe(true);
+
+      expect(await resumePluginMissions(pool, 'finance')).toEqual(['m1', 'm3']);
+      expect((await getMission(pool, 'm1'))?.pausedReason).toBeNull();
+      expect((await getMission(pool, 'm3'))?.enabled).toBe(false);
+      expect(await materializeOccurrences(pool, at('2026-09-13T06:30:00Z'))).not.toHaveLength(0);
     });
 
     it('does not backfill instants from before a new revision existed', async () => {

@@ -164,6 +164,7 @@ const mission: Mission = {
   prompt: 'Produce the weekly recap.',
   enabled: true,
   alwaysDeliver: true,
+  pausedReason: null,
   createdAt: new Date('2026-09-01T00:00:00Z'),
 };
 

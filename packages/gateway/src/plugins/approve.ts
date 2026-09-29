@@ -41,6 +41,7 @@ import {
   writePluginsFile,
   type InstalledPlugin,
   type PluginProvenance,
+  pluginAuthorMismatch,
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { agentSearchPath } from '../agents/catalog.js';
@@ -177,6 +178,12 @@ async function approveOne(
   // The first import of this plugin's code, ever.
   const plan = await planInstall(staged.packageDir, env);
   assertNameMatches(staged, plan, env);
+  // The card said "by <name>" from package.json; a manifest naming someone
+  // else is refused, as a `uses` disagreement is.
+  const authorProblem = pluginAuthorMismatch(plan.manifest.name, plan.manifest.author, staged.author);
+  if (authorProblem !== undefined) {
+    throw new InstallRefusal('author-mismatch', `${authorProblem}. Nothing was installed.`);
+  }
   const drift = driftBetween(staged.claims, plan.manifest);
   const stagedPlan: StagedPlan = {
     contribution: plan.contribution,
@@ -364,7 +371,8 @@ async function place(
   }
 
   const entry = entryPointOf(finalDir);
-  const record: InstalledPlugin = { ...base, entry };
+  // An update keeps the owner's Disable: a new version is not a yes to load it.
+  const record: InstalledPlugin = { ...base, entry, ...(previousRecord?.enabled === false ? { enabled: false as const } : {}) };
   writePluginsFile(file, upsertInstalledPlugin(readPluginsFile(file), record));
   if (asideDir !== undefined) rmSync(asideDir, { recursive: true, force: true });
 

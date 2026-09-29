@@ -149,6 +149,11 @@ export interface LoadedPlugins {
   file: string;
   loaded: LoadedPlugin[];
   problems: PluginProblem[];
+  /**
+   * Installed and disabled by the owner: not imported, nothing registered,
+   * the schema left exactly where it is. Absent means none.
+   */
+  disabled?: InstalledPlugin[];
 }
 
 /** Where this installation's record lives. */
@@ -293,7 +298,15 @@ export async function loadInstalledPlugins(
     };
   }
   const schemas = new Map<string, string>();
+  const disabled: InstalledPlugin[] = [];
   for (const record of contents.plugins) {
+    // Disabled: nothing of it is imported, so nothing of it registers — no
+    // tools, pages, views, glances, sources, sentinels or channels — and its
+    // schema is not migrated, only kept.
+    if (record.enabled === false) {
+      disabled.push(record);
+      continue;
+    }
     const result = await loadManifest(record.entry, { name: record.name }, env);
     if (!result.ok) {
       problems.push({ name: record.name, entry: record.entry, message: result.message, record });
@@ -312,7 +325,7 @@ export async function loadInstalledPlugins(
     schemas.set(result.manifest.schema, record.name);
     loaded.push({ record, manifest: result.manifest, contribution: contributionOf(result.manifest) });
   }
-  return { file, loaded, problems };
+  return { file, loaded, problems, ...(disabled.length === 0 ? {} : { disabled }) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -376,6 +389,7 @@ export function demoteToLoadFailure(
       ...plugins.problems,
       { name, entry: failed.record.entry, message, record: failed.record },
     ],
+    ...(plugins.disabled === undefined ? {} : { disabled: plugins.disabled }),
   });
 }
 

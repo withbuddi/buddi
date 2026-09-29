@@ -24,6 +24,7 @@ import {
   type ApprovalRow,
   type BuiltInPluginView,
   type InstalledPluginView,
+  type PluginAuthorView,
   type PluginJob,
   type PluginPlan,
   type PluginSource,
@@ -49,7 +50,7 @@ const PHASE_WORDS: Record<PluginJob['phase'], string> = {
 };
 
 /** The one line a checkout gets instead of a restart button. */
-const CHECKOUT_RESTART = 'Restart buddi to load it. In a checkout, stop it and run: buddi serve';
+const CHECKOUT_RESTART = 'Restart buddi to apply it. In a checkout, stop it and run: buddi serve';
 
 /** Where a plugin comes from. Three ways in, and they ask for different things. */
 type InstallMode = 'npm' | 'file' | 'directory';
@@ -115,6 +116,27 @@ function publisherWords(source: PluginSource, publisher: string | null | undefin
   if (source.kind === 'directory') return 'you, from this machine';
   if (source.kind === 'tarball') return 'a file on this machine';
   return publisher ?? 'nobody npm will name';
+}
+
+/** An author's name, a link when they gave a URL. */
+function AuthorName({ author }: { author: PluginAuthorView }): JSX.Element {
+  return author.url ? (
+    <a href={author.url} target="_blank" rel="noopener noreferrer">
+      {author.name}
+    </a>
+  ) : (
+    <>{author.name}</>
+  );
+}
+
+/** "by <name>", the name a link when the author gave a URL. */
+function AuthorLine({ author }: { author: PluginAuthorView | undefined }): JSX.Element | null {
+  if (!author) return null;
+  return (
+    <p className="ui-card-meta">
+      by <AuthorName author={author} />
+    </p>
+  );
 }
 
 /** A stage watched to its end. */
@@ -327,6 +349,7 @@ function BuiltIn({ plugin, open }: { plugin: BuiltInPluginView; open?: ReactNode
           },
         ]}
       />
+      <AuthorLine author={plugin.author} />
       {plugin.description ? <p className="ui-card-meta">{plugin.description}</p> : null}
       {plugin.network && plugin.network.length > 0 ? (
         <p className="ui-card-meta">
@@ -586,6 +609,7 @@ function Staged({
       >
         <Stack gap="sm">
           <ErrorBanner message={failed} />
+          <AuthorLine author={staged.author} />
           <KV
             items={[
               {
@@ -718,14 +742,18 @@ function Staged({
 function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | null }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const what = name ? `${name} is installed.` : 'Something is installed that this buddi has not loaded.';
+  const what = name
+    ? `${name} is installed.`
+    : 'A plugin was installed, disabled or enabled since buddi started, and this buddi has not caught up.';
   return (
     <Section title="Restart to load it" panel>
       <Section>
         <Stack gap="sm">
           <ErrorBanner message={failed} />
           <Notice tone={checkout ? 'warning' : undefined} role="status">
-            {what} {checkout ? CHECKOUT_RESTART : 'Its tools appear once buddi restarts. That closes this dashboard for a few seconds.'}
+            {what} {checkout
+              ? CHECKOUT_RESTART
+              : `${name ? 'Its tools appear' : 'It takes effect'} once buddi restarts. That closes this dashboard for a few seconds.`}
           </Notice>
           {checkout ? null : (
             <Toolbar align="end">
@@ -817,6 +845,7 @@ function Installed({
   open?: ReactNode;
 }): JSX.Element {
   const [removing, setRemoving] = useState(false);
+  const [disabling, setDisabling] = useState(false);
   const [purge, setPurge] = useState(false);
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
@@ -826,6 +855,7 @@ function Installed({
     work
       .then(() => {
         setRemoving(false);
+        setDisabling(false);
         setPurge(false);
         setConfirm('');
         onChanged();
@@ -835,17 +865,57 @@ function Installed({
   };
 
   const c = plugin.contribution;
+  const disabled = plugin.enabled === false;
+  /*
+   * Code off this machine was put there by the owner, so "you, from this
+   * machine" says nothing an author line does not say better. A registry's
+   * publisher is a different fact (who holds the npm name) and stays.
+   */
+  const authorReplacesPublisher = plugin.author !== undefined && plugin.source.kind === 'directory';
   return (
     <Stack gap="sm">
       <Card
-        tone={plugin.loaded ? undefined : 'critical'}
+        tone={plugin.loaded || disabled ? undefined : 'critical'}
         title={`${plugin.name} ${plugin.version}`}
-        meta={plugin.loaded ? <Pill tone="good">loaded</Pill> : <Pill tone="critical">did not load</Pill>}
+        meta={
+          disabled ? (
+            <Pill tone="muted">disabled</Pill>
+          ) : plugin.loaded ? (
+            <Pill tone="good">loaded</Pill>
+          ) : (
+            <Pill tone="critical">did not load</Pill>
+          )
+        }
         actions={
           <Toolbar align="end">
-            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setRemoving(!removing)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setRemoving(!removing);
+                setDisabling(false);
+              }}
+            >
               Remove…
             </Button>
+            {disabled ? (
+              <Button size="sm" disabled={busy} onClick={() => act(api.setPluginEnabled(plugin.name, true))}>
+                Enable
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setDisabling(!disabling);
+                  setRemoving(false);
+                }}
+              >
+                Disable…
+              </Button>
+            )}
             <Button size="sm" disabled={busy} onClick={() => act(api.updatePlugin(plugin.name))}>
               Update
             </Button>
@@ -855,10 +925,18 @@ function Installed({
       >
         <Stack gap="sm">
           {plugin.error ? <Notice tone="critical">{plugin.error}</Notice> : null}
+          {disabled ? (
+            <p className="ui-card-meta">
+              Disabled: its tools, pages and watchers are off and its missions are paused. Its data is kept.
+            </p>
+          ) : null}
+          {authorReplacesPublisher ? null : <AuthorLine author={plugin.author} />}
           <KV
             items={[
               { label: 'From', value: sourceWords(plugin.source) },
-              { label: 'Published by', value: publisherWords(plugin.source, plugin.publisher) },
+              authorReplacesPublisher
+                ? { label: 'By', value: <AuthorName author={plugin.author as PluginAuthorView} /> }
+                : { label: 'Published by', value: publisherWords(plugin.source, plugin.publisher) },
               { label: 'Installed', value: fmtRelative(plugin.installedAt) },
               {
                 label: 'Contributes',
@@ -871,11 +949,29 @@ function Installed({
           <Unlocks plugin={plugin.name} unlocks={plugin.unlocks} />
         </Stack>
       </Card>
+      {disabling ? (
+        <Stack gap="sm">
+          <Notice tone="accent">
+            Disabling keeps everything: its tables and data, the agents you accepted from it and their
+            grants. When buddi restarts its tools, pages and watchers stop, its missions pause, and agents
+            that use it carry on without those tools. Enable it to have it all back.
+          </Notice>
+          <Toolbar align="end">
+            <Button variant="ghost" disabled={busy} onClick={() => setDisabling(false)}>
+              Cancel
+            </Button>
+            <Button disabled={busy} onClick={() => act(api.setPluginEnabled(plugin.name, false))}>
+              Disable
+            </Button>
+          </Toolbar>
+        </Stack>
+      ) : null}
       {removing ? (
         <Stack gap="sm">
           <Notice tone="warning">
-            Removing it stops its code loading and leaves its tables exactly where they are, so
-            installing it again picks up where it left off.
+            Removing takes the plugin off this machine and stops its code loading. Its tables stay
+            unless you also drop its data below, and then they are gone for good. To stop it and keep
+            everything, disable it instead.
           </Notice>
           <label className="plugin-check">
             <input type="checkbox" checked={purge} onChange={(event) => { setPurge(event.target.checked); setConfirm(''); }} />

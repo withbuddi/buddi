@@ -19,13 +19,14 @@
  * Origin and CSRF gate as the rest of `server.ts`.
  */
 import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, readFileSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import type { IncomingMessage } from 'node:http';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Pool } from 'pg';
 import {
+  authorOfPackageJson,
   contributionOf,
   OWNER_AGENT_ID,
   PLUGIN_USE_WORDS,
@@ -33,6 +34,7 @@ import {
   pluginsFilePath,
   readPluginsFile,
   type InstalledPlugin,
+  type PluginAuthor,
   type PluginManifest,
 } from '@buddi/core';
 import { agentSearchPath, AGENTS_DIR, builtInManifests, installedManifests } from '../agents/catalog.js';
@@ -46,7 +48,7 @@ import * as engine from '../plugins/index.js';
 import { acceptAgentSteps } from '../plugins/install.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
 import { RECORD_ITSELF } from '../plugins/load.js';
-import { incomingRoot } from '../plugins/paths.js';
+import { incomingRoot, installedPackageDir } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 import type { PagesDeps } from './pages.js';
 import type { DecideResult, WriteResult } from './write.js';
@@ -75,7 +77,8 @@ export type PluginsEngine = Pick<
   | 'uninstallPlugin'
   | 'pluginLoadReport'
   | 'verifyInstalledHash'
->;
+> &
+  Partial<Pick<typeof engine, 'setPluginEnabled'>>;
 
 export interface PluginsDeps {
   env: NodeJS.ProcessEnv;
@@ -152,6 +155,7 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     version: staged.version,
     source: staged.source,
     ...(staged.publisher === undefined ? {} : { publisher: staged.publisher }),
+    ...(staged.author === undefined ? {} : { author: staged.author }),
     integrity: staged.integrity,
     /** The hash of the unpacked tree, which is what approval re-checks. */
     stagedHash: staged.stagedHash,
@@ -310,6 +314,7 @@ function builtInView(env: NodeJS.ProcessEnv, registry?: PluginsDeps['registry'])
       ...(manifest.description === undefined || manifest.description.trim() === ''
         ? {}
         : { description: manifest.description }),
+      ...(manifest.author === undefined ? {} : { author: manifest.author }),
     }));
 }
 
@@ -366,6 +371,20 @@ function installedRecord(env: NodeJS.ProcessEnv): {
 }
 
 /**
+ * Who made an installed plugin whose manifest names nobody (or did not load):
+ * its package.json's `author`, the same fallback the install card used.
+ */
+function installedPackageAuthor(entry: InstalledPlugin, env: NodeJS.ProcessEnv): PluginAuthor | undefined {
+  try {
+    const dir = entry.source.kind === 'directory' ? entry.source.path : installedPackageDir(entry.name, env);
+    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { author?: unknown };
+    return authorOfPackageJson(pkg.author);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Is this a developer checkout?
  *
  * The same question the backup page asks, answered the same way: a packaged
@@ -404,16 +423,19 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
   const installed = record.map((entry) => {
     const manifest = manifests.get(entry.name);
     const error = failures.get(entry.name);
+    const author = manifest?.author ?? installedPackageAuthor(entry, env);
     return {
       name: entry.name,
       version: entry.version,
       source: entry.source,
       ...(entry.provenance?.publisher === undefined ? {} : { publisher: entry.provenance.publisher }),
       ...(entry.provenance?.integrity === undefined ? {} : { integrity: entry.provenance.integrity }),
+      ...(author === undefined ? {} : { author }),
       installedAt: entry.installedAt,
       contribution: contributionSummary(manifest),
       unlocks: unlocksOf(manifest, env),
       loaded: manifest !== undefined && error === undefined,
+      ...(entry.enabled === false ? { enabled: false } : {}),
       ...(error === undefined ? {} : { error }),
     };
   });
@@ -432,7 +454,10 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
    * restarting will not make it load, and a banner that never goes away is a
    * banner nobody reads.
    */
-  const restartNeeded = record.some((entry) => !manifests.has(entry.name) && !failures.has(entry.name));
+  const restartNeeded = record.some((entry) =>
+    // Disabled in the record, still loaded here: the restart is what stops it.
+    entry.enabled === false ? manifests.has(entry.name) : !manifests.has(entry.name) && !failures.has(entry.name),
+  );
 
   // A record-level problem is reported as itself, not as a plugin that failed.
   const reportProblem = failures.get(RECORD_ITSELF);
@@ -674,6 +699,23 @@ export function updateRoute(
  * here as well as in the engine, because a guard only a browser applies is not
  * a guard.
  */
+/**
+ * Disable or enable an installed plugin. The record changes now; loading or
+ * not loading it is the next start's, exactly as for an install.
+ */
+export async function toggleRoute(deps: PluginsDeps, name: string, enabled: boolean): Promise<RouteReply> {
+  const setEnabled = deps.engine?.setPluginEnabled ?? engine.setPluginEnabled;
+  try {
+    const outcome = await setEnabled(name, enabled, {
+      env: deps.env,
+      ...(deps.pool === undefined ? {} : { pool: deps.pool }),
+    });
+    return { status: 200, body: { ...outcome, notes: engine.toggleNotes(outcome) } };
+  } catch (err) {
+    return refusalReply(err);
+  }
+}
+
 export async function uninstallRoute(
   deps: PluginsDeps,
   name: string,

@@ -19,6 +19,7 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { AUTHOR_NAME_MAX } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 
 /** A plugin name: lowercase, digits, `-` and `_`, starting with a letter. */
@@ -71,6 +72,12 @@ export interface ScaffoldOptions {
    * and the LICENSE file says that was a default.
    */
   license?: string;
+  /**
+   * Who is writing it: `author` in package.json and the manifest, the name
+   * the install card shows as "by <name>". `plugins init` asks, defaulting to
+   * `git config user.name`; absent, neither file names an author.
+   */
+  author?: string;
 }
 
 /** The license a scaffold gets when the author names none. */
@@ -88,18 +95,28 @@ export function assertLicense(license: string): string {
   return trimmed;
 }
 
+/** An author's name as the manifest takes it: 1–80 characters. */
+export function assertAuthor(author: string): string {
+  const trimmed = author.trim();
+  if (trimmed === '' || trimmed.length > AUTHOR_NAME_MAX) {
+    throw new InstallRefusal('bad-author', `"${author}" is not an author's name: 1 to ${AUTHOR_NAME_MAX} characters.`);
+  }
+  return trimmed;
+}
+
 /** Every file the scaffold writes, keyed by its path relative to the root. */
 export function scaffoldFiles(opts: ScaffoldOptions): Record<string, string> {
   const name = assertScaffoldName(opts.name);
   const schema = schemaFor(name);
   const peer = `>=${opts.coreVersion}`;
   const license = assertLicense(opts.license ?? DEFAULT_LICENSE);
+  const author = opts.author === undefined ? undefined : assertAuthor(opts.author);
   return {
-    'package.json': packageJson(name, peer, license),
+    'package.json': packageJson(name, peer, license, author),
     'pnpm-workspace.yaml': pnpmWorkspace(opts.coreDir),
     LICENSE: licenseText(license, opts.license === undefined),
     'tsconfig.json': tsconfig(),
-    'src/index.ts': indexTs(name, schema),
+    'src/index.ts': indexTs(name, schema, author),
     'src/version.ts': versionTs(),
     'src/index.test.ts': testTs(name),
     [`migrations/001_${schema}.sql`]: migrationSql(name, schema),
@@ -133,13 +150,14 @@ export function writeScaffold(dir: string, opts: ScaffoldOptions): string[] {
  * The files
  * ------------------------------------------------------------------ */
 
-function packageJson(name: string, peer: string, license: string): string {
+function packageJson(name: string, peer: string, license: string, author: string | undefined): string {
   return `${JSON.stringify(
     {
       name: `buddi-plugin-${name}`,
       version: '0.1.0',
       description: `A buddi plugin: ${name}.`,
       keywords: ['buddi-plugin'],
+      ...(author === undefined ? {} : { author: { name: author } }),
       license,
       type: 'module',
       main: './dist/index.js',
@@ -237,7 +255,7 @@ function tsconfig(): string {
   )}\n`;
 }
 
-function indexTs(name: string, schema: string): string {
+function indexTs(name: string, schema: string, author: string | undefined): string {
   return `/**
  * ${name} — a buddi plugin.
  *
@@ -392,7 +410,14 @@ export const manifest: PluginManifest = {
   tools: [listNotes, forgetNote],
   // One line, shown before anybody installs you.
   description: 'Keeps short notes, and deletes one when the owner says so.',
-  // Every host you intend to reach, and why. Documentation, not a sandbox —
+${
+    author === undefined
+      ? ''
+      : `  // Who made it: "by <name>" on the install card. The name must match
+  // package.json's author, which is what the card reads before this is imported.
+  author: { name: ${JSON.stringify(author)} },
+`
+  }  // Every host you intend to reach, and why. Documentation, not a sandbox —
   // and it is compared with your buddi.md at install.
   network: [],
   // The areas of \`ctx.buddi\` you reach beyond your own schema, directory and

@@ -420,6 +420,8 @@ export interface MissionView {
   agentId: string;
   prompt: string;
   enabled: boolean;
+  /** "paused: finance is disabled", when a disabled plugin paused it. */
+  pausedReason?: string;
   alwaysDeliver: boolean;
   createdAt: string;
   schedule: {
@@ -454,6 +456,7 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
       agentId: mission.agentId,
       prompt: mission.prompt,
       enabled: mission.enabled,
+      ...(mission.pausedReason === null ? {} : { pausedReason: mission.pausedReason }),
       alwaysDeliver: mission.alwaysDeliver,
       createdAt: mission.createdAt.toISOString(),
       schedule: spec
@@ -466,7 +469,7 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
           }
         : null,
       nextRun:
-        spec && mission.enabled
+        spec && mission.enabled && mission.pausedReason === null
           ? (nextAfter(spec.cron, now, spec.timezone)?.toISOString() ?? null)
           : null,
       occurrences: occurrences.map((o) => ({

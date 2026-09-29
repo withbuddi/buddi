@@ -663,6 +663,8 @@ export interface PluginFacts {
    * to, and a plugin runs with everything buddi can do — so it is named.
    */
   changed?: ReadonlyArray<{ name: string; message: string }>;
+  /** Installed and disabled by the owner: not loaded, on purpose, so not a problem. */
+  disabled?: readonly string[];
 }
 
 /** `finance@1.2.3 (npm …)`, or just the version when nothing recorded a source. */
@@ -681,6 +683,13 @@ function named(plugin: { name: string; version: string; source?: string }): stri
  * which is the command an owner runs when something feels wrong, did not ask.
  */
 export function checkPlugins(facts: PluginFacts): ProbeResult {
+  const result = checkLoadedPlugins(facts);
+  const disabled = facts.disabled ?? [];
+  if (disabled.length === 0) return result;
+  return { ...result, detail: `${result.detail}; disabled: ${disabled.join(', ')}` };
+}
+
+function checkLoadedPlugins(facts: PluginFacts): ProbeResult {
   const total = facts.loaded.length + facts.problems.length;
   const changed = facts.changed ?? [];
   if (total === 0) {

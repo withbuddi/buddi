@@ -23,6 +23,7 @@ import {
   PluginsFileError,
   pluginsFilePath,
   removeInstalledPlugin,
+  setInstalledPluginEnabled,
   upsertInstalledPlugin,
 } from './record.js';
 import {
@@ -163,6 +164,19 @@ describe('the install record', () => {
     installedAt: '2026-09-15T12:00:00.000Z',
     source: { kind: 'directory', path: '/plugins/garden' },
   };
+
+  it('disables and enables a plugin, writing enabled as the field\'s absence', () => {
+    const contents = upsertInstalledPlugin({ version: PLUGINS_FILE_VERSION, plugins: [] }, record);
+    const off = setInstalledPluginEnabled(contents, 'garden', false);
+    expect(off.found).toBe(true);
+    expect(parsePluginsFile(JSON.stringify(off.contents)).plugins).toEqual([{ ...record, enabled: false }]);
+    const on = setInstalledPluginEnabled(off.contents, 'garden', true);
+    expect(on.contents.plugins).toEqual([record]);
+    expect(setInstalledPluginEnabled(contents, 'nothing', false).found).toBe(false);
+    // Only `false` means anything: an old or hand-written `true` is the default.
+    const written = JSON.stringify({ version: PLUGINS_FILE_VERSION, plugins: [{ ...record, enabled: true }] });
+    expect(parsePluginsFile(written).plugins).toEqual([record]);
+  });
 
   it('round-trips', () => {
     const contents = upsertInstalledPlugin({ version: PLUGINS_FILE_VERSION, plugins: [] }, record);

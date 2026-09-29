@@ -209,6 +209,7 @@ import {
   receivePluginUpload,
   rejectRoute,
   stageRoute,
+  toggleRoute,
   uninstallRoute,
   updateRoute,
   uploadRoute,
@@ -2257,10 +2258,14 @@ export function createWebApp(deps: WebServerDeps): Server {
         decodeURIComponent(acceptAgent[2] as string),
       ));
     }
-    const pluginAction = /^\/api\/plugins\/([^/]+)\/(update|uninstall)$/.exec(path);
+    const pluginAction = /^\/api\/plugins\/([^/]+)\/(update|uninstall|disable|enable)$/.exec(path);
     if (pluginAction) {
       const name = decodeURIComponent(pluginAction[1] as string);
-      return reply(res, pluginAction[2] === 'update'
+      const verb = pluginAction[2] as string;
+      if (verb === 'disable' || verb === 'enable') {
+        return reply(res, await toggleRoute(pluginDeps(), name, verb === 'enable'));
+      }
+      return reply(res, verb === 'update'
         ? updateRoute(pluginDeps(), name, body)
         : await uninstallRoute(pluginDeps(), name, body));
     }

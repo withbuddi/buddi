@@ -104,6 +104,16 @@ describe('what it writes', () => {
     );
   });
 
+  it('names the author in package.json and the manifest alike, or in neither', () => {
+    const named = scaffoldFiles({ name: 'weather', coreVersion: '0.1.0', author: ' Ada "the" Lovelace ' });
+    expect(JSON.parse(named['package.json'] as string).author).toEqual({ name: 'Ada "the" Lovelace' });
+    expect(named['src/index.ts']).toContain('author: { name: "Ada \\"the\\" Lovelace" },');
+    const nobody = scaffoldFiles({ name: 'weather', coreVersion: '0.1.0' });
+    expect(JSON.parse(nobody['package.json'] as string).author).toBeUndefined();
+    expect(nobody['src/index.ts']).not.toContain('author:');
+    expect(() => scaffoldFiles({ name: 'weather', coreVersion: '0.1.0', author: 'x'.repeat(81) })).toThrow(/1 to 80/);
+  });
+
   it('ties the published package name to the manifest name through the buddi field', () => {
     const pkg = JSON.parse(files['package.json'] as string) as Record<string, any>;
     expect(pkg.name).toBe('buddi-plugin-my-notes');

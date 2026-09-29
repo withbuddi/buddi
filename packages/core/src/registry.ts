@@ -30,6 +30,7 @@ import { hostBindingOf, networkAreaOf, registerHostOf, withPluginHost, type Host
 import { registerSecretDestination } from './secrets/destinations.js';
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
+import { parsePluginAuthor } from './plugin/author.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -321,6 +322,8 @@ export class ToolRegistry {
     // naming an area this build does not have is a startup error naming the
     // plugin, like every other check here.
     const binding = hostBindingOf(manifest);
+    const author = parsePluginAuthor(manifest.author, `plugin ${manifest.name}: author`);
+    if (!author.ok) throw new Error(author.message);
     const checked = this.#checkTools(manifest.name, manifest.tools);
     // View descriptors are the one contribution that leaves this process and is
     // read by code that cannot check it — the browser draws what it is handed.

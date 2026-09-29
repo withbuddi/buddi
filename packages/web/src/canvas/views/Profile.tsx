@@ -49,6 +49,11 @@ export function Profile({ profile, onChange }: ProfileProps): JSX.Element {
           <strong>This agent cannot run here.</strong> {profile.unavailableReason}
         </p>
       )}
+      {(profile.disabled ?? []).map((line) => (
+        <p key={line} className="wb-prof-blocked" data-testid="agent-profile-disabled">
+          {line}
+        </p>
+      ))}
 
       <Section
         title="How it works with you"

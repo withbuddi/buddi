@@ -44,5 +44,6 @@ export * from './semver.js';
 export * from './host/index.js';
 export * from './secrets/index.js';
 export * from './plugin/uses.js';
+export * from './plugin/author.js';
 export * from './plugin/version.js';
 export * from './plugin/url.js';

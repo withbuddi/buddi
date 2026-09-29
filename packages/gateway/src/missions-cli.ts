@@ -202,12 +202,13 @@ async function commandList(pool: Pool, now: Date, json = false): Promise<void> {
       const spec = await getActiveSchedule(pool, mission.id);
       const last = (await listOccurrences(pool, mission.id, 1))[0];
       const notification = await lastNotification(pool, mission.id);
-      const next = spec && mission.enabled ? nextAfter(spec.cron, now, spec.timezone) : null;
+      const next = spec && mission.enabled && mission.pausedReason === null ? nextAfter(spec.cron, now, spec.timezone) : null;
       rows.push({
         id: mission.id,
         name: mission.name,
         agentId: mission.agentId,
         enabled: mission.enabled,
+        pausedReason: mission.pausedReason,
         alwaysDeliver: mission.alwaysDeliver,
         proposedBy: missionOwnerAgent(mission.id) ?? null,
         schedule: spec
@@ -240,18 +241,19 @@ async function commandList(pool: Pool, now: Date, json = false): Promise<void> {
     );
     console.log(`  agent: ${mission.agentId}`);
     console.log(`  enabled: ${mission.enabled}`);
+    if (mission.pausedReason !== null) console.log(`  ${mission.pausedReason}`);
     console.log(
       `  always deliver: ${mission.alwaysDeliver}${
         mission.alwaysDeliver ? '' : ' (speaks only when it calls mission.report)'
       }`,
     );
     if (spec) {
-      const next = mission.enabled ? nextAfter(spec.cron, now, spec.timezone) : null;
+      const next = mission.enabled && mission.pausedReason === null ? nextAfter(spec.cron, now, spec.timezone) : null;
       console.log(
         `  schedule: ${spec.cron} ${spec.timezone} (rev ${spec.revision}, misfire ${spec.misfirePolicy})`,
       );
       console.log(
-        `  next run: ${next ? next.toISOString() : mission.enabled ? '(never)' : '(disabled)'}`,
+        `  next run: ${next ? next.toISOString() : !mission.enabled ? '(disabled)' : mission.pausedReason !== null ? '(paused)' : '(never)'}`,
       );
     } else {
       console.log('  schedule: (none — enqueued, never scheduled)');

@@ -49,7 +49,7 @@ export async function materializeOccurrences(
      from core.schedule_specs s
      join core.missions m on m.id = s.mission_id
      left join core.last_materialized lm on lm.mission_id = s.mission_id
-     where s.active and m.enabled
+     where s.active and m.enabled and m.paused_reason is null
      order by s.mission_id`,
   );
 

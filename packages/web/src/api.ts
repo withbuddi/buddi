@@ -367,6 +367,8 @@ export interface MissionRow {
   agentId: string;
   prompt: string;
   enabled: boolean;
+  /** "paused: finance is disabled", when a disabled plugin paused it. */
+  pausedReason?: string;
   alwaysDeliver: boolean;
   createdAt: string;
   schedule: {
@@ -1017,6 +1019,8 @@ export interface AgentProfile {
   unavailableReason?: string;
   /** Set when a granted tool family is not installed here. */
   heldBack?: AgentHoldBack;
+  /** One line per granted plugin the owner disabled: "finance is disabled, so its tools are out." */
+  disabled?: string[];
   roles: string[];
   engine: {
     provider: string;
@@ -1319,16 +1323,25 @@ export interface PluginUnlock {
   drift: PluginDrift;
 }
 
+/** Who made a plugin: its manifest's `author`, or its package.json's. */
+export interface PluginAuthorView {
+  name: string;
+  url?: string;
+}
+
 export interface InstalledPluginView {
   name: string;
   version: string;
   source: PluginSource;
   publisher?: string;
+  author?: PluginAuthorView;
   integrity?: string;
   installedAt: string;
   contribution: { tools: number; sentinels: number; views: number; agents: number };
   unlocks: PluginUnlock[];
   loaded: boolean;
+  /** `false` when the owner disabled it: installed, kept, not loaded. */
+  enabled?: false;
   /** Why its entry point did not load. Set only when `loaded` is false. */
   error?: string;
 }
@@ -1353,6 +1366,8 @@ export interface StagedPluginView {
   version: string;
   source: PluginSource;
   publisher?: string;
+  /** From its package.json: the manifest cannot be read before approval. */
+  author?: PluginAuthorView;
   integrity?: string;
   /**
    * The hash of the unpacked tree — the package, its dependencies, and the
@@ -1402,6 +1417,7 @@ export interface BuiltInPluginView {
   version: string;
   contribution: { tools: number; sentinels: number; views: number; agents: number };
   description?: string;
+  author?: PluginAuthorView;
   /** What leaves the machine: the hosts it declared, the connected services included. */
   network?: Array<{ host: string; why: string }>;
 }
@@ -1951,6 +1967,12 @@ export const api = {
   rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
   updatePlugin: (name: string, version?: string) =>
     post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, version ? { version } : {}),
+  /** Disable or enable an installed plugin; it takes effect at the next start. */
+  setPluginEnabled: (name: string, enabled: boolean) =>
+    post<{ name: string; enabled: boolean; changed: boolean; missions: string[]; notes: string[]; restartNeeded: boolean }>(
+      `/plugins/${encodeURIComponent(name)}/${enabled ? 'enable' : 'disable'}`,
+      {},
+    ),
   /** `purge` drops the plugin's schema, and the server asks for the name back. */
   uninstallPlugin: (name: string, body: { purge?: boolean; confirm?: string }) =>
     post<{ name: string; purged: boolean; notes: string[]; restartNeeded: boolean }>(

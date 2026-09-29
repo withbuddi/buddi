@@ -87,6 +87,13 @@ export interface InstalledPlugin {
    * a plugin that loads from nowhere.
    */
   placing?: boolean;
+  /**
+   * `false` when the owner disabled it (`buddi plugins disable`, or the card's
+   * Disable): it stays installed, its schema and data stay, and nothing of it
+   * is imported at start. Absent means enabled, which is every record written
+   * before this existed.
+   */
+  enabled?: false;
 }
 
 /** A Postgres schema name a plugin may claim: a plain lowercase identifier. */

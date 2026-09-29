@@ -10,6 +10,7 @@ const mission: Mission = {
   prompt: 'recap',
   enabled: true,
   alwaysDeliver: true,
+  pausedReason: null,
   createdAt: new Date('2026-09-01T00:00:00Z'),
 };
 

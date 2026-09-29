@@ -56,7 +56,7 @@ function Mission({
   const [open, setOpen] = useState(false);
   return (
     <Card
-      tone={mission.enabled ? 'good' : 'muted'}
+      tone={mission.enabled && !mission.pausedReason ? 'good' : 'muted'}
       title={
         <>
           {mission.name} <span className="mono muted">{mission.id}</span>
@@ -67,6 +67,7 @@ function Mission({
           <Pill mono>{mission.agentId}</Pill>
           {mission.alwaysDeliver ? <Pill>always delivers</Pill> : null}
           {!mission.enabled ? <Pill tone="warning">disabled</Pill> : null}
+          {mission.pausedReason ? <Pill tone="warning">{mission.pausedReason}</Pill> : null}
         </>
       }
       actions={

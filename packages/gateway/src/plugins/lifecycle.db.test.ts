@@ -39,9 +39,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT } from '../agents/catalog.js';
 import { applyInstall, entryPointOf, InstallRefusal, planInstall } from './install.js';
-import { adoptPlugins, loadManifest, pluginLoadReport, resetAdoptedPlugins } from './load.js';
+import { adoptPlugins, loadInstalledPlugins, loadManifest, loadPluginsOnce, pluginLoadReport, resetAdoptedPlugins } from './load.js';
+import { setPluginEnabled, toggleNotes } from './toggle.js';
 import { migrateInstalled } from './migrate.js';
-import { installedManifests } from '../agents/catalog.js';
+import { createToolRegistry, installedManifests, loadGatewayCatalog } from '../agents/catalog.js';
 import { applyUninstall, declaredTools, namesPlugin, planUninstall, UninstallRefusal } from './uninstall.js';
 
 const WEATHER_DIR = path.join(REPO_ROOT, 'examples', 'plugins', 'weather');
@@ -313,5 +314,59 @@ suite('uninstall keeps the data, and --purge is the other verb', () => {
 
   it('refuses to uninstall something that is not installed, and says what is', async () => {
     await expect(planUninstall('finance', { pool, env })).rejects.toThrow(/not installed here/);
+  });
+});
+
+suite('disabling a plugin', () => {
+  it('keeps it and its data, loads nothing of it, pauses its missions, and lets its agents carry on', async () => {
+    const manifest = await install();
+    const missionId = (manifest.missions ?? [])[0]?.id as string;
+    await upsertMission(pool, { id: missionId, name: 'Test plugin daily', agentId: 'concierge', prompt: 'ping' });
+    const dir = path.join(root, 'agents', 'pinger');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path.join(dir, 'agent.md'),
+      `---\nid: pinger\nhandle: pinger\nname: Pinger\ndescription: Pong.\ntools: [testplug.*, memory.note]\n---\n\nYou say pong.\n`,
+      'utf8',
+    );
+
+    const off = await setPluginEnabled(PLUGIN, false, { env, pool });
+    expect(off).toMatchObject({ changed: true, enabled: false, missions: [missionId], restartNeeded: true });
+    expect(toggleNotes(off).join(' ')).toContain('paused: testplug is disabled');
+    expect(readPluginsFile(path.join(root, 'plugins.json')).plugins[0]?.enabled).toBe(false);
+    expect((await listMissions(pool)).find((m) => m.id === missionId)?.pausedReason).toBe('paused: testplug is disabled');
+
+    // The next start: nothing of it is imported or registered, and its schema is still there.
+    resetAdoptedPlugins();
+    const loaded = await loadInstalledPlugins(env);
+    expect(loaded.loaded).toEqual([]);
+    expect(loaded.problems).toEqual([]);
+    expect(loaded.disabled?.map((r) => r.name)).toEqual([PLUGIN]);
+    await loadPluginsOnce(env);
+    expect(installedManifests(env).map((m) => m.name)).not.toContain(PLUGIN);
+    const registry = createToolRegistry(env);
+    expect(registry.list().some((t) => t.name.startsWith(`${PLUGIN}.`))).toBe(false);
+    const { rows } = await pool.query('select 1 from information_schema.schemata where schema_name = $1', [SCHEMA]);
+    expect(rows).toHaveLength(1);
+    expect(pluginLoadReport(env)).toEqual([]);
+
+    // Its agent loads without its tools, and says why.
+    const pinger = loadGatewayCatalog({ env, registry }).get('pinger');
+    expect(pinger?.heldBack).toBeUndefined();
+    expect(pinger?.tools).toEqual(['memory.note']);
+    expect(pinger?.disabledPlugins).toEqual([PLUGIN]);
+
+    const again = await setPluginEnabled(PLUGIN, false, { env, pool });
+    expect(again.changed).toBe(false);
+
+    const on = await setPluginEnabled(PLUGIN, true, { env, pool });
+    expect(on).toMatchObject({ changed: true, enabled: true, missions: [missionId] });
+    expect(readPluginsFile(path.join(root, 'plugins.json')).plugins[0]?.enabled).toBeUndefined();
+    expect((await listMissions(pool)).find((m) => m.id === missionId)?.pausedReason).toBeNull();
+    await pool.query('delete from core.missions where id = $1', [missionId]);
+  });
+
+  it('refuses a plugin that is not installed', async () => {
+    await expect(setPluginEnabled('nothing-here', false, { env, pool })).rejects.toThrow(/not an installed plugin/);
   });
 });

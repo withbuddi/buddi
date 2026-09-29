@@ -2787,6 +2787,25 @@ by a proposal you have changed. See §2.6.
 A version that claims a *different* schema is refused: that is a data move, not
 an upgrade, and it should be decided deliberately.
 
+### Disabling a plugin
+
+```bash
+buddi plugins disable weather    # the record says enabled: false; restart to apply
+buddi plugins enable weather     # back at the next start
+```
+
+Disabling is the owner's "not now" (also a Disable button on the plugin's card
+in Settings → Plugins). Nothing is removed: the package, the schema and its
+data, the agents accepted from it and their grants all stay. At the next start
+the plugin is not imported, so nothing of it registers — no tools, pages,
+views, glances, sources, sentinels or channels — and its migrations are not run.
+Missions registered from its suggestions are paused at once with the reason
+`paused: weather is disabled`, which the Missions page and `buddi missions`
+show; enabling resumes exactly those. An agent granted `weather.*` is not held
+back: the grant is skipped like a `weather.*?`, and the agent's page and prompt
+say "weather is disabled, so its tools are out." Its proposed agents are not
+offered while it is disabled. An update keeps it disabled.
+
 ### Uninstall
 
 ```bash
@@ -2868,6 +2887,7 @@ version each arrived in — is §9b.
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
+| `author` | `PluginAuthor` | no | Who made you: `{ name, url? }`, the name at most 80 characters, the URL `https:`. The install card and the Plugins page show "by <name>", linked to the URL. Checked at `register()`. Without it the card reads `author` from your `package.json` (a string or `{ name, url }`); with both, the names must match or approval is refused. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
 | `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |

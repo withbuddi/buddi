@@ -361,6 +361,20 @@ export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (fami
 }
 
 /**
+ * The plugins the owner disabled, from the record. A grant to one of their
+ * families is skipped rather than holding the agent back — but only once the
+ * plugin is actually out of the registry, which is the next start.
+ */
+export function disabledPluginNames(env: NodeJS.ProcessEnv = process.env): string[] {
+  try {
+    const file = pluginsFilePath({ ownerRoot: agentSearchPath(env).ownerRoot, env });
+    return readPluginsFile(file).plugins.filter((p) => p.enabled === false).map((p) => p.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * The allowlist, for the *prompt* — never for the decision.
  *
  * `agent.delegate` takes a catalog id, so an agent that is shown only handles
@@ -392,10 +406,11 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
   const env = opts.env ?? process.env;
   const registry = opts.registry ?? createToolRegistry(env);
   const pluginForFamily = pluginNameForFamily(env);
+  const disabledPlugins = disabledPluginNames(env);
   // An explicit `dir` is a caller that means exactly one directory (a test, a
   // fixture): honour it literally and skip the search path entirely.
   if (opts.dir !== undefined) {
-    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, delegatesFor: delegatesForPrompt(), delegateTargetAllowed, ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
+    const single = loadAgentCatalog({ dir: opts.dir, registry, env, providerSelection: opts.providerSelection, pluginForFamily, disabledPlugins, delegatesFor: delegatesForPrompt(), delegateTargetAllowed, ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }) });
     assertNoDelegationToWriters(single);
     return single;
   }
@@ -411,6 +426,7 @@ export function loadGatewayCatalog(opts: GatewayCatalogOptions = {}): AgentCatal
     env,
     providerSelection: opts.providerSelection,
     pluginForFamily,
+    disabledPlugins,
     delegatesFor: delegatesForPrompt(), delegateTargetAllowed,
     // The owner's recorded choice, which core prefers over any file flag.
     ...(recordedDefaultAgent() === undefined ? {} : { defaultAgentId: recordedDefaultAgent() as string }),

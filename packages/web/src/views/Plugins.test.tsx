@@ -25,6 +25,7 @@ vi.mock('../api', async (load) => {
       rejectStaged: vi.fn(),
       updatePlugin: vi.fn(),
       uninstallPlugin: vi.fn(),
+      setPluginEnabled: vi.fn(),
       uploadPlugin: vi.fn(),
       serviceAction: vi.fn(),
       acceptPluginAgent: vi.fn(),
@@ -404,5 +405,82 @@ describe('the plugins section', () => {
     // What leaves the machine: the connected services' hosts, declared while buddi runs.
     expect(screen.getByText('mcp.notion.com')).toHaveAttribute('title', 'Notion, a connected service');
     expect(screen.getByText('mcp.linear.app').closest('p')).toHaveTextContent('Talks to mcp.notion.com, mcp.linear.app.');
+  });
+  it('says who made it, on the staged card and on an installed and a built-in one, linked when there is a URL', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        staged: [{ ...STAGED, author: { name: 'withbuddi', url: 'https://withbuddi.com' } }],
+        installed: [
+          {
+            name: 'finance',
+            version: '0.1.0',
+            source: { kind: 'registry', name: '@withbuddi/plugin-finance', version: '0.1.0' },
+            author: { name: 'Ada' },
+            installedAt: new Date().toISOString(),
+            contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
+            unlocks: [],
+            loaded: true,
+          },
+        ],
+        builtIn: [
+          {
+            name: 'memory',
+            version: '1.0.0',
+            contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
+            author: { name: 'Grace', url: 'https://grace.dev' },
+          },
+        ],
+      }),
+    );
+    render(<Plugins />);
+
+    const staged = await screen.findByRole('link', { name: 'withbuddi' });
+    expect(staged).toHaveAttribute('href', 'https://withbuddi.com');
+    expect(staged.closest('p')).toHaveTextContent('by withbuddi');
+    expect(screen.getByText('by Ada')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Ada' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Grace' })).toHaveAttribute('href', 'https://grace.dev');
+  });
+  it('disables a plugin after saying it keeps everything, and enables a disabled one in one click', async () => {
+    const base = {
+      version: '0.1.0',
+      source: { kind: 'directory' as const, path: '/home/o/code/garden' },
+      installedAt: new Date().toISOString(),
+      contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
+      unlocks: [],
+    };
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        installed: [
+          { ...base, name: 'garden', loaded: true, author: { name: 'Ada', url: 'https://ada.dev' } },
+          { ...base, name: 'cellar', loaded: false, enabled: false },
+        ],
+        restartNeeded: true,
+      }),
+    );
+    vi.mocked(api.setPluginEnabled).mockResolvedValue({
+      name: 'garden', enabled: false, changed: true, missions: [], notes: [], restartNeeded: true,
+    });
+    render(<Plugins />);
+
+    // A local build with an author says who made it instead of "you, from this machine".
+    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute('href', 'https://ada.dev');
+    expect(screen.getAllByText('you, from this machine')).toHaveLength(1);
+    // The disabled one is not a failure.
+    expect(screen.getByText('disabled')).toBeInTheDocument();
+    expect(screen.queryByText('did not load')).not.toBeInTheDocument();
+
+    // Remove says plainly what happens to the tables; Disable says it keeps everything.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove…' })[0] as HTMLElement);
+    expect(screen.getByText(/Its tables stay unless you also drop its data below, and then they are gone for good/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Disable…' }));
+    expect(screen.getByText(/Disabling keeps everything: its tables and data/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
+    await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('garden', false));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('cellar', true));
+    // Enabling, like installing, is applied by a restart.
+    expect(screen.getByText(/disabled or enabled since buddi started/)).toBeInTheDocument();
   });
 });

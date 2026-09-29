@@ -125,6 +125,11 @@ export interface AgentSummary {
    * agent is listed and greyed rather than missing, and never runs.
    */
   heldBack?: AgentHoldBack;
+  /**
+   * Plugins this agent was granted that the owner disabled. The agent loads
+   * without their tools; its page and its prompt say so, one line each.
+   */
+  disabledPlugins?: string[];
   /** One sentence in the agent's own voice, for a surface that opens on it. */
   intro?: string;
   /** Up to three example requests a surface may offer as drafts. */
@@ -321,6 +326,11 @@ export interface LoadAgentCatalogOptions {
    */
   pluginForFamily?: (family: string) => string | undefined;
   /**
+   * Plugins the owner disabled. A grant to one's family is skipped instead of
+   * holding the agent back, and the agent's prompt says the plugin is out.
+   */
+  disabledPlugins?: readonly string[];
+  /**
    * A single directory — the original shape, kept because most tests and every
    * ad-hoc caller means exactly one. A directory that cannot be read is an
    * error here, as it always was.
@@ -437,6 +447,12 @@ export interface ToolGrantResolution {
    * silently lost half its tools would answer wrongly instead of not at all.
    */
   missingFamilies: string[];
+  /**
+   * Families granted whose plugin the owner disabled, in declaration order.
+   * Skipped like a `?` grant — the agent loads without them — and named in
+   * its prompt and on its page.
+   */
+  disabledFamilies: string[];
 }
 
 /**
@@ -458,11 +474,14 @@ export function resolveToolGrants(
   declared: readonly string[],
   registry: ToolNameSource,
   agentId: string,
+  /** Plugins the owner disabled: a grant to one of their families is skipped. */
+  disabledPlugins: ReadonlySet<string> = new Set(),
 ): ToolGrantResolution {
   const available = registry.list().map((t) => t.name);
   const families = new Set(available.map((name) => name.split('.')[0]));
   const selected = new Set<string>();
   const missingFamilies: string[] = [];
+  const disabledFamilies: string[] = [];
   for (const declaredEntry of declared) {
     const { pattern: entry, optional } = optionalGrant(declaredEntry);
     const matches = entry.includes('*') || entry.includes('?')
@@ -471,6 +490,11 @@ export function resolveToolGrants(
     if (matches.length === 0) {
       const family = FAMILY_GRANT.exec(entry)?.[1];
       if (family !== undefined && !families.has(family)) {
+        // Disabled by the owner: the agent carries on without it, and says so.
+        if (disabledPlugins.has(family)) {
+          if (!disabledFamilies.includes(family)) disabledFamilies.push(family);
+          continue;
+        }
         // `weather.*?`: not installed here, and the agent never needed it.
         if (optional) continue;
         if (!missingFamilies.includes(family)) missingFamilies.push(family);
@@ -498,7 +522,7 @@ export function resolveToolGrants(
     }
     for (const name of matches) selected.add(name);
   }
-  return { tools: available.filter((name) => selected.has(name)), missingFamilies };
+  return { tools: available.filter((name) => selected.has(name)), missingFamilies, disabledFamilies };
 }
 
 /**
@@ -640,6 +664,11 @@ function unavailableMark(entry: AgentRosterEntry): string {
   return entry.available === false ? ' (not available now)' : '';
 }
 
+/** The one line an agent's prompt and page carry for a disabled plugin it was granted. */
+export function disabledPluginLine(plugin: string): string {
+  return `${plugin} is disabled, so its tools are out.`;
+}
+
 export function generatedSection(
   tools: readonly string[],
   language: AgentLanguage,
@@ -649,12 +678,14 @@ export function generatedSection(
     /** The colleagues this agent may ask with `agent.delegate`, in file order. */
     delegates?: readonly AgentRosterEntry[];
   },
+  /** Plugins granted to this agent that the owner disabled. */
+  disabledPlugins: readonly string[] = [],
 ): string {
   const toolLine =
     tools.length === 0
       ? 'You have no tools in this installation. Answer from the conversation alone, and say plainly when something needs a tool you do not have.'
       : `Tools available to you in this installation: ${tools.join(', ')}.`;
-  const lines = [`- ${toolLine}`, `- ${LANGUAGE_LINE[language]}`];
+  const lines = [`- ${toolLine}`, ...disabledPlugins.map((p) => `- ${disabledPluginLine(p)}`), `- ${LANGUAGE_LINE[language]}`];
   if (wiring) {
     lines.push(
       `- Your handle is @${wiring.handle}. The owner addresses you by writing @${wiring.handle} at the start of a message; refer to yourself as @${wiring.handle} when naming agents.`,
@@ -762,7 +793,9 @@ export function selectSkills(
  */
 function rosterAvailability(frontmatter: AgentFrontmatter, opts: LoadAgentCatalogOptions): boolean {
   try {
-    const { missingFamilies } = resolveToolGrants(frontmatter.tools, opts.registry, frontmatter.id);
+    const { missingFamilies } = resolveToolGrants(
+      frontmatter.tools, opts.registry, frontmatter.id, new Set(opts.disabledPlugins ?? []),
+    );
     if (missingFamilies.length > 0) return false;
     const selection = opts.providerSelection?.(frontmatter);
     if (selection?.availability) return selection.availability.ok;
@@ -786,10 +819,11 @@ function buildAgent(
   /** The ids an open allowlist ("everyone") resolves to. */
   openTargets: readonly string[] = [],
 ): CatalogAgent {
-  const { tools: granted, missingFamilies } = resolveToolGrants(
+  const { tools: granted, missingFamilies, disabledFamilies } = resolveToolGrants(
     frontmatter.tools,
     opts.registry,
     frontmatter.id,
+    new Set(opts.disabledPlugins ?? []),
   );
   /*
    * A held-back agent holds *nothing*. Loading it with the half of its grant
@@ -840,7 +874,7 @@ function buildAgent(
   const systemPromptTemplate = [
     body.trimEnd(),
     ...(section === '' ? [] : [section]),
-    generatedSection(tools, language, { handle: frontmatter.handle, colleagues, delegates }),
+    generatedSection(tools, language, { handle: frontmatter.handle, colleagues, delegates }, disabledFamilies),
   ].join('\n\n');
   const maxTurns = frontmatter.maxTurns ?? DEFAULT_MAX_TURNS;
 
@@ -856,6 +890,7 @@ function buildAgent(
     available: availability.ok,
     ...(availability.ok ? {} : { unavailableReason: availability.problem.message }),
     ...(heldBack === undefined ? {} : { heldBack }),
+    ...(disabledFamilies.length === 0 ? {} : { disabledPlugins: disabledFamilies }),
     ...(frontmatter.intro === undefined ? {} : { intro: frontmatter.intro }),
     ...(frontmatter.starters === undefined ? {} : { starters: [...frontmatter.starters] }),
     ...(frontmatter.avatar === undefined ? {} : { avatar: frontmatter.avatar }),
@@ -1106,7 +1141,9 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     .filter(({ frontmatter }) => {
       if (opts.delegateTargetAllowed === undefined) return true;
       try {
-        return opts.delegateTargetAllowed(resolveToolGrants(frontmatter.tools, opts.registry, frontmatter.id).tools);
+        return opts.delegateTargetAllowed(
+          resolveToolGrants(frontmatter.tools, opts.registry, frontmatter.id, new Set(opts.disabledPlugins ?? [])).tools,
+        );
       } catch {
         return false;
       }
@@ -1218,6 +1255,7 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
           ? {}
           : { unavailableReason: a.availability.problem.message }),
         ...(a.heldBack === undefined ? {} : { heldBack: a.heldBack }),
+        ...(a.disabledPlugins === undefined ? {} : { disabledPlugins: [...a.disabledPlugins] }),
         ...(a.intro === undefined ? {} : { intro: a.intro }),
         ...(a.starters === undefined ? {} : { starters: [...a.starters] }),
         ...(a.avatar === undefined ? {} : { avatar: a.avatar }),

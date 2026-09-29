@@ -43,7 +43,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { hostApiProblem, parsePluginUses, type PluginSource, type PluginUse } from '@buddi/core';
+import { authorOfPackageJson, hostApiProblem, parsePluginUses, type PluginAuthor, type PluginSource, type PluginUse } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
@@ -138,6 +138,11 @@ export interface StagedPlugin {
   uses?: PluginUse[];
   /** On an upgrade, what the installed version declared: the card marks what is new. */
   previousUses?: PluginUse[];
+  /**
+   * Who made it, from package.json's `author` — the card is drawn before the
+   * manifest can be read. At approval a manifest `author` must name the same.
+   */
+  author?: PluginAuthor;
   /** The peer range it wants on `@buddi/core`. */
   coreRange?: string;
   /** Lifecycle scripts the package itself declares. */
@@ -674,6 +679,8 @@ export async function stagePlugin(
       }
     }
 
+    const author = authorOfPackageJson(pkg.author);
+
     if (parsed.kind !== 'directory' && opts.skipDependencies !== true) {
       phase('installing-dependencies');
       const registry = parsed.kind === 'registry' ? parsed.registry : undefined;
@@ -727,6 +734,7 @@ export async function stagePlugin(
             },
           }),
       uses: uses.uses,
+      ...(author === undefined ? {} : { author }),
       ...(opts.previousUses === undefined ? {} : { previousUses: opts.previousUses }),
       ...(typeof pkg.peerDependencies?.['@buddi/core'] === 'string'
         ? { coreRange: pkg.peerDependencies['@buddi/core'] as string }

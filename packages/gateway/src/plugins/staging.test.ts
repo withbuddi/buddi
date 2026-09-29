@@ -56,6 +56,7 @@ import {
   TRUST_SENTENCE,
 } from './stage.js';
 import type { NpmRunner } from './npm.js';
+import { renderStaged } from '../plugins-cli.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MARKER_FIXTURE = path.join(HERE, 'fixtures', 'marker-plugin');
@@ -336,6 +337,40 @@ describe('approval 1', () => {
     // re-read the manifest from where the package now lives, so a plugin with
     // a side effect at import did it twice on every install.
     expect(readFileSync(marker, 'utf8').trimEnd().split('\n')).toHaveLength(1);
+  });
+});
+
+describe('who made it', () => {
+  const withAuthor = (author: unknown) => (dir: string): void => {
+    const file = path.join(dir, 'package.json');
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), author }));
+  };
+
+  it("draws the card's author from package.json, and installs when the manifest names the same", async () => {
+    const npm = fakeNpm({ edit: withAuthor('A fixture maker <m@example.invalid> (https://example.invalid/maker)') });
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm });
+    expect(staged.author).toEqual({ name: 'A fixture maker', url: 'https://example.invalid/maker' });
+    expect(renderStaged(staged)).toContain('  by        A fixture maker (https://example.invalid/maker)');
+
+    const outcome = await approveStaged(staged.id, { integrity: staged.integrity, env });
+    expect(outcome.kind).toBe('installed');
+  });
+
+  it('names nobody on the card when package.json names nobody', async () => {
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm() });
+    expect(staged.author).toBeUndefined();
+    expect(renderStaged(staged).some((line) => line.includes(' by  '))).toBe(false);
+  });
+
+  it('refuses a manifest naming another author than package.json, and installs nothing', async () => {
+    const npm = fakeNpm({ edit: withAuthor({ name: 'Somebody else' }) });
+    const staged = await stagePlugin('buddi-plugin-fixture-marker', { env, npm });
+
+    await expect(approveStaged(staged.id, { integrity: staged.integrity, env })).rejects.toThrow(
+      'plugin "fixture-marker" says its author is "A fixture maker" in its manifest and "Somebody else" in ' +
+        'package.json; the install card was drawn from the second, so the two must match. Nothing was installed.',
+    );
+    expect(existsSync(path.join(root, 'plugins.json'))).toBe(false);
   });
 });
 
