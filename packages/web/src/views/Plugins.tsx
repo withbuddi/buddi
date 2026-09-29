@@ -1730,7 +1730,7 @@ function Browse({
       <p className="plugins-quiet">
         <Icon name="globe" size={14} />
         Opening this tab fetched the list from withbuddi.com. Nothing else leaves.{' '}
-        <button type="button" className="plugins-link" disabled={loading} onClick={() => loadMarket(true)}>
+        <button type="button" className="plugins-link" disabled={loading} onClick={onRetry}>
           Refresh
         </button>
       </p>

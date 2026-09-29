@@ -96,8 +96,10 @@ const INSTALLED: InstalledPluginView = {
 
 /** A row's ⋯ menu, opened from the keyboard, and one of its items chosen. */
 async function openMenuItem(plugin: string, item: string): Promise<void> {
-  // Radix opens its menu on a pointer press, which user-event makes and fireEvent does not.
-  await userEvent.setup().click(await screen.findByLabelText(`More for ${plugin}`));
+  // Radix opens its menu on a pointer press, which user-event makes and
+  // fireEvent does not. No typing delay and no pointer-events check: with the
+  // defaults the press took 5–14 s under jsdom, and CI timed out on it.
+  await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(await screen.findByLabelText(`More for ${plugin}`));
   fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp(`^${item}`) }));
 }
 
@@ -259,7 +261,7 @@ describe('the plugins section', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
   });
 
-  it('removes without dropping anything unless asked, and offers to disable instead', async () => {
+  it('removes without dropping anything unless asked, and offers to disable instead', { timeout: 180_000 }, async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ installed: [{ ...INSTALLED, name: 'garden' }] }));
     vi.mocked(api.uninstallPlugin).mockResolvedValue({ name: 'garden', purged: false, notes: ['Removed. Its tables stay.'], restartNeeded: true });
     render(<Plugins />);
@@ -503,7 +505,7 @@ describe('the plugins section', () => {
     expect(screen.getByText('Your money, in one place.')).toBeInTheDocument();
   });
 
-  it('disables a plugin after asking, in a dialog that says it keeps everything, and enables one in one click', async () => {
+  it('disables a plugin after asking, in a dialog that says it keeps everything, and enables one in one click', { timeout: 180_000 }, async () => {
     const base = {
       version: '0.1.0',
       source: { kind: 'directory' as const, path: '/home/o/code/garden' },
