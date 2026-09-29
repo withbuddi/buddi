@@ -44,6 +44,7 @@ it('tags what an Ollama host says can think, and leaves other hosts untagged', a
   const transport = (async (url: string, init: any) => {
     calls.push(url);
     if (url.endsWith('/models')) return new Response(JSON.stringify({ data: [{ id: 'gemma4:12b' }, { id: 'smollm:135m' }] }), { status: 200 });
+    if (url.endsWith('/api/version')) return new Response(JSON.stringify({ version: '0.12.0' }), { status: 200 });
     if (url.endsWith('/api/show')) {
       const { model } = JSON.parse(init.body);
       return new Response(JSON.stringify({ capabilities: model === 'gemma4:12b' ? ['completion', 'thinking'] : ['completion'] }), { status: 200 });
@@ -63,6 +64,20 @@ it('tags what an Ollama host says can think, and leaves other hosts untagged', a
   calls.length = 0;
   const plain = await listProviderModels(other, transport);
   expect(plain.models.every((m) => m.thinks === undefined)).toBe(true);
+  expect(calls.some((u) => u.endsWith('/api/show'))).toBe(false);
+
+  // A `/v1` host that is not Ollama (mlxh: no /api/version) is asked nothing
+  // per model: mlxh's manager would load a worker for each question.
+  const mlxh = { ...local, baseUrl: 'http://127.0.0.1:1060/v1' };
+  calls.length = 0;
+  const notOllama: HttpTransport = async (url: string, init) => {
+    calls.push(url);
+    if (url.endsWith('/api/version') || url.endsWith('/api/show')) return new Response('not found', { status: 404 });
+    return transport(url, init);
+  };
+  const quiet = await listProviderModels(mlxh, notOllama);
+  expect(quiet.models.every((m) => m.thinks === undefined)).toBe(true);
+  expect(calls.filter((u) => u.endsWith('/api/version'))).toHaveLength(1);
   expect(calls.some((u) => u.endsWith('/api/show'))).toBe(false);
 });
 it('signs the model list for an Ollama device key and sends no bearer token', async () => {

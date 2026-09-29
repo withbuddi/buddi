@@ -546,7 +546,9 @@ export class ProviderAccounts {
         if (this.deps.test) await this.deps.test(resolved);
         else await createProvider(resolved, { maxTokens: 32, maxStatusRetries: 0 }).complete({
           system: 'Reply with OK.', messages: [{ role: 'user', content: [{ type: 'text', text: 'Connection test. Reply OK.' }] }],
-          tools: [], signal: AbortSignal.timeout(15_000),
+          // A model on this computer loads on its first request, which can take
+          // a minute for a large one; a hosted provider answers in seconds or not at all.
+          tools: [], signal: AbortSignal.timeout(isLocalAccount(row) ? 120_000 : 15_000),
         });
       } catch (error) {
         diagnostic = providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel });
@@ -829,4 +831,15 @@ export class ProviderAccounts {
       throw new ProviderAccountError(409, view?.state === 'failed' && view.message ? view.message : 'Could not start ChatGPT sign-in. Check the host vault and try again.');
     }
   }); }
+}
+
+/** An account on this computer: a loopback address, where the first request may be a model load. */
+function isLocalAccount(row: { kind: string; baseUrl?: string | null }): boolean {
+  if (row.kind !== 'openai-compatible' || !row.baseUrl) return false;
+  try {
+    const host = new URL(row.baseUrl).hostname;
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  } catch {
+    return false;
+  }
 }

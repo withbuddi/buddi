@@ -89,6 +89,14 @@ async function withCapabilities(
   if (provider.kind !== 'openai' || !provider.compatible || models.length === 0 || models.length > CAPABILITY_SWEEP_MAX) return models;
   const root = provider.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
   if (root === provider.baseUrl.replace(/\/+$/, '')) return models;
+  /*
+   * Only Ollama gets the sweep. Another host that routes requests by their
+   * `model` (mlxh's manager does) would load a worker for every model asked
+   * about, image models and 27B ones included, to answer a question it
+   * cannot answer. A device key means Ollama Cloud; otherwise the host has
+   * to say it is Ollama first, on `/api/version`, which mlxh does not serve.
+   */
+  if (!provider.deviceKey && !(await isOllamaHost(root, transport, signal))) return models;
   const tagged = await Promise.all(models.map(async (model) => {
     try {
       const signed = provider.deviceKey ? signOllamaRequest('POST', `${root}/api/show`, provider.deviceKey) : null;
@@ -109,4 +117,16 @@ async function withCapabilities(
     }
   }));
   return tagged;
+}
+
+/** Does `GET /api/version` answer the way Ollama does? Anything else is not Ollama. */
+async function isOllamaHost(root: string, transport: HttpTransport, signal: AbortSignal): Promise<boolean> {
+  try {
+    const response = await transport(`${root}/api/version`, { method: 'GET', headers: { accept: 'application/json' }, signal, maxBytes: 64 * 1024 });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return typeof data?.version === 'string';
+  } catch {
+    return false;
+  }
 }

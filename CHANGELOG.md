@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Listing the models of an OpenAI-compatible account asked every model Ollama's capability question, which on mlxh made its manager load a worker for each one, image models and the largest included. Only a host that answers as Ollama is asked now.
+- Test connection gives an account on this computer two minutes instead of fifteen seconds, since a local model loads on its first request.
 - When a model's provider refuses a call because of the account ("Third-party apps now draw from your extra usage…"), the chat shows that sentence and points at Settings → Model accounts, instead of a generic line about the connection or a wrong one about the .env.
 - Giving a connection's tools to an agent failed with "matches no registered tool" whenever a chat or a run had happened between buddi starting and the review being kept, and worked again after a restart: the tools were being registered into that run's own copy of the registry. They now go to buddi's own registry, and every run started afterwards gets them.
 - Adding a service that was already added and never reviewed reuses that connection instead of making a second one.
