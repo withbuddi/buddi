@@ -366,6 +366,28 @@ suite('disabling a plugin', () => {
     await pool.query('delete from core.missions where id = $1', [missionId]);
   });
 
+  it('takes effect in the running gateway at once: tools out and back, schema migrated, no restart', async () => {
+    const manifest = await install();
+    const registry = createToolRegistry(env);
+    expect(registry.list().some((t) => t.name.startsWith(`${PLUGIN}.`))).toBe(true);
+
+    const off = await setPluginEnabled(PLUGIN, false, { env, pool, registry });
+    expect(off).toMatchObject({ changed: true, restartNeeded: false });
+    expect(registry.list().some((t) => t.name.startsWith(`${PLUGIN}.`))).toBe(false);
+    expect(installedManifests(env).map((m) => m.name)).not.toContain(PLUGIN);
+
+    // Its schema gone meanwhile: enabling migrates it again before it registers, as a start does.
+    await wipeFixtureSchema();
+    const on = await setPluginEnabled(PLUGIN, true, { env, pool, registry });
+    expect(on).toMatchObject({ changed: true, restartNeeded: false });
+    expect(on.loadProblem).toBeUndefined();
+    expect(toggleNotes(on)[0]).toBe('Enabled.');
+    expect(registry.list().map((t) => t.name)).toEqual(expect.arrayContaining(manifest.tools.map((t) => t.name)));
+    expect(installedManifests(env).map((m) => m.name)).toContain(PLUGIN);
+    const { rows } = await pool.query('select 1 from information_schema.schemata where schema_name = $1', [SCHEMA]);
+    expect(rows).toHaveLength(1);
+  });
+
   it('refuses a plugin that is not installed', async () => {
     await expect(setPluginEnabled('nothing-here', false, { env, pool })).rejects.toThrow(/not an installed plugin/);
   });

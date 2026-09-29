@@ -396,7 +396,7 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'plugins disable',
     group: 'Agents',
-    summary: 'Stop loading a plugin without removing it: its data stays and its missions pause.',
+    summary: 'Turn a plugin off now without removing it: its tools, pages and watchers stop, its data stays, its missions pause.',
     usage: 'buddi plugins disable <name>',
     flags: [],
     example: 'buddi plugins disable finance',
@@ -405,7 +405,7 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'plugins enable',
     group: 'Agents',
-    summary: 'Load a disabled plugin again at the next start and resume its missions.',
+    summary: 'Turn a disabled plugin back on now and resume its missions.',
     usage: 'buddi plugins enable <name>',
     flags: [],
     example: 'buddi plugins enable finance',

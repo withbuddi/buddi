@@ -26,8 +26,8 @@ import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQ
 import type { HomeContribution } from './home.js';
 import { parseMetrics, type RegisteredMetric } from './metrics.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
-import { hostBindingOf, networkAreaOf, registerHostOf, withPluginHost, type HostBinding } from './host/build.js';
-import { registerSecretDestination } from './secrets/destinations.js';
+import { hostBindingOf, networkAreaOf, registerHostOf, releaseHostBinding, withPluginHost, type HostBinding } from './host/build.js';
+import { registerSecretDestination, unregisterSecretDestinations } from './secrets/destinations.js';
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
 import { parsePluginAuthor } from './plugin/author.js';
@@ -409,6 +409,34 @@ export class ToolRegistry {
     }
     this.#changed();
     manifest.register?.(registerHostOf(binding));
+  }
+
+  /**
+   * Take a whole plugin out while buddi runs: the owner disabled it. Its tools
+   * (manifest and runtime), pages, queries, views, Home blocks and glances,
+   * metrics, sources and sentinels (both are read off `manifests()` on every
+   * tick), channels and secret destinations all go at once, and `onChange`
+   * fires so every agent's grants are resolved again for its next turn.
+   * Returns false when the plugin was not registered here.
+   */
+  unregister(plugin: string): boolean {
+    if (!this.#manifests.has(plugin)) return false;
+    for (const [name, entry] of [...this.#tools]) {
+      if (entry.plugin !== plugin) continue;
+      this.#tools.delete(name);
+      entry.runtime?.dispose?.();
+    }
+    this.#manifests.delete(plugin);
+    this.#pages.delete(plugin);
+    this.#queries.delete(plugin);
+    this.#pageTools.delete(plugin);
+    this.#metrics.delete(plugin);
+    const binding = this.#bindings.get(plugin);
+    this.#bindings.delete(plugin);
+    if (binding !== undefined) releaseHostBinding(binding);
+    unregisterSecretDestinations(plugin);
+    this.#changed();
+    return true;
   }
 
   /**

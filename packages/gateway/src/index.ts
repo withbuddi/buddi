@@ -45,7 +45,7 @@ export { main as runAgentsCli, parseAgentsArgs } from './agents-cli.js';
 export { main as runMissionsCli, parseMissionsArgs } from './missions-cli.js';
 export { main as runRemindersCli, parseRemindersArgs } from './reminders-cli.js';
 export { main as runNudgesCli, parseNudgesArgs } from './nudges-cli.js';
-export { main as runPluginsCli, parsePluginsArgs } from './plugins-cli.js';
+export { main as runPluginsCli, parsePluginsArgs, type PluginsCliHooks, type ToggleInGateway } from './plugins-cli.js';
 export * from './plugins/index.js';
 export { main as runServe } from './serve.js';
 // The agents' own browser, for the launcher's first-run line and `buddi browser install`.

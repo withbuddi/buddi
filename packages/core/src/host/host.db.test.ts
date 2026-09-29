@@ -179,6 +179,10 @@ suite('ctx.buddi', () => {
       expect(undeclared?.channels).toBeUndefined();
       expect((await hostOf(registry, 'quiet.host')).channels).toBeUndefined();
       expect((await hostOf(registry, 'pager.host')).channels).toBeDefined();
+
+      // Disabled while buddi runs: its channel goes with it.
+      registry.unregister('pager');
+      expect((await listChannels()).map((c) => c.kind)).not.toContain('pager.beep');
     } finally {
       clearChannels();
     }

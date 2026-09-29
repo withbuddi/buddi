@@ -74,6 +74,11 @@ export function secretDestinations(): RegisteredDestination[] {
   return [...destinations.values()];
 }
 
+/** Forget one plugin's destinations: it was disabled while buddi runs. */
+export function unregisterSecretDestinations(plugin: string): void {
+  for (const [kind, destination] of destinations) if (destination.plugin === plugin) destinations.delete(kind);
+}
+
 /** Forget them all. Tests only. */
 export function resetSecretDestinations(): void {
   destinations.clear();

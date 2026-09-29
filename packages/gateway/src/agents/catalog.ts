@@ -362,8 +362,9 @@ export function pluginNameForFamily(env: NodeJS.ProcessEnv = process.env): (fami
 
 /**
  * The plugins the owner disabled, from the record. A grant to one of their
- * families is skipped rather than holding the agent back — but only once the
- * plugin is actually out of the registry, which is the next start.
+ * families is skipped rather than holding the agent back once the plugin is
+ * out of the registry — at once in the running gateway, which unregisters it
+ * and rebuilds the catalog on the registry's `onChange`.
  */
 export function disabledPluginNames(env: NodeJS.ProcessEnv = process.env): string[] {
   try {

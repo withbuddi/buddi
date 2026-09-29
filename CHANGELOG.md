@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Disabling or enabling a plugin takes effect at once, no restart: its pages leave the rail, its tools leave the agents, its watchers stop.
+
 ## 0.1.0-pre.23 — 2026-09-29
 
 ### Added

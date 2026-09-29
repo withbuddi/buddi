@@ -2790,15 +2790,22 @@ an upgrade, and it should be decided deliberately.
 ### Disabling a plugin
 
 ```bash
-buddi plugins disable weather    # the record says enabled: false; restart to apply
-buddi plugins enable weather     # back at the next start
+buddi plugins disable weather    # off now: the record says enabled: false
+buddi plugins enable weather     # back now
 ```
 
 Disabling is the owner's "not now" (also a Disable button on the plugin's card
 in Settings → Plugins). Nothing is removed: the package, the schema and its
-data, the agents accepted from it and their grants all stay. At the next start
-the plugin is not imported, so nothing of it registers — no tools, pages,
-views, glances, sources, sentinels or channels — and its migrations are not run.
+data, the agents accepted from it and their grants all stay. It takes effect in
+the running gateway at once, with no restart: the plugin is unregistered, so
+its tools, pages, views, glances, sources, sentinels and channels all go — the
+rail and Settings drop its pages, the loops stop polling its sources and
+sentinels, and every agent's grants are resolved again for its next turn. (The
+CLI asks the running gateway to do it; with nothing running, it writes the
+record, which the next start reads.) At a start a disabled plugin is not
+imported and its migrations are not run. Enabling loads it the way a start
+does — import, migrate its schema, register, adopt its proposed rules — and
+says "restart buddi to finish" only for a part it could not do live.
 Missions registered from its suggestions are paused at once with the reason
 `paused: weather is disabled`, which the Missions page and `buddi missions`
 show; enabling resumes exactly those. An agent granted `weather.*` is not held

@@ -28,26 +28,49 @@ export function orderPages(pages: PluginPageDescriptor[], place: 'rail' | 'setti
     .map((entry) => entry.page);
 }
 
+/**
+ * Fired when the set of plugin pages changed under the shell — a plugin was
+ * disabled or enabled — so the rail and Settings read the list again at once.
+ */
+export const PAGES_CHANGED_EVENT = 'buddi:plugin-pages-changed';
+
+/** Say the plugin pages changed: the shell reads them again. */
+export function announcePagesChanged(): void {
+  window.dispatchEvent(new Event(PAGES_CHANGED_EVENT));
+}
+
 export function usePluginPages(skip = false): PluginPages {
   const [pages, setPages] = useState<PluginPageDescriptor[]>([]);
   useEffect(() => {
     if (skip) return undefined;
     let cancelled = false;
-    // Through a promise, so a gateway that answers 404 and a browser that
-    // cannot reach one leave the shell exactly as it was.
-    Promise.resolve()
-      .then(() => api.pages())
-      .then((body) => {
-        // Whatever answered, the shell only ever holds a list: a gateway that
-        // does not serve this route yet is an installation with no plugin
-        // pages, not a broken dashboard.
-        if (!cancelled) setPages(Array.isArray(body?.pages) ? body.pages : []);
-      })
-      .catch(() => {
-        /* No server, no session, or an older gateway. The shell is unchanged. */
-      });
+    const read = (): void => {
+      // Through a promise, so a gateway that answers 404 and a browser that
+      // cannot reach one leave the shell exactly as it was.
+      Promise.resolve()
+        .then(() => api.pages())
+        .then((body) => {
+          // Whatever answered, the shell only ever holds a list: a gateway that
+          // does not serve this route yet is an installation with no plugin
+          // pages, not a broken dashboard.
+          if (!cancelled) setPages(Array.isArray(body?.pages) ? body.pages : []);
+        })
+        .catch(() => {
+          /* No server, no session, or an older gateway. The shell is unchanged. */
+        });
+    };
+    read();
+    // Again when a plugin was toggled here, and when the tab comes back into
+    // view (another tab or the CLI may have toggled one meanwhile).
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') read();
+    };
+    window.addEventListener(PAGES_CHANGED_EVENT, read);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
+      window.removeEventListener(PAGES_CHANGED_EVENT, read);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [skip]);
   return {

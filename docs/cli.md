@@ -133,8 +133,8 @@ Your agents, what they have scheduled, and the plugins they use.
   - `--integrity <hash>`: The hash the staged card printed.
   - `--acknowledge-drift`: Approve it although what is on disk changed since it was staged.
 - `buddi plugins reject <id>`: Delete a stage and everything it fetched.
-- `buddi plugins disable <name>`: Stop loading a plugin without removing it: its data stays and its missions pause.
-- `buddi plugins enable <name>`: Load a disabled plugin again at the next start and resume its missions.
+- `buddi plugins disable <name>`: Turn a plugin off now without removing it: its tools, pages and watchers stop, its data stays, its missions pause.
+- `buddi plugins enable <name>`: Turn a disabled plugin back on now and resume its missions.
 - `buddi plugins uninstall <name> [--yes] [--detach-agents] [--purge --confirm <name>]`: Say what removing a plugin would do; --yes removes it and keeps its data.
   - `--yes`: Remove it. Its database schema is kept.
   - `--detach-agents`: Also take its tools out of the agents that were given them.

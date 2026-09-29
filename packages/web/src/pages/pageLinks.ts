@@ -8,8 +8,16 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { pluginPageRoute, pluginSettingsRoute } from '../routes';
 import type { PluginPageDescriptor } from './types';
+import { PAGES_CHANGED_EVENT } from './usePages';
 
 let pages: Promise<PluginPageDescriptor[]> | null = null;
+
+// A plugin disabled or enabled: the next link reads the list again.
+if (typeof window !== 'undefined') {
+  window.addEventListener(PAGES_CHANGED_EVENT, () => {
+    pages = null;
+  });
+}
 
 function loadPages(): Promise<PluginPageDescriptor[]> {
   pages ??= Promise.resolve()

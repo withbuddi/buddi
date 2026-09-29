@@ -95,9 +95,9 @@ export const USAGE = `buddi plugins — what this installation has installed
   buddi plugins staged                    what is staged and waiting for you
   buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
   buddi plugins reject <id>               delete a stage and everything it fetched
-  buddi plugins disable <name>            stop loading it: its tools, pages and watchers stop at the
-                                          next start, its data stays, its missions pause
-  buddi plugins enable <name>             load it again at the next start and resume its missions
+  buddi plugins disable <name>            turn it off now: its tools, pages and watchers stop, its
+                                          data stays, its missions pause
+  buddi plugins enable <name>             turn it back on now and resume its missions
   buddi plugins uninstall <name>          what removing it would do (removes nothing)
   buddi plugins uninstall <name> --yes    remove it; its database schema is KEPT
       --detach-agents                     also take its tools out of agents that were granted them
@@ -787,11 +787,42 @@ export function runningCoreVersion(): string {
   return '0.1.0';
 }
 
-/** `disable` / `enable`: the record, the missions, and the restart it needs. */
-async function commandToggle(name: string, enabled: boolean, pool: Pool | undefined, env: NodeJS.ProcessEnv): Promise<number> {
-  const outcome = await setPluginEnabled(name, enabled, { env, ...(pool === undefined ? {} : { pool }) });
+/**
+ * How `disable` / `enable` reach the running gateway: its own route, so the
+ * change applies there at once. `notRunning` when nothing answered (the next
+ * start reads the record), `unreachable` when one may be running but could
+ * not be asked, `refused` with the gateway's own sentence.
+ */
+export type ToggleInGateway = (
+  name: string,
+  enabled: boolean,
+) => Promise<{ notes: string[] } | { notRunning: true } | { unreachable: string } | { refused: string }>;
+
+export interface PluginsCliHooks {
+  toggleInGateway?: ToggleInGateway;
+}
+
+/** `disable` / `enable`: through the running gateway when there is one, else the record. */
+async function commandToggle(
+  name: string,
+  enabled: boolean,
+  pool: Pool | undefined,
+  env: NodeJS.ProcessEnv,
+  hooks: PluginsCliHooks,
+): Promise<number> {
+  const via = hooks.toggleInGateway === undefined ? undefined : await hooks.toggleInGateway(name, enabled);
+  if (via !== undefined && 'notes' in via) {
+    for (const note of via.notes) console.log(note);
+    return 0;
+  }
+  if (via !== undefined && 'refused' in via) {
+    console.error(via.refused);
+    return 1;
+  }
+  const gatewayRunning = via === undefined || !('notRunning' in via);
+  const outcome = await setPluginEnabled(name, enabled, { env, gatewayRunning, ...(pool === undefined ? {} : { pool }) });
   for (const note of toggleNotes(outcome)) console.log(note);
-  if (outcome.restartNeeded) console.log('Restart buddi to apply it: `buddi service restart`.');
+  if (outcome.restartNeeded) console.log('`buddi service restart` restarts it.');
   return 0;
 }
 
@@ -904,7 +935,7 @@ async function commandDev(dir: string): Promise<number> {
   return 0;
 }
 
-export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
+export async function main(argv: string[] = process.argv.slice(2), hooks: PluginsCliHooks = {}): Promise<number> {
   let args: ParsedPluginsArgs;
   try {
     args = parsePluginsArgs(argv);
@@ -953,7 +984,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     if (args.command === 'approve') return await commandApprove(args.target as string, args, pool, process.env);
     if (args.command === 'reject') return commandReject(args.target as string, process.env);
     if (args.command === 'disable' || args.command === 'enable') {
-      return await commandToggle(args.target as string, args.command === 'enable', pool, process.env);
+      return await commandToggle(args.target as string, args.command === 'enable', pool, process.env, hooks);
     }
     return await commandUninstall(args.target as string, args, pool, process.env);
   } catch (err) {
@@ -968,8 +999,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 }
 
-export async function runPluginsCli(argv: string[]): Promise<number> {
-  return main(argv);
+export async function runPluginsCli(argv: string[], hooks: PluginsCliHooks = {}): Promise<number> {
+  return main(argv, hooks);
 }
 
 function invokedDirectly(): boolean {

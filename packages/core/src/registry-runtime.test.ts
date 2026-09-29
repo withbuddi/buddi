@@ -224,3 +224,37 @@ describe('hosts declared while buddi runs (`ctx.buddi.network`, host API 1.7)', 
     expect(r.networkOf('nobody')).toBeUndefined();
   });
 });
+
+describe('a whole plugin unregistered while buddi runs (disabled)', () => {
+  it('takes out its manifest and runtime tools, pages and Home blocks, fires onChange once, and can come back', async () => {
+    const r = new ToolRegistry();
+    r.register({ ...plugin('keep').manifest, tools: [jsonTool('keep.one')] });
+    const p = plugin('garden', [jsonTool('garden.beds')]);
+    const manifest: PluginManifest = {
+      ...p.manifest,
+      pages: [{ id: 'beds', title: 'Garden', place: 'rail', body: [{ kind: 'notice', text: 'Beds.' }] }] as never,
+      home: [{ id: 'garden.now', title: 'Garden', placement: 'glance', produce: async () => null }] as never,
+    };
+    r.register(manifest);
+    p.host().tools.register([jsonTool('garden.water')]);
+    expect(r.list().map((t) => t.name)).toEqual(['keep.one', 'garden.beds', 'garden.water']);
+    await Promise.resolve();
+
+    const changed = vi.fn();
+    r.onChange(changed);
+    expect(r.unregister('garden')).toBe(true);
+    expect(r.list().map((t) => t.name)).toEqual(['keep.one']);
+    expect(r.pages()).toEqual([]);
+    expect(r.home()).toEqual([]);
+    expect(r.manifests().map((m) => m.name)).toEqual(['keep']);
+    expect(r.networkOf('garden')).toBeUndefined();
+    expect(await r.invoke('garden.beds', {}, ctx)).toMatchObject({ ok: false, reason: 'unknown-tool' });
+    await Promise.resolve();
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(r.unregister('garden')).toBe(false);
+
+    r.register(manifest);
+    expect(r.list().map((t) => t.name)).toEqual(['keep.one', 'garden.beds']);
+    expect(r.pages().map((pg) => pg.plugin)).toEqual(['garden']);
+  });
+});

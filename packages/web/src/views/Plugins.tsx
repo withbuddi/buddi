@@ -34,6 +34,7 @@ import {
 import { fmtRelative } from '../format';
 import { AGENTS_ROUTE, pluginPageRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
+import { announcePagesChanged } from '../pages/usePages';
 import { Button, ButtonLink, Card, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Spacer, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 
@@ -849,9 +850,12 @@ function Installed({
   const [purge, setPurge] = useState(false);
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
+  /** What the last disable or enable said: "Disabled. Its tools, … are off now; …". */
+  const [said, setSaid] = useState<string[] | null>(null);
 
   const act = (work: Promise<unknown>): void => {
     setBusy(true);
+    setSaid(null);
     work
       .then(() => {
         setRemoving(false);
@@ -863,6 +867,15 @@ function Installed({
       .catch((error: unknown) => onFailed(error instanceof ApiError ? error.message : String(error)))
       .finally(() => setBusy(false));
   };
+
+  /** Disable or enable: it takes effect at once, so the rail reads its pages again. */
+  const toggle = (enabled: boolean): void =>
+    act(
+      api.setPluginEnabled(plugin.name, enabled).then((reply) => {
+        announcePagesChanged();
+        setSaid(reply.notes ?? null);
+      }),
+    );
 
   const c = plugin.contribution;
   const disabled = plugin.enabled === false;
@@ -900,7 +913,7 @@ function Installed({
               Remove…
             </Button>
             {disabled ? (
-              <Button size="sm" disabled={busy} onClick={() => act(api.setPluginEnabled(plugin.name, true))}>
+              <Button size="sm" disabled={busy} onClick={() => toggle(true)}>
                 Enable
               </Button>
             ) : (
@@ -925,6 +938,11 @@ function Installed({
       >
         <Stack gap="sm">
           {plugin.error ? <Notice tone="critical">{plugin.error}</Notice> : null}
+          {said && said.length > 0 ? (
+            <Notice role="status">
+              {said.join(' ')}
+            </Notice>
+          ) : null}
           {disabled ? (
             <p className="ui-card-meta">
               Disabled: its tools, pages and watchers are off and its missions are paused. Its data is kept.
@@ -953,14 +971,14 @@ function Installed({
         <Stack gap="sm">
           <Notice tone="accent">
             Disabling keeps everything: its tables and data, the agents you accepted from it and their
-            grants. When buddi restarts its tools, pages and watchers stop, its missions pause, and agents
-            that use it carry on without those tools. Enable it to have it all back.
+            grants. Its tools, pages and watchers stop now, its missions pause, and agents that use it
+            carry on without those tools. Enable it to have it all back.
           </Notice>
           <Toolbar align="end">
             <Button variant="ghost" disabled={busy} onClick={() => setDisabling(false)}>
               Cancel
             </Button>
-            <Button disabled={busy} onClick={() => act(api.setPluginEnabled(plugin.name, false))}>
+            <Button disabled={busy} onClick={() => toggle(false)}>
               Disable
             </Button>
           </Toolbar>

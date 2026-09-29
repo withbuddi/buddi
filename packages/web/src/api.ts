@@ -1967,9 +1967,9 @@ export const api = {
   rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
   updatePlugin: (name: string, version?: string) =>
     post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, version ? { version } : {}),
-  /** Disable or enable an installed plugin; it takes effect at the next start. */
+  /** Disable or enable an installed plugin; it takes effect at once, `restartFor` says what a restart must finish. */
   setPluginEnabled: (name: string, enabled: boolean) =>
-    post<{ name: string; enabled: boolean; changed: boolean; missions: string[]; notes: string[]; restartNeeded: boolean }>(
+    post<{ name: string; enabled: boolean; changed: boolean; missions: string[]; notes: string[]; restartNeeded: boolean; restartFor?: string; loadProblem?: string }>(
       `/plugins/${encodeURIComponent(name)}/${enabled ? 'enable' : 'disable'}`,
       {},
     ),

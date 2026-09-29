@@ -95,6 +95,22 @@ export interface HostBinding {
   manifestNetwork: ReadonlyArray<{ host: string; why: string }>;
   /** The hosts `ctx.buddi.network.declare` added, and why. */
   runtimeNetwork: Map<string, string>;
+  /**
+   * What undoes this binding's registrations outside the registry (a channel
+   * it registered), run when the plugin is unregistered while buddi runs.
+   */
+  release?: Array<() => void>;
+}
+
+/** Undo what a binding registered outside the registry: its channels. Never throws. */
+export function releaseHostBinding(binding: HostBinding): void {
+  for (const undo of binding.release?.splice(0) ?? []) {
+    try {
+      undo();
+    } catch {
+      // Removing a registration is best effort; the plugin is going either way.
+    }
+  }
 }
 
 /**
@@ -579,7 +595,7 @@ function channelsArea(binding: HostBinding): ChannelsArea {
       if (!channel.kind.startsWith(`${plugin}.`) || channel.kind.length <= plugin.length + 1) {
         throw new Error(`${plugin} may register a channel only in its own namespace (${plugin}.<what>), not ${channel.kind}`);
       }
-      return registerChannel({
+      const remove = registerChannel({
         kind: channel.kind,
         can: { ...channel.can },
         priority: 100,
@@ -594,6 +610,8 @@ function channelsArea(binding: HostBinding): ChannelsArea {
           return 'id' in answer ? { id: String(answer.id) } : { refused: String(answer.refused) };
         },
       });
+      (binding.release ??= []).push(remove);
+      return remove;
     },
   };
 }

@@ -50,6 +50,7 @@ import { driftFor, type Drift } from '../plugins/provenance.js';
 import { RECORD_ITSELF } from '../plugins/load.js';
 import { incomingRoot, installedPackageDir } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
+import type { LiveRegistry } from '../plugins/live.js';
 import type { PagesDeps } from './pages.js';
 import type { DecideResult, WriteResult } from './write.js';
 
@@ -95,7 +96,15 @@ export interface PluginsDeps {
    * runs (`ctx.buddi.network`): Connections' services. Without one, the
    * manifest's `network` is all there is.
    */
-  registry?: { networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined } | undefined;
+  registry?:
+    | ({ networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined } & Partial<LiveRegistry>)
+    | undefined;
+}
+
+/** The registry as disabling and enabling need it, when this one has all of it. */
+function liveRegistryOf(registry: PluginsDeps['registry']): LiveRegistry | undefined {
+  if (registry?.register === undefined || registry.unregister === undefined || registry.manifests === undefined) return undefined;
+  return registry as LiveRegistry;
 }
 
 function engineOf(deps: PluginsDeps): PluginsEngine {
@@ -691,6 +700,27 @@ export function updateRoute(
 }
 
 /**
+ * Disable or enable an installed plugin, in this running gateway at once: its
+ * tools, pages, glances and watchers leave (or come back) with the registry,
+ * and the rail drops the entry on its next read of `GET /api/pages`.
+ */
+export async function toggleRoute(deps: PluginsDeps, name: string, enabled: boolean): Promise<RouteReply> {
+  const setEnabled = deps.engine?.setPluginEnabled ?? engine.setPluginEnabled;
+  const registry = liveRegistryOf(deps.registry);
+  try {
+    const outcome = await setEnabled(name, enabled, {
+      env: deps.env,
+      log: deps.log,
+      ...(deps.pool === undefined ? {} : { pool: deps.pool }),
+      ...(registry === undefined ? {} : { registry }),
+    });
+    return { status: 200, body: { ...outcome, notes: engine.toggleNotes(outcome) } };
+  } catch (err) {
+    return refusalReply(err);
+  }
+}
+
+/**
  * Remove a plugin, and decide what happens to its data.
  *
  * Uninstalling stops the code loading and keeps the schema, which is what
@@ -699,23 +729,6 @@ export function updateRoute(
  * here as well as in the engine, because a guard only a browser applies is not
  * a guard.
  */
-/**
- * Disable or enable an installed plugin. The record changes now; loading or
- * not loading it is the next start's, exactly as for an install.
- */
-export async function toggleRoute(deps: PluginsDeps, name: string, enabled: boolean): Promise<RouteReply> {
-  const setEnabled = deps.engine?.setPluginEnabled ?? engine.setPluginEnabled;
-  try {
-    const outcome = await setEnabled(name, enabled, {
-      env: deps.env,
-      ...(deps.pool === undefined ? {} : { pool: deps.pool }),
-    });
-    return { status: 200, body: { ...outcome, notes: engine.toggleNotes(outcome) } };
-  } catch (err) {
-    return refusalReply(err);
-  }
-}
-
 export async function uninstallRoute(
   deps: PluginsDeps,
   name: string,

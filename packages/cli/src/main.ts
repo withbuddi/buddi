@@ -71,6 +71,7 @@ import { runInit } from './init.js';
 import { jobsCancel, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
 import { DATA_DIR, loadEnv, loadEnvironment, REPO_ROOT } from './paths.js';
 import { runMcp } from './mcp/server.js';
+import { toggleInGateway } from './plugins-toggle.js';
 import { createServiceManager, followLogs } from './service/index.js';
 import { runTelegram } from './telegram-cmd.js';
 import { runUpgrade } from './upgrade.js';
@@ -213,7 +214,7 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       return 0;
     case 'plugins': {
       await loadEnvironment();
-      return runPluginsCli(withJson(command.argv, json));
+      return runPluginsCli(withJson(command.argv, json), { toggleInGateway: toggleInGateway(process.env) });
     }
     case 'migrate': {
       await loadEnvironment();

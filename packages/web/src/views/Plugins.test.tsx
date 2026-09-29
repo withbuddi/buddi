@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type PluginsView, type StagedPluginView } from '../api';
+import { PAGES_CHANGED_EVENT } from '../pages/usePages';
 import { Plugins } from './Plugins';
 
 vi.mock('../api', async (load) => {
@@ -455,12 +456,14 @@ describe('the plugins section', () => {
           { ...base, name: 'garden', loaded: true, author: { name: 'Ada', url: 'https://ada.dev' } },
           { ...base, name: 'cellar', loaded: false, enabled: false },
         ],
-        restartNeeded: true,
       }),
     );
     vi.mocked(api.setPluginEnabled).mockResolvedValue({
-      name: 'garden', enabled: false, changed: true, missions: [], notes: [], restartNeeded: true,
+      name: 'garden', enabled: false, changed: true, missions: [],
+      notes: ['Disabled. Its tools, pages and watchers are off now; its data is kept.'], restartNeeded: false,
     });
+    const pagesChanged = vi.fn();
+    window.addEventListener(PAGES_CHANGED_EVENT, pagesChanged);
     render(<Plugins />);
 
     // A local build with an author says who made it instead of "you, from this machine".
@@ -477,10 +480,18 @@ describe('the plugins section', () => {
     expect(screen.getByText(/Disabling keeps everything: its tables and data/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
     await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('garden', false));
+    // It takes effect at once: the card says so, the rail reads its pages again, and nothing asks for a restart.
+    expect(await screen.findByText('Disabled. Its tools, pages and watchers are off now; its data is kept.')).toBeInTheDocument();
+    expect(pagesChanged).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/since buddi started/)).not.toBeInTheDocument();
 
+    vi.mocked(api.setPluginEnabled).mockResolvedValue({
+      name: 'cellar', enabled: true, changed: true, missions: [], notes: ['Enabled.'], restartNeeded: false,
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
     await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('cellar', true));
-    // Enabling, like installing, is applied by a restart.
-    expect(screen.getByText(/disabled or enabled since buddi started/)).toBeInTheDocument();
+    expect(await screen.findByText('Enabled.')).toBeInTheDocument();
+    expect(pagesChanged).toHaveBeenCalledTimes(2);
+    window.removeEventListener(PAGES_CHANGED_EVENT, pagesChanged);
   });
 });
