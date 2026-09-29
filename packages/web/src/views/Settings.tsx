@@ -13,13 +13,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
+import { SETTINGS_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
-import { Button, Empty, ErrorBanner, Field, KV, Notice, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
+import { Breadcrumb, Button, Empty, ErrorBanner, Field, KV, Notice, PageHeader, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
@@ -69,10 +69,20 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       {narrow ? null : <SettingsNav {...list} />}
       <div className="settings-body">
         <div className="ui-page">
-          <header className="ui-page-head">
-            <h2 className="ui-page-title">Settings</h2>
-            <p className="ui-page-lede">How this installation runs, and where it reaches.</p>
-          </header>
+          {section === 'plugins' ? (
+            /* Plugins is a page of its own inside Settings, as the kit draws it:
+               the way back to Settings, then its own title and lede. */
+            <PageHeader
+              before={<Breadcrumb inline items={[{ label: 'Settings', href: SETTINGS_ROUTE, onClick: () => navigate(SETTINGS_ROUTE) }]} />}
+              title="Plugins"
+              lede="New tools and pages for your team, written by someone else. Each one is read with you, fact by fact, before any of it runs."
+            />
+          ) : (
+            <header className="ui-page-head">
+              <h2 className="ui-page-title">Settings</h2>
+              <p className="ui-page-lede">How this installation runs, and where it reaches.</p>
+            </header>
+          )}
           {narrow ? <SettingsMenu {...list} /> : null}
           {pluginPage ? (
             <PluginSettingsPage

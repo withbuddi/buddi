@@ -224,19 +224,45 @@ A list of sections in four groups.
 - **Watchers**: the checks plugins run on a schedule, with a switch each.
 - **Backup**: nightly backups, one now, a check, the passphrase, and restore.
 - **System**: the version and upgrade, pausing the queue, this host.
-- **All plugins**: two tabs. **Installed** is what is installed, and
-  installing one. **Browse** is the plugin list from withbuddi.com, fetched
-  through buddi only when you open the tab and kept a day: a search field, a
-  **Recommended** shelf of the plugins buddi publishes that you do not have,
-  then every listing by category (Your days, Money, Home, Voice, Work, Other)
-  with who made it, how it is trusted, its price when it has one, the hosts it
-  talks to and what it reaches in buddi. **Install** stages the listed version
-  and takes you to Installed, where the staged card and its approvals are the
-  same as any install; a newer listed version shows **Update to <version>**,
-  there and on the installed row. A link from withbuddi.com,
-  `#/settings/plugins?install=<npm name>@<version>`, opens Installed and stages
-  that version at once; `#/settings/plugins?tab=browse` opens Browse. A
-  plugin's own settings tabs follow it (see [Plugin pages](plugin-pages.md)).
+- **All plugins**: a page of its own under Settings (the title reads
+  Settings › Plugins), with two tabs. **Installed** starts with one **Add a
+  plugin** panel: where it comes from (From npm, A file, A directory I built),
+  one field and **Read it first**, and the trust sentence under it, word for
+  word. For a directory, **Browse…** lists the folders under your home
+  directory on the computer buddi runs on, marks the ones with a package.json,
+  and **Use this folder** fills the field. Reading shows its progress on one
+  line; what was read comes back as a card with its facts on the left and what
+  the package says about itself on the right, with **Not this one** and
+  **Install** (and a second card, **Install anyway**, when the two disagree).
+  Installed plugins are rows: the icon (the market's, once Browse has been
+  opened, when it is listed there), name, version, agents waiting to be
+  accepted, who made it, where it came from and what it adds; then **Update to
+  <version>** when withbuddi.com lists a newer one, **Open** for its page, its
+  state (loaded, disabled, did not load) and a ⋯ menu. A disabled row is
+  dimmed. A row opens a sheet with the rest: where it came from, who published
+  it, its integrity, the hosts it talks to, what it reaches in buddi, and the
+  agents it proposes with **Accept**; its foot has **Remove…**, **Open**,
+  **Disable…** or **Enable**, and **Update** (or **Check for an update**).
+  Disable and Remove ask in a small dialog; Remove can also drop the plugin's
+  data, once you type its name, and offers **Disable instead**. **Ships with
+  buddi**, folded, names the plugins compiled in and how many tools each adds.
+  **Browse** is the plugin list from withbuddi.com, fetched through buddi only
+  when you open the tab and kept a day: a search field, filter chips (All,
+  **Recommended** — the plugins buddi publishes that you do not have — and each
+  category: Your days, Money, Voice, Work, Home, Other), and one grid of cards
+  with who made it, how it is trusted and what you have installed. A card opens
+  a sheet with its screenshot, the package, its tools (how many run without
+  asking and how many ask you first), the hosts it talks to, what it reaches in
+  buddi, its dependencies, and its licence and price. The icons and screenshots
+  come through buddi, which keeps them beside the list; the page never fetches
+  withbuddi.com itself. **Install** stages the listed version and takes you to
+  Installed, where the staged card and its approvals are the same as any
+  install; a newer listed version shows **Update to <version>**, there and on
+  the installed row, and the Installed tab counts them. A link from
+  withbuddi.com, `#/settings/plugins?install=<npm name>@<version>`, opens
+  Installed and stages that version at once; `#/settings/plugins?tab=browse`
+  opens Browse. A plugin's own settings tabs follow it (see [Plugin
+  pages](plugin-pages.md)).
 
 ## Notifications on the dashboard
 

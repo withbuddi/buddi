@@ -6,6 +6,7 @@
  * attribute the rule already knows. There is no `style` prop on purpose.
  */
 import * as Dialog from '@radix-ui/react-dialog';
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 
@@ -27,7 +28,11 @@ function cx(...parts: Array<string | false | null | undefined>): string {
  * controls
  * ------------------------------------------------------------------ */
 
-export type ButtonVariant = 'default' | 'accent' | 'good' | 'danger' | 'ghost';
+/**
+ * `danger-ghost` is the quiet destructive action at the far end of a row of
+ * buttons (a sheet's "Remove…"): no border, the critical ink.
+ */
+export type ButtonVariant = 'default' | 'accent' | 'good' | 'danger' | 'danger-ghost' | 'ghost';
 
 export function Button({
   variant,
@@ -234,12 +239,28 @@ export function Notice({
   title,
   children,
   role,
+  action,
 }: {
   tone?: Exclude<Tone, 'muted'>;
   title?: ReactNode;
   children?: ReactNode;
   role?: 'status' | 'alert';
+  /** The one thing to do about it, on the right of the words: "Restart to load it". */
+  action?: ReactNode;
 }): JSX.Element {
+  if (action) {
+    return (
+      <div className="ui-notice" data-tone={tone} role={role}>
+        <div className="ui-notice-row">
+          <div className="ui-notice-body">
+            {title ? <div className="ui-notice-title">{title}</div> : null}
+            {children}
+          </div>
+          {action}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="ui-notice" data-tone={tone} role={role}>
       {title ? <div className="ui-notice-title">{title}</div> : null}
@@ -498,6 +519,8 @@ export function Card({
   actions,
   children,
   foot,
+  onClick,
+  label,
   as: As = 'div',
 }: {
   tone?: Tone;
@@ -507,10 +530,30 @@ export function Card({
   actions?: ReactNode;
   children?: ReactNode;
   foot?: ReactNode;
+  /**
+   * The whole card opens something (its detail). It lifts on hover and is
+   * reachable by Tab and Enter; buttons inside keep their own clicks.
+   */
+  onClick?: () => void;
+  /** Its name for a screen reader when it is clickable. */
+  label?: string;
   as?: 'div' | 'section' | 'article';
 }): JSX.Element {
+  const interactive = onClick
+    ? {
+        'data-interactive': 'true',
+        tabIndex: 0,
+        'aria-label': label,
+        onClick,
+        onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
+          if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          onClick();
+        },
+      }
+    : {};
   return (
-    <As className="ui-card" data-tone={tone}>
+    <As className="ui-card" data-tone={tone} {...interactive}>
       {title || meta || actions ? (
         <div className="ui-card-head">
           {title ? <h3 className="ui-card-title">{title}</h3> : null}
@@ -665,11 +708,14 @@ export function Sheet({
   title,
   onClose,
   size,
+  foot,
   children,
 }: {
   title: ReactNode;
   onClose: () => void;
   size?: 'wide';
+  /** The sheet's last row, held at its bottom behind a hairline: its actions. */
+  foot?: ReactNode;
   children: ReactNode;
 }): JSX.Element {
   return (
@@ -684,9 +730,109 @@ export function Sheet({
             </Dialog.Close>
           </div>
           {children}
+          {foot ? <div className="ui-sheet-foot">{foot}</div> : null}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/**
+ * A small question centred over the page: one decision, asked once. Title,
+ * a sentence or two, and the buttons in `foot` (the one that acts last, on
+ * the right). Modal: focus stays in it, Escape and the overlay cancel. It may
+ * open over a Sheet; closing it leaves the sheet where it was.
+ */
+export function Modal({
+  title,
+  onClose,
+  foot,
+  children,
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  foot?: ReactNode;
+  children?: ReactNode;
+}): JSX.Element {
+  return (
+    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ui-sheet-overlay" data-layer="modal" />
+        <Dialog.Content className="ui-modal" role="alertdialog" aria-describedby={undefined}>
+          <Dialog.Title className="ui-modal-title">{title}</Dialog.Title>
+          {children}
+          {foot ? <div className="ui-modal-foot">{foot}</div> : null}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** One thing a row's ⋯ menu does. */
+export interface MenuAction {
+  label: ReactNode;
+  /** A short note on the right: what it keeps, what it undoes. */
+  hint?: ReactNode;
+  tone?: 'critical';
+  onSelect: () => void;
+}
+
+/**
+ * A row's other things to do, behind ⋯. `null` and `false` are skipped, so
+ * a condition can sit in the list; `'separator'` draws a hairline. Clicks in
+ * it never reach the row around it.
+ */
+export function ActionMenu({
+  label,
+  items,
+}: {
+  /** The button's name: "More for finance". */
+  label: string;
+  items: Array<MenuAction | 'separator' | null | false | undefined>;
+}): JSX.Element {
+  const stop = (event: { stopPropagation: () => void }): void => event.stopPropagation();
+  /*
+   * An item that opens something (a dialog, a sheet) takes the focus there;
+   * handing it back to ⋯ as the menu closes would pull it out of what opened.
+   */
+  const chose = useRef(false);
+  return (
+    <DropdownMenu.Root modal={false} onOpenChange={(open) => { if (open) chose.current = false; }}>
+      <DropdownMenu.Trigger asChild>
+        <button type="button" className="ui-icon-btn" data-size="sm" aria-label={label} title={label} onClick={stop}>
+          <Icon name="more" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="ui-menu"
+          align="end"
+          sideOffset={4}
+          onClick={stop}
+          onKeyDown={stop}
+          onCloseAutoFocus={(event) => { if (chose.current) event.preventDefault(); }}
+        >
+          {items.map((item, index) =>
+            !item ? null : item === 'separator' ? (
+              <DropdownMenu.Separator key={`sep-${index}`} className="ui-menu-sep" />
+            ) : (
+              <DropdownMenu.Item
+                key={index}
+                className="ui-menu-item"
+                data-tone={item.tone}
+                onSelect={() => {
+                  chose.current = true;
+                  item.onSelect();
+                }}
+              >
+                <span>{item.label}</span>
+                {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
+              </DropdownMenu.Item>
+            ),
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
@@ -819,13 +965,24 @@ export function ListRow({
   title,
   sub,
   side,
+  dimmed,
+  label,
 }: {
   href?: string;
+  /**
+   * Without `href`, the whole row opens something (its detail): it takes the
+   * hover and the focus, and Enter on it is a click. Controls in `side` keep
+   * their own clicks — they stop the event themselves.
+   */
   onClick?: () => void;
   lead?: ReactNode;
   title: ReactNode;
   sub?: ReactNode;
   side?: ReactNode;
+  /** Off, but still here: a disabled plugin. The side stays at full strength. */
+  dimmed?: boolean;
+  /** The row's name for a screen reader when it is clickable. */
+  label?: string;
 }): JSX.Element {
   const body = (
     <>
@@ -837,14 +994,34 @@ export function ListRow({
       {side ? <span className="ui-list-side">{side}</span> : null}
     </>
   );
+  const dim = dimmed ? 'true' : undefined;
   if (href) {
     return (
-      <a className="ui-list-row" href={href} onClick={onClick ? (e) => { e.preventDefault(); onClick(); } : undefined}>
+      <a className="ui-list-row" data-dimmed={dim} href={href} onClick={onClick ? (e) => { e.preventDefault(); onClick(); } : undefined}>
         {body}
       </a>
     );
   }
-  return <div className="ui-list-row">{body}</div>;
+  if (onClick) {
+    return (
+      <div
+        className="ui-list-row"
+        data-interactive="true"
+        data-dimmed={dim}
+        tabIndex={0}
+        aria-label={label}
+        onClick={onClick}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          onClick();
+        }}
+      >
+        {body}
+      </div>
+    );
+  }
+  return <div className="ui-list-row" data-dimmed={dim}>{body}</div>;
 }
 
 /**
@@ -1119,6 +1296,142 @@ export function ChipPicker({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * One filter out of a few, said as pill buttons: the chosen one pressed.
+ * A group of toggles rather than tabs, because the list under it is the same
+ * list, narrowed.
+ */
+export function FilterChips<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<{ value: T; label: ReactNode }>;
+  value: T;
+  onChange: (value: T) => void;
+}): JSX.Element {
+  return (
+    <div className="ui-filter-chips" role="group" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className="ui-btn ui-filter-chip"
+          data-size="sm"
+          aria-pressed={option.value === value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A search as one field that filters as you type. The placeholder says what
+ * it searches; `label` names it for a screen reader. `grow` takes the row.
+ */
+export function SearchField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  grow,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  grow?: boolean;
+}): JSX.Element {
+  return (
+    <span className="ui-search" data-grow={grow ? 'true' : undefined}>
+      <input
+        type="search"
+        aria-label={label}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </span>
+  );
+}
+
+/**
+ * A thing's face as a soft square: an app's icon. `svg` is markup the
+ * gateway already sanitised (a market icon); it draws in `currentColor`, so it
+ * takes the tile's accent. Without it, one of buddi's own icons on a quiet
+ * tile. Decoration: the name beside it says what it is.
+ */
+export function AppIcon({
+  svg,
+  icon = 'plug',
+  size,
+}: {
+  svg?: string | undefined;
+  icon?: IconName;
+  size?: 'lg';
+}): JSX.Element {
+  return (
+    <span className="ui-app-icon" data-size={size} data-tone={svg ? 'accent' : undefined} aria-hidden="true">
+      {svg ? <span className="ui-app-icon-svg" dangerouslySetInnerHTML={{ __html: svg }} /> : <Icon name={icon} />}
+    </span>
+  );
+}
+
+/**
+ * Where this is, as the steps to it: each step a link or a button, a chevron
+ * after it, and the step you are on (`current`) plain. `inline` renders a
+ * span for a place that takes no <nav>, such as inside a page title.
+ */
+export function Breadcrumb({
+  items,
+  label = 'Where this is',
+  inline,
+}: {
+  items: Array<{ label: ReactNode; key?: string; href?: string; onClick?: () => void; current?: boolean }>;
+  label?: string;
+  inline?: boolean;
+}): JSX.Element {
+  const steps = items.map((item, index) => {
+    const key = item.key ?? String(index);
+    if (item.current) {
+      return (
+        <span key={key} className="ui-crumb" aria-current="page">
+          {item.label}
+        </span>
+      );
+    }
+    const step = item.href ? (
+      <a
+        className="ui-crumb"
+        href={item.href}
+        onClick={item.onClick ? (event) => { event.preventDefault(); item.onClick?.(); } : undefined}
+      >
+        {item.label}
+      </a>
+    ) : (
+      <button type="button" className="ui-crumb" onClick={item.onClick}>
+        {item.label}
+      </button>
+    );
+    return (
+      <span key={key} className="ui-crumb-step">
+        {step}
+        <Icon name="chevron-right" size={12} />
+      </span>
+    );
+  });
+  return inline ? (
+    <span className="ui-crumbs" aria-label={label}>{steps}</span>
+  ) : (
+    <nav className="ui-crumbs" aria-label={label}>{steps}</nav>
   );
 }
 

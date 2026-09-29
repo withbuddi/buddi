@@ -6,11 +6,17 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Settings → Plugins has a Browse tab: the plugin list from withbuddi.com, fetched only when you open it and kept a day, with a Recommended shelf of the plugins buddi publishes, a search, and every listing by category. Install stages the listed version onto the usual card.
+- Settings → Plugins has a Browse tab: the plugin list from withbuddi.com, fetched only when you open it and kept a day, as one grid of cards with each listing's icon behind a search and filter chips (All, Recommended — what buddi publishes that you do not have — and each category). A card opens a sheet with its screenshot, its tools, the hosts it talks to, what it reaches in buddi, its dependencies and its licence; the icons and screenshots come through buddi, never straight from the page. Install stages the listed version onto the usual card.
 - A newer version listed on withbuddi.com shows as "Update to <version>" in Browse and on the installed plugin's row, once Browse has been opened.
+- "A directory I built" has a Browse… button: it lists the folders under your home directory on the computer buddi runs on, marks the ones with a package.json, and fills the field with the one you choose.
 - A link to `#/settings/plugins?install=<npm name>@<version>`, which withbuddi.com's "Install in buddi" opens, stages that version at once.
 - `buddi plugins describe <spec> [--json]` stages a plugin, reads its manifest, prints what it brings and deletes the stage; `--json` is what a market listing's claims are made of.
 - A Home tip points at Browse on an installation with none of the recommended plugins.
+
+### Changed
+
+- Settings → Plugins is redrawn from the design kit: one "Add a plugin" panel with the trust sentence under the field, the staged card with its facts beside what the package says about itself, installed plugins as compact rows (status, Update, Open and a ⋯ menu) that open a detail sheet, and "Ships with buddi" folded. Disable and Remove ask in a small dialog; Remove offers "Disable instead".
+- An installed plugin's row offers an Update only when withbuddi.com lists a newer version; its detail sheet has "Check for an update" otherwise.
 
 ### Fixed
 

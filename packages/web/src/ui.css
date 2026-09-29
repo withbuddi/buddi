@@ -60,6 +60,9 @@
 .ui-btn[data-variant='danger']:hover:not(:disabled) { background: var(--critical-soft); border-color: var(--critical); color: var(--critical); }
 .ui-btn[data-variant='ghost'] { border-color: transparent; background: transparent; color: var(--text-muted); }
 .ui-btn[data-variant='ghost']:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text); }
+/* The quiet destructive action at the far end of a row: no border, the critical ink. */
+.ui-btn[data-variant='danger-ghost'] { border-color: transparent; background: transparent; color: var(--critical); }
+.ui-btn[data-variant='danger-ghost']:hover:not(:disabled) { background: var(--critical-soft); color: var(--critical); }
 /* White on brand blue: the one control a brand surface carries. */
 .ui-btn[data-variant='on-brand'] { background: var(--surface); border-color: transparent; color: var(--buddi-navy); }
 .ui-btn[data-variant='on-brand']:hover:not(:disabled) { background: var(--buddi-cream); color: var(--buddi-navy); }
@@ -499,6 +502,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-card[data-tone='critical'] { border-color: color-mix(in oklab, var(--critical) 40%, var(--line)); }
 .ui-card[data-interactive='true'] { cursor: pointer; transition: border-color var(--dur-fast) ease, transform var(--dur) var(--ease), box-shadow var(--dur) ease; }
 .ui-card[data-interactive='true']:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--shadow-pop); }
+.ui-card[data-interactive='true']:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--space-0); }
 .ui-card-head { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .ui-card-title {
   margin: 0;
@@ -679,6 +683,35 @@ fieldset:disabled { opacity: 0.6; }
 @keyframes ui-sheet-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .ui-sheet[data-size='wide'] { width: min(760px, 100%); }
 .ui-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+/* The sheet's actions, held at its bottom behind a hairline. */
+.ui-sheet-foot { margin-top: auto; padding-top: var(--space-4); border-top: 1px solid var(--line); }
+
+/* A small question centred over the page (and over a sheet): the kit's dialog card. */
+.ui-sheet-overlay[data-layer='modal'] { z-index: 44; }
+.ui-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  margin: auto;
+  width: min(440px, calc(100% - var(--space-6) * 2));
+  height: fit-content;
+  max-height: calc(100% - var(--space-6) * 2);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  outline: none;
+  animation: ui-modal-in var(--dur-slow) var(--ease);
+}
+@keyframes ui-modal-in { from { transform: translateY(var(--space-2)) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+.ui-modal-title { margin: 0; font-family: var(--font-display); font-size: var(--text-lg); font-weight: var(--weight-semibold); line-height: var(--leading-tight); }
+.ui-modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+@media (prefers-reduced-motion: reduce) { .ui-modal { animation: none; } }
 .ui-sheet-title { margin: 0; font-size: var(--text-lg); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 
 /* A small window docked bottom-right: a side conversation over the page. */
@@ -922,6 +955,12 @@ a.ui-list-row:hover .ui-list-title { color: var(--accent); }
 .ui-list-sub { font-size: var(--text-sm); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-list-side { flex: 0 0 auto; font-size: var(--text-sm); color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ui-panel[data-flush='true'] .ui-list-row { padding: 10px var(--space-4); }
+/* A row that opens its detail: the title takes the accent on hover, as a link row's does. */
+.ui-list-row[data-interactive='true'] { cursor: pointer; }
+.ui-list-row[data-interactive='true']:hover .ui-list-title { color: var(--accent); }
+.ui-list-row[data-interactive='true']:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: calc(var(--space-0) * -1); }
+/* Off, but still here: everything but the side fades; its state and controls stay readable. */
+.ui-list-row[data-dimmed='true'] > :not(.ui-list-side) { opacity: 0.55; }
 
 /* A list and the one thing it is showing: the list a white panel of its own
    width that scrolls by itself, the reading pane a white panel filling the
@@ -1139,3 +1178,53 @@ a.ui-list-row:hover .ui-list-title { color: var(--accent); }
   .ui-float-body { padding: var(--space-5); }
   .ui-float-dock { padding: var(--space-3) var(--space-5); }
 }
+
+/* ================================================================== *
+ * filters, search, faces, where-you-are
+ * ================================================================== */
+
+/* One filter out of a few, as pill buttons; the pressed one wears the accent (.ui-btn[aria-pressed]). */
+.ui-filter-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.ui-filter-chip.ui-btn { border-radius: var(--radius-pill); padding: 0 var(--space-3); }
+
+/* A search that filters as you type. */
+.ui-search { display: flex; min-width: 0; }
+.ui-search[data-grow='true'] { flex: 1 1 280px; }
+.ui-search input { width: 100%; }
+
+/* An app's face: a soft square. A market icon draws in the accent; buddi's own on a quiet tile. */
+.ui-app-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.ui-app-icon[data-tone='accent'] { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.ui-app-icon[data-size='lg'] { width: var(--space-10); height: var(--space-10); border-radius: var(--radius-lg); }
+.ui-app-icon-svg { display: inline-flex; width: var(--space-5); height: var(--space-5); }
+.ui-app-icon[data-size='lg'] .ui-app-icon-svg { width: var(--space-6); height: var(--space-6); }
+.ui-app-icon-svg svg { width: 100%; height: 100%; }
+
+/* Where this is: muted steps with a chevron after each, the one you are on plain. */
+.ui-crumbs { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }
+.ui-crumb-step { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--text-muted); }
+.ui-crumb {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ui-crumb:hover { color: var(--accent); text-decoration: none; }
+.ui-crumb[aria-current='page'] { color: var(--text); cursor: default; }
+.ui-crumb[aria-current='page']:hover { color: var(--text); }

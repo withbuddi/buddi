@@ -18,12 +18,22 @@
  * version is newer, and `usesWords` in the same words the staged card uses.
  * Nothing about installing changes: Install on the page stages the spec, and
  * the staged card and its approvals are the ones every install goes through.
+ *
+ * The listings' pictures come through here too: `GET /api/market/asset?url=`
+ * fetches a file under `https://withbuddi.com/plugins/` (a screenshot) and
+ * keeps it beside the index, so the page never reaches the internet itself.
+ * Each listing's icon is read the same way while the list is answered and
+ * passed on as `iconSvg`, sanitised to plain shapes (`svg.ts`), so the page can
+ * draw it inline in the colour of its tile. Both happen only on the way to
+ * Browse, which is already the one time the market is asked anything.
  */
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { compareVersions, resolveDataDir, type InstalledPlugin } from '@buddi/core';
 import { installedRecord, usesWords, type RouteReply } from './plugins.js';
+import { sanitizeIconSvg } from './svg.js';
 
 export const MARKET_ORIGIN = 'https://withbuddi.com';
 export const MARKET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -183,6 +193,157 @@ export function annotateMarket(
   });
 }
 
+/* ------------------------------------------------------------------ *
+ * The listings' files: icons and screenshots
+ * ------------------------------------------------------------------ */
+
+/** Where every listing's files live; nothing outside it is fetched for the page. */
+export const MARKET_ASSET_PREFIX = `${MARKET_ORIGIN}/plugins/`;
+/** A screenshot is a few hundred kilobytes; this is room and no more. */
+export const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+/** What a listing's file may be. Anything else is not passed on. */
+const ASSET_TYPES: ReadonlySet<string> = new Set(['image/webp', 'image/png', 'image/jpeg', 'image/gif', 'image/svg+xml']);
+
+/**
+ * The prefixes a file may be fetched from: withbuddi.com's, and the origin
+ * `BUDDI_MARKET_URL` names when set (a staging copy of the site), whose own
+ * files sit at the same place under it.
+ */
+function assetPrefixes(env: NodeJS.ProcessEnv): string[] {
+  const configured = env.BUDDI_MARKET_URL?.trim();
+  const prefixes = [MARKET_ASSET_PREFIX];
+  if (configured) prefixes.push(`${configured.replace(/\/+$/, '')}/plugins/`);
+  return [...new Set(prefixes)];
+}
+
+/** The URL, when it is a listing's file; `undefined` for anything else. */
+export function marketAssetUrl(env: NodeJS.ProcessEnv, raw: string | null | undefined): URL | undefined {
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  // Parsed, so `..` and encoded dots are resolved before the prefix is checked.
+  if (url.username || url.password || url.search || url.hash) return undefined;
+  return assetPrefixes(env).some((prefix) => url.href.startsWith(prefix)) && url.href.length > url.origin.length + '/plugins/'.length
+    ? url
+    : undefined;
+}
+
+interface Asset {
+  bytes: Buffer;
+  type: string;
+  fetchedAt: string;
+}
+
+function assetPaths(env: NodeJS.ProcessEnv, url: URL): { bytes: string; meta: string } {
+  const key = createHash('sha256').update(url.href).digest('hex');
+  const dir = path.join(path.dirname(marketFile(env)), 'assets');
+  return { bytes: path.join(dir, key), meta: path.join(dir, `${key}.json`) };
+}
+
+function readAsset(env: NodeJS.ProcessEnv, url: URL): Asset | undefined {
+  try {
+    const files = assetPaths(env, url);
+    const meta = JSON.parse(readFileSync(files.meta, 'utf8')) as { url?: unknown; type?: unknown; fetchedAt?: unknown };
+    if (meta.url !== url.href || typeof meta.type !== 'string' || typeof meta.fetchedAt !== 'string') return undefined;
+    return { bytes: readFileSync(files.bytes), type: meta.type, fetchedAt: meta.fetchedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeAsset(env: NodeJS.ProcessEnv, url: URL, asset: Asset, log: (line: string) => void): void {
+  try {
+    const files = assetPaths(env, url);
+    mkdirSync(path.dirname(files.bytes), { recursive: true });
+    const tmp = `${files.bytes}.${process.pid}.tmp`;
+    writeFileSync(tmp, asset.bytes);
+    renameSync(tmp, files.bytes);
+    writeFileSync(files.meta, `${JSON.stringify({ url: url.href, type: asset.type, fetchedAt: asset.fetchedAt })}\n`);
+  } catch (err) {
+    log(`market: could not keep ${url.href} on disk: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function fetchAsset(deps: MarketDeps, url: URL): Promise<Omit<Asset, 'fetchedAt'>> {
+  const doFetch = deps.fetch ?? fetch;
+  const response = await doFetch(url.href, { signal: AbortSignal.timeout(MARKET_TIMEOUT_MS), redirect: 'error' });
+  if (!response.ok) throw new Error(`${url.href} answered ${response.status}`);
+  const type = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+  if (!ASSET_TYPES.has(type)) throw new Error(`${url.href} is not a picture (${type || 'no type'})`);
+  const declared = Number(response.headers.get('content-length') ?? '0');
+  if (declared > MAX_ASSET_BYTES) throw new Error(`${url.href} is larger than a listing's picture should be`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > MAX_ASSET_BYTES) throw new Error(`${url.href} is larger than a listing's picture should be`);
+  return { bytes, type };
+}
+
+/**
+ * One listing's file: from the copy beside the index while it is under a day
+ * old, else fetched and kept. A fetch that fails with a copy on hand answers
+ * the copy; with none, it throws.
+ */
+export async function marketAsset(deps: MarketDeps, url: URL): Promise<Asset> {
+  const now = deps.now ?? ((): Date => new Date());
+  const kept = readAsset(deps.env, url);
+  if (kept && now().getTime() - Date.parse(kept.fetchedAt) < MARKET_TTL_MS) return kept;
+  try {
+    const asset = { ...(await fetchAsset(deps, url)), fetchedAt: now().toISOString() };
+    writeAsset(deps.env, url, asset, deps.log);
+    return asset;
+  } catch (err) {
+    if (kept) return kept;
+    throw err;
+  }
+}
+
+/** A reply that is a file rather than JSON. */
+export interface AssetReply {
+  status: number;
+  body?: unknown;
+  bytes?: Buffer;
+  type?: string;
+}
+
+/**
+ * `GET /api/market/asset?url=<a listing's file>` — a screenshot for the
+ * detail sheet. An SVG goes out only as the sanitiser re-wrote it.
+ */
+export async function marketAssetRoute(deps: MarketDeps, url: URL): Promise<AssetReply> {
+  const target = marketAssetUrl(deps.env, url.searchParams.get('url'));
+  if (!target) return { status: 400, body: { error: `Only a listing's own files, under ${MARKET_ASSET_PREFIX}, come through here.` } };
+  let asset: Asset;
+  try {
+    asset = await marketAsset(deps, target);
+  } catch (err) {
+    deps.log(`market: fetching ${target.href} failed: ${reason(err)}`);
+    return { status: 502, body: { error: `buddi could not fetch that picture from withbuddi.com: ${reason(err)}` } };
+  }
+  if (asset.type === 'image/svg+xml') {
+    const svg = sanitizeIconSvg(asset.bytes.toString('utf8'));
+    if (svg === undefined) return { status: 415, body: { error: 'That picture is not one buddi will draw.' } };
+    return { status: 200, bytes: Buffer.from(svg), type: asset.type };
+  }
+  return { status: 200, bytes: asset.bytes, type: asset.type };
+}
+
+/** A listing's icon, as markup the page may draw inline; `undefined` when there is none it will draw. */
+async function iconSvgOf(deps: MarketDeps, entry: MarketEntry): Promise<string | undefined> {
+  const icon = (entry as { icon?: unknown }).icon;
+  const url = typeof icon === 'string' ? marketAssetUrl(deps.env, icon) : undefined;
+  if (!url) return undefined;
+  try {
+    const asset = await marketAsset(deps, url);
+    return asset.type === 'image/svg+xml' ? sanitizeIconSvg(asset.bytes.toString('utf8')) : undefined;
+  } catch (err) {
+    deps.log(`market: the icon of "${entry.name}" was left out: ${reason(err)}`);
+    return undefined;
+  }
+}
+
 /** `GET /api/market[?refresh=1]`. */
 export async function marketRoute(deps: MarketDeps, url: URL): Promise<RouteReply> {
   const now = deps.now ?? ((): Date => new Date());
@@ -212,12 +373,16 @@ export async function marketRoute(deps: MarketDeps, url: URL): Promise<RouteRepl
     }
   }
   const { plugins: record } = installedRecord(deps.env);
+  const listed = (cached as Cached).index.plugins;
+  const icons = await Promise.all(listed.map((entry) => iconSvgOf(deps, entry)));
   return {
     status: 200,
     body: {
       fetchedAt: (cached as Cached).fetchedAt,
       ...(stale ? { stale: true } : {}),
-      plugins: annotateMarket((cached as Cached).index.plugins, record),
+      plugins: annotateMarket(listed, record).map((entry, i) =>
+        icons[i] === undefined ? entry : { ...entry, iconSvg: icons[i] },
+      ),
     },
   };
 }

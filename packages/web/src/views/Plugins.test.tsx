@@ -10,8 +10,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
+import { pluginPageRoute } from '../routes';
 import { Plugins } from './Plugins';
 
 vi.mock('../api', async (load) => {
@@ -28,6 +30,8 @@ vi.mock('../api', async (load) => {
       updatePlugin: vi.fn(),
       uninstallPlugin: vi.fn(),
       setPluginEnabled: vi.fn(),
+      pluginFolders: vi.fn(),
+      marketAssetUrl: (url: string) => `/api/market/asset?url=${encodeURIComponent(url)}`,
       uploadPlugin: vi.fn(),
       serviceAction: vi.fn(),
       acceptPluginAgent: vi.fn(),
@@ -78,6 +82,24 @@ beforeEach(() => {
 });
 
 const JOB = { id: 'job-1', kind: 'stage' as const, phase: 'fetching' as const, startedAt: new Date().toISOString() };
+
+const INSTALLED: InstalledPluginView = {
+  name: 'garden',
+  version: '1.0.0',
+  source: { kind: 'registry', name: 'buddi-plugin-garden', version: '1.0.0' },
+  publisher: 'someone',
+  installedAt: new Date().toISOString(),
+  contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
+  unlocks: [],
+  loaded: true,
+};
+
+/** A row's ⋯ menu, opened from the keyboard, and one of its items chosen. */
+async function openMenuItem(plugin: string, item: string): Promise<void> {
+  // Radix opens its menu on a pointer press, which user-event makes and fireEvent does not.
+  await userEvent.setup().click(await screen.findByLabelText(`More for ${plugin}`));
+  fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp(`^${item}`) }));
+}
 
 describe('the plugins section', () => {
   it('shows the trust sentence word for word, above everything', async () => {
@@ -140,7 +162,7 @@ describe('the plugins section', () => {
     };
     vi.mocked(api.plugins).mockResolvedValue(view({ staged: [update] }));
     render(<Plugins />);
-    expect(await screen.findByText('What it reaches in buddi')).toBeInTheDocument();
+    expect(await screen.findByText('What it reaches')).toBeInTheDocument();
     expect(screen.getByText(/It sends web requests\./)).toBeInTheDocument();
     expect(screen.getByText(/It reads every file in your Files library\./)).toBeInTheDocument();
     expect(screen.getByText('new in 2.1.0')).toBeInTheDocument();
@@ -209,12 +231,18 @@ describe('the plugins section', () => {
     vi.mocked(api.uninstallPlugin).mockResolvedValue({ name: 'weather', purged: false, notes: [], restartNeeded: true });
     render(<Plugins />);
 
+    // The row says there is an agent waiting, and opens the detail.
+    expect(await screen.findByText('1 agent to accept')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('weather: details'));
+
     // The agent it would unlock, and the two places accepting one happens.
     expect(await screen.findByText('@sky')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Accept' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /on the Agents page/ })).toHaveAttribute('href', '#/agents');
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove…' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Remove weather?' });
+    expect(dialog).toHaveTextContent('Its tables and the agents you accepted from it stay.');
     fireEvent.click(screen.getByLabelText(/Also drop its data/));
     const go = screen.getByRole('button', { name: 'Remove and drop its data' });
     expect(go).toBeDisabled();
@@ -227,6 +255,25 @@ describe('the plugins section', () => {
     await waitFor(() =>
       expect(api.uninstallPlugin).toHaveBeenCalledWith('weather', { purge: true, confirm: 'weather' }),
     );
+    // Done: the dialog and the sheet are gone.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+  });
+
+  it('removes without dropping anything unless asked, and offers to disable instead', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [{ ...INSTALLED, name: 'garden' }] }));
+    vi.mocked(api.uninstallPlugin).mockResolvedValue({ name: 'garden', purged: false, notes: ['Removed. Its tables stay.'], restartNeeded: true });
+    render(<Plugins />);
+    await openMenuItem('garden', 'Remove…');
+    expect(await screen.findByRole('alertdialog', { name: 'Remove garden?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Disable instead' }));
+    expect(await screen.findByRole('alertdialog', { name: 'Disable garden?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+
+    await openMenuItem('garden', 'Remove…');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.uninstallPlugin).toHaveBeenCalledWith('garden', {}));
+    expect(await screen.findByText('Removed. Its tables stay.')).toBeInTheDocument();
   });
 
   /**
@@ -259,12 +306,14 @@ describe('the plugins section', () => {
     });
 
     render(<Plugins />);
+    fireEvent.click(await screen.findByLabelText('garden: details'));
     fireEvent.click(await screen.findByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(api.acceptPluginAgent).toHaveBeenCalledWith('garden', 'gardener'));
 
     expect(await screen.findByText(/@gardener is ready/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Talk to @gardener' })).toHaveAttribute('href', '#/chat/gardener');
     expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.getByText('up to date')).toBeInTheDocument();
     expect(api.approval).not.toHaveBeenCalled();
   });
 
@@ -294,9 +343,20 @@ describe('the plugins section', () => {
     );
     render(<Plugins />);
 
-    expect(await screen.findByText('you, from this machine')).toBeInTheDocument();
-    expect(screen.getByText('a file on this machine')).toBeInTheDocument();
-    expect(screen.getByText('someone')).toBeInTheDocument();
+    // The rows say it in two words each.
+    expect(await screen.findByText('by you · from a directory · 1 tool')).toBeInTheDocument();
+    expect(screen.getByText('by you · from a file · 1 tool')).toBeInTheDocument();
+    expect(screen.getByText('by someone · from npm · 1 tool')).toBeInTheDocument();
+
+    const detail = async (name: string, fact: string): Promise<void> => {
+      fireEvent.click(screen.getByLabelText(`${name}: details`));
+      expect(await screen.findByText(fact)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    };
+    await detail('weather', 'you, from this machine');
+    await detail('packed', 'a file on this machine');
+    await detail('from-npm', 'someone');
     expect(screen.queryByText('nobody npm will name')).not.toBeInTheDocument();
   });
 
@@ -378,7 +438,7 @@ describe('the plugins section', () => {
     expect(api.stagePlugin).not.toHaveBeenCalled();
   });
 
-  it('names what buddi already ships with, and what each of them adds', async () => {
+  it('names what buddi already ships with, folded, and what each of them adds', async () => {
     vi.mocked(api.plugins).mockResolvedValue(
       view({
         builtIn: [
@@ -393,6 +453,7 @@ describe('the plugins section', () => {
             name: 'mcp',
             version: '0.1.0',
             contribution: { tools: 0, sentinels: 0, views: 0, agents: 0 },
+            author: { name: 'Grace', url: 'https://grace.dev' },
             network: [{ host: 'mcp.notion.com', why: 'Notion, a connected service' }, { host: 'mcp.linear.app', why: 'Linear' }],
           },
         ],
@@ -400,15 +461,19 @@ describe('the plugins section', () => {
     );
     render(<Plugins />);
 
-    expect(await screen.findByText('Ships with buddi')).toBeInTheDocument();
-    expect(screen.getByText('1.0.0 \u00b7 4 tools, 1 watcher')).toBeInTheDocument();
-    expect(screen.getByText('1.0.0 \u00b7 1 tool')).toBeInTheDocument();
-    expect(screen.getByText('What buddi remembers about you.')).toBeInTheDocument();
-    // What leaves the machine: the connected services' hosts, declared while buddi runs.
-    expect(screen.getByText('mcp.notion.com')).toHaveAttribute('title', 'Notion, a connected service');
-    expect(screen.getByText('mcp.linear.app').closest('p')).toHaveTextContent('Talks to mcp.notion.com, mcp.linear.app.');
+    const fold = await screen.findByText('Ships with buddi · 3 plugins');
+    expect(fold.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByText('memory').closest('.plugins-builtin')).toHaveTextContent('memory4 tools');
+    expect(screen.getByText('mail').closest('.plugins-builtin')).toHaveTextContent('mail1 tool');
+    // What each does, who made it and the hosts it talks to (what leaves the machine) are its tooltip.
+    expect(screen.getByText('memory').closest('.plugins-builtin')).toHaveAttribute('title', 'What buddi remembers about you.');
+    expect(screen.getByText('mcp').closest('.plugins-builtin')).toHaveAttribute(
+      'title',
+      'By Grace. Talks to mcp.notion.com, mcp.linear.app.',
+    );
   });
-  it('says who made it, on the staged card and on an installed and a built-in one, linked when there is a URL', async () => {
+
+  it('says who made it, on the staged card, on an installed row and in its detail, linked when there is a URL', async () => {
     vi.mocked(api.plugins).mockResolvedValue(
       view({
         staged: [{ ...STAGED, author: { name: 'withbuddi', url: 'https://withbuddi.com' } }],
@@ -417,19 +482,12 @@ describe('the plugins section', () => {
             name: 'finance',
             version: '0.1.0',
             source: { kind: 'registry', name: '@withbuddi/plugin-finance', version: '0.1.0' },
-            author: { name: 'Ada' },
+            author: { name: 'Ada', url: 'https://ada.dev' },
+            description: 'Your money, in one place.',
             installedAt: new Date().toISOString(),
             contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
             unlocks: [],
             loaded: true,
-          },
-        ],
-        builtIn: [
-          {
-            name: 'memory',
-            version: '1.0.0',
-            contribution: { tools: 1, sentinels: 0, views: 0, agents: 0 },
-            author: { name: 'Grace', url: 'https://grace.dev' },
           },
         ],
       }),
@@ -438,12 +496,14 @@ describe('the plugins section', () => {
 
     const staged = await screen.findByRole('link', { name: 'withbuddi' });
     expect(staged).toHaveAttribute('href', 'https://withbuddi.com');
-    expect(staged.closest('p')).toHaveTextContent('by withbuddi');
-    expect(screen.getByText('by Ada')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Ada' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Grace' })).toHaveAttribute('href', 'https://grace.dev');
+    expect(screen.getByText('by Ada · from npm · 1 tool')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('finance: details'));
+    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute('href', 'https://ada.dev');
+    // Not listed on withbuddi.com (Browse was never opened): its own description.
+    expect(screen.getByText('Your money, in one place.')).toBeInTheDocument();
   });
-  it('disables a plugin after saying it keeps everything, and enables a disabled one in one click', async () => {
+
+  it('disables a plugin after asking, in a dialog that says it keeps everything, and enables one in one click', async () => {
     const base = {
       version: '0.1.0',
       source: { kind: 'directory' as const, path: '/home/o/code/garden' },
@@ -467,33 +527,107 @@ describe('the plugins section', () => {
     window.addEventListener(PAGES_CHANGED_EVENT, pagesChanged);
     render(<Plugins />);
 
-    // A local build with an author says who made it instead of "you, from this machine".
-    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute('href', 'https://ada.dev');
-    expect(screen.getAllByText('you, from this machine')).toHaveLength(1);
-    // The disabled one is not a failure.
-    expect(screen.getByText('disabled')).toBeInTheDocument();
+    // The disabled one is not a failure, and its row is dimmed.
+    expect(await screen.findByText('disabled')).toBeInTheDocument();
     expect(screen.queryByText('did not load')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('cellar: details')).toHaveAttribute('data-dimmed', 'true');
+    expect(screen.getByLabelText('garden: details')).not.toHaveAttribute('data-dimmed');
 
-    // Remove says plainly what happens to the tables; Disable says it keeps everything.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove…' })[0] as HTMLElement);
-    expect(screen.getByText(/Its tables stay unless you also drop its data below, and then they are gone for good/)).toBeInTheDocument();
+    // A local build with an author says who made it instead of "you, from this machine".
+    fireEvent.click(screen.getByLabelText('garden: details'));
+    expect(await screen.findByRole('link', { name: 'Ada' })).toHaveAttribute('href', 'https://ada.dev');
+    expect(screen.queryByText('you, from this machine')).toBeNull();
+
     fireEvent.click(screen.getByRole('button', { name: 'Disable…' }));
-    expect(screen.getByText(/Disabling keeps everything: its tables and data/)).toBeInTheDocument();
+    const dialog = await screen.findByRole('alertdialog', { name: 'Disable garden?' });
+    expect(dialog).toHaveTextContent('Its tools, pages and watchers stop now and its missions pause.');
+    expect(dialog).toHaveTextContent('Its data and the agents you accepted from it are kept');
     fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
     await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('garden', false));
-    // It takes effect at once: the card says so, the rail reads its pages again, and nothing asks for a restart.
+    // It takes effect at once: the sheet says so, the rail reads its pages again, and nothing asks for a restart.
     expect(await screen.findByText('Disabled. Its tools, pages and watchers are off now; its data is kept.')).toBeInTheDocument();
     expect(pagesChanged).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/since buddi started/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
     vi.mocked(api.setPluginEnabled).mockResolvedValue({
       name: 'cellar', enabled: true, changed: true, missions: [], notes: ['Enabled.'], restartNeeded: false,
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+    await openMenuItem('cellar', 'Enable');
     await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('cellar', true));
     expect(await screen.findByText('Enabled.')).toBeInTheDocument();
     expect(pagesChanged).toHaveBeenCalledTimes(2);
     window.removeEventListener(PAGES_CHANGED_EVENT, pagesChanged);
+  });
+
+  it('opens a plugin\'s page from its row without opening the detail', async () => {
+    const navigate = vi.fn();
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [{ ...INSTALLED, name: 'weather' }] }));
+    render(
+      <Plugins
+        navigate={navigate}
+        railPages={[{ plugin: 'weather', id: 'today', title: 'Weather' } as never]}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('link', { name: 'Open Weather' }));
+    expect(navigate).toHaveBeenCalledWith(pluginPageRoute('weather', 'today'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('browses the folders on the gateway\'s machine and fills the field with the one chosen', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.pluginFolders).mockImplementation(async (path?: string) =>
+      path === '/home/o/code'
+        ? {
+            path: '/home/o/code',
+            parent: '/home/o',
+            home: '/home/o',
+            folders: [{ name: 'buddi-plugin-garden', path: '/home/o/code/buddi-plugin-garden', plugin: true }],
+          }
+        : {
+            path: '/home/o',
+            parent: null,
+            home: '/home/o',
+            folders: [
+              { name: 'code', path: '/home/o/code', plugin: false },
+              { name: 'Documents', path: '/home/o/Documents', plugin: false },
+            ],
+          },
+    );
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'A directory I built' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }));
+
+    // It starts at home, and the search narrows what is listed.
+    expect(await screen.findByText('Documents')).toBeInTheDocument();
+    expect(api.pluginFolders).toHaveBeenCalledWith(undefined);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find a folder here' }), { target: { value: 'cod' } });
+    expect(screen.queryByText('Documents')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Open code'));
+    expect(await screen.findByText('buddi-plugin-garden')).toBeInTheDocument();
+    expect(screen.getByText('package.json')).toBeInTheDocument();
+    // The trail back up.
+    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Open buddi-plugin-garden'));
+    await waitFor(() => expect(api.pluginFolders).toHaveBeenCalledWith('/home/o/code/buddi-plugin-garden'));
+  });
+
+  it('uses the folder it is showing', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.pluginFolders).mockResolvedValue({ path: '/home/o/code/garden', parent: '/home/o/code', home: '/home/o', folders: [] });
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('radio', { name: 'A directory I built' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse…' }));
+    expect(await screen.findByText('No folders in here.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByPlaceholderText('/home/you/code/buddi-plugin-weather')).toHaveValue('/home/o/code/garden');
+    fireEvent.click(screen.getByRole('button', { name: 'Read it first' }));
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('/home/o/code/garden'));
   });
 });
 
@@ -548,7 +682,9 @@ describe('browsing the market', () => {
     loaded: true,
   };
 
-  it('asks withbuddi.com only when Browse opens, and shows the shelves', async () => {
+  const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="9" r="3.5"></circle></svg>';
+
+  it('asks withbuddi.com only when Browse opens, and shows every listing as one grid', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view());
     vi.mocked(api.market).mockResolvedValue({ fetchedAt: new Date().toISOString(), plugins: [WEATHER, FINANCE, GARDEN] });
     render(<Plugins />);
@@ -557,19 +693,85 @@ describe('browsing the market', () => {
 
     fireEvent.click(screen.getByRole('link', { name: 'Browse' }));
     expect(await screen.findByText('Opening this tab fetched the list from withbuddi.com. Nothing else leaves.')).toBeInTheDocument();
-    await screen.findByText('Recommended');
+    await screen.findByText('Garden');
     expect(api.market).toHaveBeenCalledTimes(1);
     expect(api.market).toHaveBeenCalledWith(false);
-    for (const heading of ['All plugins', 'Your days', 'Money', 'Home']) expect(screen.getByText(heading)).toBeInTheDocument();
-    expect(screen.queryByText('Voice')).toBeNull();
-    // Weather twice (Recommended and Your days); finance is installed, so not recommended.
-    expect(screen.getAllByText('Weather')).toHaveLength(2);
-    expect(screen.getAllByText('Finance')).toHaveLength(1);
+    // The shelves are chips, and only the categories that have a listing.
+    const chips = screen.getByRole('group', { name: 'Show' });
+    expect([...chips.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'All',
+      'Recommended',
+      'Your days',
+      'Money',
+      'Home',
+    ]);
+    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
+    // Each listing once, with how it is trusted and what is installed.
+    expect(screen.getAllByText('Weather')).toHaveLength(1);
     expect(screen.getByText('installed 1.0.0')).toBeInTheDocument();
     expect(screen.getByText('reviewed 0.1.0')).toBeInTheDocument();
-    expect(screen.getByText(/A subscription · 14 days to try/)).toBeInTheDocument();
-    expect(screen.getAllByText('api.open-meteo.com').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Reaches in buddi: it sends web requests.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('by buddi')).toHaveLength(2);
+  });
+
+  it('narrows the grid by shelf: Recommended is what buddi publishes that you do not have', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [INSTALLED_FINANCE] }));
+    vi.mocked(api.market).mockResolvedValue({ plugins: [WEATHER, FINANCE, GARDEN] });
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    await screen.findByText('Garden');
+    fireEvent.click(screen.getByRole('button', { name: 'Recommended' }));
+    expect(screen.getByText('Weather')).toBeInTheDocument();
+    expect(screen.queryByText('Finance')).toBeNull();
+    expect(screen.queryByText('Garden')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Money' }));
+    expect(screen.getByText('Finance')).toBeInTheDocument();
+    expect(screen.queryByText('Weather')).toBeNull();
+  });
+
+  it('opens a listing in the sheet: its screenshot through buddi, what it reaches, its licence and price', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view());
+    vi.mocked(api.market).mockResolvedValue({
+      plugins: [
+        {
+          ...GARDEN,
+          iconSvg: ICON,
+          license: 'MIT',
+          screenshots: ['https://withbuddi.com/plugins/garden/shots/week.webp'],
+          claims: {
+            package: { dependencies: { count: 3, withScripts: [] } },
+            manifest: {
+              network: [{ host: 'api.garden.example' }],
+              tools: [{ name: 'garden.list', tier: 'auto' }, { name: 'garden.water', tier: 'gated' }],
+              sentinels: [{}],
+            },
+          },
+        },
+      ],
+    });
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins hash="#/settings/plugins?tab=browse" />);
+    fireEvent.click(await screen.findByLabelText('Garden: details'));
+
+    const sheet = await screen.findByRole('dialog');
+    const shot = sheet.querySelector('img');
+    // The page never fetches withbuddi.com itself: the gateway proxies the picture.
+    expect(shot).toHaveAttribute('src', '/api/market/asset?url=https%3A%2F%2Fwithbuddi.com%2Fplugins%2Fgarden%2Fshots%2Fweek.webp');
+    expect(shot).toHaveAttribute('alt', 'Garden, as it looks in buddi');
+    // The market's own icon, drawn inline so it takes the tile's colour.
+    expect(sheet.querySelector('.ui-app-icon[data-tone="accent"] svg circle')).not.toBeNull();
+    expect(sheet).toHaveTextContent('buddi-plugin-garden@0.1.0');
+    expect(sheet).toHaveTextContent('1 run without asking, 1 asks you first, 1 on a timer');
+    expect(sheet).toHaveTextContent('api.garden.example');
+    expect(sheet).toHaveTextContent('It sends web requests.');
+    expect(sheet).toHaveTextContent('3, none of which run install scripts');
+    expect(sheet).toHaveTextContent('MIT · a subscription · 14 days to try');
+    expect(screen.getByRole('link', { name: "its maker's page" })).toHaveAttribute('href', 'https://garden.example');
+    expect(sheet).toHaveTextContent('Install reads it first. Nothing of it runs until you say yes.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('buddi-plugin-garden@0.1.0'));
+    // Back on Installed, reading it.
+    expect(await screen.findByText(TRUST)).toBeInTheDocument();
   });
 
   it('stages the listed version and goes back to Installed to read the card', async () => {
@@ -578,23 +780,24 @@ describe('browsing the market', () => {
     vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
     vi.mocked(api.pluginJob).mockResolvedValue(JOB);
     render(<Plugins hash="#/settings/plugins?tab=browse" />);
-    const [install] = await screen.findAllByRole('button', { name: 'Install' });
-    fireEvent.click(install as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }));
     await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.1.0'));
     expect(await screen.findByText(TRUST)).toBeInTheDocument();
     expect(await screen.findByText(/Fetching the package/)).toBeInTheDocument();
   });
 
-  it('updates to the listed version', async () => {
+  it('updates to the listed version, and counts the updates on the Installed tab', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ installed: [INSTALLED_FINANCE] }));
-    vi.mocked(api.market).mockResolvedValue({ plugins: [FINANCE] });
+    vi.mocked(api.market).mockResolvedValue({ plugins: [{ ...FINANCE, iconSvg: ICON }] });
     vi.mocked(api.updatePlugin).mockResolvedValue({ job: JOB });
     vi.mocked(api.pluginJob).mockResolvedValue(JOB);
     render(<Plugins hash="#/settings/plugins?tab=browse" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Update to 1.2.0' }));
     await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', '1.2.0'));
-    // Back on Installed, the row names the version too.
+    // Back on Installed, the row names the version too, wears the market's icon, and the tab counts it.
     expect(await screen.findByRole('button', { name: 'Update to 1.2.0' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Installed/ })).toHaveTextContent('Installed1');
+    expect(screen.getByLabelText('finance: details').querySelector('.ui-app-icon-svg svg')).not.toBeNull();
   });
 
   it('filters by title, summary and npm name', async () => {
@@ -608,7 +811,8 @@ describe('browsing the market', () => {
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'plugin-weather' } });
     expect(screen.queryByText('Garden')).toBeNull();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'nothing like it' } });
-    expect(screen.getByText('Nothing listed matches "nothing like it".')).toBeInTheDocument();
+    expect(screen.getByText('Nothing listed matches')).toBeInTheDocument();
+    expect(screen.getByText('No plugin on withbuddi.com mentions “nothing like it”.')).toBeInTheDocument();
   });
 
   it('says when withbuddi.com could not be reached, and tries again past the copy', async () => {
@@ -620,10 +824,17 @@ describe('browsing the market', () => {
     await waitFor(() => expect(api.market).toHaveBeenLastCalledWith(true));
   });
 
-  it('does not ask the market from the Installed tab, and keeps the plain Update', async () => {
+  it('does not ask the market from the Installed tab, and still checks for an update from the detail', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view({ installed: [INSTALLED_FINANCE] }));
+    vi.mocked(api.updatePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
     render(<Plugins />);
-    expect(await screen.findByRole('button', { name: 'Update' })).toBeInTheDocument();
+    // Nothing on the row names a version it does not know.
+    expect(await screen.findByLabelText('finance: details')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Update/ })).toBeNull();
+    fireEvent.click(screen.getByLabelText('finance: details'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check for an update' }));
+    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', undefined));
     expect(api.market).not.toHaveBeenCalled();
   });
 

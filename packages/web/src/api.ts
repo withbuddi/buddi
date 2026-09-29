@@ -1335,6 +1335,12 @@ export interface InstalledPluginView {
   source: PluginSource;
   publisher?: string;
   author?: PluginAuthorView;
+  /** Its manifest's own one paragraph, when it wrote one and loaded. */
+  description?: string;
+  /** The hosts it talks to, from its manifest (and the connections made since). Absent when it did not load. */
+  network?: Array<{ host: string; why: string }>;
+  /** What it reaches in buddi beyond itself, in the staged card's words. Absent when it did not load. */
+  uses?: Array<{ use: string; words: string }>;
   integrity?: string;
   installedAt: string;
   contribution: { tools: number; sentinels: number; views: number; agents: number };
@@ -1456,7 +1462,22 @@ export interface MarketEntryView {
   author?: PluginAuthorView;
   page?: string;
   reviewed?: { version: string; on?: string; covered?: string };
-  claims?: { manifest?: { network?: Array<{ host: string; why?: string }> } };
+  /** A URL under withbuddi.com/plugins/; the page draws `iconSvg` instead of fetching it. */
+  icon?: string;
+  /** The icon, fetched and sanitised by the gateway to plain shapes: drawn inline in the tile's colour. */
+  iconSvg?: string;
+  /** URLs under withbuddi.com/plugins/, shown through `api.marketAssetUrl`. */
+  screenshots?: string[];
+  license?: string;
+  claims?: {
+    package?: { dependencies?: { count: number; withScripts: string[] } };
+    manifest?: {
+      network?: Array<{ host: string; why?: string }>;
+      tools?: Array<{ name: string; tier?: string }>;
+      sentinels?: unknown[];
+      agents?: unknown[];
+    };
+  };
   /** The areas it reaches in buddi, in the staged card's words. */
   usesWords?: Array<{ use: string; words: string }>;
   /** Set when it is installed here: the installed version and the name it is installed under. */
@@ -1472,6 +1493,23 @@ export interface MarketView {
   plugins: MarketEntryView[];
   /** Why there is no list: withbuddi.com was not reachable and nothing was kept. */
   unavailable?: string;
+}
+
+/** One folder on the gateway's machine, for "A directory I built". */
+export interface PluginFolderView {
+  name: string;
+  path: string;
+  /** It holds a package.json. */
+  plugin: boolean;
+}
+
+export interface PluginFoldersView {
+  path: string;
+  /** One level up; `null` at the home directory, where the list stops. */
+  parent: string | null;
+  home: string;
+  folders: PluginFolderView[];
+  truncated?: true;
 }
 
 export interface PluginJob {
@@ -1984,6 +2022,10 @@ export const api = {
   plugins: () => get<PluginsView>('/plugins'),
   /** The plugin list from withbuddi.com, through the gateway; `refresh` asks again past its day-old copy. */
   market: (refresh = false) => get<MarketView>(`/market${refresh ? '?refresh=1' : ''}`),
+  /** A listing's picture (a screenshot), through the gateway: the page never fetches withbuddi.com itself. */
+  marketAssetUrl: (url: string) => `/api/market/asset?url=${encodeURIComponent(url)}`,
+  /** The folders in one folder on the gateway's machine, from the owner's home down; no path is the home. */
+  pluginFolders: (path?: string) => get<PluginFoldersView>('/plugins/folders', path ? { path } : {}),
   stagePlugin: (spec: string) => post<{ job: PluginJob }>('/plugins/stage', { spec }),
   /**
    * The same stage, from a .tgz on the owner's own machine.

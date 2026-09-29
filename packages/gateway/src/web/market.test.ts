@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { marketFile, marketRoute, resetMarketCache } from './market.js';
+import { marketAssetRoute, marketFile, marketRoute, resetMarketCache } from './market.js';
 
 const weather = {
   name: 'weather',
@@ -28,6 +28,8 @@ let root: string;
 let env: NodeJS.ProcessEnv;
 let server: Server | undefined;
 let hits = 0;
+/** The listings' own files the stand-in site serves, by path. */
+let files: Record<string, { type: string; body: string | Buffer }> = {};
 let answer: () => { status: number; body: unknown } = () => ({ status: 200, body: { plugins: [weather, finance] } });
 const logs: string[] = [];
 const log = (line: string): void => void logs.push(line);
@@ -35,6 +37,11 @@ const log = (line: string): void => void logs.push(line);
 async function start(): Promise<string> {
   server = createServer((req, res) => {
     hits += 1;
+    const file = files[req.url ?? ''];
+    if (file) {
+      res.writeHead(200, { 'content-type': file.type }).end(file.body);
+      return;
+    }
     if (req.url !== '/plugins/index.json') {
       res.writeHead(404).end();
       return;
@@ -52,6 +59,7 @@ const route = (query = '', now?: Date) =>
 beforeEach(async () => {
   resetMarketCache();
   hits = 0;
+  files = {};
   logs.length = 0;
   answer = () => ({ status: 200, body: { plugins: [weather, finance] } });
   root = mkdtempSync(path.join(tmpdir(), 'buddi-market-'));
@@ -161,5 +169,80 @@ describe('GET /api/market', () => {
     expect(body.plugins[0]).toMatchObject({ installed: { version: '0.1.0' }, update: '0.2.0' });
     expect(body.plugins[1]).toMatchObject({ installed: { version: '1.0.0' } });
     expect(body.plugins[1]?.update).toBeUndefined();
+  });
+});
+
+const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="9" r="3.5"/></svg>';
+
+describe('the listings\' files', () => {
+  const asset = (target: string, now?: Date) =>
+    marketAssetRoute(
+      { env, log, ...(now === undefined ? {} : { now: () => now }) },
+      new URL(`http://x/api/market/asset?url=${encodeURIComponent(target)}`),
+    );
+
+  it('passes each listing\'s icon on as sanitised markup, and leaves out one it will not draw', async () => {
+    const origin = env.BUDDI_MARKET_URL as string;
+    files['/plugins/weather/icon.svg'] = { type: 'image/svg+xml', body: ICON.replace('/>', ' onclick="x()"/>') };
+    files['/plugins/finance/icon.svg'] = { type: 'image/svg+xml', body: '<svg><script>alert(1)</script></svg>' };
+    answer = () => ({
+      status: 200,
+      body: {
+        plugins: [
+          { ...weather, icon: `${origin}/plugins/weather/icon.svg` },
+          { ...finance, icon: `${origin}/plugins/finance/icon.svg` },
+          { ...finance, name: 'far', icon: 'https://elsewhere.example/icon.svg' },
+        ],
+      },
+    });
+    const body = (await route()).body as { plugins: Array<Record<string, unknown>> };
+    expect(body.plugins[0]?.iconSvg).toBe(ICON);
+    expect(body.plugins[1]?.iconSvg).toBeUndefined();
+    expect(body.plugins[2]?.iconSvg).toBeUndefined();
+    // Asked once each, then kept beside the list.
+    const asked = hits;
+    resetMarketCache();
+    await route();
+    expect(hits).toBe(asked);
+  });
+
+  it('serves a screenshot from withbuddi.com/plugins/, kept a day', async () => {
+    const origin = env.BUDDI_MARKET_URL as string;
+    files['/plugins/weather/shots/today.webp'] = { type: 'image/webp', body: Buffer.from('RIFF....WEBP') };
+    const first = await asset(`${origin}/plugins/weather/shots/today.webp`);
+    expect(first.status).toBe(200);
+    expect(first.type).toBe('image/webp');
+    expect(first.bytes?.toString()).toBe('RIFF....WEBP');
+    await asset(`${origin}/plugins/weather/shots/today.webp`);
+    expect(hits).toBe(1);
+    await asset(`${origin}/plugins/weather/shots/today.webp`, new Date(Date.now() + 25 * 60 * 60 * 1000));
+    expect(hits).toBe(2);
+  });
+
+  it('refuses anything that is not a listing\'s file, before asking anyone', async () => {
+    const origin = env.BUDDI_MARKET_URL as string;
+    for (const target of [
+      'https://elsewhere.example/plugins/weather/icon.svg',
+      `${origin}/plugins/../secrets.json`,
+      `${origin}/index.html`,
+      `${origin}/plugins/`,
+      `${origin}/plugins/weather/icon.svg?x=1`,
+      'https://withbuddi.com.evil.example/plugins/x.png',
+      'not a url',
+    ]) {
+      expect((await asset(target)).status, target).toBe(400);
+    }
+    expect(hits).toBe(0);
+  });
+
+  it('passes on only pictures, and an SVG only as the sanitiser wrote it', async () => {
+    const origin = env.BUDDI_MARKET_URL as string;
+    files['/plugins/weather/page.html'] = { type: 'text/html', body: '<script>x()</script>' };
+    files['/plugins/weather/bad.svg'] = { type: 'image/svg+xml', body: '<svg><foreignObject/></svg>' };
+    files['/plugins/weather/icon.svg'] = { type: 'image/svg+xml', body: ICON };
+    expect((await asset(`${origin}/plugins/weather/page.html`)).status).toBe(502);
+    expect((await asset(`${origin}/plugins/weather/bad.svg`)).status).toBe(415);
+    const good = await asset(`${origin}/plugins/weather/icon.svg`);
+    expect(good.bytes?.toString()).toBe(ICON);
   });
 });

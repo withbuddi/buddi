@@ -103,6 +103,14 @@ const GLYPHS = {
   'chevron-right': [14, 1.6, <path d="M5 2.5 9.5 7 5 11.5" />],
   plus: [14, 1.6, <path d="M7 2.5v9M2.5 7h9" />],
 
+  // ---- settings: plugins ----
+  // Three dots, stacked: the row's other things to do. Filled, the kit's own.
+  more: [16, 0, <g fill="currentColor" stroke="none"><circle cx="8" cy="3.4" r="1.35" /><circle cx="8" cy="8" r="1.35" /><circle cx="8" cy="12.6" r="1.35" /></g>],
+  // An arrow down into a tray: where a file lands.
+  drop: [28, 1.8, <><path d="M14 4v13M8.5 11.5 14 17l5.5-5.5" /><path d="M5 19.5v2a2.5 2.5 0 0 0 2.5 2.5h13a2.5 2.5 0 0 0 2.5-2.5v-2" /></>],
+  // A folder with its tab: a directory on this machine.
+  folder: [20, 1.6, <path d="M2.8 5.6a1.4 1.4 0 0 1 1.4-1.4h3.4l1.7 1.9h6.5a1.4 1.4 0 0 1 1.4 1.4v7.3a1.4 1.4 0 0 1-1.4 1.4H4.2a1.4 1.4 0 0 1-1.4-1.4Z" />],
+
   // ---- the canvas ----
   'chevron-down': [14, 1.4, <path d="M4 5.5 7 8.5l3-3" />, 12],
   // An empty frame with a hill and a sun: where a result will be drawn.

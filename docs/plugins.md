@@ -118,7 +118,8 @@ buddi plugins list
 `buddi plugins dev` is the loop that makes living with it bearable.
 
 `buddi plugins list` should now show `ok weather 0.1.0 installed`. On the
-dashboard, **Plugins** lists what it brought and what it proposes. Nothing can
+dashboard, Settings → **Plugins** lists it as a row; the row opens a sheet
+with what it brought and the agents it proposes. Nothing can
 call your tools yet: being installed grants nothing.
 
 ### 5. Grant it to an agent
@@ -2817,8 +2818,8 @@ buddi plugins disable weather    # off now: the record says enabled: false
 buddi plugins enable weather     # back now
 ```
 
-Disabling is the owner's "not now" (also a Disable button on the plugin's card
-in Settings → Plugins). Nothing is removed: the package, the schema and its
+Disabling is the owner's "not now" (also **Disable…** in the plugin's ⋯ menu
+and its detail sheet in Settings → Plugins, which asks once in a small dialog). Nothing is removed: the package, the schema and its
 data, the agents accepted from it and their grants all stay. It takes effect in
 the running gateway at once, with no restart: the plugin is unregistered, so
 its tools, pages, views, glances, sources, sentinels and channels all go — the

@@ -216,7 +216,8 @@ import {
   type PluginsDeps,
   type PluginsEngine,
 } from './plugins.js';
-import { marketRoute } from './market.js';
+import { marketAssetRoute, marketRoute } from './market.js';
+import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
@@ -1383,6 +1384,29 @@ export function createWebApp(deps: WebServerDeps): Server {
          */
         case '/api/market':
           return reply(res, await marketRoute({ env: deps.env ?? process.env, log }, url));
+        /*
+         * A listing's screenshot, fetched from withbuddi.com/plugins/ and kept
+         * beside the list: the page asks here and never the internet itself.
+         */
+        case '/api/market/asset': {
+          const asset = await marketAssetRoute({ env: deps.env ?? process.env, log }, url);
+          if (asset.bytes === undefined) return sendJson(res, asset.status, asset.body);
+          res.statusCode = asset.status;
+          res.setHeader('Content-Type', asset.type ?? 'application/octet-stream');
+          res.setHeader('Content-Length', String(asset.bytes.length));
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+          res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+          res.end(method === 'HEAD' ? undefined : asset.bytes);
+          return;
+        }
+        /*
+         * "A directory I built": the folders on this machine, under the
+         * owner's home, for the picker beside the field. A read of names only.
+         */
+        case '/api/plugins/folders':
+          return reply(res, pluginFoldersRoute(deps.env ?? process.env, url));
         case '/api/secrets':
           return reply(res, await listSecrets(secretsDeps()));
         case '/api/secrets/uses':

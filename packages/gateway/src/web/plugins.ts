@@ -450,6 +450,18 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       ...(entry.provenance?.publisher === undefined ? {} : { publisher: entry.provenance.publisher }),
       ...(entry.provenance?.integrity === undefined ? {} : { integrity: entry.provenance.integrity }),
       ...(author === undefined ? {} : { author }),
+      ...(manifest?.description === undefined || manifest.description.trim() === ''
+        ? {}
+        : { description: manifest.description }),
+      // What it reaches, from the manifest it loaded with: the hosts it talks
+      // to (the live registry's, a connection made since included) and the
+      // areas of buddi beyond its own, in the staged card's words.
+      ...(manifest === undefined
+        ? {}
+        : {
+            network: (deps.registry?.networkOf(manifest.name) ?? manifest.network ?? []).map(({ host, why }) => ({ host, why })),
+            uses: usesWords(manifest.uses ?? []),
+          }),
       installedAt: entry.installedAt,
       contribution: contributionSummary(manifest),
       unlocks: unlocksOf(manifest, env),

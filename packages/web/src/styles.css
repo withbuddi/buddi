@@ -3350,7 +3350,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 
 /* A box, its label, and enough room between them to hit either. */
 .recovery-check,
-.plugin-check,
 .policy-check,
 .backup-check {
   display: flex;
@@ -3360,7 +3359,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
   cursor: pointer;
 }
 .recovery-check input,
-.plugin-check input,
 .policy-check input,
 .backup-check input { margin-top: 2px; }
 /* In a panel head, the box that ticks every row shown. No indent: it is a
@@ -3383,61 +3381,91 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 .tailscale-command code { overflow-x: auto; white-space: pre; min-width: 0; }
 
-/* Three ways a plugin gets here, as one control: the chosen one is the only
-   one that looks pressed, and what it asks for replaces what the last one did. */
-.plugin-modes {
+/* ---- Settings → Plugins, as the kit draws it ----
+   One quiet Add panel; the staged card, facts left and its own claims right;
+   installed plugins as compact rows that open a sheet; Browse as one grid. */
+.plugins-ver { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: var(--weight-normal); color: var(--text-faint); }
+.plugins-ask { margin-left: var(--space-2); font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--warning); }
+.plugins-side { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-faint); }
+.plugins-rows .ui-list-row { min-height: calc(var(--space-12) + var(--space-3)); }
+.plugins-hash { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); word-break: break-all; }
+.plugins-note { margin: 0; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+.plugins-foot-note { font-size: var(--text-sm); color: var(--text-muted); min-width: 0; overflow-wrap: anywhere; }
+.plugins-facts .ui-kv { grid-template-columns: minmax(0, calc(var(--space-12) * 2.5)) 1fr; }
+
+/* add a plugin */
+.plugins-add { display: flex; flex-direction: column; gap: var(--space-3); }
+.plugins-add-row { display: flex; flex-direction: column; gap: var(--space-1); }
+.plugins-drop {
   display: flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
   background: var(--surface-sunken);
-}
-.plugin-mode {
-  flex: 1;
-  padding: var(--space-2) var(--space-3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-md);
-  cursor: pointer;
 }
-.plugin-mode:hover { color: var(--text); }
-.plugin-mode[data-chosen='true'] {
-  background: var(--surface);
-  color: var(--text);
-  font-weight: var(--weight-semibold);
-  box-shadow: var(--shadow-panel);
-}
+.plugins-drop-text { flex: 1 1 auto; font-size: var(--text-md); min-width: 0; }
+.plugins-drop[data-state='over'] { border-color: var(--accent); background: var(--accent-soft); }
+.plugins-drop[data-state='chosen'] { border-style: solid; border-color: var(--accent); }
+.plugins-drop[data-state='refused'] { border-color: var(--critical); }
+.plugins-drop[data-state='refused'] .plugins-drop-text { color: var(--critical); }
+/* The stage's progress: a quiet line, not a box. */
+.plugins-status { margin: 0; font-size: var(--text-sm); color: var(--text-muted); }
+.plugins-status[data-tone='critical'] { color: var(--critical); }
+/* The trust sentence, compact under the field. */
+.plugins-trust .ui-notice { padding: var(--space-2) var(--space-3); font-size: var(--text-sm); border-radius: var(--radius); color: var(--text); }
 
-/* Where a packed plugin lands. Dashed while it is empty, because there is
-   nothing in it yet; coloured the moment it is holding or refusing one. */
-.plugin-drop {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
-}
-.plugin-drop[data-state='over'] { border-color: var(--accent); background: var(--accent-soft); }
-.plugin-drop[data-state='chosen'] { border-style: solid; border-color: var(--accent); }
-.plugin-drop[data-state='refused'] { border-color: var(--critical); }
-.plugin-drop[data-state='refused'] p { color: var(--critical); }
+/* the staged card: the facts, and beside them what it says about itself */
+.plugins-staged { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--space-5); align-items: start; }
+@media (max-width: 1100px) { .plugins-staged { grid-template-columns: 1fr; } }
+.plugins-uses { display: flex; flex-direction: column; gap: var(--space-1); }
+.plugins-claim { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-radius: var(--radius); background: var(--surface-sunken); }
+.plugins-claim-head { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.plugins-claim-note { margin-top: calc(var(--space-2) * -1); font-size: var(--text-sm); color: var(--text-muted); }
+.plugins-claim-text { margin: 0; font-size: var(--text-md); color: var(--text-muted); font-style: italic; }
+/* The differences between what a package claims and what its manifest does. */
+.plugins-drift { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.plugins-drift li { font-size: var(--text-md); }
 
-/* The differences between what a package claims and what its manifest does.
-   A plain list: each line is one disagreement, read before "Install anyway". */
-.plugin-drift { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
-.plugin-drift li { font-size: var(--text-md); }
-.plugin-uses { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
-.plugin-uses li { font-size: var(--text-md); }
+/* ships with buddi */
+.plugins-builtins { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-1) var(--space-5); margin-top: var(--space-3); }
+.plugins-builtin { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; border-bottom: 1px solid var(--line); font-size: var(--text-md); }
+.plugins-builtin-n { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-faint); font-size: var(--text-sm); }
 
-/* Browse: listings as cards, as many to a row as fit, one on a phone. */
-.plugin-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr)); gap: var(--space-3); }
-.plugin-market-grid .ui-card p { margin: 0; }
+/* the sheet */
+.plugins-sheet-title { display: flex; align-items: center; gap: var(--space-3); }
+.plugins-sheet-name { display: flex; flex-direction: column; gap: var(--space-1); }
+.plugins-sheet-by { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); font-family: var(--font-sans); font-size: var(--text-sm); font-weight: var(--weight-normal); color: var(--text-muted); }
+.plugins-summary-full { margin: 0; font-size: var(--text-base); line-height: var(--leading-loose); color: var(--text); }
+.plugins-shot { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-sunken); box-shadow: var(--shadow-panel); }
+.plugins-handle { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--weight-normal); }
+.plugins-unlocks { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.plugins-unlock { display: flex; flex-direction: column; gap: var(--space-2); }
+.plugins-unlock:not(:last-child) { border-bottom: 1px solid var(--line); }
+.plugins-unlock .ui-list-row { border-bottom: 0; }
+
+/* the dialog */
+.plugins-dialog-text { margin: 0; font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); }
+.plugins-purge { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.plugins-purge[data-on='true'] { border-color: color-mix(in oklab, var(--critical) 40%, var(--line)); background: var(--critical-soft); }
+.plugins-check { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
+.plugins-check input { margin-top: var(--space-0); }
+.plugins-check > span { display: flex; flex-direction: column; gap: var(--space-0); }
+.plugins-check-title { font-size: var(--text-md); font-weight: var(--weight-medium); }
+.plugins-check-hint { font-size: var(--text-sm); color: var(--text-muted); }
+
+/* browse */
+.plugins-quiet { display: flex; align-items: center; gap: var(--space-2); margin: calc(var(--space-2) * -1) 0 0; font-size: var(--text-sm); color: var(--text-faint); }
+.plugins-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+@media (max-width: 1100px) { .plugins-grid, .plugins-builtins { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .plugins-grid { grid-template-columns: 1fr; } }
+.plugins-card-head { display: flex; align-items: center; gap: var(--space-3); }
+.plugins-card-name { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
+.plugins-card-by { font-size: var(--text-sm); color: var(--text-muted); }
+.plugins-summary { margin: 0; font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: calc(2em * 1.5); }
+.plugins-card-foot { display: flex; align-items: center; gap: var(--space-2); margin-top: auto; min-height: var(--control-h-sm); }
 
 /* Six words, read out loud and written down: the one thing here worth seeing. */
 .backup-phrase {
