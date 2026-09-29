@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.24 — 2026-09-29
+
 ### Added
 
 - Settings → Plugins has a Browse tab: the plugin list from withbuddi.com, fetched only when you open it and kept a day, as one grid of cards with each listing's icon behind a search and filter chips (All, Recommended — what buddi publishes that you do not have — and each category). A card opens a sheet with its screenshot, its tools, the hosts it talks to, what it reaches in buddi, its dependencies and its licence; the icons and screenshots come through buddi, never straight from the page. Install stages the listed version onto the usual card.
