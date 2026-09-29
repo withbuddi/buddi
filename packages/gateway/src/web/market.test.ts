@@ -1,5 +1,5 @@
 /**
- * `/api/market`: fetched only when asked, kept a day, and honest when
+ * `/api/market`: fetched only when asked, kept an hour, and honest when
  * withbuddi.com does not answer. A local server stands in for the site.
  */
 import { createServer, type Server } from 'node:http';
@@ -95,7 +95,7 @@ describe('GET /api/market', () => {
     expect(disk.index.plugins).toHaveLength(2);
   });
 
-  it('answers from its copy for a day, and refetches on refresh=1', async () => {
+  it('answers from its copy for an hour, and refetches on refresh=1', async () => {
     await route();
     await route();
     expect(hits).toBe(1);
@@ -105,8 +105,10 @@ describe('GET /api/market', () => {
     expect(hits).toBe(1);
     await route('?refresh=1');
     expect(hits).toBe(2);
-    // A day later it asks again.
-    await route('', new Date(Date.now() + 25 * 60 * 60 * 1000));
+    // Within the hour the copy answers; past it, it asks again.
+    await route('', new Date(Date.now() + 30 * 60 * 1000));
+    expect(hits).toBe(2);
+    await route('', new Date(Date.now() + 61 * 60 * 1000));
     expect(hits).toBe(3);
   });
 

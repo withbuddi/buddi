@@ -3886,3 +3886,5 @@ a.home-glance-text:hover { color: var(--text); text-decoration: underline; text-
 
 /* list */
 .cal-list{display:flex;flex-direction:column;gap:var(--space-4)}
+.plugins-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 0.15em; }
+.plugins-link:disabled { color: var(--text-faint); cursor: default; }

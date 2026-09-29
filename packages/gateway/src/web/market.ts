@@ -36,7 +36,9 @@ import { installedRecord, usesWords, type RouteReply } from './plugins.js';
 import { sanitizeIconSvg } from './svg.js';
 
 export const MARKET_ORIGIN = 'https://withbuddi.com';
-export const MARKET_TTL_MS = 24 * 60 * 60 * 1000;
+/** How long a fetched list is trusted before Browse asks again. The pictures keep a day. */
+export const MARKET_TTL_MS = 60 * 60 * 1000;
+export const MARKET_ASSET_TTL_MS = 24 * 60 * 60 * 1000;
 export const MARKET_TIMEOUT_MS = 10_000;
 
 export const MARKET_CATEGORIES = ['days', 'money', 'home', 'voice', 'work', 'other'] as const;
@@ -289,7 +291,7 @@ async function fetchAsset(deps: MarketDeps, url: URL): Promise<Omit<Asset, 'fetc
 export async function marketAsset(deps: MarketDeps, url: URL): Promise<Asset> {
   const now = deps.now ?? ((): Date => new Date());
   const kept = readAsset(deps.env, url);
-  if (kept && now().getTime() - Date.parse(kept.fetchedAt) < MARKET_TTL_MS) return kept;
+  if (kept && now().getTime() - Date.parse(kept.fetchedAt) < MARKET_ASSET_TTL_MS) return kept;
   try {
     const asset = { ...(await fetchAsset(deps, url)), fetchedAt: now().toISOString() };
     writeAsset(deps.env, url, asset, deps.log);

@@ -1729,7 +1729,10 @@ function Browse({
       </Toolbar>
       <p className="plugins-quiet">
         <Icon name="globe" size={14} />
-        Opening this tab fetched the list from withbuddi.com. Nothing else leaves.
+        Opening this tab fetched the list from withbuddi.com. Nothing else leaves.{' '}
+        <button type="button" className="plugins-link" disabled={loading} onClick={() => loadMarket(true)}>
+          Refresh
+        </button>
       </p>
       {market === null || (loading && market.unavailable) ? (
         <Empty>Asking withbuddi.com…</Empty>

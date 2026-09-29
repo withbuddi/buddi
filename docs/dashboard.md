@@ -247,7 +247,7 @@ A list of sections in four groups.
   data, once you type its name, and offers **Disable instead**. **Ships with
   buddi**, folded, names the plugins compiled in and how many tools each adds.
   **Browse** is the plugin list from withbuddi.com, fetched through buddi only
-  when you open the tab and kept a day: a search field, filter chips (All,
+  when you open the tab and kept an hour (Refresh asks again): a search field, filter chips (All,
   **Recommended** — the plugins buddi publishes that you do not have — and each
   category: Your days, Money, Voice, Work, Home, Other), and one grid of cards
   with who made it, how it is trusted and what you have installed. A card opens
