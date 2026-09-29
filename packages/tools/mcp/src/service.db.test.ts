@@ -307,6 +307,42 @@ suite('connections (postgres + fake MCP server)', () => {
     expect(new URL(authorizeUrl).searchParams.get('client_id')).toBe('my-app');
   });
 
+  it('replaces an abandoned, never-reviewed attempt when the same address is added again', async () => {
+    const fake = new Fake({ json: true });
+    const { service } = setup(fake);
+    const first = await service.add({ url: MCP_URL });
+    const second = await service.add({ url: MCP_URL });
+    expect(second.connection.id).not.toBe(first.connection.id);
+    expect((await service.list()).map((c) => c.id)).toEqual([second.connection.id]);
+  });
+
+  it('hands a per-run registry a copy of the tools, and keeps registering into the first', async () => {
+    const fake = new Fake({ json: true });
+    const { registry, service } = setup(fake);
+    // A chat session or an agent run builds its own registry by registering
+    // every base manifest again, before and after reviews are kept.
+    const early = new ToolRegistry();
+    for (const manifest of registry.manifests()) early.register(manifest);
+    expect(early.list()).toEqual([]);
+
+    const added = await service.add({ url: MCP_URL });
+    const review = await service.review(added.connection.id);
+    await service.saveReview(added.connection.id, { slug: 'tracker', hash: review.hash });
+    // The review's tools went to the gateway's registry, not to the run's.
+    expect(registry.list().map((t) => t.name)).toEqual(['mcp.tracker.search_issues', 'mcp.tracker.create_issue', 'mcp.tracker.delete_repo']);
+    expect(early.list()).toEqual([]);
+
+    // A run started after the review has them from the start.
+    const later = new ToolRegistry();
+    for (const manifest of registry.manifests()) later.register(manifest);
+    expect(later.list().map((t) => t.name)).toEqual(registry.list().map((t) => t.name));
+
+    // A disconnect takes them out of the gateway's registry; the run keeps its copy until it ends.
+    await service.disconnect(added.connection.id);
+    expect(registry.list()).toEqual([]);
+    expect(later.list()).toHaveLength(3);
+  });
+
   it('registers reviewed connections at boot, and disconnect takes tokens, tools and rows', async () => {
     const fake = new Fake({ auth: true, json: true });
     const first = setup(fake);

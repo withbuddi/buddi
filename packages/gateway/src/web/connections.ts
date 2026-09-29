@@ -279,7 +279,15 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
   const unknown = agents.filter((a) => !known.has(a));
   if (unknown.length > 0) return { status: 400, body: { error: `No such agent: ${unknown.join(', ')}.` } };
   const result = await grantConnection(deps, view.slug, agents);
-  return { status: result.failed.length > 0 && result.granted.length === 0 ? 409 : 200, body: { ...result, connection: withAgents(deps, await service.get(id)) } };
+  const refused = result.failed.length > 0 && result.granted.length === 0;
+  return {
+    status: refused ? 409 : 200,
+    body: {
+      ...result,
+      ...(refused ? { error: `Nothing was given: ${result.failed.map((f) => `${f.agent}: ${f.message}`).join('; ')}` } : {}),
+      connection: withAgents(deps, await service.get(id)),
+    },
+  };
 }
 
 /**

@@ -45,8 +45,10 @@ export function createConnectionsManifest(): PluginManifest {
     migrationsDir: MIGRATIONS_DIR,
     tools: [],
     register: (host) => {
-      handle.tools = host.tools;
-      handle.network = host.network;
+      // The first registry is the gateway's; later ones are per-run copies
+      // (see `attachTools`). The handle keeps the first for `bindConnections`.
+      handle.tools ??= host.tools;
+      handle.network ??= host.network;
       handle.service?.attachTools(host.tools, host.network);
     },
   };

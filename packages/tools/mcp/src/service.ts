@@ -240,6 +240,8 @@ export class ConnectionsService {
   readonly sessions: Sessions;
   readonly tokens: TokenKeeper;
   #tools: ToolsArea | undefined;
+  /** What each connection has registered, by id: what a per-run registry is handed. */
+  readonly #defs = new Map<string, ToolDefinition<any, any>[]>();
   #network: NetworkArea | undefined;
   readonly #registered = new Map<string, string[]>();
   /** When each connection's list was last compared with its review (ms). */
@@ -273,10 +275,32 @@ export class ConnectionsService {
    * hosts are declared (`ctx.buddi.network`), handed over at register.
    */
   attachTools(area: ToolsArea, network?: NetworkArea): void {
-    this.#tools = area;
-    if (network) {
-      this.#network = network;
-      for (const row of this.#live.values()) this.#declare(row);
+    /*
+     * The first registry to register the plugin is the gateway's own, and
+     * that is where a review's tools go and where a disconnect takes them
+     * out. Every later one is a per-run registry (a chat session, an agent
+     * run, a mission), built by registering every base manifest again: it
+     * gets a copy of what is registered now, so an agent's run has the
+     * connections' tools, and it never becomes the place new ones go — the
+     * run ends and the registry with it. Before this, the last registry won,
+     * and a review kept after the first chat registered its tools into a
+     * registry nobody read: the grant then failed with "matches no
+     * registered tool" until a restart.
+     */
+    if (this.#tools === undefined) {
+      this.#tools = area;
+      if (network) {
+        this.#network = network;
+        for (const row of this.#live.values()) this.#declare(row);
+      }
+      return;
+    }
+    const defs = [...this.#defs.values()].flat();
+    if (defs.length === 0) return;
+    try {
+      area.register(defs);
+    } catch (err) {
+      this.#log(`the connections' tools did not register for a run: ${short(err)}`);
     }
   }
 
@@ -369,6 +393,14 @@ export class ConnectionsService {
       throw new ConnectionError(400, err instanceof Error ? err.message : String(err));
     }
     const address = url.toString();
+    /*
+     * The same address added again before its first review replaces the
+     * abandoned attempt (a blank tab, a closed terminal): it never leaves a
+     * second "waiting for a sign-in" row beside the new one. Nothing of it
+     * was reviewed, so nothing an agent holds is lost.
+     */
+    const pending = [...this.#live.values()].find((r) => r.url === address && r.slug === null);
+    if (pending) await this.disconnect(pending.id);
     let signIn: SignIn = 'none';
     let server: { name?: string; title?: string; version?: string } | undefined;
     try {
@@ -949,6 +981,7 @@ export class ConnectionsService {
     const names = this.#registered.get(id);
     if (names && names.length > 0 && this.#tools) this.#tools.unregister(names);
     this.#registered.delete(id);
+    this.#defs.delete(id);
   }
 
   #register(row: ConnectionRow, tools: readonly ToolRow[]): void {
@@ -960,6 +993,7 @@ export class ConnectionsService {
     const defs = tools.filter((t) => t.enabled && !t.changed).map((t) => this.#definition(row.id, row.slug!, t));
     this.#tools.register(defs);
     this.#registered.set(row.id, defs.map((d) => d.name));
+    this.#defs.set(row.id, defs);
   }
 
   async #setState(id: string, state: ConnectionState): Promise<void> {

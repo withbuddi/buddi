@@ -172,7 +172,13 @@ export class GatewayClient implements Gateway {
     }
     const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
     if (!res.ok) {
-      const message = typeof body?.error === 'string' ? body.error : `buddi answered ${res.status}`;
+      const failed = (body as { failed?: Array<{ agent?: string; message?: string }> } | null)?.failed;
+      const message =
+        typeof body?.error === 'string'
+          ? body.error
+          : Array.isArray(failed) && failed.length > 0
+            ? failed.map((f) => `${f.agent ?? '?'}: ${f.message ?? 'refused'}`).join('; ')
+            : `buddi answered ${res.status}`;
       throw new GatewayError(res.status, message, body);
     }
     return body;
