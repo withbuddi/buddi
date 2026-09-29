@@ -4,13 +4,13 @@
 
 **A small AI team that lives on your computer.**
 
-Local-first teammates that use tools, work on schedules, remember what
-matters, and ask before doing anything consequential.
+AI teammates that use tools, work on schedules, remember what matters, and
+ask before doing anything consequential.
 
 [withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md) · [plugins](https://withbuddi.com/plugins)
 
 Give each teammate a job. Planner prepares your mornings. Mail Triage watches
-your inbox. Ledger keeps an eye on your money. Make your own for anything
+your inbox. Ledger keeps an eye on your money. Add your own for anything
 else.
 
 They use tools, work with your files, browse the web in a browser of their
@@ -19,10 +19,11 @@ consequential stops for your approval**, as a card on the dashboard or on
 your phone.
 
 **Everything stays home.** Conversations, files and memory live in a private
-database on your machine. The one thing that leaves is what a teammate says
-to the AI it thinks with: the context of that request goes to the provider
-and model you chose for that teammate, and to nobody else. Your passwords
-live in a vault the team can use but never see.
+database on your machine. When a teammate uses a remote AI, the context it
+needs for that request goes to the provider and model you chose for that
+teammate. The whole list of what leaves is short enough to print, and it is
+[printed below](#where-your-data-lives-and-what-leaves-the-machine). Your
+passwords live in a vault the team can use but never see.
 
 Your first teammate is Buddi, the front desk, and it wears the Buddi Blob.
 Rename it, rewrite its personality, or add others. Under the hood every
