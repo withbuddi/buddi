@@ -2,27 +2,34 @@
 
 <img src="https://raw.githubusercontent.com/withbuddi/buddi/main/packages/web/public/mascot/core.png" alt="The Buddi Blob, buddi's mascot" width="160" align="right">
 
-[withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md)
+**A small AI team that lives on your computer.**
 
-buddi is a small team that lives on your computer. Each teammate has a job:
-your front desk answers first; Planner does your mornings; Mail Triage reads
-the inbox and brings you only what needs you; Ledger knows what is left this
-month. They can read your mail, look at websites in a browser of their own,
-keep your files, run commands, and they keep working while you are away, on
-schedules and watches of their own. Anything consequential stops at a card you
-approve or reject, on the dashboard or on your phone.
+Local-first teammates that use tools, work on schedules, remember what
+matters, and ask before doing anything consequential.
 
-Everything stays home: your conversations, files and memory sit in a private
-database on your disk. The one thing that leaves is what a teammate says to
-the AI it thinks with, and one line in its file decides which company that
-is. Your passwords live in a vault the team can use but never see.
+[withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md) · [plugins](https://withbuddi.com/plugins)
 
-Under the hood a teammate is a markdown file: a front matter that names the
-tools it may call, a body that is its persona. The docs call that file an
-agent, and so does the dashboard where it is the accurate word; this README
-says teammate, because that is what it is to you.
+Give each teammate a job. Planner prepares your mornings. Mail Triage watches
+your inbox. Ledger keeps an eye on your money. Make your own for anything
+else.
 
-The first teammate is called buddi. It wears the Buddi Blob.
+They use tools, work with your files, browse the web in a browser of their
+own, and keep working on schedules while you're away. **Anything
+consequential stops for your approval**, as a card on the dashboard or on
+your phone.
+
+**Everything stays home.** Conversations, files and memory live in a private
+database on your machine. The one thing that leaves is what a teammate says
+to the AI it thinks with: the context of that request goes to the provider
+and model you chose for that teammate, and to nobody else. Your passwords
+live in a vault the team can use but never see.
+
+Your first teammate is Buddi, the front desk, and it wears the Buddi Blob.
+Rename it, rewrite its personality, or add others. Under the hood every
+teammate is a markdown file, which the docs and the dashboard call an agent
+where that is the accurate word.
+
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="The buddi dashboard: a greeting by name, an approval card, the team, what is coming up." width="100%">
 
 ---
 
