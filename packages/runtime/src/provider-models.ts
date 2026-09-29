@@ -10,6 +10,8 @@ export interface AccountModel {
   thinks?: boolean;
   /** The host's own number for this model's window, when it says (the ChatGPT backend does). */
   contextWindow?: number;
+  /** The host says this is an image model, not one to chat with. Only known for hosts that say (mlxh, once loaded). */
+  image?: boolean;
 }
 export interface AccountModels { models: AccountModel[]; truncated: boolean }
 

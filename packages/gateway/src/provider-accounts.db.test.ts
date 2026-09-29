@@ -135,6 +135,36 @@ suite('named provider accounts', () => {
     await f.service.refresh();
     expect(view()).toMatchObject({ detectedContextWindowTokens: 600_000, detectedContextWindowSource: 'provider' });
   });
+  it('fills an mlxh account\'s windows from its max_prompt_tokens, else 8192, and flags its image models', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const probe = vi.fn(async (_opts: unknown) => ({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: true,
+      models: [{ id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const }, { id: 'klein', loaded: true, kind: 'image' as const }] }));
+    const service = new ProviderAccounts({ ...f.service.deps, probeMlxh: probe as never }); await service.initialize();
+    f.listModels.mockResolvedValue({ models: [{ id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false }, { id: 'klein', name: 'klein', isDefault: false }], truncated: false } as never);
+    const a = await service.save({ label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://127.0.0.1:1060/v1', defaultModel: 'gemma4-e2b-it', enabled: true });
+    const view = () => service.view().accounts.find(x => x.id === a.id)!;
+    // Before any list: mlxh's default limit, not the model's own window.
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 8192, detectedContextWindowSource: 'mlxh' });
+    const listed = await service.models(a.id, true);
+    expect(probe).toHaveBeenCalledWith({ baseUrl: 'http://127.0.0.1:1060/v1' });
+    expect(listed.models).toEqual([
+      { id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false, contextWindow: 8192 },
+      { id: 'klein', name: 'klein', isDefault: false, contextWindow: 8192, image: true },
+    ]);
+    const { rows } = await pool.query('select reported_context_windows as m from core.provider_accounts where id=$1', [a.id]);
+    expect(rows[0].m).toEqual({ 'gemma4-e2b-it': 8192, klein: 8192 });
+    // A pinned server that reports its own limit wins.
+    probe.mockResolvedValueOnce({ running: true, baseUrl: 'http://127.0.0.1:1060/v1', manager: false, maxPromptTokens: 40960,
+      models: [{ id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const }] } as never);
+    await service.models(a.id, true);
+    expect(view()).toMatchObject({ detectedContextWindowTokens: 40960, detectedContextWindowSource: 'mlxh' });
+    // Another compatible endpoint is never probed.
+    probe.mockClear();
+    const other = await service.save({ label: 'Local', kind: 'openai-compatible', auth: 'none', baseUrl: 'http://localhost:11434/v1', defaultModel: 'qwen3:8b', enabled: true });
+    await service.models(other.id, true);
+    expect(probe).not.toHaveBeenCalled();
+    expect(service.view().accounts.find(x => x.id === other.id)).toMatchObject({ detectedContextWindowSource: 'table' });
+  });
   it('redacts discovery failures and never falls back to another credential', async () => {
     const f = fixture(); await f.service.initialize(); const a = await f.service.save(settings);
     f.listModels.mockRejectedValue(Object.assign(new Error('SECRET-RESPONSE'), { status: 401 }));

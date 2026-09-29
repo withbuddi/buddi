@@ -606,6 +606,38 @@ describe('createOpenAiProvider — thinking and streaming', () => {
     expect(res.usage).toEqual({ input: 4, output: 6 });
     expect(res.model).toBe('gemma4:12b');
   });
+
+  it('reads mlxh\'s stream: keepalive comments, tool calls whole in one chunk, finish and usage together', async () => {
+    // The shape mlxh v0.2 sends (serve_app.py): a role chunk, `: ping` while
+    // the prompt is processed, the buffered text and every tool call at once,
+    // then one empty delta carrying finish_reason and usage.
+    const base = { id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 1, model: 'gemma4-e2b-it' };
+    const chunk = (delta: object, finish: string | null = null, usage?: object) =>
+      `data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
+    const wire = chunk({ role: 'assistant' })
+      + ': ping\n\n: ping\n\n'
+      + chunk({ content: 'Checking.' })
+      + chunk({ tool_calls: [
+        { index: 0, id: 'call_a', type: 'function', function: { name: 'finance_balance', arguments: '{"account": "main"}' } },
+        { index: 1, id: 'call_b', type: 'function', function: { name: 'finance_spend', arguments: '{}' } },
+      ] })
+      + chunk({}, 'tool_calls', { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 })
+      + 'data: [DONE]\n\n';
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => {
+      init.onChunk(wire, 200);
+      return new Response(wire, { status: 200 });
+    });
+    const provider = createOpenAiProvider({ ...resolved(), compatible: true, secret: '', baseUrl: 'http://127.0.0.1:1060/v1', model: 'gemma4-e2b-it' }, { fetch: fetchMock as unknown as typeof fetch });
+    const res = await provider.complete({ ...request, onDelta: () => {} });
+    expect(res.content).toEqual([
+      { type: 'text', text: 'Checking.' },
+      { type: 'tool_use', id: 'call_a', name: 'finance_balance', input: { account: 'main' } },
+      { type: 'tool_use', id: 'call_b', name: 'finance_spend', input: {} },
+    ]);
+    expect(res.stopReason).toBe('tool_use');
+    expect(res.usage).toEqual({ input: 120, output: 30 });
+    expect(res.model).toBe('gemma4-e2b-it');
+  });
 });
 
 describe('createOpenAiProvider — prompt caching', () => {

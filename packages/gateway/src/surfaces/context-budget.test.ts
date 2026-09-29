@@ -13,7 +13,7 @@ import { forgetProjectedSizes, projectedTranscriptTokens, transcriptBudget } fro
 
 const CONVERSATION = '11111111-1111-1111-1111-111111111111';
 
-type Account = { model: string; kind: string; override: number | null; reported?: Record<string, unknown> };
+type Account = { model: string; kind: string; override: number | null; reported?: Record<string, unknown>; baseUrl?: string };
 
 /**
  * A pool that answers the two questions the budget asks: this conversation's
@@ -69,6 +69,17 @@ describe('what a conversation may grow to', () => {
     expect(other.windowTokens).toBe(400_000);
     const installation = await transcriptBudget(accounts({ binding: null, installation: { model: 'gpt-6-astra', kind: 'codex', override: null, reported } }), CONVERSATION);
     expect(installation.windowTokens).toBe(272_000);
+  });
+
+  it('holds an mlxh account to mlxh\'s prompt limit until its list says a number', async () => {
+    const mlxh = { model: 'gemma4-e2b-it', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1060/v1' };
+    expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: null } }), CONVERSATION)).windowTokens).toBe(8192);
+    const reported = { 'gemma4-e2b-it': 40_960 };
+    expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: null, reported } }), CONVERSATION)).windowTokens).toBe(40_960);
+    expect((await transcriptBudget(accounts({ binding: { ...mlxh, override: 32_000 } }), CONVERSATION)).windowTokens).toBe(32_000);
+    // The same model name on another host keeps the table's number.
+    const other = await transcriptBudget(accounts({ binding: { ...mlxh, baseUrl: 'http://localhost:11434/v1', override: null } }), CONVERSATION);
+    expect(other.windowTokens).not.toBe(8192);
   });
 
   it('sizes an unbound agent against the installation default it will run on', async () => {

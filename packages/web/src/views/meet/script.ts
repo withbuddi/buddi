@@ -155,7 +155,7 @@ export const SCRIPT = {
       claude: { title: 'I pay for Claude', line: 'Sign in with your Claude account. Uses its extra usage.' },
       chatgpt: { title: 'I pay for ChatGPT', line: 'Sign in with a code on openai.com. Uses your plan.' },
       key: { title: 'I have an API key', line: 'Anthropic, OpenAI, Google AI, or another service with an address.' },
-      ollama: { title: 'Ollama on this computer', line: 'Free and private. Looking for it on this computer…' },
+      local: { title: 'On this computer', line: 'Free and private. Looking on this computer…' },
     },
     /** Which kind of key, under the key card. */
     keyKinds: {
@@ -210,12 +210,28 @@ export const SCRIPT = {
       openai: 'OpenAI',
       refused: 'That key was refused. Check it and paste it again.',
     },
+    /** The "On this computer" card: what the gateway found here, Ollama, mlxh, both or neither. */
+    local: {
+      looking: 'Free and private. Looking on this computer…',
+      found: (found: { ollama?: number; mlxh?: number }): string => {
+        const count = (n: number): string => (n === 1 ? 'one model' : `${n} models`);
+        const names = [
+          found.ollama !== undefined ? `Ollama with ${count(found.ollama)}` : null,
+          found.mlxh !== undefined ? `mlxh with ${count(found.mlxh)}` : null,
+        ].filter(Boolean);
+        return `Free and private. I found ${names.join(' and ')}; the first answer takes a minute.`;
+      },
+      missing: 'Nothing local answered; Ollama or mlxh, once installed, shows here.',
+    },
+    /** mlxh, the local MLX model server on a Mac: no key, the gateway's address. */
+    mlxh: {
+      label: 'mlxh',
+      connect: 'Use mlxh',
+      /** mlxh answered but serves no language model (only image ones). */
+      noBrain: 'mlxh has no language model installed. Pull one with `mlxh pull`, then come back.',
+    },
     ollama: {
       label: 'Ollama',
-      found: (models: number): string =>
-        `Free and private. I found Ollama running with ${models === 1 ? 'one model' : `${models} models`}; the first answer takes a minute.`,
-      missing: 'Free and private. Install Ollama, then come back; I keep looking.',
-      looking: 'Free and private. Looking for it on this computer…',
       connect: 'Use Ollama',
       download: 'Get Ollama',
     },

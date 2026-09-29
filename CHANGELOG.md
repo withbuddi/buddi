@@ -13,6 +13,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- mlxh, local MLX models on a Mac, as a model account: Settings → Model accounts has a **mlxh, local MLX models on this Mac** choice (address filled in, no key, the model list next), and first run's "On this computer" card finds mlxh beside Ollama and starts on its first language model. `GET /api/onboarding/mlxh` says whether mlxh answers here and what it serves.
+- An mlxh account's context window follows mlxh's `max_prompt_tokens` when the server reports it, else its 8,192 default, and Settings says how to raise it; image models on mlxh are flagged in the model list as belonging to the Image plugin.
 - First run's "What should I take on for you?": tick My days, My mail, My money, Voice, My code or Pictures, and buddi fetches their plugins from withbuddi.com and installs them in the background while you answer the next chapters. It approves on your behalf only plugins made by buddi whose download matches the hash withbuddi.com lists; anything else waits on its card in Settings → Plugins, and every install shows there with its hash as usual. `POST`/`GET /api/onboarding/take-on`.
 - GitHub connects with a code instead of a token: Settings → Connections and `buddi connections add github` show a code and open github.com/login/device, you type it and say yes, and buddi signs in with its own GitHub app (the OAuth device flow). Token and Client id stay available; `--token` still forces the token.
 - `buddi connections list|add|review|give|remove` connects an MCP service from the terminal, through the running buddi and the same four steps as Settings → Connections; a sign-in on the service's page lands in any dashboard session, once, within ten minutes.

@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProviderAccountsView } from '../api';
 import { Providers } from './Providers';
-vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), probeModels: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn(), ollamaConnect: vi.fn(), ollamaPoll: vi.fn(), ollamaDisconnect: vi.fn(), ollama: vi.fn() } }));
+vi.mock('../api', async importOriginal => ({ ...await importOriginal<typeof import('../api')>(), api: { providerAccounts: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), probeModels: vi.fn(), saveProviderAccount: vi.fn(), removeProviderAccount: vi.fn(), testProviderAccount: vi.fn(), codexAccountAction: vi.fn(), anthropicAccountAction: vi.fn(), ollamaConnect: vi.fn(), ollamaPoll: vi.fn(), ollamaDisconnect: vi.fn(), ollama: vi.fn(), mlxh: vi.fn() } }));
 const view: ProviderAccountsView = { vault: { kind: 'file', locked: false, advice: '' }, bindings: [], accounts: [{
   id: 'one', label: 'Personal OpenAI', kind: 'openai', auth: 'api-key', baseUrl: '',
   defaultModel: 'gpt-5', enabled: true, revision: 1, configured: true, refreshable: false,
@@ -239,6 +239,50 @@ it('says whose the detected context window is', async () => {
   expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'provider' })).toBe('from the provider');
   expect(detectedWindowSource({ kind: 'openai', detectedContextWindowSource: 'table' })).toBe('assumed');
   expect(detectedWindowSource({ kind: 'codex' })).toBe('assumed');
+});
+it('names mlxh\'s prompt limit as the window source, with how to raise it', async () => {
+  const { detectedWindowSource, providerName } = await import('./Providers');
+  expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'mlxh', detectedContextWindowTokens: 8192 }))
+    .toBe('mlxh’s max_prompt_tokens; raise it with `mlxh config max_prompt_tokens 40960` for long conversations');
+  expect(detectedWindowSource({ kind: 'openai-compatible', detectedContextWindowSource: 'mlxh', detectedContextWindowTokens: 40960 })).toBe('mlxh’s max_prompt_tokens');
+  expect(providerName({ kind: 'openai-compatible', auth: 'none', detectedContextWindowSource: 'mlxh' })).toBe('mlxh');
+});
+it('adds mlxh as a preset: the gateway\'s address, no key, the first language model, and the model list after the save', async () => {
+  const probe = { running: true, baseUrl: 'http://localhost/mlxh-fixture/v1', manager: true, models: [
+    { id: 'klein', loaded: true, kind: 'image' as const }, { id: 'bonsai2', loaded: false }, { id: 'gemma4-e2b-it', loaded: true, kind: 'language' as const },
+  ] };
+  vi.mocked(api.mlxh).mockResolvedValue(probe);
+  let saved = false;
+  const row = { ...view.accounts[0]!, id: 'two', label: 'mlxh', kind: 'openai-compatible' as const, auth: 'none' as const, baseUrl: probe.baseUrl, defaultModel: 'gemma4-e2b-it', detectedContextWindowSource: 'mlxh' as const };
+  vi.mocked(api.providerAccounts).mockImplementation(async () => ({ ...view, accounts: saved ? [...view.accounts, row] : view.accounts }));
+  vi.mocked(api.saveProviderAccount).mockImplementation(async () => { saved = true; return { id: 'two' }; });
+  vi.mocked(api.accountModels).mockResolvedValue({ models: [
+    { id: 'gemma4-e2b-it', name: 'gemma4-e2b-it', isDefault: false }, { id: 'klein', name: 'klein', isDefault: false, image: true },
+  ], truncated: false });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'mlxh' } });
+  expect(screen.getByLabelText('Account name')).toHaveValue('mlxh');
+  await waitFor(() => expect(screen.getByLabelText(/API base URL/)).toHaveValue(probe.baseUrl));
+  expect(screen.queryByLabelText('Authentication')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+  expect(screen.getByText(/klein: an image model; pick it in the Image plugin, not here/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+  await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalledWith({
+    label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: probe.baseUrl, defaultModel: 'gemma4-e2b-it', enabled: true,
+  }));
+  // No test call on save: that would be a prompt, and loading a model takes a minute.
+  expect(api.testProviderAccount).not.toHaveBeenCalled();
+  expect(await screen.findByText(/Pick the model this account offers by default/)).toBeInTheDocument();
+  expect(await screen.findByRole('option', { name: /klein — an image model; pick it in the Image plugin, not here/ })).toBeInTheDocument();
+});
+it('says how to start mlxh when it is not answering, and keeps Save off', async () => {
+  vi.mocked(api.mlxh).mockResolvedValue({ running: false, baseUrl: 'http://127.0.0.1:1060/v1', manager: false, models: [] });
+  render(<Providers />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'mlxh' } });
+  expect(await screen.findByText('mlxh is not answering on 127.0.0.1:1060. Start it with `mlxh serve`, or `mlxh service install` to keep it running.')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save account' })).toBeDisabled();
 });
 it('adds Gemini as a preset: Google\'s address and the name filled in, a key, the newest Pro, and the model list after the save', async () => {
   const gemini = { baseUrl: 'http://localhost/google-fixture/openai/', keyUrl: 'http://localhost/key-page' };

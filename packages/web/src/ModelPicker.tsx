@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Button, Field } from './ui';
+import { MLXH_IMAGE_MODEL } from './mlxh';
 
 /**
  * Remount when the account/revision changes; fetching never selects a model.
@@ -56,7 +57,7 @@ export function ModelPicker({ accountId, label, value, onChange, disabled = fals
         }}>
           <option value="" disabled>Choose a model</option>
           {absent && <option value={value}>{value} (current{list ? ', not listed' : ''})</option>}
-          {models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}</option>)}
+          {models.map(m => <option key={m.id} value={m.id}>{m.name === m.id ? m.id : `${m.name} — ${m.id}`}{m.isDefault ? ' (provider default)' : ''}{m.image ? ` — ${MLXH_IMAGE_MODEL}` : ''}</option>)}
           <option value="__buddi_custom__">Custom model…</option>
         </select>
       </Field>

@@ -8,10 +8,11 @@
  * can be read once.
  */
 import { useEffect, useRef, useState } from 'react';
-import { OLLAMA_CLOUD_MODEL, api, keyRefused, type ProviderAccount, type SaveProviderAccount } from '../api';
+import { OLLAMA_CLOUD_MODEL, api, keyRefused, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
 import { GEMINI_FALLBACK_MODEL, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
+import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering, mlxhWindowNote } from '../mlxh';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
 
@@ -129,16 +130,18 @@ function vaultName(kind: string): string {
   return kind === 'keychain' ? 'macOS Keychain' : kind === 'file' ? 'encrypted file vault' : kind === 'none' ? 'vault (none configured)' : kind;
 }
 
-export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'>): string {
+export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'> & Partial<Pick<ProviderAccount, 'detectedContextWindowSource'>>): string {
   if (a.kind === 'codex') return 'ChatGPT subscription';
   if (a.kind === 'anthropic') return a.auth === 'anthropic-oauth' ? 'Claude subscription' : a.auth === 'legacy-subscription-token' ? 'Claude setup token' : 'Anthropic API';
   if (a.kind === 'openai') return 'OpenAI API';
   if (a.auth === 'device-key') return 'Ollama Cloud';
+  if (isMlxhAccount(a)) return 'mlxh';
   return 'OpenAI-compatible';
 }
 
 /** Whose the detected context window is, for the label beside it. */
-export function detectedWindowSource(a: Pick<ProviderAccount, 'kind' | 'detectedContextWindowSource'>): string {
+export function detectedWindowSource(a: Pick<ProviderAccount, 'kind' | 'detectedContextWindowSource'> & Partial<Pick<ProviderAccount, 'detectedContextWindowTokens'>>): string {
+  if (a.detectedContextWindowSource === 'mlxh') return mlxhWindowNote(a.detectedContextWindowTokens);
   if (a.detectedContextWindowSource !== 'provider') return 'assumed';
   return a.kind === 'codex' ? 'from ChatGPT' : 'from the provider';
 }
@@ -320,7 +323,9 @@ function AccountForm({ account: a, busy, run, onDone, codexEnabled, anthropicOAu
         <Toolbar valign="end">
           <ModelPicker key={`${a?.id}:${a?.revision}`} accountId={a?.configured && a.enabled ? a.id : undefined} label="Default model" value={model} onChange={setModel} disabled={busy} />
         </Toolbar>
-        <Field label="Context window" hint="Tokens this endpoint actually serves. Leave blank unless you run the model yourself and set a window of your own — a conversation is ended once its history would fill half of this.">
+        <Field label="Context window" hint={isMlxhAccount(a)
+          ? 'mlxh refuses a prompt over its max_prompt_tokens, and its model manager does not report the number, so buddi assumes 8,192. After `mlxh config max_prompt_tokens 40960`, enter the same number here.'
+          : 'Tokens this endpoint actually serves. Leave blank unless you run the model yourself and set a window of your own — a conversation is ended once its history would fill half of this.'}>
           <input type="number" inputMode="numeric" min={8000} max={2000000} step={1000} value={contextWindow}
             placeholder={a?.detectedContextWindowTokens ? `${a.detectedContextWindowTokens} (${detectedWindowSource(a)})` : 'assumed from the model'}
             onChange={e => setContextWindow(e.target.value)} />
@@ -478,9 +483,15 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
   const [cloud, setCloud] = useState(false);
   /** The Gemini preset: an OpenAI-compatible account on Google's address, a key, and the model list after the save. */
   const [google, setGoogle] = useState(false);
+  /**
+   * The mlxh preset: an OpenAI-compatible account on the address the gateway
+   * found mlxh on, no key (mlxh takes any), and the model list after the save.
+   * `undefined` while not chosen, null while the gateway is asked.
+   */
+  const [mlxh, setMlxh] = useState<MlxhProbe | null | undefined>(undefined);
   const choose = (nextKind: ProviderAccount['kind'], nextAuth: ProviderAccount['auth'], nextCloud = false) => {
     setKind(nextKind); setAuth(nextAuth); setSecret(''); setProbe(null); setProbeError(''); setModel(''); setCustomModel(false);
-    setCloud(nextCloud); setGoogle(false);
+    setCloud(nextCloud); setGoogle(false); setMlxh(undefined);
     setBaseUrl(nextCloud ? '' : nextKind === 'openai-compatible' ? 'http://localhost:11434/v1' : '');
     if (!labelTouched) setLabel(nextCloud ? suggestedLabel(nextKind, 'device-key', taken) : suggestedLabel(nextKind, nextAuth, taken));
   };
@@ -496,6 +507,13 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     setBaseUrl(gemini.baseUrl);
     if (!labelTouched) setLabel(uniqueLabel('Gemini', taken));
   };
+  const chooseMlxh = () => {
+    choose('openai-compatible', 'none');
+    setMlxh(null);
+    if (!labelTouched) setLabel(uniqueLabel('mlxh', taken));
+    void api.mlxh().then((probed) => { setMlxh(probed); setBaseUrl(probed.baseUrl); }).catch(() => setMlxh(undefined));
+  };
+  const local = mlxh !== undefined;
   const saved = savedId ? accounts.find((a) => a.id === savedId) : undefined;
   if (savedId) {
     if (!saved) return <Empty>Saving…</Empty>;
@@ -516,12 +534,12 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
     } finally { setProbing(false); }
   };
   const chosen = model.trim();
-  const incomplete = !label.trim() || (endpoint && !baseUrl.trim()) || (endpoint && !google && !chosen) || (google && !secret.trim());
+  const incomplete = !label.trim() || (endpoint && !baseUrl.trim()) || (endpoint && !google && !local && !chosen) || (google && !secret.trim()) || (local && !mlxh?.running);
   return (
     <form className="ui-stack" onSubmit={e => {
       e.preventDefault();
       const value = secret; setSecret('');
-      let defaultModel = chosen || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
+      let defaultModel = chosen || (local ? firstMlxhModel(mlxh) ?? mlxh?.models[0]?.id : undefined) || (auth === 'device-key' ? OLLAMA_CLOUD_MODEL : STARTING_MODEL[kind]) || 'claude-sonnet-5';
       let flash: string | undefined;
       void (async () => {
         if (google) {
@@ -573,22 +591,25 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
         }, 'Account saved.');
         if (!ok || !created) return;
         // A model picked here is the whole job; only a subscription has a next step.
-        if (google || failed) setSavedId(created.id);
+        // Gemini and mlxh serve several models: the next step lists them.
+        if (google || local || failed) setSavedId(created.id);
         else if (chosen || !subscription) onDone(created.id);
         else setSavedId(created.id);
       })();
     }}>
       <fieldset disabled={busy} className="ui-fields" data-stack="true">
         <Field label="Provider">
-          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : cloud ? 'ollama-cloud' : google ? 'gemini' : kind} onChange={e => {
+          <select value={auth === 'anthropic-oauth' ? 'anthropic-oauth' : cloud ? 'ollama-cloud' : google ? 'gemini' : local ? 'mlxh' : kind} onChange={e => {
             if (e.target.value === 'anthropic-oauth') choose('anthropic', 'anthropic-oauth');
             else if (e.target.value === 'gemini') chooseGemini();
+            else if (e.target.value === 'mlxh') chooseMlxh();
             else if (e.target.value === 'ollama-cloud') choose('openai-compatible', 'device-key', true);
             else { const k = e.target.value as ProviderAccount['kind']; choose(k, k === 'codex' ? 'chatgpt' : 'api-key'); }
           }}>
             <option value="anthropic">Anthropic API</option><option value="openai">OpenAI API</option>
             {gemini && <option value="gemini">Gemini (Google AI key)</option>}
             <option value="ollama-cloud">Ollama Cloud</option>
+            <option value="mlxh">mlxh, local MLX models on this Mac</option>
             <option value="openai-compatible">OpenAI-compatible endpoint (Ollama, OpenRouter, vLLM…)</option>
             {anthropicOAuthEnabled && <option value="anthropic-oauth">Claude subscription</option>}
             {codexEnabled && <option value="codex">ChatGPT subscription</option>}
@@ -607,7 +628,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           <Field label="API base URL" hint="Include the API path, such as /v1 or /api/v1. Conversation data will be sent to this endpoint. The model must support tool calling to use agent tools.">
             <input required type="url" value={baseUrl} onChange={e => { setBaseUrl(e.target.value); setProbe(null); }} />
           </Field>
-          {!google && <Field label="Authentication">
+          {!google && !local && <Field label="Authentication">
             <select value={auth} onChange={e => { setAuth(e.target.value as ProviderAccount['auth']); setSecret(''); setProbe(null); }}>
               <option value="api-key">API key</option><option value="none">No key (local/self-hosted)</option>
             </select>
@@ -618,7 +639,19 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
             <input type="password" autoComplete="new-password" spellCheck={false} value={secret} onChange={e => { setSecret(e.target.value); setProbe(null); }} />
           </Field>
         )}
-        {google && gemini ? (
+        {local ? (
+          mlxh === null ? <p className="muted">Looking for mlxh on this computer…</p>
+          : mlxh?.running ? (
+            <Stack gap="sm">
+              <p className="muted">
+                mlxh answers with {mlxh.models.length === 1 ? 'one model' : `${mlxh.models.length} models`}. No key: mlxh takes any. buddi starts on {firstMlxhModel(mlxh) ?? 'the first'}; the next step lists the rest. A model that is not loaded takes up to a minute on its first answer.
+              </p>
+              {mlxh.models.some((m) => m.kind === 'image') ? (
+                <p className="muted">{mlxh.models.filter((m) => m.kind === 'image').map((m) => m.id).join(', ')}: {MLXH_IMAGE_MODEL}.</p>
+              ) : null}
+            </Stack>
+          ) : <Notice tone="warning">{mlxhNotAnswering(mlxh?.baseUrl ?? baseUrl)}</Notice>
+        ) : google && gemini ? (
           <p className="muted">
             <a href={gemini.keyUrl} target="_blank" rel="noreferrer">Get a key at aistudio.google.com</a>. buddi picks the newest Gemini Pro your key can reach; the next step lists the rest.
           </p>
@@ -657,7 +690,7 @@ function AccountWizard({ accounts, busy, run, onDone, codexEnabled, anthropicOAu
           <Button type="submit" variant="accent" disabled={incomplete}>Save account</Button>
         </Toolbar>
       </fieldset>
-      {incomplete && <p className="muted">Enter an account name{google ? ' and a key' : endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
+      {incomplete && !local && <p className="muted">Enter an account name{google ? ' and a key' : endpoint ? ', an endpoint and a model' : ''} to enable Save account.</p>}
     </form>
   );
 }

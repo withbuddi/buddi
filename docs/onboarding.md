@@ -89,9 +89,11 @@ Five cards, two per row, in this order:
    gateway names the address; [providers.md](providers.md#gemini)) and
    **Another service** (an address and a key, the gateway's Ollama Cloud
    address prefilled).
-5. **Ollama on this computer** — the whole row, with what was found: "I found
-   Ollama running with 2 models; the first answer takes a minute", or
-   "Install Ollama, then come back", polled.
+5. **On this computer** — the whole row, with what the gateway found here,
+   polled: "I found Ollama with 2 models", "I found mlxh with 5 models", both,
+   or "Nothing local answered; Ollama or mlxh, once installed, shows here".
+   **Use Ollama** asks which model when there are several; **Use mlxh** starts
+   on its first language model ([providers.md](providers.md#mlxh)).
 
 Every card ends in one small call (a ChatGPT plan has no per-turn cap to keep a
 test small, so there the assistant's first answer is the test). A service

@@ -54,6 +54,7 @@ import { ProviderAccountError, type ProviderAccounts } from '../provider-account
 import { listBrowserProfiles, listInstalledApps } from './apps.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR } from '../agents/catalog.js';
 import { setDelegatesFromWeb } from './write.js';
+import { mlxhBaseUrl, probeMlxh } from '../mlxh.js';
 import {
   OnboardingRefusal,
   WEB_ONBOARDING_STEPS,
@@ -1454,6 +1455,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
+        // Is mlxh running here? The same question, asked the same way, of port 1060.
+        case '/api/onboarding/mlxh':
+          return sendJson(res, 200, await probeMlxh({ baseUrl: mlxhBaseUrl(deps.env ?? process.env) }));
         // Chapter 3's progress: per plugin, and what the handover card will say is waiting.
         case '/api/onboarding/take-on':
           return sendJson(res, 200, await readTakeOn(takeOnDeps()));

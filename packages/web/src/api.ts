@@ -712,6 +712,21 @@ export interface OllamaProbe {
   cloudBaseUrl: string;
 }
 
+/** What the gateway found when it asked mlxh, here, a moment ago (`GET /api/onboarding/mlxh`). */
+export interface MlxhProbe {
+  running: boolean;
+  /** Where an account for it points — data, so this bundle names no host. */
+  baseUrl: string;
+  /** `mlxh serve` with no model: every installed model loads on demand. */
+  manager: boolean;
+  /** `kind` is only known for a loaded model. */
+  models: Array<{ id: string; loaded: boolean; kind?: 'language' | 'image' }>;
+  /** The server's own limit when it reports one; 0 means off. */
+  maxPromptTokens?: number;
+  workerIdleTimeoutS?: number;
+  version?: string;
+}
+
 /* ---- notifications (docs/notifications.md) ---- */
 
 export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin'] as const;
@@ -989,7 +1004,7 @@ export interface ProviderAccount {
   /** What the server would assume for `defaultModel`: the field's placeholder. */
   detectedContextWindowTokens?: number;
   /** Whose that number is: the provider's own model list, or buddi's table for the model name. */
-  detectedContextWindowSource?: 'provider' | 'table';
+  detectedContextWindowSource?: 'provider' | 'table' | 'mlxh';
   refreshable: boolean; tokenExpiresAt: string | null; subscriptionRenewsAt: string | null;
   assignedAgents: string[]; test: { state: string; message: string; checkedAt: string; httpStatus?: number | null; retryAt?: string | null } | null;
   removalPending?: boolean;
@@ -1708,7 +1723,7 @@ export const api = {
   providerAccounts: () => get<ProviderAccountsView>('/provider-accounts'),
   probeModels: (body: { kind: 'anthropic' | 'openai' | 'openai-compatible'; auth: 'api-key' | 'none'; baseUrl?: string; secret?: string }) =>
     post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>('/provider-accounts/probe-models', body),
-  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
+  accountModels: (id: string, refresh = false) => post<{ models: Array<{ id: string; name: string; isDefault: boolean; thinks?: boolean; image?: boolean }>; truncated: boolean }>(`/provider-accounts/${encodeURIComponent(id)}/models`, { refresh }),
   saveProviderAccount: (body: SaveProviderAccount) => post<{ id: string; warning?: string }>('/provider-accounts/save', body),
   testProviderAccount: (id: string) => post<ConnectionVerdict>(`/provider-accounts/${encodeURIComponent(id)}/test`),
   removeProviderAccount: (id: string, revision: number) => post(`/provider-accounts/${encodeURIComponent(id)}/remove`, { revision }),
@@ -1861,6 +1876,8 @@ export const api = {
    * reaches no host but its own, and the answer is about that machine anyway.
    */
   ollama: () => get<OllamaProbe>('/onboarding/ollama'),
+  /** Is mlxh running on the machine buddi runs on? Asked of the gateway, as Ollama is. */
+  mlxh: () => get<MlxhProbe>('/onboarding/mlxh'),
   /**
    * Change the assistant after it exists — its name, face or purpose.
    *

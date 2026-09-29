@@ -37,7 +37,7 @@
  * Total by construction: every failure here degrades to the old constant and
  * the stored count. A machine that cannot size a transcript must still answer.
  */
-import type { Queryable } from '@buddi/core';
+import { MLXH_DEFAULT_MAX_PROMPT_TOKENS, isMlxhAccount, type Queryable } from '@buddi/core';
 import {
   CHARS_PER_TOKEN,
   compactObservations,
@@ -108,7 +108,10 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
   const map = row.reported;
   const reportedRaw = map && typeof map === 'object' && Object.hasOwn(map, model) ? (map as Record<string, unknown>)[model] : undefined;
   const reported = typeof reportedRaw === 'number' && Number.isFinite(reportedRaw) ? reportedRaw : null;
-  const override = owner ?? reported;
+  // mlxh refuses a prompt past its max_prompt_tokens; until its model list
+  // said the number, assume its default rather than the model's own window.
+  const mlxh = typeof row.baseUrl === 'string' && isMlxhAccount({ kind: String(row.kind), baseUrl: row.baseUrl }) ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : null;
+  const override = owner ?? reported ?? mlxh;
   const windowTokens = contextWindowTokens(model, providerOf(row.kind), override);
   const maxTokens = transcriptTokenBudget(windowTokens);
   return {
@@ -127,7 +130,7 @@ function budgetFor(row: Record<string, unknown>, source: TranscriptBudget['sourc
 export async function transcriptBudget(pool: Queryable, conversationId: string): Promise<TranscriptBudget> {
   const { rows } = await pool.query(
     `select b.model as model, a.kind as kind, a.context_window_tokens as override,
-            a.reported_context_windows as reported
+            a.reported_context_windows as reported, a.base_url as "baseUrl"
        from core.conversations c
        join core.agent_provider_accounts b on b.agent_id = c.agent_id
        left join core.provider_accounts a on a.id = b.account_id
@@ -142,7 +145,7 @@ export async function transcriptBudget(pool: Queryable, conversationId: string):
   // them in — so that is the window it will actually be given.
   const { rows: defaults } = await pool.query(
     `select default_model as model, kind, context_window_tokens as override,
-            reported_context_windows as reported
+            reported_context_windows as reported, base_url as "baseUrl"
        from core.provider_accounts
       where enabled and not deleting
       order by created_at, id

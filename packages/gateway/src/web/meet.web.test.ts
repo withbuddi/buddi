@@ -150,6 +150,25 @@ it('answers the probe over the API, and never asks the page to do it', async () 
   expect(body.cloudBaseUrl).toBe(OLLAMA_CLOUD_BASE_URL);
 });
 
+it('answers the mlxh probe over the API, from the address MLXH_BASE_URL names', async () => {
+  // A fake mlxh: only the two read-only routes exist.
+  const seen: string[] = [];
+  const fake = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    if (req.url === '/mlxh/info') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ model: null, model_kind: 'manager', manager: true, models: ['gemma4-e2b-it'], workers: [], worker_idle_timeout_s: 300 })); return; }
+    if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'gemma4-e2b-it' }] })); return; }
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((resolve) => fake.listen(0, '127.0.0.1', resolve));
+  closers.push(() => new Promise<void>((resolve) => { fake.close(() => resolve()); }));
+  const baseUrl = `http://127.0.0.1:${(fake.address() as { port: number }).port}/v1`;
+  const { origin, headers } = await boot({ env: { MLXH_BASE_URL: baseUrl } });
+  const res = await fetch(`${origin}/api/onboarding/mlxh`, { headers });
+  expect(res.status).toBe(200);
+  expect(await json(res)).toEqual({ running: true, baseUrl, manager: true, models: [{ id: 'gemma4-e2b-it', loaded: false }], workerIdleTimeoutS: 300 });
+  expect(seen.sort()).toEqual(['GET /mlxh/info', 'GET /v1/models']);
+});
+
 /* ------------------------------------------------------------------ *
  * Telegram
  * ------------------------------------------------------------------ */

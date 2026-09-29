@@ -49,6 +49,7 @@ vi.mock('../api', async (load) => {
       removeProviderAccount: vi.fn(),
       probeModels: vi.fn(),
       ollama: vi.fn(),
+      mlxh: vi.fn(),
       telegram: vi.fn(),
       saveTelegramToken: vi.fn(),
       telegramPairing: vi.fn(),
@@ -131,6 +132,7 @@ function quiet(): void {
   vi.mocked(api.owner).mockResolvedValue(owner());
   vi.mocked(api.providerAccounts).mockResolvedValue(accounts());
   vi.mocked(api.ollama).mockResolvedValue({ running: false, models: [], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' });
+  vi.mocked(api.mlxh).mockResolvedValue({ running: false, baseUrl: 'mlxh-on-this-machine/v1', manager: false, models: [] });
   vi.mocked(api.onboardingStep).mockResolvedValue(view());
   vi.mocked(api.takeOn).mockResolvedValue({ jobs: [] });
   vi.mocked(api.takeOnProgress).mockResolvedValue(progress());
@@ -361,7 +363,7 @@ describe('chapter 2: a brain', () => {
     const page = render(meet());
     expect(await screen.findByText(SCRIPT.brain.title)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.brain.cards.key.title)).toBeInTheDocument();
-    expect(screen.getByText(SCRIPT.brain.cards.ollama.title)).toBeInTheDocument();
+    expect(screen.getByText(SCRIPT.brain.cards.local.title)).toBeInTheDocument();
     expect(screen.getByText(SCRIPT.brain.cards.free.title)).toBeInTheDocument();
     expect(screen.queryByText(SCRIPT.brain.cards.claude.title)).not.toBeInTheDocument();
     page.unmount();
@@ -411,7 +413,52 @@ describe('chapter 2: a brain', () => {
     vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
     vi.mocked(api.ollama).mockResolvedValue({ running: true, models: ['qwen3:4b'], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' });
     render(meet());
-    expect(await screen.findByText(SCRIPT.brain.ollama.found(1))).toBeInTheDocument();
+    expect(await screen.findByText(SCRIPT.brain.local.found({ ollama: 1 }))).toBeInTheDocument();
+  });
+
+  it('names what answered on this computer: Ollama, mlxh, both, or neither', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    const ollamaOn = { running: true, models: ['qwen3:4b', 'gemma4:12b'], downloadUrl: 'ollama.com/download', baseUrl: 'ollama-on-this-machine/v1', cloudBaseUrl: 'ollama-cloud/v1' };
+    const mlxhOn = {
+      running: true, baseUrl: 'mlxh-on-this-machine/v1', manager: true,
+      models: ['bonsai2', 'gemma4-e2b', 'gemma4-e2b-it', 'klein', 'openjev'].map((id) => ({ id, loaded: false })),
+    };
+    // Neither: nothing local answered.
+    let page = render(meet());
+    expect(await screen.findByText(SCRIPT.brain.local.missing)).toBeInTheDocument();
+    page.unmount();
+    // mlxh alone.
+    vi.mocked(api.mlxh).mockResolvedValue(mlxhOn);
+    page = render(meet());
+    expect(await screen.findByText(SCRIPT.brain.local.found({ mlxh: 5 }))).toBeInTheDocument();
+    expect(SCRIPT.brain.local.found({ mlxh: 5 })).toContain('I found mlxh with 5 models');
+    page.unmount();
+    // Both.
+    vi.mocked(api.ollama).mockResolvedValue(ollamaOn);
+    render(meet());
+    const both = SCRIPT.brain.local.found({ ollama: 2, mlxh: 5 });
+    expect(both).toContain('I found Ollama with 2 models and mlxh with 5 models');
+    expect(await screen.findByText(both)).toBeInTheDocument();
+  });
+
+  it('makes an mlxh account from the probe and starts on its first language model, a loaded one first', async () => {
+    vi.mocked(api.owner).mockResolvedValue(owner({ preferredName: 'Amen', timezone: 'UTC' }));
+    vi.mocked(api.saveProviderAccount).mockRejectedValue(new Error('stop here'));
+    vi.mocked(api.mlxh).mockResolvedValue({
+      running: true, baseUrl: 'mlxh-on-this-machine/v1', manager: true,
+      models: [
+        { id: 'bonsai2', loaded: false },
+        { id: 'klein', loaded: true, kind: 'image' },
+        { id: 'gemma4-e2b-it', loaded: true, kind: 'language' },
+      ],
+    });
+    render(meet());
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
+    fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.mlxh.connect }));
+    await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
+    expect(vi.mocked(api.saveProviderAccount).mock.calls[0]![0]).toEqual({
+      label: 'mlxh', kind: 'openai-compatible', auth: 'none', baseUrl: 'mlxh-on-this-machine/v1', defaultModel: 'gemma4-e2b-it', enabled: true,
+    });
   });
 
   it('offers the five cards in the kit\'s order: free first, then the plans, a key, and Ollama here last', async () => {
@@ -420,7 +467,7 @@ describe('chapter 2: a brain', () => {
     render(meet());
     await screen.findByText(SCRIPT.brain.cards.free.title);
     const titles = within(screen.getByRole('group', { name: SCRIPT.brain.ask })).getAllByRole('button').map((card) => card.textContent ?? '');
-    expect(titles.map((text) => ['free', 'claude', 'chatgpt', 'key', 'ollama'].find((id) => text.startsWith(SCRIPT.brain.cards[id as 'free'].title)))).toEqual(['free', 'claude', 'chatgpt', 'key', 'ollama']);
+    expect(titles.map((text) => ['free', 'claude', 'chatgpt', 'key', 'local'].find((id) => text.startsWith(SCRIPT.brain.cards[id as 'free'].title)))).toEqual(['free', 'claude', 'chatgpt', 'key', 'local']);
     expect(titles[0]).toContain(SCRIPT.brain.cards.free.line);
     // "Use this brain" waits for a brain that answered.
     expect(screen.getByRole('button', { name: SCRIPT.brain.submit })).toBeDisabled();
@@ -843,7 +890,7 @@ describe('chapter 2: a brain', () => {
       cloudBaseUrl: 'ollama-cloud/v1',
     });
     const page = render(meet());
-    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.ollama.title));
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.ollama.connect }));
     expect(await screen.findByText(SCRIPT.brain.model.ask)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(SCRIPT.brain.model.label), { target: { value: 'qwen3:8b' } });
@@ -866,7 +913,7 @@ describe('chapter 2: a brain', () => {
       cloudBaseUrl: 'ollama-cloud/v1',
     });
     render(meet());
-    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.ollama.title));
+    fireEvent.click(await screen.findByText(SCRIPT.brain.cards.local.title));
     fireEvent.click(await screen.findByRole('button', { name: SCRIPT.brain.ollama.connect }));
     await waitFor(() => expect(api.saveProviderAccount).toHaveBeenCalled());
     expect(screen.queryByText(SCRIPT.brain.model.ask)).not.toBeInTheDocument();

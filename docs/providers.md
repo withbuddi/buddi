@@ -38,6 +38,8 @@ Supported connections:
   an OpenAI-compatible account at `https://ollama.com/v1`.
 - [Gemini](#gemini): a Google AI Studio key on Google's OpenAI-compatible
   endpoint, offered as its own choice so the address is filled in.
+- [mlxh](#mlxh): local MLX models on this Mac, offered as its own choice so
+  the address is filled in and no key is asked.
 
 Both sign-ins are offered by default. `BUDDI_SUBSCRIPTION_SIGNINS=off` hides
 both: the account kinds are refused and the wizard and Settings do not offer
@@ -49,8 +51,8 @@ built-in table of model windows for that endpoint, which is the only truth
 available for a locally served model whose window is whatever `num_ctx` the
 host was started with. Left blank, the number is the provider's own when its
 model list reports one (a ChatGPT subscription does, as would an Ollama host
-that says), otherwise buddi's assumption for the model name; the owner's value
-always wins. [conversations.md](conversations.md) is what the number is used for.
+that says, or mlxh's prompt limit), otherwise buddi's assumption for the model
+name; the owner's value always wins. [conversations.md](conversations.md) is what the number is used for.
 
 ## Gemini
 
@@ -78,6 +80,45 @@ tier.
 model, as on any compatible host (the endpoint takes `reasoning_effort`, which
 buddi does not send). No Google Search grounding or other native tools. No
 sign-in with a Google account: a key only.
+
+## mlxh
+
+**What it is.** [mlxh](https://github.com/amenophis1er/mlxh), a local MLX
+model server for Apple Silicon, on its OpenAI-compatible API at
+`http://127.0.0.1:1060/v1` (1060 is MLX in Roman numerals; `MLXH_BASE_URL`
+overrides it on the gateway). mlxh takes any key, so the account is an
+ordinary `openai-compatible` account labelled "mlxh" with no key. Install it
+with `curl -fsSL https://raw.githubusercontent.com/amenophis1er/mlxh/main/install.sh | bash`
+(needs uv), pull a model (`mlxh pull …`), and run `mlxh serve`;
+`mlxh service install` keeps it running across logins as a LaunchAgent.
+
+**Set it up.** In first run, the **On this computer** card says what it found
+("I found mlxh with 5 models"); **Use mlxh** makes the account and starts on
+its first language model, a loaded one first, with the rest under "Think with
+another". In Settings → Model accounts, add an account and pick **mlxh, local
+MLX models on this Mac**: the address comes from the gateway, the next step
+lists the models. When nothing answers, the form says so and how to start it.
+The gateway asks `GET /api/onboarding/mlxh`, which reads mlxh's `/mlxh/info`
+and `/v1/models` (two seconds, never a prompt) and answers
+`{ running, baseUrl, manager, models: [{ id, loaded, kind? }], maxPromptTokens?, workerIdleTimeoutS?, version? }`.
+
+**The model manager.** `mlxh serve` loads no model up front: every installed
+model is listed, a request's model loads its worker on demand (the first
+answer after idle takes seconds to a minute), and idle workers unload after
+`worker_idle_timeout_s` (300 s). `mlxh serve NAME` pins one model instead.
+
+**The context window.** mlxh refuses a prompt over `max_prompt_tokens` with a
+400, 8,192 by default; coding-agent-sized conversations need about 40,960
+(`mlxh config max_prompt_tokens 40960`). A pinned server reports its limit and
+buddi uses it; the manager does not, so an mlxh account's window is 8,192
+until you set the account's Context window to the number you configured.
+Settings shows where the number comes from.
+
+**Image models.** Image models (FLUX Schnell, Klein, Qwen Image) are listed
+too, but answer the Images API, not chat. Once one is loaded, mlxh says so and
+the model list flags it ("an image model; pick it in the Image plugin, not
+here"); before that, first run passes over them by name. Using them for
+pictures belongs to the Image plugin, later.
 
 ## Ollama Cloud with a device key
 

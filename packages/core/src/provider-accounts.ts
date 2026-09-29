@@ -19,6 +19,33 @@ export const OLLAMA_CLOUD_ACCOUNT_URL = 'https://ollama.com/v1';
  */
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 export const GEMINI_KEY_URL = 'https://aistudio.google.com/apikey';
+
+/**
+ * mlxh, the local MLX model server for Apple Silicon: an ordinary
+ * `openai-compatible` account on this Mac. Port 1060 is MLX in Roman numerals.
+ * Any key is accepted, so the account needs none.
+ */
+export const MLXH_BASE_URL = 'http://127.0.0.1:1060/v1';
+/**
+ * mlxh refuses a prompt over its `max_prompt_tokens` with a 400, and ships with
+ * this limit. Its model manager does not report the number, so a window for an
+ * mlxh account is this one unless the server said otherwise.
+ */
+export const MLXH_DEFAULT_MAX_PROMPT_TOKENS = 8192;
+
+/**
+ * Whether an account points at mlxh: the address it was saved with (or the
+ * `MLXH_BASE_URL` override), or any loopback address on mlxh's port.
+ */
+export function isMlxhAccount(row: { kind: string; baseUrl: string }, mlxhBaseUrl: string = MLXH_BASE_URL): boolean {
+  if (row.kind !== 'openai-compatible') return false;
+  const trim = (url: string): string => url.replace(/\/+$/, '');
+  if (trim(row.baseUrl) === trim(mlxhBaseUrl) || trim(row.baseUrl) === trim(MLXH_BASE_URL)) return true;
+  try {
+    const url = new URL(row.baseUrl);
+    return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.port === '1060';
+  } catch { return false; }
+}
 export interface ProviderAccount {
   id: string;
   label: string;

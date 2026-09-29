@@ -43,6 +43,7 @@ import {
   type BrowserLaunchCheck,
   type ConnectionVerdict,
   keyRefused,
+  type MlxhProbe,
   type OllamaProbe,
   type OnboardingReach,
   type ProviderAccountsView,
@@ -57,6 +58,7 @@ import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, 
 import { useMediaQuery } from '../useMediaQuery';
 import type { PluginPageDescriptor } from '../pages/types';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
+import { firstMlxhModel, isMlxhAccount, isMlxhImageModel, mlxhNotAnswering } from '../mlxh';
 import { PluginPage } from '../pages/PluginPage';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
@@ -903,7 +905,7 @@ function HelloChapter({ answers, zones, browserZone, onSettled, onTrouble }: Que
  * 2. A brain
  * ------------------------------------------------------------------ */
 
-type Card = 'free' | 'claude' | 'chatgpt' | 'key' | 'ollama';
+type Card = 'free' | 'claude' | 'chatgpt' | 'key' | 'local';
 type KeyKind = 'key' | 'gemini' | 'service';
 
 const CARD_LOOK: Record<Card, { icon: IconName; tone?: string; wide?: boolean }> = {
@@ -911,7 +913,7 @@ const CARD_LOOK: Record<Card, { icon: IconName; tone?: string; wide?: boolean }>
   claude: { icon: 'bulb', tone: 'mail' },
   chatgpt: { icon: 'chat', tone: 'coding' },
   key: { icon: 'key', tone: 'accent' },
-  ollama: { icon: 'monitor', tone: 'plain', wide: true },
+  local: { icon: 'monitor', tone: 'plain', wide: true },
 };
 
 function BrainChapter(props: QuestionProps): JSX.Element {
@@ -921,6 +923,7 @@ function BrainChapter(props: QuestionProps): JSX.Element {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ollama, setOllama] = useState<OllamaProbe | null>(null);
+  const [mlxh, setMlxh] = useState<MlxhProbe | null>(null);
   /** The models the owner is choosing between, and what to do with the answer. */
   const [choice, setChoice] = useState<{
     models: string[];
@@ -934,9 +937,9 @@ function BrainChapter(props: QuestionProps): JSX.Element {
   /** The ollama.com or openai.com window, opened inside the tap so no popup blocker stops it. */
   const [consent, setConsent] = useState<Window | null>(null);
 
-  // The Ollama card has to know before it is opened whether Ollama is there:
-  // its line says what was found. The gateway asks the machine; this only
-  // reads the answer, and keeps asking while the answer is no.
+  // The "On this computer" card has to know before it is opened what is
+  // there, Ollama or mlxh: its line says what was found. The gateway asks the
+  // machine; this only reads the answers, and keeps asking.
   useEffect(() => {
     let cancelled = false;
     const ask = (): void => {
@@ -946,6 +949,15 @@ function BrainChapter(props: QuestionProps): JSX.Element {
           if (!cancelled && probe) setOllama(probe);
         })
         .catch(() => {});
+      Promise.resolve()
+        .then(() => api.mlxh())
+        .then((probe) => {
+          if (!cancelled && probe) setMlxh(probe);
+        })
+        .catch(() => {
+          // A gateway without the probe: nothing local of that kind.
+          if (!cancelled) setMlxh({ running: false, baseUrl: '', manager: false, models: [] });
+        });
     };
     ask();
     const timer = window.setInterval(ask, 4_000);
@@ -1108,13 +1120,8 @@ function BrainChapter(props: QuestionProps): JSX.Element {
     setCard(null);
   };
 
-  const ollamaLine =
-    ollama === null
-      ? SCRIPT.brain.ollama.looking
-      : ollama.running
-        ? SCRIPT.brain.ollama.found(ollama.models.length)
-        : SCRIPT.brain.ollama.missing;
-  const shownCards: Card[] = ['free', ...(claudeOffered ? (['claude'] as Card[]) : []), ...(chatgptOffered ? (['chatgpt'] as Card[]) : []), 'key', 'ollama'];
+  const localLine = localFound(ollama, mlxh);
+  const shownCards: Card[] = ['free', ...(claudeOffered ? (['claude'] as Card[]) : []), ...(chatgptOffered ? (['chatgpt'] as Card[]) : []), 'key', 'local'];
 
   let flow: ReactNode = null;
   if (choice) {
@@ -1160,8 +1167,8 @@ function BrainChapter(props: QuestionProps): JSX.Element {
         )}
       </>
     );
-  } else if (card === 'ollama') {
-    flow = <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={leave} onOffer={offer} />;
+  } else if (card === 'local') {
+    flow = <LocalCard busy={busy} problem={problem} probe={ollama} mlxh={mlxh} onBack={leave} onOffer={offer} onUse={adopt} />;
   } else if (card === 'free') {
     flow = <OllamaCloudCard {...props} busy={busy} consent={consent} onBack={leave} onConnected={bind} />;
   } else if (card === 'chatgpt') {
@@ -1194,7 +1201,7 @@ function BrainChapter(props: QuestionProps): JSX.Element {
               </span>
               <span>
                 <span className="wiz-opt-title">{words.title}</span>
-                <span className="wiz-opt-line">{id === 'ollama' ? ollamaLine : words.line}</span>
+                <span className="wiz-opt-line">{id === 'local' ? localLine : words.line}</span>
                 {'pill' in words ? <Pill tone="good">{words.pill}</Pill> : null}
               </span>
             </button>
@@ -1557,21 +1564,60 @@ function GeminiCard({
     </>
   );
 }
-/** Ollama, on this computer. */
-function OllamaCard({
+/**
+ * What the "On this computer" card says: what answered here, Ollama, mlxh,
+ * both or neither. Still looking until both probes have answered once.
+ */
+function localFound(ollama: OllamaProbe | null, mlxh: MlxhProbe | null): string {
+  if (ollama === null || mlxh === null) return SCRIPT.brain.local.looking;
+  if (!ollama.running && !mlxh.running) return SCRIPT.brain.local.missing;
+  return SCRIPT.brain.local.found({
+    ...(ollama.running ? { ollama: ollama.models.length } : {}),
+    ...(mlxh.running ? { mlxh: mlxh.models.length } : {}),
+  });
+}
+
+/**
+ * On this computer: Ollama, mlxh, or both. Ollama asks which model when it
+ * has several; mlxh starts on its first language model (a loaded one when
+ * there is one), and "Think with another" offers the rest after.
+ */
+function LocalCard({
   busy,
   problem,
   probe,
+  mlxh,
   onBack,
   onOffer,
+  onUse,
 }: {
   busy: boolean;
   problem: string | null;
   probe: OllamaProbe | null;
+  mlxh: MlxhProbe | null;
   onBack: () => void;
   onOffer: Offer;
+  onUse: Adopt;
 }): JSX.Element {
   const models = probe?.models ?? [];
+  const mlxhModel = firstMlxhModel(mlxh);
+  const useMlxh = (): void => {
+    if (!mlxh?.running || !mlxhModel) return;
+    void onUse(
+      {
+        label: SCRIPT.brain.mlxh.label,
+        kind: 'openai-compatible',
+        // mlxh takes any key, so the account holds none.
+        auth: 'none',
+        // From the probe: this page names no address, not even a local one.
+        baseUrl: mlxh.baseUrl,
+        defaultModel: mlxhModel,
+        enabled: true,
+      },
+      SCRIPT.brain.mlxh.label,
+    );
+  };
+  const nothing = probe !== null && mlxh !== null && !probe.running && !mlxh.running;
   const use = (): void => {
     if (!probe) return;
     // Several models pulled and no "the" one: the owner is asked which. One,
@@ -1607,10 +1653,16 @@ function OllamaCard({
           <>
             <Back onClick={onBack} disabled={busy} />
             {probe?.running ? (
-              <Button variant="accent" size="lg" disabled={busy || models.length === 0} onClick={use}>
+              <Button variant={mlxh?.running ? undefined : 'accent'} size="lg" disabled={busy || models.length === 0} onClick={use}>
                 {SCRIPT.brain.ollama.connect}
               </Button>
-            ) : probe ? (
+            ) : null}
+            {mlxh?.running ? (
+              <Button variant="accent" size="lg" disabled={busy || !mlxhModel} onClick={useMlxh}>
+                {SCRIPT.brain.mlxh.connect}
+              </Button>
+            ) : null}
+            {nothing && probe ? (
               <ButtonLink variant="accent" size="lg" href={probe.downloadUrl} target="_blank" rel="noreferrer">
                 {SCRIPT.brain.ollama.download}
               </ButtonLink>
@@ -1619,11 +1671,9 @@ function OllamaCard({
         }
       >
         <span className="wiz-foot">
-          {probe === null
-            ? SCRIPT.brain.ollama.looking
-            : probe.running
-              ? SCRIPT.brain.ollama.found(probe.models.length)
-              : SCRIPT.brain.ollama.missing}
+          {localFound(probe, mlxh)}
+          {mlxh?.running && !mlxhModel ? ` ${SCRIPT.brain.mlxh.noBrain}` : ''}
+          {nothing && mlxh?.baseUrl ? ` ${mlxhNotAnswering(mlxh.baseUrl)}` : ''}
         </span>
       </Ask>
     </>
@@ -1957,14 +2007,19 @@ function CloudModels({ answers, accounts, onKept, onTrouble }: QuestionProps): J
   const [saving, setSaving] = useState(false);
   // Ollama Cloud, ChatGPT and Gemini all serve several models, and the first
   // one chosen for the owner is only a start.
-  const cloud = account?.auth === 'device-key' || account?.kind === 'codex' || (!!account && isGeminiAccount(account, accounts?.gemini?.baseUrl));
+  const mlxhAccount = isMlxhAccount(account);
+  const cloud = account?.auth === 'device-key' || account?.kind === 'codex' || mlxhAccount || (!!account && isGeminiAccount(account, accounts?.gemini?.baseUrl));
   useEffect(() => {
     if (!cloud || !account) return;
     let cancelled = false;
     api
       .accountModels(account.id)
       .then((listed) => {
-        if (!cancelled) setModels(listed.models.map((model) => model.id));
+        // mlxh lists its image models too; they are not brains.
+        const brains = mlxhAccount
+          ? listed.models.filter((model) => !isMlxhImageModel({ id: model.id, loaded: false, ...(model.image ? { kind: 'image' as const } : {}) }))
+          : listed.models;
+        if (!cancelled) setModels(brains.map((model) => model.id));
       })
       .catch(() => {});
     return () => {

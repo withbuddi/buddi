@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
-  GEMINI_BASE_URL, GEMINI_KEY_URL, OLLAMA_CLOUD_ACCOUNT_URL, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
+  GEMINI_BASE_URL, GEMINI_KEY_URL, MLXH_DEFAULT_MAX_PROMPT_TOKENS, OLLAMA_CLOUD_ACCOUNT_URL, isMlxhAccount, accountBaseUrl, accountModelProblem, accountProtocol, createVault, providerFromEnv,
   putOwnerSecret, registerSecretDestination, resolveProviderAccount, useOwnerSecret, vaultState,
   type AgentCatalog, type AgentFrontmatter, type BuddiHost,
   type LoadAgentCatalogOptions, type ProviderAccount, type ProviderAccountsAccess, type ProviderRef, type ResolvedProvider, type Vault,
@@ -14,13 +14,14 @@ import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
 import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
 import { SIGNIN_HIDDEN, subscriptionSignIns } from './subscription-signins.js';
+import { mlxhBaseUrl, mlxhWindow, probeMlxh } from './mlxh.js';
 import { ACCOUNTS_PROVIDER_KIND, accountsProviderDestination, deleteAccountSecret, ownerSecretVault } from './owner-secrets.js';
 
 /** Who answered, in the owner's words, for the diagnostic sentence. */
 function diagnosticContext(row: Pick<ProviderAccount, 'kind' | 'baseUrl' | 'label'>): DiagnosticContext {
   const trim = (url: string): string => url.replace(/\/+$/, '');
   const gemini = row.kind === 'openai-compatible' && trim(row.baseUrl) === trim(GEMINI_BASE_URL);
-  const provider = gemini ? 'Google' : row.kind === 'anthropic' ? 'Anthropic' : row.kind === 'openai' ? 'OpenAI' : row.kind === 'codex' ? 'ChatGPT'
+  const provider = gemini ? 'Google' : isMlxhAccount(row) ? 'mlxh' : row.kind === 'anthropic' ? 'Anthropic' : row.kind === 'openai' ? 'OpenAI' : row.kind === 'codex' ? 'ChatGPT'
     : row.label && row.label !== 'probe' ? row.label : undefined;
   return { provider, gemini };
 }
@@ -111,6 +112,8 @@ export class ProviderAccounts {
     catalog: () => AgentCatalog; reload: () => void; vault?: Vault;
     test?: (resolved: ResolvedProvider) => Promise<void>;
     listModels?: typeof listProviderModels;
+    /** mlxh's read-only probe, replaceable in tests. */
+    probeMlxh?: typeof probeMlxh;
     /** The one signed `/api/me` call and the device name, replaceable in tests. */
     ollama?: { protocol?: OllamaConnectProtocol; deviceName?: () => string; now?: () => number };
   }) {
@@ -253,10 +256,13 @@ export class ProviderAccounts {
         // said one, else what the runtime would assume from the name, so the
         // field can show it as a placeholder instead of a blank.
         const reported = reportedWindow(reportedContextWindows, row.defaultModel);
+        // mlxh refuses a prompt over its max_prompt_tokens: until its list
+        // said a number, the window is its default rather than the table's.
+        const mlxh = isMlxhAccount(row, mlxhBaseUrl(this.deps.env));
         return {
         ...row, configured: this.#configured.get(row.id) ?? false,
-        detectedContextWindowTokens: reported ?? contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind),
-        detectedContextWindowSource: (reported ? 'provider' : 'table') as 'provider' | 'table',
+        detectedContextWindowTokens: reported ?? (mlxh ? MLXH_DEFAULT_MAX_PROMPT_TOKENS : contextWindowTokens(row.defaultModel, row.kind === 'codex' ? 'openai' : row.kind)),
+        detectedContextWindowSource: (mlxh ? 'mlxh' : reported ? 'provider' : 'table') as 'provider' | 'table' | 'mlxh',
         removalPending: deleting,
         refreshable: row.kind === 'codex' || row.auth === 'anthropic-oauth', tokenExpiresAt: null, subscriptionRenewsAt: null,
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
@@ -298,6 +304,7 @@ export class ProviderAccounts {
           const secret = await this.#usableSecret(row);
           if (row.auth !== 'none' && !secret) throw new ProviderAccountError(409, 'Save or connect this account’s credential before loading models.');
           value = await (this.deps.listModels ?? listProviderModels)(resolveProviderAccount(row, row.defaultModel, secret));
+          if (isMlxhAccount(row, mlxhBaseUrl(this.deps.env))) value = await this.#mlxhDetails(row, value);
         }
         const current = await this.#row(id);
         if (current.revision !== row.revision || !current.enabled || current.deleting) throw new ProviderAccountError(409, 'Account changed. Refresh models again.');
@@ -312,6 +319,28 @@ export class ProviderAccounts {
     })();
     this.#modelRequests.set(key, pending);
     return pending;
+  }
+
+  /**
+   * mlxh's list names models and nothing else. Its `/mlxh/info` says how long
+   * a prompt it takes (`max_prompt_tokens`, a 400 past it) and which loaded
+   * workers are image models; both go on the list, so the window is kept like
+   * any provider-reported one and the picker can flag what is not a brain.
+   */
+  async #mlxhDetails(row: Row, list: AccountModels): Promise<AccountModels> {
+    const probe = await (this.deps.probeMlxh ?? probeMlxh)({ baseUrl: row.baseUrl });
+    if (!probe.running) return list;
+    const window = mlxhWindow(probe);
+    const kinds = new Map(probe.models.map((m) => [m.id, m.kind]));
+    return {
+      ...list,
+      models: list.models.map((m) => ({
+        ...m,
+        // The limit off: the model's own window, from the table.
+        ...(m.contextWindow === undefined ? { contextWindow: window ?? contextWindowTokens(m.id, 'openai-compatible') } : {}),
+        ...(kinds.get(m.id) === 'image' ? { image: true } : {}),
+      })),
+    };
   }
 
   /**
