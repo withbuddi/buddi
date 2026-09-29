@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- When a model's provider refuses a call because of the account ("Third-party apps now draw from your extra usage…"), the chat shows that sentence and points at Settings → Model accounts, instead of a generic line about the connection or a wrong one about the .env.
 - Giving a connection's tools to an agent failed with "matches no registered tool" whenever a chat or a run had happened between buddi starting and the review being kept, and worked again after a restart: the tools were being registered into that run's own copy of the registry. They now go to buddi's own registry, and every run started afterwards gets them.
 - Adding a service that was already added and never reviewed reuses that connection instead of making a second one.
 - The page a service sends you back to after a sign-in (`/connections/callback`) was blank: the dashboard's files are addressed relatively and the browser looked for them under `/connections/`. It now finishes the sign-in and closes itself as meant.

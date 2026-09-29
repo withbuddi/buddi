@@ -135,6 +135,29 @@ export function credentialEnvVar(err: unknown): string | undefined {
   return match?.[1];
 }
 
+/**
+ * A refusal about the account's usage or billing, in the provider's own words.
+ *
+ * Anthropic answered a subscription sign-in on 2026-09-29 with "Third-party
+ * apps now draw from your extra usage, not your plan limits. Add more at
+ * claude.ai/settings/usage and keep going." — a sentence written for a
+ * person, about the account rather than the request. Filed under the
+ * credential sentence it read as "replace the key in your .env", which was
+ * wrong twice over. When a 4xx carries a sentence like that, the owner reads
+ * it: it is the provider's prose, not a stack, and it names the cure.
+ */
+function usageRefusal(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const e = err as Record<string, unknown>;
+  const status = typeof e.status === 'number' ? e.status : undefined;
+  if (status === undefined || status < 400 || status >= 500) return undefined;
+  const message = typeof e.message === 'string' ? e.message.trim() : '';
+  if (!/\b(extra usage|plan limits?|usage limits?|credits?|billing|quota|spending limit|balance)\b/i.test(message)) return undefined;
+  // Prose only: a sentence with spaces and no JSON, no braces, no code.
+  if (message.length < 20 || message.length > 400 || /[{}<>`]/.test(message)) return undefined;
+  return message;
+}
+
 /** Auth failures that are about a credential rather than about the request. */
 function isCredentialFailure(err: unknown): boolean {
   if (credentialEnvVar(err) !== undefined) return true;
@@ -198,6 +221,17 @@ export function describeFailure(
     if (typeof err === 'object' && err !== null && (err as Record<string, unknown>).type === 'model_not_supported') {
       return { class: 'permanent', retryable: false, detail,
         text: 'The selected model is not available for this provider account. Open agent settings and choose a model supported by the assigned account, then send your message again.' };
+    }
+    const usage = usageRefusal(err);
+    if (usage !== undefined) {
+      const who = options.agentName ? `${options.agentName} can't` : "I can't";
+      return {
+        class: 'permanent', retryable: false, detail,
+        text:
+          `${who} use the model right now: its provider refused the call because of the account, not the request. ` +
+          `It said: "${usage.replace(/"/g, "'")}" ` +
+          'Trying again changes nothing until the account does: add usage there, or give this agent another account in Settings → Model accounts.',
+      };
     }
     if (isCredentialFailure(err)) {
       const envVar = credentialEnvVar(err);

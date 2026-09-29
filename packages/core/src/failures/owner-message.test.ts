@@ -96,6 +96,26 @@ describe('transient', () => {
   });
 });
 
+describe('a usage refusal in the provider\'s own words', () => {
+  it('shows the sentence and points at the account, not at the .env', () => {
+    const err = Object.assign(
+      new Error('Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.'),
+      { name: 'ProviderError', status: 403, type: 'permission_error' },
+    );
+    const out = describeFailure(err, { agentName: '@buddi' });
+    expect(out.class).toBe('permanent');
+    expect(out.retryable).toBe(false);
+    expect(out.text).toContain('extra usage');
+    expect(out.text).toContain('Settings → Model accounts');
+    expect(out.text).not.toContain('.env');
+  });
+
+  it('does not mistake a JSON body or a short code for prose', () => {
+    const json = Object.assign(new Error('{"error":"billing"}'), { name: 'ProviderError', status: 402, type: 'billing' });
+    expect(describeFailure(json).text).not.toContain('{');
+  });
+});
+
 describe('permanent', () => {
   it('never offers a retry, because the second attempt fails identically', () => {
     for (const err of [httpError(400, 'invalid_request_error'), httpError(404, 'not_found_error')]) {
