@@ -1,7 +1,7 @@
 ---
 title: "The buddi command line"
 status: reference
-updated: 2026-09-28
+updated: 2026-09-29
 ---
 
 # The buddi command line
@@ -119,6 +119,9 @@ Your agents, what they have scheduled, and the plugins they use.
 - `buddi plugins list [--json]`: List what is installed, its version, and whether it is healthy.
   - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
   - JSON: [{ name, version, origin, health, detail }]. origin is built-in or installed; health is ok, warn or fail.
+- `buddi plugins describe <spec> [--json]`: Stage a plugin, read its manifest, print what it brings, and delete the stage.
+  - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+  - JSON: { package, claims, manifest, drift }: what the package says, what its manifest declares (tools with tiers, schema, hosts, timers, agents), and where the two differ. Nothing is installed.
 - `buddi plugins info <name>`: Show what a plugin is, what it brought, and what it proposes.
 - `buddi plugins install <spec> [--yes --integrity <hash>] [--registry <url>]`: Stage a plugin and read what it claims, then approve it with --yes.
   - `--yes`: Approve it: import it, plan it, install it.
