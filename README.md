@@ -1,6 +1,4 @@
-# buddi
-
-<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/packages/web/public/mascot/core.png" alt="The Buddi Blob, buddi's mascot" width="160" align="right">
+<p align="center"><img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/header.png" alt="buddi, with the Buddi Blob" width="800"></p>
 
 **A small AI team that lives on your computer.**
 
@@ -25,7 +23,7 @@ teammate. The whole list of what leaves is short enough to print, and it is
 [printed below](#where-your-data-lives-and-what-leaves-the-machine). Your
 passwords live in a vault the team can use but never see.
 
-Your first teammate is Buddi, the front desk, and it wears the Buddi Blob.
+Your first teammate is Buddi, the front desk, and the Buddi Blob is its face.
 Rename it, rewrite its personality, or add others. Under the hood every
 teammate is a markdown file, which the docs and the dashboard call an agent
 where that is the accurate word.
