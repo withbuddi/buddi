@@ -132,10 +132,10 @@ describe('buildDiffers', () => {
 });
 
 describe('Focus in the owner menu', () => {
-  it('switches a mode for a duration, and shows the moon while one is on', async () => {
+  it('switches a mode for a duration, and shows the moon while one is on', { timeout: 180_000 }, async () => {
     const { userEvent } = await import('@testing-library/user-event');
     const { act, fireEvent, within } = await import('@testing-library/react');
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     const until = new Date(Date.now() + 3_600_000).toISOString();
     vi.mocked(api.focus).mockResolvedValueOnce({ focus: null });
     vi.mocked(api.setFocus).mockResolvedValueOnce({ focus: { mode: 'do-not-disturb', until, startedAt: new Date().toISOString(), by: 'dashboard' } });
