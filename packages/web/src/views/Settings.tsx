@@ -132,8 +132,44 @@ function AppearanceSection(): JSX.Element {
             onChange={(width) => set({ width })}
           />
         </PrefRow>
+        <HomeGlancesPref />
       </Stack>
     </Section>
+  );
+}
+
+/**
+ * Settings → Appearance → Home glances: every glance the plugins offer, with
+ * a switch each. Unlike the rest of this section it is kept by the
+ * installation, so a glance hidden on the laptop is hidden on the phone too.
+ */
+function HomeGlancesPref(): JSX.Element | null {
+  const overview = useAsync(() => api.overview(), []);
+  const [busy, setBusy] = useState<string | null>(null);
+  const glances = overview.data?.glances ?? [];
+  if (glances.length === 0) return null;
+  const toggle = (id: string, shown: boolean): void => {
+    setBusy(id);
+    void api
+      .setGlanceHidden(id, !shown)
+      .then(() => overview.reload())
+      .finally(() => setBusy(null));
+  };
+  return (
+    <div className="pref-row ui-section">
+      <div className="pref-text">
+        <span className="pref-label">Home glances</span>
+        <span className="ui-field-hint">The lines beside the date on Home, at most three. Kept for every browser.</span>
+      </div>
+      <Stack gap="sm">
+        {glances.map((glance) => (
+          <label key={glance.id} className="backup-check">
+            <input type="checkbox" checked={!glance.hidden} disabled={busy === glance.id} onChange={(event) => toggle(glance.id, event.target.checked)} />
+            <span>{glance.title}</span>
+          </label>
+        ))}
+      </Stack>
+    </div>
   );
 }
 

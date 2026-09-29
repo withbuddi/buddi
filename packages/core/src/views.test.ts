@@ -240,3 +240,41 @@ describe('view descriptors', () => {
     expect(registry.views()).toEqual([]);
   });
 });
+
+describe('tiles', () => {
+  const tiles = (map: Record<string, unknown>) => ({ tool: 'demo.read', renderer: 'tiles', map });
+
+  it('accepts a row of tiles with a constant or a path for the icon, two lines, a tone and a notice', () => {
+    const parsed = viewDescriptorSchema.parse(
+      tiles({
+        items: 'daily',
+        icon: { path: 'icon' },
+        value: 'temps',
+        label: 'weekday',
+        lines: ['condition', 'rain'],
+        tone: 'tone',
+        empty: 'No days.',
+        notice: { text: 'message', icon: 'cloud', link: { page: 'settings' } },
+      }),
+    );
+    expect(parsed.renderer).toBe('tiles');
+    expect(() => viewDescriptorSchema.parse(tiles({ items: 'events', icon: { const: 'calendar' }, value: 'time', label: 'title' }))).not.toThrow();
+  });
+
+  it('refuses a constant icon outside the pinned set, a third line and a missing value', () => {
+    expect(() => viewDescriptorSchema.parse(tiles({ items: 'a', icon: { const: 'rocket' }, value: 'v', label: 'l' }))).toThrow();
+    expect(() =>
+      viewDescriptorSchema.parse(tiles({ items: 'a', icon: { const: 'sun' }, value: 'v', label: 'l', lines: ['a', 'b', 'c'] })),
+    ).toThrow();
+    expect(() => viewDescriptorSchema.parse(tiles({ items: 'a', icon: { const: 'sun' }, label: 'l' }))).toThrow();
+    expect(() =>
+      viewDescriptorSchema.parse(tiles({ items: 'a', icon: { const: 'sun' }, value: 'v', label: 'l', notice: { text: 'm', link: { page: 'https://x' } } })),
+    ).toThrow();
+  });
+
+  it('refuses a notice linking to a page the plugin does not contribute', () => {
+    const view = tiles({ items: 'a', icon: { const: 'sun' }, value: 'v', label: 'l', notice: { text: 'm', link: { page: 'settings' } } });
+    expect(() => parseViewDescriptors([view], { plugin: 'demo', tools: ['demo.read'], pages: [] })).toThrow(/page settings/);
+    expect(() => parseViewDescriptors([view], { plugin: 'demo', tools: ['demo.read'], pages: ['settings'] })).not.toThrow();
+  });
+});

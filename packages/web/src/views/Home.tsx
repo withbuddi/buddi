@@ -41,6 +41,7 @@ import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
+import { HomeGlances } from './parts/HomeGlances';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -125,7 +126,10 @@ export function Home({
       <div className="home-band">
         <header className="home-hero">
           <div className="home-hero-text">
-            <p className="home-date">{fmtDay(data?.now, timezone)}</p>
+            <p className="home-date">
+              <span>{fmtDay(data?.now, timezone)}</span>
+              <HomeGlances glances={data?.glances} navigate={navigate} onChanged={() => overview.reload()} />
+            </p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
           </div>

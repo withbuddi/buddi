@@ -376,6 +376,7 @@ const PLURAL: Record<RendererName, string> = {
   table: 'tables',
   bars: 'comparisons',
   keyvalue: 'figures',
+  tiles: 'cards',
   document: 'pages it read',
   diff: 'diffs',
   terminal: 'command output',

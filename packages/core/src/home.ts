@@ -8,6 +8,7 @@
  * and no idea one could exist. The same rule the Canvas views follow.
  */
 import type { ToolContext } from './tools.js';
+import type { TileIcon, TileLink } from './views.js';
 
 export interface HomeStat {
   label: string;
@@ -42,12 +43,42 @@ export interface HomeBlock {
   sensitive?: boolean;
 }
 
-export interface HomeContribution {
+/**
+ * One line beside the date under Home's greeting: "☁ 18°C Lyon". A glyph
+ * from the pinned set, at most sixty characters of already formatted text,
+ * and optionally a page of the same plugin it opens. The owner can hide any
+ * glance; at most three are drawn, in plugin order.
+ */
+export interface HomeGlance {
+  icon: TileIcon;
+  /** Already formatted, at most `HOME_GLANCE_MAX` characters; longer is cut. */
+  text: string;
+  link?: { route: TileLink };
+}
+
+export const HOME_GLANCE_MAX = 60;
+
+export interface HomeBlockContribution {
   id: string;
   title: string;
+  /** A block on the page. The default. */
+  placement?: 'block';
   /**
    * Produce the block for this owner now, or null when there is nothing to
    * show (no data yet). Read-only by contract: nothing here may write.
    */
   produce(ctx: ToolContext): Promise<HomeBlock | null>;
 }
+
+export interface HomeGlanceContribution {
+  /** Stable, namespaced: `weather.now`. What the owner's hide remembers. */
+  id: string;
+  /** What Settings → Appearance lists it as. */
+  title: string;
+  placement: 'glance';
+  /** The line for now, or null when there is nothing worth saying. Read-only, as a block. */
+  produce(ctx: ToolContext): Promise<HomeGlance | null>;
+}
+
+/** A block (the default) or a glance, told apart by `placement`. */
+export type HomeContribution = HomeBlockContribution | HomeGlanceContribution;

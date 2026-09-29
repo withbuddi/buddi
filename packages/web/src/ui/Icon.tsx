@@ -55,6 +55,20 @@ const GLYPHS = {
   // A chip with its pins: the system itself.
   chip: [20, 1.6, <><rect x="5.4" y="5.4" width="9.2" height="9.2" rx="1.4" /><path d="M8 2.8v2.6M12 2.8v2.6M8 14.6v2.6M12 14.6v2.6M2.8 8h2.6M2.8 12h2.6M14.6 8h2.6M14.6 12h2.6" /></>],
 
+  // ---- the sky: a tile's or a glance's weather, on the rail's 20px grid (the sun is above) ----
+  'partly-cloudy': [20, 1.6, <><circle cx="7.4" cy="7.4" r="2.4" /><path d="M7.4 2.8v1M2.8 7.4h1M4.2 4.2l.7.7M10.6 4.2l-.7.7" /><path d="M7.8 16.8h6.4a2.9 2.9 0 0 0 .3-5.8 4 4 0 0 0-7.6 1.1 2.4 2.4 0 0 0 .9 4.7Z" /></>],
+  cloud: [20, 1.6, <path d="M6 15.6h8.2a3.3 3.3 0 0 0 .4-6.6 4.6 4.6 0 0 0-8.9 1A2.8 2.8 0 0 0 6 15.6Z" />],
+  rain: [20, 1.6, <><path d="M6 12.2h8.2a3 3 0 0 0 .4-6 4.3 4.3 0 0 0-8.3.9A2.6 2.6 0 0 0 6 12.2Z" /><path d="M7.2 14.6l-.8 2M10.4 14.6l-.8 2M13.6 14.6l-.8 2" /></>],
+  drizzle: [20, 1.6, <><path d="M6 12.2h8.2a3 3 0 0 0 .4-6 4.3 4.3 0 0 0-8.3.9A2.6 2.6 0 0 0 6 12.2Z" /><path d="M7 15.2v.3M10 16.4v.3M13 15.2v.3" /></>],
+  snow: [20, 1.6, <><path d="M6 12.2h8.2a3 3 0 0 0 .4-6 4.3 4.3 0 0 0-8.3.9A2.6 2.6 0 0 0 6 12.2Z" /><path d="M7.4 14.4v2.4M6.2 15.6h2.4M12.6 14.4v2.4M11.4 15.6h2.4" /></>],
+  storm: [20, 1.6, <><path d="M6 12.2h8.2a3 3 0 0 0 .4-6 4.3 4.3 0 0 0-8.3.9A2.6 2.6 0 0 0 6 12.2Z" /><path d="M10.8 13.2 9 15.6h2.4l-1.8 2.6" /></>],
+  fog: [20, 1.6, <path d="M3.6 7.2h12.8M5.2 10.2h9.6M3.6 13.2h12.8M6.4 16.2h7.2" />],
+  wind: [20, 1.6, <path d="M3 8h9.4a2.2 2.2 0 1 0-2.2-2.2M3 12h11.6a2.2 2.2 0 1 1-2.2 2.2M3 10h5.4" />],
+  // A crescent: a clear night.
+  'moon-clear': [20, 1.6, <path d="M15.8 12.2A6.2 6.2 0 0 1 7.8 4.2a6.2 6.2 0 1 0 8 8Z" />],
+  // A plain ring: a glyph the set does not have, drawn as nothing in particular.
+  dot: [20, 1.6, <circle cx="10" cy="10" r="2.2" />],
+
   // ---- the composer ----
   // A camera: one picture of another tab, into the composer.
   camera: [17, 1.5, <><path d="M2.6 6.2a1.4 1.4 0 0 1 1.4-1.4h2l1.1-1.6h2.8l1.1 1.6h2a1.4 1.4 0 0 1 1.4 1.4v6.4a1.4 1.4 0 0 1-1.4 1.4H4a1.4 1.4 0 0 1-1.4-1.4z" /><circle cx="8.5" cy="9.2" r="2.4" /></>],
@@ -98,6 +112,8 @@ const GLYPHS = {
   'shape-table': [16, 1.4, <path d="M2.2 3.5h11.6v9H2.2zM2.2 6.6h11.6M6.6 6.6v5.9" />],
   'shape-bars': [16, 1.4, <path d="M3 13V8.2M7 13V3.6M11 13V6.4M2 13.6h12" />],
   'shape-keyvalue': [16, 1.4, <path d="M2.6 4.6h4M9.4 4.6h4M2.6 8h4M9.4 8h4M2.6 11.4h4M9.4 11.4h4" />],
+  // Four cards in a grid.
+  'shape-tiles': [16, 1.4, <path d="M2.4 3.4h4.8v4.2H2.4zM8.8 3.4h4.8v4.2H8.8zM2.4 9.2h4.8v4.2H2.4zM8.8 9.2h4.8v4.2H8.8z" />],
   'shape-document': [16, 1.4, <path d="M4 2.4h5l3 3v8.2H4zM9 2.4v3h3M6 9h4M6 11.2h3" />],
   // A plus over a minus: lines in, lines out.
   'shape-diff': [16, 1.4, <path d="M8 2.6v5M5.5 5.1h5M5.5 11.6h5M3 14h10" />],

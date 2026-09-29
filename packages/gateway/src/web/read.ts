@@ -41,6 +41,10 @@ import {
   type ToolRegistry,
   type HomeBlock,
   type Offer,
+  HOME_GLANCE_MAX,
+  TILE_ICONS,
+  readWebSetting,
+  writeWebSetting,
 } from '@buddi/core';
 import type { OwnerChoice } from '@buddi/core';
 import type { Pool } from 'pg';
@@ -927,6 +931,12 @@ export interface Overview {
   paused: boolean;
   /** What the installed plugins put on Home, in registration order. */
   home: HomeBlock[];
+  /**
+   * The one-line glances beside the date, in plugin order, hidden ones
+   * included and marked: Home draws the first three shown, Settings lists
+   * them all with a switch each.
+   */
+  glances: HomeGlanceView[];
   approvals: { pending: number; oldestPendingAt: string | null };
   jobs: Record<JobState, number>;
   missions: { total: number; enabled: number; nextRun: string | null };
@@ -988,6 +998,7 @@ export async function readOverview(deps: {
     timezone: deps.timezone,
     paused,
     home: await readHome(deps),
+    glances: await readGlances(deps),
     approvals: {
       pending: pendingActions.length,
       oldestPendingAt: pendingActions[0]?.createdAt.toISOString() ?? null,
@@ -1032,6 +1043,8 @@ export async function readOverview(deps: {
 export async function readHome(deps: { registry: ToolRegistry; ctx: CoreToolContext }): Promise<HomeBlock[]> {
   const blocks: HomeBlock[] = [];
   for (const contribution of deps.registry.home()) {
+    // A glance is drawn beside the date, not as a block (`readGlances`).
+    if (contribution.placement === 'glance') continue;
     try {
       const block = await contribution.produce(deps.ctx);
       if (block) blocks.push(block);
@@ -1043,3 +1056,101 @@ export async function readHome(deps: { registry: ToolRegistry; ctx: CoreToolCont
 }
 
 
+
+/* ------------------------------------------------------------------ *
+ * Glances
+ * ------------------------------------------------------------------ */
+
+/** The `core.web_settings` key the owner's Home choices are kept under. */
+export const HOME_SETTINGS_KEY = 'home';
+
+interface HomeSettings {
+  /** Glance ids the owner hid. */
+  hiddenGlances?: string[];
+}
+
+/** One glance, as Home and Settings draw it. The link is resolved here, where the pages are known. */
+export interface HomeGlanceView {
+  id: string;
+  /** The contribution's title: what Settings lists it as. */
+  title: string;
+  plugin: string;
+  icon: string;
+  text: string;
+  link?: { plugin: string; page: string; place: 'rail' | 'settings' };
+  hidden: boolean;
+}
+
+async function readHomeSettings(pool: Pick<Pool, 'query'>): Promise<HomeSettings> {
+  try {
+    const value = await readWebSetting<HomeSettings>(pool as never, HOME_SETTINGS_KEY);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function hiddenOf(settings: HomeSettings): Set<string> {
+  const list = settings.hiddenGlances;
+  return new Set(Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []);
+}
+
+const ICONS: ReadonlySet<string> = new Set(TILE_ICONS);
+
+/**
+ * Every glance the installed plugins contribute, produced now, side by side.
+ *
+ * Unlike a block, a glance that fails is left out: a line beside the date has
+ * no room for an error, and a missing temperature is not news. Text past the
+ * limit is cut with an ellipsis; an icon outside the set becomes the dot the
+ * page draws for one; a link to a page the plugin does not have is dropped.
+ */
+export async function readGlances(deps: {
+  pool: Pick<Pool, 'query'>;
+  registry: ToolRegistry;
+  ctx: CoreToolContext;
+}): Promise<HomeGlanceView[]> {
+  const hidden = hiddenOf(await readHomeSettings(deps.pool));
+  const pages = deps.registry.pages();
+  const produced = await Promise.all(
+    deps.registry.home().map(async (contribution): Promise<HomeGlanceView | null> => {
+      if (contribution.placement !== 'glance') return null;
+      const plugin = deps.registry.homePlugin(contribution.id) ?? contribution.id.split('.')[0] ?? '';
+      try {
+        const glance = await contribution.produce(deps.ctx);
+        if (!glance || typeof glance.text !== 'string' || glance.text.trim() === '') return null;
+        const text = glance.text.trim();
+        const page = glance.link?.route?.page;
+        const target = page === undefined ? undefined : pages.find((p) => p.plugin === plugin && p.id === page);
+        return {
+          id: contribution.id,
+          title: contribution.title,
+          plugin,
+          icon: ICONS.has(glance.icon) ? glance.icon : 'dot',
+          text: text.length > HOME_GLANCE_MAX ? `${text.slice(0, HOME_GLANCE_MAX - 1).trimEnd()}…` : text,
+          ...(target ? { link: { plugin, page: target.id, place: target.place } } : {}),
+          hidden: hidden.has(contribution.id),
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return produced.filter((g): g is HomeGlanceView => g !== null);
+}
+
+/** Hide or show one glance. The id must name a glance an installed plugin contributes. */
+export async function setGlanceHidden(
+  deps: { pool: Pick<Pool, 'query'>; registry: ToolRegistry },
+  id: string,
+  hide: boolean,
+): Promise<{ status: number; body: unknown }> {
+  const known = deps.registry.home().some((c) => c.placement === 'glance' && c.id === id);
+  if (!known) return { status: 404, body: { error: `no glance is installed with the id ${id}` } };
+  const settings = await readHomeSettings(deps.pool);
+  const hidden = hiddenOf(settings);
+  if (hide) hidden.add(id);
+  else hidden.delete(id);
+  await writeWebSetting(deps.pool as never, HOME_SETTINGS_KEY, { ...settings, hiddenGlances: [...hidden] });
+  return { status: 200, body: { id, hidden: hide } };
+}

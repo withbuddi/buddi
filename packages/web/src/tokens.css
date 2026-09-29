@@ -97,6 +97,7 @@
   --page-max: 1320px;
   --page-gutter: clamp(24px, 3vw, 48px);
   --read-max: 68ch;
+  --tile-min: 132px;      /* the narrowest a canvas tile gets before the row wraps */
   --fab-size: 64px;       /* the corner button that opens the dock: big enough for the Blob's breath to read */
   --dock-w: clamp(360px, 33vw, 480px);
   --dock-h: min(640px, calc(100vh - 96px));

@@ -1020,8 +1020,8 @@ owner accepting the suggestion.
 ```ts
 export interface ViewDescriptor {
   tool: string;        // 'weather.forecast'
-  renderer: 'timeseries' | 'table' | 'bars' | 'keyvalue' | 'document'
-          | 'preview' | 'envelope' | 'structured';
+  renderer: 'timeseries' | 'table' | 'bars' | 'keyvalue' | 'tiles' | 'document'
+          | 'diff' | 'terminal' | 'image' | 'preview' | 'envelope' | 'structured';
   title?: string;      // the canvas panel's heading
   map: ViewMap;        // declarative: paths, columns, formats. Never a function.
 }
@@ -1136,6 +1136,22 @@ means, the page knows how to draw a line, and this says which is which.
   process and is drawn as nothing: a descriptor is data from a plugin, and
   "put this URL in an iframe on the dashboard" is not a sentence a plugin gets
   to say.
+- **Small cards are a renderer too.** `tiles` takes
+  `{ items, icon, value, label, lines?, tone?, empty?, notice? }`: `items` is
+  the path to an array, and every other path is read *within one item* — a
+  big `value` ("64° / 55°"), a `label` ("Tuesday"), at most two small `lines`
+  and a `tone` path. `icon` is `{ path }` or `{ const }` naming one of a
+  pinned set — the page icons (`mail`, `money`, `calendar`, `people`, `file`,
+  `chart`, `bell`, `plug`, `key`, `globe`) and the sky (`sun`,
+  `partly-cloudy`, `cloud`, `rain`, `drizzle`, `snow`, `storm`, `fog`, `wind`,
+  `moon-clear`); a constant outside it is refused at load, and a path that
+  finds anything else draws a neutral dot. The values are already formatted:
+  the tool writes "64°", in the owner's units, and the page draws it.
+  `notice: { text, icon?, link?: { page } }` is the one card drawn *instead*
+  when `text` finds a sentence — a tool that is not set up yet answers
+  `{ message: "No calendar is linked yet…" }` rather than failing, and the
+  card links to your page where it can be (a page you do not contribute is a
+  startup error). Needs host API `^1.10`.
 - **It is validated at load.** `ToolRegistry.register` parses every descriptor
   with zod (`packages/core/src/views.ts`), checks the renderer against its own
   map shape, and refuses a descriptor naming a tool your manifest does not
@@ -1166,6 +1182,7 @@ plugin by name, and a plugin ships no page code.
 | --- | --- | --- |
 | Home, "Needs you" | An urgent finding, until it resolves or is snoozed | a sentinel's `urgent` finding (§2.3) |
 | Home, blocks | A read-only card in your own units (a balance, a count, a date) | `home` (`HomeContribution[]`) |
+| Home, glances | One line beside the date under the greeting ("☁ 18°C Lyon"), at most three, which the owner can hide | `home` with `placement: 'glance'` |
 | Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
 | Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
 | **The rail** | **A place of your own, with its own URL and a pinned icon** | **`pages` with `place: 'rail'` (§2.5b)** |
@@ -2820,7 +2837,7 @@ version each arrived in — is §9b.
 | `sources` | `Source[]` | no | Pollers that originate runs with no agent in the loop. Most plugins have none. |
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
-| `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. See `packages/core/src/home.ts`. |
+| `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. With `placement: 'glance'` a contribution is instead one line beside the date: `produce` answers `{ icon, text, link?: { route: { page } } } \| null` — a tile icon, at most 60 characters (longer is cut), and a page of yours it opens. Home draws the first three the owner has not hidden, in plugin order; one that throws is left out. Produced on each Home read, like a block, so cache anything slow. Needs host API `^1.10`. See `packages/core/src/home.ts`. |
 | `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
@@ -3032,9 +3049,22 @@ closed when it is absent rather than guess.
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
 | `tool` | `string` | yes | The tool whose result this draws. Naming a tool your manifest does not contribute is a startup error. |
-| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| document \| preview \| envelope \| structured`. Shapes, never domains. |
+| `renderer` | `RendererName` | yes | `timeseries \| table \| bars \| keyvalue \| tiles \| document \| diff \| terminal \| image \| preview \| envelope \| structured`. Shapes, never domains. |
 | `map` | `ViewMap` | yes | Declarative paths, columns and formats. Data, never a function: it is serialised to the browser. |
 | `title` | `string` | no | The canvas tab and panel heading. Defaults to the tool name. |
+
+#### `TilesMap`
+
+| Field | Type | Required | What it is |
+| --- | --- | --- | --- |
+| `items` | `string` | yes | Path to the array of items, one tile each. |
+| `icon` | `ValueRef` | yes | A path within the item, or a constant, naming a `TileIcon`; anything else is a neutral dot. |
+| `value` | `string` | yes | Path within the item to the big figure, already formatted. |
+| `label` | `string` | yes | Path within the item to the words under it. |
+| `lines` | `string[]` | no | At most two paths within the item, drawn small. |
+| `tone` | `string` | no | Path within the item to `good \| warning \| critical \| neutral \| accent`. |
+| `empty` | `string` | no | What to say when there are no items. |
+| `notice` | `{ text, icon?, link?: { page } }` | no | The one card drawn instead when `text` (a path) finds a sentence: a tool not set up yet. `link` is a page of yours. |
 
 #### `PageDescriptor`
 

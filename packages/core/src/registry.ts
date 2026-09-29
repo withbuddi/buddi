@@ -330,6 +330,7 @@ export class ToolRegistry {
       parseViewDescriptors(manifest.views, {
         plugin: manifest.name,
         tools: manifest.tools.map((t) => t.name),
+        pages: (manifest.pages ?? []).map((p) => p.id),
       });
     }
     // Page descriptors leave this process the same way and are checked the
@@ -638,11 +639,18 @@ export class ToolRegistry {
   /** Every Home block the installed plugins contribute, in registration order. */
   home(): HomeContribution[] {
     return [...this.#manifests.values()].flatMap((m) =>
-      (m.home ?? []).map((block) => ({
-        ...block,
-        produce: (ctx: CoreToolContext) => block.produce(this.#host(m.name, ctx)),
-      })),
+      (m.home ?? []).map((block): HomeContribution =>
+        block.placement === 'glance'
+          ? { ...block, produce: (ctx: CoreToolContext) => block.produce(this.#host(m.name, ctx)) }
+          : { ...block, produce: (ctx: CoreToolContext) => block.produce(this.#host(m.name, ctx)) },
+      ),
     );
+  }
+
+  /** The plugin that contributes a Home block or glance, by the contribution's id. */
+  homePlugin(id: string): string | undefined {
+    for (const m of this.#manifests.values()) if ((m.home ?? []).some((h) => h.id === id)) return m.name;
+    return undefined;
   }
 
   /**

@@ -63,7 +63,7 @@ describe('Icon', () => {
   });
 
   it('has a mark for every canvas renderer', () => {
-    for (const renderer of ['timeseries', 'table', 'bars', 'keyvalue', 'document', 'diff', 'terminal', 'image', 'preview', 'envelope', 'structured']) {
+    for (const renderer of ['timeseries', 'table', 'bars', 'keyvalue', 'tiles', 'document', 'diff', 'terminal', 'image', 'preview', 'envelope', 'structured']) {
       expect(ICON_NAMES).toContain(`shape-${renderer}`);
     }
   });

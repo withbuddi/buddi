@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 - An agent's tool grant can end in `?` (`weather.*?`) to mean "if provided": a family no installed plugin provides is skipped instead of holding the agent back.
 - Planner's morning brief reads today's weather for your home place and today's meetings with their gaps when the Weather and Calendar plugins are installed, then ends with what to do first; without them it leaves those lines out and never mentions them. A Planner added earlier gains this by adding `weather.*?, calendar.*?` to its tools.
 - Plugins can keep a private link, such as a calendar's secret ICS address, as an owner secret they fetch without ever reading it (host API 1.9, `auth: { secret, as: 'url' }`, kind `http.url`).
+- Plugins can draw results as tiles on the canvas and add a one-line glance next to Home's greeting; Weather shows its forecast as daily tiles and the temperature at home beside the date, and Calendar your next meeting.
 
 ### Changed
 

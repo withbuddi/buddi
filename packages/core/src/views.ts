@@ -15,7 +15,7 @@
  *     installation with no finance plugin ships no finance code.
  *
  *  2. **The renderers are generic.** `timeseries`, `table`, `bars`,
- *     `keyvalue`, `document`, `diff`, `preview`, `envelope`, `structured` — shapes, not
+ *     `keyvalue`, `tiles`, `document`, `diff`, `preview`, `envelope`, `structured` — shapes, not
  *     domains. Nothing in the web package is allowed to know the word "cashflow".
  *
  * A plugin with no descriptors is the normal case: its tool results fall back
@@ -28,6 +28,7 @@ export type RendererName =
   | 'table'
   | 'bars'
   | 'keyvalue'
+  | 'tiles'
   | 'document'
   | 'diff'
   | 'terminal'
@@ -152,6 +153,66 @@ export interface KeyValueMap {
   from?: string;
 }
 
+/**
+ * The glyphs a tile or a Home glance may wear. A pinned set, drawn by the
+ * dashboard in its own hand — never an image the plugin supplies. The page
+ * icons, and a handful of skies. A name outside the set, which a `{ path }`
+ * can produce at run time, is drawn as a neutral dot.
+ */
+export const TILE_ICONS = [
+  'mail',
+  'money',
+  'calendar',
+  'people',
+  'file',
+  'chart',
+  'bell',
+  'plug',
+  'key',
+  'globe',
+  'sun',
+  'partly-cloudy',
+  'cloud',
+  'rain',
+  'drizzle',
+  'snow',
+  'storm',
+  'fog',
+  'wind',
+  'moon-clear',
+] as const;
+
+export type TileIcon = (typeof TILE_ICONS)[number];
+
+/** A page of the same plugin, the way a page descriptor's `RouteRef` names one. */
+export interface TileLink {
+  page: string;
+}
+
+/**
+ * A row of small cards: one per item, each a glyph, a big value, a label and
+ * at most two small lines. Days of a forecast, the next meetings. Every path
+ * but `items` is read *within one item*; `icon` may instead be a constant.
+ *
+ * `notice` is the one card drawn instead of the items when the output says
+ * the tool is not set up yet — a sentence at `text`, and a link to the page
+ * where the owner can fix that.
+ */
+export interface TilesMap {
+  /** Path to the array of items. */
+  items: string;
+  icon: ValueRef;
+  value: string;
+  label: string;
+  /** At most two small lines under the label. */
+  lines?: string[];
+  /** Path within the item to one of the five tones. */
+  tone?: string;
+  /** What to say when there are no items. */
+  empty?: string;
+  notice?: { text: string; icon?: TileIcon; link?: TileLink };
+}
+
 export interface DocumentMap {
   /** `text` (default), `image` or `pdf`. */
   kind?: ValueRef;
@@ -268,6 +329,7 @@ export type ViewMap =
   | TableMap
   | BarsMap
   | KeyValueMap
+  | TilesMap
   | DocumentMap
   | DiffMap
   | TerminalMap
@@ -426,6 +488,29 @@ const keyValueMapSchema = z
     'a keyvalue view needs either `pairs` or `from`',
   );
 
+export const tileIconSchema = z.enum(TILE_ICONS);
+
+/** A page id, as `pages.ts` spells one. */
+const tileLinkSchema = z.object({ page: z.string().regex(/^[a-z][a-z0-9-]*$/, 'a page id is lower-kebab-case') }).strict();
+
+const tilesMapSchema = z
+  .object({
+    items: viewPathSchema,
+    // A constant is checked against the set now; a path is read at run time,
+    // and whatever it finds outside the set is drawn as a dot.
+    icon: z.union([z.object({ path: viewPathSchema }).strict(), z.object({ const: tileIconSchema }).strict()]),
+    value: viewPathSchema,
+    label: viewPathSchema,
+    lines: z.array(viewPathSchema).max(2).optional(),
+    tone: viewPathSchema.optional(),
+    empty: z.string().min(1).max(120).optional(),
+    notice: z
+      .object({ text: viewPathSchema, icon: tileIconSchema.optional(), link: tileLinkSchema.optional() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 /** The facts drawn above a body: a document's, a diff's. */
 const metadataSchema = z
   .array(
@@ -514,6 +599,7 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
   z.object({ ...common, renderer: z.literal('table'), map: tableMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('bars'), map: barsMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('keyvalue'), map: keyValueMapSchema }).strict(),
+  z.object({ ...common, renderer: z.literal('tiles'), map: tilesMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('document'), map: documentMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('diff'), map: diffMapSchema }).strict(),
   z.object({ ...common, renderer: z.literal('terminal'), map: terminalMapSchema }).strict(),
@@ -533,7 +619,7 @@ export const viewDescriptorSchema = z.discriminatedUnion('renderer', [
  */
 export function parseViewDescriptors(
   views: readonly unknown[],
-  opts: { plugin: string; tools?: readonly string[] },
+  opts: { plugin: string; tools?: readonly string[]; pages?: readonly string[] },
 ): ViewDescriptor[] {
   const known = opts.tools ? new Set(opts.tools) : undefined;
   return views.map((raw, index) => {
@@ -550,6 +636,14 @@ export function parseViewDescriptors(
       throw new Error(
         `plugin ${opts.plugin}: view descriptor names ${parsed.data.tool}, which this plugin does not contribute`,
       );
+    }
+    if (parsed.data.renderer === 'tiles' && opts.pages) {
+      const page = parsed.data.map.notice?.link?.page;
+      if (page !== undefined && !opts.pages.includes(page)) {
+        throw new Error(
+          `plugin ${opts.plugin}: view descriptor for ${parsed.data.tool} links to page ${page}, which this plugin does not contribute`,
+        );
+      }
     }
     return parsed.data as ViewDescriptor;
   });

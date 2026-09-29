@@ -94,6 +94,7 @@ describe('the renderer registry', () => {
       'structured',
       'table',
       'terminal',
+      'tiles',
       'timeseries',
     ]);
   });

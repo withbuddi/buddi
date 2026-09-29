@@ -275,12 +275,25 @@ export interface HomeStat { label: string; value: string; note?: string; tone?: 
 export interface HomeRow { title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }
 export interface HomeBlock { id: string; title: string; note?: string; stats: HomeStat[]; rows: HomeRow[]; rowsTitle?: string; sensitive?: boolean }
 
+/** One line beside Home's date. `icon` is a tile icon, or `dot` for one outside the set. */
+export interface HomeGlance {
+  id: string;
+  title: string;
+  plugin: string;
+  icon: string;
+  text: string;
+  link?: { plugin: string; page: string; place: 'rail' | 'settings' };
+  hidden: boolean;
+}
+
 export interface Overview {
   now: string;
   timezone: string;
   paused: boolean;
   /** What the installed plugins put on Home, already formatted, in their order. */
   home: HomeBlock[];
+  /** The glances beside the date, hidden ones included and marked. Absent from an older gateway. */
+  glances?: HomeGlance[];
   approvals: { pending: number; oldestPendingAt: string | null };
   jobs: Record<string, number>;
   missions: { total: number; enabled: number; nextRun: string | null };
@@ -1680,6 +1693,9 @@ export const api = {
       `/sentinels/${encodeURIComponent(id)}/enabled`,
       { enabled },
     ),
+  /** Hide one Home glance, or show it again. */
+  setGlanceHidden: (id: string, hidden: boolean) =>
+    post<{ id: string; hidden: boolean }>(`/home/glances/${encodeURIComponent(id)}/hidden`, { hidden }),
   snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
   agents: () => get<AgentsView>('/agents'),
   /**

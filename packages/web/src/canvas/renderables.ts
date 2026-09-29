@@ -451,6 +451,9 @@ export function hasSubstance(renderer: RendererName, props: unknown): boolean {
       return count(record['bars']) > 0;
     case 'keyvalue':
       return count(record['pairs']) > 0;
+    // A "not set up" notice keeps its tab without taking the screen.
+    case 'tiles':
+      return record['notice'] !== true && count(record['tiles']) > 0;
     case 'document':
       return Boolean(record['text']) || Boolean(record['src']);
     case 'diff':

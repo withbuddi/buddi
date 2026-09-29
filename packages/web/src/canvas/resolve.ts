@@ -31,12 +31,17 @@ import type {
   TerminalProps,
   TimeseriesMap,
   TimeseriesProps,
+  Tile,
+  TileIcon,
+  TilesMap,
+  TilesProps,
   Tone,
   Unit,
   ValueRef,
   ViewDescriptor,
   ViewMap,
 } from './types';
+import { TILE_ICONS } from './types';
 
 /**
  * Read one path out of a value. `''` and `'$'` are the root; segments are
@@ -255,6 +260,54 @@ export function resolveKeyValue(output: unknown, map: KeyValueMap): KeyValueProp
   };
 }
 
+const TONES: ReadonlySet<string> = new Set(['good', 'warning', 'critical', 'neutral', 'accent']);
+const GLYPHS: ReadonlySet<string> = new Set(TILE_ICONS);
+
+/** A name from the pinned set, or null — which draws as a neutral dot. */
+export function tileIcon(value: unknown): TileIcon | null {
+  return typeof value === 'string' && GLYPHS.has(value) ? (value as TileIcon) : null;
+}
+
+/**
+ * Tiles: one per item, or the single notice when the output says the tool is
+ * not set up. Every path but `items` is read within the item; the icon may be
+ * a constant. An item with neither a value nor a label is not a tile. The
+ * plugin a notice links into is the tool's own, read off the tool name, so a
+ * descriptor can only ever point at its own pages.
+ */
+export function resolveTiles(output: unknown, map: TilesMap, tool = ''): TilesProps {
+  const empty = map.empty ?? 'Nothing to show.';
+  const plugin = tool.split('.')[0] ?? '';
+  if (map.notice) {
+    const text = asString(readPath(output, map.notice.text));
+    if (text !== null && text.trim() !== '') {
+      const link = map.notice.link && plugin !== '' ? { plugin, page: map.notice.link.page } : null;
+      const tile: Tile = { icon: tileIcon(map.notice.icon ?? 'bell'), value: '', label: text.trim(), lines: [], tone: 'neutral', link };
+      return { tiles: [tile], notice: true, empty };
+    }
+  }
+  const tiles = asArray(readPath(output, map.items))
+    .map((item): Tile | null => {
+      const value = asString(readPath(item, map.value)) ?? '';
+      const label = asString(readPath(item, map.label)) ?? '';
+      if (value === '' && label === '') return null;
+      const tone = map.tone ? asString(readPath(item, map.tone)) : null;
+      return {
+        icon: tileIcon(readRef(item, map.icon)),
+        value,
+        label,
+        lines: (map.lines ?? [])
+          .slice(0, 2)
+          .map((path) => asString(readPath(item, path)))
+          .filter((line): line is string => line !== null && line.trim() !== ''),
+        tone: tone !== null && TONES.has(tone) ? (tone as Tone) : 'neutral',
+        link: null,
+      };
+    })
+    .filter((tile): tile is Tile => tile !== null);
+  return { tiles, notice: false, empty };
+}
+
 export function resolveDocument(output: unknown, map: DocumentMap): DocumentProps {
   const kindRaw = asString(readRef(output, map.kind));
   const kind = kindRaw === 'image' || kindRaw === 'pdf' ? kindRaw : 'text';
@@ -432,6 +485,8 @@ export function applyDescriptor(
       return { renderer: 'bars', props: resolveBars(output, map as BarsMap) };
     case 'keyvalue':
       return { renderer: 'keyvalue', props: resolveKeyValue(output, map as KeyValueMap) };
+    case 'tiles':
+      return { renderer: 'tiles', props: resolveTiles(output, map as TilesMap, descriptor.tool) };
     case 'document':
       return { renderer: 'document', props: resolveDocument(output, map as DocumentMap) };
     case 'diff':

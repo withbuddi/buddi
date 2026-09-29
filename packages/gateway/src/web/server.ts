@@ -176,6 +176,7 @@ import {
   readJobs,
   readMissions,
   readOverview,
+  setGlanceHidden,
   readOffers,
   readReminders,
   readSentinels,
@@ -2081,6 +2082,20 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       const state = await setSentinelEnabled(deps.pool, sentinelId, body.enabled, deps.now());
       return sendJson(res, 200, { sentinelId: state.sentinelId, enabled: state.enabled });
+    }
+
+    /* One Home glance, hidden or shown again (Home's ×, Settings → Appearance). */
+    const glanceHidden = /^\/api\/home\/glances\/([^/]+)\/hidden$/.exec(path);
+    if (glanceHidden) {
+      if (typeof body.hidden !== 'boolean') {
+        return sendJson(res, 400, { error: '`hidden` must be true or false' });
+      }
+      const result = await setGlanceHidden(
+        { pool: deps.pool, registry: deps.registry },
+        decodeURIComponent(glanceHidden[1] as string),
+        body.hidden,
+      );
+      return sendJson(res, result.status, result.body);
     }
 
     if (path === '/api/pause') {

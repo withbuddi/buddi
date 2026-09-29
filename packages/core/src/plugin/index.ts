@@ -70,7 +70,8 @@ export type {
   SentinelResult,
   Severity,
 } from '../sentinels/types.js';
-export type { ViewDescriptor, ViewMap, RendererName } from '../views.js';
+export type { ViewDescriptor, ViewMap, RendererName, TilesMap, TileIcon, TileLink } from '../views.js';
+export { TILE_ICONS } from '../views.js';
 export type {
   Component,
   Field,
@@ -83,7 +84,8 @@ export type {
   QueryRef,
   WorkspaceFiles,
 } from '../pages.js';
-export type { HomeBlock, HomeContribution, HomeRow, HomeStat } from '../home.js';
+export type { HomeBlock, HomeBlockContribution, HomeContribution, HomeGlance, HomeGlanceContribution, HomeRow, HomeStat } from '../home.js';
+export { HOME_GLANCE_MAX } from '../home.js';
 export type { MetricDefinition, MetricDirection, MetricReading, MetricUnit } from '../metrics.js';
 export type {
   PolicyApplyResult,

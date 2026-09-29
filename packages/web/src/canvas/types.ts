@@ -17,6 +17,7 @@ export type RendererName =
   | 'table'
   | 'bars'
   | 'keyvalue'
+  | 'tiles'
   | 'document'
   | 'diff'
   | 'terminal'
@@ -91,6 +92,50 @@ export interface KeyValueMap {
   from?: string;
 }
 
+/** The pinned glyphs a tile or a Home glance may wear. Mirrors core's `TILE_ICONS`. */
+export const TILE_ICONS = [
+  'mail',
+  'money',
+  'calendar',
+  'people',
+  'file',
+  'chart',
+  'bell',
+  'plug',
+  'key',
+  'globe',
+  'sun',
+  'partly-cloudy',
+  'cloud',
+  'rain',
+  'drizzle',
+  'snow',
+  'storm',
+  'fog',
+  'wind',
+  'moon-clear',
+] as const;
+
+export type TileIcon = (typeof TILE_ICONS)[number];
+
+/** A page of the same plugin. */
+export interface TileLink {
+  page: string;
+}
+
+/** A row of small cards, one per item: glyph, big value, label, up to two lines. */
+export interface TilesMap {
+  items: string;
+  icon: ValueRef;
+  value: string;
+  label: string;
+  lines?: string[];
+  tone?: string;
+  empty?: string;
+  /** The one card drawn instead when the output says the tool is not set up. */
+  notice?: { text: string; icon?: TileIcon; link?: TileLink };
+}
+
 export interface DocumentMap {
   kind?: ValueRef;
   text?: string;
@@ -152,6 +197,7 @@ export type ViewMap =
   | TableMap
   | BarsMap
   | KeyValueMap
+  | TilesMap
   | DocumentMap
   | DiffMap
   | TerminalMap
@@ -208,6 +254,24 @@ export interface BarsProps {
 
 export interface KeyValueProps {
   pairs: Array<{ label: string; value: unknown; unit: Unit; currency: string | null; tone: Tone }>;
+}
+
+export interface Tile {
+  /** One of `TILE_ICONS`, or null for anything else: drawn as a neutral dot. */
+  icon: TileIcon | null;
+  value: string;
+  label: string;
+  lines: string[];
+  tone: Tone;
+  /** A page of the tool's plugin the tile opens (the notice's only). */
+  link: { plugin: string; page: string } | null;
+}
+
+export interface TilesProps {
+  tiles: Tile[];
+  /** True when the one tile is the notice that the tool is not set up. */
+  notice: boolean;
+  empty: string;
 }
 
 export interface DocumentProps {

@@ -2,8 +2,8 @@
  * The renderer registry.
  *
  * Keyed by **shape**, never by tool. `timeseries`, `table`, `bars`,
- * `keyvalue`, `document`, `diff`, `terminal`, `image`, `preview`, `envelope`,
- * `structured` — eleven entries, and a default. What decides which one a given tool result gets is a view
+ * `keyvalue`, `tiles`, `document`, `diff`, `terminal`, `image`, `preview`, `envelope`,
+ * `structured` — twelve entries, and a default. What decides which one a given tool result gets is a view
  * descriptor the plugin declared and the server handed over as data; this file
  * has no opinion about any plugin, and an installation with no plugins still
  * ships every one of these.
@@ -25,6 +25,7 @@ import type {
   StructuredProps,
   TableProps,
   TerminalProps,
+  TilesProps,
   TimeseriesProps,
 } from './types';
 import { Bars } from './views/Bars';
@@ -37,6 +38,7 @@ import { PreviewView } from './views/PreviewView';
 import { Structured } from './views/Structured';
 import { Table } from './views/Table';
 import { TerminalView } from './views/TerminalView';
+import { Tiles } from './views/Tiles';
 import { Timeseries } from './views/Timeseries';
 
 /** Everything a renderer may be handed. Only `envelope` uses the extras. */
@@ -62,6 +64,7 @@ export const RENDERERS: Record<RendererName, RendererComponent> = {
   table: erase<TableProps>(Table),
   bars: erase<BarsProps>(Bars),
   keyvalue: erase<KeyValueProps>(KeyValue),
+  tiles: erase<TilesProps>(Tiles),
   document: erase<DocumentProps>(DocumentView),
   diff: erase<DiffProps>(DiffView),
   terminal: erase<TerminalProps>(TerminalView),
