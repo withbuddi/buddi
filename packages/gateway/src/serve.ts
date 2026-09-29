@@ -977,15 +977,15 @@ export async function main(): Promise<void> {
     });
 
     // Notifications that were shown or held and whose moment came: an unseen
-    // one escalates, quiet hours end, the day ends (docs/notifications.md).
+    // one escalates, a focus ends, the day ends (docs/notifications.md).
     const notificationsLoop = recovering ? idle.loop : startLoop({
       name: 'notifications',
       everyMs: NOTIFICATIONS_TICK_MS,
       abortAfterMs: NOTIFICATIONS_TICK_MS * 2,
       run: async () => {
         const outcome = await notificationsTick(pool, notifyDeps, now());
-        if (outcome.escalated + outcome.endOfDay > 0) {
-          console.log(`notifications: ${outcome.escalated} escalated, ${outcome.endOfDay} in the end-of-day message`);
+        if (outcome.escalated + outcome.endOfDay + outcome.focusEnded > 0) {
+          console.log(`notifications: ${outcome.escalated} escalated, ${outcome.endOfDay} in the end-of-day message, ${outcome.focusEnded} in the end-of-focus message`);
         }
       },
       log: logErr,

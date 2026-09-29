@@ -203,8 +203,8 @@ A list of sections in four groups.
 
 - **Profile**: your name and how the agents address you.
 - **Appearance**: theme, background and page width, kept in this browser.
-- **Notifications**: where messages go, quiet hours, the end of the day, and
-  the last twenty sent. Also where Telegram is paired.
+- **Notifications**: where messages go, the focus schedules, the end of the
+  day, and the last twenty sent. Also where Telegram is paired.
 - **Memory**: what the agents have kept about you, and the means to correct it.
 - **Proposals**: what the agents learned, to keep or discard.
 - **Model accounts**: the credentials the agents run on.

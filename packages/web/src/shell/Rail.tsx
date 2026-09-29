@@ -8,8 +8,10 @@
  * count of things waiting on the owner, which is the reason to go there.
  * Settings carries a dot, without a number, when a newer buddi is ready.
  *
- * Under a hairline at the foot, the owner's initial: a small menu with the
- * quick theme switch, the way to Appearance, and the running version. Running
+ * Under a hairline at the foot, the owner's initial: a small menu with Focus
+ * (Do not disturb or Urgent only, for a while; a moon on the initial while
+ * one is on), the quick theme switch, the way to Appearance, and the running
+ * version. Running
  * as an installed app, which has no reload button of its own, it also has
  * Reload; after an upgrade, in any mode, that reads Reload to update, with the
  * accent and a dot on the initial.
@@ -18,7 +20,7 @@
  */
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useState, type ReactNode } from 'react';
-import { api } from '../api';
+import { api, type FocusDuration, type FocusMode, type FocusState } from '../api';
 import { isStandalone } from '../build';
 import { ACTIVITY_ROUTE, AGENTS_ROUTE, CHAT_ROUTE, FILES_ROUTE, HOME_ROUTE, PLACES, SETTINGS_ROUTE, pluginPageRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
@@ -41,6 +43,7 @@ export function Rail({
   version,
   stale = false,
   reload,
+  timezone,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -64,6 +67,8 @@ export function Rail({
   stale?: boolean;
   /** How the page reloads; the browser's own by default. */
   reload?: () => void;
+  /** The owner's zone, for when a focus ends; the browser's when absent. */
+  timezone?: string | undefined;
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -113,7 +118,7 @@ export function Rail({
         {ICONS[SETTINGS_ROUTE]}
       </RailLink>
 
-      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} stale={stale} reload={reload} />
+      <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} stale={stale} reload={reload} timezone={timezone} />
     </nav>
   );
 }
@@ -137,6 +142,7 @@ function OwnerMenu({
   version,
   stale,
   reload = () => window.location.reload(),
+  timezone,
 }: {
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
@@ -144,21 +150,30 @@ function OwnerMenu({
   version?: RailVersion | undefined;
   stale: boolean;
   reload?: () => void;
+  timezone?: string | undefined;
 }): JSX.Element {
   const owner = useAsync(() => api.owner(), []);
+  const focusView = useAsync(() => api.focus(), [], 60_000);
+  const focus = focusView.data?.focus ?? null;
+  const switchFocus = (mode: FocusMode, duration?: FocusDuration): void => {
+    void api.setFocus(mode, duration).finally(() => focusView.reload());
+  };
   const name = owner.data?.preferredName?.trim() || null;
   const initial = (name ?? 'You').slice(0, 1).toUpperCase();
   // An installed app has no toolbar, so no reload button: this is it.
   const [standalone] = useState(isStandalone);
   const [hint] = useState(reloadHint);
   const who = name ? `You: ${name}` : 'You';
+  const focusWords = focus ? `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone)}` : null;
+  const label = [who, focusWords, stale ? 'reload to update' : null].filter(Boolean).join(', ');
   return (
     <div className="rail-owner">
       <DropdownMenu.Root modal={false}>
         <DropdownMenu.Trigger asChild>
-          <button type="button" className="rail-owner-btn" aria-label={stale ? `${who}, reload to update` : who}>
+          <button type="button" className="rail-owner-btn" aria-label={label}>
             <span className="rail-owner-face" aria-hidden="true">{initial}</span>
             {stale ? <span className="ui-badge rail-dot" data-kind="dot" data-testid="owner-dot" aria-hidden="true" /> : null}
+            {focus ? <span className="rail-focus" data-testid="owner-focus" aria-hidden="true"><Icon name="moon" size={10} /></span> : null}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -170,6 +185,8 @@ function OwnerMenu({
                 <span className="rail-owner-sub">On this Mac</span>
               </span>
             </div>
+            <DropdownMenu.Separator className="ui-menu-sep" />
+            <FocusMenu focus={focus} timezone={timezone} onSwitch={switchFocus} />
             <DropdownMenu.Separator className="ui-menu-sep" />
             <DropdownMenu.Label className="ui-menu-label">Theme</DropdownMenu.Label>
             <div className="rail-owner-theme">
@@ -204,6 +221,84 @@ function OwnerMenu({
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
     </div>
+  );
+}
+
+export const FOCUS_LABELS: Record<FocusMode, string> = {
+  normal: 'Off',
+  'urgent-only': 'Urgent only',
+  'do-not-disturb': 'Do not disturb',
+};
+
+const FOCUS_DURATIONS: ReadonlyArray<{ value: FocusDuration; label: string }> = [
+  { value: '1h', label: 'For 1 hour' },
+  { value: '3h', label: 'For 3 hours' },
+  { value: 'tomorrow', label: 'Until tomorrow morning' },
+  { value: 'indefinite', label: 'Until I turn it off' },
+];
+
+/** "until 21:30" today, "until Tue 08:00" later, "until you turn it off". */
+export function focusUntilLabel(focus: FocusState, timezone?: string, now: Date = new Date()): string {
+  if (!focus.until) return 'until you turn it off';
+  const end = new Date(focus.until);
+  const zone = timezone ? { timeZone: timezone } : {};
+  const day = (d: Date): string => new Intl.DateTimeFormat('en-CA', { ...zone, dateStyle: 'short' }).format(d);
+  const time = new Intl.DateTimeFormat('en-GB', { ...zone, hour: '2-digit', minute: '2-digit' }).format(end);
+  if (day(end) === day(now)) return `until ${time}`;
+  const weekday = new Intl.DateTimeFormat('en-GB', { ...zone, weekday: 'short' }).format(end);
+  return `until ${weekday} ${time}`;
+}
+
+/**
+ * Focus, one level in: what is on and until when, then each mode with its
+ * durations, and Turn off while one is on. What a mode lets through is in
+ * Settings → Notifications; here it is one click.
+ */
+function FocusMenu({
+  focus,
+  timezone,
+  onSwitch,
+}: {
+  focus: FocusState | null;
+  timezone?: string | undefined;
+  onSwitch: (mode: FocusMode, duration?: FocusDuration) => void;
+}): JSX.Element {
+  return (
+    <DropdownMenu.Sub>
+      <DropdownMenu.SubTrigger className="ui-menu-item rail-owner-focus">
+        <span>Focus</span>
+        <span className="rail-owner-kbd">{focus ? FOCUS_LABELS[focus.mode] : 'Off'}</span>
+      </DropdownMenu.SubTrigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.SubContent className="ui-menu rail-owner-menu" sideOffset={6}>
+          <p className="ui-menu-empty" role="status">
+            {focus ? `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone)}${focus.by === 'schedule' ? ', from a schedule' : ''}.` : 'No focus is on.'}
+          </p>
+          {(['do-not-disturb', 'urgent-only'] as const).map((mode) => (
+            <DropdownMenu.Group key={mode}>
+              <DropdownMenu.Separator className="ui-menu-sep" />
+              <DropdownMenu.Label className="ui-menu-label">{FOCUS_LABELS[mode]}</DropdownMenu.Label>
+              {FOCUS_DURATIONS.map((d) => (
+                <DropdownMenu.Item
+                  key={d.value}
+                  className="ui-menu-item"
+                  aria-label={`${FOCUS_LABELS[mode]} ${d.label.toLowerCase()}`}
+                  onSelect={() => onSwitch(mode, d.value)}
+                >
+                  {d.label}
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Group>
+          ))}
+          {focus ? (
+            <>
+              <DropdownMenu.Separator className="ui-menu-sep" />
+              <DropdownMenu.Item className="ui-menu-item" onSelect={() => onSwitch('normal')}>Turn off</DropdownMenu.Item>
+            </>
+          ) : null}
+        </DropdownMenu.SubContent>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Sub>
   );
 }
 

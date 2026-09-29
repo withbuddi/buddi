@@ -29,7 +29,7 @@ import { testDatabaseUrl } from '@buddi/core/testing';
 import { notifyApproval, ownerDeliver, ownerText, splitOwnerText } from './owner-notify.js';
 import { createTelegramChannel, ownerMessageText } from './telegram/channel.js';
 import { OwnerNotPairedError } from './telegram/notify.js';
-import { listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './web/notifications.js';
+import { focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './web/notifications.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -174,24 +174,35 @@ suite('reaching the owner from the gateway', () => {
     telegram();
     const read = await notificationSettingsRoute(pool, 'GET');
     expect(read.body).toMatchObject({
-      settings: { defaultChannel: null, endOfDay: '18:00', quietStart: null },
+      settings: { defaultChannel: null, endOfDay: '18:00', schedules: [], focus: null },
       channels: [{ kind: 'telegram.chat', label: 'Telegram', where: '@buddi_test_bot' }],
     });
+    const night = { mode: 'do-not-disturb', days: ['mon', 'tue'], from: '22:00', to: '07:00' };
     const put = await notificationSettingsRoute(pool, 'PUT', {
       defaultChannel: 'telegram.chat',
       perKind: { watcher: 'off', recap: 'default' },
-      quietStart: '22:00',
-      quietEnd: '07:00',
+      schedules: [night],
       endOfDay: '17:30',
     });
     expect(put.body).toMatchObject({
-      settings: { defaultChannel: 'telegram.chat', perKind: { watcher: 'off' }, quietStart: '22:00', quietEnd: '07:00', endOfDay: '17:30' },
+      settings: { defaultChannel: 'telegram.chat', perKind: { watcher: 'off' }, schedules: [night], endOfDay: '17:30' },
     });
     expect(await notificationSettingsRoute(pool, 'PUT', { perKind: { approval: 'off' } })).toEqual({
       status: 400,
       body: { error: 'Approvals and questions cannot be turned off.' },
     });
-    expect((await notificationSettingsRoute(pool, 'PUT', { quietStart: '22:00' })).status).toBe(400);
+    expect((await notificationSettingsRoute(pool, 'PUT', { schedules: [{ ...night, days: [] }] })).status).toBe(400);
+  });
+
+  it('reads and switches the focus', async () => {
+    const deps = { now: () => NOW, timezone: 'America/New_York' };
+    expect(await focusRoute(pool, deps, 'GET')).toEqual({ status: 200, body: { focus: null } });
+    const on = await focusRoute(pool, deps, 'PUT', { mode: 'do-not-disturb', duration: '3h' });
+    expect(on.body).toMatchObject({ focus: { mode: 'do-not-disturb', until: new Date(NOW.getTime() + 3 * 3_600_000).toISOString(), by: 'dashboard' } });
+    expect((await focusRoute(pool, deps, 'GET')).body).toMatchObject({ focus: { mode: 'do-not-disturb' } });
+    expect((await focusRoute(pool, deps, 'PUT', { mode: 'loud' })).status).toBe(400);
+    expect((await focusRoute(pool, deps, 'PUT', { mode: 'urgent-only', duration: 'soon' })).status).toBe(400);
+    expect(await focusRoute(pool, deps, 'PUT', { mode: 'normal' })).toEqual({ status: 200, body: { focus: null } });
   });
 
   it('splits a report into a title and a body', () => {

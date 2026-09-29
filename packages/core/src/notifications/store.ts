@@ -6,10 +6,13 @@
 import type { Offer } from '../offers/types.js';
 import type { Queryable } from '../owner.js';
 import { LOCAL_TIME } from '../time.js';
+import { parseFocusSchedules, schedulesFromQuietHours, toFocusSchedules, toFocusSetting } from './focus.js';
 import {
   ALWAYS_REACH,
   NOTIFICATION_KINDS,
+  type FocusSetting,
   type NotificationKind,
+  type NotificationPreferences,
   type NotificationSettings,
   type OwnerNotification,
 } from './types.js';
@@ -23,9 +26,9 @@ export const DEFAULT_END_OF_DAY = '18:00';
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   defaultChannel: null,
   perKind: {},
-  quietStart: null,
-  quietEnd: null,
+  schedules: [],
   endOfDay: DEFAULT_END_OF_DAY,
+  focus: null,
 };
 
 const iso = (v: unknown): string | null =>
@@ -33,7 +36,7 @@ const iso = (v: unknown): string | null =>
 
 export const NOTIFICATION_COLUMNS =
   'id, kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, ' +
-  'channel, fired_count, lowered, topic, also_from, created_at, sent_at, seen_at, acted_at, error';
+  'channel, fired_count, lowered, topic, also_from, held_for, created_at, sent_at, seen_at, acted_at, error';
 
 export function toNotification(row: Record<string, any>): OwnerNotification {
   return {
@@ -55,6 +58,7 @@ export function toNotification(row: Record<string, any>): OwnerNotification {
     lowered: row.lowered === true,
     topic: row.topic ?? null,
     alsoFrom: Array.isArray(row.also_from) ? row.also_from.map(String) : [],
+    heldFor: row.held_for ?? null,
     createdAt: iso(row.created_at) as string,
     sentAt: iso(row.sent_at),
     seenAt: iso(row.seen_at),
@@ -195,10 +199,10 @@ export async function ownerPresent(db: Queryable, now: Date = new Date()): Promi
 
 export async function readNotificationSettings(db: Queryable): Promise<NotificationSettings> {
   const { rows } = await db.query(
-    `select default_channel, per_kind, quiet_start, quiet_end, end_of_day from core.notification_settings where id`,
+    `select default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, focus from core.notification_settings where id`,
   );
   const row = rows[0];
-  if (!row) return { ...DEFAULT_NOTIFICATION_SETTINGS, perKind: {} };
+  if (!row) return { ...DEFAULT_NOTIFICATION_SETTINGS, perKind: {}, schedules: [] };
   const perKind: NotificationSettings['perKind'] = {};
   if (row.per_kind && typeof row.per_kind === 'object') {
     for (const [k, v] of Object.entries(row.per_kind as Record<string, unknown>)) {
@@ -210,9 +214,10 @@ export async function readNotificationSettings(db: Queryable): Promise<Notificat
   return {
     defaultChannel: row.default_channel ?? null,
     perKind,
-    quietStart: row.quiet_start ?? null,
-    quietEnd: row.quiet_end ?? null,
+    // Quiet hours never moved (migration 051 does it) read as the first schedule.
+    schedules: toFocusSchedules(row.schedules) ?? schedulesFromQuietHours(row.quiet_start, row.quiet_end),
     endOfDay: row.end_of_day ?? DEFAULT_END_OF_DAY,
+    focus: toFocusSetting(row.focus),
   };
 }
 
@@ -222,7 +227,7 @@ export async function readNotificationSettings(db: Queryable): Promise<Notificat
  */
 export function parseNotificationSettings(
   input: unknown,
-): { ok: true; settings: NotificationSettings } | { ok: false; message: string } {
+): { ok: true; settings: NotificationPreferences } | { ok: false; message: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, message: 'Settings must be an object.' };
   const o = input as Record<string, unknown>;
   const optionalTime = (v: unknown, name: string): string | null | Error => {
@@ -247,28 +252,33 @@ export function parseNotificationSettings(
       perKind[k as NotificationKind] = v;
     }
   }
-  const quietStart = optionalTime(o.quietStart, 'Quiet hours start');
-  if (quietStart instanceof Error) return { ok: false, message: quietStart.message };
-  const quietEnd = optionalTime(o.quietEnd, 'Quiet hours end');
-  if (quietEnd instanceof Error) return { ok: false, message: quietEnd.message };
-  if ((quietStart === null) !== (quietEnd === null)) return { ok: false, message: 'Quiet hours need both a start and an end.' };
-  if (quietStart !== null && quietStart === quietEnd) return { ok: false, message: 'Quiet hours cannot start and end at the same time.' };
+  const schedules = parseFocusSchedules(o.schedules);
+  if (!schedules.ok) return { ok: false, message: schedules.message };
   const endOfDay = optionalTime(o.endOfDay, 'The end of the day');
   if (endOfDay instanceof Error) return { ok: false, message: endOfDay.message };
   return {
     ok: true,
-    settings: { defaultChannel, perKind, quietStart, quietEnd, endOfDay: endOfDay ?? DEFAULT_END_OF_DAY },
+    settings: { defaultChannel, perKind, schedules: schedules.schedules, endOfDay: endOfDay ?? DEFAULT_END_OF_DAY },
   };
 }
 
-/** Replace the settings, whole. */
-export async function writeNotificationSettings(db: Queryable, settings: NotificationSettings): Promise<void> {
+/** Replace the settings, whole, but for the manual focus, which `writeFocus` owns. */
+export async function writeNotificationSettings(db: Queryable, settings: NotificationPreferences): Promise<void> {
   await db.query(
-    `insert into core.notification_settings (id, default_channel, per_kind, quiet_start, quiet_end, end_of_day, updated_at)
-     values (true, $1, $2::jsonb, $3, $4, $5, now())
+    `insert into core.notification_settings (id, default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, updated_at)
+     values (true, $1, $2::jsonb, null, null, $3, $4::jsonb, now())
      on conflict (id) do update set default_channel = excluded.default_channel, per_kind = excluded.per_kind,
-       quiet_start = excluded.quiet_start, quiet_end = excluded.quiet_end, end_of_day = excluded.end_of_day,
+       quiet_start = null, quiet_end = null, end_of_day = excluded.end_of_day, schedules = excluded.schedules,
        updated_at = now()`,
-    [settings.defaultChannel, JSON.stringify(settings.perKind), settings.quietStart, settings.quietEnd, settings.endOfDay],
+    [settings.defaultChannel, JSON.stringify(settings.perKind), settings.endOfDay, JSON.stringify(settings.schedules)],
+  );
+}
+
+/** Replace the manual focus; null when none is on. */
+export async function writeFocus(db: Queryable, focus: FocusSetting | null): Promise<void> {
+  await db.query(
+    `insert into core.notification_settings (id, focus, updated_at) values (true, $1::jsonb, now())
+     on conflict (id) do update set focus = excluded.focus, updated_at = now()`,
+    [focus === null ? null : JSON.stringify(focus)],
   );
 }

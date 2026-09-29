@@ -108,6 +108,8 @@ const GLYPHS = {
   // A window with a title bar: the app itself, framed.
   'shape-preview': [16, 1.4, <path d="M2.2 3.4h11.6v9.2H2.2zM2.2 6h11.6M4.1 4.7h.01M6 4.7h.01" />],
   'shape-envelope': [16, 1.4, <path d="M2.2 4h11.6v8H2.2zM2.2 4.4 8 8.8l5.8-4.4" />],
+  // A crescent: a focus is on (the owner's face on the rail).
+  moon: [16, 1.5, <path d="M12.9 9.7A5.3 5.3 0 0 1 6.3 3.1a5.3 5.3 0 1 0 6.6 6.6z" />],
   'shape-structured': [16, 1.4, <path d="M4 2.6h8v10.8H4zM6.2 5.6h3.6M6.2 8h3.6M6.2 10.4h2.2" />],
 } satisfies Record<string, Glyph>;
 

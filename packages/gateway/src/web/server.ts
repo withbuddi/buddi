@@ -41,7 +41,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
-import { listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute, testChannelRoute } from './notifications.js';
+import { focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute, testChannelRoute } from './notifications.js';
 import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
@@ -1258,6 +1258,8 @@ export function createWebApp(deps: WebServerDeps): Server {
           return reply(res, await listNotificationsRoute(deps.pool, q.get('limit')));
         case '/api/notifications/settings':
           return reply(res, await notificationSettingsRoute(deps.pool, 'GET'));
+        case '/api/notifications/focus':
+          return reply(res, await focusRoute(deps.pool, { now: deps.now, timezone: deps.timezone }, 'GET'));
         case '/api/reminders':
           return sendJson(res, 200, {
             reminders: await readReminders(deps.pool, boundedLimit(q.get('limit'))),
@@ -1746,7 +1748,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * everything else.
      */
     if (method === 'PUT') {
-      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/notifications/settings'];
+      const puttable = ['/api/backups/schedule', '/api/backups/passphrase', '/api/version/check', '/api/tailscale', '/api/notifications/settings', '/api/notifications/focus'];
       if (!puttable.includes(path)) return sendEmpty(res, 405);
       let put: Record<string, unknown>;
       try {
@@ -1806,6 +1808,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       if (path === '/api/version/check') return reply(res, await versionCheckRoute(versionDeps(), 'PUT', put));
       if (path === '/api/notifications/settings') return reply(res, await notificationSettingsRoute(deps.pool, 'PUT', put));
+      if (path === '/api/notifications/focus') return reply(res, await focusRoute(deps.pool, { now: deps.now, timezone: deps.timezone }, 'PUT', put));
       return reply(res, path === '/api/backups/schedule'
         ? await scheduleRoute(backupDeps(), 'PUT', put)
         : await passphraseRoute(backupDeps(), 'PUT', put));

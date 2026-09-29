@@ -7,6 +7,8 @@
  *   GET  /api/notifications/settings        the settings, and the channels there are
  *   PUT  /api/notifications/settings        the whole settings value, replaced
  *   POST /api/notifications/test { channel } one line through that channel, now
+ *   GET  /api/notifications/focus           the focus in force now, or null
+ *   PUT  /api/notifications/focus { mode, duration } switch it; mode `normal` turns it off
  *   POST /api/presence { state }            `active` every 30 s while the page is
  *                                           visible and focused; `away` on blur or hide
  *
@@ -21,8 +23,11 @@ import {
   markSeen,
   parseNotificationSettings,
   presenceTouch,
+  readFocusState,
   readNotificationSettings,
+  setFocus,
   writeNotificationSettings,
+  type NotifyDeps,
   type Queryable,
 } from '@buddi/core';
 
@@ -81,4 +86,28 @@ export async function testChannelRoute(body: Record<string, unknown>, now: Date)
   return sent.ok
     ? { status: 200, body: { ok: true } }
     : { status: 502, body: { error: `The test did not go through: ${sent.error}.` } };
+}
+
+/**
+ * The owner menu's Focus: what is on now, or a switch to a mode for a
+ * duration (`1h`, `3h`, `tomorrow`, `indefinite`); `normal` turns it off.
+ */
+export async function focusRoute(
+  pool: Queryable,
+  deps: NotifyDeps,
+  method: 'GET' | 'PUT',
+  body?: unknown,
+): Promise<NotificationsRouteReply> {
+  if (method === 'GET') return { status: 200, body: { focus: await readFocusState(pool, deps) } };
+  const o = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  const mode = o.mode;
+  if (mode !== 'normal' && mode !== 'urgent-only' && mode !== 'do-not-disturb') {
+    return { status: 400, body: { error: '`mode` must be normal, urgent-only or do-not-disturb.' } };
+  }
+  const duration = typeof o.duration === 'string' ? o.duration : undefined;
+  try {
+    return { status: 200, body: { focus: await setFocus(pool, deps, { mode, ...(duration ? { duration } : {}), by: 'dashboard' }) } };
+  } catch (error) {
+    return { status: 400, body: { error: `${error instanceof Error ? error.message : String(error)}.` } };
+  }
 }

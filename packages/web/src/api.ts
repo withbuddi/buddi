@@ -707,10 +707,35 @@ export interface NotificationSettings {
   defaultChannel: string | null;
   /** kind → a channel kind or `off`; a kind left out takes the default. */
   perKind: Partial<Record<NotificationKind, string>>;
-  quietStart: string | null;
-  quietEnd: string | null;
+  /** When a focus turns itself on; what quiet hours were is the first. */
+  schedules: FocusSchedule[];
   endOfDay: string;
+  /** The manual focus, as stored; read only here, switched with `api.setFocus`. */
+  focus?: unknown;
 }
+
+export type FocusMode = 'normal' | 'urgent-only' | 'do-not-disturb';
+export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+export interface FocusSchedule {
+  mode: Exclude<FocusMode, 'normal'>;
+  days: Weekday[];
+  from: string;
+  to: string;
+}
+
+/** The focus in force now, manual or scheduled. */
+export interface FocusState {
+  mode: Exclude<FocusMode, 'normal'>;
+  /** ISO; null until turned off. */
+  until: string | null;
+  startedAt: string | null;
+  by: 'dashboard' | 'telegram' | 'schedule';
+}
+
+/** `1h`, `3h`, `tomorrow` (the next 08:00), `indefinite`. */
+export type FocusDuration = '1h' | '3h' | 'tomorrow' | 'indefinite';
 
 export interface NotificationSettingsView {
   settings: NotificationSettings;
@@ -1736,6 +1761,9 @@ export const api = {
   notificationSeen: (id: string) => post<{ ok: true }>(`/notifications/${encodeURIComponent(id)}/seen`),
   notificationSettings: () => get<NotificationSettingsView>('/notifications/settings'),
   saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),
+  focus: () => get<{ focus: FocusState | null }>('/notifications/focus'),
+  setFocus: (mode: FocusMode, duration?: FocusDuration) =>
+    put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
   /* ---- tips on Home (docs/dashboard.md, Home) ---- */
   /** Today's tip, or null: at most one a day, none while tips are off. */

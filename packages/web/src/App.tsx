@@ -399,6 +399,7 @@ export function App(): JSX.Element {
             updateAvailable={update !== null}
             settingsDot={connectionSignals.length > 0 ? CONNECTION_DOT : undefined}
             stale={stale}
+            timezone={timezone}
             version={version && !version.checkout ? { current: version.current, latest: version.latest, updateAvailable: version.updateAvailable } : version ? { current: version.current, updateAvailable: false } : undefined}
           />
 

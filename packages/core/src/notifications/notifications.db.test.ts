@@ -1,7 +1,7 @@
 /**
  * Reaching the owner, against real Postgres with a fake clock and a fake
  * channel: where each urgency goes, present and away, the escalation, the end
- * of the day, dedupe, the rate rule, quiet hours, and nowhere to go.
+ * of the day, dedupe, the rate rule, focus, and nowhere to go.
  *
  * The database is created by this suite, named after this process, and
  * dropped again: the owner's installation is never touched.
@@ -12,7 +12,9 @@ import { urlForDatabase } from '../backup/restore.js';
 import { createPool, migrateCore } from '../db.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { clearChannels, registerChannel } from './channels.js';
-import { LOWERED_SENTENCE, notificationsTick, notifyOwner } from './notify.js';
+import { readFile } from 'node:fs/promises';
+import { schedulesFromQuietHours } from './focus.js';
+import { LOWERED_SENTENCE, notificationsTick, notifyOwner, readFocusState, setFocus } from './notify.js';
 import {
   listDigestNotifications,
   listNotifications,
@@ -20,6 +22,7 @@ import {
   markSeen,
   ownerPresent,
   presenceTouch,
+  readNotificationSettings,
   writeNotificationSettings,
   DEFAULT_NOTIFICATION_SETTINGS,
 } from './store.js';
@@ -239,22 +242,78 @@ suite('reaching the owner', () => {
     expect(approval.deduped).toBe(false);
   });
 
-  it('holds now messages through quiet hours, except approvals and questions', async () => {
+  it('holds now messages through a scheduled Do not disturb, except approvals and questions, and says what waited in one message', async () => {
     fakeChannel();
-    await writeNotificationSettings(pool, { ...DEFAULT_NOTIFICATION_SETTINGS, quietStart: '22:00', quietEnd: '07:00' });
+    await writeNotificationSettings(pool, { ...DEFAULT_NOTIFICATION_SETTINGS, schedules: schedulesFromQuietHours('22:00', '07:00') });
     // 23:00 in New York.
     clock = new Date('2026-09-15T03:00:00.000Z');
-    const watcher = await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Card declined' });
+    const watcher = await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Card declined', agentId: 'ledger' });
     expect(watcher.state).toBe('held');
+    const reminder = await notifyOwner(pool, deps, { kind: 'reminder', urgency: 'now', title: 'Call the dentist', agentId: 'diary' });
+    expect(reminder.state).toBe('held');
     const approval = await notifyOwner(pool, deps, { kind: 'approval', urgency: 'now', title: 'ledger needs your approval' });
     expect(approval.state).toBe('sent');
     expect(sent.map((m) => m.title)).toEqual(['ledger needs your approval']);
 
     await notificationsTick(pool, deps, new Date('2026-09-15T10:59:00.000Z'));
     expect(sent).toHaveLength(1);
-    // 07:00 in New York.
-    await notificationsTick(pool, deps, new Date('2026-09-15T11:00:00.000Z'));
-    expect(sent.map((m) => m.title)).toEqual(['ledger needs your approval', 'Card declined']);
+    // 07:00 in New York: one message for both, and both rows sent in it.
+    const tick = await notificationsTick(pool, deps, new Date('2026-09-15T11:00:00.000Z'));
+    expect(tick.focusEnded).toBe(2);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({
+      title: 'While you were in Do not disturb: 2 things.',
+      text: '- ledger: Card declined\n- diary: Call the dentist',
+    });
+    const rows = await listNotifications(pool);
+    expect(rows.filter((r) => r.kind !== 'approval').map((r) => [r.state, r.channel])).toEqual([['sent', 'fake.chat'], ['sent', 'fake.chat']]);
+    await notificationsTick(pool, deps, new Date('2026-09-15T11:01:00.000Z'));
+    expect(sent).toHaveLength(2);
+  });
+
+  it('holds what Urgent only holds, and a manual focus turned off says what waited at once', async () => {
+    fakeChannel();
+    expect(await setFocus(pool, deps, { mode: 'urgent-only', duration: '1h', by: 'telegram' }))
+      .toMatchObject({ mode: 'urgent-only', until: minutes(60).toISOString(), by: 'telegram' });
+    expect((await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Card declined' })).state).toBe('sent');
+    expect((await notifyOwner(pool, deps, { kind: 'reminder', urgency: 'now', title: 'Call the dentist', agentId: 'diary' })).state).toBe('held');
+    expect(await readFocusState(pool, deps)).toMatchObject({ mode: 'urgent-only' });
+
+    clock = minutes(10);
+    expect(await setFocus(pool, deps, { mode: 'normal', by: 'dashboard' })).toBeNull();
+    expect(sent.map((m) => m.title)).toEqual(['Card declined', 'While you were in Urgent only: 1 thing.']);
+    expect(await readFocusState(pool, deps)).toBeNull();
+
+    // Nothing held, nothing said.
+    await setFocus(pool, deps, { mode: 'do-not-disturb', duration: 'indefinite', by: 'dashboard' });
+    await setFocus(pool, deps, { mode: 'normal', by: 'dashboard' });
+    expect(sent).toHaveLength(2);
+  });
+
+  it('lets a manual focus win over a schedule, and keeps it when the settings are saved', async () => {
+    fakeChannel();
+    await writeNotificationSettings(pool, { ...DEFAULT_NOTIFICATION_SETTINGS, schedules: schedulesFromQuietHours('22:00', '07:00') });
+    clock = new Date('2026-09-15T03:00:00.000Z');
+    await setFocus(pool, deps, { mode: 'urgent-only', duration: '1h', by: 'dashboard' });
+    // A save from the page does not touch the manual focus.
+    await writeNotificationSettings(pool, { ...DEFAULT_NOTIFICATION_SETTINGS, schedules: schedulesFromQuietHours('22:00', '07:00') });
+    expect((await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Card declined' })).state).toBe('sent');
+    // Turned off over the schedule: off until it ends.
+    await setFocus(pool, deps, { mode: 'normal', by: 'dashboard' });
+    expect((await notifyOwner(pool, deps, { kind: 'reminder', urgency: 'now', title: 'Call the dentist' })).state).toBe('sent');
+    // The next night the schedule holds again.
+    clock = new Date('2026-09-16T03:00:00.000Z');
+    expect((await notifyOwner(pool, deps, { kind: 'reminder', urgency: 'now', title: 'Water the plants' })).state).toBe('held');
+  });
+
+  it('moves quiet hours into the first schedule', async () => {
+    await pool.query(`insert into core.notification_settings (id, quiet_start, quiet_end) values (true, '22:00', '07:00')`);
+    const expected = [{ mode: 'do-not-disturb', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], from: '22:00', to: '07:00' }];
+    expect((await readNotificationSettings(pool)).schedules).toEqual(expected);
+    const sql = await readFile(new URL('../../migrations/051_notification_focus.sql', import.meta.url), 'utf8');
+    await pool.query(sql);
+    const { rows } = await pool.query('select quiet_start, quiet_end, schedules from core.notification_settings');
+    expect(rows[0]).toEqual({ quiet_start: null, quiet_end: null, schedules: expected });
   });
 
   it('records "no channel" once and throws nothing when there is nowhere to go', async () => {

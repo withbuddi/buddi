@@ -6,12 +6,15 @@ import '@testing-library/jest-dom/vitest';
 import { render, screen } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { api } from '../api';
-import { CONNECTION_DOT, Rail } from './Rail';
+import { CONNECTION_DOT, Rail, focusUntilLabel } from './Rail';
 import { buildDiffers } from '../build';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
-  return { ...real, api: { ...real.api, owner: vi.fn(async () => ({})) } };
+  return {
+    ...real,
+    api: { ...real.api, owner: vi.fn(async () => ({})), focus: vi.fn(async () => ({ focus: null })), setFocus: vi.fn(async () => ({ focus: null })) },
+  };
 });
 
 function rail(updateAvailable?: boolean): void {
@@ -125,5 +128,49 @@ describe('buildDiffers', () => {
     expect(buildDiffers('0.1.0+a', '0.1.0+a')).toBe(false);
     expect(buildDiffers(undefined, '0.1.0+a')).toBe(false);
     expect(buildDiffers('0.1.0+b', undefined)).toBe(false);
+  });
+});
+
+describe('Focus in the owner menu', () => {
+  it('switches a mode for a duration, and shows the moon while one is on', async () => {
+    const { userEvent } = await import('@testing-library/user-event');
+    const { act, fireEvent, within } = await import('@testing-library/react');
+    const user = userEvent.setup();
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    vi.mocked(api.focus).mockResolvedValueOnce({ focus: null });
+    vi.mocked(api.setFocus).mockResolvedValueOnce({ focus: { mode: 'do-not-disturb', until, startedAt: new Date().toISOString(), by: 'dashboard' } });
+    await act(async () => {
+      render(
+        <Tooltip.Provider>
+          <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} timezone="UTC" />
+        </Tooltip.Provider>,
+      );
+    });
+    expect(screen.queryByTestId('owner-focus')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'You' }));
+    await user.click(await screen.findByRole('menuitem', { name: /Focus/ }));
+    expect(await screen.findByText('No focus is on.')).toBeInTheDocument();
+    vi.mocked(api.focus).mockResolvedValue({ focus: { mode: 'do-not-disturb', until, startedAt: new Date().toISOString(), by: 'dashboard' } });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Do not disturb for 1 hour' })); });
+    expect(api.setFocus).toHaveBeenCalledWith('do-not-disturb', '1h');
+    expect(await screen.findByTestId('owner-focus')).toBeInTheDocument();
+    const owner = screen.getByRole('button', { name: /^You, Do not disturb until/ });
+    expect(within(owner).getByTestId('owner-focus')).toBeInTheDocument();
+
+    // Open again: the state with its end, and Turn off.
+    await user.click(owner);
+    await user.click(await screen.findByRole('menuitem', { name: /Focus/ }));
+    expect(await screen.findByText(/^Do not disturb until .*\.$/)).toBeInTheDocument();
+    vi.mocked(api.setFocus).mockResolvedValueOnce({ focus: null });
+    vi.mocked(api.focus).mockResolvedValue({ focus: null });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Turn off' })); });
+    expect(api.setFocus).toHaveBeenLastCalledWith('normal', undefined);
+  });
+
+  it('says when a focus ends in words', () => {
+    const now = new Date('2026-09-15T10:00:00.000Z');
+    expect(focusUntilLabel({ mode: 'urgent-only', until: null, startedAt: null, by: 'telegram' }, 'UTC', now)).toBe('until you turn it off');
+    expect(focusUntilLabel({ mode: 'urgent-only', until: '2026-09-15T13:30:00.000Z', startedAt: null, by: 'dashboard' }, 'UTC', now)).toBe('until 13:30');
+    expect(focusUntilLabel({ mode: 'do-not-disturb', until: '2026-09-16T08:00:00.000Z', startedAt: null, by: 'dashboard' }, 'UTC', now)).toBe('until Wed 08:00');
   });
 });

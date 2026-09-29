@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { channelFor, clearChannels, deliverTo, listChannels, registerChannel } from './channels.js';
 import type { ChannelAnswer, NotificationSettings } from './types.js';
 
-const SETTINGS: NotificationSettings = { defaultChannel: null, perKind: {}, quietStart: null, quietEnd: null, endOfDay: '18:00' };
+const SETTINGS: NotificationSettings = { defaultChannel: null, perKind: {}, schedules: [], endOfDay: '18:00', focus: null };
 
 function add(kind: string, priority?: number, answer: ChannelAnswer = { id: kind }): void {
   registerChannel({

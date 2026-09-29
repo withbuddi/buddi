@@ -6,39 +6,37 @@
  *
  *   now     the owner is on the dashboard → shown there; if nobody has seen it
  *           in ten minutes, the default channel anyway. Away → the default
- *           channel at once. Quiet hours hold it until they end, except
- *           approvals and questions.
+ *           channel at once. A focus (focus.ts) holds what its mode holds
+ *           until it ends; approvals and questions always go.
  *   today   held until the end of the owner's day, then one message for all.
  *   digest  stored; the recap reads it.
  *
- * `notificationsTick` does the later half: escalations, the end of quiet
- * hours, the end of the day. Every transition is one UPDATE guarded by the
+ * `notificationsTick` does the later half: escalations, the end of a focus
+ * (one message for what waited), the end of the day. Every transition is one UPDATE guarded by the
  * state it leaves, so two ticks never send one row twice.
  */
 import { getOwnerProfile } from '../onboarding/store.js';
 import type { Queryable } from '../owner.js';
 import { scrubText } from '../secrets/scrub.js';
-import {
-  isKnownTimezone,
-  localDateString,
-  localMinutesOfDay,
-  minutesOfLocalTime,
-  nextLocalTime,
-  timezoneFromEnv,
-} from '../time.js';
+import { isKnownTimezone, localDateString, nextLocalTime, timezoneFromEnv } from '../time.js';
 import { channelFor, deliverTo } from './channels.js';
+import { activeFocus, FOCUS_LABELS, focusEnd, focusHolds, heldKinds, scheduledFocus, type FocusDuration } from './focus.js';
 import { notificationTopic, sameTopic, TOPIC_WINDOW_MS } from './topic.js';
 import {
   NOTIFICATION_COLUMNS,
   presentSurfaces,
   readNotificationSettings,
   toNotification,
+  writeFocus,
 } from './store.js';
 import {
   ALWAYS_REACH,
   NOTIFICATION_KINDS,
   NOTIFICATION_URGENCIES,
   type DeliverableMessage,
+  type FocusMode,
+  type FocusSetting,
+  type FocusState,
   type NotificationSettings,
   type NotificationState,
   type NotifyDeps,
@@ -69,25 +67,19 @@ async function ownerTimezone(db: Queryable, deps: NotifyDeps): Promise<string> {
   return deps.timezone ?? timezoneFromEnv();
 }
 
-/** Inside quiet hours at `now`, and the instant they end; null when there are none or it is not quiet. */
-export function quietUntil(settings: NotificationSettings, now: Date, timezone: string): Date | null {
-  if (!settings.quietStart || !settings.quietEnd) return null;
-  const start = minutesOfLocalTime(settings.quietStart);
-  const end = minutesOfLocalTime(settings.quietEnd);
-  const at = localMinutesOfDay(now, timezone);
-  const quiet = start < end ? at >= start && at < end : at >= start || at < end;
-  return quiet ? nextLocalTime(now, timezone, settings.quietEnd) : null;
-}
-
 type Route =
   | { state: 'shown'; dueAt: Date; channel: 'dashboard' }
-  | { state: 'held'; dueAt: Date }
+  | { state: 'held'; dueAt: Date | null; heldFor?: FocusMode }
   | { state: 'stored' }
   | { state: 'deliver' };
 
-function route(
+/**
+ * Where a message goes, before any channel is asked. Exported for the
+ * routing table's tests; `notifyOwner` is the one caller.
+ */
+export function route(
   message: Pick<OwnerMessage, 'kind' | 'urgency'>,
-  ctx: { now: Date; timezone: string; settings: NotificationSettings; onDashboard: boolean },
+  ctx: { now: Date; timezone: string; settings: NotificationSettings; onDashboard: boolean; focus: FocusState | null },
 ): Route {
   const always = ALWAYS_REACH.has(message.kind);
   if (!always && ctx.settings.perKind[message.kind] === 'off') return { state: 'stored' };
@@ -98,8 +90,9 @@ function route(
   if (ctx.onDashboard) {
     return { state: 'shown', dueAt: new Date(ctx.now.getTime() + ESCALATE_AFTER_MS), channel: 'dashboard' };
   }
-  const quiet = always ? null : quietUntil(ctx.settings, ctx.now, ctx.timezone);
-  if (quiet) return { state: 'held', dueAt: quiet };
+  if (ctx.focus && focusHolds(ctx.focus.mode, message.kind, message.urgency)) {
+    return { state: 'held', dueAt: ctx.focus.until ? new Date(ctx.focus.until) : null, heldFor: ctx.focus.mode };
+  }
   return { state: 'deliver' };
 }
 
@@ -222,7 +215,8 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   const title = lowered ? `${baseTitle} ${LOWERED_SENTENCE}` : baseTitle;
 
   const onDashboard = (await presentSurfaces(db, now)).includes(DASHBOARD_SURFACE);
-  let next = route({ kind: message.kind, urgency }, { now, timezone, settings, onDashboard });
+  const focus = activeFocus(settings, now, timezone);
+  let next = route({ kind: message.kind, urgency }, { now, timezone, settings, onDashboard, focus });
   // A repeat shown on the dashboard keeps the clock it started, unless the
   // owner had already seen the earlier one: then the new content is unseen.
   if (next.state === 'shown' && existing?.state === 'shown' && existing.seenAt === null && existing.dueAt) {
@@ -231,6 +225,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   const state: NotificationState = next.state === 'deliver' ? 'sending' : next.state;
   const dueAt = 'dueAt' in next ? next.dueAt : null;
   const channel = next.state === 'shown' ? 'dashboard' : null;
+  const heldFor = next.state === 'held' ? next.heldFor ?? null : null;
   const offers = JSON.stringify(message.offers ?? []);
 
   let row: OwnerNotification;
@@ -239,11 +234,12 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
       `update core.owner_notifications
           set urgency = $2, title = $3, text = $4, link = $5, offers = $6::jsonb, agent_id = coalesce($7, agent_id),
               topic = coalesce($15, topic), plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
-              channel = $12, fired_count = fired_count + 1, lowered = $13, seen_at = null, error = null, updated_at = $14
+              channel = $12, fired_count = fired_count + 1, lowered = $13, seen_at = null, error = null, updated_at = $14,
+              held_for = $16
         where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.
@@ -252,11 +248,11 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `insert into core.owner_notifications
          (kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, channel,
-          lowered, created_at, updated_at, topic)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16)
+          lowered, created_at, updated_at, topic, held_for)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16, $17)
        returning ${NOTIFICATION_COLUMNS}`,
       [message.kind, urgency, title, text, message.link?.route ?? null, offers, dedupeKey, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor],
     );
     row = toNotification(rows[0]);
   }
@@ -320,37 +316,35 @@ async function foldIntoTopic(
 export interface NotificationsTickResult {
   escalated: number;
   endOfDay: number;
+  /** Rows told in the one message at the end of a focus. */
+  focusEnded: number;
   failed: number;
 }
 
 /**
  * The later half of routing: runs on the gateway's 60-second loop.
  *
- * 1. Quiet hours: a `now` row that falls due while it is quiet (and is not an
- *    approval or a question) waits for the end of them.
- * 2. Escalation: a `now` row shown on the dashboard and not seen, or held
- *    through quiet hours, goes to its channel.
+ * 1. Focus: a `now` row that falls due while a focus holds its kind waits
+ *    for the end of the focus; when the focus ends, what waited goes out as
+ *    one message (`settleFocus`).
+ * 2. Escalation: a `now` row shown on the dashboard and not seen goes to its
+ *    channel.
  * 3. End of the day: every held `today` row goes out as one message.
  */
 export async function notificationsTick(db: Queryable, deps: NotifyDeps, now: Date = deps.now?.() ?? new Date()): Promise<NotificationsTickResult> {
   const timezone = await ownerTimezone(db, deps);
   const settings = await readNotificationSettings(db);
-  const outcome: NotificationsTickResult = { escalated: 0, endOfDay: 0, failed: 0 };
+  const outcome: NotificationsTickResult = { escalated: 0, endOfDay: 0, focusEnded: 0, failed: 0 };
 
-  const quiet = quietUntil(settings, now, timezone);
-  if (quiet) {
-    await db.query(
-      `update core.owner_notifications set state = 'held', due_at = $2, updated_at = $1
-        where urgency = 'now' and due_at <= $1 and acted_at is null and kind not in ('approval', 'question')
-          and ((state = 'shown' and seen_at is null) or state = 'held')`,
-      [now, quiet],
-    );
-  }
+  const settled = await settleFocus(db, settings, timezone, now);
+  outcome.focusEnded = settled.told;
+  outcome.failed += settled.failed;
 
+  // A row held by a focus waits for `settleFocus`, never for its own `due_at`.
   const { rows: claimed } = await db.query(
     `update core.owner_notifications set state = 'sending', updated_at = $1
       where urgency = 'now' and due_at <= $1 and acted_at is null
-        and ((state = 'shown' and seen_at is null) or state = 'held')
+        and ((state = 'shown' and seen_at is null) or (state = 'held' and held_for is null))
       returning ${NOTIFICATION_COLUMNS}`,
     [now],
   );
@@ -402,4 +396,116 @@ export async function notificationsTick(db: Queryable, deps: NotifyDeps, now: Da
     }
   }
   return outcome;
+}
+
+/**
+ * Keep held rows in step with the focus in force, and say what waited when
+ * it ends.
+ *
+ * While a focus is on, a `now` row of a kind it holds that falls due on the
+ * dashboard unseen is held too, and every row it holds is dated to its end
+ * (a longer or shorter focus moves them all). Rows held by a focus that no
+ * longer holds them (it ended, was turned off, or became Urgent only) go out
+ * as one message on the owner's channel, "While you were in Do not disturb:
+ * 4 things.", one line each, and are marked sent in it; nothing held,
+ * nothing said. Rows the owner already dealt with are left out.
+ */
+export async function settleFocus(
+  db: Queryable,
+  settings: NotificationSettings,
+  timezone: string,
+  now: Date,
+): Promise<{ told: number; failed: number }> {
+  const focus = activeFocus(settings, now, timezone);
+  const holding = focus ? heldKinds(focus.mode) : [];
+  if (focus && holding.length > 0) {
+    await db.query(
+      `update core.owner_notifications set state = 'held', due_at = $2, held_for = $3, updated_at = $1
+        where urgency = 'now' and acted_at is null and kind = any($4::text[])
+          and ((state = 'shown' and seen_at is null and due_at <= $1) or (state = 'held' and held_for is not null))`,
+      [now, focus.until, focus.mode, holding],
+    );
+  }
+  await db.query(
+    `update core.owner_notifications set state = 'stored', updated_at = $1
+      where state = 'held' and held_for is not null and acted_at is not null and not (kind = any($2::text[]))`,
+    [now, holding],
+  );
+  const { rows: claimed } = await db.query(
+    `update core.owner_notifications set state = 'sending', updated_at = $1
+      where state = 'held' and held_for is not null and acted_at is null and not (kind = any($2::text[]))
+      returning ${NOTIFICATION_COLUMNS}`,
+    [now, holding],
+  );
+  if (claimed.length === 0) return { told: 0, failed: 0 };
+  const rows = claimed.map(toNotification).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const mode: FocusMode = rows.some((r) => r.heldFor === 'do-not-disturb') ? 'do-not-disturb' : 'urgent-only';
+  const message: DeliverableMessage = {
+    id: `focus:${now.toISOString()}`,
+    kind: 'recap',
+    urgency: 'now',
+    title: focusSummaryTitle(mode, rows.length),
+    text: rows.map((r) => `- ${r.agentId ?? r.pluginId ?? 'buddi'}: ${r.title}`).join('\n'),
+    parts: rows.map(toDeliverable),
+  };
+  const kind = await channelFor(settings);
+  const answer = kind === null || kind === 'off' ? { ok: false as const, error: 'no channel' } : await deliverTo(kind, message);
+  const ids = rows.map((r) => r.id);
+  if (answer.ok) {
+    await db.query(
+      `update core.owner_notifications set state = 'sent', channel = $2, sent_at = $3, error = null, updated_at = $3
+        where id = any($1::uuid[]) and state = 'sending'`,
+      [ids, kind, now],
+    );
+    return { told: rows.length, failed: 0 };
+  }
+  await db.query(
+    `update core.owner_notifications set state = 'failed', channel = $2, error = $3, updated_at = $4
+      where id = any($1::uuid[]) and state = 'sending'`,
+    [ids, kind === 'off' ? null : kind, answer.error, now],
+  );
+  return { told: 0, failed: rows.length };
+}
+
+/** "While you were in Do not disturb: 4 things." */
+export function focusSummaryTitle(mode: FocusMode, count: number): string {
+  return `While you were in ${FOCUS_LABELS[mode]}: ${count} ${count === 1 ? 'thing' : 'things'}.`;
+}
+
+/** The focus in force now, for the owner menu and /focus; null when none is. */
+export async function readFocusState(db: Queryable, deps: NotifyDeps = {}): Promise<FocusState | null> {
+  const now = deps.now?.() ?? new Date();
+  return activeFocus(await readNotificationSettings(db), now, await ownerTimezone(db, deps));
+}
+
+/**
+ * Switch the manual focus: a mode for a duration (`1h`, `3h`, `tomorrow`,
+ * `indefinite`), or `normal` to turn it off. Turning off while a schedule is
+ * on keeps it off until that schedule ends: a manual choice wins while it
+ * lasts. Held rows are settled at once, so turning off says what waited now,
+ * not at the next tick. Throws for a mode or duration that is not one.
+ */
+export async function setFocus(
+  db: Queryable,
+  deps: NotifyDeps,
+  input: { mode: FocusMode; duration?: FocusDuration; by: FocusSetting['by'] },
+): Promise<FocusState | null> {
+  const now = deps.now?.() ?? new Date();
+  const timezone = await ownerTimezone(db, deps);
+  const settings = await readNotificationSettings(db);
+  let focus: FocusSetting | null;
+  if (input.mode === 'normal') {
+    const scheduled = scheduledFocus(settings.schedules, now, timezone);
+    focus = scheduled ? { mode: 'normal', until: scheduled.until, startedAt: now.toISOString(), by: input.by } : null;
+  } else if (input.mode === 'urgent-only' || input.mode === 'do-not-disturb') {
+    const end = focusEnd(input.duration ?? 'indefinite', now, timezone);
+    if (end === undefined) throw new Error(`"${String(input.duration)}" is not a duration (1h, 3h, tomorrow or indefinite)`);
+    focus = { mode: input.mode, until: end?.toISOString() ?? null, startedAt: now.toISOString(), by: input.by };
+  } else {
+    throw new Error(`"${String(input.mode)}" is not a focus mode`);
+  }
+  await writeFocus(db, focus);
+  const next = { ...settings, focus };
+  await settleFocus(db, next, timezone, now);
+  return activeFocus(next, now, timezone);
 }

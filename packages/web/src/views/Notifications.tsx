@@ -2,7 +2,7 @@
  * Settings → Notifications (docs/notifications.md).
  *
  * Where buddi reaches you when you are not looking, which kinds go where,
- * the hours it keeps quiet, and the last twenty things it told you. The first
+ * the focus schedules, and the last twenty things it told you. The first
  * three save together; the list below is the record, read only.
  *
  * Above them, Telegram itself: the bot, the phones paired with it, and
@@ -13,6 +13,8 @@ import {
   ApiError,
   NOTIFICATION_KINDS,
   api,
+  WEEKDAYS,
+  type FocusSchedule,
   type NotificationChannel,
   type NotificationKind,
   type NotificationRow,
@@ -128,24 +130,21 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
             ) : null}
           </Section>
 
-          <Section title="Quiet hours">
+          <Section title="Focus schedules">
             {settings ? (
               <Stack gap="sm">
+                <ScheduleEditor schedules={settings.schedules} onChange={(schedules) => change({ schedules })} />
+                <p className="ui-field-hint">
+                  Do not disturb holds everything but approvals and questions; Urgent only also lets watchers and
+                  failures through. What waited comes in one message when the focus ends. Switch a focus by hand from
+                  your initial at the foot of the rail, or /focus on Telegram. Times are on your clock ({timezone}).
+                </p>
                 <div className="nt-times">
-                  <Field label="From">
-                    <input type="time" value={settings.quietStart ?? ''} onChange={(e) => change({ quietStart: e.target.value || null })} />
-                  </Field>
-                  <Field label="Until">
-                    <input type="time" value={settings.quietEnd ?? ''} onChange={(e) => change({ quietEnd: e.target.value || null })} />
-                  </Field>
                   <Field label="End of the day">
                     <input type="time" value={settings.endOfDay} onChange={(e) => change({ endOfDay: e.target.value })} />
                   </Field>
                 </div>
-                <p className="ui-field-hint">
-                  Messages wait until quiet hours end. Approvals and questions still come through. At the end of the day,
-                  what could wait goes out as one message. Times are on your clock ({timezone}).
-                </p>
+                <p className="ui-field-hint">At the end of the day, what could wait goes out as one message.</p>
               </Stack>
             ) : null}
           </Section>
@@ -463,4 +462,75 @@ function RowState({ row }: { row: NotificationRow }): JSX.Element {
   if (row.state === 'stored') return <span className="nt-state">Kept</span>;
   if (row.state === 'sent') return <span className="nt-state">Sent</span>;
   return <span className="nt-state">Not seen</span>;
+}
+
+const DAY_LABELS: Record<(typeof WEEKDAYS)[number], string> = {
+  mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun',
+};
+
+/** A new row: Do not disturb every night, 22:00 to 07:00. */
+const NEW_SCHEDULE: FocusSchedule = { mode: 'do-not-disturb', days: [...WEEKDAYS], from: '22:00', to: '07:00' };
+
+/**
+ * The focus schedules: one row each, the mode, the days as chips, from and
+ * to. Saved with the rest of the page.
+ */
+export function ScheduleEditor({
+  schedules,
+  onChange,
+}: {
+  schedules: FocusSchedule[];
+  onChange: (schedules: FocusSchedule[]) => void;
+}): JSX.Element {
+  const edit = (i: number, patch: Partial<FocusSchedule>): void =>
+    onChange(schedules.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  return (
+    <Stack gap="sm">
+      {schedules.length === 0 ? <p className="ui-card-meta">No schedule: a focus is on only when you switch one on.</p> : null}
+      {schedules.map((schedule, i) => {
+        const n = i + 1;
+        return (
+          <div key={i} className="nt-schedule" role="group" aria-label={`Schedule ${n}`}>
+            <select
+              aria-label={`Schedule ${n} mode`}
+              value={schedule.mode}
+              onChange={(e) => edit(i, { mode: e.target.value as FocusSchedule['mode'] })}
+            >
+              <option value="do-not-disturb">Do not disturb</option>
+              <option value="urgent-only">Urgent only</option>
+            </select>
+            <span className="nt-days">
+              {WEEKDAYS.map((day) => {
+                const on = schedule.days.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    className="nt-day"
+                    aria-pressed={on}
+                    aria-label={`Schedule ${n} ${DAY_LABELS[day]}`}
+                    onClick={() => edit(i, { days: on ? schedule.days.filter((d) => d !== day) : WEEKDAYS.filter((d) => d === day || schedule.days.includes(d)) })}
+                  >
+                    {DAY_LABELS[day]}
+                  </button>
+                );
+              })}
+            </span>
+            <Field label="From">
+              <input type="time" aria-label={`Schedule ${n} from`} value={schedule.from} onChange={(e) => edit(i, { from: e.target.value })} />
+            </Field>
+            <Field label="To">
+              <input type="time" aria-label={`Schedule ${n} to`} value={schedule.to} onChange={(e) => edit(i, { to: e.target.value })} />
+            </Field>
+            <Button size="sm" variant="ghost" aria-label={`Remove schedule ${n}`} onClick={() => onChange(schedules.filter((_, j) => j !== i))}>
+              Remove
+            </Button>
+          </div>
+        );
+      })}
+      <div className="nt-schedule-add">
+        <Button size="sm" onClick={() => onChange([...schedules, { ...NEW_SCHEDULE, days: [...NEW_SCHEDULE.days] }])}>Add a schedule</Button>
+      </div>
+    </Stack>
+  );
 }

@@ -167,6 +167,21 @@ main[data-ground='plain'] { background: var(--bg); }
 .rail-owner-name { font-family: var(--font-display); font-size: var(--text-base); font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-owner-sub { font-size: var(--text-xs); color: var(--text-muted); }
 .rail-owner-theme { padding: 0 6px 6px; }
+/* A focus is on: a small crescent on the owner's initial, quiet like the dot. */
+.rail-focus {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  box-shadow: 0 0 0 1px var(--line);
+}
 .rail-owner-theme .ui-segment { display: flex; }
 .rail-owner-theme .ui-tab { flex: 1 1 0; justify-content: center; }
 
@@ -3644,6 +3659,20 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .nt-channel-sent[data-tone='critical'] { color: var(--critical); }
 .nt-kind select { min-width: 12em; }
 .nt-times { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end; }
+.nt-schedule { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: flex-end; padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
+.nt-schedule-add { display: flex; justify-content: flex-end; }
+.nt-days { display: inline-flex; gap: var(--space-1); flex-wrap: wrap; }
+.nt-day {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.nt-day[aria-pressed='true'] { border-color: color-mix(in oklab, var(--accent) 30%, var(--line)); background: var(--accent-soft); color: var(--accent); font-weight: var(--weight-medium); }
 .nt-state[data-tone='critical'] { color: var(--critical); }
 
 /* Settings → Connections: the service cards, a row that wraps. */

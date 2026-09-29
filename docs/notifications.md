@@ -1,7 +1,7 @@
 ---
 title: "Notifications"
 status: reference
-updated: 2026-09-27
+updated: 2026-09-28
 ---
 
 # Notifications
@@ -43,8 +43,9 @@ A mission that decides to stay silent sends nothing and writes nothing here.
   profile, else `BUDDI_TZ`). Everything held for the day goes out as one
   message: "Today, 3 things:", then one line each with the agent's name.
   Anything you already dealt with is left out.
-- **Quiet hours** hold `now` messages until they end, except approvals and
-  questions: you asked for those by starting the run.
+- **A focus** holds some `now` messages until it ends ("Focus", below).
+  Approvals and questions always pass: you asked for those by starting the
+  run.
 - **The same thing again.** A message with the same key as one not yet sent
   replaces it rather than adding a second. The same key more than three
   times in an hour waits for the end-of-day message, and says so once.
@@ -80,8 +81,47 @@ or sent. Where you are is never sent anywhere.
   not listed twice. The greeting counts them.
 - **Settings → Notifications**: the default channel with a "Send a test"
   button for each, a channel or Off per kind (approvals and questions cannot
-  be off), quiet hours and the end of the day, and the last twenty messages
-  with where each went and whether you saw it.
+  be off), the focus schedules and the end of the day, and the last twenty
+  messages with where each went and whether you saw it.
+- **The owner menu** at the foot of the rail: Focus (below), and a small
+  moon on your initial while one is on.
+
+## Focus
+
+Like a phone's Focus: for a while, only what matters reaches you.
+
+| Mode | What goes out | What waits for the end of the focus |
+| --- | --- | --- |
+| Normal | Everything, as above. | Nothing. |
+| Urgent only | Approvals, questions, and `now` watchers and failures. | Every other `now` message. |
+| Do not disturb | Approvals and questions. | Every other `now` message. |
+
+`today` and `digest` messages are the same in every mode. Approvals and
+questions always pass. A focus does not change where you are counted as
+present: a message still shows on the dashboard while you are there, and one
+you have not seen after ten minutes waits for the end of the focus instead of
+going to your channel. Waiting is the row's `held` state, with `due_at` the
+end of the focus (none for one that lasts until you turn it off).
+
+- **By hand.** Your initial at the foot of the rail, then Focus: Do not
+  disturb or Urgent only, for 1 hour, for 3 hours, until tomorrow morning
+  (the next 08:00 on your clock) or until you turn it off. The menu says what
+  is on and until when, and has Turn off. On Telegram, `/focus`
+  ([telegram.md](telegram.md)).
+- **On a schedule.** Settings → Notifications, Focus schedules: rows of a
+  mode, the days, from and to on your clock. A night that runs past midnight
+  belongs to the day it starts. When two are on, Do not disturb wins. Quiet
+  hours set before focus modes became the first schedule: Do not disturb on
+  every day, the same hours.
+- **By hand wins.** A focus you switch on wins over a schedule while it
+  lasts. Turning off while a schedule is on keeps it off until that schedule
+  ends.
+- **When it ends** (its time runs out, its schedule ends, or you turn it off),
+  one message on your channel: "While you were in Do not disturb: 4 things.",
+  then one line each with the agent's name and the title. The rows are marked
+  sent in that message, not sent one by one. Anything you already dealt with
+  is left out; nothing waited, nothing is said. The dashboard lists them as
+  usual.
 
 ## Settings
 
@@ -92,7 +132,8 @@ is a complete answer.
 | --- | --- | --- |
 | Default channel | Telegram, else the system notification, else the first there is | Where messages go. |
 | Per kind | the default channel | A channel, or `off`: kept for the record, never sent. Approvals and questions cannot be off. |
-| Quiet hours | none | Start and end on your clock, like `22:00` and `07:00`. |
+| Focus schedules | none | `{ mode, days, from, to }`: `do-not-disturb` or `urgent-only`, days `mon`…`sun`, times on your clock. |
+| Focus | off | The one you switched on by hand: `{ mode, until, startedAt, by }`, `by` being `dashboard`, `telegram` or `schedule`. Set only through its own endpoint and `/focus`, never by saving the page. |
 | End of day | `18:00` | When the day's held items go out. |
 
 ## Telegram
@@ -152,14 +193,15 @@ answers `{ id }`, `'refused'` or `{ refused: reason }`, or throws.
 `core.owner_notifications` has one row per message: `kind`, `urgency`,
 `title`, `text`, `link` (a dashboard route), `offers`, `dedupe_key`,
 `agent_id`, `plugin_id`, `action_id` (an approval's action), `topic`,
-`also_from` (the other agents folded into it), `state`,
+`also_from` (the other agents folded into it), `held_for` (the focus mode
+that held it), `state`,
 `due_at`, `channel`, `created_at`, `sent_at`, `seen_at`, `acted_at`,
 `error`.
 
 | State | Means |
 | --- | --- |
 | `shown` | Kept for the dashboard; `due_at` is when it goes to the channel if unseen. |
-| `held` | Waiting for `due_at`: the end of the day, or the end of quiet hours. |
+| `held` | Waiting for `due_at`: the end of the day, or the end of a focus (`held_for` names its mode). |
 | `stored` | Kept for the record, never sent. |
 | `sending` | One delivery has it. |
 | `sent` | A channel took it; `channel` says which. |
@@ -183,6 +225,7 @@ notifyOwner(pool, { now?, timezone? }, {
   kind, urgency, title, text?, link?: { route }, offers?, dedupeKey?, agentId?,
 }): Promise<{ id, state, channel, error, deduped, lowered }>
 notificationsTick(pool, deps, now)   // the gateway runs it every 60 s
+setFocus(pool, deps, { mode, duration?, by }), readFocusState(pool, deps)
 markSeen(pool, id), markActed(pool, id), listNotifications(pool, { limit })
 listDigestNotifications(pool, since)
 presenceTouch(pool, surface, now, 'active' | 'away'), ownerPresent(pool, now)
@@ -202,6 +245,8 @@ The dashboard's endpoints:
 | `POST /api/notifications/:id/seen` | `{ ok: true }`, or 404. |
 | `GET /api/notifications/settings` | `{ settings, channels }`. |
 | `PUT /api/notifications/settings` | The whole value replaced; 400 with a sentence when it cannot be. |
+| `GET /api/notifications/focus` | `{ focus }`: `{ mode, until, startedAt, by }` in force now, manual or scheduled, or null. |
+| `PUT /api/notifications/focus` `{ mode, duration? }` | `{ focus }` after the switch. `mode` is `do-not-disturb`, `urgent-only`, or `normal` to turn it off; `duration` is `1h`, `3h`, `tomorrow` or `indefinite` (the default). 400 with a sentence otherwise. |
 | `POST /api/notifications/test` `{ channel }` | `{ ok: true }` once that channel took one line; 404 for a channel that is not there, 502 with a sentence when it refused. Not recorded. |
 | `GET /api/telegram/bot` | `{ configured, running, username }`. The running bot's name, else Telegram is asked; null when it does not answer. |
 | `GET /api/telegram/devices` | `{ devices: [{ id, name, userId, pairedAt, lastSeenAt }] }`, the paired Telegram phones, oldest first. |

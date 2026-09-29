@@ -101,6 +101,7 @@ export const OWNER_COMMANDS: readonly TelegramBotCommand[] = [
   { command: 'recap', description: 'Run the weekly recap now' },
   { command: 'reminders', description: 'What the agents put on the clock' },
   { command: 'quiet', description: 'Stop proactive messages for a while' },
+  { command: 'focus', description: 'Do not disturb or Urgent only: 1h, 3h, until tomorrow, off' },
   { command: 'approvals', description: 'Anything waiting for your approval' },
   { command: 'missions', description: 'The next five scheduled missions' },
   { command: 'goals', description: 'Your goals and where they stand' },

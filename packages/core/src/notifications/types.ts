@@ -62,6 +62,8 @@ export interface OwnerNotification {
   topic: string | null;
   /** Other agents that said the same thing and were folded into this row. */
   alsoFrom: string[];
+  /** The focus mode that held it for the end of the focus; null otherwise. */
+  heldFor: string | null;
   createdAt: string;
   sentAt: string | null;
   seenAt: string | null;
@@ -120,11 +122,58 @@ export interface NotificationSettings {
   defaultChannel: string | null;
   /** kind → a channel kind, or `off`. Approvals and questions are never off. */
   perKind: Partial<Record<NotificationKind, string>>;
-  /** `HH:MM`, the owner's clock; both or neither. */
-  quietStart: string | null;
-  quietEnd: string | null;
+  /** When a focus turns itself on; the first one is what quiet hours were. */
+  schedules: FocusSchedule[];
   /** `HH:MM`; when the day's held items go out. */
   endOfDay: string;
+  /** The manual focus the owner switched on, or null. Written only by `setFocus`. */
+  focus: FocusSetting | null;
+}
+
+/** What the Settings page saves: everything but the manual focus, which has its own switch. */
+export type NotificationPreferences = Omit<NotificationSettings, 'focus'>;
+
+/**
+ * Focus modes, like a phone's (docs/notifications.md, "Focus").
+ *
+ *   normal          what is routed is sent
+ *   urgent-only     approvals, questions, and `now` watchers and failures go
+ *                   out; every other `now` waits for the end of the focus
+ *   do-not-disturb  only approvals and questions go out
+ *
+ * `today` and `digest` are the same in every mode.
+ */
+export const FOCUS_MODES = ['normal', 'urgent-only', 'do-not-disturb'] as const;
+export type FocusMode = (typeof FOCUS_MODES)[number];
+
+export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** A focus that turns itself on: `from` to `to` on the owner's clock, starting on each of `days`. */
+export interface FocusSchedule {
+  mode: Exclude<FocusMode, 'normal'>;
+  days: Weekday[];
+  /** `HH:MM`; a `to` before `from` runs past midnight into the next day. */
+  from: string;
+  to: string;
+}
+
+/** The manual focus, as stored. */
+export interface FocusSetting {
+  mode: FocusMode;
+  /** ISO; null until the owner turns it off. */
+  until: string | null;
+  startedAt: string;
+  by: 'dashboard' | 'telegram' | 'schedule';
+}
+
+/** The focus in force now, manual or scheduled; what the owner menu and /focus show. */
+export interface FocusState {
+  mode: Exclude<FocusMode, 'normal'>;
+  /** ISO; null when it lasts until turned off. */
+  until: string | null;
+  startedAt: string | null;
+  by: FocusSetting['by'];
 }
 
 /** What one call did. */

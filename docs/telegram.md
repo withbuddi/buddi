@@ -46,7 +46,7 @@ gives you. Then pair your phone in any of three places:
   file) wait for the end of your day, then arrive as cards with Keep and
   Discard.
 - **Notifications.** Reminders, reports, what a watcher found, and the
-  end-of-day message, following your quiet hours and choices on Settings →
+  end-of-day message, following your focus and choices on Settings →
   Notifications (see [Notifications](notifications.md)).
 
 ## What you can send
@@ -76,6 +76,7 @@ gives you. Then pair your phone in any of three places:
 | `/reminders` | What the agents have put on the clock, with a button to cancel one. |
 | `/approvals` | Anything waiting for your approval. |
 | `/quiet [1d\|1w\|off]` | Stops proactive messages for a while (7 days by default). |
+| `/focus [dnd\|urgent] [1h\|3h\|until tomorrow\|until off]` | Switches a focus for notifications: `dnd` is Do not disturb, `urgent` is Urgent only; `1h`, `3h` (any number of hours up to 24), `until tomorrow` (08:00 on your clock) or `until off`, the default. `/focus off` turns it off, and whatever waited arrives as one message. `/focus` alone says what is on and until when, and the words it takes ([Notifications](notifications.md), "Focus"). |
 | `/files` | The last files you sent. |
 | `/where` | The dashboard address when your phone can reach it; otherwise says it is on this computer only. |
 | `/browser` | Where the screen stands; `stop`, `resume` or `release` it. |

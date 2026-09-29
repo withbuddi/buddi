@@ -39,6 +39,8 @@ import {
   TELEGRAM_SURFACE,
   touchSurfaceIdentity,
   presenceTouch,
+  readFocusState,
+  setFocus,
   type Offer,
   type Question,
   type Queryable,
@@ -77,6 +79,7 @@ import {
 } from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 import { whereText } from './commands.js';
+import { focusSetText, focusStatusText, FOCUS_USAGE_TEXT, parseFocusArg } from './focus.js';
 import {
   BURST_GAP_MS,
   StreamedAnswer,
@@ -231,6 +234,7 @@ export const HELP = [
   '/files — the last files you sent me',
   '/reminders — what the agents have put on the clock, with a button to cancel one',
   '/quiet [1d|1w|off] — stop proactive messages for a while (7 days by default)',
+  '/focus [dnd|urgent] [1h|3h|until tomorrow|until off] — hold notifications for a while; /focus off ends it',
   '/approvals — anything waiting for your approval',
   '/missions — the next five scheduled missions',
   '/goals — each goal with its number and where it stands',
@@ -1768,6 +1772,10 @@ export class TelegramSurface {
       await this.handleVoice(chatId, text.slice(command.length));
       return;
     }
+    if (command === '/focus') {
+      await this.handleFocus(chatId, text.slice(command.length));
+      return;
+    }
     // `/quiet 1w` — the argument is everything after the command word, so
     // `/quiet` alone parses as the default. The surface never reads a duration.
     if (command === '/quiet') {
@@ -2841,6 +2849,24 @@ export class TelegramSurface {
    * when, `/voice voice|both|text` what. Written to the chat's row and to the
    * speech plugin's copy, so Settings → Speech shows the same.
    */
+  /** `/focus`: alone, what is on and the words it takes; with words, switch it (telegram/focus.ts). */
+  async handleFocus(chatId: string, arg: string): Promise<void> {
+    const api = this.#opts.api;
+    const timezone = this.#opts.timezone ?? DEFAULT_TIMEZONE;
+    const deps = { timezone };
+    const parsed = parseFocusArg(arg);
+    if (!parsed) {
+      await api.sendMessage(chatId, FOCUS_USAGE_TEXT);
+      return;
+    }
+    if (parsed.kind === 'status') {
+      await api.sendMessage(chatId, focusStatusText(await readFocusState(this.#opts.pool, deps), timezone));
+      return;
+    }
+    const focus = await setFocus(this.#opts.pool, deps, { mode: parsed.mode, duration: parsed.duration, by: 'telegram' });
+    await api.sendMessage(chatId, focusSetText(focus, timezone));
+  }
+
   async handleVoice(chatId: string, arg: string): Promise<void> {
     const api = this.#opts.api;
     const current = await this.#chatVoice(chatId);

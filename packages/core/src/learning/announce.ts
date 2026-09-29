@@ -3,7 +3,7 @@
  *
  * A proposal waits on Settings → Proposals, where an owner who never goes
  * there never meets it. So each new one is also a notification: kind
- * `plugin`, urgency `today`, which means it keeps quiet hours and arrives
+ * `plugin`, urgency `today`, which means it arrives
  * with the end-of-day message rather than the moment an agent thought of it.
  * A channel that draws cards (Telegram) draws this one with Keep and Discard,
  * found by its dedupe key, `proposal:<id>`.

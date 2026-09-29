@@ -1,6 +1,6 @@
 /**
  * Settings → Notifications: the channels with a test each, a select per
- * kind, quiet hours, one save, and the last twenty.
+ * kind, the focus schedules, one save, and the last twenty.
  */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
@@ -30,7 +30,7 @@ vi.mock('../api', async (importOriginal) => {
 });
 
 const VIEW: NotificationSettingsView = {
-  settings: { defaultChannel: null, perKind: {}, quietStart: null, quietEnd: null, endOfDay: '18:00' },
+  settings: { defaultChannel: null, perKind: {}, schedules: [], endOfDay: '18:00' },
   channels: [{ kind: 'telegram.chat', label: 'Telegram', where: '@buddi_bot', can: { offers: true, attachments: false, markdown: false } }],
 };
 
@@ -75,7 +75,7 @@ describe('Settings → Notifications', () => {
     const approvals = screen.getByRole('combobox', { name: 'Approvals' });
     expect(within(approvals).queryByRole('option', { name: 'Off' })).toBeNull();
     expect(within(screen.getByRole('combobox', { name: 'Watchers' })).getByRole('option', { name: 'Off' })).toBeInTheDocument();
-    expect(screen.getByText('Approvals and questions still come through.', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('Do not disturb holds everything but approvals and questions', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('Failed: no channel')).toBeInTheDocument();
     expect(screen.getByText(/failures · dashboard/)).toBeInTheDocument();
     expect(screen.getByText(/watchers · Telegram/)).toBeInTheDocument();
@@ -84,22 +84,43 @@ describe('Settings → Notifications', () => {
   it('saves the whole value and says so', async () => {
     await page();
     fireEvent.change(screen.getByRole('combobox', { name: 'Watchers' }), { target: { value: 'off' } });
-    fireEvent.change(screen.getByLabelText('From'), { target: { value: '22:00' } });
-    fireEvent.change(screen.getByLabelText('Until'), { target: { value: '07:00' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
     expect(api.saveNotificationSettings).toHaveBeenCalledWith({
-      defaultChannel: null, perKind: { watcher: 'off' }, quietStart: '22:00', quietEnd: '07:00', endOfDay: '18:00',
+      defaultChannel: null, perKind: { watcher: 'off' }, schedules: [], endOfDay: '18:00',
     });
     expect(screen.getByText('Saved.')).toBeInTheDocument();
   });
 
   it('shows the sentence the server refuses with', async () => {
-    vi.mocked(api.saveNotificationSettings).mockRejectedValue(new ApiError(400, 'Quiet hours need both a start and an end.'));
+    vi.mocked(api.saveNotificationSettings).mockRejectedValue(new ApiError(400, 'Schedule 1 needs at least one day.'));
     await page();
-    fireEvent.change(screen.getByLabelText('From'), { target: { value: '22:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add a schedule' }));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
-    expect(screen.getByText('Quiet hours need both a start and an end.')).toBeInTheDocument();
+    expect(screen.getByText('Schedule 1 needs at least one day.')).toBeInTheDocument();
     expect(screen.queryByText('Saved.')).toBeNull();
+  });
+
+  it('edits the focus schedules: add, mode, days, times, remove', async () => {
+    vi.mocked(api.notificationSettings).mockResolvedValue({
+      ...VIEW,
+      settings: { ...VIEW.settings, schedules: [{ mode: 'do-not-disturb', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], from: '22:00', to: '07:00' }] },
+    });
+    await page();
+    expect(screen.getByLabelText('Schedule 1 from')).toHaveValue('22:00');
+    fireEvent.click(screen.getByRole('button', { name: 'Add a schedule' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Schedule 2 mode' }), { target: { value: 'urgent-only' } });
+    for (const day of ['Sat', 'Sun', 'Mon']) fireEvent.click(screen.getByRole('button', { name: `Schedule 2 ${day}` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule 2 Mon' }));
+    expect(screen.getByRole('button', { name: 'Schedule 2 Mon' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Schedule 2 Sat' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('Schedule 2 from'), { target: { value: '09:00' } });
+    fireEvent.change(screen.getByLabelText('Schedule 2 to'), { target: { value: '12:00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove schedule 1' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.saveNotificationSettings).toHaveBeenCalledWith({
+      defaultChannel: null, perKind: {}, endOfDay: '18:00',
+      schedules: [{ mode: 'urgent-only', days: ['mon', 'tue', 'wed', 'thu', 'fri'], from: '09:00', to: '12:00' }],
+    });
   });
 
   it('sends a test through a channel, and says when it did not go', async () => {
