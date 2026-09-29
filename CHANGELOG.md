@@ -18,6 +18,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Weather's Today view is one panel: the day's chart with its values written on it and the hourly strip below share one highlight when you hover or pick an hour.
 - `buddi plugins init` writes a plugin whose manifest version is read from its package.json (`src/version.ts`), so the installed card can no longer show a stale version.
 - `buddi speech install` downloads through an `http` area of its own, with the same address rules as the gateway, refusing any host the speech plugin does not declare.
 - Until 0.1.0, pre-releases are installed with plain `npm install -g @withbuddi/buddi`; the `next` tag is only meaningful after 0.1.0.

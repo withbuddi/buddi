@@ -1496,6 +1496,44 @@ describe('a forecast page: tabs with a pick, a hero, tiles and a two-kind chart'
   });
 });
 
+describe('a series panel', () => {
+  const page: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'day',
+    title: 'Day',
+    place: 'rail',
+    body: [
+      {
+        kind: 'series-panel',
+        title: 'Today',
+        query: { query: 'hours' },
+        points: 'hours',
+        x: 'time',
+        series: [
+          { id: 'temp', label: 'Temperature', y: 'temp', unit: 'temp', kind: 'area' },
+          { id: 'rain', label: 'Rain', y: 'chance', unit: 'percent', kind: 'bars' },
+        ],
+        tiles: { icon: { path: 'icon' }, value: 'value', label: 'time', lines: ['rain'] },
+      },
+    ],
+  };
+  const HOURS = [14, 16, 17, 15, 12, 11].map((temp, i) => ({ time: i === 0 ? 'Now' : `1${i}:00`, icon: 'cloud', value: `${temp}°`, rain: `Rain ${i * 10}%`, temp, chance: i * 10 }));
+
+  it('draws the chart and the strip from the same points, one panel, one mark', async () => {
+    vi.mocked(api.pageQuery).mockImplementation((() => Promise.resolve({ data: { hours: HOURS } })) as unknown as typeof api.pageQuery);
+    render(<PluginPage page={page} item={null} navigate={navigate} timezone="UTC" />);
+    const tiles = await screen.findAllByRole('button', { name: /°, Rain/ });
+    expect(tiles.map((t) => t.getAttribute('aria-label'))).toEqual(HOURS.map((h) => `${h.time}, ${h.value}, ${h.rain}`));
+    const panel = tiles[0]!.closest('.ui-panel')!;
+    expect(within(panel as HTMLElement).getByRole('heading', { name: 'Today' })).toBeInTheDocument();
+    const svg = within(panel as HTMLElement).getByTestId('series-svg');
+    expect([...svg.querySelectorAll('.pg-series-value')].map((t) => t.textContent)).toEqual(['14°', '15°']);
+    fireEvent.mouseEnter(svg.querySelector('.pg-series-hit[data-index="4"]')!);
+    expect(tiles[4]).toHaveAttribute('data-hover', 'true');
+    expect(svg.querySelector('.pg-series-dot[data-hover="true"]')).toHaveAttribute('data-index', '4');
+  });
+});
+
 describe('a form three to a row', () => {
   it('passes `columns` to the grid, and leaves the default grid alone', async () => {
     vi.mocked(api.pageQuery).mockImplementation(((_plugin: string, query: string) =>

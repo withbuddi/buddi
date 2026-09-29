@@ -3750,6 +3750,30 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .pg-tabs { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .pg-tabs-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
 .pg-tabs-bar > :only-child { margin-left: auto; }
+/* A day in one panel (kit: WxSeries): tabs, the chart with its values written on it, the strip below; one highlight. */
+.pg-series { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.pg-series-tabs { display: flex; gap: var(--space-1); margin-top: calc(var(--space-2) * -1); }
+.pg-series-tabs .ui-tab { padding: var(--space-1) var(--space-2); margin: 0; font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.pg-series-tabs .ui-tab[aria-selected='true'] { color: var(--text); border-bottom-color: var(--accent); }
+.pg-series-tabs .ui-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--space-0); }
+.pg-series-chart { margin: 0; min-width: 0; }
+.pg-series-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.pg-series-chart text { font-variant-numeric: tabular-nums; }
+.pg-series-grid { stroke: var(--chart-grid); }
+.pg-series-tick, .pg-series-x { fill: var(--text-muted); font-size: var(--text-xs); }
+.pg-series-area { fill: var(--chart-line); fill-opacity: 0.1; stroke: none; }
+.pg-series-line { fill: none; stroke: var(--chart-line); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.pg-series-bar { fill: var(--chart-bar); opacity: 0.55; }
+.pg-series-bar[data-hover='true'] { opacity: 1; }
+.pg-series-dot { fill: var(--chart-point); stroke: var(--surface); stroke-width: 2; }
+.pg-series-guide { stroke: var(--chart-axis); stroke-dasharray: 3 3; }
+.pg-series-value { fill: var(--text); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.pg-series-value[data-hover='true'] { font-weight: var(--weight-bold); }
+.pg-series-hit { fill: transparent; cursor: pointer; }
+.pg-series .wb-tiles[data-layout='strip'] { gap: var(--space-1); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.pg-series .wb-tile > .ui-card { border-color: transparent; background: transparent; cursor: pointer; transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease; }
+.pg-series .wb-tile > .ui-card[data-hover='true'] { border-color: var(--accent); background: var(--accent-soft); }
+.pg-series .wb-tile > .ui-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: var(--space-0); }
 
 /* ---- Home: the glances on the date line ---- */
 .home-date { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--space-2); row-gap: var(--space-0); }

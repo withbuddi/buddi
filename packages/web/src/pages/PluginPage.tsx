@@ -66,6 +66,7 @@ import { ApprovalCard, useDecide } from '../views/parts/ApprovalCard';
 import { messageOf, playOf, playSound, stopSound, usePlaying } from './play';
 import { todayIn, toEvents } from './calendar';
 import { CalendarView, useCalendarState } from './CalendarPiece';
+import { SeriesPanel } from './SeriesPanel';
 import type {
   ArgRef,
   ColumnMap,
@@ -1084,6 +1085,8 @@ function Piece({
       return <CalendarPiece component={component} data={data} />;
     case 'tiles':
       return <TilesPiece component={component} data={data} />;
+    case 'series-panel':
+      return <SeriesPanelPiece component={component} data={data} />;
     case 'hero':
       return <HeroPiece component={component} data={data} />;
     case 'tabs':
@@ -2221,6 +2224,56 @@ function TilesPiece({ component, data }: { component: Of<'tiles'>; data: unknown
         />
       )}
     </PieceSection>
+  );
+}
+
+/**
+ * A day in one panel: the chart of its series and the strip of its hours,
+ * both drawn from the same points, so a point and its tile share an index —
+ * a point that draws no tile still keeps its place in the strip.
+ */
+function SeriesPanelPiece({ component, data }: { component: Of<'series-panel'>; data: unknown }): JSX.Element {
+  const query = usePageQuery(component.query, data);
+  const points = rowsOf(query.data, component.points);
+  if (query.data === undefined || points.length === 0) {
+    return (
+      <PieceSection title={component.title} note={component.note}>
+        <ErrorBanner message={query.error} />
+        {query.data === undefined ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing to show.'} />}
+      </PieceSection>
+    );
+  }
+  const xs = points.map((point) => String(readPath(point, component.x) ?? ''));
+  const map = {
+    items: '$',
+    icon: component.tiles.icon,
+    value: component.tiles.value,
+    label: component.tiles.label,
+    ...(component.tiles.lines ? { lines: component.tiles.lines } : {}),
+  };
+  const tiles = points.map(
+    (point, index) =>
+      resolveTiles([point], map).tiles[0] ?? { icon: null, value: '', label: xs[index] ?? '', lines: [], tone: 'neutral' as const, link: null },
+  );
+  const series = component.series.map((s) => ({
+    id: s.id,
+    label: s.label,
+    kind: s.kind,
+    ...(s.unit ? { unit: s.unit } : {}),
+    values: points.map((point) => asNumber(readPath(point, s.y)) ?? null),
+  }));
+  return (
+    <>
+      <ErrorBanner message={query.error} />
+      <SeriesPanel
+        {...(component.title ? { title: component.title } : {})}
+        {...(component.note ? { note: component.note } : {})}
+        {...(component.labelEvery ? { labelEvery: component.labelEvery } : {})}
+        xs={xs}
+        series={series}
+        tiles={tiles}
+      />
+    </>
   );
 }
 

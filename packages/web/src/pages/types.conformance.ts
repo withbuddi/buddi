@@ -45,6 +45,8 @@ import type {
   RowAction as CoreRowAction,
   SectionAction as CoreSectionAction,
   Selection as CoreSelection,
+  SeriesPanelSeries as CoreSeriesPanelSeries,
+  SeriesPanelTiles as CoreSeriesPanelTiles,
   TabsPick as CoreTabsPick,
   TilesLayout as CoreTilesLayout,
   ToolRef as CoreToolRef,
@@ -76,6 +78,9 @@ import type {
   RowAction,
   SectionAction,
   Selection,
+  SeriesPanelComponent,
+  SeriesPanelSeries,
+  SeriesPanelTiles,
   TabsPick,
   TilesComponent,
   TilesLayout,
@@ -140,6 +145,10 @@ interface Conformance {
   /** The web's `TilesComponent` is core's tiles arm, named for its renderer. */
   tilesComponent: Exact<Extract<CoreComponent, { kind: 'tiles' }>, TilesComponent>;
   tilesLayout: Same<CoreTilesLayout, TilesLayout>;
+  /** The web's `SeriesPanelComponent` is core's series-panel arm. */
+  seriesPanelComponent: Exact<Extract<CoreComponent, { kind: 'series-panel' }>, SeriesPanelComponent>;
+  seriesPanelSeries: Exact<CoreSeriesPanelSeries, SeriesPanelSeries>;
+  seriesPanelTiles: Exact<CoreSeriesPanelTiles, SeriesPanelTiles>;
   chartSeries: Exact<CoreChartSeries, ChartSeries>;
   pageTab: Exact<CorePageTab, PageTab>;
   tabsPick: Exact<CoreTabsPick, TabsPick>;
@@ -178,6 +187,9 @@ export const CONTRACTS_AGREE: Conformance = {
   calendarComponent: true,
   tilesComponent: true,
   tilesLayout: true,
+  seriesPanelComponent: true,
+  seriesPanelSeries: true,
+  seriesPanelTiles: true,
   chartSeries: true,
   pageTab: true,
   tabsPick: true,
@@ -209,6 +221,7 @@ export const COMPONENTS_AGREE: ExactUnion<CoreComponent, Component> = {
   repeat: true,
   calendar: true,
   tiles: true,
+  'series-panel': true,
   hero: true,
   tabs: true,
   expand: true,
@@ -249,6 +262,8 @@ export const CHECKED_TYPES = [
   'PageTab',
   'TabsPick',
   'TilesLayout',
+  'SeriesPanelSeries',
+  'SeriesPanelTiles',
   'OptionsFrom',
   'Field',
   'FieldAction',
@@ -273,6 +288,7 @@ export const WEB_TYPES: Record<string, string> = {
   ListComponent: 'Component',
   CalendarComponent: 'Component',
   TilesComponent: 'Component',
+  SeriesPanelComponent: 'Component',
   PageActResult: 'the act route’s reply, which core does not declare',
   PluginWorkspaceFiles: 'WorkspaceFiles, plus the plugin the route carries',
 };

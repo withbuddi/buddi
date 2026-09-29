@@ -144,6 +144,8 @@ type Component =
   | { kind: 'calendar'; query: QueryRef; events: string; map: CalendarMap; views?: Array<'week' | 'month' | 'list'>; default?: 'week' | 'month' | 'list'; hours?: [number, number] }
   /** The canvas tiles on a page: one card per item; `layout` grid (wraps), row (shares the width) or strip (scrolls sideways); `select` writes the picked item's `key` into page parameter `param`. */
   | { kind: 'tiles'; query: QueryRef; items: string; icon: { path: string } | { const: TileIcon }; value: string; label: string; lines?: string[]; tone?: string; layout?: 'grid' | 'row' | 'strip'; select?: { param: string; key: string } }
+  /** A day in one panel: tabs across `series`, the chosen one an area (or bars) with its values written on it, over a strip of `tiles` drawn from the same `points`; one hover or pick marks both. */
+  | { kind: 'series-panel'; query: QueryRef; points: string; x: string; series: SeriesPanelSeries[]; tiles: { icon: { path: string } | { const: TileIcon }; value: string; label: string; lines?: string[] }; labelEvery?: number }
   /** Now, large: a glyph, a big value and its word, and labelled facts beside; every path read in the query's answer. */
   | { kind: 'hero'; query: QueryRef; icon: { path: string } | { const: TileIcon }; value: string; title: string; facts: Array<{ label: string; path: string }> }
   /** Two to six views behind a switch at the right of a bar, only the chosen one drawn; `pick` a second switch at its left, written into a page parameter. */
@@ -172,6 +174,8 @@ interface Selection { key: string; disabledWhen?: Visibility }
 interface CalendarMap { id: string; title: string; start: string; end: string; allDay?: string; calendar?: string; tone?: string; location?: string }
 /** One series of a two-kind chart; the bars' scale is on the right, 0–100 with `unit: 'percent'`. */
 interface ChartSeries { y: string; type: 'line' | 'bar'; label: string; unit?: 'percent' }
+/** One tab of a series panel: `temp` fitted to the day with `°`, `percent` 0–100 with `%`, `speed` from zero. */
+interface SeriesPanelSeries { id: string; label: string; y: string; unit?: 'percent' | 'temp' | 'speed'; kind: 'area' | 'bars' }
 /** Which place, which account: the first option until the owner picks; with one option, nothing is drawn. */
 interface TabsPick { param: string; label: string; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom }
 /** `label` and `confirm` may carry `{field}` placeholders read from the row. */
@@ -234,7 +238,7 @@ What each one is for, in email's terms:
 | `tabs` with `pick` | (Weather) The rail page: Home · Work at the left, Today · Week · 10 days at the right |
 | `hero` | (Weather) Now: the sky's glyph, the temperature and its word; feels like, high and low, wind, rain, sunrise and sunset beside |
 | `tiles` | (Weather) The next 24 hours as a strip; the week as a row whose picked day shows its hours below; ten days as a row |
-| `chart` with `series` | (Weather) The temperature as a line over the chance of rain as bars |
+| `series-panel` | (Weather) Today's next 24 hours, and the picked day's hours in Week: temperature, rain chance and wind as tabs over the hourly strip |
 
 A `chart` is small on purpose: a trend beside the numbers, drawn inline in
 the dashboard's own colours, with two ticks a side, the first and last x
@@ -285,6 +289,23 @@ bars' on the right from zero, 0–100% when every bar series says `unit:
 page's width, with a legend. A chart names `y` or `series`, never both, and
 with `series` no `type`; a tab bar's `default` is one of its tabs. Each is
 refused at load otherwise.
+
+**`series-panel`** is the kit's day panel (`WxSeries`), and needs host API
+`^1.13`. One raised panel with the component's `title` as its head; under it
+a tab per series (drawn when there are two or more), the chosen series across
+the width — `area` a line with a soft fill under it, `bars` a bar per point —
+and under a hairline the strip of tiles, one per point, read with the same
+paths as a `tiles`. The chart writes the point's own value above every
+`labelEvery`-th point (3 by default) and an x label under the same ones. The
+scale takes 3–4 ticks chosen so the values fill the height: fitted to the
+range for `temp` (never from zero, so a 62° → 56° evening reads as the drop
+it is), 0–100 for `percent`, from zero otherwise; values are written `20°`,
+`70%` or bare. Hovering a point or a tile marks both with the same index —
+the tile highlighted, a guide and a larger dot on the chart, the value
+written — and a click pins it; from the strip, ←/→ move the pin and Home/End
+go to the ends. The strip scrolls to keep the marked hour in view. A point
+that draws no tile keeps its place, so a tile and its point never drift.
+Series ids are the panel's own; one to four series, `labelEvery` 1–12.
 
 Not in the set, on purpose: free layout, custom styling, embedded HTML,
 client-side logic beyond `when`. A plugin that needs those serves its own app.

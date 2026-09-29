@@ -216,6 +216,34 @@ export type TilesComponent = ComponentCommon & {
   select?: { param: string; key: string };
 };
 
+/** One series of a `series-panel`: a tab over the chart; `unit` says how it is written and scaled. */
+export interface SeriesPanelSeries {
+  id: string;
+  label: string;
+  y: string;
+  unit?: 'percent' | 'temp' | 'speed';
+  kind: 'area' | 'bars';
+}
+
+/** The strip under a `series-panel`'s chart, one tile per point. */
+export interface SeriesPanelTiles {
+  icon: { path: string } | { const: TileIcon };
+  value: string;
+  label: string;
+  lines?: string[];
+}
+
+/** The series-panel arm, named so its renderer can take it. */
+export type SeriesPanelComponent = ComponentCommon & {
+  kind: 'series-panel';
+  query: QueryRef;
+  points: string;
+  x: string;
+  series: SeriesPanelSeries[];
+  tiles: SeriesPanelTiles;
+  labelEvery?: number;
+};
+
 /** The calendar arm, named so its renderer can take it. */
 export type CalendarComponent = ComponentCommon & {
   kind: 'calendar';
@@ -316,6 +344,7 @@ export type Component =
   /** Dated events: week, month and list views; the page adds `from` and `to` to the query. */
   | CalendarComponent
   | TilesComponent
+  | SeriesPanelComponent
   | (ComponentCommon & {
       kind: 'hero';
       query: QueryRef;

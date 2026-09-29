@@ -458,6 +458,42 @@ describe('page descriptors', () => {
     expect(() => parse([tabs({}, [{ kind: 'hero', query: { query: 'today' }, icon: { path: 'icon' }, value: 'now', title: 'sky', facts: [{ path: 'wind' }] }])], { queries: q })).toThrow(/facts\.0\.label/);
   });
 
+  it('takes a series panel, and refuses what it cannot mean', () => {
+    const panel = (over: Record<string, unknown> = {}): unknown =>
+      page({
+        body: [
+          {
+            kind: 'series-panel',
+            title: 'Today',
+            query: { query: 'hours', params: { place: { param: 'place' } } },
+            points: 'hours',
+            x: 'time',
+            series: [
+              { id: 'temp', label: 'Temperature', y: 'temp', unit: 'temp', kind: 'area' },
+              { id: 'rain', label: 'Rain', y: 'chance', unit: 'percent', kind: 'bars' },
+              { id: 'wind', label: 'Wind', y: 'wind', unit: 'speed', kind: 'area' },
+            ],
+            tiles: { icon: { path: 'icon' }, value: 'value', label: 'time', lines: ['rain'] },
+            labelEvery: 3,
+            ...over,
+          },
+        ],
+      });
+    const [parsed] = parse([panel()], { queries: ['hours'] });
+    expect(parsed!.body[0]).toMatchObject({ kind: 'series-panel', series: [{ id: 'temp' }, { id: 'rain' }, { id: 'wind' }] });
+    expect(() => parse([panel()], { queries: ['days'] })).toThrow(/no query called hours/);
+    const one = (s: Record<string, unknown>) => panel({ series: [{ id: 'temp', label: 'T', y: 'temp', kind: 'area', ...s }] });
+    expect(() => parse([one({ kind: 'line' })], { queries: ['hours'] })).toThrow(/series\.0\.kind/);
+    expect(() => parse([one({ unit: 'kelvin' })], { queries: ['hours'] })).toThrow(/series\.0\.unit/);
+    expect(() => parse([panel({ series: [] })], { queries: ['hours'] })).toThrow(/series/);
+    expect(() =>
+      parse([panel({ series: [{ id: 'a', label: 'A', y: 'a', kind: 'area' }, { id: 'a', label: 'B', y: 'b', kind: 'bars' }] })], { queries: ['hours'] }),
+    ).toThrow(/each series has its own id/);
+    expect(() => parse([panel({ labelEvery: 0 })], { queries: ['hours'] })).toThrow(/labelEvery/);
+    expect(() => parse([panel({ tiles: { icon: { const: 'rocket' }, value: 'v', label: 'l' } })], { queries: ['hours'] })).toThrow(/tiles\.icon/);
+    expect(() => parse([panel({ tiles: { icon: { path: 'icon' }, value: 'v', label: 'l', lines: ['a', 'b', 'c'] } })], { queries: ['hours'] })).toThrow(/tiles\.lines/);
+  });
+
   it('refuses two queries with the same name', () => {
     expect(() =>
       parsePageContributions({

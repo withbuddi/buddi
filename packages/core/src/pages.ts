@@ -317,6 +317,27 @@ export interface ChartSeries {
   unit?: 'percent';
 }
 
+/**
+ * One series of a `series-panel`: a tab over the chart. `unit` says how its
+ * values are written and scaled — `temp` fitted to the day's range with `°`,
+ * `percent` 0–100 with `%`, `speed` from zero as a bare number.
+ */
+export interface SeriesPanelSeries {
+  id: string;
+  label: string;
+  y: string;
+  unit?: 'percent' | 'temp' | 'speed';
+  kind: 'area' | 'bars';
+}
+
+/** The strip under a `series-panel`'s chart: one tile per point, paths read within the point. */
+export interface SeriesPanelTiles {
+  icon: { path: string } | { const: TileIcon };
+  value: string;
+  label: string;
+  lines?: string[];
+}
+
 /** One tab of a `tabs`: its words, and what it shows. */
 export interface PageTab {
   id: string;
@@ -661,6 +682,23 @@ export type Component =
       tone?: string;
       layout?: TilesLayout;
       select?: { param: string; key: string };
+    })
+  /**
+   * A day in one panel: tabs across its `series`, the chosen one drawn as an
+   * area (or bars) with its values written above every `labelEvery`-th point,
+   * and under it the hourly strip of `tiles` drawn from the same `points` —
+   * hovering or picking an hour marks it in both, and ←/→ move the pick.
+   * `points` is the path to the array in the query's answer; `x` and every
+   * series' `y` are read within one point.
+   */
+  | (ComponentCommon & {
+      kind: 'series-panel';
+      query: QueryRef;
+      points: string;
+      x: string;
+      series: SeriesPanelSeries[];
+      tiles: SeriesPanelTiles;
+      labelEvery?: number;
     })
   /**
    * Now, large: one glyph, one big value and its word, and a few facts
@@ -1106,6 +1144,39 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
           .object({ param: z.string().regex(PAGE_NAME, 'a page parameter is a name'), key: viewPathSchema })
           .strict()
           .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        ...common,
+        kind: z.literal('series-panel'),
+        query: queryRefSchema,
+        points: viewPathSchema,
+        x: viewPathSchema,
+        series: z
+          .array(
+            z
+              .object({
+                id: z.string().regex(PAGE_ID, 'a series id is lower-kebab-case'),
+                label,
+                y: viewPathSchema,
+                unit: z.enum(['percent', 'temp', 'speed']).optional(),
+                kind: z.enum(['area', 'bars']),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(4)
+          .refine((series) => new Set(series.map((s) => s.id)).size === series.length, 'each series has its own id'),
+        tiles: z
+          .object({
+            icon: glyphRefSchema,
+            value: viewPathSchema,
+            label: viewPathSchema,
+            lines: z.array(viewPathSchema).max(2).optional(),
+          })
+          .strict(),
+        labelEvery: z.number().int().min(1).max(12).optional(),
       })
       .strict(),
     z

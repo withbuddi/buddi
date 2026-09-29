@@ -85,6 +85,8 @@ export type {
   PageQuery,
   PageTab,
   QueryRef,
+  SeriesPanelSeries,
+  SeriesPanelTiles,
   TabsPick,
   TilesLayout,
   WorkspaceFiles,
