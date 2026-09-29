@@ -126,7 +126,10 @@ suite('connections routes', () => {
   it('serves the callback page without a session, and nothing else', async () => {
     const page = await fetch(`${base}/connections/callback?code=x&state=y`, { redirect: 'manual' });
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('<title>buddi</title>');
+    const html = await page.text();
+    expect(html).toContain('<title>buddi</title>');
+    // The build's assets are relative; on this nested path they need the root.
+    expect(html).toContain('<base href="/" />');
     expect(page.headers.get('set-cookie')).toBeNull();
     expect((await fetch(`${base}/api/connections`)).status).toBe(401);
   });

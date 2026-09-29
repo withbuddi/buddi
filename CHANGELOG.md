@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- The page a service sends you back to after a sign-in (`/connections/callback`) was blank: the dashboard's files are addressed relatively and the browser looked for them under `/connections/`. It now finishes the sign-in and closes itself as meant.
+
 ### Added
 
 - A plugin that ships a settings tab has a Settings action on its row (in place of Open when it has no page of its own), in its ⋯ menu and in its detail sheet, so setting one up after an install is one click.

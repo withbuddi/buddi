@@ -8,7 +8,7 @@
  * getting the normalization exactly right.
  */
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { baseHeaders } from './http.js';
@@ -102,3 +102,23 @@ async function isFile(file: string): Promise<boolean> {
 /** What to say when nobody ran `pnpm -r build`. Owner-facing, plain text. */
 export const BUILD_MISSING =
   'The dashboard has not been built yet. Run `pnpm -r build` (or `pnpm --filter @buddi/web build`) and reload.';
+
+/**
+ * The shell on a path that is not the root (`/connections/callback`). The
+ * build references its assets relatively (`./assets/…`, so the same build
+ * serves under any prefix), which on a nested path resolves to
+ * `/connections/assets/…` and a blank page. A `<base href="/">` puts every
+ * relative address back on the root the dashboard is served from.
+ */
+export async function serveShellAtRoot(res: ServerResponse, assetsDir: string): Promise<ServeResult> {
+  const index = path.resolve(assetsDir, 'index.html');
+  if (!(await isFile(index))) return { served: false, missing: true };
+  const raw = await readFile(index, 'utf8');
+  const tag = '<base href="/" />';
+  const html = /<head>/i.test(raw)
+    ? raw.replace(/<head>/i, `<head>\n    ${tag}`)
+    : raw.replace(/^(\s*<!doctype[^>]*>)?/i, (doctype) => `${doctype}${tag}`);
+  res.writeHead(200, { ...baseHeaders(), 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(html);
+  return { served: true };
+}

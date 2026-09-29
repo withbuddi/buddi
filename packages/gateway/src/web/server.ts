@@ -231,7 +231,7 @@ import {
 } from './version.js';
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
 import { readRail, setRailPageHidden } from './rail.js';
-import { BUILD_MISSING, serveAsset } from './static.js';
+import { BUILD_MISSING, serveAsset, serveShellAtRoot } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
@@ -725,7 +725,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * state is checked there against the session that started the sign-in.
      */
     if ((method === 'GET' || method === 'HEAD') && url.pathname === CONNECTIONS_CALLBACK_PATH) {
-      const served = await serveAsset(res, assetsDir, '/index.html');
+      const served = await serveShellAtRoot(res, assetsDir);
       if (!served.served) sendText(res, 503, BUILD_MISSING);
       return;
     }
