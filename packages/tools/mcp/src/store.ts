@@ -5,6 +5,8 @@ import type { ServerTool, ToolTier } from './tiers.js';
 
 export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 'pending-review' | 'needs-review';
 export type Queryable = Pick<Pool, 'query'> | PoolClient;
+/** How a connection signs in: not at all, OAuth, or a token the owner pasted. */
+export type AuthKind = 'none' | 'oauth' | 'token';
 
 export interface ConnectionRow {
   id: string;
@@ -13,7 +15,10 @@ export interface ConnectionRow {
   url: string;
   host: string;
   state: ConnectionState;
-  authKind: 'none' | 'oauth';
+  authKind: AuthKind;
+  /** Token sign-in: the header the token goes in, and the words before it (`Bearer `). */
+  tokenHeader: string | null;
+  tokenPrefix: string | null;
   clientId: string | null;
   clientSource: 'dynamic' | 'manual' | null;
   vaultRef: string | null;
@@ -47,7 +52,8 @@ const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() 
 function connection(r: Record<string, unknown>): ConnectionRow {
   return {
     id: String(r.id), slug: (r.slug as string | null) ?? null, name: String(r.name), url: String(r.url), host: String(r.host),
-    state: r.state as ConnectionState, authKind: r.auth_kind as 'none' | 'oauth',
+    state: r.state as ConnectionState, authKind: r.auth_kind as AuthKind,
+    tokenHeader: (r.token_header as string | null) ?? null, tokenPrefix: (r.token_prefix as string | null) ?? null,
     clientId: (r.client_id as string | null) ?? null, clientSource: (r.client_source as ConnectionRow['clientSource']) ?? null,
     vaultRef: (r.vault_ref as string | null) ?? null,
     serverName: (r.server_name as string | null) ?? null, serverVersion: (r.server_version as string | null) ?? null,
@@ -90,11 +96,12 @@ export async function insertConnection(db: Queryable, input: {
 export async function updateConnection(db: Queryable, id: string, patch: Partial<{
   slug: string; name: string; state: ConnectionState; clientId: string | null; clientSource: 'dynamic' | 'manual' | null;
   vaultRef: string | null; serverName: string | null; serverVersion: string | null; reviewedHash: string; reviewedAt: Date;
-  unreachableSince: Date | null;
+  unreachableSince: Date | null; authKind: AuthKind; tokenHeader: string | null; tokenPrefix: string | null;
 }>): Promise<ConnectionRow | null> {
   const columns: Record<string, string> = {
     slug: 'slug', name: 'name', state: 'state', clientId: 'client_id', clientSource: 'client_source', vaultRef: 'vault_ref',
     serverName: 'server_name', serverVersion: 'server_version', reviewedHash: 'reviewed_hash', reviewedAt: 'reviewed_at', unreachableSince: 'unreachable_since',
+    authKind: 'auth_kind', tokenHeader: 'token_header', tokenPrefix: 'token_prefix',
   };
   const sets: string[] = [];
   const values: unknown[] = [id];

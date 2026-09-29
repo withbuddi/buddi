@@ -5,6 +5,7 @@
  *   POST   /api/connections                 1. address: { url, name? }
  *   GET    /api/connections/:id             one connection
  *   POST   /api/connections/:id/consent     2. consent: { clientId? } → { authorizeUrl }
+ *   POST   /api/connections/:id/token       2. or a token: { token, header?, prefix? }, tried before it is kept
  *   POST   /api/connections/callback        the consent page came back: { state, code? | error? }
  *   GET    /api/connections/:id/review      3. review: the tools as buddi would take them
  *   POST   /api/connections/:id/review      3. keep them: { slug?, hash }
@@ -172,6 +173,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
           catalog: CATALOG,
           agents: agentChoices(deps.catalog),
           vault: service.tokens.available,
+          tokens: service.deps.secrets !== undefined,
           callbackPath: CONNECTIONS_CALLBACK_PATH,
         },
       };
@@ -200,7 +202,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: done };
   }
-  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|review|grant|tools))?$`, 'i').exec(path);
+  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|review|grant|tools))?$`, 'i').exec(path);
   if (!one) return { status: 404, body: { error: 'no such route' } };
   const id = one[1]!.toLowerCase();
   const what = one[2];
@@ -227,6 +229,16 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
       ...(typeof body.clientId === 'string' && body.clientId.trim() ? { clientId: body.clientId } : {}),
     });
     return { status: 200, body: { ...started, redirectUri } };
+  }
+  if (what === 'token') {
+    if (method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
+    if (typeof body.token !== 'string' || body.token.trim() === '') return { status: 400, body: { error: 'Paste the token.' } };
+    const done = await service.useToken(id, {
+      token: body.token,
+      ...(typeof body.header === 'string' ? { header: body.header } : {}),
+      ...(typeof body.prefix === 'string' ? { prefix: body.prefix } : {}),
+    });
+    return { status: 200, body: { ...done, connection: withAgents(deps, await service.get(id)) } };
   }
   if (what === 'tools') {
     if (method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };

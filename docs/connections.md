@@ -1,7 +1,7 @@
 ---
 title: "Connections: services your agents can use"
 status: reference
-updated: 2026-09-28
+updated: 2026-09-29
 ---
 
 # Connections
@@ -18,23 +18,37 @@ Connections live in **Settings → Connections**.
 ## Connect
 
 "Connect a service" shows a card for each service with an official remote
-server, and **Another server** for anything else. Connecting is four short
-screens.
+server, **Another server** for any other address, and **I have a config**
+for the block another MCP client takes. Connecting is four short screens.
 
 1. **Address.** A card fills it in; Another server asks for an `https://`
    address. buddi opens the server, reads its name and what it offers, and
    finds out whether it wants you to sign in. Nothing else is sent.
-2. **Sign in.** When the service asks for a sign-in, buddi registers itself
-   with the service's sign-in server (nothing is pre-registered anywhere, and
-   there is no key to paste), then opens the service's own consent page in a
-   new tab. You say yes there. The page sends you back to your dashboard,
-   `/connections/callback`, never to anyone else; that tab closes and the
-   first one carries on. The sign-in only lands in the dashboard session
-   that started it, and only once.
+2. **Sign in.** A service that answered without asking skips this screen.
+   Otherwise there are up to three ways in, as a row of choices when more
+   than one applies:
 
-   A few services do not let an app register itself. Then the screen says so
-   in one sentence and asks for a client id you create in the service's
-   developer settings, with the redirect address it shows.
+   - **Sign in**, when the service lets buddi register itself with its
+     sign-in server (nothing is pre-registered anywhere, and there is no key
+     to paste). buddi fetches the service's consent page first; your click
+     opens it in a new tab. You say yes there. The page sends you back to
+     your dashboard, `/connections/callback`, never to anyone else; that tab
+     closes and the first one carries on. The sign-in only lands in the
+     dashboard session that started it, and only once.
+   - **Token**: a token you make on the service's site (GitHub's card links
+     to the page). buddi opens the server with it and lists its tools before
+     it keeps anything, so a token the service refuses ("GitHub did not
+     accept that token.") is never stored. Kept, it is one of your secrets,
+     bound to that server's host and header, and sent on every request as
+     `Authorization: Bearer <token>`. The header's name and the words before
+     the token can be changed for a service that wants another.
+   - **Client id**, when the service does not let an app register itself:
+     one you create in its developer settings, with the redirect address the
+     screen shows. buddi asks for it before it opens anything; the button
+     then opens the service's page.
+
+   GitHub opens on Token, and Sign in is its first choice for the others.
+   A server that wants no sign-in at all needs none of these.
 3. **Review.** Every tool the server lists, one row each: the name buddi
    gives it, the server's own description, and its tier. Read it before you
    keep it: a connection brings nothing until you do. You also choose the
@@ -44,6 +58,21 @@ screens.
    your other agents listed. Yes writes `mcp.github.*` on each chosen agent's
    `tools:` line, through the same path Agent Father's changes take. You can
    also give them to nobody: the connection waits in Settings.
+
+### I have a config
+
+Paste the block another app uses, the standard
+`{ "mcpServers": { "<name>": { "url": "https://…", "headers": { "Authorization": "Bearer …" } } } }`
+or just one server's `{ "url": …, "headers": … }`. buddi fills the address
+and the connection's name from it, and turns the header into the Token
+choice: its name, its value as the token, and `Bearer ` or `Basic ` as the
+words before it when the value starts with one. A placeholder such as
+`${GITHUB_TOKEN}` is not a token: the screen asks for the token itself. The
+box is emptied once it is read, and the value is never shown or logged.
+
+It refuses what buddi cannot connect: a `command` (a server that runs as a
+program on this computer), a `"type": "sse"` server (buddi speaks Streamable
+HTTP), and a block that names several servers at once.
 
 ## What an agent gets
 
@@ -79,7 +108,9 @@ to the agent for that step and not kept; a link is a plain link.
 A connection's sign-in is kept in buddi's vault, one entry per connection
 (`MCP_CONNECTION_…`), and renewed there when it runs out. It goes on the wire
 only in the `Authorization` header of a request to that connection's own
-address. No agent, tool result, log or page ever sees it, and the output
+address. A pasted token is one of your secrets (`MCP_TOKEN_…`, listed in
+Settings → Secrets), bound to that connection's host and header; it goes
+nowhere else. Deleting it there makes the connection ask to be reconnected. No agent, tool result, log or page ever sees it, and the output
 scrubber knows it.
 
 What leaves your machine for a connection:
@@ -155,6 +186,6 @@ old one). Its row says "Unreachable since <time>, retrying."
 - Tools only. A server's resources and prompts are not used.
 - The cards' addresses were each checked on 2026-09-28 (the server answered
   with its sign-in challenge and its sign-in server's details). GitHub's
-  sign-in server does not let an app register itself, so connecting GitHub
-  asks for a client id from a GitHub OAuth app you create, with the redirect
-  address the screen shows.
+  sign-in server does not let an app register itself, so GitHub opens on a
+  personal access token; a client id from a GitHub OAuth app you create
+  still works.

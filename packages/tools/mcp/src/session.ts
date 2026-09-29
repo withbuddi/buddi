@@ -18,6 +18,7 @@ export interface OpenOptions {
   url: string;
   transport: HttpTransport;
   token?: () => Promise<string | undefined>;
+  credential?: () => Promise<{ header: string; value: string }>;
   allowLoopbackHttp?: boolean;
   signal?: AbortSignal;
 }
@@ -36,6 +37,7 @@ export async function openSession(opts: OpenOptions): Promise<Opened> {
     url: opts.url,
     transport: opts.transport,
     ...(opts.token ? { token: opts.token } : {}),
+    ...(opts.credential ? { credential: opts.credential } : {}),
     ...(opts.allowLoopbackHttp ? { allowLoopbackHttp: true } : {}),
     onUnauthorized: (www) => { challenge = www ?? ''; },
   });

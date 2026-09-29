@@ -7,9 +7,12 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - A plugin that ships a settings tab has a Settings action on its row (in place of Open when it has no page of its own), in its ⋯ menu and in its detail sheet, so setting one up after an install is one click.
+- Connections sign in with a token: paste one on the sign-in screen and buddi tries it on the server before it keeps it, as one of your secrets sent only to that server's host. GitHub opens on Token, with a link to the page where you make one.
+- "I have a config" on Settings → Connections reads the `mcpServers` block another MCP client uses: it fills the address and name, and a header becomes the token. A local `command` and SSE-only servers are refused with a sentence.
 
 ### Changed
 
+- The sign-in screen of a connection asks for everything it needs (a token, a client id) before it opens a tab, and opens the tab only onto the service's page. GitHub's sign-in tab no longer opens and closes by itself.
 - Updating to a version listed on withbuddi.com takes it from npm even when the plugin was installed from a directory or a file; the staged card says what it replaces, and on approval the plugin's source becomes the registry.
 - Browse trusts its copy of the withbuddi.com list for an hour, not a day, and has a Refresh link beside the line that says it fetched it.
 

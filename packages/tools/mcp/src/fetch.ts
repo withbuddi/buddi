@@ -30,6 +30,12 @@ export interface ConnectionFetchOptions {
   transport: HttpTransport;
   /** The access token, or undefined for a server that wants none. */
   token?: () => Promise<string | undefined>;
+  /**
+   * A header the owner's token goes in (token sign-in): its name and whole
+   * value, prefix included. Whatever the caller wrote under that name is
+   * dropped first, as `Authorization` is for `token`.
+   */
+  credential?: () => Promise<{ header: string; value: string }>;
   /** A 401, with the server's `WWW-Authenticate`. */
   onUnauthorized?: (wwwAuthenticate: string | null) => void;
   /** `http:` to a loopback address (tests, a local development server). */
@@ -92,6 +98,12 @@ export function connectionFetch(opts: ConnectionFetchOptions): FetchLike {
     delete headers.cookie;
     const token = await opts.token?.();
     if (token) headers.authorization = `Bearer ${token}`;
+    const credential = await opts.credential?.();
+    if (credential) {
+      const name = credential.header.toLowerCase();
+      delete headers[name];
+      headers[name] = credential.value;
+    }
     let body: string | Buffer | undefined;
     if (typeof init.body === 'string') body = init.body;
     else if (init.body instanceof Uint8Array) body = Buffer.from(init.body);

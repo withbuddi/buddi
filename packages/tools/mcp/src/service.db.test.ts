@@ -23,6 +23,22 @@ import { ConnectionError, type ConnectionsService } from './service.js';
 import { SERVICE_OPEN } from './output.js';
 import { DEFAULT_TOOLS, Fake, MCP_URL } from './testing/fake.js';
 import { vaultRefFor } from './tokens.js';
+import type { HeaderTarget, SecretsPort } from './ports.js';
+
+/** The owner's secrets as the gateway binds them: a value answers only for the host and header it was kept for. */
+class MemorySecrets implements SecretsPort {
+  readonly held = new Map<string, { value: string; target: HeaderTarget }>();
+  refuse = false;
+  async put(name: string, value: string, target: HeaderTarget): Promise<void> { this.held.set(name, { value, target }); }
+  async value(name: string, target: HeaderTarget): Promise<string> {
+    const held = this.held.get(name);
+    if (this.refuse || !held || held.target.host !== target.host || held.target.header.toLowerCase() !== target.header.toLowerCase()) {
+      throw new Error(`"${name}" is not bound there`);
+    }
+    return held.value;
+  }
+  async remove(name: string): Promise<void> { this.held.delete(name); }
+}
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -55,15 +71,16 @@ suite('connections (postgres + fake MCP server)', () => {
     await pool.query('truncate mcp.tools, mcp.connections cascade');
   });
 
-  function setup(fake: Fake, vault: Vault = createMemoryVault(), now?: () => Date): { registry: ToolRegistry; service: ConnectionsService; vault: Vault } {
+  function setup(fake: Fake, vault: Vault = createMemoryVault(), now?: () => Date): { registry: ToolRegistry; service: ConnectionsService; vault: Vault; secrets: MemorySecrets } {
     const registry = new ToolRegistry();
     registry.register(createConnectionsManifest());
+    const secrets = new MemorySecrets();
     const service = bindConnections(registry.manifests(), {
-      pool, vault, transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }),
+      pool, vault, secrets, transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }),
       compileSchema: (schema) => compileJsonSchema(schema).dispose(), log: () => {},
       ...(now ? { now } : {}),
     })!;
-    return { registry, service, vault };
+    return { registry, service, vault, secrets };
   }
 
   const ctx = (): CoreToolContext => ({ db: pool, ownerId: 'owner', agentId: 'concierge', now: () => new Date(), timezone: 'UTC' });
@@ -192,6 +209,74 @@ suite('connections (postgres + fake MCP server)', () => {
     expect(registry.has('mcp.tracker.search_issues')).toBe(true);
     expect(await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx())).toMatchObject({ ok: true });
     expect(await vault.get(vaultRefFor(connection.id))).not.toBeNull();
+    await service.close();
+  });
+
+  it('signs in with a pasted token: tried first, refused when the service says no, kept as an owner secret bound to the host', async () => {
+    const fake = new Fake({ auth: true, json: true, registration: false });
+    const { registry, service, secrets, vault } = setup(fake);
+    const added = await service.add({ url: MCP_URL, name: 'Tracker' });
+    expect(added.signIn).toBe('manual');
+
+    // A token the service refuses is never kept.
+    await expect(service.useToken(added.connection.id, { token: 'not-it' })).rejects.toMatchObject({ status: 400, code: 'token-refused', message: 'Tracker did not accept that token.' });
+    expect(secrets.held.size).toBe(0);
+    expect((await service.get(added.connection.id)).signedIn).toBe(false);
+    // Nor one that could break a header.
+    await expect(service.useToken(added.connection.id, { token: 'a\r\nX-Evil: 1' })).rejects.toMatchObject({ status: 400 });
+    await expect(service.useToken(added.connection.id, { token: fake.validToken, header: 'Content-Type' })).rejects.toMatchObject({ status: 400 });
+
+    // Pasted with its prefix: the prefix is said once.
+    const done = await service.useToken(added.connection.id, { token: `Bearer ${fake.validToken}` });
+    expect(done).toMatchObject({ id: added.connection.id, reconnected: false });
+    const view = await service.get(added.connection.id);
+    expect(view).toMatchObject({ authKind: 'token', signedIn: true, state: 'pending-review' });
+    const [name, held] = [...secrets.held.entries()][0]!;
+    expect(held).toEqual({ value: fake.validToken, target: { host: 'mcp.example.test', header: 'Authorization' } });
+    const { rows } = await pool.query('select * from mcp.connections');
+    expect(rows[0]).toMatchObject({ auth_kind: 'token', vault_ref: name, token_header: 'Authorization', token_prefix: 'Bearer ' });
+    expect(JSON.stringify(rows)).not.toContain(fake.validToken);
+    expect(await vault.get(vaultRefFor(added.connection.id))).toBeNull();
+
+    const review = await service.review(added.connection.id);
+    await service.saveReview(added.connection.id, { slug: 'tracker', hash: review.hash });
+    expect(await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx())).toMatchObject({ ok: true });
+    expect(fake.calls.filter((c) => c.url === MCP_URL).at(-1)!.headers.authorization).toBe(`Bearer ${fake.validToken}`);
+
+    // The binding refuses (the owner deleted the secret in Settings): needs a reconnect, and a token again reconnects.
+    secrets.refuse = true;
+    await service.sessions.closeAll();
+    const refused = await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx());
+    expect((refused as { message: string }).message).toMatch(/needs to be reconnected/);
+    expect((await service.get(added.connection.id)).state).toBe('needs-reconnect');
+    secrets.refuse = false;
+    expect(await service.useToken(added.connection.id, { token: fake.validToken })).toMatchObject({ reconnected: true });
+    expect((await service.get(added.connection.id)).state).toBe('connected');
+    expect(await registry.invoke('mcp.tracker.search_issues', { q: 'x' }, ctx())).toMatchObject({ ok: true });
+
+    // Disconnect takes the token away.
+    await service.disconnect(added.connection.id);
+    expect(secrets.held.size).toBe(0);
+    await service.close();
+  });
+
+  it('switches a token connection to a sign-in and drops the token', async () => {
+    const fake = new Fake({ auth: true, json: true });
+    const { service, secrets } = setup(fake);
+    const { connection } = await service.add({ url: MCP_URL });
+    await service.useToken(connection.id, { token: fake.validToken });
+    expect(secrets.held.size).toBe(1);
+    await signIn(service, connection.id);
+    expect(await service.get(connection.id)).toMatchObject({ authKind: 'oauth', signedIn: true });
+    expect(secrets.held.size).toBe(0);
+    await service.close();
+  });
+
+  it('refuses a token for a server that wants no sign-in', async () => {
+    const fake = new Fake({ json: true });
+    const { service } = setup(fake);
+    const { connection } = await service.add({ url: MCP_URL });
+    await expect(service.useToken(connection.id, { token: 'whatever' })).rejects.toMatchObject({ status: 409 });
     await service.close();
   });
 

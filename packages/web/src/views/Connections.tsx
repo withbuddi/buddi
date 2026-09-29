@@ -8,7 +8,9 @@
  * them; Disconnect names the agents it takes them from before it does.
  *
  * The four screens are one sheet, in the first-run wizard's voice: one
- * question per screen, the primary answer on the right.
+ * question per screen, the primary answer on the right. Signing in is the
+ * service's own page, a token you paste, or a client id; "I have a config"
+ * reads the block another MCP client takes into the same screens.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -22,7 +24,8 @@ import {
   type ConnectionsView,
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { Button, Card, Empty, EmptyState, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
+import { Button, Card, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
+import { parseConnectionConfig, type PastedConfig, type PastedHeader } from './connection-config';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
   connected: { label: 'Connected', tone: 'good' },
@@ -42,13 +45,13 @@ export function tierLabel(tool: { tier: 'auto' | 'gated'; destructive: boolean }
   return { label: 'Asks you first', tone: 'warning' };
 }
 
-type Step = 'address' | 'consent' | 'review' | 'grant';
+type Step = 'paste' | 'address' | 'consent' | 'review' | 'grant';
 
 /** The tab the consent page comes back to tells the one that sent it (`ConnectionCallback`). */
 export const CONNECTIONS_CHANNEL = 'buddi-connections';
 export const CALLBACK_PATH = '/connections/callback';
 const MANUAL_SENTENCE =
-  'This service does not let buddi register itself, so it needs a client id you create in the service’s developer settings, with the address below as its redirect.';
+  'This service does not let buddi register itself. Create an app in its developer settings with the redirect address below, and paste its client id here. A token is usually simpler.';
 
 interface FlowStart {
   step: Step;
@@ -98,7 +101,7 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
           </Section>
         ) : null}
         {data ? (
-          <Section title="Connect a service" aside="Each has an official remote server. You sign in on the service's own page.">
+          <Section title="Connect a service" aside="Each has an official remote server. You sign in on the service's own page, or with a token.">
             <div className="connections-cards">
               {data.catalog.map((card) => (
                 <Card
@@ -115,6 +118,12 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
               >
                 <p className="ui-card-meta">Any remote MCP server, by its https address.</p>
               </Card>
+              <Card
+                title="I have a config"
+                foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'paste' })}>Paste it</Button></Toolbar>}
+              >
+                <p className="ui-card-meta">The mcpServers block another app uses, with its url and headers.</p>
+              </Card>
             </div>
           </Section>
         ) : null}
@@ -123,6 +132,8 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
         <ConnectFlow
           start={flow}
           agents={data.agents}
+          catalog={data.catalog}
+          tokens={data.tokens ?? data.vault}
           onClose={() => { setFlow(null); view.reload(); }}
         />
       ) : null}
@@ -218,7 +229,7 @@ function ConnectionRow({
               Review again
             </Button>
           ) : null}
-          {connection.authKind === 'oauth' && !pending ? (
+          {connection.authKind !== 'none' && !pending ? (
             <Button size="sm" variant={connection.state === 'needs-reconnect' ? 'accent' : undefined} onClick={() => onFlow({ step: 'consent', connection, keepGrants: true })}>
               Reconnect
             </Button>
@@ -237,27 +248,41 @@ function ConnectionRow({
 export function ConnectFlow({
   start,
   agents,
+  catalog = [],
+  tokens = true,
   onClose,
   pollMs = 2000,
 }: {
   start: FlowStart;
   agents: ConnectionsView['agents'];
+  /** The cards, so a pasted address that is one of them gets its hints. */
+  catalog?: ConnectionCard[];
+  /** Whether a pasted token can be kept. */
+  tokens?: boolean;
   onClose: () => void;
   pollMs?: number;
 }): JSX.Element {
   const [step, setStep] = useState<Step>(start.step);
   const [connection, setConnection] = useState<ConnectionView | undefined>(start.connection);
-  const [signIn, setSignIn] = useState<'dynamic' | 'manual'>('dynamic');
-  const name = connection?.name ?? start.card?.name ?? 'the service';
-  const title = step === 'address' ? 'Connect a service'
+  const [signIn, setSignIn] = useState<KnownSignIn>('unknown');
+  const [pasted, setPasted] = useState<PastedConfig | null>(null);
+  const address = pasted?.url ?? connection?.url;
+  const card = start.card ?? catalog.find((c) => address !== undefined && sameAddress(c.url, address));
+  const name = connection?.name ?? card?.name ?? pasted?.name ?? 'the service';
+  const title = step === 'paste' ? 'Paste a config'
+    : step === 'address' ? 'Connect a service'
     : step === 'consent' ? `Sign in to ${name}`
     : step === 'review' ? `What ${name} brings`
     : 'Who gets these tools';
   return (
     <Sheet title={title} onClose={onClose} size="wide">
+      {step === 'paste' ? (
+        <PasteStep onRead={(config) => { setPasted(config); setStep('address'); }} />
+      ) : null}
       {step === 'address' ? (
         <AddressStep
-          card={start.card}
+          card={card}
+          pasted={pasted}
           onDone={(added, kind) => {
             setConnection(added);
             if (kind === 'none') setStep('review');
@@ -268,9 +293,14 @@ export function ConnectFlow({
       {step === 'consent' && connection ? (
         <ConsentStep
           connection={connection}
-          manual={signIn === 'manual'}
+          signIn={signIn}
+          card={card}
+          pasted={pasted?.header}
+          placeholder={pasted?.placeholder ?? false}
+          tokens={tokens}
           pollMs={pollMs}
           onSignedIn={(fresh) => {
+            setPasted(null);
             setConnection(fresh);
             if (start.keepGrants) onClose();
             else setStep('review');
@@ -292,25 +322,74 @@ export function ConnectFlow({
   );
 }
 
+function sameAddress(a: string, b: string): boolean {
+  const norm = (text: string): string => text.trim().replace(/\/+$/, '').toLowerCase();
+  return norm(a) === norm(b);
+}
+
 function failureOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * "I have a config": the block another MCP client takes. Read here, never
+ * sent as it is: the address and name go to the next screen, a header's
+ * value to the token screen, and the box is cleared.
+ */
+function PasteStep({ onRead }: { onRead: (config: PastedConfig) => void }): JSX.Element {
+  const [text, setText] = useState('');
+  const [failure, setFailure] = useState<string | null>(null);
+  const read = (): void => {
+    try {
+      const config = parseConnectionConfig(text);
+      setText('');
+      setFailure(null);
+      onRead(config);
+    } catch (error) {
+      setFailure(failureOf(error));
+    }
+  };
+  return (
+    <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); read(); }}>
+      <p>Paste the block another app uses for this server, the one with <span className="mono">mcpServers</span>, or just its url and headers. buddi takes the address, the name and one header from it.</p>
+      <Field label="Config" hint="Remote servers only: a url, not a command.">
+        <textarea
+          className="mono"
+          rows={8}
+          required
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+          value={text}
+          placeholder={'{ "mcpServers": { "github": { "url": "…", "headers": { "Authorization": "Bearer …" } } } }'}
+          onChange={(event) => setText(event.target.value)}
+        />
+      </Field>
+      <ErrorBanner message={failure} />
+      <Toolbar align="end">
+        <Button type="submit" variant="accent" disabled={text.trim() === ''}>Read it</Button>
+      </Toolbar>
+    </form>
+  );
+}
+
 function AddressStep({
   card,
+  pasted,
   onDone,
 }: {
   card?: ConnectionCard;
+  pasted?: PastedConfig | null;
   onDone: (connection: ConnectionView, signIn: 'none' | 'dynamic' | 'manual') => void;
 }): JSX.Element {
-  const [url, setUrl] = useState(card?.url ?? '');
+  const [url, setUrl] = useState(pasted?.url ?? card?.url ?? '');
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const open = async (): Promise<void> => {
     setBusy(true);
     setFailure(null);
     try {
-      const added = await api.addConnection(url.trim(), card?.name);
+      const added = await api.addConnection(url.trim(), card?.name ?? pasted?.name);
       onDone(added.connection, added.signIn);
     } catch (error) {
       setFailure(failureOf(error));
@@ -318,6 +397,7 @@ function AddressStep({
       setBusy(false);
     }
   };
+  const tokenFirst = card?.auth?.recommended === 'token';
   return (
     <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); void open(); }}>
       {card ? (
@@ -326,10 +406,24 @@ function AddressStep({
         <p>Where is the server? buddi opens it, reads its name and what it offers, and nothing else until you have read its tools.</p>
       )}
       <Field label="Address" hint="An https:// address. Servers that run as a program on this computer are not supported yet.">
-        <input required autoFocus={!card} spellCheck={false} value={url} placeholder="https://" onChange={(event) => setUrl(event.target.value)} />
+        <input required autoFocus={!card && !pasted} spellCheck={false} value={url} placeholder="https://" onChange={(event) => setUrl(event.target.value)} />
       </Field>
       {card && !card.verified ? <p className="ui-card-meta">This address is the one {card.name} published; buddi has not checked it since.</p> : null}
-      {card?.clientIdRequired ? <p className="ui-card-meta">{card.name} does not let buddi register itself: you will need a client id from its developer settings.</p> : null}
+      {tokenFirst ? (
+        <p className="ui-card-meta">{card!.name} signs in with a token you make on its site. The next screen links to the page.</p>
+      ) : card?.clientIdRequired ? (
+        <p className="ui-card-meta">{card.name} does not let buddi register itself: signing in needs a token, or a client id from its developer settings.</p>
+      ) : null}
+      {pasted?.header ? (
+        <p className="ui-card-meta">
+          {pasted.placeholder
+            ? `Your config has a placeholder where the ${pasted.header.name} header's token goes. You paste the token itself on the next screen.`
+            : `The ${pasted.header.name} header from your config waits for the sign-in screen. buddi tries it before it keeps it.`}
+        </p>
+      ) : null}
+      {pasted && pasted.dropped.length > 0 ? (
+        <p className="ui-card-meta">buddi sends one header, so {pasted.dropped.join(', ')} {pasted.dropped.length === 1 ? 'was' : 'were'} left out.</p>
+      ) : null}
       <ErrorBanner message={failure} />
       <Toolbar align="end">
         <Button type="submit" variant="accent" disabled={busy || url.trim() === ''}>{busy ? 'Opening…' : 'Continue'}</Button>
@@ -338,20 +432,52 @@ function AddressStep({
   );
 }
 
+type KnownSignIn = 'dynamic' | 'manual' | 'unknown';
+type SignInMode = 'oauth' | 'token' | 'client';
+
+const MODE_LABELS: Record<SignInMode, string> = { oauth: 'Sign in', token: 'Token', client: 'Client id' };
+
+/**
+ * The ways this service can be signed in to, from what its server said
+ * (`signIn`) and whether a token can be kept: its own sign-in page when it
+ * lets buddi register, a client id when it does not, a token either way.
+ * Unknown (a reconnect) is taken as the sign-in page until the server says
+ * otherwise.
+ */
+export function signInModes(signIn: KnownSignIn, tokens: boolean): SignInMode[] {
+  const modes: SignInMode[] = signIn === 'manual' ? ['token', 'client'] : ['oauth', 'token'];
+  return tokens ? modes : modes.filter((m) => m !== 'token');
+}
+
 function ConsentStep({
   connection,
-  manual,
+  signIn,
+  card,
+  pasted,
+  placeholder,
+  tokens,
   pollMs,
   onSignedIn,
 }: {
   connection: ConnectionView;
-  manual: boolean;
+  signIn: KnownSignIn;
+  card?: ConnectionCard;
+  pasted?: PastedHeader;
+  placeholder: boolean;
+  tokens: boolean;
   pollMs: number;
   onSignedIn: (connection: ConnectionView) => void;
 }): JSX.Element {
-  const [needsClientId, setNeedsClientId] = useState<string | null>(manual ? MANUAL_SENTENCE : null);
+  const [known, setKnown] = useState<KnownSignIn>(signIn);
+  const modes = signInModes(known, tokens);
+  const preferToken = pasted !== undefined || connection.authKind === 'token' || card?.auth?.recommended === 'token';
+  const [chosen, setChosen] = useState<SignInMode>(() => (preferToken && modes.includes('token') ? 'token' : modes[0]!));
+  const mode = modes.includes(chosen) ? chosen : modes[0]!;
+  const [manualSentence, setManualSentence] = useState(MANUAL_SENTENCE);
   const [clientId, setClientId] = useState('');
-  const [busy, setBusy] = useState(false);
+  /** The consent page's address, once buddi has it: a tab opens only onto it. */
+  const [consentUrl, setConsentUrl] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [link, setLink] = useState<string | null>(null);
@@ -381,7 +507,7 @@ function ConsentStep({
       if (stopped) return;
       try {
         const fresh = await api.connection(connection.id);
-        if (!connection.signedIn && fresh.signedIn) { void finish(); return; }
+        if ((!connection.signedIn || connection.authKind === 'token') && fresh.signedIn && fresh.authKind === 'oauth') { void finish(); return; }
       } catch {
         // Keep asking.
       }
@@ -392,56 +518,184 @@ function ConsentStep({
     return () => { stopped = true; channel?.close(); window.clearTimeout(timer); };
   }, [waiting, connection, pollMs]);
 
-  const begin = async (): Promise<void> => {
-    // Opened now, inside the click, so no popup blocker stands in the way;
-    // pointed at the consent page once buddi has it.
-    const tab = window.open('', '_blank');
-    setBusy(true);
+  /** Ask buddi for the consent page's address. No tab is opened here. */
+  const fetchConsent = async (withClientId?: string): Promise<void> => {
+    setAsking(true);
     setFailure(null);
     try {
-      const { authorizeUrl } = await api.connectionConsent(connection.id, needsClientId !== null ? clientId.trim() : undefined);
-      if (tab) {
-        tab.opener = null;
-        tab.location.href = authorizeUrl;
-      } else {
-        setLink(authorizeUrl);
-      }
-      setWaiting(true);
+      const { authorizeUrl } = await api.connectionConsent(connection.id, withClientId);
+      setConsentUrl(authorizeUrl);
     } catch (error) {
-      tab?.close();
       if (error instanceof ApiError && (error.detail as { code?: string } | undefined)?.code === 'client-id') {
-        setNeedsClientId(error.message);
+        setManualSentence(error.message);
+        setKnown('manual');
+        setChosen('client');
       } else {
         setFailure(failureOf(error));
       }
     } finally {
-      setBusy(false);
+      setAsking(false);
     }
   };
+
+  // The service's own sign-in page: its address is fetched as the mode opens, so the click only opens it.
+  useEffect(() => {
+    if (mode !== 'oauth' || consentUrl !== null) return;
+    void fetchConsent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  /** Opened inside the click, onto the page itself: never an empty tab. */
+  const openConsent = (url: string): void => {
+    const tab = window.open(url, '_blank');
+    if (tab) {
+      tab.opener = null;
+      setLink(null);
+    } else {
+      setLink(url);
+    }
+    setWaiting(true);
+  };
+
+  const switchMode = (next: SignInMode): void => {
+    setChosen(next);
+    setConsentUrl(null);
+    setFailure(null);
+    setWaiting(false);
+    setLink(null);
+  };
+
   return (
     <div className="ui-stack">
-      <p>
-        {connection.name} asks you to sign in. buddi opens its own consent page in a new tab; you say yes there, to {connection.name}, and
-        the tab comes back here. buddi keeps the sign-in in its vault, and no agent ever sees it.
-      </p>
-      {needsClientId !== null ? (
+      {modes.length > 1 ? (
+        <Segment label="How to sign in" options={modes.map((m) => ({ value: m, label: MODE_LABELS[m] }))} value={mode} onChange={switchMode} />
+      ) : null}
+      {mode === 'oauth' ? (
         <>
-          <Notice tone="warning">{needsClientId}</Notice>
+          <p>
+            buddi opens {connection.name}’s own sign-in page in a new tab. You say yes there, the tab comes back here, and buddi keeps
+            the sign-in in its vault. No agent ever sees it.
+          </p>
+          {asking ? <Empty>Getting {connection.name}’s sign-in page…</Empty> : null}
+        </>
+      ) : null}
+      {mode === 'client' ? (
+        <>
+          <Notice tone="warning">{manualSentence}</Notice>
           <Field label="Client id">
-            <input required spellCheck={false} value={clientId} onChange={(event) => setClientId(event.target.value)} />
+            <input
+              required
+              spellCheck={false}
+              value={clientId}
+              onChange={(event) => { setClientId(event.target.value); setConsentUrl(null); setWaiting(false); }}
+            />
           </Field>
           <p className="ui-card-meta">Its redirect address: <span className="mono">{redirect}</span></p>
         </>
       ) : null}
-      {waiting ? <Notice tone="accent" role="status">Waiting for you to say yes on {connection.name}’s page…</Notice> : null}
-      {link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {connection.name}’s sign-in page</a></p> : null}
+      {mode === 'token' ? (
+        <TokenForm connection={connection} card={card} pasted={pasted} placeholder={placeholder} onSignedIn={onSignedIn} />
+      ) : null}
+      {mode !== 'token' && waiting ? <Notice tone="accent" role="status">Waiting for you to say yes on {connection.name}’s page…</Notice> : null}
+      {mode !== 'token' && link ? <p><a href={link} target="_blank" rel="noopener noreferrer">Open {connection.name}’s sign-in page</a></p> : null}
+      {mode !== 'token' ? <ErrorBanner message={failure} /> : null}
+      {mode === 'oauth' ? (
+        <Toolbar align="end">
+          <Button variant="accent" onClick={() => { if (consentUrl) openConsent(consentUrl); }} disabled={consentUrl === null}>
+            {waiting ? 'Open it again' : `Sign in to ${connection.name}`}
+          </Button>
+        </Toolbar>
+      ) : null}
+      {mode === 'client' ? (
+        <Toolbar align="end">
+          {consentUrl === null ? (
+            <Button variant="accent" onClick={() => void fetchConsent(clientId.trim())} disabled={asking || clientId.trim() === ''}>
+              {asking ? 'Checking…' : 'Continue'}
+            </Button>
+          ) : (
+            <Button variant="accent" onClick={() => openConsent(consentUrl)}>
+              {waiting ? 'Open it again' : `Open ${connection.name}’s sign-in page`}
+            </Button>
+          )}
+        </Toolbar>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A token the owner pasted: tried on the server before buddi keeps it, then
+ * kept in the vault and sent only to this connection's host, in one header.
+ * The field is a password field and is emptied once the token is kept.
+ */
+function TokenForm({
+  connection,
+  card,
+  pasted,
+  placeholder,
+  onSignedIn,
+}: {
+  connection: ConnectionView;
+  card?: ConnectionCard;
+  pasted?: PastedHeader;
+  placeholder: boolean;
+  onSignedIn: (connection: ConnectionView) => void;
+}): JSX.Element {
+  const [token, setToken] = useState(pasted?.value ?? '');
+  const [header, setHeader] = useState(pasted?.name ?? 'Authorization');
+  const [prefix, setPrefix] = useState(pasted?.prefix ?? (pasted ? '' : 'Bearer '));
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const keep = async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      const done = await api.connectionToken(connection.id, { token: token.trim(), header: header.trim(), prefix });
+      setToken('');
+      onSignedIn(done.connection);
+    } catch (error) {
+      setFailure(failureOf(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const page = card?.auth?.tokenPage;
+  return (
+    <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); void keep(); }}>
+      <p>
+        {page ? `Make a token on ${connection.name}’s site and paste it here.` : `Paste a token ${connection.name} gave you.`} buddi tries it on{' '}
+        <span className="mono">{connection.host}</span> first, keeps it in its vault, and sends it only there. No agent ever sees it.
+      </p>
+      {page ? (
+        <p><a href={page} target="_blank" rel="noopener noreferrer">Make a token on {connection.name}</a></p>
+      ) : null}
+      {placeholder ? <Notice tone="accent">Your config had a placeholder where the token goes. Paste the token itself.</Notice> : null}
+      <Field label="Token" hint={card?.auth?.tokenHint}>
+        <input
+          type="password"
+          required
+          autoFocus={!pasted?.value}
+          autoComplete="off"
+          spellCheck={false}
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+        />
+      </Field>
+      <FormGrid columns={2} dense>
+        <Field label="Header" hint="Most services want Authorization.">
+          <input required spellCheck={false} value={header} onChange={(event) => setHeader(event.target.value)} />
+        </Field>
+        <Field label="Before the token" hint="Usually “Bearer ”, with its space. Empty for none.">
+          <input spellCheck={false} value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+        </Field>
+      </FormGrid>
       <ErrorBanner message={failure} />
       <Toolbar align="end">
-        <Button variant="accent" onClick={() => void begin()} disabled={busy || (needsClientId !== null && clientId.trim() === '')}>
-          {waiting ? 'Open it again' : `Sign in to ${connection.name}`}
+        <Button type="submit" variant="accent" disabled={busy || token.trim() === '' || header.trim() === ''}>
+          {busy ? 'Trying it…' : 'Try it and keep it'}
         </Button>
       </Toolbar>
-    </div>
+    </form>
   );
 }
 

@@ -1930,6 +1930,9 @@ export const api = {
     post<{ connection: ConnectionView; signIn: 'none' | 'dynamic' | 'manual' }>('/connections', { url, ...(name ? { name } : {}) }),
   connectionConsent: (id: string, clientId?: string) =>
     post<{ authorizeUrl: string; redirectUri: string }>(`/connections/${id}/consent`, clientId ? { clientId } : {}),
+  /** Sign in with a pasted token: the gateway tries it on the server before it keeps it. */
+  connectionToken: (id: string, input: { token: string; header: string; prefix: string }) =>
+    post<{ id: string; reconnected: boolean; name: string; connection: ConnectionView }>(`/connections/${id}/token`, input),
   connectionCallback: (input: { state: string; code?: string; error?: string }) =>
     post<{ id: string; reconnected: boolean; name: string }>('/connections/callback', input),
   connectionReview: (id: string) => get<ConnectionReview>(`/connections/${id}/review`),
@@ -2252,7 +2255,8 @@ export interface ConnectionView {
   url: string;
   host: string;
   state: ConnectionState;
-  authKind: 'none' | 'oauth';
+  /** How it signs in: not at all, the service's own page, or a token you pasted. */
+  authKind: 'none' | 'oauth' | 'token';
   signedIn: boolean;
   toolCount: number;
   /** `mcp.<slug>.*`, what an agent's grant names; null before review. */
@@ -2276,6 +2280,8 @@ export interface ConnectionCard {
   verified: boolean;
   /** The service offers no dynamic registration: the owner brings a client id. */
   clientIdRequired?: boolean;
+  /** Which way of signing in the screen offers first, and where a token is made. */
+  auth?: { recommended: 'token' | 'oauth'; tokenPage?: string; tokenHint?: string };
 }
 
 export interface ConnectionsView {
@@ -2285,6 +2291,8 @@ export interface ConnectionsView {
   agents: Array<{ id: string; name: string; handle: string; frontDesk: boolean }>;
   /** Whether this installation has a vault to keep sign-ins in. */
   vault: boolean;
+  /** Whether a pasted token can be kept (the owner's secrets are available). */
+  tokens?: boolean;
   callbackPath: string;
 }
 

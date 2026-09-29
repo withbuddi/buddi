@@ -20,6 +20,15 @@ describe('connectionFetch', () => {
     expect(Object.keys(init.headers).filter((k) => k.toLowerCase() === 'authorization')).toHaveLength(1);
   });
 
+  it('puts a pasted token in its own header, whatever the caller wrote there', async () => {
+    const transport = vi.fn(async () => reply(200, '{}'));
+    const fetch = connectionFetch({ url: 'https://mcp.example.test/mcp', transport, credential: async () => ({ header: 'X-Api-Key', value: 'key-1' }) });
+    await fetch('https://mcp.example.test/mcp', { method: 'POST', headers: { 'x-api-key': 'other', 'content-type': 'application/json' }, body: '{}' });
+    const [, init] = transport.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
+    expect(init.headers['x-api-key']).toBe('key-1');
+    expect(Object.keys(init.headers).filter((k) => k.toLowerCase() === 'x-api-key')).toHaveLength(1);
+  });
+
   it('answers the standing GET stream itself, and reports a 401', async () => {
     const onUnauthorized = vi.fn();
     const transport = vi.fn(async () => reply(401, '', { 'www-authenticate': 'Bearer realm="x"' }));

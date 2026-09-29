@@ -19,6 +19,7 @@ vi.mock('../api', async (importOriginal) => {
     api: {
       ...original.api,
       connections: vi.fn(), connection: vi.fn(), addConnection: vi.fn(), connectionConsent: vi.fn(), connectionCallback: vi.fn(),
+      connectionToken: vi.fn(),
       connectionReview: vi.fn(), saveConnectionReview: vi.fn(), grantConnection: vi.fn(), disconnect: vi.fn(),
       connectionTools: vi.fn(), setRememberedApproval: vi.fn(),
     },
@@ -44,7 +45,10 @@ function view(connections: ConnectionView[] = [connection()]): ConnectionsView {
   return {
     connections, agents: AGENTS, vault: true, callbackPath: '/connections/callback',
     catalog: [
-      { id: 'github', name: 'GitHub', blurb: 'Repositories.', url: 'https://api.githubcopilot.com/mcp/', verified: false },
+      {
+        id: 'github', name: 'GitHub', blurb: 'Repositories.', url: 'https://api.githubcopilot.com/mcp/', verified: false, clientIdRequired: true,
+        auth: { recommended: 'token', tokenPage: 'https://github.com/settings/personal-access-tokens/new', tokenHint: 'A fine-grained token.' },
+      },
       { id: 'notion', name: 'Notion', blurb: 'Pages.', url: 'https://mcp.notion.com/mcp', verified: false },
     ],
   };
@@ -80,6 +84,7 @@ describe('the list', () => {
     expect(screen.getByText(/12 tools/)).toBeInTheDocument();
     expect(screen.getByText(/each of its tools answers with one sentence/)).toBeInTheDocument();
     expect(screen.getByText('Another server')).toBeInTheDocument();
+    expect(screen.getByText('I have a config')).toBeInTheDocument();
     expect(screen.getByText('Notion')).toBeInTheDocument();
   });
 
@@ -97,41 +102,105 @@ describe('the list', () => {
 });
 
 describe('the four screens', () => {
-  it('address → consent: the tab is opened inside the click and pointed at the consent page', async () => {
-    const pending = connection({ slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
+  it('address → sign in: the consent page is fetched first, and the click opens a tab onto it, never an empty one', async () => {
+    const pending = connection({ name: 'Notion', slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
     mocked.addConnection.mockResolvedValue({ connection: pending, signIn: 'dynamic' });
-    mocked.connectionConsent.mockResolvedValue({ authorizeUrl: 'https://github.com/login/oauth/authorize?x=1', redirectUri: 'http://localhost/connections/callback' });
+    mocked.connectionConsent.mockResolvedValue({ authorizeUrl: 'https://notion.example/authorize?x=1', redirectUri: 'http://localhost/connections/callback' });
     mocked.connection.mockResolvedValue(pending);
     const tab = { opener: {} as unknown, location: { href: '' }, close: vi.fn() };
     const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window);
-    render(<ConnectFlow start={{ step: 'address', card: view().catalog[0] }} agents={AGENTS} onClose={() => {}} pollMs={10} />);
-    expect(screen.getByLabelText('Address')).toHaveValue('https://api.githubcopilot.com/mcp/');
+    render(<ConnectFlow start={{ step: 'address', card: view().catalog[1] }} agents={AGENTS} onClose={() => {}} pollMs={10} />);
+    expect(screen.getByLabelText('Address')).toHaveValue('https://mcp.notion.com/mcp');
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(mocked.addConnection).toHaveBeenCalledWith('https://api.githubcopilot.com/mcp/', 'GitHub'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign in to GitHub' }));
-    expect(open).toHaveBeenCalledWith('', '_blank');
-    await waitFor(() => expect(tab.location.href).toBe('https://github.com/login/oauth/authorize?x=1'));
+    await waitFor(() => expect(mocked.addConnection).toHaveBeenCalledWith('https://mcp.notion.com/mcp', 'Notion'));
+    // Sign in and Token; Sign in first for a service that lets buddi register.
+    expect(await screen.findByRole('radio', { name: 'Sign in' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Token' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Client id' })).toBeNull();
+    const signIn = await screen.findByRole('button', { name: 'Sign in to Notion' });
+    await waitFor(() => expect(signIn).toBeEnabled());
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(signIn);
+    expect(open).toHaveBeenCalledWith('https://notion.example/authorize?x=1', '_blank');
     expect(tab.opener).toBeNull();
     expect(await screen.findByText(/Waiting for you to say yes/)).toBeInTheDocument();
     open.mockRestore();
   });
 
-  it('asks for a client id when the service offers no registration', async () => {
+  it('asks for a client id before any tab when the service offers no registration', async () => {
     const pending = connection({ slug: null, state: 'pending-review', signedIn: false });
     mocked.connectionConsent.mockRejectedValueOnce(new ApiError(409, 'This service does not let buddi register itself.', { error: 'x', code: 'client-id' }));
     const open = vi.spyOn(window, 'open').mockReturnValue(null);
     render(<ConnectFlow start={{ step: 'consent', connection: pending }} agents={AGENTS} onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in to GitHub' }));
     expect(await screen.findByText('This service does not let buddi register itself.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Client id')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Client id' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Token' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Sign in' })).toBeNull();
     expect(screen.getByText(/connections\/callback/)).toBeInTheDocument();
     mocked.connectionConsent.mockResolvedValueOnce({ authorizeUrl: 'https://x.test/authorize', redirectUri: 'r' });
     fireEvent.change(screen.getByLabelText('Client id'), { target: { value: 'my-app' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in to GitHub' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(mocked.connectionConsent).toHaveBeenLastCalledWith(pending.id, 'my-app'));
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub’s sign-in page' }));
+    expect(open).toHaveBeenCalledWith('https://x.test/authorize', '_blank');
     // No tab could be opened: a link does it instead.
     expect(await screen.findByRole('link', { name: 'Open GitHub’s sign-in page' })).toHaveAttribute('href', 'https://x.test/authorize');
     open.mockRestore();
+  });
+
+  it('GitHub opens on Token: the page to make one, tried before it is kept, and no tab at all', async () => {
+    const pending = connection({ slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
+    mocked.addConnection.mockResolvedValue({ connection: pending, signIn: 'manual' });
+    mocked.connectionReview.mockResolvedValue(REVIEW);
+    const open = vi.spyOn(window, 'open');
+    render(<ConnectFlow start={{ step: 'address', card: view().catalog[0] }} agents={AGENTS} onClose={() => {}} />);
+    expect(screen.getByText(/signs in with a token you make on its site/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('radio', { name: 'Token' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Client id' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Make a token on GitHub' })).toHaveAttribute('href', 'https://github.com/settings/personal-access-tokens/new');
+    expect(screen.getByText('A fine-grained token.')).toBeInTheDocument();
+    expect(mocked.connectionConsent).not.toHaveBeenCalled();
+    const field = screen.getByLabelText('Token');
+    expect(field).toHaveAttribute('type', 'password');
+
+    mocked.connectionToken.mockRejectedValueOnce(new ApiError(400, 'GitHub did not accept that token.', { error: 'x', code: 'token-refused' }));
+    fireEvent.change(field, { target: { value: 'wrong-one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Try it and keep it' }));
+    expect(await screen.findByText('GitHub did not accept that token.')).toBeInTheDocument();
+
+    mocked.connectionToken.mockResolvedValueOnce({ id: pending.id, reconnected: false, name: 'GitHub', connection: { ...pending, authKind: 'token', signedIn: true } });
+    fireEvent.change(field, { target: { value: 'right-one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Try it and keep it' }));
+    await waitFor(() => expect(mocked.connectionToken).toHaveBeenLastCalledWith(pending.id, { token: 'right-one', header: 'Authorization', prefix: 'Bearer ' }));
+    expect(await screen.findByText('mcp.github.search_issues')).toBeInTheDocument();
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
+  it('reads a pasted config: address and name filled, the header waiting on the token screen, the box cleared', async () => {
+    const pending = connection({ slug: null, state: 'pending-review', signedIn: false, grant: null, agents: [] });
+    mocked.addConnection.mockResolvedValue({ connection: pending, signIn: 'manual' });
+    mocked.connectionToken.mockResolvedValue({ id: pending.id, reconnected: false, name: 'GitHub', connection: { ...pending, authKind: 'token', signedIn: true } });
+    mocked.connectionReview.mockResolvedValue(REVIEW);
+    render(<ConnectFlow start={{ step: 'paste' }} catalog={view().catalog} agents={AGENTS} onClose={() => {}} />);
+    const box = screen.getByLabelText('Config');
+    fireEvent.change(box, { target: { value: '{ "mcpServers": { "local": { "command": "npx", "args": ["x"] } } }' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read it' }));
+    expect(await screen.findByText('Servers that run as a program on this computer are not supported yet.')).toBeInTheDocument();
+    fireEvent.change(box, { target: { value: '{ "mcpServers": { "gh": { "type": "http", "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer pasted-value" } } } }' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read it' }));
+    expect(await screen.findByLabelText('Address')).toHaveValue('https://api.githubcopilot.com/mcp/');
+    expect(screen.queryByText(/pasted-value/)).toBeNull();
+    expect(screen.getByText(/The Authorization header from your config waits/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    // The card it matches gives the name.
+    await waitFor(() => expect(mocked.addConnection).toHaveBeenCalledWith('https://api.githubcopilot.com/mcp/', 'GitHub'));
+    expect(await screen.findByRole('radio', { name: 'Token' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Before the token')).toHaveValue('Bearer ');
+    fireEvent.click(screen.getByRole('button', { name: 'Try it and keep it' }));
+    await waitFor(() => expect(mocked.connectionToken).toHaveBeenCalledWith(pending.id, { token: 'pasted-value', header: 'Authorization', prefix: 'Bearer ' }));
   });
 
   it('review → grant: names, tiers, the editable name, and the front desk preselected', async () => {

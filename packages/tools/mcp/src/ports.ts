@@ -77,3 +77,23 @@ export interface OAuthPort {
     invalid: string; missing: string; interrupted: string; refreshFailed: string; unsaved: string; cannotRenew: string;
   }): Promise<OAuthTokens>;
 }
+
+/** Where a token-signed connection's header goes: its host and the header's name. */
+export interface HeaderTarget {
+  host: string;
+  header: string;
+}
+
+/**
+ * The owner's secrets, for a connection signed in with a token
+ * (docs/owner-secrets.md, `http.header`). The composition root builds it over
+ * core's secret store: `put` keeps the value bound to this connection's host
+ * and header, pre-approved, and `value` is one recorded use of that binding,
+ * answered only for that host and header. No other code reads the value.
+ */
+export interface SecretsPort {
+  put(name: string, value: string, target: HeaderTarget): Promise<void>;
+  /** The value for this host and header, or a thrown sentence when the binding refuses it. */
+  value(name: string, target: HeaderTarget): Promise<string>;
+  remove(name: string): Promise<void>;
+}

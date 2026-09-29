@@ -83,6 +83,9 @@ export {
   ConnectionError,
   ConnectionsService,
   NEEDS_CLIENT_ID,
+  DEFAULT_TOKEN_HEADER,
+  DEFAULT_TOKEN_PREFIX,
+  tokenSecretFor,
   RETRY_MINUTES,
   changedSentence,
   reconnectSentence,
@@ -98,4 +101,4 @@ export { STDIO_REFUSAL, checkServerUrl, connectionFetch } from './fetch.js';
 export { SERVICE_OPEN, SERVICE_CLOSE, UNTRUSTED_NOTICE, toResult } from './output.js';
 export { tierOf, listHash, toolHash, suggestSlug, localNames, NAMESPACE } from './tiers.js';
 export { vaultRefFor, ReconnectNeeded } from './tokens.js';
-export type { HttpTransport, OAuthPort, OAuthTokens, TransportResponse, VaultPort } from './ports.js';
+export type { HeaderTarget, HttpTransport, OAuthPort, OAuthTokens, SecretsPort, TransportResponse, VaultPort } from './ports.js';

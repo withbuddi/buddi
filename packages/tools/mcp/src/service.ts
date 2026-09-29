@@ -9,12 +9,13 @@
  *
  * What a server may reach before the owner has read its review: an
  * `initialize` and a tool list. No token exists until the owner signed in on
- * the service's own consent page, and no tool is registered until the review
- * is saved.
+ * the service's own consent page or pasted one (tried on the server, then
+ * kept as an owner secret), and no tool is registered until the review is
+ * saved.
  */
 import type { Pool } from 'pg';
 import { ToolRefusal, type JSONSchema7, type NetworkArea, type ToolContext, type ToolDefinition, type ToolsArea } from '@buddi/core/plugin';
-import type { DiscoveredAuthorization, HttpTransport, OAuthPort, VaultPort } from './ports.js';
+import type { DiscoveredAuthorization, HttpTransport, OAuthPort, SecretsPort, VaultPort } from './ports.js';
 import { checkServerUrl } from './fetch.js';
 import { takeImage, toResult, type ServiceResult } from './output.js';
 import { listAllTools, openSession, Sessions, Unauthorized, type Opened } from './session.js';
@@ -28,6 +29,7 @@ import {
   replaceTools,
   slugTaken,
   updateConnection,
+  type AuthKind,
   type ConnectionRow,
   type ConnectionState,
   type ToolRow,
@@ -50,6 +52,8 @@ export interface ConnectionsDeps {
   transport: HttpTransport;
   /** The shared OAuth module over the same transport (`createOAuthPort`). */
   oauth: OAuthPort;
+  /** The owner's secrets, for a connection signed in with a token. Without one, token sign-in is refused. */
+  secrets?: SecretsPort;
   /**
    * Compile a server's input schema the way the registry will, throwing a
    * sentence when it cannot (core's `compileJsonSchema`). Without one, only
@@ -74,8 +78,8 @@ export interface ConnectionView {
   url: string;
   host: string;
   state: ConnectionState;
-  authKind: 'none' | 'oauth';
-  /** OAuth: tokens are in the vault. Always true for a server that wants none. */
+  authKind: AuthKind;
+  /** OAuth or token: the sign-in is kept. Always true for a server that wants none. */
   signedIn: boolean;
   /** Tools registered for agents (enabled, reviewed). */
   toolCount: number;
@@ -137,6 +141,21 @@ export interface ConnectionSignal {
 
 export type SignIn = 'none' | 'dynamic' | 'manual';
 
+/** The header a pasted token goes in when nothing else is said, and the words before it. */
+export const DEFAULT_TOKEN_HEADER = 'Authorization';
+export const DEFAULT_TOKEN_PREFIX = 'Bearer ';
+
+/** Headers the protocol itself writes: a token may not take their place. */
+const RESERVED_HEADERS = new Set([
+  'host', 'content-type', 'content-length', 'accept', 'connection', 'transfer-encoding', 'cookie',
+  'mcp-session-id', 'mcp-protocol-version', 'last-event-id', 'user-agent',
+]);
+
+/** The owner-secret name a connection's token is kept under. */
+export function tokenSecretFor(connectionId: string): string {
+  return `MCP_TOKEN_${connectionId.replace(/-/g, '')}`;
+}
+
 interface PendingConsent {
   sessionId: string;
   connectionId: string;
@@ -156,7 +175,7 @@ const MAX_DESCRIPTION = 2000;
 
 /** Spec §2: the escape hatch, one sentence. */
 export const NEEDS_CLIENT_ID =
-  'This service does not let buddi register itself, so it needs a client id you create in the service\'s developer settings, with the address below as its redirect.';
+  'This service does not let buddi register itself. Create an app in its developer settings with the redirect address below, and paste its client id here. A token is usually simpler.';
 
 /** After a failure, the next try is this many minutes on; the last one repeats (spec: 1, 5, 15, 60, then hourly). */
 export const RETRY_MINUTES = [1, 5, 15, 60] as const;
@@ -366,7 +385,7 @@ export class ConnectionsService {
     this.#sweep();
     if (!this.tokens.available) throw new ConnectionError(409, 'This installation has no vault, so a connection cannot keep its sign-in. Turn the vault on first.');
     const row = await this.#row(id);
-    if (row.authKind !== 'oauth') throw new ConnectionError(409, `${row.name} does not ask for a sign-in.`);
+    if (row.authKind === 'none') throw new ConnectionError(409, `${row.name} does not ask for a sign-in.`);
     const discovered = await this.#discover(row);
     const as = discovered.authorizationServer;
     let clientId: string;
@@ -446,13 +465,80 @@ export class ConnectionsService {
     }
     const ref = vaultRefFor(row.id);
     await this.tokens.save(ref, tokens);
+    // It was signed in with a token until now: that token is not kept.
+    if (row.authKind === 'token' && row.vaultRef) await this.deps.secrets?.remove(row.vaultRef).catch(() => {});
     const reconnected = row.slug !== null;
     const updated = await updateConnection(this.deps.pool, row.id, {
       clientId: pending.clientId, clientSource: pending.clientSource, vaultRef: ref,
+      authKind: 'oauth', tokenHeader: null, tokenPrefix: null,
       state: reconnected ? 'connected' : 'pending-review',
     });
     await this.sessions.close(row.id);
     if (updated) this.#live.set(row.id, updated);
+    return { id: row.id, reconnected, name: row.name };
+  }
+
+  /**
+   * Sign in with a token the owner pasted (docs/connections.md, "Connect"):
+   * the server is opened with it and its tools listed before anything is
+   * kept, so a token the service refuses is never stored. Kept, it is an
+   * owner secret bound to this host's header, sent on every request as
+   * `<prefix><token>`. Reconnect is this again, on a connection that keeps
+   * its tools.
+   */
+  async useToken(id: string, input: { token: string; header?: string; prefix?: string }): Promise<{ id: string; reconnected: boolean; name: string }> {
+    const secrets = this.deps.secrets;
+    if (!secrets) throw new ConnectionError(409, 'This installation has no vault, so a connection cannot keep a token. Turn the vault on first.');
+    const row = await this.#row(id);
+    if (row.authKind === 'none') throw new ConnectionError(409, `${row.name} does not ask for a sign-in.`);
+    const header = (input.header ?? '').trim() || DEFAULT_TOKEN_HEADER;
+    if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/.test(header) || RESERVED_HEADERS.has(header.toLowerCase())) {
+      throw new ConnectionError(400, 'That header name cannot carry a token. Most services want Authorization.');
+    }
+    const prefix = input.prefix ?? DEFAULT_TOKEN_PREFIX;
+    if (!/^[\x20-\x7e]{0,32}$/.test(prefix)) throw new ConnectionError(400, 'The words before the token are plain text, up to 32 characters.');
+    let token = String(input.token ?? '').trim();
+    // Pasted with its prefix: the prefix is said once.
+    if (prefix.trim() && token.toLowerCase().startsWith(prefix.toLowerCase())) token = token.slice(prefix.length).trim();
+    if (token === '') throw new ConnectionError(400, 'Paste the token.');
+    if (token.length > 8192 || !/^[\x21-\x7e]+$/.test(token)) {
+      throw new ConnectionError(400, 'That does not look like a token: it is one word of plain characters, with no spaces or line breaks.');
+    }
+    const value = `${prefix}${token}`;
+    const target = { host: hostnameOf(row), header };
+    // Tried before it is kept.
+    let opened: Opened | undefined;
+    try {
+      opened = await openSession({
+        url: row.url, transport: this.deps.transport, ...this.#loopback(),
+        credential: async () => ({ header, value }),
+      });
+      await listAllTools(opened.client);
+    } catch (err) {
+      if (err instanceof Unauthorized || (opened?.unauthorized() ?? null) !== null) {
+        throw new ConnectionError(400, `${row.name} did not accept that token.`, 'token-refused');
+      }
+      throw new ConnectionError(502, `${row.name} did not answer with that token: ${short(err).split(token).join('…')}`);
+    } finally {
+      await opened?.close();
+    }
+    const name = tokenSecretFor(row.id);
+    try {
+      await secrets.put(name, token, target);
+    } catch (err) {
+      throw new ConnectionError(409, `The token could not be kept: ${short(err).split(token).join('…')}`);
+    }
+    // It was signed in through OAuth until now: that sign-in is not kept.
+    if (row.authKind === 'oauth' && row.vaultRef) await this.tokens.remove(row.vaultRef).catch(() => {});
+    this.deps.tokensChanged?.();
+    const reconnected = row.slug !== null;
+    const updated = await updateConnection(this.deps.pool, row.id, {
+      authKind: 'token', vaultRef: name, tokenHeader: header, tokenPrefix: prefix, clientId: null, clientSource: null,
+      state: reconnected ? 'connected' : 'pending-review', unreachableSince: null,
+    });
+    await this.sessions.close(row.id);
+    if (updated) this.#live.set(row.id, updated);
+    this.#retries.delete(row.id);
     return { id: row.id, reconnected, name: row.name };
   }
 
@@ -461,7 +547,7 @@ export class ConnectionsService {
    * ---------------------------------------------------------------- */
 
   async #liveTools(row: ConnectionRow): Promise<ServerTool[]> {
-    if (row.authKind === 'oauth' && !row.vaultRef) throw new ConnectionError(409, `Sign in to ${row.name} first.`);
+    if (row.authKind !== 'none' && !row.vaultRef) throw new ConnectionError(409, `Sign in to ${row.name} first.`);
     try {
       const opened = await this.#session(row);
       const tools = await listAllTools(opened.client);
@@ -569,7 +655,10 @@ export class ConnectionsService {
     const row = await this.#row(id);
     await this.sessions.close(id);
     if (row.vaultRef) {
-      try { await this.tokens.remove(row.vaultRef); } catch {
+      try {
+        if (row.authKind === 'token') await this.deps.secrets?.remove(row.vaultRef);
+        else await this.tokens.remove(row.vaultRef);
+      } catch {
         throw new ConnectionError(409, 'The sign-in could not be removed from the vault, so nothing was disconnected. Unlock the vault and try again.');
       }
     }
@@ -745,7 +834,20 @@ export class ConnectionsService {
       transport: this.deps.transport,
       ...this.#loopback(),
       ...(row.authKind === 'oauth' && row.vaultRef ? { token: () => this.tokens.accessToken(row.vaultRef!) } : {}),
+      ...(row.authKind === 'token' && row.vaultRef ? { credential: () => this.#credential(row) } : {}),
     }));
+  }
+
+  /** A token connection's header, read through its binding on each request. */
+  async #credential(row: ConnectionRow): Promise<{ header: string; value: string }> {
+    const header = row.tokenHeader ?? DEFAULT_TOKEN_HEADER;
+    if (!this.deps.secrets) throw new ReconnectNeeded('This installation has no vault, so the connection\'s token cannot be read.');
+    try {
+      const token = await this.deps.secrets.value(row.vaultRef!, { host: hostnameOf(row), header });
+      return { header, value: `${row.tokenPrefix ?? ''}${token}` };
+    } catch {
+      throw new ReconnectNeeded(`The token for ${row.name} cannot be read. Give it again.`);
+    }
   }
 
   static envelope(row: Pick<ConnectionRow, 'name' | 'host' | 'slug'>, tool: string, input: unknown): Record<string, unknown> {

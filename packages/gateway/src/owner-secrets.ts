@@ -20,11 +20,15 @@ import {
   deleteOwnerSecret,
   findSecret,
   ownerSecretVaultName,
+  putOwnerSecret,
+  useOwnerSecret,
+  type BuddiHost,
   type AdoptOutcome,
   type SecretDestination,
   type Vault,
 } from '@buddi/core';
 import { ACCOUNT_KIND, GMAIL_SECRET_NAME, listAccounts } from '@buddi/tool-email';
+import type { SecretsPort } from '@buddi/tool-mcp';
 import type { Pool } from 'pg';
 
 /** The shape of a page-added mailbox's old vault name (`secretNameFor`). Not `EMAIL_BACKFILL`. */
@@ -247,4 +251,48 @@ export async function adoptProviderAccountSecrets(
     }
   }
   return result;
+}
+
+/**
+ * A connection's pasted token (docs/connections.md, "Connect"), as an owner
+ * secret bound to core's `http.header` destination for that connection's host
+ * and header, pre-approved: the owner pasted it on that connection's own
+ * screen. A read is one recorded use through `useOwnerSecret`, answered only
+ * for the bound host and header — the same core-internal delivery the `http`
+ * area uses — so Settings → Secrets lists it, its last use and its binding.
+ */
+export function connectionSecrets(pool: Pool, vault: Vault | undefined): SecretsPort | undefined {
+  if (vault === undefined) return undefined;
+  const host = { version: '0.0', plugin: 'http' } as unknown as BuddiHost;
+  return {
+    async put(name, value, target) {
+      await putOwnerSecret(pool, vault, {
+        name,
+        value,
+        bindings: [{ kind: 'http.header', target: { host: target.host.toLowerCase(), header: target.header }, rule: 'pre-approved' }],
+      });
+    },
+    async value(name, target) {
+      let value: string | undefined;
+      const result = await useOwnerSecret(
+        {
+          pool,
+          vault,
+          plugin: 'http',
+          buddi: host,
+          now: () => new Date(),
+          deliverInto: (delivered) => {
+            value = delivered;
+          },
+        },
+        { name, kind: 'http.header', target: { host: target.host.toLowerCase(), header: target.header } },
+      );
+      if ('done' in result && value !== undefined) return value;
+      if ('pending' in result) throw new Error(`"${name}" waits for the owner's approval.`);
+      throw new Error('refused' in result ? result.refused : `"${name}" was not delivered.`);
+    },
+    async remove(name) {
+      await deleteOwnerSecret(pool, vault, name);
+    },
+  };
 }

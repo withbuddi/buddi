@@ -16,6 +16,8 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMemoryVault, createPool, runMigrations, testDatabaseUrl, type CoreToolContext } from '@buddi/core/testing';
+import { registerHttpHeaderDestination, secretDestination } from '@buddi/core';
+import { connectionSecrets } from '../owner-secrets.js';
 import { createOAuthPort } from '@buddi/runtime';
 import { bindConnections, manifest as connectionsManifest, vaultRefFor } from '@buddi/tool-mcp';
 import { Fake, MCP_URL } from '@buddi/tool-mcp/testing';
@@ -67,7 +69,8 @@ suite('connections routes', () => {
     const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry }));
     registry.onChange(() => catalog.reload());
     bindPlatformTools(registry, { catalog, reload: () => catalog.reload(), agentsDir: path.join(dir, 'agents') });
-    const connections = bindConnections(registry.manifests(), { pool, vault, transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }), log: () => {} });
+    if (!secretDestination('http.header')) registerHttpHeaderDestination();
+    const connections = bindConnections(registry.manifests(), { pool, vault, secrets: connectionSecrets(pool, vault), transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }), log: () => {} });
     server = createWebApp({
       pool,
       registry,
@@ -198,5 +201,31 @@ suite('connections routes', () => {
     expect(agentFile('concierge')).not.toContain('mcp.tracker');
     expect(await vault.get(vaultRefFor(id))).toBeNull();
     expect((await call(owner, 'GET', '')).body.connections).toEqual([]);
+  });
+
+  it('signs in with a pasted token: refused ones are not kept, a kept one is an owner secret bound to the host', async () => {
+    const owner = await signIn();
+    const added = await call(owner, 'POST', '', { url: MCP_URL, name: 'Tracker' });
+    const id = added.body.connection.id as string;
+
+    expect((await call(owner, 'POST', `/${id}/token`, {})).status).toBe(400);
+    const refused = await call(owner, 'POST', `/${id}/token`, { token: 'not-it' });
+    expect(refused).toMatchObject({ status: 400, body: { error: 'Tracker did not accept that token.', code: 'token-refused' } });
+    expect((await pool.query(`select count(*)::int as n from core.secrets`)).rows[0].n).toBe(0);
+
+    const kept = await call(owner, 'POST', `/${id}/token`, { token: fake.validToken, prefix: 'Bearer ' });
+    expect(kept).toMatchObject({ status: 200, body: { id, reconnected: false, connection: { authKind: 'token', signedIn: true } } });
+    expect(JSON.stringify(kept.body)).not.toContain(fake.validToken);
+    const secrets = await pool.query(`select s.name, b.kind, b.target, b.rule from core.secrets s join core.secret_bindings b on b.secret_id = s.id`);
+    expect(secrets.rows).toEqual([{ name: `MCP_TOKEN_${id.replace(/-/g, '')}`, kind: 'http.header', target: { host: 'mcp.example.test', header: 'Authorization' }, rule: 'pre-approved' }]);
+
+    const review = await call(owner, 'GET', `/${id}/review`);
+    expect(review.status).toBe(200);
+    const uses = await pool.query(`select kind, outcome from core.secret_uses order by at`);
+    expect(uses.rows.at(-1)).toEqual({ kind: 'http.header', outcome: 'delivered' });
+    expect(fake.calls.filter((c) => c.url === MCP_URL).at(-1)!.headers.authorization).toBe(`Bearer ${fake.validToken}`);
+
+    expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
+    expect((await pool.query(`select count(*)::int as n from core.secrets`)).rows[0].n).toBe(0);
   });
 });

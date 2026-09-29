@@ -39,6 +39,7 @@ import { createHttpTransport, createOAuthPort, createProvider, defaultHttpTransp
 import { bindConnections, type ConnectionsService } from '@buddi/tool-mcp';
 import { ProviderSettings } from './providers.js';
 import { ProviderAccounts } from './provider-accounts.js';
+import { connectionSecrets } from './owner-secrets.js';
 import { config as loadDotenv } from 'dotenv';
 import type { Pool } from 'pg';
 import {
@@ -462,11 +463,13 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
    */
   let vault: Vault | undefined;
   try { vault = createVault({ env }); } catch { vault = undefined; }
+  const connectionSecretsPort = connectionSecrets(pool, vault);
   const connections = bindConnections(registry.manifests(), {
     pool,
     vault,
     transport: defaultHttpTransport,
     oauth: createOAuthPort({ transport: defaultHttpTransport }),
+    ...(connectionSecretsPort ? { secrets: connectionSecretsPort } : {}),
     compileSchema: (schema) => compileJsonSchema(schema).dispose(),
     tokensChanged: invalidateSecretScrubber,
     now,
