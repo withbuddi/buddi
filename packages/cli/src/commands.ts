@@ -333,6 +333,16 @@ export const COMMANDS: readonly CommandEntry[] = [
     json: '[{ name, version, origin, health, detail }]. origin is built-in or installed; health is ok, warn or fail.',
   },
   {
+    name: 'plugins describe',
+    group: 'Agents',
+    summary: 'Stage a plugin, read its manifest, print what it brings, and delete the stage.',
+    usage: 'buddi plugins describe <spec> [--json]',
+    flags: [JSON_FLAG],
+    example: 'buddi plugins describe @withbuddi/plugin-weather@0.1.1 --json',
+    applies: 'both',
+    json: '{ package, claims, manifest, drift }: what the package says, what its manifest declares (tools with tiers, schema, hosts, timers, agents), and where the two differ. Nothing is installed.',
+  },
+  {
     name: 'plugins info',
     group: 'Agents',
     summary: 'Show what a plugin is, what it brought, and what it proposes.',

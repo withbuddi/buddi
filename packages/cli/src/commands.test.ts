@@ -176,6 +176,7 @@ describe('the command table', () => {
       'missions list',
       'reminders',
       'plugins list',
+      'plugins describe',
       'telegram devices',
       'backup list',
       'jobs',
