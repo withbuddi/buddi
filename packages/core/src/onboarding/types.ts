@@ -78,6 +78,21 @@ export interface OnboardingDetails {
   conversationId?: string;
   /** The account chosen during first run, which is the assistant's brain. */
   accountId?: string;
+  /**
+   * What the owner asked buddi to take on in chapter 3 (`days`, `mail`, …).
+   * An empty list is an answer too: "just an assistant for now".
+   */
+  takeOn?: string[];
+  /** Which of chapter 4's rows the owner did: the phone, a mailbox, the app, the browser. */
+  reach?: OnboardingReach;
+}
+
+/** Chapter 4 of first run, as the record keeps it: what was done, never how. */
+export interface OnboardingReach {
+  phone?: boolean;
+  mailbox?: boolean;
+  app?: boolean;
+  browser?: boolean;
 }
 
 /** One row of `core.onboarding`, or the synthetic pending row before there is one. */

@@ -1,20 +1,25 @@
 /**
  * First run: you meet buddi (docs/onboarding.md).
  *
- * One screen, one thread. buddi asks four things — your name, your clock, a
- * brain for your assistant, and the assistant itself — in message bubbles,
- * scripted, with no model behind them. Each answer is given inline where a
- * reply would go and becomes a bubble on the owner's side with a small
- * "change" link, so the thread reads back as a conversation.
+ * One screen, five chapters and a handover. A map on the left says where the
+ * owner is, what they answered (with "change") and the way out; one card on
+ * the field holds buddi's bubbles, the chapter's inputs and a dock: "Chapter n
+ * of 5" on the left, Back, the chapter's secondary action and its primary on
+ * the right. At phone width the map folds into a strip of dots.
  *
- * Then the speaker changes and the screen does not: the assistant's first
- * message lands in the same thread, under the same composer, and the record is
- * marked done when it arrives. Nothing here is a settings page; the settings
- * pages are unchanged for later.
+ *   1. Hello: a name and a clock.
+ *   2. A brain: the accounts, each tested with one small call.
+ *   3. What I take on: outcomes whose plugins install in the background.
+ *   4. Reach me: the phone, a mailbox, the app and the browser, all optional.
+ *   5. Your assistant: a name, a colour and a persona.
+ *
+ * Then the speaker changes: the assistant's first message lands in the same
+ * card, with four first questions under it and the things still waiting.
  *
  * What is answered lives on the server, never in this component: a reload
- * replays the answers from the record, the profile and the accounts, and asks
- * the first question nobody has answered (`meet/machine.ts`).
+ * replays the answers from the record, the profile and the accounts, and
+ * opens the first chapter nobody has answered (`meet/machine.ts`). Every word
+ * is in `meet/script.ts`.
  */
 import {
   createContext,
@@ -39,45 +44,56 @@ import {
   type ConnectionVerdict,
   keyRefused,
   type OllamaProbe,
+  type OnboardingReach,
   type ProviderAccountsView,
+  type TakeOnView,
   type VersionView,
 } from '../api';
 import { useAsync } from '../ui/async';
 import { MessageList } from '../chat/MessageList';
 import type { ChatAgent, ChatMessage } from '../chat/types';
 import { HOME_ROUTE, chatRoute } from '../routes';
-import { Blob, Button, ButtonLink, Code, Field, Icon, Stack, Toolbar } from '../ui';
+import { Blob, Button, ButtonLink, Code, Field, FloatCard, GradientField, Icon, Mark, Notice, Pill, Segment, Sheet, Stack, Toolbar, type IconName } from '../ui';
+import { useMediaQuery } from '../useMediaQuery';
+import type { PluginPageDescriptor } from '../pages/types';
 import { GEMINI_FALLBACK_MODEL, geminiBrains, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
+import { PluginPage } from '../pages/PluginPage';
 import { InstallProgress } from './parts/InstallProgress';
 import { SignInCode } from './parts/SignInCode';
+import { installHint, useInstallPrompt } from './parts/KeepClose';
 import {
+  COLOURS,
   DEFAULT_ASSISTANT_NAME,
   OPENING_INSTRUCTION,
   SCRIPT,
+  TAKE_ON,
+  TAKE_ON_DEFAULT,
   mascotUrl,
+  type ColourId,
+  type TakeOnTile,
 } from './meet/script';
-import { FacePicker, mascotFile, type FaceChoice } from './parts/FacePicker';
+import { mascotFile } from './parts/FacePicker';
 import {
+  CHAPTERS,
   STEP_OF,
   afterRestore,
+  answered,
   answersFrom,
   firstOpen,
   idFor,
   keyKind,
+  mapState,
+  previous,
   rememberRestore,
   rememberedRestore,
   reopen,
-  thread,
   usableAccounts,
   type BrainAnswer,
   type BrowserAnswer,
+  type ChapterId,
   type MeetAnswers,
-  type QuestionId,
 } from './meet/machine';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
-
-/** How long a scripted bubble "types" before it lands. */
-const TYPING_MS = 550;
 
 /**
  * How long a silent, *living* run goes before buddi says something about it.
@@ -91,29 +107,32 @@ export const PATIENCE_MS = 60_000;
 /**
  * The longest first run waits at all.
  *
- * Past this, with nothing said, the thread stops claiming anything is coming —
- * whatever the run says about itself.
+ * Past this, with nothing said, the handover stops claiming anything is
+ * coming — whatever the run says about itself.
  */
 export const FIRST_MESSAGE_TIMEOUT_MS = 5 * 60_000;
 
-/** How often the thread asks whether the answer has arrived. */
+/** How often the handover asks whether the answer has arrived. */
 const POLL_MS = 1_500;
 
-/** How long the finished board waits before leaving for the dashboard itself. */
-export const LEAVE_MS = 3_000;
+/** How often chapter 3's progress is read while an install runs. */
+export const TAKE_ON_POLL_MS = 2_000;
+
+/** Below this width the map folds into a strip of dots. */
+const PHONE = '(max-width: 720px)';
 
 /**
  * A field that opens is a field the owner is being asked to fill in.
  *
- * Every question puts its input in the dock, one at a time, so the thing that
- * just appeared is the only thing to type into — and asking someone to click
- * it first is asking them to do the obvious by hand.
+ * Every chapter puts its input on the card, and the thing that just appeared
+ * is the thing to type into — asking someone to click it first is asking them
+ * to do the obvious by hand.
  *
  * Focusing once on mount is not enough, and the reason is not React: measured
  * in Chrome, the field *was* `document.activeElement` while `document.
  * hasFocus()` was false, because the dashboard opens in a tab the owner is
  * not looking at yet. The first thing they do is click the window to bring it
- * forward, and that click lands where they clicked — usually the board — and
+ * forward, and that click lands where they clicked — usually the card — and
  * takes the caret with it. So this asks three times: after the frame is
  * painted, once more on the next turn of the loop if nothing has claimed the
  * focus, and again whenever the window itself comes back, as long as nobody
@@ -124,18 +143,22 @@ function useOpened<T extends HTMLElement>(): RefObject<T> {
   useEffect(() => {
     let frame = 0;
     let later = 0;
-    /** Nobody is typing anywhere: the open question may have the caret. */
+    /**
+     * Nobody is typing anywhere: the open field may have the caret. A sheet
+     * that just opened puts the focus on its own first button (Close); that
+     * is the sheet arriving, not the owner choosing, so a field in the same
+     * sheet may still take it.
+     */
     const free = (node: T): boolean => {
       const active = node.ownerDocument.activeElement;
-      return active === null || active === node.ownerDocument.body || active === node.ownerDocument.documentElement;
+      if (active === null || active === node.ownerDocument.body || active === node.ownerDocument.documentElement) return true;
+      const sheet = node.closest('[role="dialog"]');
+      return sheet !== null && active.tagName === 'BUTTON' && active.closest('[role="dialog"]') === sheet;
     };
     const take = (): void => {
       const node = field.current;
       if (node && free(node)) node.focus();
     };
-    // After the paint, not during the commit: a field that is not laid out yet
-    // is a field whose focus the browser may have nothing to put a caret in.
-    // Somewhere with no frames to wait for, the field is simply focused.
     const painted = (): void => {
       take();
       later = window.setTimeout(take, 0);
@@ -152,7 +175,7 @@ function useOpened<T extends HTMLElement>(): RefObject<T> {
   return field;
 }
 
-/** Reduced motion means no theatre: the bubbles are simply there. */
+/** Reduced motion means no theatre. */
 function useStill(): boolean {
   const [still, setStill] = useState(() => {
     try {
@@ -175,59 +198,11 @@ function useStill(): boolean {
   return still;
 }
 
-/**
- * A scripted bubble, after a pause with a typing indicator under buddi's name.
- *
- * The pause is what makes a script read as speech rather than as a page that
- * rendered. It is skipped entirely when the owner has asked for less motion.
- */
-function Said({ children, at = 0 }: { children: ReactNode; at?: number }): JSX.Element {
-  const still = useStill();
-  const [shown, setShown] = useState(still || at === 0);
-  useEffect(() => {
-    if (still) {
-      setShown(true);
-      return undefined;
-    }
-    const timer = window.setTimeout(() => setShown(true), TYPING_MS * at);
-    return () => window.clearTimeout(timer);
-  }, [still, at]);
-  if (!shown) return <Thinking />;
-  return (
-    <div className="wb-msg" data-role="assistant">
-      <div className="wb-bubble">{children}</div>
-    </div>
-  );
-}
+/* ------------------------------------------------------------------ *
+ * buddi speaking, and buddi at work
+ * ------------------------------------------------------------------ */
 
-/**
- * buddi at work: the typing dots, with a line saying what it is doing.
- *
- * The same indicator a scripted bubble shows before it lands, so "busy" on
- * this screen always looks like buddi about to say something — and then it
- * does, with the verdict.
- */
-function Thinking({ line }: { line?: string }): JSX.Element {
-  const { report } = useContext(MeetBusy);
-  useEffect(() => {
-    report(true);
-    return () => report(false);
-  }, [report]);
-  return (
-    <div className="wb-msg" data-role="assistant">
-      <span className="wb-working" role="status" aria-live="polite">
-        {line}
-        <span className="wb-dots" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-      </span>
-    </div>
-  );
-}
-
-/** How many of buddi's working lines are up, so the face over them can move. */
+/** How many of buddi's working lines are up, so the Blob beside them can move. */
 const MeetBusy = createContext<{ busy: number; report: (on: boolean) => void }>({ busy: 0, report: () => {} });
 
 function MeetBusyProvider({ children }: { children: ReactNode }): JSX.Element {
@@ -238,111 +213,89 @@ function MeetBusyProvider({ children }: { children: ReactNode }): JSX.Element {
 }
 
 /**
- * buddi's name and face, over a run of its bubbles.
+ * One of buddi's bubbles: the Blob, then the words.
  *
- * The face is the mark from the rail — the same accent tile with the same
- * letter — because this is the same buddi the owner will see in the corner of
- * every page afterwards. Initials would be a stand-in for a face we have.
+ * The face is the real Buddi Blob, the same one the owner meets again in the
+ * corner of every page; it moves while buddi is working on something.
  */
-function Buddi({ children }: { children: ReactNode }): JSX.Element {
+function Said({ children }: { children: ReactNode }): JSX.Element {
   const { busy } = useContext(MeetBusy);
-  const head = useRef<HTMLDivElement>(null);
-  const [moving, setMoving] = useState(false);
-  // While buddi works, the one name showing over the latest run moves: turns
-  // after the first in a run hide theirs, so a working line under a hidden
-  // name is told by the name above it.
-  useEffect(() => {
-    const mine = head.current;
-    const thread = mine?.closest('.meet-thread');
-    if (busy === 0 || !mine || !thread) {
-      setMoving(false);
-      return;
-    }
-    const shown = [...thread.querySelectorAll<HTMLElement>('.meet-turn > .wb-msg-who')].filter((h) => getComputedStyle(h).display !== 'none');
-    setMoving(shown.at(-1) === mine);
-  }, [busy]);
   return (
-    <div className="meet-turn">
-      <div className="wb-msg-who" ref={head}>
-        {/* The Blob speaks here, the same face as above the card; it moves while buddi works. */}
-        <Blob state={moving ? 'working' : 'idle'} size="sm" className="meet-turn-mark" />
-        <span>buddi</span>
-      </div>
-      {children}
+    <div className="wiz-say">
+      <Blob state={busy > 0 ? 'working' : 'idle'} size="sm" className="wiz-say-face" />
+      <div className="wiz-bubble">{children}</div>
+    </div>
+  );
+}
+
+/** A run of buddi's bubbles. Kept as a name so a chapter reads as a script. */
+function Buddi({ children }: { children: ReactNode }): JSX.Element {
+  return <>{children}</>;
+}
+
+/**
+ * buddi at work: three dots and a line saying what it is doing, until the
+ * verdict arrives as a bubble. Never blocks anything.
+ */
+function Thinking({ line }: { line?: string }): JSX.Element {
+  const { report } = useContext(MeetBusy);
+  useEffect(() => {
+    report(true);
+    return () => report(false);
+  }, [report]);
+  return (
+    <div className="wiz-busy" role="status" aria-live="polite">
+      <span className="wiz-pulse" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      {line}
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ *
- * The dock: one place at the bottom of the board
+ * The dock: the card's last row
  * ------------------------------------------------------------------ */
 
+/** The dock's actions element, once it is on the page, for the open chapter to fill. */
+const DockSlot = createContext<HTMLElement | null>(null);
+
 /**
- * Where the thing being answered goes.
+ * Where an answer is given.
  *
- * The board is one card with the thread scrolling inside it, so whatever the
- * owner is answering *right now* — a field, a set of cards, the real composer
- * — is pinned at its bottom rather than sitting at the end of a column that
- * grows past the window. Each question still owns its own input; it renders
- * through here, so nothing had to be split in two to be placed in two.
+ * What is being filled in sits on the card (`children`), and the actions sit
+ * on the dock's one row (`actions`): Back first, the secondary, then the
+ * primary last and rightmost. Each chapter renders exactly one row at a time.
  */
-interface DockSlots {
-  /** Above: the fields, cards or lines being answered. */
-  body: HTMLElement | null;
-  /** Below, on the dock's one row: the actions, primary last and rightmost. */
-  actions: HTMLElement | null;
-}
-
-const DockSlot = createContext<DockSlots>({ body: null, actions: null });
-
-function Dock({ children, actions }: { children?: ReactNode; actions?: ReactNode }): JSX.Element {
-  const slots = useContext(DockSlot);
-  const body = children === undefined || children === null ? null : slots.body ? createPortal(children, slots.body) : children;
-  const row = actions === undefined || actions === null ? null : slots.actions ? createPortal(actions, slots.actions) : actions;
+function Ask({ children, actions }: { children?: ReactNode; actions?: ReactNode }): JSX.Element {
+  const slot = useContext(DockSlot);
+  const row = actions === undefined || actions === null ? null : slot ? createPortal(actions, slot) : <div className="wiz-dock-inline">{actions}</div>;
   return (
     <>
-      {body}
+      {children ? <div className="wiz-ask">{children}</div> : null}
       {row}
     </>
   );
 }
 
-/** What the owner said, with the way back to it. */
-function Answered({ text, onChange }: { text: string; onChange: () => void }): JSX.Element {
-  return (
-    <div className="wb-msg" data-role="user">
-      <div className="wb-bubble">{text}</div>
-      <button type="button" className="meet-change" onClick={onChange}>
-        {SCRIPT.change}
-      </button>
-    </div>
-  );
-}
-
-/**
- * Where an answer is given.
- *
- * Every step has the same two parts, so every step lines up the same way: what
- * is being filled in sits above (`children`), and the actions sit on the dock's
- * bottom row (`actions`) — secondary ones first, the primary last, flush right,
- * with the quiet way out at the row's left edge.
- */
-function Ask({ children, actions }: { children?: ReactNode; actions?: ReactNode }): JSX.Element {
-  return (
-    <Dock
-      actions={actions ? <span className="meet-actions">{actions}</span> : null}
-    >
-      {children ? <div className="meet-ask">{children}</div> : null}
-    </Dock>
-  );
-}
-
-/** The way back to the four brains, as a real, labelled action. */
+/** Back, as a real, labelled action: to the chapter before, or to the brain cards. */
 function Back({ onClick, disabled }: { onClick: () => void; disabled?: boolean }): JSX.Element {
   return (
-    <Button variant="ghost" onClick={onClick} disabled={disabled}>
+    <Button variant="ghost" size="lg" onClick={onClick} disabled={disabled}>
       <Icon name="chevron-left" />
-      {SCRIPT.brain.back}
+      {SCRIPT.back}
+    </Button>
+  );
+}
+
+/** The chapter's primary: accent, large, with the arrow. */
+function Primary({ children, onClick, disabled }: { children: ReactNode; onClick: () => void; disabled?: boolean }): JSX.Element {
+  return (
+    <Button variant="accent" size="lg" onClick={onClick} disabled={disabled}>
+      {children}
+      <Icon name="arrow" />
     </Button>
   );
 }
@@ -353,30 +306,63 @@ export interface ExistingAssistant {
   name: string;
   avatar: string;
   description: string;
-  /** The picture it wears, when it has one (a mascot chosen here, or an upload). */
+  /** The picture it wears, when it has one (a Blob chosen here, or an upload). */
   picture?: string;
 }
 
 export interface MeetProps {
   navigate: (next: string, replace?: boolean) => void;
-  /** The installation's zone. The clock question offers the browser's own. */
+  /** The installation's zone. Chapter 1 offers the browser's own. */
   timezone: string;
 }
 
+
+/** What a chapter is handed: the answers, what the server holds, and the ways to answer. */
+interface QuestionProps {
+  answers: MeetAnswers;
+  accounts: ProviderAccountsView | undefined;
+  /** The catalogue's default model for a new Claude account, when the server named one. */
+  claudeModel?: string | undefined;
+  zones: string[];
+  browserZone: string;
+  assistantAgent: ChatAgent | null;
+  /** The handover conversation the record already holds, if any. */
+  met: string | null;
+  onMet: (conversationId: string) => void;
+  /** The assistant this installation already has, if it has one. */
+  existing: ExistingAssistant | null;
+  /** Chapter 3's progress, as the server last said it. */
+  progress: TakeOnView | null;
+  /** Read chapter 3's progress again now. */
+  onProgress: () => void;
+  navigate: (next: string, replace?: boolean) => void;
+  /** Save this chapter's answer and open the next unanswered one. */
+  onSettled: (next: MeetAnswers) => void;
+  /** Keep an answer without moving on (a brain tested, a model changed). */
+  onKept: (next: MeetAnswers) => void;
+  onBack: () => void;
+  onTrouble: (message: string | null) => void;
+  onReload: () => void;
+  onPickAnotherBrain: () => void;
+  /** The handover: the assistant has spoken, and first run is over. */
+  onSpoken: (route: string) => void;
+}
+
 export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
+  const phone = useMediaQuery(PHONE);
   // The machine buddi runs on, from the gateway: the browser may be elsewhere.
   const [platform, setPlatform] = useState<string | undefined>(undefined);
   useEffect(() => {
     api.session().then((s) => setPlatform(s.platform)).catch(() => {});
   }, []);
   const [answers, setAnswers] = useState<MeetAnswers>({});
-  const [open, setOpen] = useState<QuestionId | null>(null);
+  const [open, setOpen] = useState<ChapterId | null>(null);
   const [accounts, setAccounts] = useState<ProviderAccountsView | undefined>(undefined);
   // The model catalogue's default for a Claude account, when the server names one.
   const [claudeModel, setClaudeModel] = useState<string | undefined>(undefined);
   const [zones, setZones] = useState<string[]>([]);
   const [assistantAgent, setAssistantAgent] = useState<ChatAgent | null>(null);
-  /** Anything that failed, said in the thread rather than in a banner. */
+  /** Anything that failed, said on the card rather than in a banner. */
   const [trouble, setTrouble] = useState<string | null>(null);
   const [leaving, setLeaving] = useState(false);
   /** The handover conversation the record already knows about, if any. */
@@ -384,29 +370,15 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   /**
    * The assistant that already exists, whatever the answers currently say.
    *
-   * "Change" empties the answer, and the answer is what the thread draws; this
-   * is what the *installation* holds, and it is what decides whether saving
-   * the assistant question writes a first agent or changes the one there is.
+   * Start over empties the answers, and the answers are what the map draws;
+   * this is what the *installation* holds, and it is what decides whether
+   * saving chapter 5 writes a first agent or changes the one there is.
    */
   const [existing, setExisting] = useState<ExistingAssistant | null>(null);
-  /** The dock's two elements, once they are on the page, for the open question to fill. */
-  const [dockBody, setDockBody] = useState<HTMLElement | null>(null);
-  const [dockActions, setDockActions] = useState<HTMLElement | null>(null);
-  const slots = useMemo<DockSlots>(() => ({ body: dockBody, actions: dockActions }), [dockBody, dockActions]);
-  /**
-   * Where this thread carries on once the assistant has spoken.
-   *
-   * From that moment first run is over — the record says so — and the quiet
-   * link under the dock stops offering to set up later, which is no longer a
-   * thing that can happen, and offers the way out instead.
-   */
+  /** The dock's actions element, once it is on the page. */
+  const [dock, setDock] = useState<HTMLElement | null>(null);
+  /** Where the conversation carries on once the assistant has spoken: first run is over. */
   const [carriesOn, setCarriesOn] = useState<string | null>(null);
-  /**
-   * The thread has ended and the dock itself offers the way out, as the
-   * primary action; the quiet link would only say the same thing twice.
-   */
-  const [closed, setClosed] = useState(false);
-  const close = useCallback((): void => setClosed(true), []);
   /**
    * The other way this screen can go.
    *
@@ -415,20 +387,34 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
    * land back on "what should we call you?".
    */
   const [restore, setRestore] = useState<RestoreState>(() => (rememberedRestore() ? 'running' : 'idle'));
+  /** Start over: what the server already holds and the new run meets again as answered. */
+  const [kept, setKept] = useState<{ brain?: BrainAnswer }>({});
   /**
-   * Start over: what the server already holds and the new thread will meet
-   * again as answered, the way a reload replays a finished step. Empty until
-   * the owner starts over.
+   * What buddi says once at the foot of the open chapter: what stays after
+   * Start over, or the welcome back after a restore. Gone with the next answer.
    */
-  const [kept, setKept] = useState<{ brain?: BrainAnswer; browser?: BrowserAnswer }>({});
-  /** What stays in Settings, named once above the first question again. */
-  const [keptSaid, setKeptSaid] = useState<string[]>([]);
-  /** Bumped by Start over, so every question and card mounts afresh. */
+  const [said, setSaid] = useState<string[]>([]);
+  /** Bumped by Start over, so every chapter mounts afresh. */
   const [round, setRound] = useState(0);
-  /** The brain the thread last knew, so starting over can meet it again. */
+  /** The brain the wizard last knew, so starting over can meet it again. */
   const lastBrain = useRef<BrainAnswer | undefined>(undefined);
+  /** Chapter 3's progress, read from the server and read again while it runs. */
+  const [progress, setProgress] = useState<TakeOnView | null>(null);
+  const readProgress = useCallback((): void => {
+    void Promise.resolve()
+      .then(() => api.takeOnProgress())
+      .then((view) => {
+        if (view && Array.isArray(view.plugins)) setProgress(view);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!progress?.running) return undefined;
+    const timer = window.setInterval(readProgress, TAKE_ON_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [progress?.running, readProgress]);
 
-  /** The zone this browser is in, which is what the question offers. */
+  /** The zone this browser is in, which is what chapter 1 offers. */
   const browserZone = useMemo(() => {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone || timezone;
@@ -445,7 +431,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
   /**
    * Read the server and, on the first pass, replay what it already knows.
    *
-   * A refresh after a write does not replay: the thread has just decided
+   * A refresh after a write does not replay: the wizard has just decided
    * something, and re-deriving the answers from a read that may not yet show
    * it would overwrite the newer truth with the older one — the account the
    * assistant was moved onto a moment ago being the case that bites.
@@ -480,6 +466,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
           }
         : null,
     );
+    if (Array.isArray(onboarding?.details?.takeOn)) readProgress();
     const facts = {
       onboarding,
       owner,
@@ -487,11 +474,10 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       browser: browserView?.browser?.engine,
       ...(own ? { assistant: { id: own.id, name: own.name, avatar: own.avatar?.kind === 'emoji' ? own.avatar.value : '' } } : {}),
     };
-    const replayed = answersFrom(facts);
     /*
      * A restore that just landed brings a finished record with it, which is
      * the one case where "done" does not mean the owner should be sent away:
-     * the keys did not come back, so there is a question left to ask.
+     * the keys did not come back, so there is a chapter left to answer.
      */
     if (restoredNow) {
       const resume = afterRestore(facts);
@@ -504,7 +490,7 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       return;
     }
     /*
-     * A finished first run has no thread to show.
+     * A finished first run has nothing to show.
      *
      * The record is done, so this route is a page the owner has already left;
      * a reload lands where the conversation is — the same one they met their
@@ -517,71 +503,78 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       return;
     }
     if (!replay) return;
+    const replayed = answersFrom(facts);
     setAnswers(replayed);
     setOpen((current) => current ?? firstOpen(replayed));
     // Deliberately no dependencies: this reads the server once on mount and
-    // again only when something asks it to. `navigate` is held in a ref rather
-    // than depended on, because a caller that passes a fresh function every
-    // render would otherwise make "read the server" mean "read it for ever".
+    // again only when something asks it to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const record = (id: QuestionId, learned: { conversationId?: string; accountId?: string } = {}): void => {
-    void api.onboardingStep(STEP_OF[id], learned).catch(() => {});
+  const record = (id: ChapterId, learned: { conversationId?: string; accountId?: string; reach?: OnboardingReach } = {}): void => {
+    void Promise.resolve()
+      .then(() => api.onboardingStep(STEP_OF[id], learned))
+      .catch(() => {});
   };
 
-  /**
-   * After Start over, a step the server already holds is met as answered —
-   * the account as connected, the browser as there — with its "change" link,
-   * exactly as a reload replays it.
-   */
-  const withKept = (next: MeetAnswers): MeetAnswers => {
-    let out = next;
-    for (;;) {
-      const at = firstOpen(out);
-      if (at === 'brain' && kept.brain) out = { ...out, brain: kept.brain };
-      else if (at === 'browser' && kept.browser) out = { ...out, browser: kept.browser };
-      else return out;
-    }
-  };
+  /** After Start over, a brain the server already holds is met as answered, with its "change". */
+  const withKept = (next: MeetAnswers): MeetAnswers =>
+    firstOpen(next) === 'brain' && kept.brain ? { ...next, brain: kept.brain } : next;
 
-  /** One answer saved: keep it, record the step, move on. */
-  const settle = (id: QuestionId, given: MeetAnswers): void => {
+  /** One chapter saved: keep it, record the step, open the next chapter nobody answered. */
+  const settle = (id: ChapterId, given: MeetAnswers): void => {
     const next = withKept(given);
     if (next.brain) lastBrain.current = next.brain;
     setTrouble(null);
+    setSaid([]);
     setAnswers(next);
-    // The account chosen here is recorded with the step, so a reload knows
-    // which of several accounts is this assistant's brain.
-    record(id, id === 'brain' && next.brain ? { accountId: next.brain.accountId } : {});
+    // Chapter 3 is recorded by its own route; chapter 4 carries its rows.
+    if (id === 'brain' && next.brain) record(id, { accountId: next.brain.accountId });
+    else if (id === 'reach') record(id, next.reach ? { reach: next.reach } : {});
+    else if (id !== 'takeOn') record(id);
     setOpen(firstOpen(next));
   };
 
-  const change = (id: QuestionId): void => {
+  /** An answer kept without moving on: the brain tested, a model changed. */
+  const keep = (id: ChapterId, given: MeetAnswers): void => {
+    setTrouble(null);
+    setAnswers(given);
+    if (given.brain) lastBrain.current = given.brain;
+    if (id === 'brain' && given.brain) record(id, { accountId: given.brain.accountId });
+  };
+
+  const change = (id: ChapterId): void => {
     setTrouble(null);
     setAnswers((current) => reopen(current, id));
     setOpen(id);
   };
 
+  const back = (): void => {
+    if (!open) return;
+    const before = previous(open === 'handover' ? 'handover' : open);
+    if (before) change(before);
+  };
+
   /*
-   * Start over: back to the first question with an empty thread.
+   * Start over: back to chapter 1 with nothing answered.
    *
-   * Unmounting the open question is what cancels anything in flight — a
+   * Unmounting the open chapter is what cancels anything in flight — a
    * sign-in waiting for its code cancels itself when its card goes. Nothing
    * saved is undone, so there is nothing to confirm: buddi says what stays,
-   * once, and meets it again as answered when the thread gets there.
+   * once, and meets the brain again as answered when the owner gets there.
    */
   const startOver = (): void => {
     const brainNow = answers.brain ?? lastBrain.current;
-    const browserNow = answers.browser;
+    const installedNow = (progress?.plugins ?? []).filter((p) => p.state === 'ready').map((p) => p.title);
     setTrouble(null);
     setKept({});
-    setKeptSaid([]);
+    setSaid([]);
     setAnswers({});
-    setOpen('name');
+    setOpen('hello');
     setRound((at) => at + 1);
     void (async () => {
       const [accountView, telegram, browserView] = await Promise.all([
@@ -591,20 +584,17 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       ]);
       const usable = usableAccounts(accountView);
       const brain = brainNow && usable.some((account) => account.id === brainNow.accountId) ? brainNow : undefined;
-      const browser: BrowserAnswer | undefined =
-        browserNow === 'installed' || browserView?.browser?.engine === 'chromium' ? 'chromium' : undefined;
       if (accountView) setAccounts(accountView);
-      setKept({ ...(brain ? { brain } : {}), ...(browser ? { browser } : {}) });
-      setKeptSaid([
+      setKept(brain ? { brain } : {});
+      const stays = [
         ...new Set(usable.map((account) => account.label)),
         ...(telegram?.paired ? [SCRIPT.startOver.telegram] : []),
-        ...(browser ? [SCRIPT.startOver.browser] : []),
-      ]);
+        ...(browserView?.browser?.engine === 'chromium' ? [SCRIPT.startOver.browser] : []),
+        ...installedNow,
+      ];
+      setSaid(stays.length > 0 ? [SCRIPT.startOver.said(stays.join(', '))] : []);
     })();
   };
-  /** From the second question on, and during anything under way after it. */
-  const offerStartOver =
-    restore === 'idle' && !carriesOn && !closed && open !== null && (open !== 'name' || Object.keys(answers).length > 0);
 
   /*
    * Leaving happens only when the server agrees it happened: a dashboard that
@@ -620,519 +610,314 @@ export function Meet({ navigate, timezone }: MeetProps): JSX.Element {
       .finally(() => setLeaving(false));
   };
 
-  // While a restore is being asked for or run, it is the only thing on the
-  // screen: there is nothing to answer that it would not overwrite.
-  const shown = restore === 'form' || restore === 'running' ? [] : open ? thread(answers, open) : [];
-
-  /*
-   * The newest line is the one at the bottom, and it is where the owner is
-   * looking. Anything that lengthens the thread scrolls it down; `auto` is
-   * deliberate, because a jump is what a chat does and reduced motion is
-   * honoured by the browser rather than by us.
-   */
   // The running version, quietly under the tagline: the one place an owner
   // reads it before the dashboard exists.
   const version = useAsync<VersionView>(() => api.version().catch(() => ({ current: '' } as VersionView)), []);
-  const scroller = useRef<HTMLDivElement>(null);
+  const wizard = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const node = scroller.current;
-    if (!node) return undefined;
-    const pin = (): void => {
-      node.scrollTop = node.scrollHeight;
-    };
-    pin();
-    // Everything that lengthens the thread is watched, not just the things
-    // this component happens to re-render for: a scripted bubble landing after
-    // its pause, and the assistant's answer arriving inside the handover, are
-    // both simply the content getting taller.
-    let observer: ResizeObserver | undefined;
-    try {
-      observer = new ResizeObserver(pin);
-      if (node.firstElementChild) observer.observe(node.firstElementChild);
-    } catch {
-      /* No ResizeObserver: the effect above still pins on every render. */
-    }
-    return () => observer?.disconnect();
-  }, [shown.length, open, answers, trouble]);
+    if (wizard.current) wizard.current.scrollTop = 0;
+  }, [open]);
+
+  const restoring = restore === 'running';
+  const nothingAnswered = Object.keys(answers).length === 0;
+  const props: QuestionProps = {
+    answers,
+    accounts,
+    claudeModel,
+    zones,
+    browserZone,
+    assistantAgent,
+    met,
+    onMet: setMet,
+    existing,
+    progress,
+    onProgress: readProgress,
+    navigate,
+    onSettled: (next) => open && settle(open, next),
+    onKept: (next) => open && keep(open, next),
+    onBack: back,
+    onTrouble: setTrouble,
+    onReload: () => void load(false),
+    onPickAnotherBrain: () => change('brain'),
+    onSpoken: setCarriesOn,
+  };
+
+  /* ---- the map ---- */
+  const takeOnTitles = (answers.takeOn ?? []).map((tile) => TAKE_ON.find((t) => t.id === tile)?.title ?? tile);
+  const installs = progress?.plugins ?? [];
+  const ready = installs.filter((p) => p.state === 'ready').length;
+  const installSub =
+    installs.length === 0 ? null : progress?.running ? SCRIPT.takeOn.installing(ready, installs.length) : ready === installs.length ? SCRIPT.takeOn.installed : null;
+  const reachDone = [
+    answers.reach?.phone ? (SCRIPT.reach.done.phone as string) : null,
+    answers.reach?.mailbox ? SCRIPT.reach.done.mailbox : null,
+    answers.reach?.app || answers.reach?.browser ? SCRIPT.reach.done.app : null,
+  ].filter((line): line is string => line !== null);
+  const mapAnswers: Record<Exclude<ChapterId, 'handover'>, { answer: string; sub?: string | null }> = {
+    hello: { answer: SCRIPT.hello.answer(answers.name ?? ''), sub: answers.clock ?? null },
+    brain: { answer: SCRIPT.brain.answer(answers.brain?.label ?? '') },
+    takeOn: { answer: SCRIPT.takeOn.answer(takeOnTitles), sub: installSub },
+    reach: { answer: SCRIPT.reach.answer(reachDone) },
+    assistant: { answer: answers.assistant?.name ?? '' },
+  };
+  const chapterIds = CHAPTERS.filter((id): id is Exclude<ChapterId, 'handover'> => id !== 'handover');
+  const at = open === null || open === 'handover' ? chapterIds.length : chapterIds.indexOf(open);
+  const noteAt = Math.min(at, chapterIds.length - 1);
+
+  const outLinks = carriesOn ? null : (
+    <div className="wiz-map-out">
+      <button type="button" className="wiz-link" disabled={leaving} onClick={later}>
+        {SCRIPT.later}
+      </button>
+      {open === 'hello' && nothingAnswered && restore === 'idle' ? (
+        <button type="button" className="wiz-link" onClick={() => setRestore('form')}>
+          {SCRIPT.restore.offer}
+        </button>
+      ) : !restoring && open !== null && !(open === 'hello' && nothingAnswered) ? (
+        <button type="button" className="wiz-link" disabled={leaving} onClick={startOver}>
+          {SCRIPT.startOver.link}
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const tagline = platform === undefined || platform === 'darwin' ? SCRIPT.tagline : SCRIPT.taglineElsewhere;
+  const count = open && open !== 'handover' ? <span className="wiz-count">{SCRIPT.count(at + 1)}</span> : <span className="wiz-count" />;
 
   return (
-    <DockSlot.Provider value={slots}>
-    <div className="meet">
-      <div className="meet-stack">
-      {/*
-        One board, centred, never taller than the window: the thread scrolls
-        inside it with the newest line at the bottom, and what is being
-        answered is docked under a single hairline. A short thread is a short
-        card, and the page itself never scrolls.
-      */}
-        <header className="meet-head">
-          {/* Buddi Blob, the mascot: a bundled copy of the design repo's art. */}
-          <img className="meet-head-mascot" src={mascotUrl('core')} alt="" aria-hidden="true" />
-          <span className="meet-head-who">
-            <span className="meet-head-name">buddi</span>
-            <span className="meet-head-line">{platform === undefined || platform === 'darwin' ? SCRIPT.tagline : SCRIPT.taglineElsewhere}</span>
-            {version.data?.current ? <span className="meet-head-version mono">buddi {version.data.current}</span> : null}
-          </span>
-        </header>
-
-        <div className="meet-board">
-        <div className="meet-scroll thin-scroll" ref={scroller}>
-          <div className="meet-thread" data-testid="meet-thread">
-            <MeetBusyProvider>
-              <Buddi>
-                {SCRIPT.opening.map((line, at) => (
-                  <Said key={line} at={at}>
-                    {line}
-                  </Said>
-                ))}
-              </Buddi>
-
-              <FromABackup
-                state={restore}
-                offered={open === 'name' && answers.name === undefined}
-                name={answers.name}
-                onState={setRestore}
-                onDone={() => {
-                  setRestore('idle');
-                  void load(true, true);
-                }}
-                onTrouble={setTrouble}
-              />
-
-              {keptSaid.length > 0 ? (
-                <Buddi>
-                  <Said>{SCRIPT.startOver.said(keptSaid.join(', '))}</Said>
-                </Buddi>
-              ) : null}
-
-              {shown.map((id) => (
-                <Question
-                  key={`${round}-${id}`}
-                  id={id}
-                  openNow={open === id}
-                  answers={answers}
-                  accounts={accounts}
-                  claudeModel={claudeModel}
-                  zones={zones}
-                  browserZone={browserZone}
-                  assistantAgent={assistantAgent}
-                  met={met}
-                  onMet={setMet}
-                  existing={existing}
-                  navigate={navigate}
-                  onCarriesOn={setCarriesOn}
-                  onClosed={close}
-                  onSettled={(next) => settle(id, next)}
-                  onChange={() => change(id)}
-                  onTrouble={setTrouble}
-                  onReload={() => void load(false)}
-                  onPickAnotherBrain={() => change('brain')}
-                />
-              ))}
-
-            {trouble ? (
-              <Buddi>
-                <Said>{trouble}</Said>
-              </Buddi>
-            ) : null}
-            </MeetBusyProvider>
+    <DockSlot.Provider value={dock}>
+      <MeetBusyProvider>
+        <GradientField className="wiz-ground">
+          <div className="wiz" ref={wizard} data-phone={phone ? 'true' : undefined} data-testid="meet">
+            <div className="wiz-frame">
+              {phone ? (
+                <div className="wiz-strip">
+                  <Mark size="sm" />
+                  <span className="wiz-dots" aria-label={open && open !== 'handover' ? SCRIPT.count(at + 1) : undefined}>
+                    {chapterIds.map((id) => (
+                      <i key={id} data-state={mapState(answers, open, id)} />
+                    ))}
+                  </span>
+                  <span className="wiz-strip-name">
+                    {open && open !== 'handover' ? SCRIPT.strip(at + 1, SCRIPT.chapters[at] ?? '') : SCRIPT.handover.starterLabel}
+                  </span>
+                </div>
+              ) : (
+                <nav className="wiz-map" aria-label="Chapters">
+                  <div className="wiz-head">
+                    <Mark size="lg" />
+                    <div>
+                      <div className="wiz-head-name">buddi</div>
+                      <div className="wiz-head-line">{tagline}</div>
+                      {version.data?.current ? <div className="wiz-head-version mono">buddi {version.data.current}</div> : null}
+                    </div>
+                  </div>
+                  {chapterIds.map((id, index) => {
+                    const state = restoring ? (id === 'hello' ? 'now' : 'todo') : mapState(answers, open, id);
+                    const shown = mapAnswers[id];
+                    return (
+                      <div key={id} className="wiz-ch" data-state={state} aria-current={state === 'now' ? 'step' : undefined}>
+                        <span className="wiz-num" data-state={state}>
+                          {state === 'done' ? <Icon name="check" size={12} /> : index + 1}
+                        </span>
+                        <span className="wiz-ch-label">
+                          {state === 'done' ? shown.answer : SCRIPT.chapters[index]}
+                          {state === 'done' && shown.sub ? <span className="wiz-ch-sub">{shown.sub}</span> : null}
+                        </span>
+                        {state === 'done' && !restoring ? (
+                          <button type="button" className="wiz-link" onClick={() => change(id)}>
+                            {SCRIPT.change}
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  <div className="wiz-map-spacer" />
+                  <div className="wiz-map-note">{SCRIPT.mapNotes[noteAt]}</div>
+                  {outLinks}
+                </nav>
+              )}
+              <div className="wiz-stage" role="main">
+                <div className="wiz-column" data-width={open === 'hello' ? 'narrow' : open === 'brain' ? 'mid' : 'wide'}>
+                  <FloatCard
+                    key={`${round}-${open ?? ''}-${restoring ? 'r' : ''}`}
+                    dock={
+                      <>
+                        {count}
+                        <div className="wiz-dock-actions" ref={setDock} />
+                      </>
+                    }
+                  >
+                    {restoring ? (
+                      <RestoreRunning
+                        onDone={(name) => {
+                          setRestore('idle');
+                          // The name comes back with the backup; a backup that
+                          // carried none simply gets the sentence that matters.
+                          setSaid([...(name ? [SCRIPT.restore.welcome(name)] : []), SCRIPT.restore.keys]);
+                          void load(true, true);
+                        }}
+                        onFailed={(message) => {
+                          setRestore('idle');
+                          setTrouble(message);
+                        }}
+                      />
+                    ) : open === 'hello' ? (
+                      <HelloChapter {...props} />
+                    ) : open === 'brain' ? (
+                      <BrainChapter {...props} />
+                    ) : open === 'takeOn' ? (
+                      <TakeOnChapter {...props} />
+                    ) : open === 'reach' ? (
+                      <ReachChapter {...props} />
+                    ) : open === 'assistant' ? (
+                      <AssistantChapter {...props} />
+                    ) : open === 'handover' ? (
+                      <Handover {...props} />
+                    ) : (
+                      <Thinking />
+                    )}
+                    {said.length > 0 || trouble ? (
+                      <Buddi>
+                        {said.map((line) => (
+                          <Said key={line}>{line}</Said>
+                        ))}
+                        {trouble ? <Said>{trouble}</Said> : null}
+                      </Buddi>
+                    ) : null}
+                  </FloatCard>
+                  {phone ? <div className="wiz-phone-out">{outLinks}</div> : null}
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-
-        <footer className="meet-dock">
-          <div className="meet-dock-ask" ref={setDockBody} />
-          {/* One row, every step: the quiet way out on the left, the step's
-              actions on the right with the primary last. */}
-          <div className="meet-dock-row">
-          {closed ? (
-            <span />
-          ) : carriesOn ? (
-            <a
-              className="meet-later"
-              href={carriesOn}
-              onClick={(event) => {
-                event.preventDefault();
-                navigate(carriesOn, true);
-              }}
-            >
-              {SCRIPT.done.open}
-            </a>
-          ) : (
-            <span className="meet-quiet">
-              <button className="meet-later" type="button" disabled={leaving} onClick={later}>
-                {SCRIPT.later}
-              </button>
-              {offerStartOver ? (
-                <button className="meet-later" type="button" disabled={leaving} onClick={startOver}>
-                  {SCRIPT.startOver.link}
-                </button>
-              ) : null}
-            </span>
-          )}
-          <div className="meet-dock-actions" ref={setDockActions} />
-          </div>
-        </footer>
-        </div>
-      </div>
-    </div>
+          {restore === 'form' ? (
+            <RestoreForm
+              onCancel={() => setRestore('idle')}
+              onStarted={() => setRestore('running')}
+              onTrouble={setTrouble}
+            />
+          ) : null}
+        </GradientField>
+      </MeetBusyProvider>
     </DockSlot.Provider>
   );
 }
 
+/** A chapter's title: the one heading on the card. */
+function Title({ children }: { children: ReactNode }): JSX.Element {
+  return <h1 className="wiz-title">{children}</h1>;
+}
+
 /* ------------------------------------------------------------------ *
- * 0. There is already a buddi, and this one is meant to become it
+ * 1. Hello: a name and a clock
  * ------------------------------------------------------------------ */
 
-/** Idle, being asked for, or under way. */
-export type RestoreState = 'idle' | 'form' | 'running';
+/** Now, on the clock in `zone`, as "18:22"; empty for a zone the browser does not know. */
+function timeIn(zone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone }).format(new Date());
+  } catch {
+    return '';
+  }
+}
 
-/**
- * Restoring, offered before the first question and never after it.
- *
- * It is a quiet link under the opening bubbles because almost nobody has a
- * backup on the day they install this, and the one person who does is looking
- * for exactly those words. What follows is the job's own phases, said in
- * buddi's voice, and then the thread picks up at the brain — the one answer a
- * backup can never bring back, because it never carries a key.
- */
-function FromABackup({
-  state,
-  offered,
-  name,
-  onState,
-  onDone,
-  onTrouble,
-}: {
-  state: RestoreState;
-  /** Nothing has been answered yet, so there is nothing a restore would undo. */
-  offered: boolean;
-  name: string | undefined;
-  onState: (next: RestoreState) => void;
-  onDone: () => void;
-  onTrouble: (message: string | null) => void;
-}): JSX.Element | null {
-  const [jobId, setJobId] = useState<string | null>(() => rememberedRestore());
-  const [phases, setPhases] = useState<string[]>([]);
-  const [done, setDone] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [passphrase, setPassphrase] = useState('');
-  const [sending, setSending] = useState(false);
-
-  /*
-   * The job outlives this page: halfway through, the gateway is stopped and
-   * every request fails. A failed poll is therefore not news — only an answer
-   * is — and the id that makes the answer findable is what the tab remembers.
-   */
-  useEffect(() => {
-    if (!jobId) return undefined;
-    let stopped = false;
-    const ask = (): void => {
-      api
-        .backupJob(jobId)
-        .then((job: BackupJob) => {
-          if (stopped) return;
-          setPhases((seen) => (seen.includes(job.phase) ? seen : [...seen, job.phase]));
-          if (job.phase === 'done') {
-            stopped = true;
-            rememberRestore(null);
-            setDone(true);
-            onDone();
-          } else if (job.phase === 'rolled-back' || job.phase === 'failed') {
-            // Both are the end of this job. They differ in what is on disk
-            // now, which is what the job's own error says, so it is preferred
-            // over either standing sentence.
-            stopped = true;
-            rememberRestore(null);
-            setJobId(null);
-            onTrouble(job.error ?? SCRIPT.restore.phases[job.phase]);
-            onState('idle');
-          }
-        })
-        .catch(() => {
-          /* Restarting, or not answering yet. Ask again in a moment. */
-        });
-    };
-    ask();
-    const timer = window.setInterval(ask, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
-
-  const send = (): void => {
-    if (!file || sending) return;
-    setSending(true);
-    onTrouble(null);
+function HelloChapter({ answers, zones, browserZone, onSettled, onTrouble }: QuestionProps): JSX.Element {
+  const field = useOpened<HTMLInputElement>();
+  const [name, setName] = useState(answers.name ?? '');
+  const [zone, setZone] = useState(answers.clock ?? browserZone);
+  const [picking, setPicking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const submit = (): void => {
+    const trimmed = name.trim();
+    if (trimmed === '' || saving) return;
+    setSaving(true);
     api
-      .firstRunRestore(file, passphrase.trim())
-      .then((answer) => {
-        rememberRestore(answer.job.id);
-        setJobId(answer.job.id);
-        onState('running');
-      })
-      .catch((error: unknown) => onTrouble(error instanceof ApiError ? error.message : String(error)))
-      .finally(() => setSending(false));
+      .setOwner({ preferredName: trimmed, timezone: zone })
+      .then(() => onSettled({ ...answers, name: trimmed, clock: zone }))
+      .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setSaving(false));
   };
-
-  const said = phases.filter((phase): phase is keyof typeof SCRIPT.restore.phases => phase in SCRIPT.restore.phases);
-
   return (
     <>
-      {offered && state === 'idle' && !done ? (
-        <button type="button" className="meet-later" onClick={() => onState('form')}>
-          {SCRIPT.restore.offer}
-        </button>
-      ) : null}
-
-      {state === 'form' ? (
-        <Ask
-          actions={
-            <>
-              <Button variant="ghost" onClick={() => onState('idle')}>
-                {SCRIPT.restore.cancel}
-              </Button>
-              <Button variant="accent" disabled={sending || !file} onClick={send}>
-                {SCRIPT.restore.submit}
-              </Button>
-            </>
-          }
-        >
-          <Field label={SCRIPT.restore.file} grow>
-            <input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+      <Title>{SCRIPT.hello.title}</Title>
+      <Buddi>
+        {SCRIPT.hello.opening.map((line) => (
+          <Said key={line}>{line}</Said>
+        ))}
+      </Buddi>
+      <Ask
+        actions={
+          <Primary onClick={submit} disabled={saving || name.trim() === ''}>
+            {SCRIPT.hello.submit}
+          </Primary>
+        }
+      >
+        <div className="wiz-pair">
+          <Field label={SCRIPT.name.label}>
+            <input
+              ref={field}
+              placeholder={SCRIPT.name.placeholder}
+              maxLength={80}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  submit();
+                }
+              }}
+            />
           </Field>
-          <Field label={SCRIPT.restore.passphrase} hint={SCRIPT.restore.passphraseHint}>
-            <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
-          </Field>
-        </Ask>
-      ) : null}
-
-      {state === 'running' || done ? (
-        <Buddi>
-          <Said>{SCRIPT.restore.started}</Said>
-          {said.map((phase) => (
-            <Said key={phase}>{SCRIPT.restore.phases[phase]}</Said>
-          ))}
-        </Buddi>
-      ) : null}
-
-      {done ? (
-        <Buddi>
-          {/* The name comes back with the backup; a backup that carried none
-              simply gets the sentence that matters instead. */}
-          {name ? <Said>{SCRIPT.restore.welcome(name)}</Said> : null}
-          <Said>{SCRIPT.restore.keys}</Said>
-        </Buddi>
-      ) : null}
+          {picking ? (
+            <Field label={SCRIPT.clock.label} hint={SCRIPT.clock.hint(timeIn(zone))}>
+              <select value={zone} onChange={(event) => setZone(event.target.value)}>
+                {(zones.includes(zone) ? zones : [zone, ...zones]).map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          ) : (
+            <Field
+              label={SCRIPT.clock.label}
+              hint={SCRIPT.clock.hint(timeIn(zone))}
+              action={
+                <Button size="lg" onClick={() => setPicking(true)}>
+                  {SCRIPT.clock.change}
+                </Button>
+              }
+            >
+              <input value={zone} readOnly />
+            </Field>
+          )}
+        </div>
+        <div className="wiz-foot">{SCRIPT.hello.foot}</div>
+      </Ask>
     </>
   );
 }
 
-interface QuestionProps {
-  id: QuestionId;
-  openNow: boolean;
-  answers: MeetAnswers;
-  accounts: ProviderAccountsView | undefined;
-  /** The catalogue's default model for a new Claude account, when the server named one. */
-  claudeModel?: string | undefined;
-  zones: string[];
-  browserZone: string;
-  assistantAgent: ChatAgent | null;
-  /** The handover conversation the record already holds, if any. */
-  met: string | null;
-  onMet: (conversationId: string) => void;
-  /** The assistant this installation already has, if it has one. */
-  existing: ExistingAssistant | null;
-  /** The thread is over: where it carries on, as a route. */
-  onCarriesOn: (route: string) => void;
-  /** The thread has ended and the dock now offers the way out itself. */
-  onClosed: () => void;
-  navigate: (next: string, replace?: boolean) => void;
-  onSettled: (next: MeetAnswers) => void;
-  onChange: () => void;
-  onTrouble: (message: string | null) => void;
-  onReload: () => void;
-  onPickAnotherBrain: () => void;
-}
-
-function Question(props: QuestionProps): JSX.Element | null {
-  const { id, openNow, answers, onChange } = props;
-  if (id === 'name') {
-    return (
-      <>
-        <Buddi>
-          <Said at={1}>{SCRIPT.name.ask}</Said>
-        </Buddi>
-        {openNow ? <NameAsk {...props} /> : <Answered text={answers.name ?? ''} onChange={onChange} />}
-      </>
-    );
-  }
-  if (id === 'clock') {
-    return (
-      <>
-        <Buddi>
-          <Said at={1}>{SCRIPT.clock.ask(answers.name ?? '', answers.clock ?? props.browserZone)}</Said>
-        </Buddi>
-        {openNow ? <ClockAsk {...props} /> : <Answered text={SCRIPT.clock.answer(answers.clock ?? '')} onChange={onChange} />}
-      </>
-    );
-  }
-  if (id === 'brain') {
-    return (
-      <>
-        <Buddi>
-          <Said at={1}>{SCRIPT.brain.ask}</Said>
-        </Buddi>
-        {openNow ? (
-          <BrainAsk {...props} />
-        ) : (
-          <>
-            <Answered text={SCRIPT.brain.answer(answers.brain?.label ?? '')} onChange={onChange} />
-            <Buddi>
-              <Said>
-                {answers.brain?.freeTier
-                  ? SCRIPT.brain.worksOnFlash(answers.brain.model)
-                  : SCRIPT.brain.works(answers.brain?.model ?? '')}
-              </Said>
-              <CloudModels {...props} />
-            </Buddi>
-          </>
-        )}
-      </>
-    );
-  }
-  if (id === 'browser') {
-    if (openNow) return <BrowserAsk {...props} />;
-    const said = browserLine(answers.browser);
-    return said ? (
-      <Buddi>
-        <Said>{said}</Said>
-      </Buddi>
-    ) : null;
-  }
-  if (id === 'assistant') {
-    return (
-      <>
-        <Buddi>
-          <Said at={1}>{SCRIPT.assistant.ask}</Said>
-        </Buddi>
-        {openNow ? (
-          <AssistantAsk {...props} />
-        ) : (
-          <Answered text={`${answers.assistant?.avatar ?? ''} ${answers.assistant?.name ?? ''}`.trim()} onChange={onChange} />
-        )}
-      </>
-    );
-  }
-  return <Handover {...props} />;
-}
-
 /* ------------------------------------------------------------------ *
- * 1. Your name
+ * 2. A brain
  * ------------------------------------------------------------------ */
 
-function NameAsk({ answers, onSettled, onTrouble }: QuestionProps): JSX.Element {
-  const field = useOpened<HTMLInputElement>();
-  const [value, setValue] = useState(answers.name ?? '');
-  const [saving, setSaving] = useState(false);
-  const submit = (): void => {
-    const name = value.trim();
-    if (name === '' || saving) return;
-    setSaving(true);
-    api
-      .setOwner({ preferredName: name })
-      .then(() => onSettled({ ...answers, name }))
-      .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
-      .finally(() => setSaving(false));
-  };
-  return (
-    <Ask
-      actions={
-        <Button variant="accent" disabled={saving || value.trim() === ''} onClick={submit}>
-          {SCRIPT.name.submit}
-        </Button>
-      }
-    >
-      <input
-        ref={field}
-        className="meet-input"
-        aria-label={SCRIPT.name.placeholder}
-        placeholder={SCRIPT.name.placeholder}
-        maxLength={80}
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            submit();
-          }
-        }}
-      />
-    </Ask>
-  );
-}
+type Card = 'free' | 'claude' | 'chatgpt' | 'key' | 'ollama';
+type KeyKind = 'key' | 'gemini' | 'service';
 
-/* ------------------------------------------------------------------ *
- * 2. Your clock
- * ------------------------------------------------------------------ */
+const CARD_LOOK: Record<Card, { icon: IconName; tone?: string; wide?: boolean }> = {
+  free: { icon: 'cloud', tone: 'good' },
+  claude: { icon: 'bulb', tone: 'mail' },
+  chatgpt: { icon: 'chat', tone: 'coding' },
+  key: { icon: 'key', tone: 'accent' },
+  ollama: { icon: 'monitor', tone: 'plain', wide: true },
+};
 
-function ClockAsk({ answers, zones, browserZone, onSettled, onTrouble }: QuestionProps): JSX.Element {
-  const [picking, setPicking] = useState(false);
-  const [zone, setZone] = useState(browserZone);
-  const [saving, setSaving] = useState(false);
-  const save = (chosen: string): void => {
-    setSaving(true);
-    api
-      .setOwner({ timezone: chosen })
-      .then(() => onSettled({ ...answers, clock: chosen }))
-      .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
-      .finally(() => setSaving(false));
-  };
-  if (!picking) {
-    return (
-      <Ask
-        actions={
-          <>
-            <Button variant="ghost" onClick={() => setPicking(true)}>
-              {SCRIPT.clock.another}
-            </Button>
-            <Button variant="accent" disabled={saving} onClick={() => save(browserZone)}>
-              {SCRIPT.clock.yes}
-            </Button>
-          </>
-        }
-      />
-    );
-  }
-  return (
-    <Ask
-      actions={
-        <Button variant="accent" disabled={saving} onClick={() => save(zone)}>
-          {SCRIPT.clock.yes}
-        </Button>
-      }
-    >
-      <select className="meet-input" aria-label={SCRIPT.clock.label} value={zone} onChange={(event) => setZone(event.target.value)}>
-        {(zones.includes(zone) ? zones : [zone, ...zones]).map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </Ask>
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * 3. The brain
- * ------------------------------------------------------------------ */
-
-type Card = 'claude' | 'chatgpt' | 'gemini' | 'key' | 'ollama' | 'cloud' | 'service';
-
-function BrainAsk(props: QuestionProps): JSX.Element {
-  const { accounts, answers, onSettled, onReload } = props;
+function BrainChapter(props: QuestionProps): JSX.Element {
+  const { accounts, answers, onSettled, onKept, onReload, onBack } = props;
   const [card, setCard] = useState<Card | null>(null);
+  const [keyKindShown, setKeyKindShown] = useState<KeyKind>('key');
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ollama, setOllama] = useState<OllamaProbe | null>(null);
@@ -1146,20 +931,19 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   const chatgptOffered = accounts?.codexEnabled === true;
   /** Where Gemini answers and where a key is made: the gateway's to say, as ever. */
   const gemini = accounts?.gemini;
-  /** The ollama.com window, opened inside the tap so no popup blocker stops it. */
+  /** The ollama.com or openai.com window, opened inside the tap so no popup blocker stops it. */
   const [consent, setConsent] = useState<Window | null>(null);
 
   // The Ollama card has to know before it is opened whether Ollama is there:
-  // that is the difference between "Found it" and "Install it". The gateway
-  // asks the machine; this only reads the answer, and keeps asking while the
-  // card is open and the answer is no.
+  // its line says what was found. The gateway asks the machine; this only
+  // reads the answer, and keeps asking while the answer is no.
   useEffect(() => {
     let cancelled = false;
     const ask = (): void => {
-      api
-        .ollama()
+      Promise.resolve()
+        .then(() => api.ollama())
         .then((probe) => {
-          if (!cancelled) setOllama(probe);
+          if (!cancelled && probe) setOllama(probe);
         })
         .catch(() => {});
     };
@@ -1172,12 +956,12 @@ function BrainAsk(props: QuestionProps): JSX.Element {
   }, []);
 
   /**
-   * Save the account, test it, bind it, and let buddi name the model the
-   * assistant will think with.
+   * Keep the brain: move the assistant onto it when there is one, and light
+   * "Use this brain".
    *
    * The binding is the part that is easy to forget: changing the brain after
    * the assistant exists has to move *that agent* onto the new account, or the
-   * thread would confirm one thing and the assistant would keep answering on
+   * card would confirm one thing and the assistant would keep answering on
    * another. A new assistant is bound at creation instead, with this account's
    * id, so nothing is assigned twice.
    */
@@ -1193,7 +977,12 @@ function BrainAsk(props: QuestionProps): JSX.Element {
       }
     }
     onReload();
-    onSettled({ ...answers, brain });
+    onKept({ ...answers, brain });
+    // The card closes: what shows now is the verdict and "Use this brain".
+    consent?.close();
+    setConsent(null);
+    setCard(null);
+    setChoice(null);
     return null;
   };
 
@@ -1287,10 +1076,10 @@ function BrainAsk(props: QuestionProps): JSX.Element {
    *
    * A service with thirty models has no "the" model, and picking `models[0]`
    * for the owner meant buddi confidently naming something arbitrary. So when
-   * there are several and none of them is the service's own default, the
-   * thread asks — once, with the list — and the answer becomes the account's
-   * default and the model the confirmation names. One model, or a flagged
-   * default, is not a question and is not asked.
+   * there are several and none of them is the service's own default, the card
+   * asks — once, with the list — and the answer becomes the account's default
+   * and the model the confirmation names. One model, or a flagged default, is
+   * not a question and is not asked.
    */
   const offer = (models: string[], make: (model: string) => Parameters<typeof api.saveProviderAccount>[0], label: string): void => {
     if (models.length <= 1) {
@@ -1300,235 +1089,148 @@ function BrainAsk(props: QuestionProps): JSX.Element {
     setChoice({ models, make, label });
   };
 
+  const pick = (next: Card): void => {
+    if (next === card) return;
+    consent?.close();
+    // Opened inside the tap, so no popup blocker stops it.
+    const opens = next === 'free' || next === 'chatgpt';
+    setConsent(opens && typeof window.open === 'function' ? window.open('', '_blank') : null);
+    setProblem(null);
+    setChoice(null);
+    setKeyKindShown('key');
+    setCard(next);
+  };
+  const leave = (): void => {
+    consent?.close();
+    setConsent(null);
+    setChoice(null);
+    setProblem(null);
+    setCard(null);
+  };
+
+  const ollamaLine =
+    ollama === null
+      ? SCRIPT.brain.ollama.looking
+      : ollama.running
+        ? SCRIPT.brain.ollama.found(ollama.models.length)
+        : SCRIPT.brain.ollama.missing;
+  const shownCards: Card[] = ['free', ...(claudeOffered ? (['claude'] as Card[]) : []), ...(chatgptOffered ? (['chatgpt'] as Card[]) : []), 'key', 'ollama'];
+
+  let flow: ReactNode = null;
   if (choice) {
-    return (
+    flow = (
       <>
         <Buddi>
           <Said>{SCRIPT.brain.model.ask}</Said>
         </Buddi>
         {busy ? (
-          <Buddi>
-            <Thinking line={SCRIPT.brain.checking.service} />
-          </Buddi>
+          <Thinking line={SCRIPT.brain.checking.service} />
         ) : problem ? (
           <Buddi>
             <Said>{problem}</Said>
           </Buddi>
         ) : null}
-        <ModelChoice
-          busy={busy}
-          models={choice.models}
-          onUse={(model) => void adopt(choice.make(model), choice.label)}
-        />
+        <ModelChoice busy={busy} models={choice.models} onBack={leave} onUse={(model) => void adopt(choice.make(model), choice.label)} />
       </>
     );
-  }
-
-  if (card === 'gemini' && gemini) {
-    return <GeminiCard busy={busy} problem={problem} preset={gemini} onBack={() => setCard(null)} onUse={adopt} />;
-  }
-  if (card === 'key') return <KeyCard busy={busy} problem={problem} onBack={() => setCard(null)} onUse={adopt} />;
-  if (card === 'service') {
-    return (
-      <ServiceCard
-        busy={busy}
-        problem={problem}
-        address={ollama?.cloudBaseUrl ?? ''}
-        onBack={() => setCard(null)}
-        onOffer={offer}
-        onTrial={trial}
-        onUse={adopt}
-      />
+  } else if (card === 'key') {
+    flow = (
+      <>
+        {(
+          <Segment
+            label={SCRIPT.brain.keyKinds.label}
+            value={keyKindShown}
+            onChange={(next) => {
+              setProblem(null);
+              setKeyKindShown(next);
+            }}
+            options={[
+              { value: 'key' as KeyKind, label: SCRIPT.brain.keyKinds.key },
+              ...(gemini ? [{ value: 'gemini' as KeyKind, label: SCRIPT.brain.keyKinds.gemini }] : []),
+              { value: 'service' as KeyKind, label: SCRIPT.brain.keyKinds.service },
+            ]}
+          />
+        )}
+        {keyKindShown === 'gemini' && gemini ? (
+          <GeminiCard key="gemini" busy={busy} problem={problem} preset={gemini} onBack={leave} onUse={adopt} />
+        ) : keyKindShown === 'service' ? (
+          <ServiceCard key="service" busy={busy} problem={problem} address={ollama?.cloudBaseUrl ?? ''} onBack={leave} onOffer={offer} onTrial={trial} onUse={adopt} />
+        ) : (
+          <KeyCard key="key" busy={busy} problem={problem} onBack={leave} onUse={adopt} />
+        )}
+      </>
     );
-  }
-  if (card === 'ollama') {
-    return <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={() => setCard(null)} onOffer={offer} />;
-  }
-  if (card === 'cloud') {
-    return (
-      <OllamaCloudCard
-        busy={busy}
-        consent={consent}
-        onBack={() => {
-          consent?.close();
-          setConsent(null);
-          setCard(null);
-        }}
-        onConnected={bind}
-        {...props}
-      />
-    );
-  }
-  if (card === 'chatgpt') {
-    return (
-      <ChatGPTCard
-        busy={busy}
-        consent={consent}
-        onBack={() => {
-          consent?.close();
-          setConsent(null);
-          setCard(null);
-        }}
-        onConnected={bind}
-        {...props}
-      />
-    );
-  }
-  if (card === 'claude') {
-    return <ClaudeCard busy={busy} problem={problem} onBack={() => setCard(null)} onConnected={bind} {...props} />;
+  } else if (card === 'ollama') {
+    flow = <OllamaCard busy={busy} problem={problem} probe={ollama} onBack={leave} onOffer={offer} />;
+  } else if (card === 'free') {
+    flow = <OllamaCloudCard {...props} busy={busy} consent={consent} onBack={leave} onConnected={bind} />;
+  } else if (card === 'chatgpt') {
+    flow = <ChatGPTCard {...props} busy={busy} consent={consent} onBack={leave} onConnected={bind} />;
+  } else if (card === 'claude') {
+    flow = <ClaudeCard {...props} busy={busy} problem={problem} onBack={leave} onConnected={bind} />;
   }
 
   return (
-    <Dock>
-    <div className="meet-cards" role="group" aria-label={SCRIPT.brain.ask}>
-      {claudeOffered ? <BrainCard mark={<ClaudeMark />} card={SCRIPT.brain.cards.claude} onPick={() => setCard('claude')} /> : null}
-      {chatgptOffered ? (
-        <BrainCard
-          mark={<ChatGPTMark />}
-          card={SCRIPT.brain.cards.chatgpt}
-          onPick={() => {
-            // Opened inside the tap, so no popup blocker stops it.
-            setConsent(typeof window.open === 'function' ? window.open('', '_blank') : null);
-            setCard('chatgpt');
-          }}
+    <>
+      <Title>{SCRIPT.brain.title}</Title>
+      <Buddi>
+        <Said>{SCRIPT.brain.ask}</Said>
+      </Buddi>
+      <div className="wiz-grid" role="group" aria-label={SCRIPT.brain.ask}>
+        {shownCards.map((id) => {
+          const look = CARD_LOOK[id];
+          const words = SCRIPT.brain.cards[id];
+          return (
+            <button
+              key={id}
+              type="button"
+              className="wiz-opt"
+              aria-pressed={card === id}
+              data-wide={look.wide ? 'true' : undefined}
+              onClick={() => pick(id)}
+            >
+              <span className="wiz-glyph" data-tone={look.tone} aria-hidden="true">
+                <Icon name={look.icon} />
+              </span>
+              <span>
+                <span className="wiz-opt-title">{words.title}</span>
+                <span className="wiz-opt-line">{id === 'ollama' ? ollamaLine : words.line}</span>
+                {'pill' in words ? <Pill tone="good">{words.pill}</Pill> : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {flow}
+      {flow === null && answers.brain ? (
+        <Buddi>
+          <Said>
+            {answers.brain.freeTier ? SCRIPT.brain.worksOnFlash(answers.brain.model) : SCRIPT.brain.works(answers.brain.model)}
+          </Said>
+          <CloudModels {...props} />
+        </Buddi>
+      ) : null}
+      {flow === null ? (
+        <Ask
+          actions={
+            <>
+              <Back onClick={onBack} />
+              {/* Lit only once a brain has answered its one small call. */}
+              <Primary onClick={() => answers.brain && onSettled(answers)} disabled={!answers.brain}>
+                {SCRIPT.brain.submit}
+              </Primary>
+            </>
+          }
         />
       ) : null}
-      {gemini ? <BrainCard mark={<GeminiMark />} card={SCRIPT.brain.cards.gemini} onPick={() => setCard('gemini')} /> : null}
-      <BrainCard mark={<KeyMark />} card={SCRIPT.brain.cards.key} onPick={() => setCard('key')} />
-      <BrainCard
-        mark={<OllamaMark />}
-        card={SCRIPT.brain.cards.ollama}
-        note={ollama === null ? SCRIPT.brain.ollama.looking : ollama.running ? SCRIPT.brain.ollama.found : SCRIPT.brain.ollama.missing}
-        onPick={() => setCard('ollama')}
-      />
-      <BrainCard
-        mark={<CloudMark />}
-        card={SCRIPT.brain.cards.cloud}
-        onPick={() => {
-          setConsent(typeof window.open === 'function' ? window.open('', '_blank') : null);
-          setCard('cloud');
-        }}
-      />
-      <BrainCard mark={<CloudMark />} card={SCRIPT.brain.cards.service} onPick={() => setCard('service')} />
-    </div>
-    </Dock>
+    </>
   );
 }
 
-function BrainCard({
-  mark,
-  card,
-  note,
-  onPick,
-}: {
-  mark: ReactNode;
-  card: { title: string; line: string; know?: string };
-  note?: string;
-  onPick: () => void;
-}): JSX.Element {
-  return (
-    <button type="button" className="meet-card" onClick={onPick}>
-      <span className="meet-card-mark" aria-hidden="true">
-        {mark}
-      </span>
-      <span className="meet-card-words">
-        <span className="meet-card-title">{card.title}</span>
-        <span className="meet-card-line">{note ?? card.line}</span>
-        {card.know ? <span className="meet-card-know">{card.know}</span> : null}
-      </span>
-    </button>
-  );
-}
 
 /* ------------------------------------------------------------------ *
- * The marks on the cards
- *
- * Drawn here, in one colour, from paths — never fetched, never an image file.
- * Each is the shape that AI is known by, at the weight of the page's own
- * icons, so the owner recognises what they already pay for rather than reading
- * four lines of text to find it.
+ * The brain's sign-ins and keys
  * ------------------------------------------------------------------ */
-
-/** Claude: the burst. */
-function ClaudeMark(): JSX.Element {
-  const rays = [0, 45, 90, 135, 180, 225, 270, 315];
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-      {rays.map((angle) => (
-        <rect
-          key={angle}
-          x="11.1"
-          y="2.6"
-          width="1.8"
-          height="8.6"
-          rx="0.9"
-          fill="currentColor"
-          transform={`rotate(${angle} 12 12)`}
-        />
-      ))}
-    </svg>
-  );
-}
-
-/** ChatGPT: a speech bubble, a neutral glyph rather than anyone's logo. */
-function ChatGPTMark(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M5.4 4.6h13.2a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2h-7.4l-4.4 3.4v-3.4H5.4a2 2 0 0 1-2-2V6.6a2 2 0 0 1 2-2Z" />
-      <path d="M8 9.4h8" />
-      <path d="M8 12.6h5" />
-    </svg>
-  );
-}
-
-/** A key: what a key from Anthropic or OpenAI is, in the hand. */
-function KeyMark(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="3.6" />
-      <path d="M10.6 10.6 19.4 19.4" />
-      <path d="M13.8 13.8 11.9 15.7" />
-      <path d="M16.6 16.6 14.7 18.5" />
-    </svg>
-  );
-}
-
-/**
- * Ollama: this computer.
- *
- * Two attempts at the llama were made and both were illegible at the size a
- * card mark is drawn — a 22px squiggle nobody reads as an animal is worse than
- * no mark at all. So the card carries what it actually means, and what its own
- * line says: the AI on this machine. If a proper Ollama mark is ever shipped
- * as an asset, this is the one place to change.
- */
-function OllamaMark(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3.2" y="4.6" width="17.6" height="11.2" rx="2" />
-      <path d="M9.4 19.4h5.2" />
-      <path d="M12 15.8v3.6" />
-    </svg>
-  );
-}
-
-/** Anything else that answers over the wire: a cloud. */
-/** Gemini: a four-pointed spark, drawn plainly — not Google's mark. */
-function GeminiMark(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
-      <path d="M12 3c.6 4.6 3.9 8.4 9 9-5.1.6-8.4 4.4-9 9-.6-4.6-3.9-8.4-9-9 5.1-.6 8.4-4.4 9-9Z" />
-    </svg>
-  );
-}
-
-function CloudMark(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M7.2 18.3h9.6a3.8 3.8 0 0 0 .5-7.6 5.4 5.4 0 0 0-10.3-1.2 3.9 3.9 0 0 0 .2 8.8Z" />
-    </svg>
-  );
-}
 
 /**
  * Save, test and bind; `flash` is tried once when the first model is refused for a limit.
@@ -1545,24 +1247,28 @@ type Offer = (
   make: (model: string) => Parameters<typeof api.saveProviderAccount>[0],
   label: string,
 ) => void;
-
 /** The one question a service with many models is worth: which of them. */
 function ModelChoice({
   busy,
   models,
+  onBack,
   onUse,
 }: {
   busy: boolean;
   models: string[];
+  onBack: () => void;
   onUse: (model: string) => void;
 }): JSX.Element {
   const [chosen, setChosen] = useState(models[0] ?? '');
   return (
     <Ask
       actions={
-        <Button variant="accent" disabled={busy || chosen === ''} onClick={() => onUse(chosen)}>
+        <>
+        <Back onClick={onBack} disabled={busy} />
+        <Button variant="accent" size="lg" disabled={busy || chosen === ''} onClick={() => onUse(chosen)}>
           {SCRIPT.brain.model.submit}
         </Button>
+        </>
       }
     >
       <Field label={SCRIPT.brain.model.label} grow>
@@ -1602,7 +1308,6 @@ function ModelSelect({
     </Field>
   );
 }
-
 /** A pasted key, and which AI it belongs to. */
 function KeyCard({
   busy,
@@ -1691,7 +1396,7 @@ function KeyCard({
         actions={
           <>
             <Back onClick={onBack} disabled={working} />
-            <Button variant="accent" disabled={working || secret.trim() === ''} onClick={submit}>
+            <Button variant="accent" size="lg" disabled={working || secret.trim() === ''} onClick={submit}>
               {picking ? SCRIPT.brain.model.retry : SCRIPT.brain.key.submit}
             </Button>
           </>
@@ -1721,7 +1426,7 @@ function KeyCard({
         {picking ? <ModelSelect models={models} picked={picked} disabled={working} onPick={setPicked} /> : null}
         <button
           type="button"
-          className="meet-quiet"
+          className="wiz-link"
           onClick={() => setOverride(kind === 'anthropic' ? 'openai' : 'anthropic')}
         >
           {kind === 'anthropic' ? SCRIPT.brain.key.anthropic : SCRIPT.brain.key.openai} · {SCRIPT.brain.key.which}
@@ -1730,7 +1435,6 @@ function KeyCard({
     </>
   );
 }
-
 /**
  * Gemini, with a Google AI key: one field. The address is fixed and comes
  * from the gateway; the model is the newest Pro the key can reach, read from
@@ -1812,7 +1516,7 @@ function GeminiCard({
         actions={
           <>
             <Back onClick={onBack} disabled={working} />
-            <Button variant="accent" disabled={working || secret.trim() === ''} onClick={submit}>
+            <Button variant="accent" size="lg" disabled={working || secret.trim() === ''} onClick={submit}>
               {SCRIPT.brain.gemini.submit}
             </Button>
           </>
@@ -1846,14 +1550,13 @@ function GeminiCard({
             </select>
           </Field>
         ) : null}
-        <a className="meet-quiet" href={preset.keyUrl} target="_blank" rel="noreferrer">
+        <a className="wiz-link" href={preset.keyUrl} target="_blank" rel="noreferrer">
           {SCRIPT.brain.gemini.get}
         </a>
       </Ask>
     </>
   );
 }
-
 /** Ollama, on this computer. */
 function OllamaCard({
   busy,
@@ -1876,7 +1579,7 @@ function OllamaCard({
     onOffer(
       models,
       (model) => ({
-        label: SCRIPT.brain.cards.ollama.title,
+        label: SCRIPT.brain.ollama.label,
         kind: 'openai-compatible',
         auth: 'none',
         // The address comes from the probe, not from here: this page names no
@@ -1885,7 +1588,7 @@ function OllamaCard({
         defaultModel: model,
         enabled: true,
       }),
-      SCRIPT.brain.cards.ollama.title,
+      SCRIPT.brain.ollama.label,
     );
   };
   return (
@@ -1904,29 +1607,28 @@ function OllamaCard({
           <>
             <Back onClick={onBack} disabled={busy} />
             {probe?.running ? (
-              <Button variant="accent" disabled={busy || models.length === 0} onClick={use}>
+              <Button variant="accent" size="lg" disabled={busy || models.length === 0} onClick={use}>
                 {SCRIPT.brain.ollama.connect}
               </Button>
             ) : probe ? (
-              <ButtonLink variant="accent" href={probe.downloadUrl} target="_blank" rel="noreferrer">
+              <ButtonLink variant="accent" size="lg" href={probe.downloadUrl} target="_blank" rel="noreferrer">
                 {SCRIPT.brain.ollama.download}
               </ButtonLink>
             ) : null}
           </>
         }
       >
-        <span className="meet-line">
+        <span className="wiz-foot">
           {probe === null
             ? SCRIPT.brain.ollama.looking
             : probe.running
-              ? SCRIPT.brain.ollama.found
+              ? SCRIPT.brain.ollama.found(probe.models.length)
               : SCRIPT.brain.ollama.missing}
         </span>
       </Ask>
     </>
   );
 }
-
 /** Ollama Cloud, or anything else that speaks the same way. */
 function ServiceCard({
   busy,
@@ -1970,7 +1672,7 @@ function ServiceCard({
     void (async () => {
       const auth = secret.trim() ? ('api-key' as const) : ('none' as const);
       const make = (defaultModel: string): Parameters<typeof api.saveProviderAccount>[0] => ({
-        label: SCRIPT.brain.cards.service.title,
+        label: SCRIPT.brain.service.label,
         kind: 'openai-compatible',
         auth,
         baseUrl: address.trim(),
@@ -1992,7 +1694,7 @@ function ServiceCard({
       if (auth === 'api-key' && picking && picked !== '') {
         // The owner chose from the list after a limit or a missing model.
         setProbing(false);
-        settle(await onUse(make(picked), SCRIPT.brain.cards.service.title), models, picked);
+        settle(await onUse(make(picked), SCRIPT.brain.service.label), models, picked);
         return;
       }
       let listed: string[] = [];
@@ -2014,7 +1716,7 @@ function ServiceCard({
       // that offers thirty has not, and buddi asks rather than guessing.
       const candidates = flagged ? [flagged] : listed;
       if (auth === 'none') {
-        onOffer(candidates, make, SCRIPT.brain.cards.service.title);
+        onOffer(candidates, make, SCRIPT.brain.service.label);
         return;
       }
       // A key: some services list their models without one (Ollama Cloud
@@ -2022,11 +1724,11 @@ function ServiceCard({
       // decides before the picker is offered.
       const first = candidates[0] ?? '';
       if (candidates.length <= 1) {
-        settle(await onUse(make(first), SCRIPT.brain.cards.service.title), listed, first);
+        settle(await onUse(make(first), SCRIPT.brain.service.label), listed, first);
         return;
       }
       const verdict = await onTrial(make(first));
-      if (verdict?.state === 'connected') onOffer(candidates, make, SCRIPT.brain.cards.service.title);
+      if (verdict?.state === 'connected') onOffer(candidates, make, SCRIPT.brain.service.label);
       else settle(verdict, listed, first);
     })();
   };
@@ -2049,7 +1751,7 @@ function ServiceCard({
         actions={
           <>
             <Back onClick={onBack} disabled={working} />
-            <Button variant="accent" disabled={working || address.trim() === ''} onClick={submit}>
+            <Button variant="accent" size="lg" disabled={working || address.trim() === ''} onClick={submit}>
               {picking ? SCRIPT.brain.model.retry : SCRIPT.brain.service.submit}
             </Button>
           </>
@@ -2083,7 +1785,6 @@ function ServiceCard({
     </>
   );
 }
-
 /** How often the one-tap card asks whether Connect was pressed. */
 export const OLLAMA_POLL_MS = 2_000;
 
@@ -2226,11 +1927,11 @@ function OllamaCloudCard({
           <>
             <Back onClick={onBack} disabled={working || busy} />
             {attempt ? (
-              <ButtonLink variant="accent" href={attempt.url} target="_blank" rel="noreferrer">
+              <ButtonLink variant="accent" size="lg" href={attempt.url} target="_blank" rel="noreferrer">
                 {SCRIPT.brain.cloud.open}
               </ButtonLink>
             ) : trouble ? (
-              <Button variant="accent" disabled={working || busy} onClick={() => {
+              <Button variant="accent" size="lg" disabled={working || busy} onClick={() => {
                 retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
                 setRound((n) => n + 1);
               }}>
@@ -2249,7 +1950,7 @@ function OllamaCloudCard({
  * free tier serves several, and the first one chosen for the owner is only a
  * start.
  */
-function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps): JSX.Element | null {
+function CloudModels({ answers, accounts, onKept, onTrouble }: QuestionProps): JSX.Element | null {
   const brain = answers.brain;
   const account = brain ? (accounts?.accounts ?? []).find((row) => row.id === brain.accountId) : undefined;
   const [models, setModels] = useState<string[]>([]);
@@ -2285,7 +1986,7 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
         });
         if (answers.assistant) await api.bindBrain({ accountId: account.id, model });
         // The owner's own pick: the free-tier line no longer applies.
-        onSettled({ ...answers, brain: { accountId: brain.accountId, label: brain.label, model } });
+        onKept({ ...answers, brain: { accountId: brain.accountId, label: brain.label, model } });
       } catch (err) {
         onTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {
@@ -2309,7 +2010,6 @@ function CloudModels({ answers, accounts, onSettled, onTrouble }: QuestionProps)
     </Said>
   );
 }
-
 /** The model a new ChatGPT account starts on until the plan's list names its own default. */
 export const CHATGPT_FALLBACK_MODEL = 'gpt-5.5';
 
@@ -2485,11 +2185,11 @@ function ChatGPTCard({
           <>
             <Back onClick={leave} disabled={working || busy} />
             {attempt ? (
-              <ButtonLink variant="accent" href={attempt.url} target="_blank" rel="noreferrer">
+              <ButtonLink variant="accent" size="lg" href={attempt.url} target="_blank" rel="noreferrer">
                 {SCRIPT.brain.chatgpt.open}
               </ButtonLink>
             ) : trouble ? (
-              <Button variant="accent" disabled={working || busy} onClick={() => {
+              <Button variant="accent" size="lg" disabled={working || busy} onClick={() => {
                 retried.current = typeof window.open === 'function' ? window.open('', '_blank') : null;
                 setRound((n) => n + 1);
               }}>
@@ -2504,7 +2204,6 @@ function ChatGPTCard({
     </>
   );
 }
-
 /** The Claude model a new account starts on when the catalogue names no default. */
 export const CLAUDE_FALLBACK_MODEL = 'claude-sonnet-5';
 
@@ -2567,7 +2266,7 @@ function ClaudeCard({
         const saved = existing
           ? { id: existing.id }
           : await api.saveProviderAccount({
-              label: SCRIPT.brain.cards.claude.title,
+              label: SCRIPT.brain.claude.label,
               kind: 'anthropic',
               auth: 'anthropic-oauth',
               baseUrl: '',
@@ -2614,7 +2313,7 @@ function ClaudeCard({
           setTrouble(verdict.message);
           return;
         }
-        setTrouble(await onConnected({ accountId: attempt.id, label: SCRIPT.brain.cards.claude.title, model }));
+        setTrouble(await onConnected({ accountId: attempt.id, label: SCRIPT.brain.claude.label, model }));
       } catch (err) {
         setTrouble(err instanceof ApiError ? err.message : String(err));
       } finally {
@@ -2643,10 +2342,10 @@ function ClaudeCard({
             actions={
               <>
                 <Back onClick={leave} disabled={working} />
-                <ButtonLink href={attempt.url} target="_blank" rel="noreferrer">
+                <ButtonLink size="lg" href={attempt.url} target="_blank" rel="noreferrer">
                   {SCRIPT.brain.claude.open}
                 </ButtonLink>
-                <Button variant="accent" disabled={working || code.trim() === ''} onClick={finish}>
+                <Button variant="accent" size="lg" disabled={working || code.trim() === ''} onClick={finish}>
                   {SCRIPT.brain.claude.finish}
                 </Button>
               </>
@@ -2662,7 +2361,7 @@ function ClaudeCard({
           actions={
             <>
               <Back onClick={leave} disabled={busy || working} />
-              <Button variant="accent" disabled={busy || working} onClick={start}>
+              <Button variant="accent" size="lg" disabled={busy || working} onClick={start}>
                 {SCRIPT.brain.claude.start}
               </Button>
             </>
@@ -2690,170 +2389,543 @@ function ClaudeCode({ value, onChange }: { value: string; onChange: (next: strin
 }
 
 /* ------------------------------------------------------------------ *
- * 3½. The browser
+ * 3. What I take on
  * ------------------------------------------------------------------ */
 
-/** What buddi says once the browser step is settled; nothing in a mode that fetches nothing. */
-function browserLine(answer: MeetAnswers['browser']): string | null {
-  switch (answer) {
-    case 'chrome': return SCRIPT.browser.chrome;
-    case 'chromium': return SCRIPT.browser.chromium;
-    case 'installed': return SCRIPT.browser.installed;
-    case 'skipped': return SCRIPT.browser.skipped;
-    case 'none': return SCRIPT.browser.missing;
-    default: return null;
-  }
-}
+const TILE_ICON: Record<TakeOnTile, IconName> = {
+  days: 'calendar',
+  mail: 'mail',
+  money: 'money',
+  voice: 'bulb',
+  code: 'monitor',
+  pictures: 'files',
+};
 
 /**
- * The agents' own browser, checked rather than asked.
- *
- * Found — Chrome on this Mac, or Chromium already fetched — and buddi makes
- * sure it opens, says which in one line and moves on, with no button. Not
- * found, and buddi fetches Playwright's Chromium itself with a progress bar
- * and one line of its own ("Fetching Chromium… 45%"), never the installer's
- * text; then it launches it once to be sure. A browser on disk that cannot
- * start — a Linux machine short of system libraries — is said plainly, with
- * the command to run in a block to copy, "Try again" as the primary and
- * "Skip for now" beside it. Never a gate: a failure or a skip still moves on.
+ * The progress line: what is being fetched and how far along, what is in, or
+ * what did not come — one line, never a gate.
  */
-function BrowserAsk({ answers, onSettled }: QuestionProps): JSX.Element | null {
-  const [phase, setPhase] = useState<'checking' | 'installing' | 'launching' | 'failed'>('checking');
-  const [line, setLine] = useState<string | null>(null);
-  const [command, setCommand] = useState<string | null>(null);
-  const [progress, setProgress] = useState<BrowserInstallProgress | undefined>(undefined);
-  const [attempt, setAttempt] = useState(0);
-  /** This screen started an install, so a browser found afterwards is "Installed.". */
-  const started = useRef(false);
-  const settled = useRef(false);
-  // Held in a ref so a parent re-render does not restart the check.
-  const settleRef = useRef<(browser: NonNullable<MeetAnswers['browser']>) => void>(() => {});
-  settleRef.current = (browser) => {
-    if (settled.current) return;
-    settled.current = true;
-    onSettled({ ...answers, browser });
+function progressLine(progress: TakeOnView | null): { line: string; done: boolean } | null {
+  const plugins = progress?.plugins ?? [];
+  if (plugins.length === 0) return null;
+  const titles = plugins.map((p) => p.title);
+  const failed = plugins.filter((p) => p.state === 'failed');
+  if (progress?.running) {
+    const ready = plugins.filter((p) => p.state === 'ready' || p.state === 'failed').length;
+    return { line: SCRIPT.takeOn.fetching(titles, Math.min(ready + 1, plugins.length), plugins.length), done: false };
+  }
+  if (failed.length > 0) {
+    return { line: failed.map((p) => SCRIPT.takeOn.failed(p.title, p.reason ?? '')).join(' '), done: true };
+  }
+  return { line: SCRIPT.takeOn.ready(titles), done: true };
+}
+
+function TakeOnChapter({ answers, progress, onProgress, onSettled, onBack, onTrouble }: QuestionProps): JSX.Element {
+  const [tiles, setTiles] = useState<string[]>(() => answers.takeOn ?? [...TAKE_ON_DEFAULT]);
+  const [sending, setSending] = useState(false);
+  const picked = TAKE_ON.filter((tile) => tiles.includes(tile.id));
+  const toggle = (id: string): void => setTiles((current) => (current.includes(id) ? current.filter((t) => t !== id) : [...current, id]));
+  /*
+   * Recorded, and the installs started behind the answer: the route answers
+   * at once, and chapter 4 opens while withbuddi.com is still being asked.
+   */
+  const send = (list: string[]): void => {
+    if (sending) return;
+    setSending(true);
+    Promise.resolve()
+      .then(() => api.takeOn(list))
+      .then(() => {
+        onProgress();
+        onSettled({ ...answers, takeOn: list });
+      })
+      .catch((err: unknown) => onTrouble(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setSending(false));
   };
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | undefined;
-    const settle = (browser: NonNullable<MeetAnswers['browser']>): void => { if (!cancelled) settleRef.current(browser); };
-    const fail = (why: string, run?: string): void => {
-      if (cancelled) return;
-      started.current = false;
-      setPhase('failed');
-      setLine(why);
-      setCommand(run ?? null);
-    };
-    /** Launch it once and close it: a browser that cannot start is not one the owner has. */
-    const launch = async (engine: 'chromium' | 'chrome'): Promise<void> => {
-      setPhase('launching');
-      let check: BrowserLaunchCheck;
-      try { check = await api.browserCheck(); } catch (err) { return fail(err instanceof ApiError ? err.message : String(err)); }
-      if (cancelled) return;
-      if (check.ok) return settle(started.current ? 'installed' : engine);
-      return fail(check.message, check.command);
-    };
-    const follow = async (): Promise<void> => {
-      let status;
-      try { status = await api.browser(); } catch { return settle('other'); }
-      if (cancelled) return;
-      const own = status.browser;
-      if (!own) return settle('other');
-      if (own.install?.state === 'running') {
-        setPhase('installing');
-        setProgress(own.install.progress);
-        timer = window.setTimeout(() => void follow(), 1000);
-        return;
-      }
-      if (own.engine !== 'none') return launch(own.engine);
-      if (started.current) return fail(own.install?.line ?? '');
-      // Nothing here: fetch it, and follow the installer.
-      started.current = true;
-      setPhase('installing');
-      setProgress(undefined);
-      try { await api.browserInstall(); } catch (err) { return fail(err instanceof ApiError ? err.message : String(err)); }
-      if (!cancelled) timer = window.setTimeout(() => void follow(), 1000);
-    };
-    void follow();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [attempt]);
-
-  if (phase === 'checking') return <Thinking />;
-  const busy = phase === 'installing' || phase === 'launching';
+  const line = progressLine(progress);
   return (
     <>
+      <Title>{SCRIPT.takeOn.title}</Title>
       <Buddi>
-        {started.current || phase === 'installing' ? <Said>{SCRIPT.browser.needs}</Said> : null}
-        {phase === 'installing' ? (
-          <div className="wb-msg" data-role="assistant">
-            <div className="wb-bubble">
-              <InstallProgress progress={progress} />
-            </div>
-          </div>
-        ) : phase === 'launching' ? (
-          <Thinking line={SCRIPT.browser.launching} />
-        ) : (
-          <Said>{SCRIPT.browser.failed(line ?? '')}</Said>
-        )}
+        <Said>{SCRIPT.takeOn.ask}</Said>
       </Buddi>
       <Ask
         actions={
           <>
-            <Button variant="ghost" onClick={() => settleRef.current('skipped')}>
-              {SCRIPT.browser.skip}
+            <Back onClick={onBack} disabled={sending} />
+            <Button variant="ghost" size="lg" disabled={sending} onClick={() => send([])}>
+              {SCRIPT.takeOn.none}
             </Button>
-            <Button variant="accent" disabled={busy} onClick={() => { setPhase('launching'); setCommand(null); setAttempt((n) => n + 1); }}>
-              {busy ? SCRIPT.browser.installing : SCRIPT.browser.retry}
-            </Button>
+            <Primary onClick={() => send(TAKE_ON.filter((t) => tiles.includes(t.id)).map((t) => t.id))} disabled={sending || tiles.length === 0}>
+              {SCRIPT.takeOn.submit}
+            </Primary>
           </>
         }
       >
-        {phase === 'failed' && command ? <CommandBlock command={command} /> : null}
+        <div className="wiz-grid" data-cols="3" role="group" aria-label={SCRIPT.takeOn.title}>
+          {TAKE_ON.map((tile) => {
+            const on = tiles.includes(tile.id);
+            return (
+              <button key={tile.id} type="button" className="wiz-opt" data-tile="true" aria-pressed={on} onClick={() => toggle(tile.id)}>
+                <span className="wiz-tile-top">
+                  <span className="wiz-glyph" aria-hidden="true">
+                    <Icon name={TILE_ICON[tile.id]} />
+                  </span>
+                  <span className="wiz-tick" aria-hidden="true">
+                    {on ? <Icon name="check" size={12} /> : null}
+                  </span>
+                </span>
+                <span>
+                  <span className="wiz-opt-title">{tile.title}</span>
+                  <span className="wiz-opt-plugins">{tile.plugins}</span>
+                </span>
+                <span className="wiz-opt-line">{tile.line}</span>
+              </button>
+            );
+          })}
+        </div>
+        {picked.length > 0 ? (
+          <div className="wiz-stack">
+            {line ? (
+              <div className="wiz-busy" data-boxed="true" role="status">
+                <span className="wiz-pulse" data-done={line.done ? 'true' : undefined} aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                <span>{line.line}</span>
+                {tiles.includes('mail') ? <span className="wiz-busy-side">{SCRIPT.takeOn.builtIn}</span> : null}
+              </div>
+            ) : null}
+            <div className="wiz-foot">{picked.map((tile) => tile.note).join(' ')}</div>
+          </div>
+        ) : (
+          <div className="wiz-foot">{SCRIPT.takeOn.nothing}</div>
+        )}
       </Ask>
     </>
   );
 }
 
-/** A command the owner runs themselves, in a block, with a way to copy it. */
-function CommandBlock({ command }: { command: string }): JSX.Element {
-  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
-  const copy = (): void => {
-    if (!navigator.clipboard?.writeText) { setCopied('failed'); return; }
-    void navigator.clipboard.writeText(command).then(() => setCopied('done'), () => setCopied('failed'));
+/* ------------------------------------------------------------------ *
+ * 4. Reach me
+ * ------------------------------------------------------------------ */
+
+function ReachChapter({ answers, navigate, onSettled, onBack }: QuestionProps): JSX.Element {
+  const [phone, setPhone] = useState(answers.reach?.phone === true);
+  const [mailbox, setMailbox] = useState(answers.reach?.mailbox === true);
+  const [app, setApp] = useState(answers.reach?.app === true);
+  const [browser, setBrowser] = useState<BrowserAnswer | undefined>(answers.browser);
+  const mailWanted = (answers.takeOn ?? []).includes('mail');
+  const submit = (): void => {
+    const reach: OnboardingReach = { phone, mailbox, app, browser: browser === 'chrome' || browser === 'chromium' || browser === 'installed' };
+    // The browser keeps its own step, as it always had: never a gate.
+    if (browser !== undefined) void Promise.resolve().then(() => api.onboardingStep('browser')).catch(() => {});
+    onSettled({ ...answers, reach, ...(browser !== undefined ? { browser } : {}) });
   };
   return (
-    <Stack gap="sm">
-      <Code label="The command to run">{command}</Code>
-      <Toolbar align="end">
-        {copied === 'failed' ? <span className="ui-toolbar-note">Select it to copy.</span> : null}
-        <Button size="sm" onClick={copy}>{copied === 'done' ? 'Copied' : 'Copy'}</Button>
-      </Toolbar>
-    </Stack>
+    <>
+      <Title>{SCRIPT.reach.title}</Title>
+      <Buddi>
+        <Said>{SCRIPT.reach.ask}</Said>
+      </Buddi>
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} />
+            <Primary onClick={submit}>{SCRIPT.reach.submit}</Primary>
+          </>
+        }
+      >
+        <div className="wiz-rows">
+          <PhoneRow paired={phone} onPaired={() => setPhone(true)} />
+          <MailboxRow wanted={mailWanted} added={mailbox} onAdded={setMailbox} navigate={navigate} timezone={answers.clock ?? 'UTC'} />
+          <AppRow app={app} onApp={() => setApp(true)} browser={browser} onBrowser={setBrowser} />
+          {phone ? (
+            <Notice tone="good" role="status">
+              {SCRIPT.reach.phone.hello}
+            </Notice>
+          ) : null}
+        </div>
+      </Ask>
+    </>
+  );
+}
+
+/**
+ * The phone: already paired, a square to scan from the bot that is running,
+ * or the BotFather token first, in a sheet, when there is no bot yet.
+ */
+function PhoneRow({ paired, onPaired }: { paired: boolean; onPaired: () => void }): JSX.Element {
+  const [status, setStatus] = useState<{ configured: boolean; running: boolean; paired: boolean } | null>(null);
+  const [sheet, setSheet] = useState(false);
+  const done = useRef(onPaired);
+  done.current = onPaired;
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.telegram())
+      .then((view) => {
+        if (cancelled || !view) return;
+        setStatus(view);
+        if (view.paired) done.current();
+      })
+      .catch(() => {
+        if (!cancelled) setStatus({ configured: false, running: false, paired: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const ready = status?.configured === true && status.running === true && !paired;
+  return (
+    <div className="wiz-row">
+      <span className="wiz-glyph" aria-hidden="true">
+        <Icon name="chat" />
+      </span>
+      <span className="wiz-row-text">
+        <span className="wiz-opt-title">{SCRIPT.reach.phone.title}</span>
+        <span className="wiz-opt-line">{SCRIPT.reach.phone.line}</span>
+      </span>
+      {paired ? (
+        <span className="wiz-row-side">
+          <Pill tone="good" dot>
+            {SCRIPT.reach.phone.paired}
+          </Pill>
+        </span>
+      ) : ready ? (
+        <InlineSquare onPaired={onPaired} />
+      ) : (
+        <span className="wiz-row-side">
+          <Button size="lg" disabled={status === null} onClick={() => setSheet(true)}>
+            {SCRIPT.reach.phone.setUp}
+          </Button>
+        </span>
+      )}
+      {sheet ? (
+        <Sheet title={SCRIPT.telegram.sheet} onClose={() => setSheet(false)}>
+          <TelegramCard
+            onPaired={onPaired}
+            onDismiss={() => setSheet(false)}
+          />
+        </Sheet>
+      ) : null}
+    </div>
+  );
+}
+
+/** The square, in the row, from the bot that is already running. */
+function InlineSquare({ onPaired }: { onPaired: () => void }): JSX.Element {
+  const { offer, square, paired, stale, ask } = useTelegramPairing(() => api.telegram().then((status) => status.paired), onPaired);
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    void ask().catch(() => {});
+  }, [ask]);
+  if (paired) {
+    return (
+      <span className="wiz-row-side">
+        <Pill tone="good" dot>
+          {SCRIPT.reach.phone.paired}
+        </Pill>
+      </span>
+    );
+  }
+  if (stale || !offer) {
+    return (
+      <span className="wiz-row-side">
+        <Button size="lg" onClick={() => void ask().catch(() => {})}>
+          {SCRIPT.telegram.newCode}
+        </Button>
+      </span>
+    );
+  }
+  return (
+    <span className="wiz-qr-slot">
+      <PairingSquare offer={offer} square={square} />
+    </span>
+  );
+}
+
+/**
+ * A mailbox: the email plugin's own Settings page, in a sheet — the same form
+ * Settings → Mail adds an account with — and whether one is there now.
+ */
+function MailboxRow({
+  wanted,
+  added,
+  onAdded,
+  navigate,
+  timezone,
+}: {
+  wanted: boolean;
+  added: boolean;
+  onAdded: (yes: boolean) => void;
+  navigate: (next: string, replace?: boolean) => void;
+  timezone: string;
+}): JSX.Element {
+  const [page, setPage] = useState<{ page: PluginPageDescriptor; siblings: PluginPageDescriptor[] } | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+  const [address, setAddress] = useState<string | null>(null);
+  const check = useCallback((): void => {
+    void Promise.resolve()
+      .then(() => api.pageQuery<{ accounts?: Array<{ address?: string }> }>('email', 'accounts'))
+      .then((answer) => {
+        const first = answer?.data?.accounts?.[0]?.address ?? null;
+        setAddress(first);
+        onAdded(first !== null);
+      })
+      .catch(() => {});
+    // `onAdded` is the chapter's setter; stable enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.pages())
+      .then((view) => {
+        if (cancelled) return;
+        const mail = (view?.pages ?? []).filter((p) => p.plugin === 'email');
+        const settings = mail.find((p) => p.id === 'settings') ?? null;
+        setPage(settings ? { page: settings, siblings: mail } : null);
+      })
+      .catch(() => {
+        if (!cancelled) setPage(null);
+      });
+    check();
+    return () => {
+      cancelled = true;
+    };
+  }, [check]);
+  return (
+    <div className="wiz-row">
+      <span className="wiz-glyph" data-tone="mail" aria-hidden="true">
+        <Icon name="mail" />
+      </span>
+      <span className="wiz-row-text">
+        <span className="wiz-opt-title">{wanted ? SCRIPT.reach.mailbox.forTriage : SCRIPT.reach.mailbox.title}</span>
+        <span className="wiz-opt-line">{page === null ? SCRIPT.reach.mailbox.unavailable : SCRIPT.reach.mailbox.line}</span>
+      </span>
+      <span className="wiz-row-side">
+        {added || address ? (
+          <Pill tone="good" dot mono={address !== null}>
+            {address ?? SCRIPT.reach.mailbox.added}
+          </Pill>
+        ) : page ? (
+          <Button size="lg" onClick={() => setOpen(true)}>
+            {SCRIPT.reach.mailbox.add}
+          </Button>
+        ) : null}
+      </span>
+      {open && page ? (
+        <Sheet
+          title={SCRIPT.reach.mailbox.sheet}
+          size="wide"
+          onClose={() => {
+            setOpen(false);
+            check();
+          }}
+        >
+          <PluginPage page={page.page} siblings={page.siblings} navigate={navigate} timezone={timezone} embedded />
+        </Sheet>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The app and the browser: the browser's own install prompt when it offered
+ * one, and the agents' browser — Chrome used, Chromium fetched — launched
+ * once to be sure it opens.
+ */
+function AppRow({
+  app,
+  onApp,
+  browser,
+  onBrowser,
+}: {
+  app: boolean;
+  onApp: () => void;
+  browser: BrowserAnswer | undefined;
+  onBrowser: (answer: BrowserAnswer) => void;
+}): JSX.Element {
+  const prompt = useInstallPrompt();
+  const hint = typeof navigator === 'undefined' ? null : installHint(navigator.userAgent);
+  const [engine, setEngine] = useState<'chrome' | 'chromium' | 'none' | 'other' | null>(null);
+  const [phase, setPhase] = useState<'idle' | 'installing' | 'launching' | 'failed'>('idle');
+  const [line, setLine] = useState<string | null>(null);
+  const [command, setCommand] = useState<string | null>(null);
+  const [progress, setProgress] = useState<BrowserInstallProgress | undefined>(undefined);
+  const started = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    Promise.resolve()
+      .then(() => api.browser())
+      .then((status) => {
+        if (!alive.current) return;
+        const own = status?.browser;
+        if (!own) setEngine('other');
+        else if (own.install?.state === 'running') {
+          setEngine('none');
+          started.current = true;
+          setPhase('installing');
+          void follow();
+        } else setEngine(own.engine);
+      })
+      .catch(() => {
+        if (alive.current) setEngine('other');
+      });
+    return () => {
+      alive.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const fail = (why: string, run?: string): void => {
+    if (!alive.current) return;
+    started.current = false;
+    setPhase('failed');
+    setLine(why);
+    setCommand(run ?? null);
+  };
+  /** Launch it once and close it: a browser that cannot start is not one the owner has. */
+  const launch = async (found: 'chrome' | 'chromium'): Promise<void> => {
+    setPhase('launching');
+    let check: BrowserLaunchCheck;
+    try {
+      check = await api.browserCheck();
+    } catch (err) {
+      return fail(err instanceof ApiError ? err.message : String(err));
+    }
+    if (!alive.current) return;
+    if (check.ok) {
+      setPhase('idle');
+      setEngine(found);
+      onBrowser(started.current ? 'installed' : found);
+      return;
+    }
+    fail(check.message, check.command);
+  };
+  const follow = async (): Promise<void> => {
+    let status;
+    try {
+      status = await api.browser();
+    } catch (err) {
+      return fail(err instanceof ApiError ? err.message : String(err));
+    }
+    if (!alive.current) return;
+    const own = status.browser;
+    if (!own) return fail(SCRIPT.browser.failed(''));
+    if (own.install?.state === 'running') {
+      setPhase('installing');
+      setProgress(own.install.progress);
+      window.setTimeout(() => void follow(), 1000);
+      return;
+    }
+    if (own.engine !== 'none') return launch(own.engine);
+    return fail(own.install?.line ?? '');
+  };
+  const use = (): void => {
+    setCommand(null);
+    if (engine === 'chrome' || engine === 'chromium') {
+      void launch(engine);
+      return;
+    }
+    // Nothing here: fetch it, and follow the installer.
+    started.current = true;
+    setPhase('installing');
+    setProgress(undefined);
+    void Promise.resolve()
+      .then(() => api.browserInstall())
+      .then(() => {
+        if (alive.current) window.setTimeout(() => void follow(), 1000);
+      })
+      .catch((err: unknown) => fail(err instanceof ApiError ? err.message : String(err)));
+  };
+  const done = browser === 'chrome' || browser === 'chromium' || browser === 'installed';
+  const busy = phase === 'installing' || phase === 'launching';
+  return (
+    <div className="wiz-row" data-wrap={phase !== 'idle' ? 'true' : undefined}>
+      <span className="wiz-glyph" data-tone="good" aria-hidden="true">
+        <Icon name="globe" />
+      </span>
+      <span className="wiz-row-text">
+        <span className="wiz-opt-title">{SCRIPT.reach.app.title}</span>
+        <span className="wiz-opt-line">{SCRIPT.reach.app.line}</span>
+      </span>
+      <span className="wiz-row-side">
+        {app ? (
+          <Pill tone="good" dot>
+            {SCRIPT.reach.app.installed}
+          </Pill>
+        ) : prompt ? (
+          <Button
+            size="lg"
+            onClick={() => {
+              void prompt
+                .prompt()
+                .then(() => prompt.userChoice)
+                .then((choice) => {
+                  if (!choice || choice.outcome === 'accepted') onApp();
+                })
+                .catch(() => {});
+            }}
+          >
+            {SCRIPT.reach.app.install}
+          </Button>
+        ) : null}
+        {done ? (
+          <Pill tone="good" dot>
+            {SCRIPT.reach.app.ready(browser === 'chrome' ? 'chrome' : 'chromium')}
+          </Pill>
+        ) : engine === null || engine === 'other' ? null : (
+          <Button size="lg" disabled={busy} onClick={use}>
+            {busy
+              ? SCRIPT.browser.installing
+              : phase === 'failed'
+                ? SCRIPT.browser.retry
+                : engine === 'chrome'
+                  ? SCRIPT.reach.app.chrome
+                  : engine === 'chromium'
+                    ? SCRIPT.reach.app.chromium
+                    : SCRIPT.reach.app.fetch}
+          </Button>
+        )}
+      </span>
+      {!app && !prompt && hint ? <span className="wiz-row-note">{hint}</span> : null}
+      {phase === 'installing' ? (
+        <div className="wiz-row-more">
+          <span className="wiz-opt-line">{SCRIPT.browser.needs}</span>
+          <InstallProgress progress={progress} />
+        </div>
+      ) : phase === 'launching' ? (
+        <div className="wiz-row-more">
+          <Thinking line={SCRIPT.browser.launching} />
+        </div>
+      ) : phase === 'failed' ? (
+        <div className="wiz-row-more">
+          <span className="wiz-opt-line">{SCRIPT.browser.failed(line ?? '')}</span>
+          {command ? <CommandBlock command={command} /> : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
 /* ------------------------------------------------------------------ *
- * 4. The assistant
+ * 5. Your assistant
  * ------------------------------------------------------------------ */
 
-function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: QuestionProps): JSX.Element {
+function AssistantChapter({ answers, existing, onSettled, onTrouble, onReload, onBack }: QuestionProps): JSX.Element {
   const [name, setName] = useState(() => existing?.name ?? DEFAULT_ASSISTANT_NAME);
   /*
-   * An assistant that already wears a picture keeps it unless the owner picks
-   * another face: which mascot it was is not something the roster says, and
+   * A colour is a Blob, uploaded as the assistant's picture. An assistant
+   * that already wears a picture or an emoji keeps it unless the owner picks
+   * a colour: which Blob it was is not something the roster says, and
    * guessing would overwrite it.
    */
-  const [face, setFace] = useState<FaceChoice>(() =>
-    existing?.picture
-      ? { kind: 'kept', url: existing.picture }
-      : existing?.avatar
-        ? { kind: 'emoji', value: existing.avatar }
-        : { kind: 'mascot', role: 'core' },
-  );
+  const [colour, setColour] = useState<ColourId | null>(() => (existing?.picture || existing?.avatar ? null : 'buddi'));
   /*
    * A new assistant starts from the script's persona. An existing one shows
    * its own, read from its file — never its card line, which saved back would
@@ -2873,35 +2945,31 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existing?.id]);
   const [saving, setSaving] = useState(false);
+  const mates = TAKE_ON.filter((tile) => (answers.takeOn ?? []).includes(tile.id) && 'mate' in tile).map((tile) => (tile as { mate: string }).mate);
+  const chosen = COLOURS.find((c) => c.id === colour);
 
   /*
    * Two ways to save one answer.
    *
    * The first time there is no agent and this writes one, bound to the account
-   * the thread just tested. Afterwards — the owner took up "change either" —
+   * chapter 2 just tested. Afterwards — the owner took up "change any of it" —
    * writing a *first* agent is refused, and rightly: there is one, and the
-   * change belongs in its file. Same name, same face, same purpose, one
-   * assistant either way.
-   *
-   * A mascot is a picture, not a line in the file: it is uploaded once the
-   * agent exists. An emoji chosen over a picture takes the picture away, or
-   * the picture would go on winning over it everywhere.
+   * change belongs in its file. Same name, same face, same persona, one
+   * assistant either way. The Blob is a picture, uploaded once the agent exists.
    */
   const submit = (): void => {
     if (name.trim() === '' || saving) return;
     setSaving(true);
-    const emoji = face.kind === 'emoji' ? { avatar: face.value } : {};
     // The persona is the agent's instructions; the card line is the server's
     // plain one unless the owner wrote their own.
     const persona = !existing || (initialPurpose !== null && purpose.trim() !== '' && purpose.trim() !== initialPurpose.trim()) ? { instructions: purpose.trim() } : {};
     const written = existing
-      ? api.updateFirstAgent({ name: name.trim(), ...persona, ...emoji })
+      ? api.updateFirstAgent({ name: name.trim(), ...persona })
       : api.createFirstAgent({
           name: name.trim(),
           handle: idFor(name),
           description: '',
           ...persona,
-          ...emoji,
           ...(answers.brain ? { accountId: answers.brain.accountId } : {}),
         });
     void (async () => {
@@ -2917,62 +2985,93 @@ function AssistantAsk({ answers, existing, onSettled, onTrouble, onReload }: Que
       // said, and the assistant keeps its fallback face.
       let pictureTrouble: string | null = null;
       try {
-        if (face.kind === 'mascot') await api.uploadAgentPicture(saved.id, await mascotFile(face.role));
-        else if (face.kind === 'emoji' && existing?.picture) await api.removeAgentPicture(saved.id);
+        if (chosen) await api.uploadAgentPicture(saved.id, await mascotFile(chosen.role));
       } catch (err) {
         pictureTrouble = err instanceof ApiError ? err.message : String(err);
       }
       setSaving(false);
       onReload();
-      onSettled({ ...answers, assistant: { id: saved.id, name: name.trim(), avatar: face.kind === 'emoji' ? face.value : '' } });
+      onSettled({ ...answers, assistant: { id: saved.id, name: name.trim(), avatar: chosen ? '' : existing?.avatar ?? '' } });
       if (pictureTrouble) onTrouble(pictureTrouble);
     })();
   };
 
   return (
-    <Ask
-      actions={
-        <Button variant="accent" disabled={saving || name.trim() === '' || initialPurpose === null} onClick={submit}>
-          {SCRIPT.assistant.submit}
-        </Button>
-      }
-    >
-      {/* The face is the assistant, so it is shown at the size of a face and
-          not at the size of a control: big, beside its name, changing as the
-          owner picks. */}
-      <span className="meet-chosen-face" data-kind={face.kind === 'emoji' ? 'emoji' : 'image'} aria-hidden="true">
-        {face.kind === 'emoji' ? face.value : <img src={face.kind === 'mascot' ? mascotUrl(face.role) : face.url} alt="" />}
-      </span>
-      <Field label={SCRIPT.assistant.name}>
-        <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
-      </Field>
-      <FacePicker face={face} onPick={setFace} />
-      <Field label={SCRIPT.assistant.purpose} wide>
-        <textarea
-          className="meet-purpose"
-          value={purpose}
-          maxLength={8000}
-          rows={Math.max(4, purpose.split('\n').length + 1)}
-          onChange={(event) => setPurpose(event.target.value)}
-        />
-      </Field>
-    </Ask>
+    <>
+      <Title>{SCRIPT.assistant.title}</Title>
+      <Buddi>
+        <Said>
+          {SCRIPT.assistant.ask}
+          {mates.length > 0 ? SCRIPT.assistant.team(mates) : ''}
+        </Said>
+      </Buddi>
+      <Ask
+        actions={
+          <>
+            <Back onClick={onBack} disabled={saving} />
+            <Primary onClick={submit} disabled={saving || name.trim() === '' || initialPurpose === null}>
+              {SCRIPT.assistant.submit}
+            </Primary>
+          </>
+        }
+      >
+        <div className="wiz-meet">
+          <div className="wiz-face">
+            {/* The face is the assistant, so it is shown at the size of a face. */}
+            <span className="wiz-face-tile" data-agent={chosen?.id ?? 'buddi'} aria-hidden="true">
+              {chosen ? (
+                <img src={mascotUrl(chosen.role)} alt="" />
+              ) : existing?.picture ? (
+                <img src={existing.picture} alt="" />
+              ) : (
+                <span className="wiz-face-emoji">{existing?.avatar ?? ''}</span>
+              )}
+            </span>
+            <div className="wiz-swatches" role="group" aria-label={SCRIPT.assistant.colour}>
+              {COLOURS.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className="wiz-swatch"
+                  data-agent={c.id}
+                  aria-label={SCRIPT.assistant.swatch(c.label)}
+                  aria-pressed={colour === c.id}
+                  onClick={() => setColour(c.id)}
+                />
+              ))}
+            </div>
+            <span className="wiz-face-cap">{SCRIPT.assistant.colour}</span>
+          </div>
+          <div className="wiz-stack">
+            <Field label={SCRIPT.assistant.name}>
+              <input value={name} maxLength={60} onChange={(event) => setName(event.target.value)} />
+            </Field>
+            <Field label={SCRIPT.assistant.purpose} hint={SCRIPT.assistant.purposeHint}>
+              <textarea className="wiz-persona" value={purpose} maxLength={8000} rows={7} onChange={(event) => setPurpose(event.target.value)} />
+            </Field>
+          </div>
+        </div>
+      </Ask>
+    </>
   );
 }
 
 /* ------------------------------------------------------------------ *
- * 5. The switch
+ * The handover
  * ------------------------------------------------------------------ */
 
 /**
  * The assistant speaks first.
  *
  * The runtime has no way to start a turn without one: a run is something a
- * message causes. So the thread sends one message the owner never sees — the
- * instruction from the script — and does not render it. Everything after it is
- * an ordinary conversation, in the owner's history like any other.
+ * message causes. So the card sends one message the owner never sees — the
+ * instruction from the script, which the server fronts with what exists (the
+ * clock, the weather at home, the mailbox) — and does not render it.
+ * Everything after it is an ordinary conversation, in the owner's history
+ * like any other. Under the hello: four first questions, each sent as the
+ * owner's first message, and one warm card with what is still waiting.
  */
-function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, navigate, onPickAnotherBrain }: QuestionProps): JSX.Element {
+function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnotherBrain, onSpoken, progress, onProgress }: QuestionProps): JSX.Element {
   const assistant = answers.assistant;
   const [conversationId, setConversationId] = useState<string | null>(met);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2980,31 +3079,14 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
   /** The run is alive and slow, and the owner has been watching for a minute. */
   const [patient, setPatient] = useState(false);
   const [running, setRunning] = useState(true);
-  const [offers, setOffers] = useState<'open' | 'phone' | 'gone'>('open');
-  /**
-   * Whether a phone is already paired: a rerun on an installation that has
-   * one offers nothing about Telegram. Null until asked; a failed ask is "no".
-   */
-  const [phonePaired, setPhonePaired] = useState<boolean | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    Promise.resolve()
-      .then(() => api.telegram())
-      .then((status) => {
-        if (!cancelled) setPhonePaired(status?.paired === true);
-      })
-      .catch(() => {
-        if (!cancelled) setPhonePaired(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  /** The owner is finished here, and the thread says where it carries on. */
-  const [closing, setClosing] = useState(false);
-  const still = useStill();
+  const [asking, setAsking] = useState(false);
   const started = useRef(false);
   const agents = useMemo<ChatAgent[]>(() => (assistantAgent ? [assistantAgent] : []), [assistantAgent]);
+  useEffect(() => {
+    onProgress();
+    // Once, for the waiting card; the progress keeps itself fresh while it runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /*
    * The introduction happens once per installation, not once per page.
@@ -3047,6 +3129,7 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assistant?.id, met]);
 
   /*
@@ -3056,7 +3139,7 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
    * load, and a first message that looks up the owner's profile before it
    * writes takes several turns — a fixed deadline told the owner their
    * assistant was not answering while it was demonstrably working. So the
-   * transcript's own runs decide: while one is open the thread stays patient
+   * transcript's own runs decide: while one is open the card stays patient
    * and says so after a minute, and only a run that ended without a word, or
    * five minutes of nothing at all, brings out the script's fallback.
    */
@@ -3075,9 +3158,6 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
             setRunning(false);
             setSilent(false);
             setPatient(false);
-            // Nothing is recorded here. First run was finished when the
-            // assistant was made and this conversation opened; what this
-            // moment decides is only what the screen offers next.
             return;
           }
           const runs = transcript.runs ?? [];
@@ -3103,61 +3183,56 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
    * The same conversation, in the shell.
    *
    * Not a new thread and not Home: the owner has just met their assistant in
-   * this conversation, and "open buddi" should land them in it with the rail
-   * around it. Replaced rather than pushed, because first run is not a place
-   * to go back to.
+   * this conversation, and "Open buddi" lands them in it with the rail around
+   * it. Replaced rather than pushed, because first run is not a place to go
+   * back to.
    */
   const carriesOn = assistant && conversationId ? chatRoute(assistant.id, conversationId) : null;
   const spoken = messages.some(isSpoken);
   useEffect(() => {
-    if (spoken && carriesOn) onCarriesOn(carriesOn);
-  }, [spoken, carriesOn, onCarriesOn]);
+    if (spoken && carriesOn) onSpoken(carriesOn);
+  }, [spoken, carriesOn, onSpoken]);
 
-  /*
-   * Three seconds and the board leaves by itself.
-   *
-   * The owner said they were done — "not now", or a phone that said hello —
-   * and a screen that then just sits there is the dead end this fixes. The
-   * button is always there to do it sooner, and an owner who has asked for
-   * less motion is never moved without pressing it.
-   */
-  useEffect(() => {
-    if (!closing || !carriesOn || still) return undefined;
-    const timer = window.setTimeout(() => navigate(carriesOn, true), LEAVE_MS);
-    return () => window.clearTimeout(timer);
-  }, [closing, carriesOn, still, navigate]);
-
-  /*
-   * The end, in the dock: one line and one button, and nothing to type into.
-   * A composer here was an offer the board withdrew three seconds later; the
-   * conversation carries on in the dashboard, where the composer is real.
-   */
-  const ended = closing && carriesOn !== null;
-  useEffect(() => {
-    if (ended) onClosed();
-  }, [ended, onClosed]);
+  const tiles = answers.takeOn ?? [];
+  const mates = TAKE_ON.filter((tile) => tiles.includes(tile.id) && 'mate' in tile).map((tile) => (tile as { mate: string }).mate);
+  const starters = SCRIPT.handover.starters(
+    { days: tiles.includes('days'), mail: tiles.includes('mail'), mailbox: answers.reach?.mailbox === true },
+    mates,
+  );
+  const waiting = progress?.waiting ?? [];
+  /** A first question, sent as the owner's first message; the conversation carries on in the shell. */
+  const ask = (text: string): void => {
+    if (!assistant || !conversationId || asking) return;
+    setAsking(true);
+    void Promise.resolve()
+      .then(() => chatApi.send(assistant.id, { conversationId, text }))
+      .then(() => navigate(chatRoute(assistant.id, conversationId), true))
+      .catch(() => setAsking(false));
+  };
 
   return (
     <>
-      {/*
-        What was said, and nothing about how. The chat draws the folded
-        thoughts and the tool rows because that is its job; here they are the
-        first thing an owner ever sees of an assistant, and "looking around" is
-        the true and sufficient version of it.
-      */}
-      <MessageList
-        messages={messages}
-        live={[]}
-        now={Date.now()}
-        onOpen={() => {}}
-        working={running}
-        agents={agents}
-        agentName={assistant?.name ?? ''}
-        {...(assistant ? { agentId: assistant.id } : {})}
-        emptyHint={SCRIPT.handover.waiting}
-        plain
-        workingLine={SCRIPT.handover.looking(assistant?.name ?? '')}
-      />
+      <div className="wiz-hello">
+        {/*
+          What was said, and nothing about how. The chat draws the folded
+          thoughts and the tool rows because that is its job; here they are the
+          first thing an owner ever sees of an assistant, and "looking around" is
+          the true and sufficient version of it.
+        */}
+        <MessageList
+          messages={messages}
+          live={[]}
+          now={Date.now()}
+          onOpen={() => {}}
+          working={running}
+          agents={agents}
+          agentName={assistant?.name ?? ''}
+          {...(assistant ? { agentId: assistant.id } : {})}
+          emptyHint={SCRIPT.handover.waiting}
+          plain
+          workingLine={SCRIPT.handover.looking(assistant?.name ?? '')}
+        />
+      </div>
 
       {patient && !silent ? (
         <Buddi>
@@ -3170,79 +3245,40 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
           <Buddi>
             <Said>{SCRIPT.handover.silent}</Said>
           </Buddi>
-          <Ask
-            actions={
-              <Button variant="accent" onClick={onPickAnotherBrain}>
-                {SCRIPT.handover.again}
-              </Button>
-            }
-          />
+          <Ask actions={<Primary onClick={onPickAnotherBrain}>{SCRIPT.handover.again}</Primary>} />
         </>
       ) : null}
 
-      {closing ? (
-        <Buddi>
-          <Said>{SCRIPT.done.said}</Said>
-        </Buddi>
+      {spoken ? (
+        <div className="wiz-starters" role="group" aria-label={SCRIPT.handover.starterLabel}>
+          {starters.map((text) => (
+            <button key={text} type="button" className="wiz-starter" disabled={asking} onClick={() => ask(text)}>
+              {text}
+            </button>
+          ))}
+        </div>
       ) : null}
 
-      {/*
-        buddi speaks after the hello: whose that was, that it is answered on
-        the next page, and the phone step before the phone is offered. Drawn
-        once the paired state is known, so a rerun never flashes an offer it
-        then withdraws.
-      */}
-      {spoken && phonePaired !== null && !silent ? (
-        <Buddi>
-          <Said>{phonePaired ? SCRIPT.offers.paired(assistant?.name ?? '') : SCRIPT.offers.said(assistant?.name ?? '')}</Said>
-        </Buddi>
-      ) : null}
-
-      {/*
-        An offer is a question, and a question is answered in the dock.
-        The chips, and then the phone's own step, take the composer's place
-        while they are open — the way the name, the clock, the brain and the
-        assistant each did — so there is never a second thing to fill in
-        underneath the thing the owner is filling in.
-      */}
-      {spoken && phonePaired !== null && offers === 'open' ? (
-        <Ask
-          actions={
-            <>
-              <Button
-                variant={phonePaired ? 'accent' : 'default'}
-                onClick={() => {
-                  setOffers('gone');
-                  setClosing(true);
-                }}
-              >
-                {SCRIPT.offers.notNow}
-              </Button>
-              {phonePaired ? null : (
-                <Button variant="accent" onClick={() => setOffers('phone')}>
-                  {SCRIPT.offers.phone}
-                </Button>
-              )}
-            </>
+      {spoken && waiting.length > 0 ? (
+        <Notice
+          tone="warm"
+          title={SCRIPT.handover.waitingTitle(waiting.length)}
+          action={
+            <Button variant="accent" onClick={() => navigate(HOME_ROUTE, true)}>
+              {SCRIPT.handover.home}
+            </Button>
           }
-        />
+        >
+          {SCRIPT.handover.waitingBody(waiting)}
+        </Notice>
       ) : null}
 
-      {spoken && offers === 'phone' ? (
-        <TelegramCard
-          onPaired={() => setClosing(true)}
-          onDismiss={() => {
-            setOffers('gone');
-            setClosing(true);
-          }}
-        />
-      ) : null}
-
-      {ended && carriesOn ? (
+      {spoken && carriesOn ? (
         <Ask
           actions={
             <ButtonLink
               variant="accent"
+              size="lg"
               href={carriesOn}
               onClick={(event) => {
                 event.preventDefault();
@@ -3252,16 +3288,29 @@ function Handover({ answers, assistantAgent, met, onMet, onCarriesOn, onClosed, 
               {SCRIPT.done.open}
             </ButtonLink>
           }
-        >
-          {/* Under reduced motion nothing leaves by itself, so the line does
-              not say it will. */}
-          <span className="meet-line">{still ? SCRIPT.done.ready : SCRIPT.done.leaving}</span>
-        </Ask>
+        />
       ) : null}
     </>
   );
 }
 
+/** A command the owner runs themselves, in a block, with a way to copy it. */
+function CommandBlock({ command }: { command: string }): JSX.Element {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
+  const copy = (): void => {
+    if (!navigator.clipboard?.writeText) { setCopied('failed'); return; }
+    void navigator.clipboard.writeText(command).then(() => setCopied('done'), () => setCopied('failed'));
+  };
+  return (
+    <Stack gap="sm">
+      <Code label="The command to run">{command}</Code>
+      <Toolbar align="end">
+        {copied === 'failed' ? <span className="ui-toolbar-note">Select it to copy.</span> : null}
+        <Button size="sm" onClick={copy}>{copied === 'done' ? 'Copied' : 'Copy'}</Button>
+      </Toolbar>
+    </Stack>
+  );
+}
 /** A message with words in it from the assistant. */
 function isSpoken(message: ChatMessage): boolean {
   return (
@@ -3271,21 +3320,152 @@ function isSpoken(message: ChatMessage): boolean {
 }
 
 /* ------------------------------------------------------------------ *
- * The phone
+ * There is already a buddi, and this one is meant to become it
+ * ------------------------------------------------------------------ */
+
+/** Idle, being asked for, or under way. */
+export type RestoreState = 'idle' | 'form' | 'running';
+
+/**
+ * Restoring, offered in chapter 1 and never after it: "I have a backup" under
+ * the map opens this sheet. Almost nobody has a backup on the day they
+ * install this, and the one person who does is looking for exactly those words.
+ */
+function RestoreForm({
+  onCancel,
+  onStarted,
+  onTrouble,
+}: {
+  onCancel: () => void;
+  onStarted: () => void;
+  onTrouble: (message: string | null) => void;
+}): JSX.Element {
+  const [file, setFile] = useState<File | null>(null);
+  const [passphrase, setPassphrase] = useState('');
+  const [sending, setSending] = useState(false);
+  const send = (): void => {
+    if (!file || sending) return;
+    setSending(true);
+    onTrouble(null);
+    api
+      .firstRunRestore(file, passphrase.trim())
+      .then((answer) => {
+        rememberRestore(answer.job.id);
+        onStarted();
+      })
+      .catch((error: unknown) => onTrouble(error instanceof ApiError ? error.message : String(error)))
+      .finally(() => setSending(false));
+  };
+  return (
+    <Sheet title={SCRIPT.restore.sheet} onClose={onCancel}>
+      <div className="wiz-restore">
+        <p className="wiz-foot">{SCRIPT.restore.lede}</p>
+        <Field label={SCRIPT.restore.file}>
+          <input type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+        </Field>
+        <Field label={SCRIPT.restore.passphrase} hint={SCRIPT.restore.passphraseHint}>
+          <input type="password" autoComplete="off" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
+        </Field>
+        <Toolbar align="end">
+          <Button variant="ghost" onClick={onCancel}>
+            {SCRIPT.restore.cancel}
+          </Button>
+          <Button variant="accent" disabled={sending || !file} onClick={send}>
+            {SCRIPT.restore.submit}
+          </Button>
+        </Toolbar>
+      </div>
+    </Sheet>
+  );
+}
+
+/**
+ * A restore under way, said on the card in buddi's voice, phase by phase.
+ *
+ * The job outlives this page: halfway through, the gateway is stopped and
+ * every request fails. A failed poll is therefore not news — only an answer
+ * is — and the id that makes the answer findable is what the tab remembers.
+ * Afterwards the wizard picks up at the brain: the one answer a backup can
+ * never bring back, because it never carries a key.
+ */
+function RestoreRunning({ onDone, onFailed }: { onDone: (name: string | undefined) => void; onFailed: (message: string) => void }): JSX.Element {
+  const [phases, setPhases] = useState<string[]>([]);
+  const finish = useRef({ onDone, onFailed });
+  finish.current = { onDone, onFailed };
+  useEffect(() => {
+    const jobId = rememberedRestore();
+    if (!jobId) return undefined;
+    let stopped = false;
+    const ask = (): void => {
+      api
+        .backupJob(jobId)
+        .then((job: BackupJob) => {
+          if (stopped) return;
+          setPhases((seen) => (seen.includes(job.phase) ? seen : [...seen, job.phase]));
+          if (job.phase === 'done') {
+            stopped = true;
+            rememberRestore(null);
+            void api.owner().then(
+              (owner) => finish.current.onDone(owner.preferredName ?? undefined),
+              () => finish.current.onDone(undefined),
+            );
+          } else if (job.phase === 'rolled-back' || job.phase === 'failed') {
+            // Both are the end of this job. They differ in what is on disk
+            // now, which is what the job's own error says, so it is preferred
+            // over either standing sentence.
+            stopped = true;
+            rememberRestore(null);
+            finish.current.onFailed(job.error ?? SCRIPT.restore.phases[job.phase]);
+          }
+        })
+        .catch(() => {
+          /* Restarting, or not answering yet. Ask again in a moment. */
+        });
+    };
+    ask();
+    const timer = window.setInterval(ask, POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+  const said = phases.filter((phase): phase is keyof typeof SCRIPT.restore.phases => phase in SCRIPT.restore.phases);
+  return (
+    <>
+      <Title>{SCRIPT.restore.title}</Title>
+      <Buddi>
+        <Said>{SCRIPT.restore.started}</Said>
+        {said.map((phase) => (
+          <Said key={phase}>{SCRIPT.restore.phases[phase]}</Said>
+        ))}
+      </Buddi>
+      <Thinking />
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The phone, when there is no bot yet
  * ------------------------------------------------------------------ */
 
 /**
- * Telegram: the token from BotFather in the thread, then a square to scan.
- *
- * What buddi says is a bubble and what the owner answers is in the dock —
- * the same shape as every other question on this screen, and the reason the
- * composer steps aside while this is open. "Not now" is always there: an
- * offer the owner took by mistake has to have a way back out of it.
- *
- * The pairing state is polled rather than assumed — the thread says the phone
- * arrived when the phone says hello, and not before.
+ * Telegram, in chapter 4's sheet: the token from BotFather, then a square to
+ * scan. "Not now" is always there: a row the owner opened by mistake has to
+ * have a way back out of it. The pairing state is polled rather than assumed —
+ * the sheet says the phone arrived when the phone says hello, and not before.
+ * Its actions stay in the sheet: the wizard's dock belongs to the chapter.
  */
-function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
+function TelegramCard(props: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
+  return (
+    <DockSlot.Provider value={null}>
+      <div className="wiz-sheet-body">
+        <TelegramSteps {...props} />
+      </div>
+    </DockSlot.Provider>
+  );
+}
+
+function TelegramSteps({ onPaired, onDismiss }: { onPaired: () => void; onDismiss: () => void }): JSX.Element {
   const field = useOpened<HTMLInputElement>();
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
@@ -3323,9 +3503,12 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
 
   if (paired) {
     return (
-      <Buddi>
-        <Said>{SCRIPT.telegram.paired}</Said>
-      </Buddi>
+      <>
+        <Buddi>
+          <Said>{SCRIPT.telegram.paired}</Said>
+        </Buddi>
+        <Ask actions={<Button variant="accent" onClick={onDismiss}>{SCRIPT.telegram.close}</Button>} />
+      </>
     );
   }
 
@@ -3339,7 +3522,7 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
           actions={
             <>
               <Button variant="ghost" onClick={onDismiss}>
-                {SCRIPT.offers.notNow}
+                {SCRIPT.telegram.notNow}
               </Button>
               {stale ? (
                 <Button variant="accent" onClick={again}>
@@ -3365,7 +3548,7 @@ function TelegramCard({ onPaired, onDismiss }: { onPaired: () => void; onDismiss
         actions={
           <>
             <Button variant="ghost" onClick={onDismiss}>
-              {SCRIPT.offers.notNow}
+              {SCRIPT.telegram.notNow}
             </Button>
             <Button variant="accent" disabled={saving || token.trim() === ''} onClick={save}>
               {SCRIPT.telegram.submit}

@@ -19,12 +19,28 @@ import { BANNED_WORDS, SCRIPT, OPENING_INSTRUCTION, DEFAULT_ASSISTANT_NAME, MASC
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const THREAD = path.resolve(HERE, '..', 'Meet.tsx');
 
+/** Plain samples for every shape of argument the script's sentences take. */
+const SAMPLES: unknown[][] = [
+  ['Amen', 'America/New_York'],
+  [['Weather', 'Calendar'], 1, 2],
+  [2],
+  [{ days: true, mail: true, mailbox: false }, ['Planner', 'Mail Triage']],
+  [{ days: false, mail: true, mailbox: false }, []],
+  [['Mail Triage is waiting for a mailbox', 'Calendar wants your calendar’s private link']],
+];
+
 /** Every string this object holds, functions called with plain samples. */
 function sentences(value: unknown): string[] {
   if (typeof value === 'string') return [value];
   if (typeof value === 'function') {
-    const said = (value as (...args: string[]) => unknown)('Amen', 'America/New_York');
-    return typeof said === 'string' ? [said] : [];
+    return SAMPLES.flatMap((args) => {
+      try {
+        const said = (value as (...args: unknown[]) => unknown)(...args);
+        return typeof said === 'string' ? [said] : Array.isArray(said) ? said.filter((line): line is string => typeof line === 'string') : [];
+      } catch {
+        return [];
+      }
+    });
   }
   if (Array.isArray(value)) return value.flatMap(sentences);
   if (value && typeof value === 'object') return Object.values(value).flatMap(sentences);

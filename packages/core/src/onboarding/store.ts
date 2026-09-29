@@ -24,6 +24,7 @@ import { OWNER_ID, ensureOwner, type Queryable } from '../owner.js';
 import type {
   Onboarding,
   OnboardingDetails,
+  OnboardingReach,
   OnboardingStart,
   OwnerProfile,
   OwnerProfilePatch,
@@ -65,6 +66,15 @@ function details(value: unknown): OnboardingDetails {
   const row = raw as Record<string, unknown>;
   if (typeof row.conversationId === 'string') out.conversationId = row.conversationId;
   if (typeof row.accountId === 'string') out.accountId = row.accountId;
+  if (Array.isArray(row.takeOn)) out.takeOn = row.takeOn.filter((tile): tile is string => typeof tile === 'string');
+  if (row.reach && typeof row.reach === 'object' && !Array.isArray(row.reach)) {
+    const reach: OnboardingReach = {};
+    for (const key of ['phone', 'mailbox', 'app', 'browser'] as const) {
+      const value = (row.reach as Record<string, unknown>)[key];
+      if (typeof value === 'boolean') reach[key] = value;
+    }
+    out.reach = reach;
+  }
   return out;
 }
 
@@ -187,7 +197,15 @@ export async function setOnboardingDetails(
   pool: Queryable,
   patch: OnboardingDetails,
 ): Promise<Onboarding> {
-  const entries = Object.entries(patch).filter(([, value]) => typeof value === 'string' && value !== '');
+  // A string worth keeping, a list of strings (an empty list is an answer:
+  // "just an assistant"), or a small record of yes and no.
+  const entries = Object.entries(patch).filter(
+    ([, value]) =>
+      (typeof value === 'string' && value !== '') ||
+      (Array.isArray(value) && value.every((item) => typeof item === 'string')) ||
+      (value !== null && typeof value === 'object' && !Array.isArray(value) &&
+        Object.values(value).every((item) => typeof item === 'boolean')),
+  );
   if (entries.length === 0) return getOnboarding(pool);
   const merge = JSON.stringify(Object.fromEntries(entries));
   const { rows } = await pool.query(

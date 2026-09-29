@@ -241,7 +241,8 @@ export function Notice({
   role,
   action,
 }: {
-  tone?: Exclude<Tone, 'muted'>;
+  /** `warm`: a friendly aside on the sand ground, never a problem. */
+  tone?: Exclude<Tone, 'muted'> | 'warm';
   title?: ReactNode;
   children?: ReactNode;
   role?: 'status' | 'alert';

@@ -273,6 +273,40 @@ it('records what a step learned, and answers with it', async () => {
   });
 });
 
+it('records chapter 4 as the reach step, yes or no per row, and refuses anything else', async () => {
+  const pool = fakePool();
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  for (const reach of [{ phone: 'yes' }, { garden: true }, ['phone'], null]) {
+    const bad = await fetch(`${origin}/api/onboarding/step`, { method: 'POST', headers, body: JSON.stringify({ step: 'reach', reach }) });
+    expect(bad.status, JSON.stringify(reach)).toBe(400);
+  }
+  const saved = await fetch(`${origin}/api/onboarding/step`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ step: 'reach', reach: { phone: true, mailbox: false, app: false, browser: true } }),
+  });
+  expect(saved.status).toBe(200);
+  const view = await json(saved);
+  expect(view.stepsDone).toContain('reach');
+  // A reload replays it from the record.
+  expect((await json(await fetch(`${origin}/api/onboarding`, { headers }))).details.reach).toEqual({ phone: true, mailbox: false, app: false, browser: true });
+});
+
+it('records chapter 3 through its own route, refuses an outcome it does not know, and answers the progress', async () => {
+  const pool = fakePool();
+  const { origin, headers } = await boot({ pool, agentsDir: agentsDir(), providerAccounts: accounts([]) });
+  const bad = await fetch(`${origin}/api/onboarding/take-on`, { method: 'POST', headers, body: JSON.stringify({ tiles: ['garden'] }) });
+  expect(bad.status).toBe(400);
+  expect((await fetch(`${origin}/api/onboarding/take-on`, { method: 'POST', headers: { ...headers, 'X-Buddi-CSRF': '' }, body: '{}' })).status).toBe(403);
+  // "Just an assistant for now": nothing to fetch, and the choice is on the record.
+  const none = await fetch(`${origin}/api/onboarding/take-on`, { method: 'POST', headers, body: JSON.stringify({ tiles: [] }) });
+  expect(none.status).toBe(202);
+  expect(await json(none)).toEqual({ jobs: [] });
+  expect(pool.row.steps_done).toContain('take-on');
+  const progress = await json(await fetch(`${origin}/api/onboarding/take-on`, { headers }));
+  expect(progress).toEqual({ tiles: [], plugins: [], running: false, waiting: [] });
+});
+
 it('writes the first agent, makes it the default, assigns the only account and serves it as /api/agents does', async () => {
   const pool = fakePool();
   const dir = agentsDir();

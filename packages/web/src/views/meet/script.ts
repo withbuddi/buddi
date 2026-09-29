@@ -2,7 +2,7 @@
  * What buddi says, and every other word on the first-run screen.
  *
  * One file, because the screen is a script before it is a component: the
- * sentences are the design (docs/onboarding.md §2), and keeping them together
+ * sentences are the design (docs/onboarding.md §2, the kit's `Setup.jsx`), and keeping them together
  * is what lets a test read them all and a person read them aloud.
  *
  * The rule in §1 is enforced next door in `script.test.ts`: the words a
@@ -54,68 +54,131 @@ export const FACES = ['🙂', '📚', '🧭', '🦊', '🛟', '🌿', '🛠️',
 export const OPENING_INSTRUCTION =
   'Introduce yourself by name and say one thing you can do today.';
 
+/** The five chapters, as the map names them. */
+export const CHAPTER_NAMES = ['Hello', 'A brain', 'What I take on', 'Reach me', 'Your assistant'] as const;
+
+/** "A, B and C" — and, with `comma`, "A, B, and C". */
+export const and = (items: readonly string[], comma = false): string =>
+  items.length < 2
+    ? items.join('')
+    : `${items.slice(0, -1).join(', ')}${comma && items.length > 2 ? ', and ' : ' and '}${items[items.length - 1]}`;
+
+const cap = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1);
+const NUMBER = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight'];
+
+/** The six outcomes of chapter 3, in the order the tiles are drawn. */
+export const TAKE_ON = [
+  { id: 'days', title: 'My days', plugins: 'Weather · Calendar', line: 'Weather and your calendars. A morning brief from Planner.', mate: 'Planner', note: 'Weather needs nothing. Calendar asks for your calendar’s private link later, on its own page.' },
+  { id: 'mail', title: 'My mail', plugins: 'Mail Triage (built in)', line: 'Mail Triage reads new mail and brings you only what needs you.', mate: 'Mail Triage', note: 'Mail asks for a mailbox in chapter 4.' },
+  { id: 'money', title: 'My money', plugins: 'Finance', line: 'Accounts, cards and cash flow. Ledger answers “can I afford this?”.', mate: 'Ledger', note: 'Finance asks for your bank on its own page.' },
+  { id: 'voice', title: 'Voice', plugins: 'Speech', line: 'Talk to me and hear me back, here and on your phone. Runs on this computer.', note: 'Speech needs nothing.' },
+  { id: 'code', title: 'My code', plugins: 'Developer', line: 'Developer works in one folder you name, and shows you what it changed.', mate: 'Developer', note: 'Developer asks for its folder the first time you talk.' },
+  { id: 'pictures', title: 'Pictures', plugins: 'Image', line: 'Illustrator makes one image from a prompt, with an account you pick.', mate: 'Illustrator', note: 'Image asks which account to draw with.' },
+] as const;
+export type TakeOnTile = (typeof TAKE_ON)[number]['id'];
+
+/** On when the chapter opens for the first time. */
+export const TAKE_ON_DEFAULT: readonly TakeOnTile[] = ['days', 'mail'];
+
+/** The five colours a face can take: the agent accents, each with its Blob. */
+export const COLOURS = [
+  { id: 'buddi', role: 'core', label: 'Blue' },
+  { id: 'mail', role: 'mail', label: 'Orange' },
+  { id: 'finance', role: 'finance', label: 'Green' },
+  { id: 'coding', role: 'coding', label: 'Violet' },
+  { id: 'research', role: 'research', label: 'Purple' },
+] as const satisfies ReadonlyArray<{ id: string; role: MascotRole; label: string }>;
+export type ColourId = (typeof COLOURS)[number]['id'];
+
 export const SCRIPT = {
-  opening: [
-    "Hi. I'm buddi. I live on this computer, and I'm about to introduce you to your first assistant.",
-    'Nothing you tell me leaves this machine, except what your assistant sends to the AI you pick in a minute.',
+  /** Over the map, under the name. */
+  tagline: 'Setting up, on this Mac.',
+  /** The same line where the machine is not a Mac — a Linux server, say. */
+  taglineElsewhere: 'Setting up, on this computer.',
+  chapters: CHAPTER_NAMES,
+  /** Under each chapter's map, one note, in the chapter's order. */
+  mapNotes: [
+    'Two minutes. Everything can be changed later in Settings, and nothing leaves this computer until you say so.',
+    'One line decides which company sees your assistant’s conversations. You can add more brains later and give each agent its own.',
+    'Each choice installs a plugin from withbuddi.com and proposes an agent for it. Only plugins made by buddi are installed for you; you can remove any of them later.',
+    'All three are optional. The mailbox is what “My mail” needs; the phone is how I reach you when you are away.',
+    'The persona is a plain text file the assistant grows over time. Keep it, rewrite it, or let Agent Father write one after an interview.',
   ],
+  /** The dock: where you are, and the way back. */
+  count: (n: number): string => `Chapter ${n} of 5`,
+  back: 'Back',
+  change: 'change',
   later: 'Set up later',
-  /** Back to the first question; nothing already connected is undone. */
+  /** Back to the first chapter; nothing already connected is undone. */
   startOver: {
     link: 'Start over',
-    /** Said before the first question again, only when something stays. */
+    /** Said in chapter 1 again, only when something stays. */
     said: (kept: string): string =>
       `Starting again. What you already connected stays in Settings: ${kept}.`,
     telegram: 'Telegram',
     browser: 'the browser',
   },
+  /** The phone strip's dots. */
+  strip: (n: number, name: string): string => `${n} · ${name}`,
+
+  /* ---- chapter 1 ---- */
+  hello: {
+    title: 'Hi. I’m buddi.',
+    opening: [
+      'I live on this computer and I’m about to introduce you to your first assistant. Nothing you tell me leaves this machine, except what your assistant sends to the AI you pick next.',
+      'First, what should we call you, and what time is it where you are?',
+    ],
+    foot: 'Your agents use your name in every reply, and your clock for reminders and the morning brief.',
+    submit: 'That’s me',
+    /** What the map says once it is answered, under the name. */
+    answer: (name: string): string => name,
+  },
   name: {
-    ask: 'First, what should we call you?',
-    placeholder: 'Your first name',
-    submit: "That's me",
+    label: 'Your first name',
+    placeholder: 'Sam',
   },
   clock: {
-    /** The zone is the browser's own; the sentence is buddi's. */
-    ask: (name: string, zone: string): string =>
-      `Nice to meet you, ${name}. I'll set your clock to ${zone}, which is what this browser says. Right?`,
-    yes: 'Yes',
-    another: 'Pick another',
     label: 'Your clock',
-    answer: (zone: string): string => zone,
+    /** The zone is the browser's own; the time is now, there. */
+    hint: (time: string): string => `What this browser says. ${time} right now.`,
+    change: 'Change',
   },
+
+  /* ---- chapter 2 ---- */
   brain: {
-    ask: 'Your assistant needs a brain: an AI it thinks with. Which of these do you already have?',
+    title: 'Which AI should your team think with?',
+    ask: 'Pick what you already have. I test it with one small call before we go on.',
+    submit: 'Use this brain',
+    /** The five cards, in the kit's order. */
     cards: {
-      claude: {
-        title: 'Claude',
-        line: 'I pay for Claude',
-        know: "Uses your Claude plan's monthly Agent SDK credits; after them, an API key.",
-      },
-      chatgpt: {
-        title: 'ChatGPT',
-        line: 'I pay for ChatGPT',
-        know: "Uses your ChatGPT plan through OpenAI's Codex backend. Sign in with a code.",
-      },
-      gemini: { title: 'Gemini', line: 'I have a Google AI key' },
-      key: { title: 'A key from Anthropic or OpenAI', line: 'I have an API key' },
-      ollama: { title: 'Ollama', line: 'Free, on this computer' },
-      cloud: { title: 'Ollama Cloud, one tap', line: 'Free to start, no key' },
-      service: { title: 'Another service, or Ollama Cloud with a key', line: 'I have an address and a key' },
+      free: { title: 'Free to start, no key', line: 'Ollama Cloud, one tap. Good enough to meet your assistant today.', pill: 'Recommended to begin' },
+      claude: { title: 'I pay for Claude', line: 'Sign in with your Claude account. Uses its extra usage.' },
+      chatgpt: { title: 'I pay for ChatGPT', line: 'Sign in with a code on openai.com. Uses your plan.' },
+      key: { title: 'I have an API key', line: 'Anthropic, OpenAI, Google AI, or another service with an address.' },
+      ollama: { title: 'Ollama on this computer', line: 'Free and private. Looking for it on this computer…' },
+    },
+    /** Which kind of key, under the key card. */
+    keyKinds: {
+      label: 'Which key',
+      key: 'Anthropic or OpenAI',
+      gemini: 'Google AI',
+      service: 'Another service',
     },
     claude: {
+      label: 'Claude',
       start: 'Sign in with Claude',
       open: 'Open the Claude sign-in page',
       paste: 'Paste what Claude gave you',
       finish: 'Done',
-      waiting: 'Sign in, then paste the code Claude shows you.',
+      waiting: 'Sign in on the claude.ai page that just opened, then paste the code Claude shows you.',
     },
     /** ChatGPT: buddi shows a code, the owner enters it on openai.com, buddi notices. */
     chatgpt: {
-      /** What the account is called, in Settings and in the answer bubble. */
+      /** What the account is called, in Settings and on the map. */
       label: 'ChatGPT',
       /** Around the code, which is drawn in bold between them. */
       codeBefore: 'Here is your code: ',
-      codeAfter: '. Open the link, enter it, and approve buddi on openai.com.',
+      codeAfter: '. Type it on the openai.com page that just opened and approve buddi. I’ll notice.',
       code: 'Your code',
       open: 'Open openai.com',
       again: 'Try again',
@@ -123,15 +186,14 @@ export const SCRIPT = {
     },
     /** Ollama Cloud with a device key: the owner presses Connect on ollama.com, buddi notices. */
     cloud: {
-      /** What the account is called, in Settings and in the answer bubble. */
+      /** What the account is called, in Settings and on the map. */
       label: 'Ollama Cloud',
-      waiting: 'Press Connect on the ollama.com page. Sign in there first if it asks. I will notice.',
+      waiting: 'Press Connect on the ollama.com page that just opened. Sign in there first if it asks. I’ll notice.',
       open: 'Open the ollama.com page',
       again: 'Try again',
     },
     /** Gemini with a Google AI Studio key: one field, and a link to where keys are made. */
     gemini: {
-      /** What the account is called, in Settings and in the answer bubble. */
       label: 'Gemini',
       field: 'Your Google AI key',
       placeholder: 'Paste it here',
@@ -141,6 +203,7 @@ export const SCRIPT = {
     key: {
       field: 'Your key',
       placeholder: 'Paste it here',
+      hint: 'I can tell which AI it belongs to from the key. It stays on this computer.',
       submit: 'Use this key',
       which: 'Not right?',
       anthropic: 'Anthropic',
@@ -148,11 +211,13 @@ export const SCRIPT = {
       refused: 'That key was refused. Check it and paste it again.',
     },
     ollama: {
-      found: 'Found it, running now',
-      missing: 'Install Ollama, then come back',
+      label: 'Ollama',
+      found: (models: number): string =>
+        `Free and private. I found Ollama running with ${models === 1 ? 'one model' : `${models} models`}; the first answer takes a minute.`,
+      missing: 'Free and private. Install Ollama, then come back; I keep looking.',
+      looking: 'Free and private. Looking for it on this computer…',
       connect: 'Use Ollama',
       download: 'Get Ollama',
-      looking: 'Looking for it on this computer…',
     },
     /** Asked only when the choice is real: several models and no obvious one. */
     model: {
@@ -168,14 +233,14 @@ export const SCRIPT = {
     checking: {
       key: 'Checking that key…',
       service: 'Asking the service…',
-      ollama: 'Asking Ollama…',
+      ollama: 'Asking the first model one small question. It can take a minute.',
       cloud: 'Asking Ollama Cloud…',
       claude: 'Checking with Claude…',
       chatgpt: 'Asking ChatGPT…',
       gemini: 'Asking Gemini…',
     },
-    back: 'Back',
     service: {
+      label: 'Another service',
       address: 'Address',
       addressPlaceholder: 'The address they gave you',
       key: 'Key',
@@ -186,11 +251,67 @@ export const SCRIPT = {
     /** A free Google AI key: Pro was refused, Flash answered. */
     worksOnFlash: (model: string): string =>
       `That works. Google's free tier has no Pro allowance, so your assistant will think with ${model}; turn on billing at Google to use Pro.`,
-    /** Anything else that went wrong, in its own words. */
-    refused: (why: string): string => why,
     answer: (label: string): string => label,
   },
-  /** The agents' own browser: found and said in one line, or fetched while the owner watches. */
+
+  /* ---- chapter 3 ---- */
+  takeOn: {
+    title: 'What should I take on for you?',
+    ask: 'Pick a few. Each one brings a plugin and, for some, a teammate who owns that job. Skip this and I stay a plain assistant; you can add any of it later.',
+    submit: 'Take these on',
+    none: 'Just an assistant for now',
+    /** Under the grid, when nothing is picked. */
+    nothing: 'Nothing picked. I’ll be a plain assistant, and Home will offer these again.',
+    builtIn: 'Mail is built in.',
+    nothingToFetch: 'Nothing to fetch.',
+    /** The progress line: what is being fetched, and how far along. */
+    fetching: (titles: readonly string[], at: number, of: number): string =>
+      `Fetching ${and(titles)} from withbuddi.com and reading them. ${at} of ${of}.`,
+    ready: (titles: readonly string[]): string => `${and(titles)} ${titles.length > 1 ? 'are' : 'is'} in, read and ready.`,
+    failed: (title: string, reason: string): string => `${title} did not come: ${reason}.`,
+    /** The map's line under chapter 3. */
+    installing: (ready: number, of: number): string => `Installing, ${ready} of ${of} ready`,
+    installed: 'Installed',
+    answer: (titles: readonly string[]): string => (titles.length === 0 ? 'Just an assistant' : cap(titles.join(', ').toLowerCase())),
+  },
+
+  /* ---- chapter 4 ---- */
+  reach: {
+    title: 'How do we reach each other?',
+    ask: 'Three things, each a minute. Do the ones you want; the rest wait in Settings.',
+    submit: 'Continue',
+    phone: {
+      title: 'Your phone, through Telegram',
+      line: 'Scan the code with your phone and press Start. Approvals, voice notes and the morning brief land there.',
+      setUp: 'Set up Telegram',
+      paired: 'Paired',
+      /** Under the rows, once the phone said hello. */
+      hello: '✓ That is your phone, talking to me. Approvals reach you there from now on.',
+    },
+    mailbox: {
+      title: 'A mailbox',
+      forTriage: 'A mailbox, for Mail Triage',
+      line: 'Gmail, iCloud, Fastmail or any IMAP account. Reading only; sending always stops at a card you approve.',
+      add: 'Add a mailbox',
+      sheet: 'Add a mailbox',
+      added: 'Mailbox added',
+      unavailable: 'Mail is not ready on this computer yet. Settings → Mail can add one later.',
+    },
+    app: {
+      title: 'buddi as an app, and a browser of its own',
+      line: 'Keep buddi in your Dock; give your assistant Chrome or its own Chromium (150 MB) so it can look at websites.',
+      install: 'Install app',
+      installed: 'App installed',
+      chrome: 'Use Chrome',
+      chromium: 'Use its Chromium',
+      fetch: 'Fetch a browser',
+      ready: (engine: 'chrome' | 'chromium'): string => (engine === 'chrome' ? 'Chrome, ready' : 'Chromium, ready'),
+    },
+    /** The map's line once answered. */
+    answer: (done: readonly string[]): string => (done.length === 0 ? 'Later, in Settings' : cap(done.join(', '))),
+    done: { phone: 'phone paired', mailbox: 'mailbox added', app: 'app and browser' },
+  },
+  /** The agents' own browser, in chapter 4's third row. */
   browser: {
     chrome: 'Your assistant will browse with Google Chrome.',
     chromium: 'Your assistant will browse with its own Chromium.',
@@ -199,19 +320,39 @@ export const SCRIPT = {
     /** After it is on disk: launched once and closed, to be sure it starts. */
     launching: 'Making sure it opens…',
     installed: 'Installed.',
-    skip: 'Skip for now',
-    skipped: 'Skipped. Settings → Computer & browser can install it whenever you like.',
-    missing: 'No browser for your assistant yet. Settings → Computer & browser can install one.',
     failed: (why: string): string => `That did not work: ${why}`,
     retry: 'Try again',
   },
+  /** Telegram, from chapter 4's first row: the token first when there is no bot yet. */
+  telegram: {
+    sheet: 'Your phone, through Telegram',
+    how: 'Two minutes: open Telegram, message @BotFather, send /newbot, paste the token it gives you here.',
+    field: 'The token',
+    submit: 'Save it',
+    restart: "Saved. It will be ready the next time buddi starts.",
+    scan: 'Scan this with your phone and press Start.',
+    expired: 'That code has run out. I can make you another one.',
+    newCode: 'Show a new code',
+    paired: 'That is your phone, talking to me. You can close this and carry on.',
+    close: 'Done',
+    notNow: 'Not now',
+  },
+
+  /* ---- chapter 5 ---- */
   assistant: {
-    ask: "Last thing: your assistant. I've picked a name and a face; change either, or keep them.",
+    title: 'Meet your assistant.',
+    ask: 'I’ve picked a name, a face and a way of working. Change any of it, or keep them.',
+    /** Added to the bubble when chapter 3 brought teammates. */
+    team: (names: readonly string[]): string => ` Your team so far: ${and(names)}, waiting to be introduced.`,
     name: 'Name',
     face: 'A face',
+    colour: 'A colour for the face',
+    /** The accessible name of one swatch: "Colour: green". */
+    swatch: (label: string): string => `Colour: ${label.toLowerCase()}`,
     /** The accessible name of one mascot face: "Buddi Blob, finance". */
     mascot: (role: string): string => (role === 'core' ? 'Buddi Blob' : `Buddi Blob, ${role}`),
-    purpose: 'What should it help you with?',
+    purpose: 'How it works',
+    purposeHint: 'Plain text. It becomes the assistant’s file, which is yours from then on.',
     /**
      * The assistant's persona, prefilled and editable: it becomes the body of
      * the agent's file. The one-line card is a plain line of the server's.
@@ -232,16 +373,19 @@ export const SCRIPT = {
   },
   /**
    * The other way this screen can go: there is already a buddi somewhere, and
-   * this one is meant to become it. Offered before the first question, because
+   * this one is meant to become it. Offered in chapter 1 only, because
    * afterwards there would be answers to overwrite.
    */
   restore: {
-    offer: 'I have a backup from another buddi',
-    file: 'The backup file',
-    passphrase: 'Its passphrase',
-    passphraseHint: 'Only if it was locked with one.',
+    offer: 'I have a backup',
+    sheet: 'Restore from a backup',
+    lede: 'Pick the backup file buddi made and type its passphrase. Your agents, memory and settings come back as they were; this chapter map is skipped.',
+    file: 'Backup file',
+    passphrase: 'Passphrase',
+    passphraseHint: 'The one you typed when you turned backups on, if it was locked with one. I can’t recover it.',
     submit: 'Restore',
     cancel: 'Never mind',
+    title: 'Bringing your buddi back.',
     started: 'Right. Give me a couple of minutes.',
     /** Where it has got to, one bubble each, in the order they happen. */
     phases: {
@@ -256,13 +400,11 @@ export const SCRIPT = {
       failed: 'That did not work.',
     },
     welcome: (name: string): string => `Welcome back, ${name}.`,
-    /** One sentence, because the next question would otherwise look like a bug. */
+    /** One sentence, because the next chapter would otherwise look like a bug. */
     keys: 'A backup never carries keys, so the AI you think with needs its key one more time.',
   },
-  /** Over the board, above the card. */
-  tagline: 'Setting up, on this Mac.',
-  /** The same line where the machine is not a Mac — a Linux server, say. */
-  taglineElsewhere: 'Setting up, on this computer.',
+
+  /* ---- the handover ---- */
   handover: {
     /** The one thing buddi says while the assistant is being woken. */
     waiting: 'One moment.',
@@ -271,39 +413,24 @@ export const SCRIPT = {
     /** Said once, while the assistant is demonstrably still working. */
     slow: 'Still waking up. A brain on this computer takes a minute the first time.',
     silent:
-      "Your assistant isn't answering. The AI you picked may be down; try again, or pick another brain above.",
+      "Your assistant isn't answering. The AI you picked may be down; try again, or pick another brain.",
     again: 'Pick another brain',
+    /** The four first questions, from what chapter 3 and 4 set up. */
+    starters: (has: { days: boolean; mail: boolean; mailbox: boolean }, mates: readonly string[]): string[] => [
+      has.days ? 'What’s my day like?' : 'What can you do?',
+      mates.length > 0 ? `Meet ${and(mates)}` : 'Show me around',
+      has.days ? 'Link my calendar' : has.mail && !has.mailbox ? 'Add my mailbox' : 'What do you know about me?',
+      'Remind me at 9 tomorrow',
+    ],
+    starterLabel: 'Ask first',
+    /** The warm card's title and its one paragraph. */
+    waitingTitle: (count: number): string => `${NUMBER[count] ?? String(count)} ${count === 1 ? 'thing' : 'things'} still waiting.`,
+    waitingBody: (lines: readonly string[]): string =>
+      `${cap(and(lines, true))}. ${lines.length > 1 ? (lines.length === 2 ? 'Both are' : 'They are all') : 'It’s'} on Home whenever you like.`,
+    home: 'Open Home',
   },
-  /**
-   * buddi, under the assistant's hello: whose that was, where it is answered,
-   * and the one step left. The phone is introduced before it is offered.
-   */
-  offers: {
-    said: (name: string): string =>
-      `That was ${name}. You can answer it on the next page. One more thing before that: you can also talk to it from your phone, through Telegram; a code pairs the two.`,
-    /** A rerun on an installation whose phone is already paired: nothing to offer. */
-    paired: (name: string): string => `That was ${name}. You can answer it on the next page. Your phone is already paired.`,
-    phone: 'Set up Telegram',
-    notNow: 'Not now',
-  },
-  /** The end of the thread: it carries on somewhere the owner can find it. */
+  /** The end of first run: it carries on somewhere the owner can find it. */
   done: {
-    said: "You're all set. This conversation carries on in your dashboard.",
-    /** Over the button while the board shows itself out. */
-    leaving: 'Opening buddi…',
-    /** The same place when nothing moves by itself (reduced motion). */
-    ready: 'Ready when you are.',
     open: 'Open buddi',
   },
-  telegram: {
-    how: 'Two minutes: open Telegram, message @BotFather, send /newbot, paste the token it gives you here.',
-    field: 'The token',
-    submit: 'Save it',
-    restart: "Saved. It will be ready the next time buddi starts.",
-    scan: 'Scan this with your phone and press Start.',
-    expired: 'That code has run out. I can make you another one.',
-    newCode: 'Show a new code',
-    paired: 'That is your phone, talking to me. You can close this and carry on there.',
-  },
-  change: 'change',
 } as const;

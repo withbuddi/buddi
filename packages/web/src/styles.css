@@ -2959,316 +2959,148 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 }
 
 /* ------------------------------------------------------------------ *
- * First run: one board, centred, contained.
+ * First run: a chapter map on the left, one floating card on the field.
  *
- * The screen is a card and nothing else. It is never taller than the window,
- * the thread scrolls inside it with the newest line at the bottom, and what
- * the owner is answering right now is docked under one hairline at its foot —
- * so the page itself never scrolls and the thing to do never moves. A short
- * thread is a short card, standing in the middle of the window.
- *
- * Everything that speaks reuses the chat: the same bubbles, the same face
- * beside the same name, the same typing dots, the same composer. What is added
- * here is the box around them, the marks on the cards, and the room to read.
+ * The kit's `.wiz-*` block (buddi-design, ui_kits/dashboard/kit.css), class
+ * for class. Five chapters and a handover. The map shows where the owner is,
+ * what they answered (with "change") and the way out; the card holds buddi's
+ * bubbles, the inputs and a dock: "Chapter n of 5" left, Back / secondary /
+ * primary right. At phone width the map folds into a strip of dots and the
+ * card takes the width.
  * ------------------------------------------------------------------ */
+.wiz-ground { position: fixed; inset: 0; }
+.wiz { position: fixed; inset: 0; z-index: 100; overflow: auto; --wiz-map: calc(var(--space-12) * 6 + var(--space-3)); font-size: var(--text-lg); line-height: var(--leading); }
+.wiz-frame { min-height: 100%; display: flex; }
+.wiz-map { flex: 0 0 var(--wiz-map); width: var(--wiz-map); min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-10) var(--space-8); }
+.wiz-head { display: flex; align-items: center; gap: var(--space-3); margin-bottom: calc(var(--space-6) + var(--space-1)); }
+.wiz-head-name { font-family: var(--font-display); font-size: var(--text-xl); font-weight: var(--weight-bold); letter-spacing: -.01em; line-height: var(--leading-tight); }
+.wiz-head-line { font-size: var(--text-md); color: var(--text-muted); }
+.wiz-head-version { font-size: var(--text-xs); color: var(--text-faint); }
+.wiz-ch { display: flex; align-items: center; gap: var(--space-3); min-width: 0; padding: calc(var(--space-2) + var(--space-0)) var(--space-3); border-radius: var(--radius-lg); color: var(--text-muted); }
+.wiz-ch[data-state='now'] { background: var(--surface); box-shadow: var(--shadow-panel); color: var(--text); font-weight: var(--weight-semibold); }
+.wiz-ch-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-ch-sub { display: block; font-size: var(--text-sm); color: var(--text-faint); font-weight: var(--weight-normal); }
+.wiz-num { flex: 0 0 auto; display: grid; place-items: center; width: var(--space-6); height: var(--space-6); border-radius: 50%; border: 1.5px solid var(--line-strong); font-size: var(--text-sm); font-weight: var(--weight-semibold); line-height: 1; }
+.wiz-num[data-state='now'] { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); font-weight: var(--weight-bold); }
+.wiz-num[data-state='done'] { border-color: transparent; background: var(--good-soft); color: var(--good); font-weight: var(--weight-bold); }
+.wiz-link { border: 0; background: none; padding: 0; font: inherit; color: var(--text-muted); text-decoration: underline; text-underline-offset: var(--space-0); cursor: pointer; }
+.wiz-link:hover:enabled { color: var(--accent); }
+.wiz-link:disabled { cursor: default; opacity: 0.5; }
+.wiz-ch .wiz-link { margin-left: auto; font-size: var(--text-sm); color: var(--text-faint); }
+.wiz-map-spacer { flex: 1 1 auto; }
+.wiz-map-note { font-size: var(--text-md); color: var(--text-muted); line-height: var(--leading); }
+.wiz-map-out { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-3); font-size: var(--text-md); }
+.wiz-stage { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; padding: var(--space-10) var(--space-12) var(--space-10) var(--space-6); }
+.wiz-column { width: 100%; max-width: calc(var(--space-12) * 16 + var(--space-8)); display: flex; flex-direction: column; gap: var(--space-4); }
+.wiz-column[data-width='narrow'] { max-width: calc(var(--space-12) * 15); }
+.wiz-column[data-width='mid'] { max-width: calc(var(--space-12) * 15 + var(--space-10)); }
+.wiz-column > .ui-float { animation: ui-sheet-in var(--dur-slow) var(--ease); }
+.wiz .ui-float-body { display: flex; flex-direction: column; gap: var(--space-5); padding: calc(var(--space-8) + var(--space-1)) var(--space-10) var(--space-5); }
+.wiz .ui-float-dock { flex-wrap: nowrap; padding: var(--space-4) var(--space-10); background: color-mix(in oklab, var(--surface-sunken) 40%, var(--surface)); }
+.wiz-count { margin-right: auto; font-size: var(--text-md); color: var(--text-faint); }
+.wiz-dock-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); }
+.wiz-dock-actions:empty { display: none; }
+.wiz-dock-inline { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); }
+.wiz-title { margin: 0; font-family: var(--font-display); font-size: var(--text-3xl); font-weight: var(--weight-bold); letter-spacing: -.01em; line-height: var(--leading-tight); }
+.wiz-say { display: flex; gap: var(--space-3); align-items: flex-start; margin-top: calc(var(--space-1) * -1); }
+.wiz-say-face { margin-top: var(--space-0); }
+.wiz-bubble { margin: 0; max-width: calc(var(--read-max) * .85); padding: var(--space-3) var(--space-4); background: var(--bg); border-radius: var(--radius-sm) var(--radius-xl) var(--radius-xl) var(--radius-xl); color: var(--text); display: flex; flex-direction: column; gap: var(--space-3); }
+.wiz-ask { display: flex; flex-direction: column; gap: var(--space-4); }
+.wiz-foot { margin: 0; font-size: var(--text-md); color: var(--text-muted); }
+.wiz input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']),
+.wiz select { height: calc(var(--control-h-lg) + var(--space-1)); padding: 0 var(--space-3); border-radius: var(--radius-lg); font-size: var(--text-lg); }
+.wiz textarea.wiz-persona { padding: var(--space-3); border-radius: var(--radius-lg); font-size: var(--text-base); line-height: var(--leading); }
+.wiz .ui-field-label { font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.wiz .ui-field-row .ui-btn { height: calc(var(--control-h-lg) + var(--space-1)); }
+.wiz-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+/* choices: the brains (two columns, one wide) and the jobs (three columns of tiles) */
+.wiz-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.wiz-grid[data-cols='3'] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wiz-opt { display: flex; gap: var(--space-4); align-items: flex-start; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease; }
+.wiz-opt:hover { border-color: var(--accent); }
+.wiz-opt[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.wiz-opt[data-wide='true'] { grid-column: span 2; }
+.wiz-opt[data-tile='true'] { flex-direction: column; gap: var(--space-2); }
+.wiz-opt-title { display: block; font-weight: var(--weight-semibold); }
+.wiz-opt-line { display: block; font-size: var(--text-md); color: var(--text-muted); line-height: var(--leading); }
+.wiz-opt-plugins { display: block; margin-top: calc(var(--space-1) * -1); font-size: var(--text-sm); color: var(--text-faint); }
+.wiz-opt .ui-pill { margin-top: var(--space-2); }
+.wiz-glyph { flex: 0 0 auto; display: grid; place-items: center; width: var(--space-10); height: var(--space-10); border-radius: var(--radius-lg); background: var(--g-soft, var(--accent-soft)); color: var(--g-ink, var(--accent)); }
+.wiz-glyph[data-tone='good'] { --g-soft: var(--good-soft); --g-ink: var(--good); }
+.wiz-glyph[data-tone='mail'] { --g-soft: var(--agent-mail-soft); --g-ink: var(--agent-mail-ink); }
+.wiz-glyph[data-tone='coding'] { --g-soft: var(--agent-coding-soft); --g-ink: var(--agent-coding); }
+.wiz-glyph[data-tone='plain'] { --g-soft: var(--surface-sunken); --g-ink: var(--text-muted); }
+.wiz-tile-top { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.wiz-tile-top .wiz-glyph { width: calc(var(--space-8) + var(--space-1)); height: calc(var(--space-8) + var(--space-1)); border-radius: var(--radius); }
+.wiz-opt[data-tile='true'][aria-pressed='true'] .wiz-glyph { --g-soft: var(--surface); }
+.wiz-tick { display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: 50%; border: 1.5px solid var(--line-strong); color: var(--accent-contrast); }
+.wiz-opt[aria-pressed='true'] .wiz-tick { border-color: var(--accent); background: var(--accent); }
+/* a working line: three dots and what is happening; never blocks */
+.wiz-busy { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-md); color: var(--text-muted); }
+.wiz-busy[data-boxed='true'] { padding: calc(var(--space-2) + var(--space-0)) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: color-mix(in oklab, var(--surface-sunken) 40%, var(--surface)); color: var(--text); }
+.wiz-busy-side { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
+.wiz-pulse { display: inline-flex; gap: calc(var(--space-1) - 1px); flex: 0 0 auto; }
+.wiz-pulse i { width: calc(var(--space-1) * 1.5); height: calc(var(--space-1) * 1.5); border-radius: 50%; background: var(--accent); animation: wb-dot 1.2s ease-in-out infinite; }
+.wiz-pulse i:nth-child(2) { opacity: .6; animation-delay: .2s; }
+.wiz-pulse i:nth-child(3) { opacity: .3; animation-delay: .4s; }
+.wiz-pulse[data-done='true'] i { background: var(--good); animation: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .wiz-pulse i { animation: none; } }
+.wiz-stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.wiz-meet .wiz-stack { gap: var(--space-4); }
+/* reach me: three rows, each skippable */
+.wiz-rows { display: flex; flex-direction: column; gap: var(--space-3); }
+.wiz-row { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: center; padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.wiz-row-text { flex: 1 1 0; min-width: calc(var(--space-12) * 4); }
+.wiz-row-side { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.wiz-row-note, .wiz-row-more { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-md); color: var(--text-muted); }
+.wiz-qr-slot { position: relative; flex: 0 0 auto; display: grid; }
+.wiz-qr-slot .meet-pair { align-items: center; }
+.wiz-qr-slot .meet-qr { width: calc(var(--space-12) + var(--space-10)); height: calc(var(--space-12) + var(--space-10)); padding: var(--space-1); border: 1px solid var(--line); }
+.wiz-qr-slot .meet-link { max-width: calc(var(--space-12) * 3); font-size: var(--text-xs); }
+/* your assistant */
+.wiz-meet { display: grid; grid-template-columns: calc(var(--space-12) * 4 + var(--space-5)) minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+.wiz-face { display: flex; flex-direction: column; gap: var(--space-3); align-items: center; padding-top: var(--space-2); }
+.wiz-face-tile { display: grid; place-items: center; width: calc(var(--space-12) + var(--space-4)); height: calc(var(--space-12) + var(--space-4)); border-radius: var(--radius-xl); background: var(--agent-soft, var(--accent-soft)); overflow: hidden; }
+.wiz-face-tile img { width: 100%; height: 100%; object-fit: contain; }
+.wiz-face-emoji { font-size: var(--text-3xl); line-height: 1; }
+.wiz-swatches { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: center; }
+.wiz-swatch { width: var(--space-6); height: var(--space-6); padding: 0; border: 0; border-radius: 50%; background: var(--agent-fill, var(--accent)); cursor: pointer; }
+.wiz-swatch[aria-pressed='true'] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wiz-face-cap { font-size: var(--text-sm); color: var(--text-faint); }
+.wiz-restore, .wiz-sheet-body { display: flex; flex-direction: column; gap: var(--space-4); }
+/* the handover: the hello, four first questions, and what is still waiting */
+.wiz-hello .wb-messages { padding: 0; gap: var(--space-4); overflow: visible; }
+.wiz-hello .wb-bubble { font-size: var(--text-base); line-height: var(--leading-read); }
+.wiz-starters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.wiz-starter { padding: var(--space-2) var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); font: inherit; font-size: var(--text-md); cursor: pointer; transition: border-color var(--dur-fast) ease; }
+.wiz-starter:hover:enabled { border-color: var(--accent); color: var(--accent); }
+.wiz-starter:disabled { opacity: .6; cursor: default; }
+.wiz .ui-notice[data-tone='warm'] .ui-notice-row { flex-wrap: nowrap; align-items: center; }
+/* phone: the map folds into a strip; the card takes the width */
+.wiz[data-phone='true'] .wiz-frame { flex-direction: column; }
+.wiz-strip { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: color-mix(in oklab, var(--bg) 82%, transparent); backdrop-filter: blur(var(--space-3)); border-bottom: 1px solid var(--line); }
+.wiz-dots { display: flex; gap: var(--space-1); }
+.wiz-dots i { width: var(--space-2); height: var(--space-2); border-radius: 50%; background: var(--line-strong); }
+.wiz-dots i[data-state='done'] { background: var(--good); }
+.wiz-dots i[data-state='now'] { width: var(--space-5); border-radius: var(--radius-pill); background: var(--accent); }
+.wiz-strip-name { flex: 1 1 auto; min-width: 0; font-weight: var(--weight-semibold); font-size: var(--text-base); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wiz-phone-out { padding: 0 var(--space-2) var(--space-4); }
+.wiz[data-phone='true'] .wiz-stage { align-items: flex-start; padding: var(--space-3); }
+.wiz[data-phone='true'] .ui-float { border-radius: var(--radius-xl); }
+.wiz[data-phone='true'] .ui-float-body { padding: var(--space-6) var(--space-5) var(--space-5); }
+.wiz[data-phone='true'] .ui-float-dock { flex-wrap: wrap; padding: var(--space-3) var(--space-5); }
+.wiz[data-phone='true'] .wiz-title { font-size: var(--text-2xl); }
+.wiz[data-phone='true'] .wiz-grid,
+.wiz[data-phone='true'] .wiz-grid[data-cols='3'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wiz[data-phone='true'] .wiz-opt[data-wide='true'] { grid-column: span 2; }
+.wiz[data-phone='true'] .wiz-opt { padding: var(--space-3); }
+.wiz[data-phone='true'] .wiz-count { display: none; }
+.wiz[data-phone='true'] .wiz-pair,
+.wiz[data-phone='true'] .wiz-meet { grid-template-columns: 1fr; }
+.wiz[data-phone='true'] .wiz-busy { flex-wrap: wrap; }
+.wiz[data-phone='true'] .wiz-busy-side { margin-left: 0; }
 
-.meet {
-  position: relative;
-  height: 100%;
-  overflow: hidden;
-  background: var(--field-base);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-  isolation: isolate;
-}
-
-/*
- * The backdrop: the design system's field, and two shapes moving over it.
- *
- * Three soft shapes — blue high in the middle, sand low on the right, blue
- * low on the left — blurred far past their own edges over `--field-base`, so
- * the card keeps its own surface and every word keeps its contrast. The
- * colours are the tokens', so dark mode gets the deep glow rather than a
- * washed field.
- *
- * The dashboard's own drift (ninety seconds, a few percent) reads as a still
- * picture, and this is the one screen that should feel alive: so the field
- * wanders further here, and a second layer — one blue and one sand shape, no
- * ground of its own — drifts on its own period, so the two never line up into
- * a loop the eye can follow. Transforms only; both stand still for anyone who
- * asked for less motion.
- */
-.meet::before,
-.meet::after {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  pointer-events: none;
-  filter: blur(var(--space-12));
-  will-change: transform;
-}
-.meet::before {
-  /* Wider than the page: the blur's own edges must never cross into view. */
-  inset: -20%;
-  background: var(--gradient-field);
-  opacity: var(--field-opacity);
-  animation: meet-field var(--drift-field) ease-in-out infinite alternate;
-}
-/* No ground, only shapes: whatever edge it shows as it moves is transparent. */
-.meet::after {
-  inset: -10%;
-  background:
-    radial-gradient(32% 38% at 28% 30%, var(--field-a), transparent 70%),
-    radial-gradient(28% 34% at 74% 70%, var(--field-b), transparent 70%);
-  opacity: calc(var(--field-opacity) * 0.55);
-  animation: meet-blobs var(--drift-blobs) ease-in-out infinite alternate;
-}
-@keyframes meet-field {
-  0% { transform: translate3d(-4%, -2%, 0) scale(1.02); }
-  50% { transform: translate3d(3%, 3%, 0) scale(1.08); }
-  100% { transform: translate3d(5%, -3%, 0) scale(1.04); }
-}
-@keyframes meet-blobs {
-  0% { transform: translate3d(-8%, 6%, 0) rotate(-6deg) scale(1); }
-  35% { transform: translate3d(6%, -4%, 0) rotate(4deg) scale(1.12); }
-  70% { transform: translate3d(-2%, -8%, 0) rotate(10deg) scale(1.05); }
-  100% { transform: translate3d(8%, 4%, 0) rotate(-2deg) scale(1.1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .meet::before,
-  .meet::after { animation: none; }
-}
-
-/*
- * The page's one column: the mark and its line, then the board.
- *
- * The column is centred in the window, horizontally and vertically, and
- * everything in it is aligned to its left edge — so the header stands over
- * the board's own edge rather than over its middle.
- */
-.meet-stack {
-  position: relative;
-  width: 100%;
-  max-width: 620px;
-  max-height: calc(100vh - var(--space-6) * 2);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-/*
- * Whose screen this is.
- *
- * The rail's own mark at twice its size, the name beside it, one line under
- * both. No rule below it: the card's own edge is the only line this screen
- * needs, and a header that ends in a hairline reads as a section of a page
- * rather than as the thing the page is.
- */
-.meet-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  text-align: left;
-}
-.meet-head-who { display: flex; flex-direction: column; min-width: 0; }
-/* Buddi Blob, at the size the rail's mark had here; the art carries its own
-   transparent margin, so it stands on the field without a tile. */
-.meet-head-mascot {
-  flex: 0 0 auto;
-  width: var(--space-12);
-  height: var(--space-12);
-  object-fit: contain;
-}
-.meet-head-name {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: var(--weight-bold);
-  color: var(--text);
-  letter-spacing: var(--tracking-title);
-  line-height: var(--leading);
-}
-/* It sits on the backdrop rather than on a surface, so it takes the page's
-   own text colour and a little weight: a muted grey over a tinted field is
-   the one line on this screen that could lose its contrast. */
-.meet-head-line {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  color: var(--text);
-}
-.meet-head-version { font-size: var(--text-xs); color: var(--text-faint); }
-.meet-turn-mark { flex: 0 0 auto; }
-
-.meet-board {
-  width: 100%;
-  max-width: 620px;
-  /* Whatever is left of the column under the header. Nothing here grows past
-     it: the thread scrolls instead. */
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-float);
-  overflow: hidden;
-}
-
-.meet-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: var(--space-8) var(--space-8) var(--space-6);
-}
-
-.meet-thread { display: flex; flex-direction: column; gap: var(--space-5); }
-.meet-turn { display: flex; flex-direction: column; gap: var(--space-2); }
-.meet-turn + .meet-turn { margin-top: 0; }
-
-/* Room to read: the page's own body size rather than the transcript's dense
-   one, with more air between lines, because this is the first thing anybody
-   reads here and it is read once, slowly. */
-.meet .wb-bubble { font-size: var(--text-base); line-height: var(--leading-read); }
-.meet .wb-working { font-size: var(--text-base); line-height: var(--leading-read); }
-
-/* buddi speaks once under its name, not once per sentence: a run of its turns
-   carries one heading, exactly as a run of the agent's does in the chat. An
-   owner's bubble between two of them breaks the run and the name comes back. */
-.meet-turn + .meet-turn .wb-msg-who { display: none; }
-.meet .wb-msg { gap: var(--space-2); }
-.meet .wb-messages { padding: 0; gap: var(--space-5); overflow: visible; }
-/* One hairline on this screen, and it is the dock's. The chat draws a rule
-   above its offer chips because they sit against its composer; here they sit
-   in the thread, where a second line is just a line. */
-.meet .wb-offers { border-top: 0; padding: 0; gap: var(--space-2); }
-
-
-/* ---- the dock: what is being answered, pinned under one hairline ---- */
-
-.meet-dock {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-8);
-  border-top: 1px solid var(--line);
-  background: var(--surface);
-}
-.meet-dock-ask:empty { display: none; }
-
-/*
- * The dock's one row, the same on every step: the quiet way out at the left,
- * the step's actions at the right — secondary first, the primary last — all
- * on one centre line, at one gap.
- */
-.meet-dock-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: var(--control-h);
-}
-.meet-dock-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); margin-left: auto; }
-.meet-dock-actions:empty { display: none; }
-.meet-actions { display: contents; }
-
-/* What is being filled in: fields side by side where they fit, bottoms aligned. */
-.meet-ask {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--space-3);
-}
-.meet-ask > .ui-field { flex: 1 1 200px; }
-.meet-ask > .ui-field[data-wide='true'] { flex-basis: 100%; }
-/* The persona: as tall as what it says, still the owner's to edit. */
-.meet-purpose { field-sizing: content; max-height: 60vh; }
-.meet-dock .wb-composer { margin: 0; }
-.meet-input {
-  flex: 1 1 200px;
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-base);
-}
-.meet-line { flex: 1 1 200px; color: var(--text-muted); font-size: var(--text-md); line-height: 1.6; }
-.meet-quiet {
-  border: 0;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: var(--text-md);
-  font-family: inherit;
-  text-decoration: underline;
-}
-.meet-change {
-  align-self: flex-end;
-  border: 0;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-  font-family: inherit;
-}
-.meet-change:hover { color: var(--text-muted); text-decoration: underline; }
-
-/* ---- the four brains: a mark, a title and one line ---- */
-
-.meet-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); width: 100%; }
-.meet-card {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  text-align: left;
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  /* Sunken, not the board's own surface: a card on white read as nothing in
-     the light theme, and any rule that transitions its background can be
-     caught half-changed when the whole page flips theme. */
-  background: var(--surface-sunken);
-  cursor: pointer;
-  font-family: inherit;
-  color: var(--text);
-  transition: border-color 120ms ease;
-}
-.meet-card:hover { border-color: var(--accent); }
-.meet-card-mark { flex: 0 0 auto; display: inline-flex; color: var(--text-muted); margin-top: 1px; }
-.meet-card:hover .meet-card-mark { color: var(--accent); }
-.meet-card-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.meet-card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); line-height: 1.35; }
-.meet-card-line { font-size: var(--text-md); color: var(--text-muted); line-height: 1.5; }
-/* What the owner should know before choosing it: quieter than the line. */
-.meet-card-know { font-size: var(--text-sm); color: var(--text-muted); line-height: 1.45; }
-
-/* ---- the assistant: its face, at the size of a face ---- */
-
-.meet-chosen-face {
-  flex: 0 0 auto;
-  overflow: hidden;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--radius);
-  background: var(--surface-sunken);
-  border: 1px solid var(--line);
-  font-size: 24px;
-  line-height: 1;
-}
-.meet-chosen-face img { width: 100%; height: 100%; object-fit: contain; }
+/* ---- a face picked from the Blobs and the emoji (an agent's Setup tab) ---- */
 .meet-faces { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--space-2); }
 .meet-face-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .meet-face {
@@ -3298,30 +3130,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .meet-link { font-size: var(--text-sm); word-break: break-all; }
 
 /* The quiet way out, under everything, all the way through. */
-.meet-later {
-  align-self: flex-start;
-  border: 0;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-faint);
-  font-size: var(--text-sm);
-  font-family: inherit;
-}
-.meet-later:hover:enabled { color: var(--text-muted); text-decoration: underline; }
-.meet-later:disabled { cursor: default; opacity: 0.5; }
-/* The quiet links, side by side: Set up later, then Start over. */
-.meet-quiet { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
-
-@media (max-width: 700px) {
-  .meet { padding: var(--space-3); }
-  .meet-stack { max-height: calc(100vh - var(--space-3) * 2); gap: var(--space-3); }
-  .meet-board { max-height: none; }
-  .meet-head-mascot { width: var(--space-10); height: var(--space-10); }
-  .meet-scroll { padding: var(--space-4); }
-  .meet-dock { padding: var(--space-3) var(--space-4); }
-  .meet-cards { grid-template-columns: minmax(0, 1fr); }
-}
 
 /* ================================================================== *
  * Recovery and backups

@@ -657,8 +657,41 @@ export interface OnboardingView {
    * What the steps cannot say: the conversation the owner met their assistant
    * in, and the account they chose while meeting it. A reload reads both.
    */
-  details: { conversationId?: string; accountId?: string };
+  details: {
+    conversationId?: string;
+    accountId?: string;
+    /** Chapter 3: the outcomes the owner asked buddi to take on; empty is "just an assistant". */
+    takeOn?: string[];
+    /** Chapter 4: which of its rows were done. */
+    reach?: OnboardingReach;
+  };
   needs: { owner: boolean; model: boolean; agent: boolean };
+}
+
+/** Chapter 4 of first run, as the record keeps it. */
+export interface OnboardingReach {
+  phone?: boolean;
+  mailbox?: boolean;
+  app?: boolean;
+  browser?: boolean;
+}
+
+/** One plugin chapter 3 is bringing in, as `GET /api/onboarding/take-on` says. */
+export interface TakeOnPlugin {
+  plugin: string;
+  title: string;
+  jobId?: string;
+  state: 'fetching' | 'reading' | 'installing' | 'ready' | 'failed';
+  reason?: string;
+  wakesOnRestart?: boolean;
+}
+
+/** Chapter 3's progress and the handover card's "Things still waiting". */
+export interface TakeOnView {
+  tiles: string[];
+  plugins: TakeOnPlugin[];
+  running: boolean;
+  waiting: string[];
 }
 
 /**
@@ -1811,8 +1844,11 @@ export const api = {
     get<{ entry: LibraryEntry; contexts: LibraryContext[]; contextsTotal: number; contextsOffset: number; available: boolean }>(`/artifacts/${encodeURIComponent(id)}`, contextsOffset ? { contexts: contextsOffset } : {}),
   /* ---- first run ---- */
   onboarding: () => get<OnboardingView>('/onboarding'),
-  onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string } = {}) =>
+  onboardingStep: (step: string, learned: { conversationId?: string; accountId?: string; reach?: OnboardingReach } = {}) =>
     post<OnboardingView>('/onboarding/step', { step, ...learned }),
+  /** Chapter 3: record the outcomes and start their installs in the background. */
+  takeOn: (tiles: string[]) => post<{ jobs: Array<{ plugin: string; jobId: string }> }>('/onboarding/take-on', { tiles }),
+  takeOnProgress: () => get<TakeOnView>('/onboarding/take-on'),
   completeOnboarding: () => post<OnboardingView>('/onboarding/complete'),
   skipOnboarding: () => post<OnboardingView>('/onboarding/skip'),
   /** `instructions` is the persona, written as the file's body; an empty `description` takes its first sentence. */

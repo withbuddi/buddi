@@ -1,27 +1,28 @@
 /**
- * The thread's order, its resume rule, and what "change" keeps.
+ * The chapters' order, the resume rule, and what "change" keeps.
  *
  * Every one of these is a property of the screen a person sees, decided here
- * where it can be read: four questions and a handover, a reload landing on the
- * first unanswered one, and a change that reopens one question without
+ * where it can be read: five chapters and a handover, a reload landing on the
+ * first unanswered one, and a change that reopens one chapter without
  * throwing away the answers that followed it.
  */
 import { describe, expect, it } from 'vitest';
 import type { OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
 import {
-  QUESTIONS,
+  CHAPTERS,
   RESTORE_FAILURES,
   RESTORE_PHASES,
   afterRestore,
   answered,
   answersFrom,
   firstOpen,
+  mapState,
+  previous,
   idFor,
   keyKind,
   rememberRestore,
   rememberedRestore,
   reopen,
-  thread,
 } from './machine';
 import { DEFAULT_ASSISTANT_NAME, SCRIPT } from './script';
 
@@ -69,15 +70,23 @@ const accounts = (
   })) as ProviderAccountsView['accounts'],
 });
 
-describe('the questions', () => {
-  it('asks four things and then hands over, in that order', () => {
-    expect([...QUESTIONS]).toEqual(['name', 'clock', 'brain', 'browser', 'assistant', 'handover']);
+describe('the chapters', () => {
+  it('asks five things and then hands over, in that order', () => {
+    expect([...CHAPTERS]).toEqual(['hello', 'brain', 'takeOn', 'reach', 'assistant', 'handover']);
+    expect(SCRIPT.chapters).toEqual(['Hello', 'A brain', 'What I take on', 'Reach me', 'Your assistant']);
   });
 
-  it('draws every answered question above the open one, and nothing below it', () => {
-    const answers = { name: 'Amen', clock: 'America/New_York' };
-    expect(thread(answers, 'brain')).toEqual(['name', 'clock', 'brain']);
-    expect(thread({}, 'name')).toEqual(['name']);
+  it('lights the open chapter, ticks the answered ones and numbers the rest', () => {
+    const answers = { name: 'Amen', clock: 'America/New_York', brain: { accountId: 'a', label: 'Claude', model: 'm' } };
+    expect(CHAPTERS.slice(0, 5).map((id) => mapState(answers, 'takeOn', id))).toEqual(['done', 'done', 'now', 'todo', 'todo']);
+    // A chapter reopened with "change" is lit, not ticked, while it is open.
+    expect(mapState(answers, 'hello', 'hello')).toBe('now');
+  });
+
+  it('goes back one chapter at a time, and not before the first', () => {
+    expect(previous('reach')).toBe('takeOn');
+    expect(previous('brain')).toBe('hello');
+    expect(previous('hello')).toBeNull();
   });
 });
 
@@ -96,12 +105,31 @@ describe('resume', () => {
     expect(firstOpen(answers)).toBe('handover');
   });
 
-  it('asks the first question nobody has answered', () => {
-    expect(firstOpen(answersFrom({}))).toBe('name');
-    expect(firstOpen(answersFrom({ owner: owner({ preferredName: 'Amen' }) }))).toBe('clock');
+  it('opens the first chapter nobody has answered', () => {
+    expect(firstOpen(answersFrom({}))).toBe('hello');
+    // A name without a clock is half of chapter 1.
+    expect(firstOpen(answersFrom({ owner: owner({ preferredName: 'Amen' }) }))).toBe('hello');
     expect(
       firstOpen(answersFrom({ owner: owner({ preferredName: 'Amen', timezone: 'UTC' }) })),
     ).toBe('brain');
+  });
+
+  it('replays chapters 3 and 4 from the record, "just an assistant" included', () => {
+    const facts = {
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0' } }),
+      owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+      accounts: accounts([{}]),
+    };
+    expect(firstOpen(answersFrom(facts))).toBe('takeOn');
+    const took = answersFrom({ ...facts, onboarding: onboarding({ ...facts.onboarding, details: { accountId: 'a0', takeOn: [] } }) });
+    expect(took.takeOn).toEqual([]);
+    expect(firstOpen(took)).toBe('reach');
+    const reached = answersFrom({
+      ...facts,
+      onboarding: onboarding({ ...facts.onboarding, stepsDone: ['reach'], details: { accountId: 'a0', takeOn: ['days'], reach: { phone: true } } }),
+    });
+    expect(reached.reach).toEqual({ phone: true });
+    expect(firstOpen(reached)).toBe('assistant');
   });
 
   it('counts no account the installation could not run on', () => {
@@ -146,21 +174,33 @@ describe('resume', () => {
     expect(answersFrom({ ...facts, onboarding: onboarding() }).brain).toBeUndefined();
   });
 
-  it('asks about the browser after the brain, never as a gate, and replays what is there now', () => {
+  it('keeps the browser in chapter 4, never as a gate, and replays what is there now', () => {
     const facts = {
-      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0' } }),
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, details: { accountId: 'a0', takeOn: [] } }),
       owner: owner({ preferredName: 'A', timezone: 'UTC' }),
       accounts: accounts([{}]),
     };
-    expect(firstOpen(answersFrom(facts))).toBe('browser');
-    const recorded = answersFrom({ ...facts, onboarding: onboarding({ ...facts.onboarding, stepsDone: ['browser'] }), browser: 'none' });
+    expect(firstOpen(answersFrom(facts))).toBe('reach');
+    const recorded = answersFrom({ ...facts, onboarding: onboarding({ ...facts.onboarding, stepsDone: ['browser', 'reach'] }), browser: 'none' });
     expect(recorded.browser).toBe('none');
     expect(firstOpen(recorded)).toBe('assistant');
   });
 
+  it('counts chapters 3 and 4 as behind an assistant that already exists', () => {
+    const answers = answersFrom({
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: false }, details: { accountId: 'a0' } }),
+      owner: owner({ preferredName: 'A', timezone: 'UTC' }),
+      accounts: accounts([{}]),
+      assistant: { id: 'ada', name: 'Ada', avatar: '' },
+    });
+    expect(answers.takeOn).toEqual([]);
+    expect(answers.reach).toEqual({});
+    expect(firstOpen(answers)).toBe('handover');
+  });
+
   it('does not count an assistant the record says is still missing', () => {
     const answers = answersFrom({
-      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, stepsDone: ['browser'], details: { accountId: 'a0' } }),
+      onboarding: onboarding({ needs: { owner: false, model: false, agent: true }, stepsDone: ['browser', 'reach'], details: { accountId: 'a0', takeOn: [] } }),
       owner: owner({ preferredName: 'A', timezone: 'UTC' }),
       accounts: accounts([{}]),
       // A shipped example is in the roster; it is not the owner's own.
@@ -230,24 +270,27 @@ describe('a buddi restored from a backup', () => {
 });
 
 describe('change', () => {
-  it('reopens one question and keeps the answers that followed it', () => {
+  it('reopens one chapter with its answer filled in, and keeps the answers that followed it', () => {
     const answers = {
       name: 'Amen',
       clock: 'UTC',
       brain: { accountId: 'one', label: 'Claude', model: 'claude-sonnet-5' },
+      takeOn: ['days'],
+      reach: {},
       assistant: { id: 'ada', name: 'Ada', avatar: '📚' },
     };
     const changed = reopen(answers, 'brain');
-    expect(changed.brain).toBeUndefined();
+    // The form opens on what is there; saving it again is what replaces it.
+    expect(changed.brain).toEqual(answers.brain);
     expect(changed.assistant).toEqual(answers.assistant);
-    expect(changed.name).toBe('Amen');
-    // And the open question is the one being changed, not the next gap.
-    expect(firstOpen(changed)).toBe('brain');
+    expect(changed.takeOn).toEqual(['days']);
+    // And the map lights the chapter being changed, not the next gap.
+    expect(mapState(changed, 'brain', 'brain')).toBe('now');
+    expect(mapState(changed, 'brain', 'assistant')).toBe('done');
   });
 
-  it('re-greets when the name changes, and keeps everything else', () => {
-    const changed = reopen({ name: 'Amen', clock: 'UTC' }, 'name');
-    expect(changed.name).toBeUndefined();
+  it('keeps the clock when the name changes', () => {
+    const changed = reopen({ name: 'Amen', clock: 'UTC' }, 'hello');
     expect(changed.clock).toBe('UTC');
   });
 });

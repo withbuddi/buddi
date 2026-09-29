@@ -55,6 +55,10 @@ export const WEB_ONBOARDING_STEPS = [
   'welcome',
   'you',
   'model',
+  // Chapter 3: what buddi takes on. Recorded by `POST /api/onboarding/take-on`.
+  'take-on',
+  // Chapter 4: the phone, a mailbox, the app and the browser, each optional.
+  'reach',
   // Never a gate: a missing browser is fixed later, from Computer & browser.
   'browser',
   'agent',
@@ -832,30 +836,86 @@ function settleThinking(deps: OnboardingDeps, file: string, agentId: string, acc
   return true;
 }
 
+/** What the server can find out about the owner's surroundings for the hello; each answer optional. */
+export interface FirstRunSurroundings {
+  /** The weather at home in one line, when the weather plugin is installed and answers. */
+  weatherAtHome?: () => Promise<string | null>;
+  /** Is a mailbox connected for Mail Triage to read? */
+  mailboxSet?: () => Promise<boolean>;
+  /** The plugins chapter 3 installed, by their titles. */
+  installed?: () => Promise<string[]>;
+  now?: () => Date;
+}
+
+/** An answer that is late is no answer: the hello does not wait on a slow plugin. */
+async function inTime<T>(work: () => Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work().catch(() => undefined),
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** How long the hello waits for any one of its facts. */
+export const FIRST_RUN_FACT_MS = 3_000;
+
 /**
- * The two facts the assistant should not have to ask for.
+ * What the assistant should not have to ask for, and what it can already say.
  *
  * The owner gave their name a minute ago and the assistant was named by them
- * in the same thread; a first message that opens with "what should I call
- * you?" is the installation forgetting, in front of the person who just told
- * it. The asks stay the page's words — they are the script — and this
- * puts what the *server* knows in front of them.
+ * in the same run; a first message that opens with "what should I call you?"
+ * is the installation forgetting, in front of the person who just told it.
+ * And since chapter 3 installed things, the hello can use them: the owner's
+ * clock, the weather at home when Weather is in and answers, and whether Mail
+ * Triage has a mailbox to read. The asks stay the page's words — they are the
+ * script — and this puts what the *server* knows in front of them.
  */
-export async function withFirstRunFacts(deps: OnboardingDeps, instruction: string): Promise<string> {
+export async function withFirstRunFacts(
+  deps: OnboardingDeps,
+  instruction: string,
+  around: FirstRunSurroundings = {},
+): Promise<string> {
   const profile = await getOwnerProfile(deps.pool).catch(() => null);
+  const record = await getOnboarding(deps.pool).catch(() => null);
   const owner = profile?.preferredName?.trim() ?? '';
   const assistant = privateAgent(deps.catalog)?.name.trim() ?? '';
+  const zone = profile?.timezone?.trim() ?? '';
+  const tiles = record?.details.takeOn ?? [];
   const facts = [
     ...(owner === '' ? [] : [`The owner is called ${owner}.`]),
     ...(assistant === '' ? [] : [`You are ${assistant}.`]),
   ];
+  if (zone !== '') {
+    let time = '';
+    try {
+      time = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone }).format((around.now ?? (() => new Date()))());
+    } catch {
+      /* A zone the runtime does not know is still the owner's words. */
+    }
+    facts.push(`The owner's clock is ${zone}${time === '' ? '' : `; it is ${time} there now`}.`);
+  }
+  const installed = around.installed ? (await inTime(around.installed, FIRST_RUN_FACT_MS)) ?? [] : [];
+  if (installed.length > 0) facts.push(`Installed for the owner during setup: ${installed.join(', ')}.`);
+  if (tiles.includes('days') && around.weatherAtHome) {
+    const weather = await inTime(around.weatherAtHome, FIRST_RUN_FACT_MS);
+    if (weather) facts.push(`The weather at home right now: ${weather}.`);
+  }
+  if (tiles.includes('mail') && around.mailboxSet) {
+    const mailbox = await inTime(around.mailboxSet, FIRST_RUN_FACT_MS);
+    if (mailbox === true) facts.push('A mailbox is connected, so Mail Triage can read new mail once it is introduced.');
+    else if (mailbox === false) facts.push('No mailbox is connected yet; Mail Triage is waiting for one.');
+  }
   // The model is told the setup is behind it, because the alternative is an
   // assistant re-asking what the owner answered a minute ago. And it is told
-  // where it is: a setup page with no composer, so a question would be one
-  // the owner has no way to answer there.
+  // where it is: the end of setup, with suggested first questions under it,
+  // so a question of its own would compete with them.
   const settled =
     'The setup is finished; do not ask about your name, the owner\'s name or onboarding. ' +
-    'This message is shown on a setup page where the owner cannot reply yet, so introduce yourself in two or three sentences and do not ask a question.';
+    'This message is shown at the end of setup, above a few suggested first questions, so introduce yourself in two or three sentences, say what you already know and can do today, and do not ask a question.';
   return [...facts, instruction, settled].join(' ');
 }
 

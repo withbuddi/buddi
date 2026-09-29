@@ -1,31 +1,31 @@
 /**
- * The thread's state machine: four questions and a handover, in order.
+ * First run's state machine: five chapters and a handover, in order.
  *
- * Pure on purpose. Everything the screen does — which question is open, which
- * answers are replayed above it, what a reload lands on, what "change" reopens
- * — is decided here from the server's own answers, so the component only
+ * Pure on purpose. Everything the screen does — which chapter is open, what
+ * the map says is answered, what a reload lands on, what "change" reopens —
+ * is decided here from the server's own answers, so the component only
  * renders and saves. That is also what makes the resume rule testable without
  * a browser: `answersFrom` reads the record, the profile and the accounts, and
- * `firstOpen` says which question has not been answered yet.
+ * `firstOpen` says which chapter has not been answered yet.
  */
-import type { OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
+import type { OnboardingReach, OnboardingView, OwnerView, ProviderAccountsView } from '../../api';
 
-/** The questions, in the order they are asked. `handover` is the last one. */
-export const QUESTIONS = ['name', 'clock', 'brain', 'browser', 'assistant', 'handover'] as const;
+/** The chapters, in the order they are asked. `handover` is what follows them. */
+export const CHAPTERS = ['hello', 'brain', 'takeOn', 'reach', 'assistant', 'handover'] as const;
 
-export type QuestionId = (typeof QUESTIONS)[number];
+export type ChapterId = (typeof CHAPTERS)[number];
 
-/** Which recorded step each question belongs to (`/api/onboarding/step`). */
-export const STEP_OF: Record<QuestionId, string> = {
-  name: 'you',
-  clock: 'you',
+/** Which recorded step each chapter belongs to (`/api/onboarding/step`). */
+export const STEP_OF: Record<ChapterId, string> = {
+  hello: 'you',
   brain: 'model',
-  browser: 'browser',
+  takeOn: 'take-on',
+  reach: 'reach',
   assistant: 'agent',
   handover: 'hello',
 };
 
-/** The account the assistant thinks with, as the thread knows it. */
+/** The account the assistant thinks with, as the wizard knows it. */
 export interface BrainAnswer {
   accountId: string;
   /** What the owner picked, in their words: "Claude", "Ollama". */
@@ -37,7 +37,7 @@ export interface BrainAnswer {
 }
 
 /**
- * The agents' own browser, as this step left it. `other` is a mode that is
+ * The agents' own browser, as chapter 4 left it. `other` is a mode that is
  * not the agents' own browser, where there is nothing to fetch.
  */
 export type BrowserAnswer = 'chrome' | 'chromium' | 'installed' | 'skipped' | 'none' | 'other';
@@ -53,11 +53,15 @@ export interface MeetAnswers {
   name?: string;
   clock?: string;
   brain?: BrainAnswer;
+  /** Chapter 3: the outcomes taken on; empty is "just an assistant". */
+  takeOn?: string[];
+  /** Chapter 4: which rows were done. */
+  reach?: OnboardingReach;
   browser?: BrowserAnswer;
   assistant?: AssistantAnswer;
 }
 
-/** What the server says, from the three reads the thread resumes off. */
+/** What the server says, from the reads the wizard resumes off. */
 export interface MeetFacts {
   onboarding?: OnboardingView | undefined;
   owner?: OwnerView | undefined;
@@ -106,52 +110,65 @@ export function brainFrom(facts: MeetFacts): BrainAnswer | undefined {
 export function answersFrom(facts: MeetFacts): MeetAnswers {
   const brain = brainFrom(facts);
   const assistant = facts.onboarding && !facts.onboarding.needs.agent ? facts.assistant : undefined;
+  const details = facts.onboarding?.details ?? {};
+  const steps = facts.onboarding?.stepsDone ?? [];
   return {
     ...(facts.owner?.preferredName ? { name: facts.owner.preferredName } : {}),
     ...(facts.owner?.timezone ? { clock: facts.owner.timezone } : {}),
     ...(brain ? { brain } : {}),
-    // Recorded once, never a gate: on a replay it says what is there now. An
-    // assistant that exists was made after this step, or before it existed.
-    ...(facts.onboarding?.stepsDone.includes('browser') || assistant ? { browser: facts.browser ?? 'other' } : {}),
+    // Chapters 3 and 4 come before the assistant: one that exists was made
+    // after them, or before they existed, and either way they are behind it.
+    ...(Array.isArray(details.takeOn) ? { takeOn: details.takeOn } : assistant ? { takeOn: [] } : {}),
+    ...(details.reach ? { reach: details.reach } : steps.includes('reach') || assistant ? { reach: {} } : {}),
+    // Recorded once, never a gate: on a replay it says what is there now.
+    ...(steps.includes('browser') || details.reach?.browser === true ? { browser: facts.browser ?? 'other' } : {}),
     // An agent of the owner's own is what the record calls answered; the
     // roster is where its name and face come from.
     ...(assistant ? { assistant } : {}),
   };
 }
 
-/** Is this question answered? */
-export function answered(answers: MeetAnswers, id: QuestionId): boolean {
-  if (id === 'name') return typeof answers.name === 'string' && answers.name !== '';
-  if (id === 'clock') return typeof answers.clock === 'string' && answers.clock !== '';
+/** Is this chapter answered? */
+export function answered(answers: MeetAnswers, id: ChapterId): boolean {
+  if (id === 'hello') return typeof answers.name === 'string' && answers.name !== '' && typeof answers.clock === 'string' && answers.clock !== '';
   if (id === 'brain') return answers.brain !== undefined;
-  if (id === 'browser') return answers.browser !== undefined;
+  if (id === 'takeOn') return answers.takeOn !== undefined;
+  if (id === 'reach') return answers.reach !== undefined;
   if (id === 'assistant') return answers.assistant !== undefined;
   return false;
 }
 
-/** The first question with no answer — where a reload lands. */
-export function firstOpen(answers: MeetAnswers): QuestionId {
-  return QUESTIONS.find((id) => !answered(answers, id)) ?? 'handover';
+/** The first chapter with no answer — where a reload lands. */
+export function firstOpen(answers: MeetAnswers): ChapterId {
+  return CHAPTERS.find((id) => !answered(answers, id)) ?? 'handover';
 }
 
-/** The questions to draw, in order: every answered one, then the open one. */
-export function thread(answers: MeetAnswers, open: QuestionId): QuestionId[] {
-  const upto = QUESTIONS.indexOf(open);
-  return QUESTIONS.filter((id, at) => at < upto || id === open);
+/** The chapter before this one, for Back; none before the first. */
+export function previous(id: ChapterId): ChapterId | null {
+  const at = CHAPTERS.indexOf(id);
+  return at > 0 ? CHAPTERS[at - 1]! : null;
+}
+
+/**
+ * What the map draws for one chapter: lit when open, ticked when answered
+ * and not open, numbered otherwise.
+ */
+export function mapState(answers: MeetAnswers, open: ChapterId | null, id: ChapterId): 'now' | 'done' | 'todo' {
+  if (id === open) return 'now';
+  return answered(answers, id) ? 'done' : 'todo';
 }
 
 /**
  * What "change" does.
  *
- * It reopens that question and keeps every later answer, because none of them
- * is untrue: a new name is a new greeting, and a new brain is re-tested and
- * re-bound to the assistant that already exists rather than a second assistant
- * being made. The only thing dropped is the answer being changed.
+ * It reopens that chapter in place and keeps every answer, this one included:
+ * the chapter's form opens with it filled in, and saving it again is what
+ * replaces it. None of the later answers is untrue — a new name is a new
+ * greeting, and a new brain is re-tested and re-bound to the assistant that
+ * already exists rather than a second assistant being made.
  */
-export function reopen(answers: MeetAnswers, id: QuestionId): MeetAnswers {
-  const next = { ...answers };
-  delete next[id as 'name'];
-  return next;
+export function reopen(answers: MeetAnswers, _id: ChapterId): MeetAnswers {
+  return { ...answers };
 }
 
 /* ------------------------------------------------------------------ *
@@ -208,10 +225,10 @@ export function rememberedRestore(): string | null {
   }
 }
 
-/** Where the thread carries on once a restore has finished. */
+/** Where first run carries on once a restore has finished. */
 export interface RestoreResume {
   answers: MeetAnswers;
-  open: QuestionId;
+  open: ChapterId;
   /** False when nothing is left to ask and the owner belongs in the dashboard. */
   stay: boolean;
 }

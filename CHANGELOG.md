@@ -13,6 +13,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- First run's "What should I take on for you?": tick My days, My mail, My money, Voice, My code or Pictures, and buddi fetches their plugins from withbuddi.com and installs them in the background while you answer the next chapters. It approves on your behalf only plugins made by buddi whose download matches the hash withbuddi.com lists; anything else waits on its card in Settings → Plugins, and every install shows there with its hash as usual. `POST`/`GET /api/onboarding/take-on`.
 - GitHub connects with a code instead of a token: Settings → Connections and `buddi connections add github` show a code and open github.com/login/device, you type it and say yes, and buddi signs in with its own GitHub app (the OAuth device flow). Token and Client id stay available; `--token` still forces the token.
 - `buddi connections list|add|review|give|remove` connects an MCP service from the terminal, through the running buddi and the same four steps as Settings → Connections; a sign-in on the service's page lands in any dashboard session, once, within ten minutes.
 - A plugin that ships a settings tab has a Settings action on its row (in place of Open when it has no page of its own), in its ⋯ menu and in its detail sheet, so setting one up after an install is one click.
@@ -21,6 +22,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- First run is five chapters with a map: Hello (your name and clock on one card), A brain (five cards, each tested with one small call before "Use this brain" lights), What I take on, Reach me, and Your assistant (a name, a Blob colour and the persona). The map ticks each answered chapter with its answer and "change"; Back, Set up later, Start over and "I have a backup" are always where the kit puts them; at phone width the map folds into a strip of dots.
+- The first hello knows what exists: your clock, the weather at home when Weather was installed, and whether Mail Triage has a mailbox. Under it, four first questions you can tap, and one card with the things still waiting ("Mail Triage is waiting for a mailbox"), with Open Home.
+- The phone, a mailbox, the app and the browser are one optional chapter, before the assistant is made, instead of a Telegram offer after its hello; a mailbox is added with the email plugin's own form, in a sheet.
 - The sign-in screen of a connection asks for everything it needs (a token, a client id) before it opens a tab, and opens the tab only onto the service's page. GitHub's sign-in tab no longer opens and closes by itself.
 - Updating to a version listed on withbuddi.com takes it from npm even when the plugin was installed from a directory or a file; the staged card says what it replaces, and on approval the plugin's source becomes the registry.
 - Browse trusts its copy of the withbuddi.com list for an hour, not a day, and has a Refresh link beside the line that says it fetched it.

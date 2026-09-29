@@ -165,7 +165,7 @@ function reason(err: unknown): string {
 }
 
 /** Which installed record, if any, is this listing. */
-function installedAs(entry: MarketEntry, record: readonly InstalledPlugin[]): InstalledPlugin | undefined {
+export function installedAs(entry: MarketEntry, record: readonly InstalledPlugin[]): InstalledPlugin | undefined {
   return record.find(
     (plugin) =>
       plugin.name === entry.name || (plugin.source.kind === 'registry' && plugin.source.name === entry.npm),
@@ -346,17 +346,25 @@ async function iconSvgOf(deps: MarketDeps, entry: MarketEntry): Promise<string |
   }
 }
 
-/** `GET /api/market[?refresh=1]`. */
-export async function marketRoute(deps: MarketDeps, url: URL): Promise<RouteReply> {
+/** The index as a caller gets it: the list and when it was fetched, or the sentence saying why there is none. */
+export type LoadedMarket =
+  | { fetchedAt: string; stale: boolean; index: MarketIndex }
+  | { unavailable: string };
+
+/**
+ * The index: the copy kept under an hour old, else fetched and kept. A fetch
+ * that fails with a copy on hand answers the copy, marked `stale`; with none,
+ * the sentence. Browse and first run's chapter 3 both read it here.
+ */
+export async function loadMarketIndex(deps: MarketDeps, opts: { refresh?: boolean } = {}): Promise<LoadedMarket> {
   const now = deps.now ?? ((): Date => new Date());
   const file = marketFile(deps.env);
-  const refresh = url.searchParams.get('refresh') === '1';
   let cached = memory.get(file) ?? readDisk(file);
   if (cached !== undefined) memory.set(file, cached);
   const fresh =
     cached !== undefined && now().getTime() - Date.parse(cached.fetchedAt) < MARKET_TTL_MS;
   let stale = false;
-  if (refresh || !fresh) {
+  if (opts.refresh === true || !fresh) {
     try {
       const index = await fetchIndex(deps);
       cached = { fetchedAt: now().toISOString(), index };
@@ -365,23 +373,25 @@ export async function marketRoute(deps: MarketDeps, url: URL): Promise<RouteRepl
     } catch (err) {
       const why = reason(err);
       deps.log(`market: fetching the plugin list failed: ${why}`);
-      if (cached === undefined) {
-        return {
-          status: 200,
-          body: { plugins: [], unavailable: `buddi could not reach withbuddi.com: ${why}` },
-        };
-      }
+      if (cached === undefined) return { unavailable: `buddi could not reach withbuddi.com: ${why}` };
       stale = true;
     }
   }
+  return { fetchedAt: (cached as Cached).fetchedAt, stale, index: (cached as Cached).index };
+}
+
+/** `GET /api/market[?refresh=1]`. */
+export async function marketRoute(deps: MarketDeps, url: URL): Promise<RouteReply> {
+  const loaded = await loadMarketIndex(deps, { refresh: url.searchParams.get('refresh') === '1' });
+  if ('unavailable' in loaded) return { status: 200, body: { plugins: [], unavailable: loaded.unavailable } };
   const { plugins: record } = installedRecord(deps.env);
-  const listed = (cached as Cached).index.plugins;
+  const listed = loaded.index.plugins;
   const icons = await Promise.all(listed.map((entry) => iconSvgOf(deps, entry)));
   return {
     status: 200,
     body: {
-      fetchedAt: (cached as Cached).fetchedAt,
-      ...(stale ? { stale: true } : {}),
+      fetchedAt: loaded.fetchedAt,
+      ...(loaded.stale ? { stale: true } : {}),
       plugins: annotateMarket(listed, record).map((entry, i) =>
         icons[i] === undefined ? entry : { ...entry, iconSvg: icons[i] },
       ),

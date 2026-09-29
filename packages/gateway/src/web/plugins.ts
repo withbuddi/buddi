@@ -226,7 +226,11 @@ export interface StageJob {
 /** Last twenty, in memory. A restart forgets them; the staging dirs remain. */
 const JOBS = new Map<string, StageJob>();
 
-function startJob(kind: StageJob['kind']): StageJob {
+/**
+ * A new job in the list the page watches (`GET /api/plugins/jobs/<id>`).
+ * Exported for first run's chapter 3, whose installs are jobs like any other.
+ */
+export function startJob(kind: StageJob['kind']): StageJob {
   const job: StageJob = {
     id: randomUUID(),
     kind,

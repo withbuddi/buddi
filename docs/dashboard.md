@@ -17,7 +17,10 @@ nothing outside it.
 five minutes and works once. The browser swaps it for a session: 30 days idle
 on this machine, 12 hours from anywhere else. `buddi dashboard --token` prints
 only the ticket, for a browser on another device. The first time, the link
-opens the first-run wizard (see [First run](onboarding.md)). Remote access and
+opens first run (see [First run](onboarding.md)): five chapters with a map —
+your name and clock, a brain, what buddi takes on (its plugins install in the
+background), how you reach each other, and your assistant — then the
+assistant's first hello, with four first questions and what is still waiting. Remote access and
 the session rules are in [Operations](operations.md).
 
 ### Install buddi as an app

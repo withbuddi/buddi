@@ -1,7 +1,7 @@
 ---
 title: "First run: you meet buddi"
 status: reference
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 
 # First run: you meet buddi
@@ -15,226 +15,223 @@ feel like: an introduction, not a settings tour.
 
 ## 1. The shape
 
-One screen, one thread. buddi speaks in message bubbles, scripted, no model
-behind it yet. It asks for one thing at a time, and the answer is given inline
-where a reply would go: a field, a set of cards, a button. Each answer becomes
-a bubble on the owner's side, so the thread reads back as a conversation.
+One screen, five chapters and a handover, still buddi's voice in bubbles and
+still one thing at a time. The kit's `Setup.jsx` (buddi-design) is the pixel
+source of truth.
 
-- No progress bar, no step names, no Back. The thread scrolls; earlier answers
-  are visible above and each carries a small "change" link.
-- One primary action at a time, on the right, in the composer's place. Every
-  step's dock has the same bottom row: "Set up later" (a quiet link, present
-  throughout) at its left, the step's secondary actions ("Pick another",
-  "Back", "Not now") and then the primary at its right, on one line. Fields
-  sit above that row.
-- From the second question on, "Start over" sits beside "Set up later": it
-  cancels any sign-in under way and asks the first question again, while what
-  is already connected (a model account, a paired Telegram, the browser) stays
-  in Settings, is named once, and is met again as answered.
-- While an answer is being saved and tried, buddi's typing dots show with a
-  line saying what it is doing ("Checking that key…"), until the verdict.
-- The screen is the chat layout the owner will use afterwards: same column
-  width, same bubbles, same composer. When the real assistant takes over, the
-  screen does not change; the speaker does.
-- Reload resumes at the first unanswered question with the earlier bubbles
-  replayed from the onboarding record and the settings they wrote.
+- **A map** on the left: the five chapters, numbered. The open one is lit; an
+  answered one shows a tick, its answer in a few words (the name and the
+  clock under it, the brain, "My days, my mail" with "Installing, 1 of 2
+  ready" under it while chapter 3's plugins arrive, "Phone paired", the
+  assistant's name) and **change**. Under them one note about the open
+  chapter, then the way out: **Set up later** always; **I have a backup** in
+  chapter 1 while nothing is answered; **Start over** from then on. At phone
+  width the map folds into a strip: the mark, five dots and "3 · What I take
+  on", with the way out under the card.
+- **One card** on the field: the chapter's title, buddi's bubbles (the real
+  Buddi Blob beside each, moving while buddi works on something), the inputs,
+  and a **dock**: "Chapter n of 5" on the left; Back, the chapter's secondary
+  action and its primary on the right, on one line. The primary is accent and
+  carries an arrow.
+- While something is saved and tried, three dots and a line say what is
+  happening ("Checking that key…"), until the verdict arrives as a bubble.
+- Reload opens the first unanswered chapter with the map replayed from the
+  onboarding record, the profile and the accounts.
 - Tone: short, warm, plain. No "loopback", "vault", "provider", "endpoint",
-  "handle", "credential". Those words appear nowhere on this screen.
+  "handle", "credential". Those words appear nowhere on this screen, and
+  every sentence reads aloud. All of it is in
+  `packages/web/src/views/meet/script.ts`, which a test reads against that list.
 
-## 2. The script
+## 2. The chapters
 
 Speaker `B` is buddi (scripted). Speaker `A` is the assistant (the model, once
-it exists). Owner replies are shown as `→`.
+it exists).
 
-**Opening**
+**1. Hello** — "Hi. I'm buddi."
 
-> B: Hi. I'm buddi. I live on this computer, and I'm about to introduce you to
-> your first assistant.
+> B: I live on this computer and I'm about to introduce you to your first
+> assistant. Nothing you tell me leaves this machine, except what your
+> assistant sends to the AI you pick next.
 >
-> B: Nothing you tell me leaves this machine, except what your assistant sends
-> to the AI you pick in a minute.
->
-> B: First, what should we call you?
+> B: First, what should we call you, and what time is it where you are?
 
-Inline: one text field, placeholder "Your first name", primary button "That's
-me". Enter submits.
+Two fields on one row: **Your first name** (the caret is in it) and **Your
+clock**, prefilled with the browser's zone and "What this browser says. 18:22
+right now." under it; **Change** beside it turns it into the zone picker.
+Primary "That's me". One save through the owner profile (`preferredName` and
+`timezone`), recorded as the `you` step.
 
-> → Amen
->
-> B: Nice to meet you, Amen. I'll set your clock to **America/New_York**,
-> which is what this browser says. Right?
+**2. A brain** — "Which AI should your team think with?"
 
-Inline: "Yes" primary, "Pick another" opens the timezone select in place.
-Saved through the existing owner profile.
+> B: Pick what you already have. I test it with one small call before we go on.
 
-**The brain**
+Five cards, two per row, in this order:
 
-> B: Your assistant needs a brain: an AI it thinks with. Which of these do you
-> already have?
-
-Inline: cards, two per row, each with a logo, a title and one line. Order:
-
-1. **Claude** — "I pay for Claude". Sign in with the existing Claude
-   subscription flow. One more line under it: "Uses your Claude plan's monthly
-   Agent SDK credits; after them, an API key." Shown by default; absent, not
-   disabled, when the host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
-2. **ChatGPT** — "I pay for ChatGPT", with "Uses your ChatGPT plan through
-   OpenAI's Codex backend. Sign in with a code." under it. The tap opens
-   openai.com's sign-in page and buddi shows a code to copy; the owner enters
-   it there and approves buddi. The card checks every two seconds, then
-   names the plan's default model with the list under it to pick another
-   ([codex-accounts.md](codex-accounts.md)). Shown by default; absent when the
-   host sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
-3. **Gemini** — "I have a Google AI key". One field for a Google AI Studio
-   key and a link, "Get a key at aistudio.google.com", that opens in a new
-   tab. buddi connects through Google's OpenAI-compatible endpoint (the
-   address comes from the gateway), reads the key's model list, starts on the
-   newest Gemini Pro (the highest version in the id; else the first `gemini-`
-   model) and shows the list under the confirmation to pick another
-   ([providers.md](providers.md#gemini)). Shown whenever the gateway names the
-   address.
-4. **A key from Anthropic or OpenAI** — "I have an API key". One field, the key
-   pasted, provider detected from its prefix (`sk-ant-` is Anthropic, `sk-` is
-   OpenAI), with a small "which?" toggle if detection is wrong.
-5. **Ollama** — "Free, on this computer". If Ollama answers on its default
-   port, the card says "Found it, running now" and one tap connects. If not, it
-   says "Install Ollama, then come back" with the download link, and polls.
-6. **Ollama Cloud, one tap** — "Free to start, no key". The tap opens a
-   window on ollama.com's connect page, with this computer named "buddi on
-   <this computer>"; the owner signs in there if asked and presses Connect.
-   The card checks every two seconds, then says which model the assistant
-   will think with (`gpt-oss:120b` while ollama.com offers it) and shows the
-   model list under that line to pick another. No key is typed or shown
+1. **Free to start, no key** — Ollama Cloud, one tap, marked "Recommended to
+   begin". The tap opens a window on ollama.com's connect page with this
+   computer named "buddi on <this computer>"; the owner presses Connect there
+   and the card notices within two seconds, settles on `gpt-oss:120b` while
+   ollama.com offers it, and tests it
    ([providers.md](providers.md#ollama-cloud-with-a-device-key)).
-7. **Another service, or Ollama Cloud with a key** — "I have an address and a
-   key". Address and key, for OpenAI-compatible endpoints.
+2. **I pay for Claude** — "Sign in with your Claude account. Uses its extra
+   usage." Never "monthly credits". The existing sign-in: the consent page
+   opens, the owner pastes the code back. Absent, not disabled, when the host
+   sets `BUDDI_SUBSCRIPTION_SIGNINS=off`.
+3. **I pay for ChatGPT** — a code to type on openai.com; the card checks every
+   two seconds and names the plan's default model
+   ([codex-accounts.md](codex-accounts.md)). Absent when the host sets
+   `BUDDI_SUBSCRIPTION_SIGNINS=off`.
+4. **I have an API key** — "Anthropic, OpenAI, Google AI, or another service
+   with an address." Three kinds under it: **Anthropic or OpenAI** (one field;
+   `sk-ant-` is Anthropic, anything else OpenAI, with "Not right?" to correct
+   it), **Google AI** (a Google AI Studio key, the newest Gemini Pro, the
+   newest Flash when a free key has no Pro allowance; shown whenever the
+   gateway names the address; [providers.md](providers.md#gemini)) and
+   **Another service** (an address and a key, the gateway's Ollama Cloud
+   address prefilled).
+5. **Ollama on this computer** — the whole row, with what was found: "I found
+   Ollama running with 2 models; the first answer takes a minute", or
+   "Install Ollama, then come back", polled.
 
-After any card is completed, buddi tests it with one small call (a ChatGPT
-plan has no per-turn cap to keep a test small, so there the assistant's first
-answer is the test) and answers in the thread:
+Every card ends in one small call (a ChatGPT plan has no per-turn cap to keep a
+test small, so there the assistant's first answer is the test). A service
+with several models and no default asks which, once. The verdict is a bubble
+— "That works. Your assistant will think with claude-sonnet-5." — with the
+model list under it for a brain that serves several; a refusal stays on the
+card in plain words with the field still open. **Use this brain** lights only
+after the call answered; the account is recorded as the `model` step. A card
+tapped while another sign-in is waiting cancels that sign-in.
 
-> B: That works. Your assistant will think with **claude-sonnet-5**.
+**3. What I take on** — "What should I take on for you?"
 
-A failure stays in the thread in plain words ("That key was refused. Check it
-and paste it again.") with the field still open. The chosen model is the
-account's default; "change" opens the model list in place. No account admin
-appears here. The accounts page in Settings is unchanged for later.
+> B: Pick a few. Each one brings a plugin and, for some, a teammate who owns
+> that job. Skip this and I stay a plain assistant; you can add any of it later.
 
-**The browser**
+Six tiles, three per row, the plugins named in small type: **My days**
+(Weather · Calendar), **My mail** (Mail Triage, built in), **My money**
+(Finance), **Voice** (Speech), **My code** (Developer, built in), **Pictures**
+(Image). My days and My mail are on the first time. **Take these on** posts
+`POST /api/onboarding/take-on` with the tiles and opens chapter 4 at once;
+**Just an assistant for now** posts an empty list. Either is recorded as the
+`take-on` step with the tiles.
 
-No question: buddi checks the agents' own browser through `GET /api/browser`
-(bundled Chromium, else Google Chrome, else none) and says what it found.
+The route answers straight away with a plugin job per plugin and runs them in
+the background, one after the other: the market index (`/api/market`'s own
+reader), then the listing staged like any install, then its approval, then a
+live load through the Plugins page's enable path so the hello can already use
+it. **buddi approves on the owner's behalf only a By-buddi listing, and only
+when the staged tarball's integrity is exactly the one the listing names**;
+anything else is refused and waits on its card in Settings → Plugins. The
+staged card and its approval are still written, so Settings → Plugins shows
+the plugin installed with its hash. A plugin this process cannot load live
+says "Weather is installed; it wakes up on the next restart".
 
-> B: Your assistant will browse with Google Chrome.
+`GET /api/onboarding/take-on` answers the progress per plugin (`fetching`,
+`reading`, `installing`, `ready`, `failed` with the reason) and what is still
+waiting. The page reads it every two seconds while anything runs and draws
+"Fetching Weather and Calendar from withbuddi.com and reading them. 1 of 2."
+under the tiles and "Installing, 1 of 2 ready" under the map's row; a fetch
+that fails is one line there and in the handover card, and never blocks a
+chapter.
 
-(or "…with its own Chromium.") and the thread moves straight on, with no
-button. On a Mac with Chrome nothing is downloaded. With none, buddi says it
-needs a browser of its own (about 150 MB) and starts the install itself
-(`POST /api/browser/install`), saying each line the installer prints, then
-"Installed." and on. The dock holds "Skip for now" (ghost, left of the
-primary) and the primary, which reads "Fetching the browser…" while it runs
-and "Try again" after a failure. A skip says that Settings → Computer &
-browser can install it later. The step is recorded as `browser` and never
-blocks completion: an installation that already has its assistant counts it
-as passed, and a replay says what is there now. In another mode (your apps,
-your Chrome) the step settles silently. The packaged launcher's first-run
-browser line stays as it is.
+Teammates are not created by a tick: Planner (My days) stays an offer under
+"Add a teammate", Ledger (My money) and Illustrator (Pictures) the offers
+their plugins make on Home, exactly as before.
 
-**The assistant**
+**4. Reach me** — "How do we reach each other?"
 
-> B: Last thing: your assistant. I've picked a name and a face; change either,
-> or keep them.
+> B: Three things, each a minute. Do the ones you want; the rest wait in Settings.
 
-Inline: a name field prefilled with "buddi" (the brand, and the handle the
-shipped assistant already answers to), a face picker — a row of Buddi Blob
-mascots first, the core one chosen, then the emoji set — and "What should it
-help you with?", a multi-line field grown to fit and prefilled with the
-assistant's starting persona (`SCRIPT.assistant.purposeValue` in
-`packages/web/src/views/meet/script.ts`, opening "You're not a chatbot. You're
-becoming someone this person can count on."). The owner may edit it or replace
-it. Primary: "Introduce us".
+Three rows, all optional, and **Continue**:
+
+- **Your phone, through Telegram.** With the bot running, the pairing square
+  is in the row; the row says "Paired" when the phone says hello, and a line
+  under the rows says so. With no bot yet, **Set up Telegram** opens a sheet:
+  the BotFather token, then the square, and "Not now" at either step.
+- **A mailbox** ("for Mail Triage" when My mail was taken on). **Add a
+  mailbox** opens the email plugin's own Settings page in a sheet — the form
+  Settings → Mail adds an account with — and the row names the address once
+  one is there.
+- **buddi as an app, and a browser of its own.** **Install app** hands the
+  browser's own install prompt over when it offered one. **Use Chrome** (or
+  "Use its Chromium") launches the agents' browser once to be sure it opens;
+  **Fetch a browser** installs Chromium with the bar in buddi's words
+  ("Fetching Chromium… 45%"), then launches it. A browser on disk that cannot
+  start says why, with the command to copy and **Try again**.
+
+Continue records the `reach` step with which rows were done (`phone`,
+`mailbox`, `app`, `browser`), and the `browser` step when the browser row was.
+
+**5. Your assistant** — "Meet your assistant."
+
+> B: I've picked a name, a face and a way of working. Change any of it, or
+> keep them. Your team so far: Planner and Mail Triage, waiting to be
+> introduced.
+
+The Blob at the size of a face with five colour swatches (the agent accents:
+blue, orange, green, violet, purple) under it; a **Name** field prefilled with
+"buddi"; **How it works**, the persona, prefilled with
+`SCRIPT.assistant.purposeValue` ("You're not a chatbot. You're becoming
+someone this person can count on.") and editable. Primary **Introduce us**.
 
 The persona is sent as `instructions` and written, verbatim, as the body of the
 agent file, between the name line ("You are Ada. There is exactly one owner…")
 and the "How you work" section. The file's `description`, the one line on the
 Home and Agents cards, is "Your first assistant. Ask it anything; it
-remembers." unless the owner sent one of their own — not the persona's first
-sentence, which read as "You're not a chatbot." under the name. A card line an
-earlier wizard derived that way is replaced the next time the persona changes.
-The persona stays editable afterwards in the Persona field on the agent's
-Setup tab, under Identity. Changing the assistant later through
+remembers." unless the owner sent one of their own. The persona stays editable
+afterwards on the agent's Setup tab. Changing the assistant later through
 `/api/onboarding/agent/update` rewrites the body only while it is still the
 generated one; an untouched field sends no new persona.
 
 This creates the assistant through `/api/onboarding/agent`, bound to the
-account just tested, and records it as the installation's default agent. A
-mascot face is then uploaded through `/api/agents/:id/avatar` (the bundled
-copy in `packages/web/public/mascot/`), so it is the agent's real picture
-everywhere; an emoji face is written into the agent file as before.
+account chapter 2 tested, and records it as the installation's default agent.
+The colour is the Blob of that accent (`public/mascot/`), uploaded through
+`/api/agents/:id/avatar`, so it is the agent's real picture everywhere. An
+assistant that already wears a picture or an emoji keeps it unless a colour is
+picked.
 
 The assistant is the concierge, so it is granted nearly everything built in
 (`FIRST_AGENT_TOOLS` in `packages/gateway/src/web/onboarding.ts`): `system.*`,
 `email.*`, `memory.*`, `artifacts.*`, `web.*`, `browser.*`, `secret.*`, `host.*`,
 `reminder.*`, `schedule.*`, `goal.*`, `learning.*`, `canvas.*`,
 `agent.delegate`, the read-only platform tools and `owner.get_profile` /
-`owner.set_profile`. Asked for a screenshot of a site, it opens its own browser
-rather than saying it has none. Gated and session-tier tools (`host.exec`,
+`owner.set_profile`. Gated and session-tier tools (`host.exec`,
 `email.send`, `browser.act`) still ask the owner first. Left out on purpose:
 the platform tools that write agents and grants (Agent Father's), and
 `owner.rename_me` / `owner.finish_onboarding`, which belong to the interview.
-Every family listed is compiled in, so none can hold the assistant back as
-"needs a plugin"; optional plugins (finance, developer, image) are the owner's
-to add.
 
 Being the default is an installation record (`core.web_settings`, key
 `agents`), not a flag in the agent file: the owner changes it from the picker
-at the head of the Agents page, and every surface — the dashboard, Telegram,
-the scheduler — reads the same row on its next message with no restart. A file
-that still says `default: true` is a fallback for an installation that never
-recorded one; when zero or several files claim it, nothing fails, the first
-runnable agent answers, and the picker says what the files disagree about.
+at the head of the Agents page, and every surface reads the same row on its
+next message with no restart.
 
-**The switch**
+**The handover**
 
-The thread does not change. A typing indicator appears under the assistant's
-name and face, and the assistant speaks first, on the model, with a first
-message it is prompted to make: introduce itself by the name it was given
-and say one thing it can do today, in two or three sentences. It is told the
-message is shown on a setup page where the owner cannot reply yet, so it does
-not ask a question.
+The card does not leave: every chapter is ticked on the map, and the assistant
+speaks first, on the model, with a first message it is prompted to make. The
+server puts what exists in front of the instruction: the owner's name, the
+assistant's, the owner's clock and the time there, the plugins chapter 3
+installed, the weather at home when Weather is in and answers (the weather
+page's own `today` read, never waited on for more than three seconds), and
+whether Mail Triage has a mailbox. The assistant introduces itself in two or
+three sentences, says what it already knows and can do today, and asks no
+question.
 
-The onboarding record is marked done when the first assistant message has
-arrived. If the model never answers, the
-thread says so in buddi's voice ("Your assistant isn't answering. The AI you
-picked may be down; try again, or pick another brain above.") and offers the
-brain cards again.
+Under the hello, four first questions: "What's my day like?" (or "What can you
+do?"), "Meet Planner and Mail Triage" (the teammates chapter 3 named, or "Show
+me around"), "Link my calendar" (or "Add my mailbox", or "What do you know
+about me?"), "Remind me at 9 tomorrow". A tap sends it as the owner's first
+message and opens that conversation in the dashboard. Under them, one warm
+card, **"Two things still waiting."**, listing exactly what chapters 3 and 4
+left open — "Mail Triage is waiting for a mailbox", "Calendar wants your
+calendar's private link", "Planner is ready to be introduced", a plugin that
+did not install and why — with **Open Home**. The dock holds **Open buddi**,
+the same conversation with the rail around it.
 
-**buddi, after the hello, and the phone**
-
-Under the assistant's hello, buddi speaks once more: "That was <name>. You
-can answer it on the next page. One more thing before that: you can also talk
-to it from your phone, through Telegram; a code pairs the two." The dock then
-offers **Set up Telegram** (primary) and **Not now**, with "Open buddi" as the
-quiet link.
-
-- **Set up Telegram** — opens the Telegram card in the thread:
-  "Two minutes: open Telegram, message @BotFather, send /newbot, paste the
-  token it gives you here." A field for the token. Once saved, buddi shows a
-  QR code and the deep link: "Scan this with your phone and press Start."
-  The pairing completes when the phone says hello; the thread confirms it.
-- **Not now** — ends the thread. Nothing else is offered on first run.
-
-When a phone is already paired (a rerun), the last sentence is "Your phone is
-already paired." and only Not now and Open buddi show.
-
-Either way the thread ends with "You're all set", and the dock holds one line,
-"Opening buddi…", and the "Open buddi" button — no composer, because the board
-leaves for the same conversation in the dashboard by itself after three
-seconds (never under reduced motion, where the line says "Ready when you are."
-and the button is the whole offer).
-
-The thread is the owner's first conversation; it stays in their history like
-any other.
+The record is completed when the opening turn is claimed. If the model never
+answers, the card says so in buddi's voice ("Your assistant isn't answering.
+The AI you picked may be down; try again, or pick another brain.") and **Pick
+another brain** reopens chapter 2.
 
 ## 3. What the screen must never do
 
@@ -244,7 +241,9 @@ any other.
   in the dashboard (§6).
 - Mention the terminal. The one command that exists for later (`buddi`) is
   said once by the assistant if asked, never by the screen.
-- Ask twice. Name, clock, brain, assistant. Four questions, then it is theirs.
+- Ask twice. Five chapters, each answered once, then it is theirs.
+- Block on something slow. Installs run behind the chapters; a failure is a
+  line, never a gate.
 
 After the first run, the Agents page and Home offer a starter team under
 "Add a teammate": Scout, Planner and Keeper, each added in one tap, and the
@@ -252,25 +251,32 @@ plugin agents greyed with what they need ([agents](agents.md#starter-team)).
 
 ## 4. Resume and "change"
 
-Every answered question stays in the thread with a "change" link on the
-owner's bubble. Change reopens that question in place; later answers are
-kept unless they depend on it (changing the brain re-tests it and re-binds
-the assistant; changing the name re-greets). Reload replays answered
-questions from the record and the profile, and asks the first unanswered one.
+Every answered chapter stays on the map with a "change" link. Change reopens
+that chapter in place with its answer filled in; later answers are kept
+unless they depend on it (changing the brain re-tests it and re-binds the
+assistant; changing the name re-greets). Back does the same for the chapter
+before. Reload replays answered chapters from the record, the profile and the
+accounts, and opens the first unanswered one; the installs of chapter 3 carry
+on behind a reload, and the progress line reads the plugin jobs again.
+
+Start over cancels a sign-in under way and clears the answers; what is
+connected (accounts, the phone, the browser, installed plugins) stays, is named
+once, and a brain that still answers is met again as answered.
 
 ## 5. Acceptance
 
-1. A clean install reaches the assistant's first message with four answers
-   and no other page.
-2. Every word on the screen passes a non-developer reading it aloud; the
-   banned words in §1 appear nowhere.
-3. A refused key, an absent Ollama and a model that never answers each leave
-   the owner with a way forward in the thread.
-4. Telegram pairing completes from the thread with a token and a QR, no
-   terminal.
-5. Reload mid-way resumes at the right question with earlier answers shown.
-6. The tarball smoke covers the API path; the web tests cover the thread's
-   state machine and the resume rule.
+1. A clean install reaches the hello in under three minutes with chapters 3
+   and 4 skipped, and the hello names the weather at home when My days was kept.
+2. No chapter can be left with a brain that does not answer; chapter 2 does
+   not light "Use this brain" before the test call succeeds.
+3. Ticking every tile never blocks a chapter; a failed fetch is one line and
+   the handover card names it. Only By-buddi listings whose integrity matches
+   are approved on the owner's behalf.
+4. The map's "change" and Back work on every chapter; reload resumes.
+5. The banned words in §1 appear nowhere; every sentence reads aloud.
+6. The web tests cover the state machine, background installs and resume; the
+   gateway tests cover the take-on route, its guard and the reach record; the
+   tarball smoke covers the API path.
 
 ## 6. Shipping fixes that go with it
 

@@ -66,6 +66,8 @@ import {
   updateFirstAgent,
   withFirstRunFacts,
   type OnboardingDeps, readFirstAgentPersona } from './onboarding.js';
+import type { LiveRegistry as LiveRegistryShape } from '../plugins/live.js';
+import { TakeOnRefusal, readTakeOn, startTakeOn, type TakeOnDeps } from './take-on.js';
 import {
   TelegramWebError,
   saveTelegramToken,
@@ -913,6 +915,33 @@ export function createWebApp(deps: WebServerDeps): Server {
       registry: deps.registry,
       ...(deps.plugins ? { engine: deps.plugins } : {}),
     });
+    /** Is a mailbox connected? The email plugin's own read, the one Home's offer asks. */
+    const mailboxSet = async (): Promise<boolean> => {
+      const answer = await runPageQuery(pagesDeps(), 'email', 'triage_offer', new URLSearchParams()).catch(() => null);
+      return answer?.status === 200 && (answer.body as { data?: { wanted?: unknown } } | null)?.data?.wanted === true;
+    };
+    /** First run's chapter 3: the market, the plugin engine, the live registry, the mailbox. */
+    const takeOnDeps = (): TakeOnDeps => {
+      const live = deps.registry as unknown as Partial<LiveRegistryShape>;
+      return {
+        pool: deps.pool,
+        env: deps.env ?? process.env,
+        log,
+        ...(deps.plugins ? { engine: deps.plugins } : {}),
+        ...(live.register && live.unregister && live.manifests ? { registry: deps.registry as never } : {}),
+        mailboxSet,
+        agentIds: () => deps.catalog.list().map((a) => a.id),
+      };
+    };
+    /** The weather at home in one line, for the hello, when the weather plugin answers. */
+    const weatherAtHome = async (): Promise<string | null> => {
+      const answer = await runPageQuery(pagesDeps(), 'weather', 'today', new URLSearchParams()).catch(() => null);
+      const data = (answer?.body as { data?: Record<string, unknown> } | null)?.data;
+      if (answer?.status !== 200 || !data || data.setUp !== true) return null;
+      const parts = [data.now, data.sky, typeof data.highLow === 'string' && data.highLow !== '' ? `high / low ${data.highLow}` : '']
+        .filter((part): part is string => typeof part === 'string' && part !== '');
+      return parts.length === 0 ? null : `${typeof data.place === 'string' ? `${data.place}: ` : ''}${parts.join(', ')}`;
+    };
     /**
      * May this installation still be restored over from the first-run screen?
      *
@@ -1425,6 +1454,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
         case '/api/onboarding/ollama':
           return sendJson(res, 200, await probeOllama());
+        // Chapter 3's progress: per plugin, and what the handover card will say is waiting.
+        case '/api/onboarding/take-on':
+          return sendJson(res, 200, await readTakeOn(takeOnDeps()));
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
         // Settings → Notifications: which bot, and which phones talk to it.
@@ -2487,6 +2519,17 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 400, { error: `\`${key}\` must be a string` });
         }
       }
+      // Chapter 4 carries which of its rows were done: yes or no, nothing else.
+      const reachKeys = ['phone', 'mailbox', 'app', 'browser'] as const;
+      if (
+        body.reach !== undefined &&
+        (body.reach === null || typeof body.reach !== 'object' || Array.isArray(body.reach) ||
+          Object.entries(body.reach as Record<string, unknown>).some(
+            ([key, value]) => !(reachKeys as readonly string[]).includes(key) || typeof value !== 'boolean',
+          ))
+      ) {
+        return sendJson(res, 400, { error: '`reach` must say yes or no for phone, mailbox, app and browser' });
+      }
       // The first step recorded is also what starts the record, with this
       // surface's name on it. Already in progress, done or skipped: unchanged.
       await beginOnboarding(deps.pool, WEB_ONBOARDING_SURFACE);
@@ -2494,8 +2537,21 @@ export function createWebApp(deps: WebServerDeps): Server {
       await setOnboardingDetails(deps.pool, {
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
         ...(typeof body.accountId === 'string' ? { accountId: body.accountId } : {}),
+        ...(body.reach !== undefined ? { reach: body.reach as Record<string, boolean> } : {}),
       });
       return sendJson(res, 200, await readOnboarding(onboardingDeps()));
+    }
+    /*
+     * Chapter 3: what buddi takes on. Records the tiles and starts the By-buddi
+     * installs in the background; answers at once with a job per plugin.
+     */
+    if (path === '/api/onboarding/take-on') {
+      try {
+        return sendJson(res, 202, await startTakeOn(takeOnDeps(), body.tiles));
+      } catch (error) {
+        if (error instanceof TakeOnRefusal) return sendJson(res, error.status, { error: error.message });
+        throw error;
+      }
     }
     if (path === '/api/onboarding/complete' || path === '/api/onboarding/skip') {
       if (path.endsWith('/skip')) {
@@ -2978,7 +3034,14 @@ export function createWebApp(deps: WebServerDeps): Server {
         agentId: decodeURIComponent(messages[1] as string),
         ...(typeof body.conversationId === 'string' ? { conversationId: body.conversationId } : {}),
         ...(typeof body.client === 'string' ? { client: body.client.trim() } : {}),
-        text: body.opening === true ? await withFirstRunFacts(onboardingDeps(), body.text) : body.text,
+        text: body.opening === true
+          ? await withFirstRunFacts(onboardingDeps(), body.text, {
+              weatherAtHome,
+              mailboxSet,
+              installed: async () => (await readTakeOn(takeOnDeps())).plugins.filter((p) => p.state === 'ready').map((p) => p.title),
+              now: deps.now,
+            })
+          : body.text,
         ...(ids ? { attachmentIds: ids as string[] } : {}),
         ...(body.opening === true ? { opening: true } : {}),
       });

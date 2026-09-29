@@ -43,6 +43,20 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/**
+ * The browser's install prompt, when it offered one and it has not been used:
+ * first run's chapter 4 hands it over from its "Install app" button.
+ */
+export function useInstallPrompt(): InstallPrompt | null {
+  const [prompt, setPrompt] = useState<InstallPrompt | null>(deferred);
+  useEffect(() => {
+    const listener = (): void => setPrompt(deferred);
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }, []);
+  return standalone() ? null : prompt;
+}
+
 /** For tests: forget a caught prompt. */
 export function resetInstallPrompt(): void {
   deferred = null;

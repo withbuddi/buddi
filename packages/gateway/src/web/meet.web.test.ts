@@ -478,8 +478,8 @@ it('puts the two names it knows in front of the opening instruction', async () =
   // And it is told the setup is behind it, in both senses: nothing to ask
   // about, and nothing to ask *with* except words.
   expect(said).toContain('The setup is finished; do not ask about your name, the owner\'s name or onboarding.');
-  // And where it is: a page the owner cannot answer on, so no question.
-  expect(said).toContain('This message is shown on a setup page where the owner cannot reply yet, so introduce yourself in two or three sentences and do not ask a question.');
+  // And where it is: the end of setup, above suggested first questions, so no question of its own.
+  expect(said).toContain('This message is shown at the end of setup, above a few suggested first questions, so introduce yourself in two or three sentences, say what you already know and can do today, and do not ask a question.');
   // And an installation that knows neither still gets the asks, whole.
   const anonymous = { query: vi.fn(async () => ({ rows: [{ preferred_name: null, timezone: null, language: null, about: null, display_name: null }] })) };
   const empty = reloadableCatalog(() => loadGatewayCatalog({ dir: agentsDir(), env }));
@@ -487,3 +487,32 @@ it('puts the two names it knows in front of the opening instruction', async () =
     await withFirstRunFacts({ pool: anonymous, catalog: empty, agentsDir: dir, examplesDir: dir, reload: () => {} } as never, 'Introduce yourself.'),
   ).toMatch(/^Introduce yourself\. The setup is finished;/);
 });
+
+it('tells the hello what exists: the clock, the weather at home, the mailbox, what was installed', async () => {
+  const dir = agentsDir();
+  const env = { ...process.env, BUDDI_AGENTS_DIR: dir, BUDDI_SKILLS_DIR: path.join(dir, '..', 'skills') };
+  const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir, env }));
+  const pool = {
+    query: vi.fn(async (sql: string) =>
+      /from core\.owner/.test(sql)
+        ? { rows: [{ preferred_name: 'Amen', timezone: 'Europe/Paris', language: null, about: null, display_name: null }] }
+        : /from core\.onboarding/.test(sql)
+          ? { rows: [{ owner_id: 'owner', state: 'in-progress', steps_done: [], details: { takeOn: ['days', 'mail'] }, nudges_sent: 0, unanswered: 0 }] }
+          : { rows: [] },
+    ),
+  };
+  const deps = { pool, catalog, agentsDir: dir, examplesDir: dir, reload: () => {} } as never;
+  const said = await withFirstRunFacts(deps, 'Introduce yourself.', {
+    now: () => new Date('2026-09-29T16:22:00Z'),
+    weatherAtHome: async () => 'Home: 14°, Partly cloudy',
+    mailboxSet: async () => false,
+    installed: async () => ['Weather', 'Calendar'],
+  });
+  expect(said).toContain("The owner's clock is Europe/Paris; it is 18:22 there now.");
+  expect(said).toContain('Installed for the owner during setup: Weather, Calendar.');
+  expect(said).toContain('The weather at home right now: Home: 14°, Partly cloudy.');
+  expect(said).toContain('No mailbox is connected yet; Mail Triage is waiting for one.');
+  // A weather read that never answers does not hold the hello back.
+  const slow = await withFirstRunFacts(deps, 'Hi.', { weatherAtHome: () => new Promise(() => {}), now: () => new Date() });
+  expect(slow).not.toContain('weather');
+}, 10_000);
