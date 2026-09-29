@@ -795,7 +795,7 @@ describe('browsing the market', () => {
     vi.mocked(api.pluginJob).mockResolvedValue(JOB);
     render(<Plugins hash="#/settings/plugins?tab=browse" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Update to 1.2.0' }));
-    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', '1.2.0'));
+    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('finance', '1.2.0', '@withbuddi/plugin-finance@1.2.0'));
     // Back on Installed, the row names the version too, wears the market's icon, and the tab counts it.
     expect(await screen.findByRole('button', { name: 'Update to 1.2.0' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Installed/ })).toHaveTextContent('Installed1');

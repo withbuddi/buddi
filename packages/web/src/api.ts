@@ -1397,6 +1397,8 @@ export interface StagedPluginView {
   scripts: string[];
   /** Set when this stage came from an update: what it would replace. */
   previous?: { name: string; version: string };
+  /** Where the installed one came from, when this update takes it from somewhere else. */
+  previousSource?: PluginSource;
   /**
    * What it reaches in buddi beyond itself, from its package.json, one plain
    * line each. On an update, `added` marks what the installed version did not
@@ -2047,8 +2049,16 @@ export const api = {
   approveStaged: (id: string, body: { integrity?: string; acknowledgeDrift?: boolean }) =>
     post<PluginApproval>(`/plugins/staged/${encodeURIComponent(id)}/approve`, body),
   rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
-  updatePlugin: (name: string, version?: string) =>
-    post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, version ? { version } : {}),
+  /**
+   * Stage the next version. `from` names the npm package to take it from
+   * when the installed one came from elsewhere (a directory, a file) and is
+   * now listed on withbuddi.com: the record moves to the registry on approval.
+   */
+  updatePlugin: (name: string, version?: string, from?: string) =>
+    post<{ job: PluginJob }>(`/plugins/${encodeURIComponent(name)}/update`, {
+      ...(version ? { version } : {}),
+      ...(from ? { from } : {}),
+    }),
   /** Disable or enable an installed plugin; it takes effect at once, `restartFor` says what a restart must finish. */
   setPluginEnabled: (name: string, enabled: boolean) =>
     post<{ name: string; enabled: boolean; changed: boolean; missions: string[]; notes: string[]; restartNeeded: boolean; restartFor?: string; loadProblem?: string }>(

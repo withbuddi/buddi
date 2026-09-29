@@ -151,6 +151,8 @@ export interface StagedPlugin {
   claims: PluginClaims;
   /** The installed record this would replace, when this stage came from `update`. */
   previous?: { name: string; version: string };
+  /** Where that record came from, when this update takes the new version from somewhere else. */
+  previousSource?: PluginSource;
   /**
    * The name the file had on the owner's machine, when this stage came from an
    * upload rather than from a path they typed.
@@ -196,6 +198,8 @@ export interface StageOptions {
   previous?: { name: string; version: string };
   /** Set by `updatePlugin`: the areas the installed version declared. */
   previousUses?: PluginUse[];
+  /** Set by `updatePlugin`: where the installed version came from. */
+  previousSource?: PluginSource;
   now?: () => Date;
   /** Skip the dependency install. Only the fixtures that have none use it. */
   skipDependencies?: boolean;
@@ -743,6 +747,9 @@ export async function stagePlugin(
       dependencies: scanDependencies(packageDir),
       claims: readClaims(packageDir),
       ...(opts.previous === undefined ? {} : { previous: opts.previous }),
+      ...(opts.previousSource === undefined || opts.previousSource.kind === source.kind
+        ? {}
+        : { previousSource: opts.previousSource }),
       ...(opts.uploadedName === undefined ? {} : { uploadedName: opts.uploadedName }),
       state: 'staged',
     };

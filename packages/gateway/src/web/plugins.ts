@@ -195,6 +195,7 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
     /** The package's own lifecycle scripts, which also run as somebody else. */
     scripts: staged.scripts,
     ...(staged.previous === undefined ? {} : { previous: staged.previous }),
+    ...(staged.previousSource === undefined ? {} : { previousSource: staged.previousSource }),
     /**
      * What it reaches in buddi beyond itself, one plain line each, from its
      * package.json. On an upgrade `added` marks what the installed version did
@@ -712,9 +713,14 @@ export function updateRoute(
     return { status: 400, body: { error: '"version" must be a version.' } };
   }
   const version = typeof body.version === 'string' ? body.version.trim() : '';
+  if (body.from !== undefined && typeof body.from !== 'string') {
+    return { status: 400, body: { error: '"from" must be an npm package name.' } };
+  }
+  const from = typeof body.from === 'string' ? body.from.trim() : '';
   return runStaging(deps, 'update', (onPhase) =>
     api.updatePlugin(name, {
       ...(version === '' ? {} : { version }),
+      ...(from === '' ? {} : { from }),
       env: deps.env,
       onPhase,
     }),

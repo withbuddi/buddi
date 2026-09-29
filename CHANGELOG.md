@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Updating to a version listed on withbuddi.com takes it from npm even when the plugin was installed from a directory or a file; the staged card says what it replaces, and on approval the plugin's source becomes the registry.
 - Browse trusts its copy of the withbuddi.com list for an hour, not a day, and has a Refresh link beside the line that says it fetched it.
 
 ## 0.1.0-pre.24 — 2026-09-29

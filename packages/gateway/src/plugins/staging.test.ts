@@ -438,6 +438,28 @@ describe('update', () => {
     });
     expect(next.version).toBe('1.1.0');
     expect(next.previous).toEqual({ name: 'fixture-marker', version: '1.0.0' });
+    expect(next.previousSource).toBeUndefined();
+  });
+
+  it('takes a listed version from npm for a plugin installed from a directory, and says what it replaces', async () => {
+    const staged = await stagePlugin(MARKER_FIXTURE, { env, npm: fakeNpm() });
+    await approveStaged(staged.id, { integrity: '', env });
+
+    const next = await updatePlugin('fixture-marker', {
+      env,
+      from: 'buddi-plugin-fixture-marker@1.1.0',
+      npm: fakeNpm({
+        version: '1.1.0',
+        edit: (dir) => {
+          const source = readFileSync(path.join(dir, 'index.js'), 'utf8');
+          writeFileSync(path.join(dir, 'index.js'), source.replace(/version: '1\.0\.0'/, "version: '1.1.0'"));
+        },
+      }),
+    });
+    expect(next.source.kind).toBe('registry');
+    expect(next.previousSource).toEqual({ kind: 'directory', path: MARKER_FIXTURE });
+    // A path is not a package: nothing may replace a source from a disk.
+    await expect(updatePlugin('fixture-marker', { env, from: MARKER_FIXTURE, npm: fakeNpm() })).rejects.toThrow(/names a package/);
   });
 
   it('knows which version is newer', () => {

@@ -445,7 +445,16 @@ export function Plugins({
     setFailed(null);
     toggle(name, true).catch(fail);
   };
-  const update = (name: string, version?: string): void => stageFrom(api.updatePlugin(name, version));
+  /*
+   * A listed version comes from npm whatever the installed copy came from: a
+   * plugin installed from a directory, once it is on withbuddi.com, moves to
+   * the published package. Without a listing the update follows its source.
+   */
+  const update = (name: string, version?: string): void => {
+    const listed = market?.plugins.find((entry) => (entry.installed?.name ?? entry.name) === name && entry.installed !== undefined);
+    const from = listed && version ? `${listed.npm}@${version}` : undefined;
+    stageFrom(from ? api.updatePlugin(name, version, from) : api.updatePlugin(name, version));
+  };
 
   const tabs = (
     <Tabs label="Plugins">
@@ -870,6 +879,9 @@ function Staged({
                   value: staged.uploadedName ? `a file you chose · ${staged.uploadedName}` : sourceWords(staged.source),
                 },
                 { label: 'Published by', value: publisherWords(staged.source, staged.publisher) },
+                ...(staged.previousSource && staged.previous
+                  ? [{ label: 'Replaces', value: `${staged.previous.version}, installed from ${sourceWords(staged.previousSource)}` }]
+                  : []),
                 ...(staged.source.kind === 'directory'
                   ? []
                   : [

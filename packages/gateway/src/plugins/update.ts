@@ -14,6 +14,7 @@
  * version of that limitation.
  */
 import { compareSemver, parseSemver, readPluginsFile, type InstalledPlugin } from '@buddi/core';
+import { parsePluginSpec } from './spec.js';
 import { InstallRefusal } from './refusals.js';
 import { packageUses, recordFile } from './load.js';
 import { rejectStaged, stagePlugin, type StageOptions, type StagedPlugin } from './stage.js';
@@ -50,6 +51,14 @@ export interface UpdateOptions extends StageOptions {
   version?: string;
   /** Stage an older version anyway. The CLI never passes it; nothing else does. */
   allowDowngrade?: boolean;
+  /**
+   * Take the new version from this npm package instead of from where the
+   * installed one came. Browse passes it: a plugin installed from a directory
+   * or a file, once it is listed on withbuddi.com, updates to the published
+   * package, and the record follows (its source becomes the registry). A
+   * path is refused here; only a package name may replace a source.
+   */
+  from?: string;
 }
 
 /**
@@ -75,11 +84,16 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
   // What the installed version declared it reaches, so the card can say what
   // the new one adds. Unreadable is nothing: the card then lists every area.
   const installedUses = packageUses(record.entry);
-  const staged = await stagePlugin(specFor(record, opts.version), {
-    ...opts,
+  const { from, ...stageOpts } = opts;
+  if (from !== undefined && parsePluginSpec(from).kind !== 'registry') {
+    throw new InstallRefusal('bad-from', `"${from}" is not an npm package; an update from elsewhere names a package.`);
+  }
+  const staged = await stagePlugin(from ?? specFor(record, opts.version), {
+    ...stageOpts,
     env,
     previous,
     previousUses: installedUses.ok ? installedUses.uses : [],
+    previousSource: record.source,
   });
 
   let newer = true;
