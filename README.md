@@ -4,21 +4,25 @@
 
 [withbuddi.com](https://withbuddi.com) · [npm](https://www.npmjs.com/package/@withbuddi/buddi) · [docs](docs/README.md)
 
-buddi is a personal agent platform you run on your own machine. An agent is a
-markdown file: a front matter that names the tools it may call, and a body that
-is its persona. Agents get real access: your mail, your files, a browser of
-their own, commands on the machine. They reach you on a dashboard in your
-browser and on Telegram. They also work while you are away: scheduled
-missions, watchers that speak only when something is wrong, reminders they set
-themselves. Anything consequential waits for your approval, as a card you
-approve or reject.
+buddi is a small team that lives on your computer. Each teammate has a job:
+your front desk answers first; Planner does your mornings; Mail Triage reads
+the inbox and brings you only what needs you; Ledger knows what is left this
+month. They can read your mail, look at websites in a browser of their own,
+keep your files, run commands, and they keep working while you are away, on
+schedules and watches of their own. Anything consequential stops at a card you
+approve or reject, on the dashboard or on your phone.
 
-Everything stays on your machine, in a private Postgres. The one thing that
-leaves is each agent's prompt, sent to the AI provider that agent's file names.
-So one line in one file decides which company sees that agent's conversations.
-Secrets live in a vault the agents can use but never see.
+Everything stays home: your conversations, files and memory sit in a private
+database on your disk. The one thing that leaves is what a teammate says to
+the AI it thinks with, and one line in its file decides which company that
+is. Your passwords live in a vault the team can use but never see.
 
-The first agent is called buddi. It wears the Buddi Blob.
+Under the hood a teammate is a markdown file: a front matter that names the
+tools it may call, a body that is its persona. The docs call that file an
+agent, and so does the dashboard where it is the accurate word; this README
+says teammate, because that is what it is to you.
+
+The first teammate is called buddi. It wears the Buddi Blob.
 
 ---
 
@@ -91,24 +95,27 @@ The full install story, including what is not built yet, is
 
 ## The first ten minutes
 
-**The wizard.** buddi asks four things, one at a time, in a chat thread:
+**The wizard.** Five short chapters, with a map on the left so you always
+know where you are and can go back:
 
-1. **Your name**, so the agents know what to call you.
-2. **Your clock**, taken from the browser; confirm it or pick another. This is
-   what every agent means by "today".
-3. **A brain**: the AI your assistant thinks with. An API key from Anthropic
-   or OpenAI; Ollama running on this computer; Ollama Cloud or another
-   OpenAI-compatible service, with an address and a key; or Claude, with your
-   Claude subscription, where this build enables it. buddi tests it with one
-   small call before moving on.
-4. **Your assistant**: a name (buddi by default), a face (the Buddi Blob, or
-   another mascot or an emoji), and a persona you can keep or rewrite.
+1. **Hello**: your name and your clock, taken from the browser.
+2. **A brain**: the AI your team thinks with. Free to start with Ollama Cloud
+   in one tap; or your Claude or ChatGPT account; or an API key from
+   Anthropic, OpenAI or Google; or Ollama on this computer. buddi tests it
+   with one small call before moving on.
+3. **What buddi takes on**: your days (weather and calendars, with Planner's
+   morning brief), your mail, your money, voice, your code, pictures. Each
+   tile installs its plugin in the background, from withbuddi.com, while you
+   answer the rest; nothing runs before you have seen its card.
+4. **Reach me**: your phone through Telegram, a mailbox for Mail Triage, buddi
+   as an app and a browser of its own. All optional.
+5. **Your assistant**: a name, a colour for the Blob, and a persona you can
+   keep or rewrite.
 
-Between the brain and the assistant, buddi checks the browser and fetches one
-if it has to. Then the assistant speaks first, in the same thread, and offers
-to reach you on your phone. Every answer keeps a "change" link, and a reload
-resumes where you were. [docs/onboarding.md](docs/onboarding.md) is the full
-script.
+Then your assistant speaks first, in the real chat, already knowing your
+clock, the weather at home and who is on the team, and one card lists what is
+still waiting. Every chapter keeps a "change" link, and a reload resumes where
+you were. [docs/onboarding.md](docs/onboarding.md) is the full script.
 
 **The first chat.** A few things to try:
 
@@ -122,23 +129,24 @@ script.
   about what it shows.
 - "Every Friday at 6, send me a recap of the week." A mission, on a schedule.
 
-**A mailbox.** In Settings → Email, add an account with its address and an app
-password. buddi then proposes a Mail agent (@mail) that triages new mail in
-the background. Accept it with **Create @mail**; until you do, mail is fetched
-and threaded but nobody reads it. Sending always stops at an approval card
+**A mailbox.** In Settings → Mail, or in chapter 4 of the wizard, add an
+account with its address and an app password. buddi then offers Mail Triage,
+the teammate who reads new mail in the background. Accept it with one click;
+until you do, mail is fetched and threaded but nobody reads it. Sending always stops at an approval card
 that shows the full message. [docs/email.md](docs/email.md) has the rest.
 
-**More agents.** Agent Father (@father) makes and changes agents. Say what you
-want one to do; it interviews you, proposes the file and the tools it should
-have, and writes it once you approve.
+**More teammates.** Home and the Agents page offer a starter team: Scout,
+Planner and Keeper, one tap each. For anything else, Agent Father (@father)
+interviews you, proposes the file and the tools it should have, and writes it
+once you approve.
 
 ---
 
 ## How it works
 
-**Agents are files.** One folder per agent, with an `agent.md` in it. The
-front matter says which tools the agent may call; nothing else is callable,
-and no conversation can grant more. The body is the persona, in plain
+**A teammate is a file.** One folder per agent, with an `agent.md` in it. The
+front matter says which tools it may call; nothing else is callable, and no
+conversation can grant more. The body is the persona, in plain
 markdown. The provider and model are a line in the same file, and the
 dashboard's Agents page edits them for you.
 
@@ -159,9 +167,10 @@ talking to. Today is {{today}}.
 
 **Tools and plugins.** The core has no tools; every capability is a plugin.
 Built in: `system`, `email`, `memory`, `artifacts`, `web`, `browser`, `host`,
-`reminder`, `schedule`, `goal`, `learning` and `canvas`. Installable from npm,
-on the Plugins page or with `buddi plugins install`: `finance`, `developer`
-and `image`. Installing a plugin shows everything it brings first: each tool
+`reminder`, `schedule`, `goal`, `learning` and `canvas`. Installable from
+[withbuddi.com/plugins](https://withbuddi.com/plugins), on the Plugins page's
+Browse tab or with `buddi plugins install`: `weather`, `calendar`, `finance`,
+`image`, `speech` and more. Installing a plugin shows everything it brings first: each tool
 and whether it runs without asking, the database schema it will own, what it
 runs on a timer, and the hosts it talks to. Nothing happens until you approve.
 [docs/plugins.md](docs/plugins.md) is the guide to writing one.
