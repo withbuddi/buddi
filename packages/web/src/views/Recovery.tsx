@@ -12,17 +12,59 @@
  * state, because recovery outlives a reload and is true of the installation
  * rather than of this page.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type RecoveryView } from '../api';
-import { BACKUP_ROUTE } from '../routes';
-import { Button, Empty, ErrorBanner, KV, Notice, Panel, Section, Stack, Toolbar, useAsync } from '../ui';
+import {
+  BACKUP_ROUTE,
+  PLUGINS_BROWSE_ROUTE,
+  accountRoute,
+  pluginInstallRoute,
+  settingsRoute,
+} from '../routes';
+import { Button, ButtonLink, Empty, ErrorBanner, KV, List, ListRow, Notice, Panel, Section, Stack, Toolbar, useAsync } from '../ui';
 
 /** How often a page asks whether recovery is still on. Slow: it rarely changes. */
 const POLL_MS = 30_000;
 
+/**
+ * The checklist, read again whenever the owner comes back to it: the tab
+ * regains focus or becomes visible (they pasted a key in another tab), and on
+ * every mount (they followed a Fix link and came back). A fixed item is simply
+ * gone from the next read.
+ */
 export function useRecovery(): { data: RecoveryView | undefined; reload: () => void } {
   const { data, reload } = useAsync(() => api.recovery(), [], POLL_MS);
+  // `reload` is a new function every render; the listeners read the latest.
+  const latest = useRef(reload);
+  latest.current = reload;
+  useEffect(() => {
+    const again = (): void => latest.current();
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') again();
+    };
+    window.addEventListener('focus', again);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', again);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
   return { data, reload };
+}
+
+type RecoverySecret = RecoveryView['checklist']['secrets'][number];
+type RecoveryPlugin = RecoveryView['checklist']['plugins'][number];
+
+/** Where a missing key is fixed: the account itself, the Telegram setting, or Keys and secrets. */
+export function secretFixRoute(secret: RecoverySecret): string {
+  if (secret.kind === 'account') return secret.accountId ? accountRoute(secret.accountId) : settingsRoute('accounts');
+  if (secret.kind === 'telegram') return settingsRoute('notifications');
+  return settingsRoute('secrets');
+}
+
+/** Where a missing plugin is installed again: staged when it came from npm, else the market. */
+export function pluginFixRoute(plugin: RecoveryPlugin): string {
+  return plugin.install ? pluginInstallRoute(plugin.install) : PLUGINS_BROWSE_ROUTE;
 }
 
 export const RECOVERY_BANNER =
@@ -119,14 +161,20 @@ export function RecoveryChecklist({
           {secrets.length === 0 ? (
             <Empty>Nothing is missing.</Empty>
           ) : (
-            <ul className="recovery-list">
+            <List>
               {secrets.map((secret) => (
-                <li key={`${secret.kind}:${secret.name}`}>
-                  {secret.settingsRoute ? <a href={secret.settingsRoute}>{secret.name}</a> : secret.name}{' '}
-                  <span className="ui-card-meta">{secret.kind}</span>
-                </li>
+                <ListRow
+                  key={`${secret.kind}:${secret.accountId ?? secret.name}`}
+                  title={secret.label ?? secret.name}
+                  sub={secret.name ? <span className="mono">{secret.name}</span> : undefined}
+                  side={
+                    <ButtonLink size="sm" href={secretFixRoute(secret)} aria-label={`Fix ${secret.label ?? secret.name}`}>
+                      Fix
+                    </ButtonLink>
+                  }
+                />
               ))}
-            </ul>
+            </List>
           )}
         </Section>
 
@@ -134,14 +182,20 @@ export function RecoveryChecklist({
           {missingPlugins.length === 0 ? (
             <Empty>Everything the backup named is installed.</Empty>
           ) : (
-            <ul className="recovery-list">
+            <List>
               {missingPlugins.map((plugin) => (
-                <li key={plugin.name}>
-                  <span className="mono">{plugin.name}</span> {plugin.version}{' '}
-                  <span className="ui-card-meta">{plugin.source}</span>
-                </li>
+                <ListRow
+                  key={plugin.name}
+                  title={<><span className="mono">{plugin.name}</span> {plugin.version}</>}
+                  sub={plugin.source}
+                  side={
+                    <ButtonLink size="sm" href={pluginFixRoute(plugin)} aria-label={`Install ${plugin.name} again`}>
+                      {plugin.install ? 'Install' : 'Find it'}
+                    </ButtonLink>
+                  }
+                />
               ))}
-            </ul>
+            </List>
           )}
         </Section>
 

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_ROUTE, parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
+import { SETTINGS_ROUTE, parseAccountRoute, parseProposalsFilter, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
@@ -97,7 +97,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'notifications' ? <Notifications timezone={timezone} /> : null}
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
-          {section === 'accounts' ? <Providers embedded /> : null}
+          {section === 'accounts' ? <Providers embedded account={parseAccountRoute(hash)} /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
           {section === 'secrets' ? <Secrets embedded timezone={timezone} /> : null}
           {section === 'connections' ? <Connections embedded timezone={timezone} /> : null}

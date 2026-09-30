@@ -18,14 +18,19 @@ import { AGENTS_ROUTE, agentRoute } from '../routes';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 
-export function Providers({ embedded }: { embedded?: boolean } = {}): JSX.Element {
+/**
+ * `account` is the id a link asked for (`#/settings/accounts?account=<id>`):
+ * that account opens, and a new link opens its account again.
+ */
+export function Providers({ embedded, account }: { embedded?: boolean; account?: string | null } = {}): JSX.Element {
   const { data, error, reload, loading } = useAsync(() => api.providerAccounts(), []);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [adding, setAdding] = useState(false);
   const [refreshRequested, setRefreshRequested] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(account ?? null);
+  useEffect(() => { if (account) setSelectedId(account); }, [account]);
   const pendingLogin = data?.accounts.some(a => a.login?.state === 'pending' &&
     a.login.expiresAt && Date.parse(a.login.expiresAt) > Date.now());
   useEffect(() => {

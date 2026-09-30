@@ -1336,8 +1336,10 @@ export interface RecoveryView {
   restoredAt: string | null;
   archive: string | null;
   checklist: {
-    secrets: Array<{ name: string; kind: 'account' | 'telegram' | 'plugin'; settingsRoute: string }>;
-    plugins: Array<{ name: string; version: string; source: string; installed: boolean }>;
+    /** `label` says what it is in words; `accountId` names the model account it belongs to. */
+    secrets: Array<{ name: string; kind: 'account' | 'telegram' | 'plugin'; label?: string; accountId?: string; settingsRoute: string }>;
+    /** `install` is `<npm>@<version>` when the plugin came from a registry. */
+    plugins: Array<{ name: string; version: string; source: string; installed: boolean; install?: string }>;
     pending: { jobs: number; missions: number; approvals: number; telegramChats: number };
     grants: Array<{ id: string; agent: string; tool: string; scope: string; description: string }>;
   };

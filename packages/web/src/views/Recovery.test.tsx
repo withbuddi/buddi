@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type RecoveryView } from '../api';
-import { RecoveryBanner, RecoveryChecklist } from './Recovery';
+import { RecoveryBanner, RecoveryChecklist, useRecovery } from './Recovery';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
@@ -23,8 +23,15 @@ const view = (over: Partial<RecoveryView['checklist']> = {}): RecoveryView => ({
   restoredAt: '2026-09-20T10:00:00.000Z',
   archive: 'buddi-2026-09-19.tar.gz.age',
   checklist: {
-    secrets: [{ name: 'Anthropic', kind: 'account', settingsRoute: '#/settings/accounts' }],
-    plugins: [{ name: 'finance', version: '0.2.0', source: 'registry', installed: false }],
+    secrets: [
+      { name: 'PROVIDER_ACCOUNT_1', kind: 'account', label: 'Gemini — API key', accountId: 'acc-1', settingsRoute: '#/settings/accounts' },
+      { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/notifications' },
+      { name: 'TAVILY_API_KEY', kind: 'plugin', label: 'Tavily — search key', settingsRoute: '#/settings/secrets' },
+    ],
+    plugins: [
+      { name: 'finance', version: '0.2.0', source: 'npm @withbuddi/plugin-finance@0.2.0', installed: false, install: '@withbuddi/plugin-finance@0.2.0' },
+      { name: 'ledger', version: '1.0.0', source: 'directory /plugins/ledger', installed: false },
+    ],
     pending: { jobs: 3, missions: 1, approvals: 2, telegramChats: 1 },
     grants: [
       { id: 'g1', agent: 'ada', tool: 'shell', scope: 'always', description: 'run anything' },
@@ -71,10 +78,18 @@ describe('the checklist', () => {
     );
   });
 
-  it('says what is missing, each as a way to go and fix it', () => {
+  it('says what is missing in words, each with a Fix that goes to exactly where it is fixed', () => {
     render(<RecoveryChecklist view={view()} />);
-    expect(screen.getByRole('link', { name: 'Anthropic' })).toHaveAttribute('href', '#/settings/accounts');
-    expect(screen.getByText('finance')).toBeInTheDocument();
+    expect(screen.getByText('Gemini — API key')).toBeInTheDocument();
+    expect(screen.getByText('PROVIDER_ACCOUNT_1')).toHaveClass('mono');
+    expect(screen.getByRole('link', { name: 'Fix Gemini — API key' })).toHaveAttribute('href', '#/settings/accounts?account=acc-1');
+    expect(screen.getByRole('link', { name: 'Fix Telegram — bot token' })).toHaveAttribute('href', '#/settings/notifications');
+    expect(screen.getByRole('link', { name: 'Fix Tavily — search key' })).toHaveAttribute('href', '#/settings/secrets');
+    expect(screen.getByRole('link', { name: 'Install finance again' })).toHaveAttribute(
+      'href',
+      '#/settings/plugins?install=%40withbuddi%2Fplugin-finance%400.2.0',
+    );
+    expect(screen.getByRole('link', { name: 'Install ledger again' })).toHaveAttribute('href', '#/settings/plugins?tab=browse');
   });
 
   it('asks nothing when the backup left nothing behind', async () => {
@@ -88,6 +103,24 @@ describe('the checklist', () => {
     await waitFor(() =>
       expect(api.leaveRecovery).toHaveBeenCalledWith({ dropPending: true, keepGrants: [] }),
     );
+  });
+});
+
+describe('coming back to it', () => {
+  function Probe(): JSX.Element {
+    const { data } = useRecovery();
+    return <span data-testid="count">{data ? data.checklist.secrets.length : '-'}</span>;
+  }
+
+  it('reads the checklist again when the tab regains focus, so a fixed key is gone', async () => {
+    vi.mocked(api.recovery)
+      .mockResolvedValueOnce(view())
+      .mockResolvedValueOnce(view({ secrets: [] }));
+    render(<Probe />);
+    await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('3'));
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
+    expect(api.recovery).toHaveBeenCalledTimes(2);
   });
 });
 

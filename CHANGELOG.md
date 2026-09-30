@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - A forgotten tab, an unpaired Chrome extension or any poller with no sign-in could lock the owner out of the dashboard: every refused request counted as a failed sign-in, and all tailnet and SSH-tunnel traffic shares one address. Now only a request that presents a credential counts, and the same stale cookie counts once however often it is sent; guessing still locks the address.
 - The installed app showed the browser's error page when buddi answered with an empty "too many requests" or a server error. It now shows its own offline page for those too.
+- After a restore, the recovery checklist listed every working model account as a key to paste again, because it looked for the account's key under its own name while buddi keeps it as an owner secret. It now asks the way buddi reads the key, so only what is really missing is listed, in words ("Gemini — API key"). Each item has a Fix that opens that account, the Telegram setting, Keys and secrets, or the plugin's install, and the checklist reads itself again when you come back to it.
 
 ### Changed
 

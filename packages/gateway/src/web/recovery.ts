@@ -8,8 +8,11 @@
  *
  *  - **secrets.** No backup contains a secret value, by design. So every
  *    provider account, the Telegram token and anything the restored `.env`
- *    marked as living in the vault is checked against the vault on *this*
- *    machine, and what is missing is listed with a link to where to paste it.
+ *    marked as living in the vault is looked up the way the runtime reads it
+ *    on *this* machine — owner secret first, raw vault entry, then the
+ *    environment — and only what buddi truly cannot read is listed, with a
+ *    link to where it is fixed. A name in the vault's list proves nothing: an
+ *    adopted credential is kept under `owner-secret:<id>`, not its name.
  *  - **plugins.** `plugins.json` came back in the archive; what is installed
  *    here is whatever this build has. The difference is the list.
  *  - **pending work.** Counts the restore took at the moment it loaded, so the
@@ -26,6 +29,7 @@ import path from 'node:path';
 import {
   createVault,
   describeSource,
+  envValue,
   leaveRecovery,
   listToolPermissions,
   pluginsFilePath,
@@ -37,10 +41,17 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { agentSearchPath, installedManifests } from '../agents/catalog.js';
+import { readOllamaDevice } from '../ollama-accounts.js';
+import { ownerSecretVault } from '../owner-secrets.js';
 
 export interface RecoverySecret {
+  /** The name the credential is kept under. Shown small, for the curious; never a value. */
   name: string;
   kind: 'account' | 'telegram' | 'plugin';
+  /** What it is, in words: "Gemini — API key", "Telegram — bot token". */
+  label: string;
+  /** The model account this is the credential of, so the page can open that account. */
+  accountId?: string;
   settingsRoute: string;
 }
 
@@ -49,6 +60,8 @@ export interface RecoveryPlugin {
   version: string;
   source: string;
   installed: boolean;
+  /** `<npm name>@<version>` when it came from a registry: what Settings → Plugins can stage again. */
+  install?: string;
 }
 
 export interface RecoveryGrant {
@@ -74,26 +87,91 @@ export interface RecoveryView {
 export interface RecoveryDeps {
   pool: Pool;
   env: NodeJS.ProcessEnv;
+  /** Injected in tests; this machine's own vault otherwise. */
+  vault?: Vault | undefined;
   /** Where leaving recovery says what it dropped. Optional; defaults to stderr. */
   log?: ((line: string) => void) | undefined;
 }
 
 const ACCOUNTS_ROUTE = '#/settings/accounts';
-const SYSTEM_ROUTE = '#/settings/system';
+const TELEGRAM_ROUTE = '#/settings/notifications';
+const SECRETS_ROUTE = '#/settings/secrets';
 
 /** Names that are a model credential wherever they turn up. */
 const MODEL_SECRETS = new Set(['OPENAI_API_KEY']);
 
-/** The names this machine's vault actually holds. Never a value. */
-async function vaultNames(env: NodeJS.ProcessEnv): Promise<Set<string>> {
-  const vault: Vault | undefined = createVault({ env });
-  if (!vault) return new Set();
+/**
+ * Names a restored `.env` may mark that the owner never pastes on a page: the
+ * database's own credentials and the vault's key. A gateway that is serving
+ * this page is already using them, so listing them would only ever be wrong.
+ */
+const RUNNING_PROVES = new Set(['DATABASE_URL', 'BUDDI_DB_PASSWORD', 'BUDDI_VAULT_KEY']);
+
+/** What the known names are, in words. Anything else is shown by its name. */
+const SECRET_WORDS: Record<string, string> = {
+  OPENAI_API_KEY: 'OpenAI — API key',
+  TELEGRAM_BOT_TOKEN: 'Telegram — bot token',
+  GMAIL_APP_PASSWORD: 'Gmail — app password',
+  TAVILY_API_KEY: 'Tavily — search key',
+  BRAVE_SEARCH_API_KEY: 'Brave Search — search key',
+};
+
+const AUTH_WORDS: Record<string, string> = {
+  'api-key': 'API key',
+  chatgpt: 'ChatGPT sign-in',
+  'anthropic-oauth': 'Claude sign-in',
+  'device-key': 'Ollama device key',
+};
+
+function openVault(deps: RecoveryDeps): Vault | undefined {
+  if (deps.vault) return deps.vault;
   try {
-    return new Set(await vault.list());
+    return createVault({ env: deps.env });
   } catch {
-    // A locked vault is the same problem the checklist is about; treating it
-    // as "nothing is there" lists everything, which is the safe direction.
-    return new Set();
+    return undefined;
+  }
+}
+
+/**
+ * Whether buddi can read a credential by this name the way the runtime does:
+ * the owner secret of that name when one exists (`owner-secret:<id>` in the
+ * vault, which is where every adopted account key and plugin secret lives
+ * now), else the raw vault entry. Only ever a yes or no; the value never
+ * leaves this function. A locked or failing vault is "no", the safe direction.
+ */
+async function readable(vault: Vault | undefined, pool: Pool, name: string): Promise<string | null> {
+  if (!vault || name === '') return null;
+  try {
+    const value = await ownerSecretVault(vault, pool).get(name);
+    return value !== null && value.trim() !== '' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+interface AccountRow {
+  id: string;
+  kind: string;
+  auth: string;
+  label: string;
+  secret_ref: string | null;
+  legacy_env: string | null;
+}
+
+/**
+ * Mirrors `ProviderAccountService#secret` and its "configured" rule: the
+ * credential through the owner-secret-aware vault, then a migrated account's
+ * own named environment variable; an Ollama device counts once connected.
+ */
+async function accountHasCredential(vault: Vault | undefined, deps: RecoveryDeps, row: AccountRow): Promise<boolean> {
+  const raw = row.secret_ref ? await readable(vault, deps.pool, row.secret_ref) : null;
+  const value = raw ?? (row.legacy_env ? envValue(deps.env, row.legacy_env) ?? null : null);
+  if (value === null) return false;
+  if (row.auth !== 'device-key') return true;
+  try {
+    return readOllamaDevice(value).connectedAt !== null;
+  } catch {
+    return false;
   }
 }
 
@@ -114,33 +192,52 @@ export function vaultMarkersIn(envText: string): string[] {
 }
 
 async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
-  const held = await vaultNames(deps.env);
+  const vault = openVault(deps);
   const out: RecoverySecret[] = [];
-  const add = (name: string, kind: RecoverySecret['kind'], settingsRoute: string): void => {
-    if (held.has(name) || (deps.env[name] ?? '').trim() !== '') return;
-    if (out.some((s) => s.name === name)) return;
-    out.push({ name, kind, settingsRoute });
-  };
+  const listed = (name: string): boolean => name !== '' && out.some((s) => s.name === name);
 
-  // Every account that needs a credential and whose credential is not here.
+  // Every account the runtime could not get a credential for.
+  let rows: AccountRow[] = [];
   try {
-    const { rows } = await deps.pool.query<{ secret_ref: string | null; auth: string; label: string }>(
-      `select secret_ref, auth, label from core.provider_accounts
-        where enabled and not deleting and auth <> 'none'`,
-    );
-    for (const row of rows) {
-      add(row.secret_ref ?? `credential for ${row.label}`, 'account', ACCOUNTS_ROUTE);
-    }
+    ({ rows } = await deps.pool.query<AccountRow>(
+      `select id, kind, auth, label, secret_ref, legacy_env from core.provider_accounts
+        where enabled and not deleting and auth <> 'none' order by created_at, id`,
+    ));
   } catch {
     // No accounts table is an installation that predates them, not an error.
   }
+  for (const row of rows) {
+    if (await accountHasCredential(vault, deps, row)) continue;
+    const name = row.secret_ref ?? row.legacy_env ?? '';
+    if (listed(name)) continue;
+    out.push({
+      name,
+      kind: 'account',
+      label: `${row.label} — ${AUTH_WORDS[row.auth] ?? row.auth}`,
+      accountId: row.id,
+      settingsRoute: `${ACCOUNTS_ROUTE}?account=${encodeURIComponent(row.id)}`,
+    });
+  }
+
+  /*
+   * Anything else by name: the environment the gateway started with (a real
+   * value, not the `<vault>` marker), then the owner secret or vault entry of
+   * that name — where the dashboard saves the bot token and where every plugin
+   * key lives since the host API.
+   */
+  const add = async (name: string, kind: RecoverySecret['kind'], settingsRoute: string): Promise<void> => {
+    if (listed(name) || RUNNING_PROVES.has(name)) return;
+    if (envValue(deps.env, name) !== undefined) return;
+    if ((await readable(vault, deps.pool, name)) !== null) return;
+    out.push({ name, kind, label: SECRET_WORDS[name] ?? name, settingsRoute });
+  };
 
   // A bot that was paired on the old machine but has no token on this one.
   try {
-    const { rows } = await deps.pool.query<{ n: string }>(
+    const { rows: paired } = await deps.pool.query<{ n: string }>(
       `select count(*)::text as n from core.surface_identities where surface = 'telegram'`,
     );
-    if (Number(rows[0]?.n ?? '0') > 0) add('TELEGRAM_BOT_TOKEN', 'telegram', SYSTEM_ROUTE);
+    if (Number(paired[0]?.n ?? '0') > 0) await add('TELEGRAM_BOT_TOKEN', 'telegram', TELEGRAM_ROUTE);
   } catch {
     /* same */
   }
@@ -150,9 +247,9 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
   if (envFile && existsSync(envFile)) {
     const text = await readFile(envFile, 'utf8').catch(() => '');
     for (const name of vaultMarkersIn(text)) {
-      if (name === 'TELEGRAM_BOT_TOKEN') add(name, 'telegram', SYSTEM_ROUTE);
-      else if (MODEL_SECRETS.has(name)) add(name, 'account', ACCOUNTS_ROUTE);
-      else add(name, 'plugin', SYSTEM_ROUTE);
+      if (name === 'TELEGRAM_BOT_TOKEN') await add(name, 'telegram', TELEGRAM_ROUTE);
+      else if (MODEL_SECRETS.has(name)) await add(name, 'account', ACCOUNTS_ROUTE);
+      else await add(name, 'plugin', SECRETS_ROUTE);
     }
   }
   return out;
@@ -181,6 +278,7 @@ function pluginsFromArchive(env: NodeJS.ProcessEnv): RecoveryPlugin[] {
       version: p.version,
       source: describeSource(p.source),
       installed: installed.has(p.name),
+      ...(p.source.kind === 'registry' ? { install: `${p.source.name}@${p.source.version}` } : {}),
     }));
   } catch {
     return [];

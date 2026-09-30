@@ -11,11 +11,11 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { ToolRegistry, createMemoryVault, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
-import { vaultMarkersIn } from './recovery.js';
+import { readRecoveryView, vaultMarkersIn } from './recovery.js';
 
 const servers: WebServer[] = [];
 const fakes: Server[] = [];
@@ -30,7 +30,9 @@ interface PoolState {
   active: boolean;
   grants: Array<{ id: string; agent_id: string; tool: string; conversation_id: string }>;
   telegram: number;
-  accounts: Array<{ secret_ref: string | null; auth: string; label: string }>;
+  accounts: Array<{ id: string; kind: string; secret_ref: string | null; legacy_env: string | null; auth: string; label: string }>;
+  /** Owner secrets by name → id, as `core.secrets` holds them. */
+  secrets?: Record<string, string>;
 }
 
 /** Enough of a pool for the recovery row, the grants and the two counts. */
@@ -73,6 +75,10 @@ function fakePool(state: PoolState) {
         return { rows: state.grants.map((g) => ({ ...g, owner_id: 'owner', tool_version: '1', created_at: RESTORED_AT })) };
       }
       if (/from core\.provider_accounts/.test(sql)) return { rows: state.accounts };
+      if (/from core\.secrets where name/.test(sql)) {
+        const id = state.secrets?.[params[0] as string];
+        return { rows: id ? [{ id, name: params[0], totp: false }] : [] };
+      }
       if (/from core\.surface_identities/.test(sql)) return { rows: [{ n: String(state.telegram) }] };
       return { rows: [] };
     }),
@@ -117,7 +123,7 @@ function state(over: Partial<PoolState> = {}): PoolState {
       { id: 'g2', agent_id: 'concierge', tool: 'host.exec', conversation_id: 'c1' },
     ],
     telegram: 1,
-    accounts: [{ secret_ref: 'OPENAI_API_KEY', auth: 'api-key', label: 'work' }],
+    accounts: [{ id: 'acc-work', kind: 'openai', secret_ref: 'OPENAI_API_KEY', legacy_env: null, auth: 'api-key', label: 'work' }],
     ...over,
   };
 }
@@ -140,9 +146,12 @@ it('lists what the restore left the owner to do, and says so on every page', asy
   // A backup carries no secret value, so every credential is on the list —
   // the account's, the bot's, and whatever the restored .env marked.
   expect(view.checklist.secrets).toEqual([
-    { name: 'OPENAI_API_KEY', kind: 'account', settingsRoute: '#/settings/accounts' },
-    { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', settingsRoute: '#/settings/system' },
-    { name: 'TAVILY_API_KEY', kind: 'plugin', settingsRoute: '#/settings/system' },
+    {
+      name: 'OPENAI_API_KEY', kind: 'account', label: 'work — API key', accountId: 'acc-work',
+      settingsRoute: '#/settings/accounts?account=acc-work',
+    },
+    { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/notifications' },
+    { name: 'TAVILY_API_KEY', kind: 'plugin', label: 'Tavily — search key', settingsRoute: '#/settings/secrets' },
   ]);
   // The counts are the ones the restore took, not a fresh query.
   expect(view.checklist.pending).toEqual({ jobs: 11, missions: 2, approvals: 1, telegramChats: 1 });
@@ -279,4 +288,87 @@ it('the checklist compares the archive plugins the restore wrote down, not the l
   expect(view.checklist.plugins).toEqual([
     { name: 'ledger', version: '1.2.0', source: 'directory /plugins/ledger', installed: false },
   ]);
+});
+
+/*
+ * The false alarms: a restored installation listed every working account as
+ * missing, because the check looked for `PROVIDER_ACCOUNT_…` in the vault's
+ * list of names while the key had been adopted into an owner secret, kept
+ * under `owner-secret:<id>`. The checklist now asks the way the runtime does.
+ */
+const SECRET_ID = '0b9f0c1e-5d2a-4c1b-9f3e-2a7d6c5b4a31';
+const TAVILY_ID = '1c8e1d2f-6e3b-4d2c-8a4f-3b8e7d6c5b42';
+
+it('an account whose key is an owner secret is not listed; one with nothing anywhere is', async () => {
+  const pool = fakePool(state({
+    telegram: 0,
+    accounts: [
+      { id: 'gem', kind: 'openai-compatible', secret_ref: 'PROVIDER_ACCOUNT_gem', legacy_env: null, auth: 'api-key', label: 'Gemini' },
+      { id: 'gone', kind: 'anthropic', secret_ref: 'PROVIDER_ACCOUNT_gone', legacy_env: null, auth: 'api-key', label: 'Work Claude' },
+    ],
+    secrets: { PROVIDER_ACCOUNT_gem: SECRET_ID },
+  }));
+  const vault = createMemoryVault({ seed: { [`owner-secret:${SECRET_ID}`]: 'sk-fixture' } });
+  // The old check: the name is not in the vault's list, so it said "missing".
+  expect(await vault.list()).not.toContain('PROVIDER_ACCOUNT_gem');
+
+  const view = await readRecoveryView({ pool: pool as never, env: {}, vault }, 'owner');
+  expect(view.checklist.secrets).toEqual([
+    {
+      name: 'PROVIDER_ACCOUNT_gone', kind: 'account', label: 'Work Claude — API key', accountId: 'gone',
+      settingsRoute: '#/settings/accounts?account=gone',
+    },
+  ]);
+});
+
+it('a migrated account reading its own environment variable, and a raw vault entry, both count', async () => {
+  const pool = fakePool(state({
+    telegram: 0,
+    accounts: [
+      { id: 'legacy', kind: 'openai', secret_ref: 'OPENAI_API_KEY', legacy_env: 'OPENAI_API_KEY', auth: 'api-key', label: 'OpenAI' },
+      { id: 'raw', kind: 'anthropic', secret_ref: 'PROVIDER_ACCOUNT_raw', legacy_env: null, auth: 'api-key', label: 'Raw' },
+    ],
+  }));
+  const vault = createMemoryVault({ seed: { PROVIDER_ACCOUNT_raw: 'sk-fixture' } });
+  const view = await readRecoveryView({ pool: pool as never, env: { OPENAI_API_KEY: 'sk-env' }, vault }, 'owner');
+  expect(view.checklist.secrets).toEqual([]);
+});
+
+it('the bot token and plugin keys are read where the runtime reads them, and a <vault> marker is not a value', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-env-'));
+  const envFile = path.join(dir, '.env');
+  await writeFile(envFile, [
+    'TELEGRAM_BOT_TOKEN="<vault>"', 'TAVILY_API_KEY="<vault>"', 'BRAVE_SEARCH_API_KEY="<vault>"',
+    'DATABASE_URL="<vault>"', 'BUDDI_DB_PASSWORD="<vault>"',
+  ].join('\n'));
+  const pool = fakePool(state({ accounts: [], secrets: { TAVILY_API_KEY: TAVILY_ID } }));
+
+  // The token in the vault under its own name, Tavily as an owner secret: nothing to do.
+  const held = createMemoryVault({ seed: { TELEGRAM_BOT_TOKEN: '12345:fixture', [`owner-secret:${TAVILY_ID}`]: 'tvly-fixture' } });
+  const fine = await readRecoveryView({ pool: pool as never, env: { BUDDI_ENV_FILE: envFile }, vault: held }, 'owner');
+  expect(fine.checklist.secrets.map((s) => s.name)).toEqual(['BRAVE_SEARCH_API_KEY']);
+
+  // Only the marker in the environment: the bot token is genuinely missing.
+  const empty = createMemoryVault();
+  const missing = await readRecoveryView({
+    pool: pool as never, env: { BUDDI_ENV_FILE: envFile, TELEGRAM_BOT_TOKEN: '<vault>' }, vault: empty,
+  }, 'owner');
+  expect(missing.checklist.secrets.map((s) => s.name)).toEqual(['TELEGRAM_BOT_TOKEN', 'TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY']);
+});
+
+it('a plugin from npm carries what Settings → Plugins needs to stage it again', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-data-'));
+  await writeFile(path.join(data, 'restored-plugins.json'), JSON.stringify({
+    version: 1,
+    plugins: [{
+      name: 'weather', version: '0.1.0', entry: 'index.js', installedAt: RESTORED_AT.toISOString(), schema: 'weather',
+      source: { kind: 'registry', name: '@withbuddi/plugin-weather', version: '0.1.0' },
+    }],
+  }));
+  const pool = fakePool(state());
+  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data }, vault: createMemoryVault() }, 'owner');
+  expect(view.checklist.plugins).toEqual([{
+    name: 'weather', version: '0.1.0', source: 'npm @withbuddi/plugin-weather@0.1.0', installed: false,
+    install: '@withbuddi/plugin-weather@0.1.0',
+  }]);
 });

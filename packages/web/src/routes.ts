@@ -179,6 +179,37 @@ export function settingsRoute(section?: string): string {
 }
 
 /**
+ * Settings → Model accounts with one account open:
+ * `#/settings/accounts?account=<id>`. Where the recovery checklist sends the
+ * owner to paste a key again.
+ */
+export function accountRoute(accountId: string): string {
+  return `${settingsRoute('accounts')}?account=${encodeURIComponent(accountId)}`;
+}
+
+/** The account a model-accounts hash opens, or null. */
+export function parseAccountRoute(hash: string): string | null {
+  const match = /^#\/settings\/accounts\?(.*)$/.exec(hash);
+  if (!match) return null;
+  try {
+    return new URLSearchParams(match[1]).get('account') || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Settings → Plugins with one install staged, the way a market link stages it:
+ * `#/settings/plugins?install=<npm>@<version>`.
+ */
+export function pluginInstallRoute(spec: string): string {
+  return `${settingsRoute('plugins')}?install=${encodeURIComponent(spec)}`;
+}
+
+/** Settings → Plugins on its Browse tab. */
+export const PLUGINS_BROWSE_ROUTE = `${settingsRoute('plugins')}?tab=browse`;
+
+/**
  * Settings → Proposals, optionally filtered to one plugin's rules:
  * `#/settings/proposals?plugin=<name>`. The name comes from wherever the
  * link was drawn (a plugin page's own scope), never from this file.

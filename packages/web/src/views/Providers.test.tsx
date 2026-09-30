@@ -341,3 +341,9 @@ it('tries a pasted key before finishing, and refuses a wrong one where it was ty
   expect(screen.getByLabelText('API key')).toBeInTheDocument();
   expect(screen.queryByText(/Saved “/)).not.toBeInTheDocument();
 });
+it('opens the account a link names, not the first one', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [view.accounts[0]!, { ...view.accounts[0]!, id: 'gem', label: 'Gemini' }] });
+  render(<Providers account="gem" />);
+  expect(await screen.findByRole('button', { name: /Gemini/, pressed: true })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /Personal OpenAI/, pressed: false })).toBeInTheDocument();
+});
