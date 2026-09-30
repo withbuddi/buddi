@@ -1997,8 +1997,8 @@ export const api = {
     post<{ id: string; reconnected: boolean; name: string; cli?: boolean }>('/connections/callback', input),
   connectionReview: (id: string) => get<ConnectionReview>(`/connections/${id}/review`),
   saveConnectionReview: (id: string, input: { slug?: string; hash: string }) => post<ConnectionView>(`/connections/${id}/review`, input),
-  grantConnection: (id: string, agents: string[]) =>
-    post<{ granted: string[]; failed: Array<{ agent: string; message: string }>; connection: ConnectionView }>(`/connections/${id}/grant`, { agents }),
+  grantConnection: (id: string, agents: string[], exact = false) =>
+    post<{ granted: string[]; failed: Array<{ agent: string; message: string }>; connection: ConnectionView }>(`/connections/${id}/grant`, exact ? { agents, exact: true } : { agents }),
   disconnect: (id: string) => del<{ id: string; name: string; touched: string[] }>(`/connections/${id}`),
   /** The connections that need the owner, a sentence each: Home's line and the Settings dot. */
   connectionSignals: () => get<{ signals: ConnectionSignal[] }>('/connections/signals'),

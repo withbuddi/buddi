@@ -134,6 +134,7 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
   const [flow, setFlow] = useState<FlowStart | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null);
+  const [holding, setHolding] = useState<string | null>(null);
   const data = view.data;
   const agentName = (id: string): string => data?.agents.find((a) => a.id === id)?.name ?? id;
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -143,6 +144,7 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
   const offer = catalog.filter((card) => !connections.some((c) => c.transport !== 'stdio' && sameAddress(card.url, c.url)));
   const openedConnection = opened ? connections.find((c) => c.id === opened) : undefined;
   const askingConnection = asking ? connections.find((c) => c.id === asking) : undefined;
+  const holdingConnection = holding ? connections.find((c) => c.id === holding) : undefined;
   const start = (next: FlowStart): void => { setOpened(null); setFlow(next); };
   return (
     <PageFrame embedded={embedded} title="Connections" lede={CONNECTIONS_LEDE}>
@@ -210,6 +212,16 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
           onClose={() => setOpened(null)}
           onFlow={start}
           onDisconnect={() => setAsking(openedConnection.id)}
+          onHolders={() => setHolding(openedConnection.id)}
+        />
+      ) : null}
+      {holdingConnection && data ? (
+        <HoldersDialog
+          key={holdingConnection.id}
+          connection={holdingConnection}
+          agents={data.agents}
+          onCancel={() => setHolding(null)}
+          onDone={() => { setHolding(null); view.reload(); }}
         />
       ) : null}
       {askingConnection ? (
@@ -298,6 +310,7 @@ function ConnectionSheet({
   timezone,
   onClose,
   onFlow,
+  onHolders,
   onDisconnect,
 }: {
   connection: ConnectionView;
@@ -306,6 +319,8 @@ function ConnectionSheet({
   timezone: string;
   onClose: () => void;
   onFlow: (flow: FlowStart) => void;
+  /** Change which agents hold its tools. */
+  onHolders: () => void;
   onDisconnect: () => void;
 }): JSX.Element {
   const pending = connection.state === 'pending-review';
@@ -389,7 +404,15 @@ function ConnectionSheet({
             },
             ...(pending
               ? []
-              : [{ label: 'Held by', value: connection.agents.length === 0 ? 'No agent holds these tools yet.' : connection.agents.map(agentName).join(', ') }]),
+              : [{
+                label: 'Held by',
+                value: (
+                  <span className="connections-holders">
+                    <span>{connection.agents.length === 0 ? 'No agent holds these tools yet.' : connection.agents.map(agentName).join(', ')}</span>
+                    <Button size="sm" onClick={onHolders} aria-label="Change who holds it">{connection.agents.length === 0 ? 'Give them' : 'Change'}</Button>
+                  </span>
+                ),
+              }]),
           ]}
         />
       </div>
@@ -408,6 +431,61 @@ function ConnectionSheet({
         </div>
       ) : null}
     </Sheet>
+  );
+}
+
+/** Who holds a connection's tools: tick to give, untick to take away, in one save. */
+function HoldersDialog({
+  connection,
+  agents,
+  onCancel,
+  onDone,
+}: {
+  connection: ConnectionView;
+  agents: Array<{ id: string; name: string; frontDesk: boolean }>;
+  onCancel: () => void;
+  onDone: () => void;
+}): JSX.Element {
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(connection.agents));
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const toggle = (id: string, on: boolean): void => setPicked((set) => { const next = new Set(set); if (on) next.add(id); else next.delete(id); return next; });
+  const unchanged = picked.size === connection.agents.length && connection.agents.every((id) => picked.has(id));
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    try {
+      const result = await api.grantConnection(connection.id, [...picked], true);
+      if (result.failed.length > 0) setFailure(result.failed.map((f) => `${f.agent}: ${f.message}`).join('; '));
+      else onDone();
+    } catch (error) {
+      setFailure(failureOf(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={`Who holds ${connection.name}`}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button variant="accent" disabled={busy || unchanged} onClick={() => void save()}>Save</Button>
+        </>
+      }
+    >
+      <p className="plugins-dialog-text">Each agent you tick can use its tools; untick one to take them away. Approvals still ask as before.</p>
+      <div className="ui-stack" data-gap="sm" role="group" aria-label="Agents">
+        {agents.map((agent) => (
+          <label key={agent.id} className="backup-check">
+            <input type="checkbox" checked={picked.has(agent.id)} onChange={(event) => toggle(agent.id, event.target.checked)} />
+            <span>{agent.name}{agent.frontDesk ? ' (front desk)' : ''}</span>
+          </label>
+        ))}
+      </div>
+      <ErrorBanner message={failure} />
+    </Modal>
   );
 }
 

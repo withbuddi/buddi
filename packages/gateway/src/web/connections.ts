@@ -14,7 +14,7 @@
  *   POST   /api/connections/callback        the consent page came back: { state, code? | error? }
  *   GET    /api/connections/:id/review      3. review: the tools as buddi would take them
  *   POST   /api/connections/:id/review      3. keep them: { slug?, hash }
- *   POST   /api/connections/:id/grant       4. grant: { agents: [id] }
+ *   POST   /api/connections/:id/grant       4. grant: { agents: [id], exact?: true } (exact also takes it from agents not named)
  *   DELETE /api/connections/:id             disconnect, taking the grants out of every agent file
  *   GET    /api/connections/signals         the ones that need the owner: Home's line, the rail's dot
  *   GET    /api/connections/:id/tools       its registered tools, with whether each may be remembered
@@ -305,7 +305,21 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
   const unknown = agents.filter((a) => !known.has(a));
   if (unknown.length > 0) return { status: 400, body: { error: `No such agent: ${unknown.join(', ')}.` } };
   const result = await grantConnection(deps, view.slug, agents);
-  const refused = result.failed.length > 0 && result.granted.length === 0;
+  // `exact`: the list is who holds it now, so an agent left out loses it.
+  if (body.exact === true) {
+    const prefix = ConnectionsService.grantPrefix(view.slug);
+    for (const agent of agentsHolding(deps.registry, deps.catalog, view.slug)) {
+      if (agents.includes(agent)) continue;
+      const file = readBoundAgentFile(deps.registry, agent);
+      if (!file) continue;
+      try {
+        await updateAgentFromOwner(deps.registry, { id: agent, tools: file.tools.filter((entry) => !entry.startsWith(prefix)) });
+      } catch (err) {
+        result.failed.push({ agent, message: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+  const refused = result.failed.length > 0 && result.granted.length === 0 && agents.length > 0;
   return {
     status: refused ? 409 : 200,
     body: {

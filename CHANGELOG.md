@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Once a connection was given to agents there was no way to change who holds it. Its sheet now has Change beside "Held by": tick an agent to give it the tools, untick one to take them away, in one save.
 - The floating Buddi button covered the footer of sheets and dialogs. It steps aside while one is open.
 - A catalog service could be connected only once from the page. Its sheet now offers "Add another account" through the same sign-in, and rows with the same name show their name in buddi.
 - The approval on the canvas repeated the raw tool name three times, shouted its state, and wedged its buttons under it. It now reads like the dock: the action in words, a status pill and the expiry in a short head, the preview as its body, and the decision on the right with Approve last; the raw tool name is in the envelope's details.

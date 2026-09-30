@@ -164,6 +164,21 @@ describe('the list', () => {
     expect(screen.getByLabelText('GitHub (github_work): details')).toBeInTheDocument();
   });
 
+  it('changes who holds a connection from its sheet: tick to give, untick to take away', async () => {
+    mocked.connections.mockResolvedValue(view());
+    mocked.grantConnection.mockResolvedValue({ granted: ['ledger'], failed: [], connection: connection({ agents: ['ledger'] }) });
+    render(<Connections embedded />);
+    fireEvent.click(await screen.findByLabelText('GitHub: details'));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Change who holds it' }));
+    const dialog = await screen.findByRole('alertdialog', { name: 'Who holds GitHub' });
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Buddi (front desk)' }));
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: 'Ledger' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mocked.grantConnection).toHaveBeenCalledWith(connection().id, ['ledger'], true));
+  });
+
   it('a catalog tile opens the address screen with its address', async () => {
     mocked.connections.mockResolvedValue(view());
     render(<Connections embedded />);

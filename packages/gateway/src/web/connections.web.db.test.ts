@@ -192,6 +192,14 @@ suite('connections routes', () => {
     expect((await call(owner, 'GET', `/${id}`)).body.agents).toEqual(['concierge']);
     expect((await call(owner, 'GET', '/signals')).body).toEqual({ signals: [] });
 
+    // Changing who holds it: `exact` gives it to the named and takes it from the rest.
+    const swapped = await call(owner, 'POST', `/${id}/grant`, { agents: ['helper'], exact: true });
+    expect(swapped).toMatchObject({ status: 200, body: { granted: ['helper'], failed: [] } });
+    expect(agentFile('concierge')).not.toContain('mcp.tracker');
+    expect(agentFile('helper')).toMatch(/mcp\.tracker\.\*/);
+    expect((await call(owner, 'POST', `/${id}/grant`, { agents: ['concierge'], exact: true })).body.connection.agents).toEqual(['concierge']);
+    expect(agentFile('helper')).not.toContain('mcp.tracker');
+
     // Remembered approval, per agent: a gated tool may be; a destructive one says why not.
     const tools = await call(owner, 'GET', `/${id}/tools`);
     expect(tools.body.tools.map((t: { tool: string; tier: string; rememberable: boolean }) => [t.tool, t.tier, t.rememberable])).toEqual([
