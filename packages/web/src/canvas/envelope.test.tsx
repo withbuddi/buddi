@@ -87,7 +87,7 @@ describe('the approval view', () => {
     });
     await waitFor(() => expect(screen.getByText('Shed · Order')).toBeDefined());
     expect(screen.getByText('waiting for you')).toBeDefined();
-    expect(screen.getAllByText('shed.order')).toHaveLength(1);
+    expect(screen.queryAllByText('shed.order')).toHaveLength(0); // the canvas panel's header carries it
     const buttons = screen.getAllByRole('button').map((b) => b.textContent);
     expect(buttons.indexOf('Reject')).toBeLessThan(buttons.indexOf('Approve'));
   });
@@ -156,7 +156,8 @@ describe('the approval view', () => {
     });
     const byLabel = Object.fromEntries(fields.map((field) => [field.label, field.value]));
     expect(byLabel['List']).toBe('a, b');
-    expect(byLabel['Nested']).toBe('{"deep":1}');
+    expect(byLabel['Nested']).toBe('{\n  "deep": 1\n}');
+    expect(fields.find((field) => field.label === 'Nested')?.block).toBe(true);
     expect(byLabel['Missing']).toBe('—');
   });
 });

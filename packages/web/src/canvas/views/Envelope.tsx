@@ -81,15 +81,15 @@ export function Envelope({
   const decided = [action.decidedBy ? `by ${action.decidedBy}` : '', action.decidedVia ? `via ${action.decidedVia}` : ''].filter(Boolean).join(' ');
 
   return (
-    <div className="wb-approval">
+    <div className="wb-envelope">
       <div className="envelope">
         <dl className="envelope-head">
           <dt>Action</dt>
-          <dd className="wb-approval-action">{action.tool.split('.').map((part) => humanise(part)).join(' · ')}</dd>
+          <dd className="wb-envelope-action">{action.tool.split('.').map((part) => humanise(part)).join(' · ')}</dd>
           <dt>Status</dt>
           <dd>
             {pending ? <Pill tone="warning" dot>waiting for you</Pill> : <StatePill state={action.state} />}
-            {!pending && decided ? <span className="wb-hint"> {decided}</span> : null}
+            {!pending && decided ? <span className="wb-envelope-note"> {decided}</span> : null}
           </dd>
           <dt>{pending ? 'Expires' : 'Decided'}</dt>
           <dd>{fmtTime(pending ? action.expiresAt : action.decidedAt, timezone)}</dd>
@@ -107,9 +107,9 @@ export function Envelope({
       {pending ? controls : null}
 
       {pending ? (
-        <div className="wb-approval-decide">
-          <p className="wb-hint">{reusable ? 'Auto and Always also approve later calls to this tool in that scope; you can take it back on the agent\'s Access page.' : 'This runs the action exactly as shown above.'}</p>
-          <div className="wb-approval-buttons">
+        <div className="wb-envelope-decide">
+          <p className="wb-envelope-note">{reusable ? 'Auto and Always also approve later calls to this tool in that scope; you can take it back on the agent\'s Access page.' : 'This runs the action exactly as shown above.'}</p>
+          <div className="wb-envelope-buttons">
             <button className="ui-btn" data-variant="danger" disabled={busy !== null} onClick={() => decide('reject')}>
               {busy === 'reject' ? 'Rejecting…' : 'Reject'}
             </button>
@@ -126,15 +126,13 @@ export function Envelope({
 
       <details className="ui-details">
         <summary>The envelope, field by field</summary>
-        <dl className="ui-kv">
-          <div className="contents">
-            <dt>Tool</dt>
-            <dd className="mono">{action.tool}</dd>
-          </div>
+        <dl className="ui-kv wb-envelope-fields">
           {fields.map((field) => (
             <div key={field.label} className="contents">
               <dt>{field.label}</dt>
-              <dd className={field.mono ? 'mono' : undefined}>{field.value}</dd>
+              {field.block
+                ? <dd className="wb-envelope-block"><pre className="mono">{field.value}</pre></dd>
+                : <dd className={field.mono ? 'mono' : undefined}>{field.value}</dd>}
             </div>
           ))}
         </dl>
@@ -148,12 +146,12 @@ export function Envelope({
  * the decision itself. Nothing is dropped: an unknown key the server grew last
  * week still appears, because the alternative is approving something unseen.
  */
-export function envelopeFields(action: ApprovalRow): Array<{ label: string; value: string; mono?: boolean }> {
-  const fields: Array<{ label: string; value: string; mono?: boolean }> = [];
+export function envelopeFields(action: ApprovalRow): Array<{ label: string; value: string; mono?: boolean; block?: boolean }> {
+  const fields: Array<{ label: string; value: string; mono?: boolean; block?: boolean }> = [];
   const envelope = action.envelope;
   if (envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)) {
     for (const [key, value] of Object.entries(envelope as Record<string, unknown>)) {
-      fields.push({ label: humanise(key), value: flatten(value) });
+      fields.push(entry(humanise(key), value));
     }
   } else if (envelope !== null && envelope !== undefined) {
     fields.push({ label: 'Envelope', value: flatten(envelope) });
@@ -163,7 +161,7 @@ export function envelopeFields(action: ApprovalRow): Array<{ label: string; valu
   if (args !== null && typeof args === 'object' && !Array.isArray(args)) {
     for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
       const label = `Argument · ${humanise(key)}`;
-      if (!fields.some((field) => field.label === label)) fields.push({ label, value: flatten(value) });
+      if (!fields.some((field) => field.label === label)) fields.push(entry(label, value));
     }
   }
 
@@ -177,6 +175,12 @@ export function envelopeFields(action: ApprovalRow): Array<{ label: string; valu
   if (action.conversationId) fields.push({ label: 'Conversation', value: action.conversationId, mono: true });
   if (action.jobId) fields.push({ label: 'Job', value: action.jobId, mono: true });
   return fields;
+}
+
+/** A nested value is shown whole, indented, in its own block; everything else on one line. */
+function entry(label: string, value: unknown): { label: string; value: string; block?: boolean } {
+  const nested = value !== null && typeof value === 'object' && (!Array.isArray(value) || value.some((item) => item !== null && typeof item === 'object'));
+  return nested ? { label, value: JSON.stringify(value, null, 2), block: true } : { label, value: flatten(value) };
 }
 
 function flatten(value: unknown): string {
