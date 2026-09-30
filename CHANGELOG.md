@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.25 — 2026-09-30
+
 ### Fixed
 
 - Once a connection was given to agents there was no way to change who holds it. Its sheet now has Change beside "Held by": tick an agent to give it the tools, untick one to take them away, in one save.
