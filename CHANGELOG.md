@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- The installed app claims links to its own address (`handle_links: preferred`) and reuses its open window (`launch_handler: navigate-existing`), so "Open buddi" in the extension and any buddi link land in the app once Chrome's "Open supported links" is on for it.
 - Each release attaches `buddi-extension-<version>.zip`, the Chrome Web Store upload of the extension (the unpacked folder in the tarball is unchanged), and the dashboard is ready to recognise the store's extension id once the listing exists.
 - mlxh, local MLX models on a Mac, as a model account: Settings → Model accounts has a **mlxh, local MLX models on this Mac** choice (address filled in, no key, the model list next), and first run's "On this computer" card finds mlxh beside Ollama and starts on its first language model. `GET /api/onboarding/mlxh` says whether mlxh answers here and what it serves.
 - An mlxh account's context window follows mlxh's `max_prompt_tokens` when the server reports it, else its 8,192 default, and Settings says how to raise it; image models on mlxh are flagged in the model list as belonging to the Image plugin.
