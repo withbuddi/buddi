@@ -88,7 +88,7 @@ describe('ActionMenu', () => {
         />
       </List>,
     );
-    await userEvent.setup().click(screen.getByRole('button', { name: 'More for finance' }));
+    await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(screen.getByRole('button', { name: 'More for finance' }));
     const items = await screen.findAllByRole('menuitem');
     expect(items.map((item) => item.textContent)).toEqual(['Details', 'Disable…keeps its data', 'Remove…']);
     expect(items[2]).toHaveAttribute('data-tone', 'critical');

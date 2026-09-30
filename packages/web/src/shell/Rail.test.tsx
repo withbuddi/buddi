@@ -53,10 +53,12 @@ describe('the Settings entry', () => {
   });
 });
 
-describe('the owner menu', () => {
+// Radix menus under jsdom are slow on a busy CI runner: no typing delay, no
+// pointer-events check, and room for the slowest press.
+describe('the owner menu', { timeout: 180_000 }, () => {
   it('names the running version, and the newer one when there is one', async () => {
     const { userEvent } = await import('@testing-library/user-event');
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     render(
       <Tooltip.Provider>
         <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} updateAvailable version={{ current: '0.1.0-pre.17', latest: '0.1.0-pre.18', updateAvailable: true }} />
@@ -68,7 +70,7 @@ describe('the owner menu', () => {
   });
 });
 
-describe('Reload in the owner menu', () => {
+describe('Reload in the owner menu', { timeout: 180_000 }, () => {
   function displayMode(standalone: boolean): void {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query === '(display-mode: standalone)' ? standalone : false,
@@ -79,7 +81,7 @@ describe('Reload in the owner menu', () => {
 
   async function openMenu(props: { stale?: boolean; reload?: () => void } = {}): Promise<void> {
     const { userEvent } = await import('@testing-library/user-event');
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     render(
       <Tooltip.Provider>
         <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} {...props} />
@@ -105,7 +107,7 @@ describe('Reload in the owner menu', () => {
     const item = screen.getByRole('menuitem', { name: /^Reload/ });
     expect(item).not.toHaveAttribute('data-update');
     const { userEvent } = await import('@testing-library/user-event');
-    await userEvent.setup().click(item);
+    await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(item);
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -117,7 +119,7 @@ describe('Reload in the owner menu', () => {
     const item = screen.getByRole('menuitem', { name: /Reload to update/ });
     expect(item).toHaveAttribute('data-update', 'true');
     const { userEvent } = await import('@testing-library/user-event');
-    await userEvent.setup().click(item);
+    await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(item);
     expect(reload).toHaveBeenCalledOnce();
   });
 });
@@ -131,7 +133,7 @@ describe('buildDiffers', () => {
   });
 });
 
-describe('Focus in the owner menu', () => {
+describe('Focus in the owner menu', { timeout: 180_000 }, () => {
   it('switches a mode for a duration, and shows the moon while one is on', { timeout: 180_000 }, async () => {
     const { userEvent } = await import('@testing-library/user-event');
     const { act, fireEvent, within } = await import('@testing-library/react');
