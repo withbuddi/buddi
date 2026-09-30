@@ -80,6 +80,18 @@ describe('the approval view', () => {
     expect(screen.getByText('Argument · Sku')).toBeDefined();
   });
 
+  it('reads as a head, the preview and a decision: the action in words, the raw tool name only in the envelope', async () => {
+    stubFetch(() => new Response(JSON.stringify({ action }), { status: 200 }));
+    await act(async () => {
+      render(<Envelope props={{ approvalId: 'act-99' }} timezone="UTC" />);
+    });
+    await waitFor(() => expect(screen.getByText('Shed · Order')).toBeDefined());
+    expect(screen.getByText('waiting for you')).toBeDefined();
+    expect(screen.getAllByText('shed.order')).toHaveLength(1);
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(buttons.indexOf('Reject')).toBeLessThan(buttons.indexOf('Approve'));
+  });
+
   it('approves through the existing route, with the CSRF header', async () => {
     // The cookie is named after this page's port; another dashboard on the
     // same host leaves its own beside it, which must not be the one sent.

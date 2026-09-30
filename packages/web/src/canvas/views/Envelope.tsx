@@ -16,7 +16,7 @@ import { api, ApiError, type ApprovalRow } from '../../api';
 import { fmtTime } from '../../format';
 import { humanise } from '../resolve';
 import { fmtValue } from '../format';
-import { ErrorBanner } from '../../ui';
+import { ErrorBanner, Pill, StatePill } from '../../ui';
 import { useOwnerChoices } from '../../views/parts/OwnerChoices';
 import type { EnvelopeProps } from '../types';
 
@@ -78,24 +78,27 @@ export function Envelope({
   const fields = envelopeFields(action);
   const longPreview = (action.preview ?? '').split('\n').length > 12 || (action.preview ?? '').length > 900;
 
+  const decided = [action.decidedBy ? `by ${action.decidedBy}` : '', action.decidedVia ? `via ${action.decidedVia}` : ''].filter(Boolean).join(' ');
+
   return (
-    <div>
-      <div className="ui-stats" data-inline="true">
-        <div>
-          <div className="ui-stat-k">Tool</div>
-          <div className="ui-stat-v mono">{action.tool}</div>
-        </div>
-        <div>
-          <div className="ui-stat-k">State</div>
-          <div className="ui-stat-v" data-tone={stateTone(action.state)}>
-            {action.state}
-          </div>
-        </div>
-        <div>
-          <div className="ui-stat-k">{pending ? 'Expires' : 'Decided'}</div>
-          <div className="ui-stat-v" data-size="sm">
-            {fmtTime(pending ? action.expiresAt : action.decidedAt, timezone)}
-          </div>
+    <div className="wb-approval">
+      <div className="envelope">
+        <dl className="envelope-head">
+          <dt>Action</dt>
+          <dd className="wb-approval-action">{action.tool.split('.').map((part) => humanise(part)).join(' · ')}</dd>
+          <dt>Status</dt>
+          <dd>
+            {pending ? <Pill tone="warning" dot>waiting for you</Pill> : <StatePill state={action.state} />}
+            {!pending && decided ? <span className="wb-hint"> {decided}</span> : null}
+          </dd>
+          <dt>{pending ? 'Expires' : 'Decided'}</dt>
+          <dd>{fmtTime(pending ? action.expiresAt : action.decidedAt, timezone)}</dd>
+        </dl>
+        <div className="envelope-body" data-clamp={longPreview && !showAll ? 'true' : undefined}>
+          {action.preview || '(this tool wrote no preview)'}
+          {longPreview && !showAll ? (
+            <button type="button" className="wb-doc-more" onClick={() => setShowAll(true)}>Show the whole preview</button>
+          ) : null}
         </div>
       </div>
 
@@ -104,47 +107,30 @@ export function Envelope({
       {pending ? controls : null}
 
       {pending ? (
-        <div className="wb-row-wrap wb-block">
-          <button
-            className="ui-btn"
-            data-variant="good"
-            disabled={busy !== null}
-            onClick={() => decide('approve')}
-          >
-            {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
-          </button>
-          {reusable ? <>
-            <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</button>
-            <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'always')}>Always: this agent</button>
-          </> : null}
-          <button
-            className="ui-btn"
-            data-variant="danger"
-            disabled={busy !== null}
-            onClick={() => decide('reject')}
-          >
-            {busy === 'reject' ? 'Rejecting…' : 'Reject'}
-          </button>
-          <span className="wb-hint">{reusable ? 'Auto-mode and Always also approve future calls to this tool within that scope. Host permissions can be revoked under Host execution.' : 'This runs the action exactly as printed above.'}</span>
+        <div className="wb-approval-decide">
+          <p className="wb-hint">{reusable ? 'Auto and Always also approve later calls to this tool in that scope; you can take it back on the agent\'s Access page.' : 'This runs the action exactly as shown above.'}</p>
+          <div className="wb-approval-buttons">
+            <button className="ui-btn" data-variant="danger" disabled={busy !== null} onClick={() => decide('reject')}>
+              {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+            </button>
+            {reusable ? <>
+              <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'conversation')}>Auto: this conversation</button>
+              <button className="ui-btn" disabled={busy !== null} onClick={() => decide('approve', 'always')}>Always: this agent</button>
+            </> : null}
+            <button className="ui-btn" data-variant="good" disabled={busy !== null} onClick={() => decide('approve')}>
+              {busy === 'approve' ? 'Approving…' : reusable ? 'Allow once' : 'Approve'}
+            </button>
+          </div>
         </div>
-      ) : (
-        <p className="muted">
-          {action.state} {action.decidedBy ? `by ${action.decidedBy}` : ''}{' '}
-          {action.decidedVia ? `via ${action.decidedVia}` : ''}
-        </p>
-      )}
+      ) : null}
 
-      <h4 className="ui-stat-k wb-label">Preview</h4>
-      <div className="wb-doc wb-block" data-clamp={longPreview && !showAll ? 'true' : undefined}>
-        {action.preview || '(this tool wrote no preview)'}
-        {longPreview && !showAll ? (
-          <button type="button" className="wb-doc-more" onClick={() => setShowAll(true)}>Show the whole preview</button>
-        ) : null}
-      </div>
-
-      <details className="ui-details wb-block">
+      <details className="ui-details">
         <summary>The envelope, field by field</summary>
         <dl className="ui-kv">
+          <div className="contents">
+            <dt>Tool</dt>
+            <dd className="mono">{action.tool}</dd>
+          </div>
           {fields.map((field) => (
             <div key={field.label} className="contents">
               <dt>{field.label}</dt>

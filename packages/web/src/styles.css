@@ -2132,6 +2132,19 @@ a.wb-composer-model:hover { border-color: var(--line); background: var(--surface
   overflow: auto;
   position: relative;
 }
+/* ---- the approval on the canvas: a head, the preview as its body, the decision on the right ---- */
+.wb-approval { display: flex; flex-direction: column; gap: var(--space-4); }
+.envelope { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); overflow: hidden; }
+.envelope-head { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-3); margin: 0; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); font-size: var(--text-md); align-items: baseline; }
+.envelope-head dt { color: var(--text-muted); font-size: var(--text-sm); }
+.envelope-head dd { margin: 0; min-width: 0; }
+.wb-approval-action { font-weight: var(--weight-semibold); }
+.envelope-body { position: relative; padding: var(--space-4); font-size: var(--text-base); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.envelope-body[data-clamp='true'] { max-height: 260px; overflow: hidden; padding-bottom: 44px; }
+.envelope-body .wb-doc-more { background: linear-gradient(to bottom, transparent, var(--surface) 55%); }
+.wb-approval-decide { display: flex; flex-direction: column; gap: var(--space-2); }
+.wb-approval-decide .wb-hint { margin: 0; }
+.wb-approval-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 /* A long preview shows its first screen and says there is more. */
 .wb-doc[data-clamp='true'] { max-height: 260px; overflow: hidden; padding-bottom: 44px; }
 .wb-doc-more {
