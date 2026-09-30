@@ -819,8 +819,17 @@ function buildAgent(
   /** The ids an open allowlist ("everyone") resolves to. */
   openTargets: readonly string[] = [],
 ): CatalogAgent {
+  /*
+   * The front desk may always tell the owner something (`owner.notify`), the
+   * way every agent may read the time: it is the agent the owner talks to, and
+   * a file written before the tool existed must not leave it unable to answer
+   * "send me that on my phone". Optional, so a registry without the tool loads
+   * it unchanged; mute and "off" in Notifications still apply.
+   */
+  const frontDesk = (frontmatter.roles ?? []).includes('front-desk');
+  const holdsNotify = frontmatter.tools.some((grant) => /^owner\.(\*|notify)\??$/.test(grant));
   const { tools: granted, missingFamilies, disabledFamilies } = resolveToolGrants(
-    frontmatter.tools,
+    frontDesk && !holdsNotify ? [...frontmatter.tools, 'owner.notify?'] : frontmatter.tools,
     opts.registry,
     frontmatter.id,
     new Set(opts.disabledPlugins ?? []),

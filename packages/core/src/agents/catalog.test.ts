@@ -1247,3 +1247,26 @@ describe('tools registered while buddi runs', () => {
     expect(() => resolveToolNames(['mcp.github.*'], registry, 'x')).toThrow(/"mcp\.github\.\*"/);
   });
 });
+
+describe('the front desk and owner.notify', () => {
+  const desk = agentFile('id: desk\nhandle: desk\nname: Desk\ndescription: The desk.\nroles: [front-desk]\ntools: [notes.search]');
+  const other = agentFile('id: helper\nhandle: helper\nname: Helper\ndescription: Helps.\ntools: [notes.search]');
+  const load = (names: string[]) => loadAgentCatalog({
+    dir: catalogDir({ desk, helper: other }),
+    registry: registryOf(names),
+    env: {}, providerSelection: anthropicAccount({}),
+    log: () => {},
+  });
+
+  it('holds it without a line in its file, while any other agent needs the grant', () => {
+    const catalog = load(['notes.search', 'owner.notify']);
+    expect(catalog.get('desk')?.tools).toContain('owner.notify');
+    expect(catalog.get('helper')?.tools).not.toContain('owner.notify');
+  });
+
+  it('loads unchanged on an installation without the tool', () => {
+    const catalog = load(['notes.search']);
+    expect(catalog.get('desk')?.tools).toEqual(['notes.search']);
+    expect(catalog.get('desk')?.heldBack).toBeUndefined();
+  });
+});
