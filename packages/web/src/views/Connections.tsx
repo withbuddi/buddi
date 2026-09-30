@@ -32,7 +32,7 @@ import {
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { Button, Card, Code, Details, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
-import { looksSecret, parsePastedServer, type PastedConfig, type PastedHeader, type PastedProgram } from '@buddi/core/connection-config';
+import { looksSecret, parsePastedServer, shellWords, type PastedConfig, type PastedHeader, type PastedProgram } from '@buddi/core/connection-config';
 import { SignInCode } from './parts/SignInCode';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
@@ -912,7 +912,17 @@ export function ProgramStep({
     : (pasted?.env ?? []).map((e) => ({ key: next(), name: e.name, value: e.value, secret: e.secret, kept: false }))));
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const words = [command.trim(), ...args.map((a) => a.value)].filter((w, i) => i > 0 || w !== '');
+  // A whole line typed into Command ("npx -y @trokky/mcp@3") is a command and
+  // its first arguments, split as a shell would; the form shows it that way.
+  const typed = /\s/.test(command.trim()) ? shellWords(command.trim()) : [command.trim()];
+  const head = typed[0] ?? '';
+  const allArgs = [...typed.slice(1), ...args.map((a) => a.value)];
+  const words = [head, ...allArgs].filter((w, i) => i > 0 || w !== '');
+  const unfold = (): void => {
+    if (typed.length < 2) return;
+    setCommand(head);
+    setArgs((rows) => [...typed.slice(1).map((value) => ({ key: next(), value })), ...rows]);
+  };
   const line = words.map(shellQuoted).join(' ');
   const missing = env.filter((e) => e.secret && e.value === '' && !e.kept).map((e) => e.name || 'a variable');
   const placeholders = (pasted?.env ?? []).filter((e) => e.placeholder).map((e) => e.name);
@@ -925,8 +935,8 @@ export function ProgramStep({
     setFailure(null);
     const form: ProgramForm = {
       name: name.trim(),
-      command: command.trim(),
-      args: args.map((a) => a.value),
+      command: head,
+      args: allArgs,
       env: env.filter((e) => e.name.trim() !== '').map((e) => ({ name: e.name.trim(), value: e.value, secret: e.secret })),
     };
     try {
@@ -950,8 +960,8 @@ export function ProgramStep({
         <Field label="Name">
           <input required autoFocus={!pasted && !connection} maxLength={80} spellCheck={false} value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
-        <Field label="Command" hint="The program that starts the server: npx, uvx, node, or a full path.">
-          <input required spellCheck={false} autoComplete="off" className="mono" value={command} placeholder="npx" onChange={(event) => setCommand(event.target.value)} />
+        <Field label="Command" hint="The program that starts the server: npx, uvx, node, or a full path. A whole line is split into it and its arguments.">
+          <input required spellCheck={false} autoComplete="off" className="mono" value={command} placeholder="npx" onChange={(event) => setCommand(event.target.value)} onBlur={unfold} />
         </Field>
       </FormGrid>
       <Field label="Arguments" group hint="One per row, exactly as the server's docs give them. No shell: quotes and $VARIABLES are passed as they are.">

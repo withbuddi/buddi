@@ -393,6 +393,23 @@ describe('the callback tab', () => {
       expect(screen.getByText('mcp.trokky.list')).toBeInTheDocument();
     });
 
+    it('splits a whole line typed into Command into the command and its arguments', async () => {
+      mocked.addProgram.mockResolvedValue({ connection: program(), signIn: 'none' });
+      mocked.connectionReview.mockResolvedValue({ ...REVIEW, connection: program(), slug: 'trokky', host: 'this computer', program: program().program, tools: [] });
+      render(<ConnectFlow start={{ step: 'program' }} agents={AGENTS} onClose={() => {}} />);
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Trokky' } });
+      fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'npx -y @trokky/mcp@3' } });
+      expect(screen.getByLabelText('The command line')).toHaveTextContent('npx -y @trokky/mcp@3');
+      expect(screen.getByLabelText('The command line')).not.toHaveTextContent("'");
+      fireEvent.blur(screen.getByLabelText('Command'));
+      expect(screen.getByLabelText('Command')).toHaveValue('npx');
+      expect(screen.getByLabelText('Argument 1')).toHaveValue('-y');
+      expect(screen.getByLabelText('Argument 2')).toHaveValue('@trokky/mcp@3');
+      fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'npx -y @trokky/mcp@3' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(mocked.addProgram).toHaveBeenCalledWith(expect.objectContaining({ command: 'npx', args: ['-y', '@trokky/mcp@3', '-y', '@trokky/mcp@3'] })));
+    });
+
     it('reads a pasted claude mcp add line into the form, nothing recorded until Continue', async () => {
       render(<ConnectFlow start={{ step: 'paste' }} agents={AGENTS} onClose={() => {}} />);
       fireEvent.change(screen.getByLabelText('Config'), {
