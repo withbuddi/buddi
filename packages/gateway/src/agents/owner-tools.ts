@@ -31,6 +31,10 @@ import {
   getOnboarding,
   getOwnerProfile,
   isKnownTimezone,
+  AGENT_TEXT_MAX,
+  AGENT_TITLE_MAX,
+  checkAgentLink,
+  notifyFromAgent,
   markStepDone,
   setOwnerProfile,
   updateAgentFrontmatter,
@@ -180,8 +184,58 @@ const renameInput = z
   })
   .strict();
 
+/** The one tool here an agent uses after the first run: telling the owner something now. */
+export const NOTIFY_TOOL = 'owner.notify';
+
+const notifyInput = z
+  .object({
+    title: z
+      .string()
+      .trim()
+      .min(1)
+      .max(AGENT_TITLE_MAX)
+      .describe('One line, what the owner sees first: "The parcel was delivered".'),
+    text: z
+      .string()
+      .max(AGENT_TEXT_MAX)
+      .optional()
+      .describe('A few plain lines under the title, when the title is not enough. No markdown.'),
+    urgency: z
+      .enum(['now', 'today'])
+      .optional()
+      .describe('"now" (the default) reaches them at once; "today" waits for their end-of-day message.'),
+    link: z
+      .string()
+      .optional()
+      .describe('A dashboard route to open, like "#/chat/<agent>/<conversation>". Never an outside address.'),
+    key: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .optional()
+      .describe('Your own name for this message, so a retry or a loop sends it once: "parcel-delivered".'),
+  })
+  .strict();
+
 /**
- * The four tools. No state of its own: the profile and the state machine are
+ * Is the owner in the conversation that called the tool? An owner request is
+ * stamped only at an authenticated owner input boundary — a line typed on the
+ * dashboard, on Telegram or at the terminal, or an approval they decided —
+ * and never on a mission, a watcher, a source or a reminder. A delegate runs
+ * in another conversation, so it does not count.
+ */
+export function interactiveTurn(ctx: CoreToolContext): boolean {
+  return Boolean(
+    ctx.ownerRequest &&
+      ctx.ownerRequest.expiresAt > Date.now() &&
+      ctx.conversationId &&
+      (ctx.delegationDepth ?? 0) === 0,
+  );
+}
+
+/**
+ * The five tools. No state of its own: the profile and the state machine are
  * core's rows, and the agent file is the one the catalog loaded.
  */
 export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
@@ -347,12 +401,51 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
     },
   };
 
+  const notify: ToolDefinition<z.infer<typeof notifyInput>, unknown> = {
+    name: NOTIFY_TOOL,
+    description:
+      'Tell the owner something now, on the channel they chose (usually Telegram): when they ask to be ' +
+      'pinged, messaged or told on their phone, or when something they asked to hear about happens in the ' +
+      'middle of your run. Never use it to repeat what your reply already says. It answers where the message ' +
+      'went, in a sentence you can repeat to the owner as it is. Plain text only; it is shown as ' +
+      '"@you: title". Limits: 6 urgent messages an hour (more wait for the end of the day) and 20 a day.',
+    tier: 'auto',
+    input: notifyInput,
+    async execute(input, ctx: CoreToolContext) {
+      const agentId = ctx.agentId ?? '';
+      if (agentId === '') {
+        return { ok: false, reason: 'unknown-self', delivered: 'not sent: this run does not say which agent it is' };
+      }
+      if (input.link) {
+        const problem = checkAgentLink(input.link);
+        if (problem) return { ok: false, reason: 'invalid-link', delivered: `not sent: ${problem}` };
+      }
+      const handle = bound()?.catalog.get(agentId)?.handle;
+      const result = await notifyFromAgent(ctx.db, { now: ctx.now, timezone: ctx.timezone }, {
+        agentId,
+        ...(handle ? { agentHandle: handle } : {}),
+        title: input.title,
+        ...(input.text ? { text: input.text } : {}),
+        urgency: input.urgency ?? 'now',
+        ...(input.link ? { link: input.link } : {}),
+        ...(input.key ? { key: input.key } : {}),
+        interactive: interactiveTurn(ctx),
+      });
+      return {
+        ok: result.ok,
+        ...(result.ok ? {} : { reason: result.outcome }),
+        delivered: result.delivered,
+        ...(result.updated ? { updated: true } : {}),
+      };
+    },
+  };
+
   return {
     name: OWNER_PLUGIN,
     version: '0.1.0',
-    // The rows are core's (migration 013): this manifest only exposes them.
+    // The rows are core's (migrations 013 and 043): this manifest only exposes them.
     schema: 'core',
     migrationsDir: '',
-    tools: [getProfile, setProfile, renameMe, finish],
+    tools: [getProfile, setProfile, renameMe, finish, notify],
   };
 }

@@ -1,7 +1,7 @@
 ---
 title: "Notifications"
 status: reference
-updated: 2026-09-28
+updated: 2026-09-30
 ---
 
 # Notifications
@@ -24,6 +24,7 @@ a channel only carries it.
 | `failure` | Background jobs died and will not be retried. | `now` |
 | `recap` | A mission's report, the weekly recap, the learning digest, the answer to an action you tapped. | `now` |
 | `plugin` | A plugin that declared `owner:notify` has something to say, or an agent proposed a skill, a rule or a change to its file (on Telegram, a card with Keep and Discard). | its choice; `today` for a proposal |
+| `agent` | An agent told you something itself, with `owner.notify` ("Messages from your agents", below). | its choice: `now` or `today` |
 
 A mission that decides to stay silent sends nothing and writes nothing here.
 
@@ -66,6 +67,53 @@ A mission that decides to stay silent sends nothing and writes nothing here.
 
 Titles and text are scrubbed for your stored secrets before they are kept
 or sent. Where you are is never sent anywhere.
+
+## Messages from your agents
+
+`owner.notify` is a built-in tool (tier `auto`) an agent uses when you ask to
+be told, pinged or messaged now, or when something you asked to hear about
+happens in the middle of its run. It is not for repeating what its reply
+already says; every agent that holds it is told so.
+
+| Input | |
+| --- | --- |
+| `title` | One line, at most 80 characters. |
+| `text` | Optional, at most 1,000 characters, plain text. |
+| `urgency` | `now` (the default) or `today`. |
+| `link` | Optional: a dashboard route (`#/…`). An outside address is refused; it may appear in `text` as text. |
+| `key` | Optional: the agent's own dedupe key, kept as `agent:<id>:<key>`, so a retry sends once. |
+
+It is a kind like any other, `agent`, and your routing applies to it
+unchanged: urgency, the ten-minute hold, the end of the day, a focus, the
+rate rule on a key, and your channel. What is its own:
+
+- **Signed.** Every channel shows it as "@handle: title", then the text, as
+  plain text: no markdown rendered, no buttons, no offers. It cannot pass for
+  buddi or for an approval. It is never folded into another agent's message
+  about the same thing.
+- **The interactive exception.** When the turn that calls it is one you are
+  in (a line you typed on the dashboard, on Telegram or at the terminal, or an
+  approval you just decided, not a delegate's), a `now` message skips the
+  on-dashboard hold and goes to your channel at once: you just asked for it
+  there. A focus still holds it. Missions, watchers, sources and reminders
+  keep the hold.
+- **Limits, per agent.** 6 `now` messages an hour; more are lowered to
+  `today`. 20 messages a day; more are refused.
+- **Settings → Notifications, "Messages from your agents".** On or off (off
+  is the kind's `off`: kept here, never sent), the highest urgency they may
+  use (`now`, or End of the day, which lowers every `now` to `today`), and a
+  mute per agent. The mute is also on the agent's Setup → Tools tab, next to
+  its grant. A muted agent is refused and told not to try another way.
+- **What the agent is told.** The tool answers where the message went, in a
+  sentence the agent can repeat: "sent to Telegram"; "shown on the dashboard,
+  and sent to Telegram if unseen in 10 minutes"; "in today's end-of-day
+  message"; "lowered to today: you sent more than 6 of these this hour";
+  "lowered to today by the owner's settings"; "held while the owner is in Do
+  not disturb"; "not sent: messages from agents are off"; "refused: the owner
+  has muted messages from @x"; "refused: you already sent 20 messages today".
+
+The front desk and the first assistant hold it, as do the starter agents;
+another agent is given it on its Tools tab.
 
 ## On the dashboard
 
@@ -135,6 +183,7 @@ is a complete answer.
 | Focus schedules | none | `{ mode, days, from, to }`: `do-not-disturb` or `urgent-only`, days `mon`…`sun`, times on your clock. |
 | Focus | off | The one you switched on by hand: `{ mode, until, startedAt, by }`, `by` being `dashboard`, `telegram` or `schedule`. Set only through its own endpoint and `/focus`, never by saving the page. |
 | End of day | `18:00` | When the day's held items go out. |
+| Messages from your agents | `now`, nobody muted | `agent_messages`: `{ maxUrgency, muted }`. On or off is `perKind.agent`. A save that leaves it out keeps what is stored. |
 
 ## Telegram
 
@@ -226,7 +275,11 @@ In core:
 ```ts
 notifyOwner(pool, { now?, timezone? }, {
   kind, urgency, title, text?, link?: { route }, offers?, dedupeKey?, agentId?,
+  immediate?, agentHandle?,
 }): Promise<{ id, state, channel, error, deduped, lowered }>
+notifyFromAgent(pool, deps, { agentId, agentHandle?, title, text?, urgency?, link?, key?, interactive? })
+  // → { ok, outcome, delivered, id?, updated? }: owner.notify's core half
+setAgentMuted(pool, agentId, muted)
 notificationsTick(pool, deps, now)   // the gateway runs it every 60 s
 setFocus(pool, deps, { mode, duration?, by }), readFocusState(pool, deps)
 markSeen(pool, id), markActed(pool, id), listNotifications(pool, { limit })
@@ -250,6 +303,7 @@ The dashboard's endpoints:
 | `PUT /api/notifications/settings` | The whole value replaced; 400 with a sentence when it cannot be. |
 | `GET /api/notifications/focus` | `{ focus }`: `{ mode, until, startedAt, by }` in force now, manual or scheduled, or null. |
 | `PUT /api/notifications/focus` `{ mode, duration? }` | `{ focus }` after the switch. `mode` is `do-not-disturb`, `urgent-only`, or `normal` to turn it off; `duration` is `1h`, `3h`, `tomorrow` or `indefinite` (the default). 400 with a sentence otherwise. |
+| `POST /api/notifications/agent-mute` `{ agentId, muted }` | `{ agents }` after the change: one agent's messages muted or not, the rest of the settings left alone. |
 | `POST /api/notifications/test` `{ channel }` | `{ ok: true }` once that channel took one line; 404 for a channel that is not there, 502 with a sentence when it refused. Not recorded. |
 | `GET /api/telegram/bot` | `{ configured, running, username }`. The running bot's name, else Telegram is asked; null when it does not answer. |
 | `GET /api/telegram/devices` | `{ devices: [{ id, name, userId, pairedAt, lastSeenAt }] }`, the paired Telegram phones, oldest first. |

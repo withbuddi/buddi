@@ -75,8 +75,14 @@ export async function systemContext(
   ]);
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
-    (owner === '' ? '' : `\n\n${owner}`) + (learning === '' ? '' : `\n\n${learning}`) };
+    (owner === '' ? '' : `\n\n${owner}`) + (learning === '' ? '' : `\n\n${learning}`) +
+    (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') };
 }
+
+/** For an agent that holds `owner.notify`: when to use it, and when not. */
+export const NOTIFY_LINE =
+  'Use owner.notify when the owner asks to be told, pinged or messaged now, or when something they asked to hear ' +
+  'about happens in the middle of a run; say where it went using its answer. Never use it to repeat what your reply already says.';
 
 /**
  * Who the owner is, in their own words, for every agent. Only what they set:

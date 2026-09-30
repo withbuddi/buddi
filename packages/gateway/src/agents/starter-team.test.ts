@@ -27,7 +27,7 @@ describe('the starter catalogue', () => {
     }
   });
 
-  it('grants only memory, reminders, schedules, the web and browser.status, and every tool exists', () => {
+  it('grants only memory, reminders, schedules, owner.notify, the web and browser.status, and every tool exists', () => {
     const registry = createToolRegistry({});
     const installed = new Set(registry.list().map((t) => t.name));
     for (const agent of starterAgents()) {
@@ -35,15 +35,15 @@ describe('the starter catalogue', () => {
       expect(tools.length, agent.id).toBeGreaterThan(0);
       for (const name of tools) {
         expect(installed.has(name), `${agent.id}: ${name}`).toBe(true);
-        expect(name, `${agent.id}: ${name}`).toMatch(/^(memory|reminder|schedule|web)\.|^browser\.status$/);
+        expect(name, `${agent.id}: ${name}`).toMatch(/^(memory|reminder|schedule|web)\.|^browser\.status$|^owner\.notify$/);
       }
       for (const family of agent.tools) expect(family).not.toMatch(/^(email|finance|host|platform)\.|browser\.act/);
     }
     expect(starterAgents().find((a) => a.id === 'scout')?.tools).toContain('web.*');
-    expect(starterAgents().find((a) => a.id === 'keeper')?.tools).toEqual(['memory.*', 'reminder.*']);
+    expect(starterAgents().find((a) => a.id === 'keeper')?.tools).toEqual(['memory.*', 'reminder.*', 'owner.notify']);
     // Weather and calendar only if provided: without those plugins Planner loads with the rest.
     expect(starterAgents().find((a) => a.id === 'planner')?.tools).toEqual([
-      'memory.*', 'reminder.*', 'schedule.*', 'weather.*?', 'calendar.*?',
+      'memory.*', 'reminder.*', 'schedule.*', 'owner.notify', 'weather.*?', 'calendar.*?',
     ]);
   });
 

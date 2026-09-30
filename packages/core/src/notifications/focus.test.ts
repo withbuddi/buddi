@@ -22,9 +22,9 @@ const focusOf = (mode: Exclude<FocusMode, 'normal'>): FocusState => ({ mode, unt
 
 describe('the routing table', () => {
   const expected: Record<FocusMode, Record<NotificationKind, 'deliver' | 'held'>> = {
-    normal: { approval: 'deliver', question: 'deliver', watcher: 'deliver', reminder: 'deliver', failure: 'deliver', recap: 'deliver', plugin: 'deliver' },
-    'urgent-only': { approval: 'deliver', question: 'deliver', watcher: 'deliver', reminder: 'held', failure: 'deliver', recap: 'held', plugin: 'held' },
-    'do-not-disturb': { approval: 'deliver', question: 'deliver', watcher: 'held', reminder: 'held', failure: 'held', recap: 'held', plugin: 'held' },
+    normal: { approval: 'deliver', question: 'deliver', watcher: 'deliver', reminder: 'deliver', failure: 'deliver', recap: 'deliver', plugin: 'deliver', agent: 'deliver' },
+    'urgent-only': { approval: 'deliver', question: 'deliver', watcher: 'deliver', reminder: 'held', failure: 'deliver', recap: 'held', plugin: 'held', agent: 'held' },
+    'do-not-disturb': { approval: 'deliver', question: 'deliver', watcher: 'held', reminder: 'held', failure: 'held', recap: 'held', plugin: 'held', agent: 'held' },
   };
   for (const mode of ['normal', 'urgent-only', 'do-not-disturb'] as const) {
     it(`routes each now kind in ${mode}`, () => {

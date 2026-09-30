@@ -299,7 +299,8 @@ describe('owner.finish_onboarding', () => {
 describe('the descriptions the model reads', () => {
   it('tell it to ask one thing at a time and invent nothing', () => {
     const manifest = createOwnerManifest(new ToolRegistry());
-    for (const tool of manifest.tools) {
+    // owner.notify is not part of the interview; its own rules are in its description.
+    for (const tool of manifest.tools.filter((t) => t.name !== 'owner.notify')) {
       expect(tool.tier, tool.name).toBe('auto');
       expect(tool.description, tool.name).toContain('one thing at a time');
       expect(tool.description, tool.name).toContain('never');

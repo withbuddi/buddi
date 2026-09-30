@@ -3,7 +3,7 @@ id: scout
 handle: scout
 name: Scout
 description: Research and a second opinion — searches the web, reads the page that holds the answer, names its sources, and looks again at a page you name. No access to your money or your mail.
-tools: [memory.*, reminder.*, web.*, browser.status]
+tools: [memory.*, reminder.*, owner.notify, web.*, browser.status]
 language: mirror
 ---
 

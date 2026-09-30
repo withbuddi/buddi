@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ToolRegistry, type CoreToolContext } from '@buddi/core';
-import { createSystemManifest, hostFacts, systemContext, systemTime } from './system-context.js';
+import { createSystemManifest, hostFacts, NOTIFY_LINE, systemContext, systemTime } from './system-context.js';
 
 function fixture(timezone: string | null = 'America/Los_Angeles') {
   const query = vi.fn().mockResolvedValue({ rows: [{ timezone }] });
@@ -16,6 +16,11 @@ describe('shared platform context', () => {
     ctx.now = () => new Date('2026-09-19T03:00:00Z');
     expect(await systemTime(ctx)).toMatchObject({ timezone: 'Asia/Tokyo', utc: '2026-09-19T03:00:00.000Z' });
     expect(ctx.timezone).toBe('Europe/Paris');
+  });
+  it('tells only an agent holding owner.notify when to use it', async () => {
+    const { ctx } = fixture();
+    expect((await systemContext(ctx, { agentId: 'scout', tools: ['owner.notify'] })).prompt).toContain(NOTIFY_LINE);
+    expect((await systemContext(ctx, { agentId: 'scout', tools: ['memory.remember'] })).prompt).not.toContain('owner.notify');
   });
   it('falls back explicitly for missing, invalid or unavailable profiles', async () => {
     const { ctx, query } = fixture(null);

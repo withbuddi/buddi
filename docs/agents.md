@@ -16,6 +16,16 @@ the agent loads with the rest. Procedures it follows sit
 beside it in `skills/`. Your agents live in your private agents directory;
 Agent Father writes them there, and every write waits for your approval.
 
+## Telling the owner now
+
+`owner.notify` lets an agent message the owner itself, on the channel they
+chose ("sent to Telegram"), within limits and settings the owner controls:
+6 urgent messages an hour, 20 a day, a switch for all of them, and a mute per
+agent on its Tools tab. It is shown as "@handle: title", plain text. The
+front desk, the first assistant and the starter agents hold it; give it to
+another agent on its Tools tab. See [notifications.md](notifications.md),
+"Messages from your agents".
+
 ## Placeholders in the persona
 
 The persona may use one placeholder, `{{today}}`. buddi replaces it with the
@@ -41,9 +51,9 @@ on a schedule, buddi ships a starter team you add in one tap.
 | Keeper | Remembers one domain's history you choose: the car, the house, a project. | a brain | — |
 
 Their grants stay inside what a brain alone allows: Scout holds `memory.*`,
-`reminder.*`, `web.*` and `browser.status`; Planner `memory.*`, `reminder.*`
-and `schedule.*`, plus `weather.*?` and `calendar.*?`, which hold only when
-those plugins are installed; Keeper `memory.*` and `reminder.*`. None of them reaches
+`reminder.*`, `owner.notify`, `web.*` and `browser.status`; Planner `memory.*`, `reminder.*`,
+`schedule.*` and `owner.notify`, plus `weather.*?` and `calendar.*?`, which hold only when
+those plugins are installed; Keeper `memory.*`, `reminder.*` and `owner.notify`. None of them reaches
 mail, money, this computer's shell or the browser's controls. Keeper asks, in
 its first message, which domain it keeps, and remembers the answer; its name
 on the roster stays Keeper.

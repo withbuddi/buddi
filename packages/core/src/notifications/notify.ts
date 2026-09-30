@@ -79,7 +79,15 @@ type Route =
  */
 export function route(
   message: Pick<OwnerMessage, 'kind' | 'urgency'>,
-  ctx: { now: Date; timezone: string; settings: NotificationSettings; onDashboard: boolean; focus: FocusState | null },
+  ctx: {
+    now: Date;
+    timezone: string;
+    settings: NotificationSettings;
+    onDashboard: boolean;
+    focus: FocusState | null;
+    /** Skip the on-dashboard hold (`OwnerMessage.immediate`). A focus still holds. */
+    immediate?: boolean;
+  },
 ): Route {
   const always = ALWAYS_REACH.has(message.kind);
   if (!always && ctx.settings.perKind[message.kind] === 'off') return { state: 'stored' };
@@ -87,13 +95,24 @@ export function route(
   if (message.urgency === 'today') {
     return { state: 'held', dueAt: nextLocalTime(ctx.now, ctx.timezone, ctx.settings.endOfDay) };
   }
-  if (ctx.onDashboard) {
+  if (ctx.onDashboard && !ctx.immediate) {
     return { state: 'shown', dueAt: new Date(ctx.now.getTime() + ESCALATE_AFTER_MS), channel: 'dashboard' };
   }
   if (ctx.focus && focusHolds(ctx.focus.mode, message.kind, message.urgency)) {
     return { state: 'held', dueAt: ctx.focus.until ? new Date(ctx.focus.until) : null, heldFor: ctx.focus.mode };
   }
   return { state: 'deliver' };
+}
+
+/** "@scout: ", the prefix an agent's own message carries on every channel. */
+export function agentSignature(message: Pick<OwnerMessage, 'agentHandle' | 'agentId'>): string {
+  const handle = (message.agentHandle ?? message.agentId ?? 'agent').trim().replace(/^@+/, '') || 'agent';
+  return `@${handle}: `;
+}
+
+/** One line of an end-of-day or end-of-focus message. An agent's own message is already signed. */
+function summaryLine(row: OwnerNotification): string {
+  return row.kind === 'agent' ? `- ${row.title}` : `- ${row.agentId ?? row.pluginId ?? 'buddi'}: ${row.title}`;
 }
 
 function checkMessage(message: OwnerMessage): void {
@@ -199,8 +218,9 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   // The same thing from another agent (or unkeyed, again): folded into the
   // open row that already says it, and never delivered a second time.
   // Approvals and questions carry their own action and are never folded.
-  const topic = always ? null : notificationTopic({ title: baseTitle, text, agentId: message.agentId ?? null }) || null;
-  if (!existing && topic) {
+  const topic = always || message.kind === 'agent' ? null : notificationTopic({ title: baseTitle, text, agentId: message.agentId ?? null }) || null;
+  // An agent's own message is never folded: it says it is from that agent.
+  if (!existing && topic && message.kind !== 'agent') {
     const folded = await foldIntoTopic(db, { ...message, title: baseTitle, text, dedupeKey, topic }, now);
     if (folded) return folded;
   }
@@ -212,11 +232,16 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     urgency = 'today';
     lowered = true;
   }
-  const title = lowered ? `${baseTitle} ${LOWERED_SENTENCE}` : baseTitle;
+  // An agent's own message is signed, on every channel: it cannot pass for buddi.
+  const signed = message.kind === 'agent' ? `${agentSignature(message)}${baseTitle}` : baseTitle;
+  const title = lowered ? `${signed} ${LOWERED_SENTENCE}` : signed;
 
   const onDashboard = (await presentSurfaces(db, now)).includes(DASHBOARD_SURFACE);
   const focus = activeFocus(settings, now, timezone);
-  let next = route({ kind: message.kind, urgency }, { now, timezone, settings, onDashboard, focus });
+  let next = route(
+    { kind: message.kind, urgency },
+    { now, timezone, settings, onDashboard, focus, immediate: message.immediate === true },
+  );
   // A repeat shown on the dashboard keeps the clock it started, unless the
   // owner had already seen the earlier one: then the new content is unseen.
   if (next.state === 'shown' && existing?.state === 'shown' && existing.seenAt === null && existing.dueAt) {
@@ -374,7 +399,7 @@ export async function notificationsTick(db: Queryable, deps: NotifyDeps, now: Da
       kind: 'recap',
       urgency: 'today',
       title: `Today, ${rows.length} ${rows.length === 1 ? 'thing' : 'things'}:`,
-      text: rows.map((r) => `- ${r.agentId ?? r.pluginId ?? 'buddi'}: ${r.title}`).join('\n'),
+      text: rows.map(summaryLine).join('\n'),
       parts: rows.map(toDeliverable),
     };
     const answer = kind === null || kind === 'off' ? { ok: false as const, error: 'no channel' } : await deliverTo(kind, message);
@@ -445,7 +470,7 @@ export async function settleFocus(
     kind: 'recap',
     urgency: 'now',
     title: focusSummaryTitle(mode, rows.length),
-    text: rows.map((r) => `- ${r.agentId ?? r.pluginId ?? 'buddi'}: ${r.title}`).join('\n'),
+    text: rows.map(summaryLine).join('\n'),
     parts: rows.map(toDeliverable),
   };
   const kind = await channelFor(settings);

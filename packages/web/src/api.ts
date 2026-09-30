@@ -729,7 +729,7 @@ export interface MlxhProbe {
 
 /* ---- notifications (docs/notifications.md) ---- */
 
-export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin'] as const;
+export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin', 'agent'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** One row of `core.owner_notifications`, as `GET /api/notifications` answers it. */
@@ -775,6 +775,15 @@ export interface NotificationSettings {
   endOfDay: string;
   /** The manual focus, as stored; read only here, switched with `api.setFocus`. */
   focus?: unknown;
+  /** Messages from your agents (`owner.notify`); on or off is `perKind.agent`. */
+  agents?: AgentMessageSettings;
+}
+
+export interface AgentMessageSettings {
+  /** The highest urgency an agent may use; `today` holds every message for the end of the day. */
+  maxUrgency: 'now' | 'today';
+  /** Agent ids whose messages are refused. */
+  muted: string[];
 }
 
 export type FocusMode = 'normal' | 'urgent-only' | 'do-not-disturb';
@@ -1938,6 +1947,8 @@ export const api = {
   setFocus: (mode: FocusMode, duration?: FocusDuration) =>
     put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
+  setAgentMuted: (agentId: string, muted: boolean) =>
+    post<{ agents: AgentMessageSettings }>('/notifications/agent-mute', { agentId, muted }),
   /* ---- tips on Home (docs/dashboard.md, Home) ---- */
   /** Today's tip, or null: at most one a day, none while tips are off. */
   currentTip: (preview?: string) => get<{ tip: TipView | null; enabled: boolean; preview?: boolean }>(preview ? `/tips/current?preview=${encodeURIComponent(preview)}` : '/tips/current'),

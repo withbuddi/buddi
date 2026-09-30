@@ -10,6 +10,7 @@ import { parseFocusSchedules, schedulesFromQuietHours, toFocusSchedules, toFocus
 import {
   ALWAYS_REACH,
   NOTIFICATION_KINDS,
+  type AgentMessageSettings,
   type FocusSetting,
   type NotificationKind,
   type NotificationPreferences,
@@ -29,7 +30,17 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   schedules: [],
   endOfDay: DEFAULT_END_OF_DAY,
   focus: null,
+  agents: { maxUrgency: 'now', muted: [] },
 };
+
+/** The stored `agent_messages` value, defaults filled in; anything malformed reads as the default. */
+export function toAgentMessageSettings(value: unknown): AgentMessageSettings {
+  const o = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const muted = Array.isArray(o.muted)
+    ? [...new Set(o.muted.filter((m): m is string => typeof m === 'string' && m.trim() !== '').map((m) => m.trim()))]
+    : [];
+  return { maxUrgency: o.maxUrgency === 'today' ? 'today' : 'now', muted };
+}
 
 const iso = (v: unknown): string | null =>
   v === null || v === undefined ? null : v instanceof Date ? v.toISOString() : String(v);
@@ -199,10 +210,11 @@ export async function ownerPresent(db: Queryable, now: Date = new Date()): Promi
 
 export async function readNotificationSettings(db: Queryable): Promise<NotificationSettings> {
   const { rows } = await db.query(
-    `select default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, focus from core.notification_settings where id`,
+    `select default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, focus, agent_messages
+       from core.notification_settings where id`,
   );
   const row = rows[0];
-  if (!row) return { ...DEFAULT_NOTIFICATION_SETTINGS, perKind: {}, schedules: [] };
+  if (!row) return { ...DEFAULT_NOTIFICATION_SETTINGS, perKind: {}, schedules: [], agents: toAgentMessageSettings(null) };
   const perKind: NotificationSettings['perKind'] = {};
   if (row.per_kind && typeof row.per_kind === 'object') {
     for (const [k, v] of Object.entries(row.per_kind as Record<string, unknown>)) {
@@ -218,6 +230,7 @@ export async function readNotificationSettings(db: Queryable): Promise<Notificat
     schedules: toFocusSchedules(row.schedules) ?? schedulesFromQuietHours(row.quiet_start, row.quiet_end),
     endOfDay: row.end_of_day ?? DEFAULT_END_OF_DAY,
     focus: toFocusSetting(row.focus),
+    agents: toAgentMessageSettings(row.agent_messages),
   };
 }
 
@@ -256,22 +269,61 @@ export function parseNotificationSettings(
   if (!schedules.ok) return { ok: false, message: schedules.message };
   const endOfDay = optionalTime(o.endOfDay, 'The end of the day');
   if (endOfDay instanceof Error) return { ok: false, message: endOfDay.message };
+  let agents: AgentMessageSettings | undefined;
+  if (o.agents !== undefined && o.agents !== null) {
+    if (typeof o.agents !== 'object' || Array.isArray(o.agents)) return { ok: false, message: 'agents must be an object.' };
+    const a = o.agents as Record<string, unknown>;
+    if (a.maxUrgency !== undefined && a.maxUrgency !== 'now' && a.maxUrgency !== 'today') {
+      return { ok: false, message: 'agents.maxUrgency must be "now" or "today".' };
+    }
+    if (a.muted !== undefined && !Array.isArray(a.muted)) return { ok: false, message: 'agents.muted must be a list of agent ids.' };
+    agents = toAgentMessageSettings(a);
+  }
   return {
     ok: true,
-    settings: { defaultChannel, perKind, schedules: schedules.schedules, endOfDay: endOfDay ?? DEFAULT_END_OF_DAY },
+    settings: {
+      defaultChannel,
+      perKind,
+      schedules: schedules.schedules,
+      endOfDay: endOfDay ?? DEFAULT_END_OF_DAY,
+      ...(agents ? { agents } : {}),
+    },
   };
 }
 
 /** Replace the settings, whole, but for the manual focus, which `writeFocus` owns. */
 export async function writeNotificationSettings(db: Queryable, settings: NotificationPreferences): Promise<void> {
   await db.query(
-    `insert into core.notification_settings (id, default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, updated_at)
-     values (true, $1, $2::jsonb, null, null, $3, $4::jsonb, now())
+    `insert into core.notification_settings
+       (id, default_channel, per_kind, quiet_start, quiet_end, end_of_day, schedules, agent_messages, updated_at)
+     values (true, $1, $2::jsonb, null, null, $3, $4::jsonb, $5::jsonb, now())
      on conflict (id) do update set default_channel = excluded.default_channel, per_kind = excluded.per_kind,
        quiet_start = null, quiet_end = null, end_of_day = excluded.end_of_day, schedules = excluded.schedules,
+       agent_messages = coalesce($5::jsonb, core.notification_settings.agent_messages),
        updated_at = now()`,
-    [settings.defaultChannel, JSON.stringify(settings.perKind), settings.endOfDay, JSON.stringify(settings.schedules)],
+    [settings.defaultChannel, JSON.stringify(settings.perKind), settings.endOfDay, JSON.stringify(settings.schedules),
+      settings.agents ? JSON.stringify(settings.agents) : null],
   );
+}
+
+/**
+ * Mute or unmute one agent's messages (`owner.notify`), leaving the rest of
+ * the settings alone: the agent's Tools tab switches this without the page.
+ */
+export async function setAgentMuted(db: Queryable, agentId: string, muted: boolean): Promise<AgentMessageSettings> {
+  const id = agentId.trim();
+  if (id === '') throw new Error('an agent id is needed');
+  const current = (await readNotificationSettings(db)).agents;
+  const next: AgentMessageSettings = {
+    ...current,
+    muted: muted ? [...new Set([...current.muted, id])] : current.muted.filter((m) => m !== id),
+  };
+  await db.query(
+    `insert into core.notification_settings (id, agent_messages, updated_at) values (true, $1::jsonb, now())
+     on conflict (id) do update set agent_messages = excluded.agent_messages, updated_at = now()`,
+    [JSON.stringify(next)],
+  );
+  return next;
 }
 
 /** Replace the manual focus; null when none is on. */

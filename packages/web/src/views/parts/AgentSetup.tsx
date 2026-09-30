@@ -566,6 +566,7 @@ function Access({ agent, all, onSaved }: { agent: AgentRow; all: readonly AgentR
         )}
       </div>
       <RememberedApprovals agentId={agent.id} version={granted.join(',')} disabled={busy || agent.isExample} />
+      {holdsNotify(granted) ? <AgentMessagesMute agentId={agent.id} /> : null}
       </Stack>
     </Section>
   );
@@ -646,6 +647,51 @@ export function RememberedApprovals({ agentId, version, disabled }: { agentId: s
       </div>
       <ErrorBanner message={failure} />
       <span className="ui-field-hint">Tick a tool to remember your approval: it asks once, then runs for this agent.</span>
+    </div>
+  );
+}
+
+/** Does a grant reach `owner.notify`, by name or by its family? */
+export function holdsNotify(granted: readonly string[]): boolean {
+  return granted.some((t) => t === 'owner.notify' || t === 'owner.*' || t === 'owner.notify?' || t === 'owner.*?');
+}
+
+/**
+ * Next to the grant: the owner's mute for this agent's own messages
+ * (docs/notifications.md, "Messages from your agents"). Saved the moment it
+ * is changed; the same list Settings → Notifications edits.
+ */
+export function AgentMessagesMute({ agentId }: { agentId: string }): JSX.Element {
+  const view = useAsync(() => api.notificationSettings(), []);
+  const [muted, setMuted] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const shown = muted ?? view.data?.settings.agents?.muted.includes(agentId) ?? false;
+  const change = (next: boolean): void => {
+    setBusy(true);
+    setFailure(null);
+    setMuted(next);
+    api
+      .setAgentMuted(agentId, next)
+      .then((saved) => setMuted(saved.agents.muted.includes(agentId)))
+      .catch((err: unknown) => { setMuted(!next); setFailure(err instanceof Error ? err.message : String(err)); })
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="ui-field">
+      <span className="ui-field-label">Messages to you</span>
+      <label className="backup-check">
+        <input
+          type="checkbox"
+          checked={shown}
+          disabled={busy || !view.data}
+          onChange={(event) => change(event.target.checked)}
+          aria-label="Mute this agent's messages"
+        />
+        <span>Mute its messages</span>
+      </label>
+      <ErrorBanner message={view.error ?? failure} />
+      <span className="ui-field-hint">With owner.notify it can message you itself; muted, it is refused and told so.</span>
     </div>
   );
 }

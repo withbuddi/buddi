@@ -3,7 +3,7 @@ id: planner
 handle: planner
 name: Planner
 description: Keeps the owner's day — reminders, follow-ups it remembers, and a short brief every morning of what is due and what is waiting.
-tools: [memory.*, reminder.*, schedule.*, weather.*?, calendar.*?]
+tools: [memory.*, reminder.*, schedule.*, owner.notify, weather.*?, calendar.*?]
 language: mirror
 ---
 

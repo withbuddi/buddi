@@ -389,10 +389,10 @@ export function Home({
 }
 
 /** The kinds Home lists from the notifications; approvals and questions have their own cards. */
-const HOME_KINDS: ReadonlySet<NotificationRow['kind']> = new Set(['watcher', 'reminder', 'failure', 'recap', 'plugin']);
+const HOME_KINDS: ReadonlySet<NotificationRow['kind']> = new Set(['watcher', 'reminder', 'failure', 'recap', 'plugin', 'agent']);
 
 const KIND_WORDS: Record<NotificationRow['kind'], string> = {
-  approval: 'Approval', question: 'Question', watcher: 'Watcher', reminder: 'Reminder', failure: 'Failure', recap: 'Report', plugin: 'Plugin',
+  approval: 'Approval', question: 'Question', watcher: 'Watcher', reminder: 'Reminder', failure: 'Failure', recap: 'Report', plugin: 'Plugin', agent: 'Message',
 };
 
 /**

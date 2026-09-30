@@ -14,6 +14,8 @@ import {
   NOTIFICATION_KINDS,
   api,
   WEEKDAYS,
+  type AgentMessageSettings,
+  type AgentRow,
   type FocusSchedule,
   type NotificationChannel,
   type NotificationKind,
@@ -36,10 +38,17 @@ export const KIND_LABELS: Record<NotificationKind, { label: string; hint: string
   failure: { label: 'Failures', hint: 'Background jobs died and will not be retried.' },
   recap: { label: 'Reports', hint: 'Mission reports, the weekly recap, answers to actions you tapped.' },
   plugin: { label: 'Plugins', hint: 'A plugin that may send you messages has something to say.' },
+  agent: { label: 'Messages from your agents', hint: 'An agent told you something itself.' },
 };
+
+/** Kinds with their own section below rather than a row under "By kind". */
+const OWN_SECTION: ReadonlySet<NotificationKind> = new Set(['agent']);
+
+const DEFAULT_AGENT_MESSAGES: AgentMessageSettings = { maxUrgency: 'now', muted: [] };
 
 export function Notifications({ timezone }: { timezone: string }): JSX.Element {
   const view = useAsync(() => api.notificationSettings(), []);
+  const roster = useAsync(() => api.agents(), []);
   const recent = useAsync(() => api.notifications(20), [], 30_000);
   const [draft, setDraft] = useState<NotificationSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,7 +112,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
           <Section title="By kind">
             {settings ? (
               <Stack gap="sm">
-                {NOTIFICATION_KINDS.map((kind) => (
+                {NOTIFICATION_KINDS.filter((kind) => !OWN_SECTION.has(kind)).map((kind) => (
                   <div key={kind} className="pref-row nt-kind">
                     <div className="pref-text">
                       <span className="pref-label">{KIND_LABELS[kind].label}</span>
@@ -129,6 +138,16 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
                 ))}
                 <p className="ui-field-hint">Off keeps it in the list below and never sends it.</p>
               </Stack>
+            ) : null}
+          </Section>
+
+          <Section title="Messages from your agents">
+            {settings ? (
+              <AgentMessages
+                settings={settings}
+                agents={roster.data?.agents ?? []}
+                onChange={change}
+              />
             ) : null}
           </Section>
 
@@ -175,6 +194,76 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
           </List>
         )}
       </Section>
+    </Stack>
+  );
+}
+
+/**
+ * Messages an agent writes itself (`owner.notify`): on or off (the kind's
+ * `off`), the highest urgency they may use, and a mute per agent. Saved with
+ * the rest of the page; the mute is also on each agent's Tools tab.
+ */
+function AgentMessages({ settings, agents, onChange }: {
+  settings: NotificationSettings;
+  agents: readonly AgentRow[];
+  onChange: (patch: Partial<NotificationSettings>) => void;
+}): JSX.Element {
+  const on = settings.perKind.agent !== 'off';
+  const current = settings.agents ?? DEFAULT_AGENT_MESSAGES;
+  const setOn = (next: boolean): void => {
+    const perKind = { ...settings.perKind };
+    if (next) delete perKind.agent;
+    else perKind.agent = 'off';
+    onChange({ perKind });
+  };
+  const setMuted = (id: string, muted: boolean): void =>
+    onChange({
+      agents: {
+        ...current,
+        muted: muted ? [...new Set([...current.muted, id])] : current.muted.filter((m) => m !== id),
+      },
+    });
+  return (
+    <Stack gap="sm">
+      <label className="backup-check">
+        <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />
+        <span>Agents may message you</span>
+      </label>
+      <div className="pref-row nt-kind">
+        <div className="pref-text">
+          <span className="pref-label">Highest urgency</span>
+          <span className="ui-field-hint">End of the day holds every message for the end-of-day message.</span>
+        </div>
+        <select
+          aria-label="Highest urgency for agents"
+          value={current.maxUrgency}
+          disabled={!on}
+          onChange={(e) => onChange({ agents: { ...current, maxUrgency: e.target.value === 'today' ? 'today' : 'now' } })}
+        >
+          <option value="now">Now</option>
+          <option value="today">End of the day</option>
+        </select>
+      </div>
+      {agents.length > 0 ? (
+        <div className="ui-stack" data-gap="sm" role="group" aria-label="Muted agents">
+          {agents.map((agent) => (
+            <label key={agent.id} className="backup-check">
+              <input
+                type="checkbox"
+                checked={current.muted.includes(agent.id)}
+                disabled={!on}
+                onChange={(e) => setMuted(agent.id, e.target.checked)}
+                aria-label={`Mute @${agent.handle}`}
+              />
+              <span>Mute {agent.name} (@{agent.handle})</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      <p className="ui-field-hint">
+        An agent given the owner.notify tool can message you itself, shown as "@agent: title". Each agent may send 6
+        urgent messages an hour and 20 a day. Off keeps them in the list below and never sends them.
+      </p>
     </Stack>
   );
 }

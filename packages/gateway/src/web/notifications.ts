@@ -7,6 +7,7 @@
  *   GET  /api/notifications/settings        the settings, and the channels there are
  *   PUT  /api/notifications/settings        the whole settings value, replaced
  *   POST /api/notifications/test { channel } one line through that channel, now
+ *   POST /api/notifications/agent-mute { agentId, muted } mute or unmute one agent's messages
  *   GET  /api/notifications/focus           the focus in force now, or null
  *   PUT  /api/notifications/focus { mode, duration } switch it; mode `normal` turns it off
  *   POST /api/presence { state }            `active` every 30 s while the page is
@@ -25,6 +26,7 @@ import {
   presenceTouch,
   readFocusState,
   readNotificationSettings,
+  setAgentMuted,
   setFocus,
   writeNotificationSettings,
   type NotifyDeps,
@@ -110,4 +112,15 @@ export async function focusRoute(
   } catch (error) {
     return { status: 400, body: { error: `${error instanceof Error ? error.message : String(error)}.` } };
   }
+}
+
+/**
+ * One agent's messages (`owner.notify`) muted or not, from its Tools tab,
+ * without saving the whole Notifications page.
+ */
+export async function agentMuteRoute(pool: Queryable, body: Record<string, unknown>): Promise<NotificationsRouteReply> {
+  const agentId = typeof body.agentId === 'string' ? body.agentId.trim() : '';
+  if (!agentId) return { status: 400, body: { error: '`agentId` must name an agent.' } };
+  if (typeof body.muted !== 'boolean') return { status: 400, body: { error: '`muted` must be true or false.' } };
+  return { status: 200, body: { agents: await setAgentMuted(pool, agentId, body.muted) } };
 }

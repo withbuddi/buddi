@@ -25,6 +25,7 @@ vi.mock('../api', async (importOriginal) => {
       unpairTelegramDevice: vi.fn(),
       tipsSettings: vi.fn(),
       saveTipsSettings: vi.fn(),
+      agents: vi.fn(),
     },
   };
 });
@@ -46,6 +47,7 @@ beforeEach(() => {
   vi.mocked(api.unpairTelegramDevice).mockResolvedValue(null);
   vi.mocked(api.tipsSettings).mockResolvedValue({ enabled: true });
   vi.mocked(api.saveTipsSettings).mockImplementation(async (enabled) => ({ enabled }));
+  vi.mocked(api.agents).mockResolvedValue({ agents: [{ id: 'scout', handle: 'scout', name: 'Scout' }] } as never);
   vi.mocked(api.notifications).mockResolvedValue({
     notifications: [
       {
@@ -93,6 +95,21 @@ describe('Settings → Notifications', () => {
       defaultChannel: null, perKind: { watcher: 'off' }, schedules: [], endOfDay: '18:00',
     });
     expect(screen.getByText('Saved.')).toBeInTheDocument();
+  });
+
+  it('turns messages from agents off, lowers them to today and mutes one agent', async () => {
+    await page();
+    // Its own section, not a row under "By kind".
+    expect(screen.queryByRole('combobox', { name: 'Messages from your agents' })).toBeNull();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Highest urgency for agents' }), { target: { value: 'today' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mute @scout' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.saveNotificationSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      perKind: {}, agents: { maxUrgency: 'today', muted: ['scout'] },
+    }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Agents may message you' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.saveNotificationSettings).toHaveBeenLastCalledWith(expect.objectContaining({ perKind: { agent: 'off' } }));
   });
 
   it('shows the sentence the server refuses with', async () => {

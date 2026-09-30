@@ -22,14 +22,18 @@ import {
   ownerPresent,
   pairSurfaceIdentity,
   registerChannel,
+  ToolRegistry,
   type ActionRecord,
+  type CoreToolContext,
   type Offer,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { notifyApproval, ownerDeliver, ownerText, splitOwnerText } from './owner-notify.js';
+import { bindOwnerTools, createOwnerManifest, interactiveTurn, NOTIFY_TOOL } from './agents/owner-tools.js';
+import type { AgentCatalog } from './telegram/types.js';
 import { createTelegramChannel, ownerMessageText } from './telegram/channel.js';
 import { OwnerNotPairedError } from './telegram/notify.js';
-import { focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './web/notifications.js';
+import { agentMuteRoute, focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute } from './web/notifications.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -174,7 +178,7 @@ suite('reaching the owner from the gateway', () => {
     telegram();
     const read = await notificationSettingsRoute(pool, 'GET');
     expect(read.body).toMatchObject({
-      settings: { defaultChannel: null, endOfDay: '18:00', schedules: [], focus: null },
+      settings: { defaultChannel: null, endOfDay: '18:00', schedules: [], focus: null, agents: { maxUrgency: 'now', muted: [] } },
       channels: [{ kind: 'telegram.chat', label: 'Telegram', where: '@buddi_test_bot' }],
     });
     const night = { mode: 'do-not-disturb', days: ['mon', 'tue'], from: '22:00', to: '07:00' };
@@ -203,6 +207,60 @@ suite('reaching the owner from the gateway', () => {
     expect((await focusRoute(pool, deps, 'PUT', { mode: 'loud' })).status).toBe(400);
     expect((await focusRoute(pool, deps, 'PUT', { mode: 'urgent-only', duration: 'soon' })).status).toBe(400);
     expect(await focusRoute(pool, deps, 'PUT', { mode: 'normal' })).toEqual({ status: 200, body: { focus: null } });
+  });
+
+  describe('owner.notify, the tool', () => {
+    const registry = new ToolRegistry();
+    const tool = createOwnerManifest(registry).tools.find((t) => t.name === NOTIFY_TOOL)!;
+    bindOwnerTools(registry, { catalog: { get: (id: string) => (id === 'scout-7' ? { handle: 'scout' } : undefined) } as unknown as AgentCatalog });
+    const base = (): CoreToolContext => ({
+      db: pool,
+      ownerId: 'owner',
+      now: () => NOW,
+      timezone: 'America/New_York',
+      agentId: 'scout-7',
+      conversationId: 'c-1',
+    }) as unknown as CoreToolContext;
+    const chatTurn = (): CoreToolContext => ({ ...base(), ownerRequest: { id: 'r1', text: 'send it to my phone', expiresAt: Date.now() + 60_000 } });
+    const run = async (input: Record<string, unknown>, ctx: CoreToolContext) =>
+      (await tool.execute(input as never, ctx)) as { ok: boolean; delivered: string; reason?: string };
+
+    it('tells an interactive turn from a mission and a delegate', () => {
+      expect(interactiveTurn(chatTurn())).toBe(true);
+      expect(interactiveTurn(base())).toBe(false);
+      expect(interactiveTurn({ ...chatTurn(), delegationDepth: 1 })).toBe(false);
+      expect(interactiveTurn({ ...chatTurn(), ownerRequest: { id: 'r', text: 'x', expiresAt: Date.now() - 1 } })).toBe(false);
+    });
+
+    it('in a chat turn, goes to Telegram at once though the owner is on the dashboard, as "@handle: title", plain', async () => {
+      const { texts, cards } = telegram();
+      await presenceRoute(pool, { state: 'active' }, NOW);
+      const result = await run({ title: 'Your parcel arrived', text: 'Signed by [the bank](https://evil.example).', link: '#/chat/scout-7/c-1' }, chatTurn());
+      expect(result).toEqual({ ok: true, delivered: 'sent to Telegram' });
+      expect(texts).toEqual([{ text: '@scout: Your parcel arrived\n\nSigned by [the bank](https://evil.example).' }]);
+      expect(cards).toEqual([]);
+    });
+
+    it('in a mission, keeps the dashboard hold', async () => {
+      const { texts } = telegram();
+      await presenceRoute(pool, { state: 'active' }, NOW);
+      const result = await run({ title: 'Your parcel arrived' }, base());
+      expect(result.delivered).toBe('shown on the dashboard, and sent to Telegram if unseen in 10 minutes');
+      expect(texts).toEqual([]);
+    });
+
+    it('refuses an outside link and a muted agent, and checks its input', async () => {
+      telegram();
+      expect(await run({ title: 'Look', link: 'https://evil.example' }, chatTurn())).toMatchObject({ ok: false, reason: 'invalid-link' });
+      expect(await agentMuteRoute(pool, { agentId: 'scout-7', muted: true })).toEqual({ status: 200, body: { agents: { maxUrgency: 'now', muted: ['scout-7'] } } });
+      expect(await run({ title: 'Look' }, chatTurn())).toMatchObject({ ok: false, reason: 'muted', delivered: expect.stringMatching(/^refused: the owner has muted messages from @scout/) });
+      expect((await agentMuteRoute(pool, { agentId: 'scout-7' })).status).toBe(400);
+      const input = tool.input as { safeParse(v: unknown): { success: boolean } };
+      expect(input.safeParse({ title: 'x'.repeat(81) }).success).toBe(false);
+      expect(input.safeParse({ title: 'ok', text: 'x'.repeat(1001) }).success).toBe(false);
+      expect(input.safeParse({ title: 'ok', urgency: 'digest' }).success).toBe(false);
+      expect(tool.tier).toBe('auto');
+    });
   });
 
   it('splits a report into a title and a body', () => {

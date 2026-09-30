@@ -62,10 +62,13 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
         await proposals.request(chatId, proposalId);
         return { id: chatId };
       }
+      // An agent's own message (`owner.notify`) is information only: plain
+      // text, already signed "@agent: …", never a button or a card.
+      const offers = message.kind === 'agent' ? [] : message.offers ?? [];
       const chatId = await sendText(ownerMessageText(message), {
         pool: opts.pool,
         env: opts.env ?? process.env,
-        ...(message.offers && message.offers.length > 0 ? { offers: message.offers } : {}),
+        ...(offers.length > 0 ? { offers } : {}),
       });
       // The end-of-day message names every proposal in one line each; the
       // ones still open follow as their cards, so each can be decided here.

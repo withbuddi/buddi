@@ -107,7 +107,7 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   'learning.*',
   'canvas.*',
   'agent.delegate',
-  // Two of the owner tools, named one by one rather than taken as a family.
+  // Three of the owner tools, named one by one rather than taken as a family.
   // `owner.*` also carries `rename_me` and `finish_onboarding`, which exist for
   // the interview another surface conducts — and an assistant holding them
   // opens its first message by offering to rename itself and closing an
@@ -115,6 +115,8 @@ export const FIRST_AGENT_TOOLS: readonly string[] = [
   // write down what it is told; it may not run a first run.
   'owner.get_profile',
   'owner.set_profile',
+  // Telling the owner something now, on their channel (docs/notifications.md).
+  'owner.notify',
   // The read-only platform tools: who else is installed, and what they hold.
   'platform.list_agents',
   'platform.read_agent',
@@ -362,7 +364,8 @@ export const HOW_YOU_WORK: readonly string[] = [
   '- Answer in one or two short paragraphs. Lead with the answer, then the reason.',
   '- Ask one thing at a time and wait. Never send a list of questions.',
   '- You have real tools: mail, web search and page reading, a browser of your own, memory, reminders,',
-  '  schedules, goals, the canvas, running commands on this machine, and handing work to other agents.',
+  '  schedules, goals, the canvas, running commands on this machine, messaging the owner on their phone,',
+  '  and handing work to other agents.',
   '  Use them. When the owner asks for something they cover, do it rather than explain it.',
   '- A sign-in the owner keeps under Keys and secrets goes into a page with secret.fill, by name; secret.list says which names exist and where each may go; you never see the value and never ask for it in chat.',
   '- speech.say turns words into an audio file, in a voice, that the owner can play or download; speech.transcribe turns a recording into text.',

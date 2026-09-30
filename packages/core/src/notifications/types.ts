@@ -7,7 +7,7 @@
  */
 import type { Offer } from '../offers/types.js';
 
-export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin'] as const;
+export const NOTIFICATION_KINDS = ['approval', 'question', 'watcher', 'reminder', 'failure', 'recap', 'plugin', 'agent'] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 export const NOTIFICATION_URGENCIES = ['now', 'today', 'digest'] as const;
@@ -35,6 +35,18 @@ export interface OwnerMessage {
   pluginId?: string;
   /** Core only: the approval this message asks about, drawn as a card where a channel can. */
   actionId?: string;
+  /**
+   * Skip the on-dashboard hold: a `now` message goes to the channel at once
+   * even while the owner is on the dashboard. Set only by `owner.notify` in
+   * an interactive turn, where the owner just asked to be told there.
+   */
+  immediate?: boolean;
+  /**
+   * Kind `agent` only: the handle the message is signed with. Every channel
+   * shows it as "@handle: title", so an agent's words never pass for buddi's.
+   * Falls back to `agentId`.
+   */
+  agentHandle?: string;
 }
 
 /** Where a row is in its life. See migration 043. */
@@ -128,10 +140,23 @@ export interface NotificationSettings {
   endOfDay: string;
   /** The manual focus the owner switched on, or null. Written only by `setFocus`. */
   focus: FocusSetting | null;
+  /** Messages from your agents (`owner.notify`): on or off is `perKind.agent`. */
+  agents: AgentMessageSettings;
+}
+
+/** What Settings → Notifications says about messages an agent writes itself. */
+export interface AgentMessageSettings {
+  /** The highest urgency an agent may use; `today` lowers every `now`. */
+  maxUrgency: 'now' | 'today';
+  /** Agent ids whose messages are refused. */
+  muted: string[];
 }
 
 /** What the Settings page saves: everything but the manual focus, which has its own switch. */
-export type NotificationPreferences = Omit<NotificationSettings, 'focus'>;
+export type NotificationPreferences = Omit<NotificationSettings, 'focus' | 'agents'> & {
+  /** Absent keeps what is stored: an older page that does not know it clears no mute. */
+  agents?: AgentMessageSettings;
+};
 
 /**
  * Focus modes, like a phone's (docs/notifications.md, "Focus").
