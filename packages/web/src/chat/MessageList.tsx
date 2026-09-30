@@ -14,6 +14,7 @@
  * Every recorded call opens its result or an on-demand input/output inspector.
  */
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { NOTIFY_TOOL, deliveredOf } from './notify';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { approvalIdOf, DELEGATE_TOOL, labelFor } from '../canvas/renderables';
 import { delegatedFiles, isPreviewable, previewUrl, type AttachmentBlock } from './attachments';
@@ -302,6 +303,8 @@ export function MessageList({
                 // A gated call is one line here: the decision itself is in
                 // the dock, and the whole request is on the canvas.
                 const gate = result ? approvalLine(result) : null;
+                // A message to the owner says where it went, not just that it ran.
+                const sent = !gate && block.name === NOTIFY_TOOL && result ? deliveredOf(result.output) : null;
                 return (
                   <ToolRow
                     key={blockIndex}
@@ -309,7 +312,7 @@ export function MessageList({
                     tool={block.name}
                     ok={result?.ok ?? null}
                     running={result === null}
-                    {...(gate ? { status: gate.status, waiting: gate.waiting, approval: true } : {})}
+                    {...(gate ? { status: gate.status, waiting: gate.waiting, approval: true } : sent ? { status: sent } : {})}
                     gist={gistFor(block.name, block.input)}
                     body={result ? toolBodyFor(result.output) : null}
                     opens

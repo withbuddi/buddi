@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A message an agent sent you (`owner.notify`) opens on the canvas as the message itself, with where it went as a status (sent, held, in a summary, refused) and the call's details folded; its chat row says where it went.
 - The front desk holds `owner.notify` without a line in its file, the way every agent reads the time, so an installation whose Buddi file predates the tool can still be asked to "send me that on my phone". Other agents get it on their Tools tab.
 - Agents can message you themselves with the new `owner.notify` tool: asked "send me a message on Telegram now", an agent sends it and says truthfully where it went. It is shown as "@agent: title" in plain text, follows your notification routing (and skips the dashboard hold when you asked in the conversation), and is limited to 6 urgent messages an hour and 20 a day per agent. Settings → Notifications has a "Messages from your agents" section (on or off, the highest urgency, a mute per agent), and each agent's Tools tab has its mute. The front desk, your first assistant and the starter agents have it.
 - An agent's Setup → Access now lists every connection with a switch for whether this agent holds it, saved as you flip it. A connection that needs review or a sign-in is shown with why and a link to Connections; the connection sheet's "Held by" shows the same.

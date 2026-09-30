@@ -37,6 +37,8 @@ import { applyDescriptor } from './resolve';
 import { inferShape, isSubstantialResult } from './infer';
 import { isKnownRenderer } from './registry';
 import { humanise } from './resolve';
+import { NOTIFY_TOOL } from '../chat/notify';
+import type { NotifyViewProps } from './views/NotifyView';
 import type { PreviewProps, Renderable, RendererName, ViewDescriptor } from './types';
 import type { ChatBlock, ChatMessage } from '../chat/types';
 import { delegatedFiles, type AttachmentBlock } from '../chat/attachments';
@@ -269,6 +271,22 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // A live panel already draws this call, success or failure alike: its
       // step list is where the action and its reason are read.
       if (folded?.has(tool)) continue;
+
+      // A message an agent sent the owner: drawn as the message, with where it went.
+      if (tool === NOTIFY_TOOL) {
+        collected.push({
+          id: block.toolUseId,
+          tool,
+          title: 'Message to you',
+          renderer: 'notify',
+          props: { input: use?.input ?? null, output: block.output ?? null, ok: block.ok !== false } satisfies NotifyViewProps,
+          at,
+          tone: block.ok === false ? 'critical' : undefined,
+          source: 'notify',
+          substantial: false,
+        });
+        continue;
+      }
 
       const output = forOwner(block.output);
       if (block.ok === false) {

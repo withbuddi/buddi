@@ -31,6 +31,7 @@ import { Profile, type ProfileProps } from './views/Profile';
 import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
 import { FilesView, type FilesViewProps } from './views/FilesView';
+import { NotifyView, type NotifyViewProps } from './views/NotifyView';
 import type { ChatAgent } from '../chat/types';
 import { Icon } from '../ui/Icon';
 
@@ -185,6 +186,8 @@ export function Canvas({
                 <ArtifactView {...(item.props as ArtifactViewProps)} />
               ) : item.source === 'files' ? (
                 <FilesView {...(item.props as FilesViewProps)} />
+              ) : item.source === 'notify' ? (
+                <NotifyView {...(item.props as NotifyViewProps)} />
               ) : item.source === 'delegate' ? (
                 <DelegateView {...(item.props as DelegateViewProps)} agents={agents ?? []} />
               ) : (
