@@ -60,7 +60,7 @@ cloud account or on this computer, with nothing leaving it.
    form holds, saved or not; beside a language's voice (**French voice**) it
    says the same sentence in that language; press it again to stop. Nothing is kept, and it
    does not count against the daily limit.
-5. Give `speech.*` to the agents that should use it, on their Access page.
+5. Give `speech.*` to the agents that should use it, on their Tools tab.
 
 A ChatGPT subscription, a Claude sign-in and Ollama Cloud are not offered:
 none of them serves audio.

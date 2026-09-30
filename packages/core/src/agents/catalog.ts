@@ -718,7 +718,7 @@ export function generatedSection(
          * colleague off its list improvises ("not one I'm wired to call"),
          * or spends a real run on another colleague to find out.
          */
-        `- A colleague not listed here is not on your delegate list. If the owner asks for one, say "@name is not on my delegate list; you can add it on my Access page." Do not call ${DELEGATE_TOOL_NAME} to test.`,
+        `- A colleague not listed here is not on your delegate list. If the owner asks for one, say "@name is not on my delegate list; you can add it on my Team tab." Do not call ${DELEGATE_TOOL_NAME} to test.`,
       );
     }
   }

@@ -264,7 +264,7 @@ describe('agent.delegate', () => {
 
     expect(out).toMatchObject({ ok: false, reason: 'tool-error' });
     expect(out.ok === false && out.message).toBe(
-      "delegation refused: @finance-advisor may not delegate to anyone; @credo is not on its list. The owner adds it on @finance-advisor's Access page.",
+      "delegation refused: @finance-advisor may not delegate to anyone; @credo is not on its list. The owner adds it on @finance-advisor's Team tab.",
     );
     expect(db.conversations).toEqual([]);
     expect(db.kinds()).toEqual([]);
@@ -274,7 +274,7 @@ describe('agent.delegate', () => {
     const { registry, ctx, db } = harness({ allow: { concierge: ['credit-coach'] } });
     const out = await registry.invoke(DELEGATE_TOOL, { ...task, agent: 'art' }, { ...ctx, agentId: 'concierge' });
     expect(out.ok === false && out.message).toBe(
-      "delegation refused: @buddi may delegate to @credo; @art is not on its list. The owner adds it on @buddi's Access page.",
+      "delegation refused: @buddi may delegate to @credo; @art is not on its list. The owner adds it on @buddi's Team tab.",
     );
     expect(db.conversations).toEqual([]);
   });

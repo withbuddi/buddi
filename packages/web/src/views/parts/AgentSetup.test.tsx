@@ -198,23 +198,34 @@ it('counts an unchanged set of roles as saved, whatever order the file lists the
   expect(screen.getByRole('button', { name: 'Save roles and tools' })).toBeDisabled();
 });
 
-it('splits Setup into Identity, Brain and Access, and puts the choice in the address', async () => {
+it('splits Setup into Identity, Brain, Tools and Team, and puts the choice in the address', async () => {
   const navigate = vi.fn();
   const { rerender } = render(<AgentSetup agentId="demo" navigate={navigate} />);
   const row = screen.getByRole('navigation', { name: 'Setup' });
   const links = within(row).getAllByRole('link');
-  expect(links.map((l) => l.textContent)).toEqual(['Identity', 'Brain', 'Access']);
-  expect(links.map((l) => l.getAttribute('href'))).toEqual(['#/agents/demo/setup/identity', '#/agents/demo/setup/brain', '#/agents/demo/setup/access']);
+  expect(links.map((l) => l.textContent)).toEqual(['Identity', 'Brain', 'Tools', 'Team']);
+  expect(links.map((l) => l.getAttribute('href'))).toEqual(['#/agents/demo/setup/identity', '#/agents/demo/setup/brain', '#/agents/demo/setup/tools', '#/agents/demo/setup/team']);
   expect(within(row).getByRole('link', { name: 'Identity', current: 'page' })).toBeInTheDocument();
   expect(await screen.findByRole('textbox', { name: 'Name' })).toBeVisible();
   expect(screen.queryByRole('combobox', { name: 'Account' })).not.toBeInTheDocument();
   fireEvent.click(within(row).getByRole('link', { name: 'Brain' }));
   expect(navigate).toHaveBeenCalledWith('#/agents/demo/setup/brain');
   // The address is what the page reads back.
-  rerender(<AgentSetup agentId="demo" section="access" navigate={navigate} />);
-  expect(within(row).getByRole('link', { name: 'Access', current: 'page' })).toBeInTheDocument();
+  rerender(<AgentSetup agentId="demo" section="tools" navigate={navigate} />);
+  expect(within(row).getByRole('link', { name: 'Tools', current: 'page' })).toBeInTheDocument();
   expect(screen.getByRole('group', { name: 'Roles' })).toBeInTheDocument();
   expect(screen.queryByRole('textbox', { name: 'Name' })).not.toBeInTheDocument();
+});
+
+it('takes an old link to Access to Tools, and keeps delegation on Team', async () => {
+  const { unmount } = render(<AgentSetup agentId="demo" section="access" />);
+  const row = screen.getByRole('navigation', { name: 'Setup' });
+  expect(within(row).getByRole('link', { name: 'Tools', current: 'page' })).toBeInTheDocument();
+  expect(await screen.findByRole('group', { name: 'Roles' })).toBeVisible();
+  unmount();
+  render(<AgentSetup agentId="demo" section="team" />);
+  expect(await screen.findByText('Delegation')).toBeVisible();
+  expect(screen.getByRole('group', { name: 'Roles', hidden: true })).not.toBeVisible();
 });
 
 it('opens on the part the address names', async () => {
@@ -235,9 +246,9 @@ it('shows the face as one row, and opens the picker from Change face', async () 
   expect(screen.getByRole('button', { name: 'Buddi Blob, finance' })).toBeInTheDocument();
 });
 
-it('keeps the built-in context folded under Access, and the skills off Setup', async () => {
+it('keeps the built-in context folded under Brain, and the skills off Setup', async () => {
   vi.mocked(api.agents).mockResolvedValue({ ...view, agents: [{ ...view.agents[0]!, skills: [{ file: 'a.md', name: 'budgeting', provenance: 'owner' }] }] } as AgentsView);
-  render(<AgentSetup agentId="demo" section="access" />);
+  render(<AgentSetup agentId="demo" section="brain" />);
   const summary = await screen.findByText('Built-in context');
   expect(summary.closest('details')).not.toHaveAttribute('open');
   expect(screen.queryByText(/budgeting/)).not.toBeInTheDocument();
@@ -247,7 +258,7 @@ it('keeps a draft that is not saved when the owner switches part and back', asyn
   render(<AgentSetup agentId="demo" />);
   fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Demo Two' } });
   const row = screen.getByRole('navigation', { name: 'Setup' });
-  fireEvent.click(within(row).getByRole('link', { name: 'Access' }));
+  fireEvent.click(within(row).getByRole('link', { name: 'Tools' }));
   expect(screen.getByRole('button', { name: 'Save roles and tools' })).toBeDisabled();
   fireEvent.click(within(row).getByRole('link', { name: 'Identity' }));
   expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Demo Two');
@@ -310,7 +321,7 @@ describe('Can ask', () => {
 
   it('says the front desk asks everyone, and turns into the picker on "Limit to…"', async () => {
     vi.mocked(api.setDelegates).mockResolvedValue({ delegates: ['ledger'] });
-    render(<AgentSetup agentId="desk" section="access" />);
+    render(<AgentSetup agentId="desk" section="team" />);
     expect(await screen.findByText(/Can ask: everyone, as the front desk/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Agents this one may ask' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Limit to…' }));
@@ -322,7 +333,7 @@ describe('Can ask', () => {
   });
 
   it('shows the explicit picker for any other agent, as before', async () => {
-    render(<AgentSetup agentId="ledger" section="access" />);
+    render(<AgentSetup agentId="ledger" section="team" />);
     expect(await screen.findByRole('list', { name: 'Agents this one may ask' })).toBeInTheDocument();
     expect(screen.getByText(/New teammates must be added here/)).toBeInTheDocument();
     expect(screen.queryByText(/Can ask: everyone/)).not.toBeInTheDocument();

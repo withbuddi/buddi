@@ -93,7 +93,7 @@ suite('open delegation for the front desk', () => {
 
     const refused = await registry.invoke(DELEGATE_TOOL, { agent: 'newbie', task: 'Say hello.' }, ctx('ledger'));
     expect(refused.ok === false && refused.message).toBe(
-      "delegation refused: @ledger may not delegate to anyone; @newbie is not on its list. The owner adds it on @ledger's Access page.",
+      "delegation refused: @ledger may not delegate to anyone; @newbie is not on its list. The owner adds it on @ledger's Team tab.",
     );
   }, 30_000);
 });

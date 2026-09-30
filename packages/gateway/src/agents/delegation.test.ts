@@ -118,7 +118,7 @@ describe('the agent plugin', () => {
       ctx,
     );
     expect(out.ok === false && out.message).toBe(
-      "delegation refused: @finance-advisor may delegate to @credit-coach; @concierge is not on its list. The owner adds it on @finance-advisor's Access page.",
+      "delegation refused: @finance-advisor may delegate to @credit-coach; @concierge is not on its list. The owner adds it on @finance-advisor's Team tab.",
     );
   });
 });
@@ -189,7 +189,7 @@ describe('the delegate roster in an agent\'s context', () => {
     expect(prompt).not.toContain('`postman` (@postman)');
     // And what to say about the rest, instead of improvising or probing.
     expect(prompt).toContain('A colleague not listed here is not on your delegate list');
-    expect(prompt).toContain('you can add it on my Access page');
+    expect(prompt).toContain('you can add it on my Team tab');
     expect(prompt).toContain('Do not call agent.delegate to test.');
   });
 

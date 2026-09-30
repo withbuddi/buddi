@@ -316,7 +316,7 @@ export function notOnListRefusal(from: string, wanted: string, allowed: readonly
   const who = allowed.length === 0
     ? `${self} may not delegate to anyone`
     : `${self} may delegate to ${allowed.map(handle).join(', ')}`;
-  return `delegation refused: ${who}; ${handle(wanted)} is not on its list. The owner adds it on ${self}'s Access page.`;
+  return `delegation refused: ${who}; ${handle(wanted)} is not on its list. The owner adds it on ${self}'s Team tab.`;
 }
 
 /** The gate text the loop answers a gated call with. See `awaitingApprovalText`. */

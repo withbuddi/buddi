@@ -36,11 +36,13 @@ const LANGUAGES = ['mirror', 'en', 'fr'];
 export const SETUP_SECTIONS = [
   { id: 'identity', label: 'Identity' },
   { id: 'brain', label: 'Brain' },
-  { id: 'access', label: 'Access' },
+  { id: 'tools', label: 'Tools' },
+  { id: 'team', label: 'Team' },
 ] as const;
 type SetupSection = (typeof SETUP_SECTIONS)[number]['id'];
+/** `access` was one tab before Tools and Team; its old links land on Tools. */
 const asSection = (value: string | undefined): SetupSection =>
-  SETUP_SECTIONS.find((s) => s.id === value)?.id ?? 'identity';
+  value === 'access' ? 'tools' : SETUP_SECTIONS.find((s) => s.id === value)?.id ?? 'identity';
 
 export function AgentSetup({
   agentId,
@@ -277,14 +279,6 @@ function Agent({
               </Section>
             </Stack>
           </Section>
-        </Stack>
-      </div>
-
-      <div hidden={shown !== 'access'}>
-        <Stack gap="lg">
-          <Access agent={agent} all={all} onSaved={onSaved} />
-          <AgentConnections agentId={agent.id} agentName={agent.name} readOnly={agent.isExample === true} version={agent.tools.join(',')} onSaved={onSaved} />
-          <Delegation agent={agent} all={all} onSaved={onSaved} />
           <Details summary="Built-in context" boxed>
             <p className="ui-card-meta">
               Every agent receives current time, owner timezone and server-host information. system.time and system.info
@@ -292,6 +286,19 @@ function Agent({
               permissions.
             </p>
           </Details>
+        </Stack>
+      </div>
+
+      <div hidden={shown !== 'tools'}>
+        <Stack gap="lg">
+          <Access agent={agent} all={all} onSaved={onSaved} />
+          <AgentConnections agentId={agent.id} agentName={agent.name} readOnly={agent.isExample === true} version={agent.tools.join(',')} onSaved={onSaved} />
+        </Stack>
+      </div>
+
+      <div hidden={shown !== 'team'}>
+        <Stack gap="lg">
+          <Delegation agent={agent} all={all} onSaved={onSaved} />
         </Stack>
       </div>
     </>

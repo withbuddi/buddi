@@ -1427,7 +1427,7 @@ function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept
                   </div>
                   {tool.description ? <p className="ui-card-meta">{tool.description}</p> : null}
                   {!tool.problem && tool.tier === 'gated' ? (
-                    <p className="ui-card-meta">{tool.destructive ? NEVER_REMEMBERED : 'You can remember its approval for an agent when you give it the tools, or later on the agent’s Access page.'}</p>
+                    <p className="ui-card-meta">{tool.destructive ? NEVER_REMEMBERED : 'You can remember its approval for an agent when you give it the tools, or later on the agent’s Tools tab.'}</p>
                   ) : null}
                   {tool.problem ? <p className="ui-card-meta">Left out: {tool.problem}.</p> : null}
                 </div>

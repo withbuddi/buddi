@@ -108,7 +108,7 @@ export function Envelope({
 
       {pending ? (
         <div className="wb-envelope-decide">
-          <p className="wb-envelope-note">{reusable ? 'Auto and Always also approve later calls to this tool in that scope; you can take it back on the agent\'s Access page.' : 'This runs the action exactly as shown above.'}</p>
+          <p className="wb-envelope-note">{reusable ? 'Auto and Always also approve later calls to this tool in that scope; you can take it back on the agent\'s Tools tab.' : 'This runs the action exactly as shown above.'}</p>
           <div className="wb-envelope-buttons">
             <button className="ui-btn" data-variant="danger" disabled={busy !== null} onClick={() => decide('reject')}>
               {busy === 'reject' ? 'Rejecting…' : 'Reject'}

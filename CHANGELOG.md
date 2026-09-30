@@ -16,6 +16,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- An agent's Setup is four tabs instead of three: Identity, Brain, Tools (roles, tools and connections) and Team (who it may ask). The built-in context moved to Brain, and old links to Access open Tools.
 - The agents reference documents `{{today}}`, the one placeholder a persona can use.
 
 ## 0.1.0-pre.25 — 2026-09-30

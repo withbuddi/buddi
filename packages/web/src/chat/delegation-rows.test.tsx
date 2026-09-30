@@ -138,8 +138,8 @@ describe('a turn that was refused four delegations', () => {
 
 describe('a refusal naming the delegate list', () => {
   it('reads who the agent may ask', () => {
-    expect(allowedIn("delegation refused: @buddi may delegate to @ledger, @scout; @art is not on its list. The owner adds it on @buddi's Access page.")).toBe('@ledger, @scout');
-    expect(allowedIn("delegation refused: @buddi may not delegate to anyone; @art is not on its list. The owner adds it on @buddi's Access page.")).toBeNull();
+    expect(allowedIn("delegation refused: @buddi may delegate to @ledger, @scout; @art is not on its list. The owner adds it on @buddi's Team tab.")).toBe('@ledger, @scout');
+    expect(allowedIn("delegation refused: @buddi may not delegate to anyone; @art is not on its list. The owner adds it on @buddi's Team tab.")).toBeNull();
     expect(allowedIn('delegation refused: "ada" may not delegate to "x" (allowed: a, b)')).toBe('a, b');
   });
 });
