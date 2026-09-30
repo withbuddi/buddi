@@ -88,6 +88,7 @@ export {
   DEFAULT_TOKEN_HEADER,
   DEFAULT_TOKEN_PREFIX,
   tokenSecretFor,
+  envSecretFor,
   RETRY_MINUTES,
   changedSentence,
   reconnectSentence,
@@ -99,9 +100,14 @@ export {
   type ReviewTool,
   type ReviewView,
   type SignIn,
+  type ProgramEnvInput,
+  type ProgramInput,
+  type ProgramView,
 } from './service.js';
+export { commandLine, childEnv, specHash, liveGroups, groupAlive, PROGRAM_HOST, START_TIMEOUT_MS, STDERR_LINES } from './program.js';
+export type { ProgramSpec, ProgramEnvEntry, TransportKind } from './store.js';
 export { STDIO_REFUSAL, checkServerUrl, connectionFetch } from './fetch.js';
 export { SERVICE_OPEN, SERVICE_CLOSE, UNTRUSTED_NOTICE, toResult } from './output.js';
 export { tierOf, listHash, toolHash, suggestSlug, localNames, NAMESPACE } from './tiers.js';
 export { vaultRefFor, ReconnectNeeded } from './tokens.js';
-export type { HeaderTarget, HttpTransport, OAuthPort, OAuthTokens, SecretsPort, TransportResponse, VaultPort } from './ports.js';
+export type { EnvTarget, HeaderTarget, HttpTransport, OAuthPort, OAuthTokens, SecretsPort, TransportResponse, VaultPort } from './ports.js';

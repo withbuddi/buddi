@@ -1185,6 +1185,8 @@ export async function main(): Promise<void> {
     console.log('buddi serve stopped cleanly');
   } finally {
     await browserHost(process.env).shutdown();
+    // Every program a connection started, with whatever it started (its process group).
+    await wiring.connections?.close().catch(() => {});
     await pool.end();
   }
 }

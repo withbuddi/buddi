@@ -84,6 +84,12 @@ export interface HeaderTarget {
   header: string;
 }
 
+/** Where a program's secret variable goes: that connection's program, under that name. */
+export interface EnvTarget {
+  connection: string;
+  variable: string;
+}
+
 /**
  * The owner's secrets, for a connection signed in with a token
  * (docs/owner-secrets.md, `http.header`). The composition root builds it over
@@ -96,4 +102,12 @@ export interface SecretsPort {
   /** The value for this host and header, or a thrown sentence when the binding refuses it. */
   value(name: string, target: HeaderTarget): Promise<string>;
   remove(name: string): Promise<void>;
+  /**
+   * A program's secret variable (docs/connections.md, "A program on this
+   * computer"): kept bound to `mcp.env` for this connection and variable,
+   * pre-approved, and read back as one recorded use of that binding when the
+   * program starts. Without these, secret variables are refused.
+   */
+  putEnv?(name: string, value: string, target: EnvTarget): Promise<void>;
+  envValue?(name: string, target: EnvTarget): Promise<string>;
 }

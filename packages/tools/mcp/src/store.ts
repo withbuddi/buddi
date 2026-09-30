@@ -7,6 +7,18 @@ export type ConnectionState = 'connected' | 'needs-reconnect' | 'unreachable' | 
 export type Queryable = Pick<Pool, 'query'> | PoolClient;
 /** How a connection signs in: not at all, OAuth, or a token the owner pasted. */
 export type AuthKind = 'none' | 'oauth' | 'token';
+/** How buddi speaks to it: over https, or to a program it starts on this computer. */
+export type TransportKind = 'http' | 'stdio';
+
+/** One variable a program is started with: its value, or the owner secret that holds it. */
+export type ProgramEnvEntry = { name: string; value: string } | { name: string; secretRef: string };
+
+/** A program on this computer, as the owner gave it. */
+export interface ProgramSpec {
+  command: string;
+  args: string[];
+  env: ProgramEnvEntry[];
+}
 
 export interface ConnectionRow {
   id: string;
@@ -14,6 +26,11 @@ export interface ConnectionRow {
   name: string;
   url: string;
   host: string;
+  transport: TransportKind;
+  /** A program's command, arguments and variables; null for a remote server. */
+  program: ProgramSpec | null;
+  /** The program as it was last reviewed (`specHash`); null before a review, and for a remote server. */
+  reviewedSpec: string | null;
   state: ConnectionState;
   authKind: AuthKind;
   /** Token sign-in: the header the token goes in, and the words before it (`Bearer `). */
@@ -49,9 +66,21 @@ export interface ToolRow {
 
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v === null || v === undefined ? null : String(v));
 
+function program(r: Record<string, unknown>): ProgramSpec | null {
+  if (r.transport !== 'stdio' || typeof r.command !== 'string') return null;
+  const args = Array.isArray(r.args) ? r.args.map(String) : [];
+  const env = Array.isArray(r.env)
+    ? (r.env as Array<Record<string, unknown>>).map((e): ProgramEnvEntry => (typeof e.secretRef === 'string'
+      ? { name: String(e.name), secretRef: e.secretRef }
+      : { name: String(e.name), value: String(e.value ?? '') }))
+    : [];
+  return { command: r.command, args, env };
+}
+
 function connection(r: Record<string, unknown>): ConnectionRow {
   return {
     id: String(r.id), slug: (r.slug as string | null) ?? null, name: String(r.name), url: String(r.url), host: String(r.host),
+    transport: r.transport === 'stdio' ? 'stdio' : 'http', program: program(r), reviewedSpec: (r.reviewed_spec as string | null) ?? null,
     state: r.state as ConnectionState, authKind: r.auth_kind as AuthKind,
     tokenHeader: (r.token_header as string | null) ?? null, tokenPrefix: (r.token_prefix as string | null) ?? null,
     clientId: (r.client_id as string | null) ?? null, clientSource: (r.client_source as ConnectionRow['clientSource']) ?? null,
@@ -93,18 +122,33 @@ export async function insertConnection(db: Queryable, input: {
   return connection(rows[0]);
 }
 
+/** A program on this computer, recorded before it is ever started. */
+export async function insertProgram(db: Queryable, input: { name: string; url: string; host: string }): Promise<ConnectionRow> {
+  const { rows } = await db.query(
+    `insert into mcp.connections (name, url, host, auth_kind, transport, command, args, env)
+     values ($1, $2, $3, 'none', 'stdio', '', '[]'::jsonb, '[]'::jsonb) returning *`,
+    [input.name, input.url, input.host],
+  );
+  return connection(rows[0]);
+}
+
 export async function updateConnection(db: Queryable, id: string, patch: Partial<{
   slug: string; name: string; state: ConnectionState; clientId: string | null; clientSource: 'dynamic' | 'manual' | null;
   vaultRef: string | null; serverName: string | null; serverVersion: string | null; reviewedHash: string; reviewedAt: Date;
   unreachableSince: Date | null; authKind: AuthKind; tokenHeader: string | null; tokenPrefix: string | null;
+  url: string; program: ProgramSpec; reviewedSpec: string | null;
 }>): Promise<ConnectionRow | null> {
   const columns: Record<string, string> = {
     slug: 'slug', name: 'name', state: 'state', clientId: 'client_id', clientSource: 'client_source', vaultRef: 'vault_ref',
     serverName: 'server_name', serverVersion: 'server_version', reviewedHash: 'reviewed_hash', reviewedAt: 'reviewed_at', unreachableSince: 'unreachable_since',
-    authKind: 'auth_kind', tokenHeader: 'token_header', tokenPrefix: 'token_prefix',
+    authKind: 'auth_kind', tokenHeader: 'token_header', tokenPrefix: 'token_prefix', url: 'url', reviewedSpec: 'reviewed_spec',
   };
   const sets: string[] = [];
   const values: unknown[] = [id];
+  if (patch.program) {
+    values.push(patch.program.command, JSON.stringify(patch.program.args), JSON.stringify(patch.program.env));
+    sets.push(`command = $${values.length - 2}`, `args = $${values.length - 1}::jsonb`, `env = $${values.length}::jsonb`);
+  }
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined || !(key in columns)) continue;
     values.push(value);

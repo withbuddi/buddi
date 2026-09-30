@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createMemoryVault, createPool, runMigrations, testDatabaseUrl, type CoreToolContext } from '@buddi/core/testing';
@@ -43,6 +44,7 @@ suite('connections routes', () => {
   let dir: string;
   let server: ReturnType<typeof createWebApp>;
   let base: string;
+  let tools: ReturnType<typeof createToolRegistry>;
   const fake = new Fake({ auth: true, json: true });
   const vault = createMemoryVault();
 
@@ -66,13 +68,14 @@ suite('connections routes', () => {
 
     const env = {} as NodeJS.ProcessEnv;
     const registry = createToolRegistry({});
+    tools = registry;
     const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry }));
     registry.onChange(() => catalog.reload());
     bindPlatformTools(registry, { catalog, reload: () => catalog.reload(), agentsDir: path.join(dir, 'agents') });
     if (!secretDestination('http.header')) registerHttpHeaderDestination();
     const connections = bindConnections(registry.manifests(), { pool, vault, secrets: connectionSecrets(pool, vault), transport: fake.transport, oauth: createOAuthPort({ transport: fake.transport }), log: () => {},
       catalog: [{ id: 'tracker', name: 'Tracker', blurb: '', url: MCP_URL, verified: true, auth: { recommended: 'device', device: { clientId: 'buddi-app', deviceEndpoint: `${AS_ORIGIN}/device/code`, scopes: ['read'] } } }],
-      sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+      sleep: () => new Promise((resolve) => setImmediate(resolve)), dataDir: dir, env: { PATH: process.env.PATH } });
     server = createWebApp({
       pool,
       registry,
@@ -145,7 +148,7 @@ suite('connections routes', () => {
     expect(listed.body.catalog.map((c: { id: string }) => c.id)).toContain('github');
     expect(listed.body.agents.map((a: { id: string; frontDesk: boolean }) => [a.id, a.frontDesk])).toEqual([['concierge', true], ['helper', false]]);
 
-    expect((await call(owner, 'POST', '', { url: 'npx -y some-server' })).body.error).toMatch(/remote servers over https/);
+    expect((await call(owner, 'POST', '', { url: 'npx -y some-server' })).body.error).toMatch(/A program on this computer/);
     const added = await call(owner, 'POST', '', { url: MCP_URL, name: 'Tracker' });
     expect(added.status).toBe(201);
     expect(added.body).toMatchObject({ signIn: 'dynamic', connection: { state: 'pending-review', signedIn: false } });
@@ -259,4 +262,40 @@ suite('connections routes', () => {
     expect(JSON.stringify(view)).not.toContain(fake.validToken);
     expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
   });
+
+  it('adds a program on this computer: kept unstarted, its secret an owner secret bound to mcp.env, reviewed with its command, given, disconnected', async () => {
+    const owner = await signIn();
+    const fixture = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'tools', 'mcp', 'fixtures', 'stdio-server.mjs');
+    const added = await call(owner, 'POST', '', {
+      transport: 'stdio', name: 'Fixture', command: 'node', args: [fixture],
+      env: [{ name: 'FIXTURE_TOKEN', value: 'tok-web-1', secret: true }, { name: 'MODE', value: 'plain' }],
+    });
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({ signIn: 'none', connection: { transport: 'stdio', host: 'this computer', state: 'pending-review', program: { line: `node ${fixture}` } } });
+    expect(JSON.stringify(added.body)).not.toContain('tok-web-1');
+    const id = added.body.connection.id as string;
+    const binding = await pool.query(`select s.name, b.kind, b.target, b.rule from core.secrets s join core.secret_bindings b on b.secret_id = s.id`);
+    expect(binding.rows).toEqual([{ name: `MCP_ENV_${id.replace(/-/g, '')}_FIXTURE_TOKEN`, kind: 'mcp.env', target: { connection: id, variable: 'FIXTURE_TOKEN' }, rule: 'pre-approved' }]);
+    expect(JSON.stringify((await pool.query('select * from mcp.connections')).rows)).not.toContain('tok-web-1');
+
+    const review = await call(owner, 'GET', `/${id}/review`);
+    expect(review.status).toBe(200);
+    expect(review.body.program.line).toBe(`node ${fixture}`);
+    const uses = await pool.query(`select kind, outcome from core.secret_uses order by at`);
+    expect(uses.rows.at(-1)).toEqual({ kind: 'mcp.env', outcome: 'delivered' });
+    expect((await call(owner, 'POST', `/${id}/review`, { slug: 'fx', hash: review.body.hash })).body).toMatchObject({ grant: 'mcp.fx.*', state: 'connected' });
+    expect((await call(owner, 'POST', `/${id}/grant`, { agents: ['helper'] })).body.granted).toEqual(['helper']);
+    const answer = await tools.invoke('mcp.fx.read_env', { name: 'FIXTURE_TOKEN' }, { db: pool, ownerId: 'owner', agentId: 'helper', now: () => new Date(), timezone: 'UTC' });
+    expect(JSON.stringify(answer)).toContain('tok-web-1');
+
+    // Another argument is another review.
+    const changed = await call(owner, 'POST', `/${id}/program`, {
+      name: 'Fixture', command: 'node', args: [fixture, '--x'], env: [{ name: 'FIXTURE_TOKEN', value: '', secret: true }, { name: 'MODE', value: 'plain' }],
+    });
+    expect(changed.body).toMatchObject({ state: 'needs-review', program: { changedSinceReview: true } });
+
+    expect((await call(owner, 'DELETE', `/${id}`)).status).toBe(200);
+    expect(agentFile('helper')).not.toContain('mcp.fx');
+    expect((await pool.query(`select count(*)::int as n from core.secrets`)).rows[0].n).toBe(0);
+  }, 60_000);
 });

@@ -22,6 +22,7 @@ import {
   primeSecretScrubber,
   hydrateDatabaseUrl,
   resolveDatabaseUrl,
+  resolveDataDir,
   resolveProvider,
   resolveSecrets,
   timezoneFromEnv,
@@ -470,6 +471,10 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     tokensChanged: invalidateSecretScrubber,
     now,
     log: (line) => console.error(line),
+    // A program's working directory is `<data>/connections/<id>`; its PATH,
+    // HOME and locale come from this process's environment.
+    dataDir: resolveDataDir(env),
+    env,
   });
   bindPlatformTools(registry, {
     catalog,

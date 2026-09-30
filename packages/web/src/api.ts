@@ -1981,6 +1981,10 @@ export const api = {
   connection: (id: string) => get<ConnectionView>(`/connections/${id}`),
   addConnection: (url: string, name?: string) =>
     post<{ connection: ConnectionView; signIn: 'none' | 'dynamic' | 'manual' }>('/connections', { url, ...(name ? { name } : {}) }),
+  /** A program on this computer: recorded, not started; the review starts it. */
+  addProgram: (form: ProgramForm) =>
+    post<{ connection: ConnectionView; signIn: 'none' }>('/connections', { transport: 'stdio', ...form }),
+  updateProgram: (id: string, form: ProgramForm) => post<ConnectionView>(`/connections/${id}/program`, form),
   connectionConsent: (id: string, clientId?: string) =>
     post<{ authorizeUrl: string; redirectUri: string }>(`/connections/${id}/consent`, clientId ? { clientId } : {}),
   /** Sign in with a pasted token: the gateway tries it on the server before it keeps it. */
@@ -2330,6 +2334,33 @@ export interface ConnectionView {
   agents: string[];
   /** A device sign-in that is waiting, or ended in the last ten minutes. */
   device?: ConnectionDevice;
+  /** `http` for a server at an address, `stdio` for a program on this computer. */
+  transport?: 'http' | 'stdio';
+  /** A program's command, arguments and variables (never a secret's value). */
+  program?: ConnectionProgram;
+  /** A program being started (a first download can take a minute or two). */
+  phase?: 'starting';
+  /** The last lines a program wrote to stderr when it last failed. */
+  stderr?: string[];
+}
+
+/** A program on this computer, as the row and the review show it. */
+export interface ConnectionProgram {
+  command: string;
+  args: string[];
+  /** The command line in full. */
+  line: string;
+  env: Array<{ name: string; secret: boolean; value?: string }>;
+  /** Its command, arguments or variables' names changed since the review. */
+  changedSinceReview: boolean;
+}
+
+/** What "A program on this computer" sends. A secret left empty on a change keeps its value. */
+export interface ProgramForm {
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string; secret: boolean }>;
 }
 
 /** A code the owner types on the service's site (the OAuth device flow). */
@@ -2394,4 +2425,6 @@ export interface ConnectionReview {
   annotatedNothing: boolean;
   /** What changed since the last review, by the server's names; null on a first review. */
   changes?: { added: string[]; changed: string[]; removed: string[] } | null;
+  /** A program: what runs, in full. */
+  program?: ConnectionProgram;
 }

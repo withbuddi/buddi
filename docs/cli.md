@@ -150,12 +150,15 @@ Your agents, what they have scheduled, and the plugins they use.
 - `buddi connections list [--json]`: List the connected services: their state, their tools, and the agents that hold them.
   - `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
   - JSON: [{ id, name, slug, state, host, url, signedIn, tools, heldTools, agents: [id] }]. state is connected, pending-review, needs-review, needs-reconnect or unreachable.
-- `buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]`: Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard. GitHub signs in with a code you type on github.com.
+- `buddi connections add <card|https://url> [--name <name>] [--token | --token-stdin | --client-id <id>] [--json '<mcpServers json>'] [--keep] [--slug <slug>] [--to <agent,agent>]  |  buddi connections add <name> [--env K=V]... [--secret K]... -- <command> <args...>`: Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard. GitHub signs in with a code you type on github.com. With -- <command>, a program on this computer that buddi starts as you.
   - `--name <name>`: What the connection is called on the dashboard.
   - `--token`: Sign in with a token you made on the service's site, typed with the echo off, instead of a code. buddi tries it before it keeps it.
   - `--token-stdin`: The same, with the token piped on stdin.
   - `--client-id <id>`: Sign in with a client id from an app you created in the service's developer settings.
-  - `--json '<mcpServers json>'`: The block another MCP client takes: it gives the address, the name and a header token. A command server is refused.
+  - `--json '<mcpServers json>'`: The block another MCP client takes: the address, the name and a header token, or a program's command, args and env (a placeholder value is asked for).
+  - `--env K=V`: A program's environment variable, as written. Repeat it for more.
+  - `--secret K`: A program's secret variable: its value is asked for with the echo off (one line each on stdin without a terminal) and kept in the vault. Repeat it for more.
+  - `-- <command> <args...>`: The program that starts the server, and its arguments, exactly as its docs give them. It is first run by the review, only to list its tools.
   - `--keep`: Keep the tools without asking once they are printed.
   - `--slug <slug>`: The connection's name in buddi, which every tool carries: mcp.<slug>.<tool>.
   - `--to <agent,agent>`: Give the tools to these agents without asking. --to nobody keeps the connection waiting.

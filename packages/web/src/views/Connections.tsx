@@ -12,6 +12,11 @@
  * service's own page, a code you type on its site (the device way, with
  * buddi's own app), a token you paste, or a client id; "I have a config"
  * reads the block another MCP client takes into the same screens.
+ *
+ * "A program on this computer" is a server buddi starts itself (npx, uvx, a
+ * local binary): a form for its command, arguments and variables, each with
+ * a Secret switch. The form shows the whole command line; Continue records
+ * it, and the review is the first time it runs, only to list its tools.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -23,10 +28,11 @@ import {
   type ConnectionToolView,
   type ConnectionView,
   type ConnectionsView,
+  type ProgramForm,
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { Button, Card, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
-import { parseConnectionConfig, type PastedConfig, type PastedHeader } from '@buddi/core/connection-config';
+import { Button, Card, Code, Details, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
+import { looksSecret, parsePastedServer, type PastedConfig, type PastedHeader, type PastedProgram } from '@buddi/core/connection-config';
 import { SignInCode } from './parts/SignInCode';
 
 export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
@@ -47,7 +53,7 @@ export function tierLabel(tool: { tier: 'auto' | 'gated'; destructive: boolean }
   return { label: 'Asks you first', tone: 'warning' };
 }
 
-type Step = 'paste' | 'address' | 'consent' | 'review' | 'grant';
+type Step = 'paste' | 'address' | 'program' | 'consent' | 'review' | 'grant';
 
 /** The tab the consent page comes back to tells the one that sent it (`ConnectionCallback`). */
 export const CONNECTIONS_CHANNEL = 'buddi-connections';
@@ -121,10 +127,16 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
                 <p className="ui-card-meta">Any remote MCP server, by its https address.</p>
               </Card>
               <Card
+                title="A program on this computer"
+                foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'program' })}>Add it</Button></Toolbar>}
+              >
+                <p className="ui-card-meta">A server buddi starts itself, like npx or uvx, with its arguments and variables.</p>
+              </Card>
+              <Card
                 title="I have a config"
                 foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'paste' })}>Paste it</Button></Toolbar>}
               >
-                <p className="ui-card-meta">The mcpServers block another app uses, with its url and headers.</p>
+                <p className="ui-card-meta">The mcpServers block another app uses, or a claude mcp add line.</p>
               </Card>
             </div>
           </Section>
@@ -174,6 +186,7 @@ function ConnectionRow({
     }
   };
   const pending = connection.state === 'pending-review';
+  const program = connection.transport === 'stdio' ? connection.program : undefined;
   return (
     <Stack gap="sm">
       <div className="ui-card-head">
@@ -181,8 +194,10 @@ function ConnectionRow({
         <Pill tone={state.tone} dot>{state.label}</Pill>
         {connection.grant ? <Tag>{connection.grant}</Tag> : null}
       </div>
+      {program ? <p className="ui-card-meta mono connections-line">{program.line}</p> : null}
       <p className="ui-card-meta">
-        <span className="mono">{connection.host}</span>
+        <span className={program ? undefined : 'mono'}>{program ? 'Runs on this computer as you' : connection.host}</span>
+        {connection.phase === 'starting' ? ' · starting…' : ''}
         {pending ? ' · its tools are not reviewed yet' : ` · ${connection.toolCount} ${connection.toolCount === 1 ? 'tool' : 'tools'}`}
         {connection.reviewedAt ? ` · reviewed ${fmtRelative(connection.reviewedAt)}` : ''}
       </p>
@@ -203,7 +218,17 @@ function ConnectionRow({
         </p>
       ) : null}
       {connection.state === 'unreachable' && connection.unreachableSince ? (
-        <p className="ui-card-meta">Unreachable since {fmtTime(connection.unreachableSince, timezone)}, retrying.</p>
+        <p className="ui-card-meta">
+          {program ? `It stopped answering at ${fmtTime(connection.unreachableSince, timezone)}; the next call starts it again.` : `Unreachable since ${fmtTime(connection.unreachableSince, timezone)}, retrying.`}
+        </p>
+      ) : null}
+      {program?.changedSinceReview ? (
+        <p className="ui-card-meta">Its command changed since you reviewed it, so its tools wait until you review it again.</p>
+      ) : null}
+      {connection.stderr && connection.stderr.length > 0 ? (
+        <Details summary="What the program last said">
+          <Code label="Its last lines on stderr">{connection.stderr.join('\n')}</Code>
+        </Details>
       ) : null}
       <ErrorBanner message={failure} />
       {confirming ? (
@@ -230,6 +255,9 @@ function ConnectionRow({
             <Button size="sm" variant={connection.state === 'needs-review' ? 'accent' : undefined} onClick={() => onFlow({ step: 'review', connection, keepGrants: true })}>
               Review again
             </Button>
+          ) : null}
+          {program ? (
+            <Button size="sm" onClick={() => onFlow({ step: 'program', connection, keepGrants: true })}>Change</Button>
           ) : null}
           {connection.authKind !== 'none' && !pending ? (
             <Button size="sm" variant={connection.state === 'needs-reconnect' ? 'accent' : undefined} onClick={() => onFlow({ step: 'consent', connection, keepGrants: true })}>
@@ -268,18 +296,25 @@ export function ConnectFlow({
   const [connection, setConnection] = useState<ConnectionView | undefined>(start.connection);
   const [signIn, setSignIn] = useState<KnownSignIn>('unknown');
   const [pasted, setPasted] = useState<PastedConfig | null>(null);
+  const [pastedProgram, setPastedProgram] = useState<PastedProgram | null>(null);
   const address = pasted?.url ?? connection?.url;
   const card = start.card ?? catalog.find((c) => address !== undefined && sameAddress(c.url, address));
   const name = connection?.name ?? card?.name ?? pasted?.name ?? 'the service';
   const title = step === 'paste' ? 'Paste a config'
     : step === 'address' ? 'Connect a service'
+    : step === 'program' ? (connection ? `Change ${connection.name}` : 'A program on this computer')
     : step === 'consent' ? `Sign in to ${name}`
     : step === 'review' ? `What ${name} brings`
     : 'Who gets these tools';
   return (
     <Sheet title={title} onClose={onClose} size="wide">
       {step === 'paste' ? (
-        <PasteStep onRead={(config) => { setPasted(config); setStep('address'); }} />
+        <PasteStep
+          onRead={(read) => {
+            if (read.kind === 'program') { setPastedProgram(read.program); setStep('program'); }
+            else { setPasted(read.config); setStep('address'); }
+          }}
+        />
       ) : null}
       {step === 'address' ? (
         <AddressStep
@@ -289,6 +324,20 @@ export function ConnectFlow({
             setConnection(added);
             if (kind === 'none') setStep('review');
             else { setSignIn(kind); setStep('consent'); }
+          }}
+        />
+      ) : null}
+      {step === 'program' ? (
+        <ProgramStep
+          connection={connection}
+          pasted={pastedProgram}
+          tokens={tokens}
+          onDone={(saved) => {
+            setPastedProgram(null);
+            setConnection(saved);
+            // A change that keeps the command, arguments and names needs no review.
+            if (start.keepGrants && !saved.program?.changedSinceReview && saved.state !== 'pending-review') onClose();
+            else setStep('review');
           }}
         />
       ) : null}
@@ -338,23 +387,29 @@ function failureOf(error: unknown): string {
  * sent as it is: the address and name go to the next screen, a header's
  * value to the token screen, and the box is cleared.
  */
-function PasteStep({ onRead }: { onRead: (config: PastedConfig) => void }): JSX.Element {
+type PastedRead = { kind: 'remote'; config: PastedConfig } | { kind: 'program'; program: PastedProgram };
+
+function PasteStep({ onRead }: { onRead: (read: PastedRead) => void }): JSX.Element {
   const [text, setText] = useState('');
   const [failure, setFailure] = useState<string | null>(null);
   const read = (): void => {
     try {
-      const config = parseConnectionConfig(text);
+      const read = parsePastedServer(text);
       setText('');
       setFailure(null);
-      onRead(config);
+      onRead(read);
     } catch (error) {
       setFailure(failureOf(error));
     }
   };
   return (
     <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); read(); }}>
-      <p>Paste the block another app uses for this server, the one with <span className="mono">mcpServers</span>, or just its url and headers. buddi takes the address, the name and one header from it.</p>
-      <Field label="Config" hint="Remote servers only: a url, not a command.">
+      <p>
+        Paste the block another app uses for this server, the one with <span className="mono">mcpServers</span>, or the{' '}
+        <span className="mono">claude mcp add</span> line its docs print. A remote server gives its address, name and one header; a program
+        its command, arguments and variables. Nothing is kept before you have read it on the next screen.
+      </p>
+      <Field label="Config" hint="A url for a remote server, or a command for a program on this computer.">
         <textarea
           className="mono"
           rows={8}
@@ -408,7 +463,7 @@ function AddressStep({
       ) : (
         <p>Where is the server? buddi opens it, reads its name and what it offers, and nothing else until you have read its tools.</p>
       )}
-      <Field label="Address" hint="An https:// address. Servers that run as a program on this computer are not supported yet.">
+      <Field label="Address" hint="An https:// address. A server you start with npx, uvx or a local command is “A program on this computer” instead.">
         <input required autoFocus={!card && !pasted} spellCheck={false} value={url} placeholder="https://" onChange={(event) => setUrl(event.target.value)} />
       </Field>
       {card && !card.verified ? <p className="ui-card-meta">This address is the one {card.name} published; buddi has not checked it since.</p> : null}
@@ -819,6 +874,173 @@ function TokenForm({
   );
 }
 
+interface ArgRow { key: number; value: string }
+interface EnvRow { key: number; name: string; value: string; secret: boolean; kept: boolean }
+
+/** One word as a shell needs it written, for the command line the form shows. */
+function shellQuoted(word: string): string {
+  if (word !== '' && /^[A-Za-z0-9_@%+=:,./-]+$/.test(word)) return word;
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * "A program on this computer": name, command, arguments one per row,
+ * variables with a Secret switch. The whole command line is shown before
+ * Continue; nothing runs until the review. On a change, a secret shows as
+ * kept and stays so unless a new value is typed.
+ */
+export function ProgramStep({
+  connection,
+  pasted,
+  tokens = true,
+  onDone,
+}: {
+  connection?: ConnectionView;
+  pasted?: PastedProgram | null;
+  /** Whether a secret can be kept (a vault). */
+  tokens?: boolean;
+  onDone: (connection: ConnectionView) => void;
+}): JSX.Element {
+  const existing = connection?.program;
+  const seq = useRef(0);
+  const next = (): number => { seq.current += 1; return seq.current; };
+  const [name, setName] = useState(connection?.name ?? pasted?.name ?? '');
+  const [command, setCommand] = useState(existing?.command ?? pasted?.command ?? '');
+  const [args, setArgs] = useState<ArgRow[]>(() => (existing?.args ?? pasted?.args ?? []).map((value) => ({ key: next(), value })));
+  const [env, setEnv] = useState<EnvRow[]>(() => (existing
+    ? existing.env.map((e) => ({ key: next(), name: e.name, value: e.value ?? '', secret: e.secret, kept: e.secret }))
+    : (pasted?.env ?? []).map((e) => ({ key: next(), name: e.name, value: e.value, secret: e.secret, kept: false }))));
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const words = [command.trim(), ...args.map((a) => a.value)].filter((w, i) => i > 0 || w !== '');
+  const line = words.map(shellQuoted).join(' ');
+  const missing = env.filter((e) => e.secret && e.value === '' && !e.kept).map((e) => e.name || 'a variable');
+  const placeholders = (pasted?.env ?? []).filter((e) => e.placeholder).map((e) => e.name);
+
+  const setArg = (key: number, value: string): void => setArgs((rows) => rows.map((r) => (r.key === key ? { ...r, value } : r)));
+  const setVar = (key: number, patch: Partial<EnvRow>): void => setEnv((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  const save = async (): Promise<void> => {
+    setBusy(true);
+    setFailure(null);
+    const form: ProgramForm = {
+      name: name.trim(),
+      command: command.trim(),
+      args: args.map((a) => a.value),
+      env: env.filter((e) => e.name.trim() !== '').map((e) => ({ name: e.name.trim(), value: e.value, secret: e.secret })),
+    };
+    try {
+      if (connection) onDone(await api.updateProgram(connection.id, form));
+      else onDone((await api.addProgram(form)).connection);
+      setEnv((rows) => rows.map((r) => (r.secret ? { ...r, value: '' } : r)));
+    } catch (error) {
+      setFailure(failureOf(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="ui-stack" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <p>
+        A server buddi starts itself on this computer, as you, when an agent needs it, and stops after ten quiet minutes. It runs
+        with your PATH and only the variables you name here. The review screen is the first time it runs, only to list its tools.
+      </p>
+      <FormGrid columns={2}>
+        <Field label="Name">
+          <input required autoFocus={!pasted && !connection} maxLength={80} spellCheck={false} value={name} onChange={(event) => setName(event.target.value)} />
+        </Field>
+        <Field label="Command" hint="The program that starts the server: npx, uvx, node, or a full path.">
+          <input required spellCheck={false} autoComplete="off" className="mono" value={command} placeholder="npx" onChange={(event) => setCommand(event.target.value)} />
+        </Field>
+      </FormGrid>
+      <Field label="Arguments" group hint="One per row, exactly as the server's docs give them. No shell: quotes and $VARIABLES are passed as they are.">
+        <div className="ui-stack" data-gap="sm">
+          {args.map((arg, index) => (
+            <div key={arg.key} className="connections-row">
+              <input
+                aria-label={`Argument ${index + 1}`}
+                className="mono"
+                spellCheck={false}
+                autoComplete="off"
+                value={arg.value}
+                onChange={(event) => setArg(arg.key, event.target.value)}
+              />
+              <Button size="sm" variant="ghost" onClick={() => setArgs((rows) => rows.filter((r) => r.key !== arg.key))} aria-label={`Remove argument ${index + 1}`}>Remove</Button>
+            </div>
+          ))}
+          <Toolbar>
+            <Button size="sm" onClick={() => setArgs((rows) => [...rows, { key: next(), value: '' }])}>Add an argument</Button>
+          </Toolbar>
+        </div>
+      </Field>
+      <Field label="Environment variables" group hint="A secret is kept in buddi's vault and handed to the program only when it starts. Names with TOKEN, KEY, SECRET or PASSWORD start as secrets.">
+        <div className="ui-stack" data-gap="sm">
+          {env.map((row, index) => (
+            <div key={row.key} className="connections-row" data-kind="env">
+              <input
+                aria-label={`Variable ${index + 1} name`}
+                className="mono"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="NAME"
+                value={row.name}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  // A fresh row follows its name until the switch is touched.
+                  setVar(row.key, row.value === '' && !row.kept ? { name: value, secret: looksSecret(value) } : { name: value });
+                }}
+              />
+              <input
+                aria-label={`Variable ${index + 1} value`}
+                type={row.secret ? 'password' : 'text'}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={row.kept && row.value === '' ? 'Kept. Type to replace it.' : 'value'}
+                value={row.value}
+                onChange={(event) => setVar(row.key, { value: event.target.value })}
+              />
+              <label className="backup-check">
+                <input type="checkbox" checked={row.secret} onChange={(event) => setVar(row.key, { secret: event.target.checked, kept: event.target.checked && row.kept })} />
+                <span>Secret</span>
+              </label>
+              <Button size="sm" variant="ghost" onClick={() => setEnv((rows) => rows.filter((r) => r.key !== row.key))} aria-label={`Remove variable ${index + 1}`}>Remove</Button>
+            </div>
+          ))}
+          <Toolbar>
+            <Button size="sm" onClick={() => setEnv((rows) => [...rows, { key: next(), name: '', value: '', secret: false, kept: false }])}>Add a variable</Button>
+          </Toolbar>
+        </div>
+      </Field>
+      {placeholders.length > 0 ? (
+        <Notice tone="accent">Your config had a placeholder for {placeholders.join(', ')}. Type the value itself.</Notice>
+      ) : null}
+      {!tokens && env.some((e) => e.secret) ? (
+        <Notice tone="warning">This installation has no vault, so a secret cannot be kept. Turn the vault on first, or switch Secret off.</Notice>
+      ) : null}
+      <p className="ui-card-meta">
+        A server that signs you in through a browser opens it on this computer, so it needs a screen. On a machine without one, give
+        it a token as a secret variable instead.
+      </p>
+      <div className="ui-stack" data-gap="sm">
+        <span className="ui-field-label">It will run</span>
+        <Code label="The command line">{line || '…'}</Code>
+      </div>
+      <ErrorBanner message={failure} />
+      <Toolbar align="end">
+        <Button
+          type="submit"
+          variant="accent"
+          disabled={busy || name.trim() === '' || command.trim() === '' || missing.length > 0}
+          title={missing.length > 0 ? `Give ${missing.join(', ')} a value.` : undefined}
+        >
+          {busy ? 'Saving…' : connection ? 'Save' : 'Continue'}
+        </Button>
+      </Toolbar>
+    </form>
+  );
+}
+
 function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept: (connection: ConnectionView) => void }): JSX.Element {
   const review = useAsync<ConnectionReview>(() => api.connectionReview(connection.id), [connection.id]);
   const [slug, setSlug] = useState<string | null>(null);
@@ -840,7 +1062,10 @@ function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept
     }
   };
   if (!data) {
-    return review.error ? <ErrorBanner message={review.error} /> : <Empty>Reading what {connection.name} offers…</Empty>;
+    if (review.error) return <ErrorBanner message={review.error} />;
+    return connection.transport === 'stdio'
+      ? <Empty>Starting {connection.name}… The first start can take a minute or two while it downloads.</Empty>
+      : <Empty>Reading what {connection.name} offers…</Empty>;
   }
   const usable = data.tools.filter((t) => t.problem === null).length;
   return (
@@ -849,7 +1074,24 @@ function ReviewStep({ connection, onKept }: { connection: ConnectionView; onKept
         Read what {connection.name} brings before it brings it. Each tool gets a buddi name and a tier from what the server says it does;
         anything that changes something asks you first, on the same approval card as every other tool.
       </p>
-      <p className="ui-card-meta">buddi talks to <span className="mono">{data.host}</span> for these tools, and nowhere else.</p>
+      {data.program ? (
+        <Notice tone="warning" title="This runs on this computer as you">
+          <Stack gap="sm">
+            <Code label="The command">{data.program.line}</Code>
+            <p>
+              It can read and change what you can, and reach the network. buddi starts it with only the variables below, stops it after
+              ten quiet minutes, and asks you again if its command changes.
+            </p>
+            {data.program.env.length > 0 ? (
+              <p className="ui-card-meta">
+                Variables: {data.program.env.map((e) => `${e.name}${e.secret ? ' (secret)' : ''}`).join(', ')}
+              </p>
+            ) : null}
+          </Stack>
+        </Notice>
+      ) : (
+        <p className="ui-card-meta">buddi talks to <span className="mono">{data.host}</span> for these tools, and nowhere else.</p>
+      )}
       {data.annotatedNothing ? (
         <Notice tone="warning">{connection.name} says nothing about what its tools do, so every one of them asks you first.</Notice>
       ) : null}

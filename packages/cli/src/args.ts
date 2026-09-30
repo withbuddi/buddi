@@ -176,6 +176,12 @@ export type ConnectionsCommand =
       slug?: string;
       /** `--to`: agent ids or handles; `[]` is `--to nobody`. */
       to?: string[];
+      /**
+       * `add <name> [--env K=V]... [--secret K]... -- <command> <args…>`: a
+       * program on this computer. `address` is then its name. A secret's
+       * value is asked for (or read from stdin), never taken from argv.
+       */
+      program?: { command: string; args: string[]; env: Array<{ name: string; value: string }>; secrets: string[] };
     }
   | { action: 'review'; name: string; keep: boolean; slug?: string }
   | { action: 'give'; name: string; to: string[] }
@@ -189,17 +195,23 @@ function agentList(value: string): string[] {
 }
 
 export function parseConnectionsArgs(argv: string[]): ConnectionsCommand {
-  const [first, ...rest] = argv;
+  const [first, ...all] = argv;
+  // `add <name> … -- <command> <args…>`: everything after `--` is the program's, flags included.
+  const cut = all.indexOf('--');
+  const rest = cut >= 0 ? all.slice(0, cut) : all;
+  const programWords = cut >= 0 ? all.slice(cut + 1) : undefined;
+  const envPairs: Array<{ name: string; value: string }> = [];
+  const secretNames: string[] = [];
   const action = first ?? 'list';
   if (!(CONNECTIONS_ACTIONS as readonly string[]).includes(action)) {
     throw new UsageError(`unknown connections action: ${action} (expected ${CONNECTIONS_ACTIONS.join(', ')})`);
   }
   const positional: string[] = [];
   const flags = new Map<string, string | true>();
-  const valued = new Set(['--name', '--client-id', '--json', '--slug', '--to']);
+  const valued = new Set(['--name', '--client-id', '--json', '--slug', '--to', '--env', '--secret']);
   const allowed: Record<ConnectionsAction, string[]> = {
     list: [],
-    add: ['--name', '--token', '--token-stdin', '--client-id', '--json', '--keep', '--slug', '--to'],
+    add: ['--name', '--token', '--token-stdin', '--client-id', '--json', '--keep', '--slug', '--to', '--env', '--secret'],
     review: ['--keep', '--slug'],
     give: ['--to'],
     remove: ['--yes', '-y'],
@@ -215,6 +227,15 @@ export function parseConnectionsArgs(argv: string[]): ConnectionsCommand {
     if (valued.has(flag)) {
       const value = inline ?? rest[++i];
       if (value === undefined || value === '') throw new UsageError(`${flag} needs a value`);
+      if (flag === '--env') {
+        const at = value.indexOf('=');
+        const name = at > 0 ? value.slice(0, at) : '';
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new UsageError('--env takes NAME=value');
+        envPairs.push({ name, value: value.slice(at + 1) });
+      } else if (flag === '--secret') {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new UsageError('--secret takes a variable name; its value is asked for, or read from stdin');
+        secretNames.push(value);
+      }
       flags.set(flag, value);
     } else {
       flags.set(flag, true);
@@ -231,6 +252,26 @@ export function parseConnectionsArgs(argv: string[]): ConnectionsCommand {
       if (positional.length > 0) throw new UsageError(`unexpected argument: ${positional[0]}`);
       return { action: 'list' };
     case 'add': {
+      if (programWords !== undefined || envPairs.length > 0 || secretNames.length > 0) {
+        if (programWords === undefined || programWords.length === 0) throw new UsageError('a program is given after --: buddi connections add <name> -- <command> <args…>');
+        if (positional.length !== 1) throw new UsageError('buddi connections add <name> -- <command> <args…> needs one name before --');
+        const clash = ['--json', '--token', '--token-stdin', '--client-id'].filter((f) => flags.has(f));
+        if (clash.length > 0) throw new UsageError(`${clash.join(', ')} is for a server at an address, not a program`);
+        const both = secretNames.filter((n) => envPairs.some((e) => e.name === n));
+        if (both.length > 0) throw new UsageError(`${both.join(', ')} is given with --env and --secret; a secret's value is asked for, never written on the line`);
+        const to = text('--to');
+        return {
+          action: 'add',
+          address: positional[0]!,
+          program: { command: programWords[0]!, args: programWords.slice(1), env: envPairs, secrets: secretNames },
+          ...(text('--name') ? { name: text('--name')! } : {}),
+          token: false,
+          tokenStdin: false,
+          keep: flags.has('--keep'),
+          ...(text('--slug') ? { slug: text('--slug')! } : {}),
+          ...(to !== undefined ? { to: agentList(to) } : {}),
+        };
+      }
       const config = text('--json');
       if (positional.length > 1) throw new UsageError(`unexpected argument: ${positional[1]}`);
       const address = positional[0];

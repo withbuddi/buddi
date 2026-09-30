@@ -3,7 +3,6 @@
  * dashboard's routes, a sign-in on the service's page is a CLI consent the
  * command waits for, a token is never printed, and nothing running is exit 3.
  */
-import { CONFIG_REFUSALS } from '@buddi/core/connection-config';
 import { describe, expect, it } from 'vitest';
 import { parseConnectionsArgs, UsageError } from './args.js';
 import { OPEN_IN_BROWSER, openInBrowser, runConnections, type ConnectionView, type ConnectionsGateway, type ConnectionsIo } from './connections-cmd.js';
@@ -71,6 +70,7 @@ function io(over: Partial<ConnectionsIo> = {}): ConnectionsIo & { lines: string[
     now: () => clock,
     enter: () => ({ pressed: new Promise<boolean>(() => {}), cancel: () => {} }),
     openUrl: () => {},
+    readStdin: async () => '',
     ...over,
   };
 }
@@ -78,6 +78,18 @@ function io(over: Partial<ConnectionsIo> = {}): ConnectionsIo & { lines: string[
 const listing = (connections: ConnectionView[] = []) => ({ connections, catalog: CATALOG, agents: AGENTS, callbackPath: '/connections/callback' });
 
 describe('parseConnectionsArgs', () => {
+  it('reads a program after --, with --env and --secret, flags after -- belonging to the program', () => {
+    expect(parseConnectionsArgs(['add', 'trokky', '--env', 'URL=https://t.example', '--secret', 'TOKEN', '--', 'npx', '-y', '@trokky/mcp@3', '--json', '--env'])).toEqual({
+      action: 'add', address: 'trokky', token: false, tokenStdin: false, keep: false,
+      program: { command: 'npx', args: ['-y', '@trokky/mcp@3', '--json', '--env'], env: [{ name: 'URL', value: 'https://t.example' }], secrets: ['TOKEN'] },
+    });
+    expect(() => parseConnectionsArgs(['add', 'x', '--'])).toThrow(UsageError);
+    expect(() => parseConnectionsArgs(['add', 'x', '--env', 'NOPE'])).toThrow('--env takes NAME=value');
+    expect(() => parseConnectionsArgs(['add', 'x', '--secret', 'T=v', '--', 'npx'])).toThrow(/--secret takes a variable name/);
+    expect(() => parseConnectionsArgs(['add', 'x', '--token', '--', 'npx'])).toThrow(/not a program/);
+    expect(() => parseConnectionsArgs(['add', '--', 'npx'])).toThrow(/one name before --/);
+  });
+
   it('reads each verb and its flags', () => {
     expect(parseConnectionsArgs([])).toEqual({ action: 'list' });
     expect(parseConnectionsArgs(['add', 'github', '--token', '--keep', '--to', 'buddi,ledger'])).toEqual({
@@ -261,13 +273,64 @@ describe('buddi connections', () => {
     expect(out.errors[0]).toMatch(/within ten minutes/);
   });
 
-  it('refuses a config that runs a program, with the dashboard\'s sentence', async () => {
-    const gateway = fakeGateway({});
-    const out = io();
-    const config = JSON.stringify({ mcpServers: { gh: { command: 'npx', args: ['x'] } } });
-    expect(await runConnections({ action: 'add', config, token: false, tokenStdin: false, keep: false }, { gateway, json: false, io: out })).toBe(2);
-    expect(out.errors).toEqual([CONFIG_REFUSALS.command]);
-    expect(gateway.calls).toEqual([]);
+  it('reads a config that runs a program into a program, asking for a placeholder secret', async () => {
+    const program = view({ name: 'gh', host: 'this computer', authKind: 'none', signedIn: true, transport: 'stdio' });
+    const gateway = fakeGateway({
+      'POST /api/connections': () => ({ connection: program, signIn: 'none' }),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, connection: program, program: { line: 'npx x', env: [] } }),
+    });
+    const out = io({ interactive: false, readStdin: async () => `${SECRET}\n` });
+    const config = JSON.stringify({ mcpServers: { gh: { command: 'npx', args: ['x'], env: { GH_TOKEN: '${GH_TOKEN}', MODE: 'fast' } } } });
+    expect(await runConnections({ action: 'add', config, token: false, tokenStdin: false, keep: false }, { gateway, json: false, io: out })).toBe(0);
+    expect(gateway.calls[0]).toEqual({ method: 'POST', path: '/api/connections', body: {
+      transport: 'stdio', name: 'gh', command: 'npx', args: ['x'],
+      env: [{ name: 'MODE', value: 'fast', secret: false }, { name: 'GH_TOKEN', value: SECRET, secret: true }],
+    } });
+    expect(out.lines.join('\n')).not.toContain(SECRET);
+    expect(out.lines).toContain('gh runs on this computer as you: npx x');
+  });
+
+  it('adds a program: the line in full, each --secret asked with the echo off, reviewed, kept and given', async () => {
+    const program = view({ name: 'Trokky', host: 'this computer', authKind: 'none', signedIn: true, transport: 'stdio' });
+    const kept = { ...program, slug: 'trokky', state: 'connected' as const, grant: 'mcp.trokky.*' };
+    const gateway = fakeGateway({
+      'POST /api/connections': () => ({ connection: program, signIn: 'none' }),
+      [`GET /api/connections/${ID}/review`]: () => ({ ...REVIEW, slug: 'trokky', connection: program, program: { line: 'npx -y @trokky/mcp@3', env: [] } }),
+      [`POST /api/connections/${ID}/review`]: () => kept,
+      'GET /api/connections': () => listing([kept]),
+      [`POST /api/connections/${ID}/grant`]: () => ({ granted: ['buddi'], failed: [] }),
+    });
+    const asked: string[] = [];
+    const out = io({ interactive: true, secret: async (label) => { asked.push(label); return SECRET; } });
+    const command = parseConnectionsArgs(['add', 'Trokky', '--env', 'TROKKY_URL=https://t.example', '--secret', 'TROKKY_TOKEN', '--keep', '--to', 'buddi', '--', 'npx', '-y', '@trokky/mcp@3']);
+    expect(await runConnections(command, { gateway, json: false, io: out })).toBe(0);
+    expect(asked).toEqual(['TROKKY_TOKEN (not shown): ']);
+    expect(gateway.calls[0]!.body).toEqual({
+      transport: 'stdio', name: 'Trokky', command: 'npx', args: ['-y', '@trokky/mcp@3'],
+      env: [{ name: 'TROKKY_URL', value: 'https://t.example', secret: false }, { name: 'TROKKY_TOKEN', value: SECRET, secret: true }],
+    });
+    expect(out.lines).toContain('  npx -y @trokky/mcp@3');
+    expect(out.lines).toContain('  TROKKY_TOKEN=(secret, kept in the vault)');
+    expect(out.lines.join('\n')).not.toContain(SECRET);
+    expect(out.lines).toContain('Gave mcp.trokky.* to Buddi.');
+  });
+
+  it('reads --secret values from stdin without a terminal, and prints the program\'s last lines when it does not start', async () => {
+    const program = view({ name: 'Broken', host: 'this computer', authKind: 'none', signedIn: true, transport: 'stdio' });
+    const gateway = fakeGateway({
+      'POST /api/connections': () => ({ connection: program, signIn: 'none' }),
+      [`GET /api/connections/${ID}/review`]: () => { throw new GatewayError(502, 'Broken did not start: Connection closed', { code: 'program-failed' }); },
+      [`GET /api/connections/${ID}`]: () => ({ ...program, stderr: ['boom: no such file'] }),
+    });
+    const out = io({ readStdin: async () => 'one\ntwo\n' });
+    const command = parseConnectionsArgs(['add', 'Broken', '--secret', 'A_KEY', '--secret', 'B_TOKEN', '--', 'node', 'server.js']);
+    expect(await runConnections(command, { gateway, json: false, io: out })).toBe(1);
+    expect((gateway.calls[0]!.body as { env: unknown }).env).toEqual([{ name: 'A_KEY', value: 'one', secret: true }, { name: 'B_TOKEN', value: 'two', secret: true }]);
+    expect(out.errors).toEqual(['Broken did not start: Connection closed', 'Its last lines:', '  boom: no such file']);
+
+    const missing = io({ readStdin: async () => 'only-one\n' });
+    expect(await runConnections(command, { gateway: fakeGateway({}), json: false, io: missing })).toBe(1);
+    expect(missing.errors[0]).toMatch(/No value for B_TOKEN on stdin/);
   });
 
   it('takes the header of a pasted config as the token', async () => {

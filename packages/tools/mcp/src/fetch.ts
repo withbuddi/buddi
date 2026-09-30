@@ -72,7 +72,7 @@ export function checkServerUrl(text: string, allowLoopbackHttp = false): URL {
 
 /** Spec §1: local servers stay out until there is a story for them. */
 export const STDIO_REFUSAL =
-  'buddi connects only to remote servers over https for now. A server that runs as a program on this computer (npx, uvx, a local address) is not supported yet.';
+  'An address is an https:// one. A server that runs as a program on this computer (npx, uvx, a local address) is added as "A program on this computer" instead, or with buddi connections add <name> -- <command>.';
 
 function headersOf(init: RequestInit['headers']): Record<string, string> {
   const out: Record<string, string> = {};

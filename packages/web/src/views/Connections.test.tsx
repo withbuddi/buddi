@@ -21,7 +21,7 @@ vi.mock('../api', async (importOriginal) => {
       connections: vi.fn(), connection: vi.fn(), addConnection: vi.fn(), connectionConsent: vi.fn(), connectionCallback: vi.fn(),
       connectionToken: vi.fn(), connectionDevice: vi.fn(),
       connectionReview: vi.fn(), saveConnectionReview: vi.fn(), grantConnection: vi.fn(), disconnect: vi.fn(),
-      connectionTools: vi.fn(), setRememberedApproval: vi.fn(),
+      connectionTools: vi.fn(), setRememberedApproval: vi.fn(), addProgram: vi.fn(), updateProgram: vi.fn(),
     },
   };
 });
@@ -227,9 +227,9 @@ describe('the four screens', () => {
     mocked.connectionReview.mockResolvedValue(REVIEW);
     render(<ConnectFlow start={{ step: 'paste' }} catalog={view().catalog} agents={AGENTS} onClose={() => {}} />);
     const box = screen.getByLabelText('Config');
-    fireEvent.change(box, { target: { value: '{ "mcpServers": { "local": { "command": "npx", "args": ["x"] } } }' } });
+    fireEvent.change(box, { target: { value: 'not json' } });
     fireEvent.click(screen.getByRole('button', { name: 'Read it' }));
-    expect(await screen.findByText('Servers that run as a program on this computer are not supported yet.')).toBeInTheDocument();
+    expect(await screen.findByText('That is not JSON. Paste the whole block, braces included.')).toBeInTheDocument();
     fireEvent.change(box, { target: { value: '{ "mcpServers": { "gh": { "type": "http", "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer pasted-value" } } } }' } });
     fireEvent.click(screen.getByRole('button', { name: 'Read it' }));
     expect(await screen.findByLabelText('Address')).toHaveValue('https://api.githubcopilot.com/mcp/');
@@ -346,5 +346,92 @@ describe('the callback tab', () => {
     render(<ConnectionCallback search="?code=abc&state=st" />);
     expect(await screen.findByText('Nothing was connected')).toBeInTheDocument();
     expect(screen.getByText(/another dashboard session/)).toBeInTheDocument();
+  });
+
+  describe('a program on this computer', () => {
+    const program = (over: Partial<ConnectionView> = {}): ConnectionView => connection({
+      id: '22222222-2222-4222-8222-222222222222', slug: null, name: 'Trokky', url: 'npx -y @trokky/mcp@3', host: 'this computer',
+      state: 'pending-review', authKind: 'none', grant: null, agents: [], transport: 'stdio',
+      program: {
+        command: 'npx', args: ['-y', '@trokky/mcp@3'], line: 'npx -y @trokky/mcp@3', changedSinceReview: false,
+        env: [{ name: 'TROKKY_URL', secret: false, value: 'https://t.example' }, { name: 'TROKKY_TOKEN', secret: true }],
+      },
+      ...over,
+    });
+
+    it('fills the form, shows the whole command line, switches Secret on for a token, and records it only on Continue', async () => {
+      const added = program();
+      mocked.addProgram.mockResolvedValue({ connection: added, signIn: 'none' });
+      mocked.connectionReview.mockResolvedValue({
+        ...REVIEW, connection: added, slug: 'trokky', host: 'this computer', program: added.program,
+        tools: [{ name: 'list', fullName: 'mcp.trokky.list', description: 'Lists.', tier: 'auto', destructive: false, annotated: true, problem: null }],
+      });
+      render(<ConnectFlow start={{ step: 'program' }} agents={AGENTS} onClose={() => {}} />);
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Trokky' } });
+      fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'npx' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add an argument' }));
+      fireEvent.change(screen.getByLabelText('Argument 1'), { target: { value: '-y' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add an argument' }));
+      fireEvent.change(screen.getByLabelText('Argument 2'), { target: { value: '@trokky/mcp@3' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add a variable' }));
+      fireEvent.change(screen.getByLabelText('Variable 1 name'), { target: { value: 'TROKKY_TOKEN' } });
+      expect(screen.getByRole('checkbox', { name: 'Secret' })).toBeChecked();
+      expect(screen.getByLabelText('Variable 1 value')).toHaveAttribute('type', 'password');
+      // A secret with no value cannot be kept.
+      expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Variable 1 value'), { target: { value: 'tok-1' } });
+      expect(screen.getByLabelText('The command line')).toHaveTextContent('npx -y @trokky/mcp@3');
+      expect(screen.getByText(/needs a screen/)).toBeInTheDocument();
+      expect(mocked.addProgram).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(mocked.addProgram).toHaveBeenCalledWith({
+        name: 'Trokky', command: 'npx', args: ['-y', '@trokky/mcp@3'], env: [{ name: 'TROKKY_TOKEN', value: 'tok-1', secret: true }],
+      }));
+      // The review: the command in full above the tools, and the trust words.
+      expect(await screen.findByText('This runs on this computer as you')).toBeInTheDocument();
+      expect(screen.getByLabelText('The command')).toHaveTextContent('npx -y @trokky/mcp@3');
+      expect(screen.getByText('mcp.trokky.list')).toBeInTheDocument();
+    });
+
+    it('reads a pasted claude mcp add line into the form, nothing recorded until Continue', async () => {
+      render(<ConnectFlow start={{ step: 'paste' }} agents={AGENTS} onClose={() => {}} />);
+      fireEvent.change(screen.getByLabelText('Config'), {
+        target: { value: 'claude mcp add trokky --env TROKKY_URL=https://t.example --env TROKKY_TOKEN=${TOKEN} -- npx -y @trokky/mcp@3' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Read it' }));
+      expect(await screen.findByLabelText('Name')).toHaveValue('trokky');
+      expect(screen.getByLabelText('Command')).toHaveValue('npx');
+      expect(screen.getByLabelText('Argument 2')).toHaveValue('@trokky/mcp@3');
+      expect(screen.getByLabelText('Variable 1 value')).toHaveValue('https://t.example');
+      const secrets = screen.getAllByRole('checkbox', { name: 'Secret' });
+      expect(secrets[0]).not.toBeChecked();
+      expect(secrets[1]).toBeChecked();
+      expect(screen.getByText(/placeholder for TROKKY_TOKEN/)).toBeInTheDocument();
+      expect(mocked.addProgram).not.toHaveBeenCalled();
+    });
+
+    it('shows the program on its row: the command, the last stderr lines, and Change', async () => {
+      mocked.connections.mockResolvedValue(view([program({ slug: 'trokky', state: 'unreachable', unreachableSince: '2026-09-29T10:00:00Z', stderr: ['boom: cannot reach'] })]));
+      render(<Connections timezone="UTC" />);
+      expect(await screen.findByText('npx -y @trokky/mcp@3')).toBeInTheDocument();
+      expect(screen.getByText(/Runs on this computer as you/)).toBeInTheDocument();
+      expect(screen.getByText('boom: cannot reach')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add it' })).toBeInTheDocument();
+    });
+
+    it('keeps a secret on a change unless a new value is typed', async () => {
+      const kept = program({ slug: 'trokky', state: 'connected' });
+      mocked.updateProgram.mockResolvedValue(kept);
+      const onClose = vi.fn();
+      render(<ConnectFlow start={{ step: 'program', connection: kept, keepGrants: true }} agents={AGENTS} onClose={onClose} />);
+      expect(screen.getByLabelText('Variable 2 value')).toHaveAttribute('placeholder', 'Kept. Type to replace it.');
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(mocked.updateProgram).toHaveBeenCalledWith(kept.id, {
+        name: 'Trokky', command: 'npx', args: ['-y', '@trokky/mcp@3'],
+        env: [{ name: 'TROKKY_URL', value: 'https://t.example', secret: false }, { name: 'TROKKY_TOKEN', value: '', secret: true }],
+      }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
   });
 });

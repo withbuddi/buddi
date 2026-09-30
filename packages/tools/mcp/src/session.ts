@@ -27,6 +27,8 @@ export interface Opened {
   client: Client;
   /** Set when the server answered 401: its `WWW-Authenticate`, or '' when it sent none. */
   unauthorized(): string | null;
+  /** A program that stopped by itself: the session is dead and is opened again. */
+  closed?(): boolean;
   close(): Promise<void>;
 }
 
@@ -94,6 +96,12 @@ export class Sessions {
   /** The open session for `id`, opening it with `open` when there is none. */
   async get(id: string, open: () => Promise<Opened>): Promise<Opened> {
     let held = this.#held.get(id);
+    if (held) {
+      const current = held;
+      const opened = await current.opened.catch(() => undefined);
+      if (opened?.closed?.() && this.#held.get(id) === current) await this.close(id);
+      held = this.#held.get(id);
+    }
     if (!held) {
       held = { opened: open() };
       this.#held.set(id, held);

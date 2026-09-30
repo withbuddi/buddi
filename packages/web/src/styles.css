@@ -3688,3 +3688,16 @@ a.home-glance-text:hover { color: var(--text); text-decoration: underline; text-
 .cal-list{display:flex;flex-direction:column;gap:var(--space-4)}
 .plugins-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 0.15em; }
 .plugins-link:disabled { color: var(--text-faint); cursor: default; }
+
+/* A program on this computer: its arguments and variables, one row each. */
+.connections-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+.connections-row[data-kind='env'] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto; }
+@media (max-width: 40rem) {
+  .connections-row[data-kind='env'] { grid-template-columns: minmax(0, 1fr) auto; }
+}
+.connections-line { overflow-wrap: anywhere; }

@@ -21,6 +21,7 @@ import {
   findSecret,
   ownerSecretVaultName,
   putOwnerSecret,
+  registerSecretDestination,
   useOwnerSecret,
   type BuddiHost,
   type AdoptOutcome,
@@ -28,7 +29,7 @@ import {
   type Vault,
 } from '@buddi/core';
 import { ACCOUNT_KIND, GMAIL_SECRET_NAME, listAccounts } from '@buddi/tool-email';
-import type { SecretsPort } from '@buddi/tool-mcp';
+import type { EnvTarget, SecretsPort } from '@buddi/tool-mcp';
 import type { Pool } from 'pg';
 
 /** The shape of a page-added mailbox's old vault name (`secretNameFor`). Not `EMAIL_BACKFILL`. */
@@ -261,10 +262,64 @@ export async function adoptProviderAccountSecrets(
  * for the bound host and header — the same core-internal delivery the `http`
  * area uses — so Settings → Secrets lists it, its last use and its binding.
  */
+/**
+ * A program's secret variable (docs/connections.md, "A program on this
+ * computer"): `mcp.env`, under the connections plugin's own name. The target
+ * is the connection and the variable's name; the value goes into the
+ * program's environment when it starts, and nowhere else. Core never calls
+ * `deliver`: the connections service asks through `useOwnerSecret` with its
+ * own delivery, like `http.header`.
+ */
+export const MCP_ENV_KIND = 'mcp.env';
+
+function asEnvTarget(target: unknown): EnvTarget | undefined {
+  if (typeof target !== 'object' || target === null) return undefined;
+  const { connection, variable } = target as Record<string, unknown>;
+  return typeof connection === 'string' && typeof variable === 'string' ? { connection, variable } : undefined;
+}
+
+export function registerMcpEnvDestination(): void {
+  registerSecretDestination('mcp', {
+    kind: MCP_ENV_KIND,
+    maxRule: 'pre-approved',
+    checkTarget(target, bound) {
+      const asked = asEnvTarget(target);
+      const kept = asEnvTarget(bound);
+      return asked !== undefined && kept !== undefined && asked.connection === kept.connection && asked.variable === kept.variable;
+    },
+    describe(target) {
+      const asked = asEnvTarget(target);
+      return asked === undefined ? 'a connected program\'s environment' : `the ${asked.variable} variable of a program on this computer`;
+    },
+    deliver() {
+      throw new Error('mcp.env delivers through the connections service itself, never through a destination');
+    },
+  });
+}
+
 export function connectionSecrets(pool: Pool, vault: Vault | undefined): SecretsPort | undefined {
   if (vault === undefined) return undefined;
   const host = { version: '0.0', plugin: 'http' } as unknown as BuddiHost;
+  const mcpHost = { version: '0.0', plugin: 'mcp' } as unknown as BuddiHost;
+  registerMcpEnvDestination();
   return {
+    async putEnv(name, value, target) {
+      await putOwnerSecret(pool, vault, {
+        name,
+        value,
+        bindings: [{ kind: MCP_ENV_KIND, target: { connection: target.connection, variable: target.variable }, rule: 'pre-approved' }],
+      });
+    },
+    async envValue(name, target) {
+      let value: string | undefined;
+      const result = await useOwnerSecret(
+        { pool, vault, plugin: 'mcp', buddi: mcpHost, now: () => new Date(), deliverInto: (delivered) => { value = delivered; } },
+        { name, kind: MCP_ENV_KIND, target: { connection: target.connection, variable: target.variable } },
+      );
+      if ('done' in result && value !== undefined) return value;
+      if ('pending' in result) throw new Error(`"${name}" waits for the owner's approval.`);
+      throw new Error('refused' in result ? result.refused : `"${name}" was not delivered.`);
+    },
     async put(name, value, target) {
       await putOwnerSecret(pool, vault, {
         name,

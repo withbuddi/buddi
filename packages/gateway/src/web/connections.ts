@@ -2,7 +2,10 @@
  * Settings → Connections, the owner's routes (docs/connections.md).
  *
  *   GET    /api/connections                 the list, the cards, the agents
- *   POST   /api/connections                 1. address: { url, name? }
+ *   POST   /api/connections                 1. address: { url, name? }, or a program on this computer:
+ *                                             { transport: 'stdio', name, command, args: [], env: [{ name, value, secret? }] },
+ *                                             recorded and not started (the review starts it)
+ *   PUT    /api/connections/:id/program     change a program: another command, arguments or variables' names is another review
  *   GET    /api/connections/:id             one connection
  *   POST   /api/connections/:id/consent     2. consent: { clientId?, cli? } → { authorizeUrl }
  *   POST   /api/connections/:id/token       2. or a token: { token, header?, prefix? }, tried before it is kept
@@ -33,7 +36,7 @@
  */
 import type { Pool } from 'pg';
 import { grantToolPermission, listToolPermissions, revokeToolPermission, type AgentCatalog, type ToolRegistry } from '@buddi/core';
-import { CATALOG, ConnectionError, ConnectionsService, type ConnectionView } from '@buddi/tool-mcp';
+import { CATALOG, ConnectionError, ConnectionsService, type ConnectionView, type ProgramInput } from '@buddi/tool-mcp';
 import { readBoundAgentFile, updateAgentFromOwner } from '../agents/platform.js';
 import { ROLE_FRONT_DESK, ROLE_MAKER } from '../agents/roles.js';
 
@@ -154,6 +157,21 @@ export async function revokeConnection(
   return { touched, failed };
 }
 
+/** A program's form as the page sends it, read without trusting its shape. */
+function programInput(body: Record<string, unknown>): ProgramInput {
+  const env = Array.isArray(body.env) ? body.env : [];
+  return {
+    name: typeof body.name === 'string' ? body.name : '',
+    command: typeof body.command === 'string' ? body.command : '',
+    args: Array.isArray(body.args) ? body.args.map((a) => String(a)) : [],
+    env: env.filter((e): e is Record<string, unknown> => typeof e === 'object' && e !== null).map((e) => ({
+      name: typeof e.name === 'string' ? e.name : '',
+      ...(typeof e.value === 'string' ? { value: e.value } : {}),
+      secret: e.secret === true,
+    })),
+  };
+}
+
 const ID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 
 export async function connectionsRoute(deps: ConnectionsRouteDeps, req: ConnectionsRequest): Promise<RouteAnswer> {
@@ -185,6 +203,10 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
       };
     }
     if (method === 'POST') {
+      if (body.transport === 'stdio') {
+        const added = await service.addProgram(programInput(body));
+        return { status: 201, body: { connection: withAgents(deps, added.connection), signIn: 'none' } };
+      }
       if (typeof body.url !== 'string' || body.url.trim() === '') return { status: 400, body: { error: 'Give the service\'s address.' } };
       const added = await service.add({ url: body.url, ...(typeof body.name === 'string' ? { name: body.name } : {}) });
       return { status: 201, body: { ...added, connection: withAgents(deps, added.connection) } };
@@ -208,7 +230,7 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: done };
   }
-  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|device|review|grant|tools))?$`, 'i').exec(path);
+  const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|device|review|grant|tools|program))?$`, 'i').exec(path);
   if (!one) return { status: 404, body: { error: 'no such route' } };
   const id = one[1]!.toLowerCase();
   const what = one[2];
@@ -251,6 +273,10 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     if (method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
     const started = await service.beginDevice(id);
     return { status: 200, body: { ...started, connection: withAgents(deps, await service.get(id)) } };
+  }
+  if (what === 'program') {
+    if (method !== 'PUT' && method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
+    return { status: 200, body: withAgents(deps, await service.updateProgram(id, programInput(body))) };
   }
   if (what === 'tools') {
     if (method !== 'GET') return { status: 405, body: { error: 'method not allowed' } };

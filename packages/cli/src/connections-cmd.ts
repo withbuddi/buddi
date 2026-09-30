@@ -17,10 +17,15 @@
  * A card that recommends the device way (GitHub) prints a code and the
  * address to type it at; the gateway waits for the approval and this command
  * polls the connection until its `device` says done or why not.
+ *
+ * `add <name> -- <command> <args…>` is a program on this computer: the line
+ * is printed in full, each `--secret` is asked for with the echo off (or read
+ * from stdin, one line each, when there is no terminal), and the review is
+ * the first time it runs, only to list its tools.
  */
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { parseConnectionConfig, type PastedConfig } from '@buddi/core/connection-config';
+import { looksSecret, parsePastedServer, type PastedConfig } from '@buddi/core/connection-config';
 import type { ConnectionsCommand } from './args.js';
 import { GatewayError, GatewayUnavailable, NOT_RUNNING } from './mcp/gateway-client.js';
 import { confirmTty, promptHidden } from './vault-cmd.js';
@@ -44,7 +49,13 @@ export interface ConnectionView {
   heldTools: number;
   agents: string[];
   device?: { state: 'waiting' | 'done' | 'failed'; userCode: string; verificationUri: string; expiresAt: string; reason?: string };
+  transport?: 'http' | 'stdio';
+  program?: { command: string; args: string[]; line: string; env: Array<{ name: string; secret: boolean }>; changedSinceReview: boolean };
+  stderr?: string[];
 }
+
+/** A program's variable on its way to the gateway. */
+interface ProgramVar { name: string; value: string; secret: boolean }
 
 interface CatalogCard {
   id: string;
@@ -82,6 +93,7 @@ interface ReviewView {
   tools: ReviewTool[];
   annotatedNothing: boolean;
   changes: { added: string[]; changed: string[]; removed: string[] } | null;
+  program?: { line: string; env: Array<{ name: string; secret: boolean }> };
 }
 
 /** The three verbs the routes take. `GatewayClient` is one. */
@@ -110,6 +122,8 @@ export interface ConnectionsIo {
   enter(question: string): { pressed: Promise<boolean>; cancel(): void };
   /** Open an address in the browser. Never throws: a failure only means the owner opens it. */
   openUrl(url: string): void;
+  /** Everything piped on stdin (secrets, one per line, when there is no terminal). */
+  readStdin(): Promise<string>;
 }
 
 export interface ConnectionsDeps {
@@ -147,6 +161,11 @@ function defaultIo(): ConnectionsIo {
       return { pressed, cancel: () => rl.close() };
     },
     openUrl: openInBrowser,
+    readStdin: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk as Buffer));
+      return Buffer.concat(chunks).toString('utf8');
+    },
   };
 }
 
@@ -206,6 +225,12 @@ const STATE_WORDS: Record<ConnectionView['state'], string> = {
 };
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+/** One word as a shell needs it written. */
+function quoteWord(word: string): string {
+  if (word !== '' && /^[A-Za-z0-9_@%+=:,./-]+$/.test(word)) return word;
+  return `'${word.replace(/'/g, `'\\''`)}'`;
+}
 
 class Run {
   constructor(
@@ -273,13 +298,36 @@ class Run {
   /* ----------------------------------------------------------------- add */
 
   async add(cmd: Extract<ConnectionsCommand, { action: 'add' }>): Promise<number> {
+    if (cmd.program) {
+      const vars: ProgramVar[] = cmd.program.env.map((e) => ({ name: e.name, value: e.value, secret: false }));
+      const asked = await this.#askSecrets(cmd.program.secrets);
+      if (asked === null) return 1;
+      vars.push(...asked);
+      return this.#addProgram(cmd, cmd.address!, cmd.program.command, cmd.program.args, vars);
+    }
     // 1. Address. A pasted block is read before anything is asked of buddi.
     let config: PastedConfig | undefined;
     if (cmd.config !== undefined) {
-      try { config = parseConnectionConfig(cmd.config); } catch (err) {
+      let read;
+      try { read = parsePastedServer(cmd.config); } catch (err) {
         this.io.err(err instanceof Error ? err.message : String(err));
         return 2;
       }
+      if (read.kind === 'program') {
+        const p = read.program;
+        // A value on the line is taken as given; a placeholder is asked for.
+        const blanks = p.env.filter((e) => e.value === '').map((e) => e.name);
+        const asked = await this.#askSecrets(blanks);
+        if (asked === null) return 1;
+        const vars = [
+          ...p.env.filter((e) => e.value !== '').map((e) => ({ name: e.name, value: e.value, secret: e.secret })),
+          ...asked,
+        ];
+        const name = cmd.name ?? p.name;
+        if (!name) { this.io.err('Give the program a name with --name.'); return 2; }
+        return this.#addProgram(cmd, name, p.command, p.args, vars);
+      }
+      config = read.config;
       for (const dropped of config.dropped) this.io.out(`buddi sends one header; ${dropped} is left out.`);
     }
     const listing = await this.#listing();
@@ -325,6 +373,67 @@ class Run {
     if (!reviewed) return 0;
 
     // 4. Give.
+    return this.#give(reviewed, cmd.to, listing);
+  }
+
+  /**
+   * Each named secret with the echo off, or from stdin one line each when
+   * there is no terminal. Null, said, when one is missing.
+   */
+  async #askSecrets(names: readonly string[]): Promise<ProgramVar[] | null> {
+    if (names.length === 0) return [];
+    let values: string[];
+    if (this.io.interactive) {
+      values = [];
+      for (const name of names) values.push((await this.io.secret(`${name} (not shown): `)).trim());
+    } else {
+      values = (await this.io.readStdin()).split(/\r?\n/).map((line) => line.trim());
+    }
+    const out: ProgramVar[] = [];
+    for (const [i, name] of names.entries()) {
+      const value = values[i] ?? '';
+      if (value === '') {
+        this.io.err(this.io.interactive
+          ? `No value was given for ${name}, so nothing was added.`
+          : `No value for ${name} on stdin (one line per --secret, in order), so nothing was added.`);
+        return null;
+      }
+      out.push({ name, value, secret: true });
+    }
+    return out;
+  }
+
+  /** A program on this computer: recorded, reviewed (its first run), given. */
+  async #addProgram(cmd: Extract<ConnectionsCommand, { action: 'add' }>, name: string, command: string, args: string[], vars: ProgramVar[]): Promise<number> {
+    const line = [command, ...args].map(quoteWord).join(' ');
+    this.io.out(`${cmd.name ?? name} runs on this computer as you:`);
+    this.io.out(`  ${line}`);
+    for (const v of vars) this.io.out(`  ${v.name}=${v.secret ? '(secret, kept in the vault)' : v.value}`);
+    const plainSecrets = vars.filter((v) => !v.secret && looksSecret(v.name)).map((v) => v.name);
+    if (plainSecrets.length > 0) this.io.out(`${plainSecrets.join(', ')} ${plainSecrets.length === 1 ? 'looks' : 'look'} like a secret; --secret keeps one in the vault instead.`);
+    const added = (await this.gateway.post<{ connection: ConnectionView }>('/api/connections', {
+      transport: 'stdio', name: cmd.name ?? name, command, args, env: vars,
+    })).body;
+    const view = added.connection;
+    this.io.out(`Starting ${view.name} to read its tools. The first start can take a minute or two while it downloads.`);
+    let reviewed: ConnectionView | null;
+    try {
+      reviewed = await this.#review(view, { keep: cmd.keep, ...(cmd.slug ? { slug: cmd.slug } : {}) });
+    } catch (err) {
+      if (err instanceof GatewayError) {
+        this.io.err(err.message);
+        const fresh = await this.gateway.get<ConnectionView>(`/api/connections/${view.id}`).catch(() => undefined);
+        if (fresh?.stderr?.length) {
+          this.io.err('Its last lines:');
+          for (const l of fresh.stderr) this.io.err(`  ${l}`);
+        }
+        this.io.out(`${view.name} waits under Settings → Connections; buddi connections remove "${view.name}" takes it away.`);
+        return 1;
+      }
+      throw err;
+    }
+    if (!reviewed) return 0;
+    const listing = await this.#listing();
     return this.#give(reviewed, cmd.to, listing);
   }
 
@@ -465,7 +574,12 @@ class Run {
 
   #printReview(review: ReviewView, slug: string): void {
     const name = review.connection.name;
-    this.io.out(`${name} brings ${plural(review.tools.length, 'tool')}. buddi talks to ${review.host} for them, and nowhere else.`);
+    if (review.program) {
+      this.io.out(`${name} runs on this computer as you: ${review.program.line}`);
+      this.io.out(`It brings ${plural(review.tools.length, 'tool')}. buddi starts it when an agent needs one and stops it after ten quiet minutes.`);
+    } else {
+      this.io.out(`${name} brings ${plural(review.tools.length, 'tool')}. buddi talks to ${review.host} for them, and nowhere else.`);
+    }
     if (review.annotatedNothing) this.io.out(`${name} says nothing about what its tools do, so every one of them asks you first.`);
     const changes = review.changes;
     if (changes && changes.added.length + changes.changed.length + changes.removed.length > 0) {
