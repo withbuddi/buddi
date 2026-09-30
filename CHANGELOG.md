@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A question that needed a link to answer (a sign-in page, an approval code) could reach the owner without the link, which sat in a tool result they never see. Agents are now told to put the link and the code in the question itself, and the question card makes https links clickable.
 - Agents on Claude Sonnet 5.5, Opus 5.5 and other current Claude models failed every run with "provider rejected the request as invalid", because thinking was still asked for with a token budget. buddi now sends adaptive thinking to Claude 4.6 and later, `between_tools` to turn it off on Sonnet 5.5, and nothing on models where it cannot be turned off.
 - A model account could not be removed while an agent that had since been deleted was still recorded against it. A deleted agent no longer counts as using an account, the account list stops counting it, and removing the account clears what it left behind.
 - Restoring a backup into a packaged install failed on the mail tables (a thread points at its last message, a message at its thread) because an ordinary database role cannot switch off foreign-key checks and no table order satisfies a cycle. The restore now holds those keys off during the load and adds them back before the commit, which re-checks every row.

@@ -83,7 +83,7 @@ const askInput = z.object({
     .min(1)
     .max(MAX_QUESTION_CHARS)
     .describe(
-      'The question you are asking the owner, in one line. You still write it out in your reply as well — this is the declaration, not the delivery.',
+      'The question you are asking the owner, in one line. You still write it out in your reply as well — this is the declaration, not the delivery. When answering needs a link to open or a code to check, put the link and the code in the question itself: the owner never sees a tool result.',
     ),
   options: z
     .array(
@@ -155,6 +155,7 @@ export const ASK_POLICY_SUFFIX = [
   `If the owner explicitly asks to test or demonstrate AskUserQuestion, that request itself is a valid reason to call ${ASK_TOOL}: ask one harmless bounded question with 2–5 choices so they can see the interaction.`,
   'Never use it to obtain permission for an effect. Permission is a separate approval bound to the exact action.',
   'Call it before writing the reply, then ask the same concise question in the reply without spelling out options the surface will draw.',
+  'When the owner must open a link or check a code before they can answer (a sign-in, an approval page), write the full link and the code in the question and in your reply. The owner never sees a tool result, so a link that exists only there is a link they do not have.',
   'After calling it, finish with your question and wait for the owner. No further tool calls or dependent work may run until they answer.',
   'It delivers nothing and authorizes nothing; it records the question and makes sure the answer comes back to you.',
 ].join(' ');

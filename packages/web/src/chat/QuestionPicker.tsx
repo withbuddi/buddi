@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Button } from '../ui';
 import type { ChatQuestion } from './types';
 
@@ -40,7 +40,7 @@ export function QuestionPicker({
         >
           Skip
         </Button>
-        <strong>{question.question}</strong>
+        <strong>{withLinks(question.question)}</strong>
       </div>
       {question.options.length > 0 ? (
         <div className="wb-question-options">
@@ -85,4 +85,22 @@ export function QuestionPicker({
       <p className="wb-question-note">This answers a question. It does not approve an action. Esc skips it.</p>
     </section>
   );
+}
+
+/**
+ * The question as text, with each https:// address in it a link: a sign-in
+ * question carries the page to open. Text nodes only; nothing is parsed as markup.
+ */
+export function withLinks(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(/https:\/\/[^\s<>"']+/g)) {
+    const url = match[0].replace(/[.,;:!?)\]]+$/, '');
+    const at = match.index ?? 0;
+    if (at > last) parts.push(text.slice(last, at));
+    parts.push(<a key={at} href={url} target="_blank" rel="noopener noreferrer">{url}</a>);
+    last = at + url.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }
