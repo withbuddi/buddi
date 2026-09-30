@@ -173,6 +173,7 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
                       key={connection.id}
                       connection={connection}
                       card={cardOf(connection, catalog)}
+                      twin={connection.slug !== null && connections.some((other) => other.id !== connection.id && other.name === connection.name)}
                       onOpen={() => setOpened(connection.id)}
                       onFlow={start}
                     />
@@ -237,24 +238,28 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
 function ConnectionRow({
   connection,
   card,
+  twin,
   onOpen,
   onFlow,
 }: {
   connection: ConnectionView;
   card: ConnectionCard | undefined;
+  /** Another connection has the same name (two GitHub accounts): the row adds its own. */
+  twin?: boolean;
   onOpen: () => void;
   onFlow: (flow: FlowStart) => void;
 }): JSX.Element {
   const pending = connection.state === 'pending-review';
+  const title = twin ? `${connection.name} (${connection.slug})` : connection.name;
   const program = connection.transport === 'stdio' ? connection.program : undefined;
   const where = program ? program.line : connection.host;
   const tools = pending ? 'its tools are not reviewed yet' : plural(connection.toolCount, 'tool', 'tools');
   return (
     <ListRow
       onClick={onOpen}
-      label={`${connection.name}: details`}
+      label={`${title}: details`}
       lead={<ConnectionFace connection={connection} card={card} />}
-      title={connection.name}
+      title={title}
       sub={<span className="connections-sub" data-kind={program ? 'program' : undefined}>{`${where} · ${tools}`}</span>}
       side={
         <span className="plugins-side">
@@ -392,6 +397,15 @@ function ConnectionSheet({
         <Section title="What the program last said">
           <Code label="Its last lines on stderr">{connection.stderr.join('\n')}</Code>
         </Section>
+      ) : null}
+      {card && !pending ? (
+        <div className="connections-another">
+          <p>
+            Another {card.name} account or workspace? It connects beside this one, with its own sign-in and its own name.
+            In the browser, sign in as that other account.
+          </p>
+          <Button size="sm" onClick={() => onFlow({ step: 'address', card })}>Add another account</Button>
+        </div>
       ) : null}
     </Sheet>
   );

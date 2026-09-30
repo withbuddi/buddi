@@ -6,6 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- The floating Buddi button covered the footer of sheets and dialogs. It steps aside while one is open.
+- A catalog service could be connected only once from the page. Its sheet now offers "Add another account" through the same sign-in, and rows with the same name show their name in buddi.
 - The approval on the canvas repeated the raw tool name three times, shouted its state, and wedged its buttons under it. It now reads like the dock: the action in words, a status pill and the expiry in a short head, the preview as its body, and the decision on the right with Approve last; the raw tool name is in the envelope's details.
 - The approval card for a connected service's tool showed its arguments as raw, cut-off JSON. It now says what the call does and where, then one short line per argument; the exact arguments stay on the envelope beside it.
 - A question that needed a link to answer (a sign-in page, an approval code) could reach the owner without the link, which sat in a tool result they never see. Agents are now told to put the link and the code in the question itself, and the question card makes https links clickable.

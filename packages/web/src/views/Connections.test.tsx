@@ -147,6 +147,23 @@ describe('the list', () => {
     expect(await screen.findByLabelText('Config')).toBeInTheDocument();
   });
 
+  it('offers another account of a catalog service from its sheet, through the same flow', async () => {
+    mocked.connections.mockResolvedValue(view());
+    render(<Connections embedded />);
+    fireEvent.click(await screen.findByLabelText('GitHub: details'));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText(/Another GitHub account or workspace/)).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Add another account' }));
+    expect(await screen.findByLabelText('Address')).toHaveValue('https://api.githubcopilot.com/mcp/');
+  });
+
+  it('tells two accounts of one service apart by their names in buddi', async () => {
+    mocked.connections.mockResolvedValue(view([connection(), connection({ id: '22222222-2222-4222-8222-222222222222', slug: 'github_work', grant: 'mcp.github_work.*' })]));
+    render(<Connections embedded />);
+    expect(await screen.findByLabelText('GitHub (github): details')).toBeInTheDocument();
+    expect(screen.getByLabelText('GitHub (github_work): details')).toBeInTheDocument();
+  });
+
   it('a catalog tile opens the address screen with its address', async () => {
     mocked.connections.mockResolvedValue(view());
     render(<Connections embedded />);
