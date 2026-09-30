@@ -151,6 +151,8 @@ const HTTP_EXEMPT = [
   /^packages\/runtime\/src\/transport\.ts$/,
   // Browser code. See above.
   /^packages\/web\//,
+  // The Chrome extension: browser code too, run by Chrome, never by Node.
+  /^packages\/extension\//,
   // The clients of the supervisor's control socket. A Unix domain socket
   // is not the network: there is no origin, so there is no per-origin pool to
   // wedge, and `fetch` cannot address one at all — `node:http`'s client is the
