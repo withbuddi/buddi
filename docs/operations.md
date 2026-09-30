@@ -620,7 +620,7 @@ The restore prints the exact commands, one per secret name the archive recorded:
 
 ```
 buddi vault set TELEGRAM_BOT_TOKEN
-buddi vault set GMAIL_APP_PASSWORD
+buddi vault set TAVILY_API_KEY
 ```
 
 Each prompts with the terminal's echo off — a secret is never a command-line argument,

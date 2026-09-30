@@ -23,7 +23,7 @@ import {
   type PluginChannelMessage,
 } from '@buddi/core/testing';
 import { createSelfChannel, OFFERS_LINE, SELF_CHANNEL_KIND } from './channel.js';
-import { ensureGmailAccount, GMAIL_SECRET_NAME } from './config.js';
+import { secretNameFor, writeGmailAccount } from './config.js';
 import { createEmailManifest, manifest as installed } from './index.js';
 import { FakeSmtpServer } from './smtp/fake.js';
 
@@ -31,7 +31,8 @@ const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_channel_test_${process.pid}`;
-const ENV = { GMAIL_USER: 'Owner@Example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'Owner@Example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 
 const message = (over: Partial<PluginChannelMessage> = {}): PluginChannelMessage => ({
   id: 'n1',
@@ -86,7 +87,7 @@ suite('mail to yourself (postgres)', () => {
     // No account: nothing to carry a message, so Settings lists nothing.
     expect((await listChannels()).map((c) => c.kind)).not.toContain(SELF_CHANNEL_KIND);
 
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     expect(await listChannels()).toContainEqual({
       kind: SELF_CHANNEL_KIND,
       label: 'Mail to yourself',
@@ -120,7 +121,7 @@ suite('mail to yourself (postgres)', () => {
 
   it('is not there in a process that gave the host no database', async () => {
     new ToolRegistry().register(createEmailManifest({ send: smtp.factory(), env: ENV }));
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     expect((await listChannels()).map((c) => c.kind)).not.toContain(SELF_CHANNEL_KIND);
     expect(await deliverTo(SELF_CHANNEL_KIND, { id: 'n1', kind: 'recap', urgency: 'now', title: 't' })).toEqual({
       ok: false,
@@ -129,7 +130,7 @@ suite('mail to yourself (postgres)', () => {
   });
 
   it('sends to the own address only, whatever the message says', async () => {
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     const channel = createSelfChannel({ send: smtp.factory(), env: ENV });
     const answer = await channel.deliver(
       message({
@@ -150,14 +151,14 @@ suite('mail to yourself (postgres)', () => {
   });
 
   it('has the title as the body when there is no text, and no link without a public origin', async () => {
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     const channel = createSelfChannel({ send: smtp.factory(), env: ENV });
     await channel.deliver(message({ text: undefined, link: { route: '#/chat/scout/c1' } }), host);
     expect(smtp.sent[0]!.text).toBe('A mail from the bank\n');
   });
 
   it('sends at most one mail a minute', async () => {
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     const channel = createSelfChannel({ send: smtp.factory(), env: ENV });
     expect(await channel.deliver(message(), host)).toEqual({ id: '<fake-1@smtp.test>' });
     clock = new Date(clock.getTime() + 59_000);
@@ -174,7 +175,7 @@ suite('mail to yourself (postgres)', () => {
     expect(await channel.describe(host)).toBeNull();
     expect(await channel.deliver(message(), host)).toEqual({ refused: 'There is no mail account to send from.' });
 
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     smtp.failWith = new Error('535 5.7.8 Username and Password not accepted');
     expect(await channel.deliver(message(), host)).toEqual({
       refused: 'Mail to owner@example.test was not sent: 535 5.7.8 Username and Password not accepted',
@@ -184,7 +185,7 @@ suite('mail to yourself (postgres)', () => {
     // A failed send does not use up the minute.
     expect(await channel.deliver(message(), host)).toEqual({ id: '<fake-1@smtp.test>' });
 
-    const noPassword = createSelfChannel({ send: smtp.factory(), env: { GMAIL_USER: 'owner@example.test' } });
+    const noPassword = createSelfChannel({ send: smtp.factory(), env: {} });
     clock = new Date(clock.getTime() + 60_000);
     const refused = await noPassword.deliver(message(), host);
     expect('refused' in refused && refused.refused.startsWith('Mail to owner@example.test was not sent:')).toBe(true);

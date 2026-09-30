@@ -12,7 +12,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
+import { secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
@@ -39,7 +39,8 @@ const FULL_SYNC = 10_000;
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_email_pol_test_${process.pid}`;
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 const NOW = new Date('2026-09-21T12:00:00Z');
 
 suite('email policies (postgres + fake imap)', () => {
@@ -71,7 +72,7 @@ suite('email policies (postgres + fake imap)', () => {
       'truncate email.events, email.policies, email.drafts, email.triage, email.messages, email.folders, email.accounts cascade',
     );
     await pool.query('truncate core.proposals');
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = account!.id;
     const { rows } = await pool.query(
       `insert into email.folders (account_id, name) values ($1, 'INBOX') returning id`,

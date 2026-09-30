@@ -13,7 +13,7 @@ import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
+import { secretNameFor, writeGmailAccount } from '../config.js';
 import { manifest } from '../index.js';
 import {
   DEFAULT_RETENTION_DAYS,
@@ -40,7 +40,8 @@ const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_retention_test_${process.pid}`;
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 const NOW = new Date('2026-09-13T12:00:00Z');
 
 suite('email.retention (postgres)', () => {
@@ -71,7 +72,7 @@ suite('email.retention (postgres)', () => {
   async function seed(ageDays: number[]): Promise<string[]> {
     await pool.query('truncate email.triage, email.messages, email.folders, email.accounts cascade');
     await pool.query('delete from email.settings');
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = String(account?.id);
     const { rows } = await pool.query(
       `insert into email.folders (account_id, name, uidvalidity, last_uid)

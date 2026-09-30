@@ -184,7 +184,7 @@ function scopeOf(accounts: AccountRecord[]): AccountScope {
 
 /** Nothing configured is a configuration fact with a fix, said in one line. */
 const NONE_CONFIGURED =
-  'no mail account is configured on this installation — add one under Settings → Email, or set GMAIL_USER and restart';
+  'no mail account is configured on this installation — add one under Settings → Email';
 
 export async function accountScope(db: Db, ref?: string | undefined): Promise<AccountScope> {
   const named = ref?.trim();

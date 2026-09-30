@@ -18,14 +18,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ToolRegistry, createPool, measureMetricResult, runMigrations } from '@buddi/core/testing';
 import type { CoreToolContext } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME, markAccountSynced } from './config.js';
+import { markAccountSynced, secretNameFor, writeGmailAccount } from './config.js';
 import { manifest } from './index.js';
 import { joinThread } from './threads.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_email_metrics_test_${process.pid}`;
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 /** A Monday, noon UTC. Every age below is measured from it. */
 const NOW = new Date('2026-09-21T12:00:00Z');
 const SYNCED = new Date('2026-09-21T11:45:00Z');
@@ -82,7 +83,7 @@ suite('the email metrics (postgres, read-only)', () => {
 
   /** The owner's mailbox, its inbox and its sent folder. */
   async function mailbox(opts: { synced?: boolean } = {}): Promise<void> {
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = account!.id;
     const inbox = await pool.query(
       `insert into email.folders (account_id, name, kind, synced)

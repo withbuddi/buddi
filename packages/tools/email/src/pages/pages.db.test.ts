@@ -34,7 +34,7 @@ import {
   type Vault,
 } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME, listAccounts, secretNameFor } from '../config.js';
+import { listAccounts, secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
@@ -132,7 +132,7 @@ suite('the mail pages, over postgres', () => {
     dataDir = await mkdtemp(path.join(tmpdir(), 'buddi-email-pages-'));
     process.env.BUDDI_DATA_DIR = dataDir;
 
-    env = { GMAIL_USER: OWNER, [GMAIL_SECRET_NAME]: 'app-password' };
+    env = { [secretNameFor(OWNER)]: 'app-password' };
     vault = createVault({ env: { BUDDI_VAULT: 'memory' } as NodeJS.ProcessEnv }) as Vault;
     imap = new FakeImapServer();
     const connect: ImapClientFactory = async () => imap.client();
@@ -180,7 +180,7 @@ suite('the mail pages, over postgres', () => {
         date: new Date('2026-09-20T08:00:00Z'),
       }),
     );
-    await ensureGmailAccount(pool, env);
+    await writeGmailAccount(pool, OWNER);
     const source = createInboxPollSource({
       connect: (async () => imap.client()) as ImapClientFactory,
       env,
@@ -268,13 +268,10 @@ suite('the mail pages, over postgres', () => {
     expect(draft.toText).toContain('tdorothee@client.test');
 
     const accounts = await ask('accounts');
-    // Two pills, each with its own words and tone, rather than one sentence.
+    // Pills, each with its own words and tone, rather than one sentence.
     expect(accounts.accounts[0]).toMatchObject({ address: OWNER });
-    expect(accounts.accounts[0].state).toEqual([
-      { value: 'on', tone: 'neutral' },
-      { value: 'from .env', tone: 'neutral' },
-    ]);
-    expect(accounts.accounts[0].secretName).toBe(GMAIL_SECRET_NAME);
+    expect(accounts.accounts[0].state).toEqual([{ value: 'on', tone: 'neutral' }]);
+    expect(accounts.accounts[0].secretName).toBe(secretNameFor(OWNER));
     // The cell says where, in words; the name is the tooltip behind it.
     expect(accounts.accounts[0].password).toBe('In the vault');
 
@@ -659,6 +656,26 @@ suite('the mail pages, over postgres', () => {
     expect((await listAccounts(pool, { enabledOnly: false })).some((a) => a.address === ADDED)).toBe(false);
     expect(await findSecret(pool, account.secretName)).toBeNull();
     expect(await vault.get(ownerSecretVaultName(secret.id))).toBeNull();
+  });
+
+  it('claims a mailbox the old .env seed left, keeping its id and its mail', async () => {
+    const { rows } = await pool.query(
+      `insert into email.accounts
+         (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+       values ($1, 'imap.work.test', 993, 'smtp.work.test', 465, 'app-password', 'GMAIL_APP_PASSWORD', 'env')
+       returning id::text as id`,
+      [ADDED],
+    );
+    const id = rows[0].id as string;
+    const before = (await ask('accounts')).accounts.find((a: { address: string }) => a.address === ADDED);
+    expect(before.state).toContainEqual({ value: 'add it again', tone: 'warning' });
+
+    expect(await act('email.add_account', { address: ADDED, password: 'letmein' })).toMatchObject({ added: true });
+    const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
+    expect(account).toMatchObject({ id, addedVia: 'page', secretName: secretNameFor(ADDED) });
+    const secret = (await findSecret(pool, account.secretName))!;
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('letmein');
+    await act('email.remove_account', { id });
   });
 
   /*

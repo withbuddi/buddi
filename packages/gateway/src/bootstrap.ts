@@ -137,9 +137,9 @@ export async function hydrateSecrets(
 ): Promise<SecretHydration> {
   // Mail accounts' passwords are not hydrated: they are owner secrets, which
   // the email plugin asks `ctx.buddi.secrets` for and never reads from the
-  // environment (`owner-secrets.ts`). `GMAIL_APP_PASSWORD` still is, once, so
-  // the start can adopt a `.env` copy; it is cleared from the environment
-  // after that.
+  // environment (`owner-secrets.ts`). `GMAIL_APP_PASSWORD` is not either:
+  // the start's one-time adoption of the old `.env` mailbox reads it
+  // itself (`adoptEnvMailbox`), and it is cleared from the environment after.
   const names = [...WIRED_SECRETS];
   const resolved = await resolveSecrets(names, { vault, env });
   for (const name of names) {

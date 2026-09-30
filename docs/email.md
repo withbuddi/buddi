@@ -96,7 +96,8 @@ history — as proposals, for the reason above.
 
 - Settings → Email lists accounts: address, the name the owner gave it, the
   addresses it also receives as, host, last sync, the vault secret's name,
-  whether it is on and where it came from, and remove. It is a **page descriptor this
+  whether it is on (and, for a mailbox `.env` used to name that could not be
+  adopted, that it needs adding again), and remove. It is a **page descriptor this
   plugin contributes** ([plugin-pages.md](plugin-pages.md)), not a screen compiled
   into the dashboard: a table over the `accounts` query, with
   `email.remove_account` on each row and a drawer that writes through
@@ -122,8 +123,20 @@ history — as proposals, for the reason above.
   than guess at. The password is an owner secret bound to `email.account`
   ([owner-secrets.md](owner-secrets.md) §4, §7), and it never enters
   `process.env`. Removing an account removes its vault
-  entry with it, unless the row came from the `GMAIL_USER` seed, whose
-  secret is named by `.env` rather than by us.
+  entry with it.
+- Settings → Email (and `email.add_account` behind it) is the only way a
+  mailbox exists. `.env` used to name one (`GMAIL_USER`, its password
+  `GMAIL_APP_PASSWORD`); the gateway adopts that mailbox once, at start:
+  when its password is readable (an owner secret, the vault or `.env`) and
+  no Settings account has that address, the old row becomes a page-added
+  account in place — same id, so its folders, cursors, messages, triage and
+  drafts stay its own and nothing is read or triaged twice — and the
+  password becomes the owner secret `secretNameFor(address)`. The outcome is
+  recorded in `email.settings` (`env_mailbox_adopted`), and later starts do
+  not read `.env` for a mailbox again. With no readable password nothing is
+  created, the start says to add the mailbox in Settings → Email, and adding
+  it there claims the old row with its mail. `buddi doctor` warns while the
+  `GMAIL_*` lines are still in `.env`.
 - Every read tool takes an optional `account`; absent means all accounts,
   and results carry the account. `send` and `draft_reply` take the account
   from the thread they answer; `draft_new` requires one.

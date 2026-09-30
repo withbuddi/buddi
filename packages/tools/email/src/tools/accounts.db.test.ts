@@ -8,7 +8,7 @@
  *  - does naming one narrow the answer to it;
  *  - does a reply leave from the mailbox it answers, under the alias the
  *    original was addressed to;
- *  - and does the single env-seeded account still work exactly as it did.
+ *  - and does a single Gmail account still work with no `account` argument.
  */
 import type { BuddiHost } from '@buddi/core/testing';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -17,7 +17,7 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations, ToolRegistry } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME, listAccounts, secretNameFor } from '../config.js';
+import { listAccounts, secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { FakeSmtpServer } from '../smtp/fake.js';
@@ -53,8 +53,7 @@ const WORK_SECRET = secretNameFor(WORK);
 
 /** Both secrets, by the name each account's row carries. */
 const ENV = {
-  GMAIL_USER: PERSONAL,
-  [GMAIL_SECRET_NAME]: 'personal-app-password',
+  [secretNameFor(PERSONAL)]: 'personal-app-password',
   [WORK_SECRET]: 'work-app-password',
 };
 
@@ -154,7 +153,7 @@ suite('email accounts, plural (postgres)', () => {
   /** Both accounts, both mailboxes polled in one pass. */
   async function seed(): Promise<{ personalId: string; workId: string }> {
     await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, PERSONAL);
     await pool.query(
       `insert into email.accounts
          (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name,
@@ -365,33 +364,52 @@ suite('email accounts, plural (postgres)', () => {
     expect(rows[0].n).toBe(2);
   });
 
-  describe('the env-seeded account, alone, exactly as before', () => {
+  describe('one Gmail account, alone', () => {
     beforeEach(async () => {
       await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     });
 
-    it('seeds one account from GMAIL_USER, with no aliases and no page provenance', async () => {
-      const seeded = await ensureGmailAccount(pool, ENV);
-      expect(seeded).toMatchObject({
+    it('writes a Gmail account as page-added, its secret named from its address', async () => {
+      const written = await writeGmailAccount(pool, ' Owner@Example.test ');
+      expect(written).toMatchObject({
         address: PERSONAL,
-        secretName: GMAIL_SECRET_NAME,
-        addedVia: 'env',
+        secretName: secretNameFor(PERSONAL),
+        addedVia: 'page',
+        imapHost: 'imap.gmail.com',
+        smtpHost: 'smtp.gmail.com',
         enabled: true,
         aliases: [],
         displayName: null,
       });
-      // Re-running it is how the owner moves the account, and it stays one row.
-      await ensureGmailAccount(pool, ENV);
+      expect((await writeGmailAccount(pool, PERSONAL)).id).toBe(written.id);
       expect(await listAccounts(pool)).toHaveLength(1);
     });
 
-    it('seeds nothing when GMAIL_USER is not set', async () => {
-      expect(await ensureGmailAccount(pool, { [GMAIL_SECRET_NAME]: 'x' })).toBeNull();
-      expect(await listAccounts(pool)).toHaveLength(0);
+    it('converts a row the old env seed left, in place, keeping its id', async () => {
+      const { rows } = await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+         values ($1, 'imap.gmail.com', 993, 'smtp.gmail.com', 465, 'app-password', 'GMAIL_APP_PASSWORD', 'env')
+         returning id`,
+        [PERSONAL],
+      );
+      const converted = await writeGmailAccount(pool, PERSONAL);
+      expect(converted).toMatchObject({ id: rows[0].id, addedVia: 'page', secretName: secretNameFor(PERSONAL) });
+    });
+
+    it('leaves a page-added row of the same address exactly as the owner set it', async () => {
+      await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, display_name, added_via)
+         values ($1, 'imap.other.test', 993, 'smtp.other.test', 587, 'app-password', $2, 'Mine', 'page')`,
+        [PERSONAL, secretNameFor(PERSONAL)],
+      );
+      const kept = await writeGmailAccount(pool, PERSONAL);
+      expect(kept).toMatchObject({ imapHost: 'imap.other.test', smtpPort: 587, displayName: 'Mine', addedVia: 'page' });
     });
 
     it('needs no `account` argument anywhere while there is only one', async () => {
-      await ensureGmailAccount(pool, ENV);
+      await writeGmailAccount(pool, PERSONAL);
       const server = new FakeImapServer();
       server.add(
         'INBOX',
@@ -424,7 +442,7 @@ suite('email accounts, plural (postgres)', () => {
     });
 
     it('refuses to open the page-added account when its secret is not there', async () => {
-      await ensureGmailAccount(pool, ENV);
+      await writeGmailAccount(pool, PERSONAL);
       await pool.query(
         `insert into email.accounts
            (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
@@ -436,7 +454,7 @@ suite('email accounts, plural (postgres)', () => {
       // The personal account still polls; the other one says why it cannot.
       await createInboxPollSource({
         connect: server.factory(),
-        env: { GMAIL_USER: PERSONAL, [GMAIL_SECRET_NAME]: 'personal-app-password' },
+        env: { [secretNameFor(PERSONAL)]: 'personal-app-password' },
       }).poll(hosted({
         db: pool,
         now: ctx.now,

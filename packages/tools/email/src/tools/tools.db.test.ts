@@ -11,7 +11,7 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations, ToolRegistry } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
+import { secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { FakeSmtpServer } from '../smtp/fake.js';
@@ -38,7 +38,8 @@ const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_tools_test_${process.pid}`;
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 
 suite('email tools (postgres)', () => {
   let admin: Pool;
@@ -97,7 +98,7 @@ suite('email tools (postgres)', () => {
   async function seed(): Promise<string[]> {
     await pool.query('truncate email.drafts, email.triage, email.messages, email.folders, email.accounts cascade');
     await pool.query('delete from email.settings');
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     const server = new FakeImapServer();
     server.add(
       'INBOX',
@@ -780,7 +781,7 @@ suite('email tools (postgres)', () => {
 
     it('never claims a draft when the configuration is the problem', async () => {
       const draftId = await draft();
-      const manifest = createEmailManifest({ send: smtp.factory(), env: { GMAIL_USER: 'owner@example.test' } });
+      const manifest = createEmailManifest({ send: smtp.factory(), env: {} });
       const tool = manifest.tools.find((t) => t.name === 'email.send') as typeof sendTool;
       await expect(
         tool.execute({ draftId }, { ...ctx, actionId: '55555555-5555-4555-8555-555555555555' }),

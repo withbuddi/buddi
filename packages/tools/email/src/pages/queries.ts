@@ -492,16 +492,18 @@ export function accountsQuery(): PageQuery {
             ? relative(synced.get(account.id) ?? null, now)
             : 'no mail has arrived yet',
           /*
-           * Two facts about a mailbox, not one sentence to be parsed: whether
-           * buddi is reading it, and whether it came from `.env` rather than
-           * from the page. Each is its own pill, and the one worth catching an
-           * eye — a mailbox that is switched off — carries the tone.
+           * Facts about a mailbox, not one sentence to be parsed: whether
+           * buddi is reading it, and whether it is a mailbox `.env` used to
+           * name that could not be adopted (its password was not readable at
+           * start) — adding it again here is what brings it back, with its
+           * mail. Each is its own pill, and the ones worth catching an eye
+           * carry the tone.
            */
           state: [
             account.enabled
               ? { value: 'on', tone: 'neutral' }
               : { value: 'off', tone: 'warning' },
-            ...(account.addedVia === 'env' ? [{ value: 'from .env', tone: 'neutral' }] : []),
+            ...(account.addedVia === 'env' ? [{ value: 'add it again', tone: 'warning' }] : []),
             // The poll's own record: new mail landed with nobody to triage it.
             ...(waiting.get(account.id) ? [{ value: 'triage waiting', tone: 'warning' }] : []),
           ],

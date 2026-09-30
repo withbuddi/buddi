@@ -64,7 +64,7 @@ import {
 } from '@buddi/tool-web';
 import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
 import type { Pool } from 'pg';
-import { STALE_AFTER_MS, listArchives, readRecovery, readWebSetting } from '@buddi/core';
+import { STALE_AFTER_MS, findSecret, listArchives, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {
@@ -549,16 +549,31 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         return { status: 'ok', detail: 'the mail plugin is not installed here' };
       }
       const synced = await lastSyncByAccount(pool).catch(() => new Map<string, string | null>());
-      return checkEmail(
-        accounts.map((account) => ({
+      // A mailbox password is an owner secret (Settings → Secrets): present
+      // when its row is there and the vault answers for it. The environment
+      // still counts for an installation that injects one.
+      const present = async (name: string): Promise<boolean> => {
+        if ((env[name] ?? '').trim() !== '') return true;
+        try {
+          const secret = await findSecret(pool, name);
+          if (secret === null) return false;
+          return ((await vault?.get(ownerSecretVaultName(secret.id))) ?? '').trim() !== '';
+        } catch {
+          return false;
+        }
+      };
+      const facts = [];
+      for (const account of accounts) {
+        facts.push({
           address: account.address,
           enabled: account.enabled,
           secretName: account.secretName,
-          secretPresent: (env[account.secretName] ?? '').trim() !== '',
+          secretPresent: await present(account.secretName),
           lastSyncAt: synced.get(account.id) ?? null,
-        })),
-        new Date(),
-      );
+        });
+      }
+      const legacyEnv = ['GMAIL_USER', 'GMAIL_APP_PASSWORD'].filter((name) => (env[name] ?? '').trim() !== '');
+      return checkEmail(facts, new Date(), legacyEnv);
     },
 
     async botToken(): Promise<ProbeResult> {

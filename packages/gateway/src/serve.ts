@@ -64,13 +64,12 @@ import { hostService } from '@buddi/tool-host';
 import type { ApprovalResume } from '@buddi/runtime';
 import {
   DEFAULT_POLL_TIMEOUT_MS,
-  ensureGmailAccount,
   listAccounts,
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { scrubText } from '@buddi/core';
-import { adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
+import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
 import { AGENT_RUN_JOB_KIND, createAgentRunHandler, OFFER_HINT_PREFIX } from './missions/agent-run.js';
@@ -540,10 +539,6 @@ export async function main(): Promise<void> {
     // builds the driver for whichever mode the owner last chose.
     try { await browserHost(process.env, { extensionBridge: () => extensionEndpoint(process.env) }).enable(); }
     catch (error) { console.error(`host browser unavailable: ${error instanceof Error ? error.message : String(error)}`); }
-    // The mail account this installation sends and receives as, from the named
-    // environment variable. Idempotent, and a no-op when none is configured —
-    // an installation with no mailbox is a valid, running one.
-    const account = await ensureGmailAccount(pool, process.env);
     /*
      * Owner secrets: the vault behind ctx.buddi.secrets, opened once and
      * handed to the host, never to a plugin. Then every mailbox password moves
@@ -562,7 +557,26 @@ export async function main(): Promise<void> {
       }
       if (vault !== undefined) configurePluginHost({ vault });
       try {
-        const adopted = await adoptMailboxSecrets(pool, vault, process.env);
+        // The mailbox `.env` used to name (GMAIL_USER), once, as a Settings →
+        // Email account with its mail and cursors kept. After this nothing
+        // reads a mailbox from the environment.
+        const env = await adoptEnvMailbox(pool, vault, process.env);
+        if (env.outcome === 'adopted') {
+          console.error(
+            `mail: adopted ${env.address} from .env as a Settings → Email account (its mail and cursors kept); ` +
+              'the GMAIL_USER and GMAIL_APP_PASSWORD lines in .env are no longer read and can be deleted',
+          );
+        } else if (env.outcome === 'no-password') {
+          console.error(
+            `mail: .env names ${env.address} in GMAIL_USER, but ${env.reason}; buddi no longer reads mailboxes from .env — ` +
+              'add it in Settings → Email',
+          );
+        }
+      } catch (error) {
+        console.error(`mail: the .env mailbox was not adopted: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        const adopted = await adoptMailboxSecrets(pool, vault);
         const moved = Object.entries(adopted.outcomes).filter(([, outcome]) => outcome === 'adopted');
         if (moved.length > 0) console.error(`moved ${moved.length} mailbox password(s) into owner secrets`);
         for (const problem of adopted.problems) console.error(`owner secrets: ${problem}`);
@@ -1123,7 +1137,12 @@ export async function main(): Promise<void> {
       `  queue: worker for ${JOB_KINDS.join(', ')}, lease ${JOB_LEASE_MS / 60_000}m — ` +
         `${jobCounts.pending} pending, ${jobCounts.suspended} suspended, ${jobCounts.failed} failed`,
     );
-    console.log(`  mail account: ${account ? account.address : 'none configured (GMAIL_USER unset)'}`);
+    {
+      const mailboxes = await listAccounts(pool).catch(() => []);
+      console.log(
+        `  mailboxes: ${mailboxes.length === 0 ? 'none configured (Settings → Email adds one)' : `${mailboxes.length} configured`}`,
+      );
+    }
     if (await isPaused(pool)) {
       console.log('  PAUSED — nothing will run until `buddi resume`');
     }

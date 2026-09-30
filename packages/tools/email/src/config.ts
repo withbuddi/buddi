@@ -3,18 +3,16 @@
  *
  * An agent must never be able to point the mailbox somewhere else: which
  * accounts buddi reads and sends as is owner configuration, done from the
- * settings page or by env at startup, and the registry never carries a
+ * settings page (or the owner-only tools behind it), and the registry never carries a
  * `configure_account` capability to argue with. What an agent may do is *name*
  * one of the accounts the owner configured — that is a filter over rows, not a
  * new mailbox — which is why the read tools take an `account` argument and
  * nothing here takes a host or a password.
  *
- * Two ways a row gets here, and they never fight:
- *
- *  - `ensureGmailAccount` seeds the one account `GMAIL_USER` names, on every
- *    boot, exactly as it always did. It refreshes hosts and auth mode, and it
- *    touches nothing the owner set on the page.
- *  - the settings page inserts the rest, each with its own owner secret.
+ * One way a row gets here: the settings page, each account with its own owner
+ * secret. The mailbox `.env` used to name (`GMAIL_USER`) is adopted into one
+ * of those once, at start, by the gateway (`writeGmailAccount` below); after
+ * that nothing here reads the environment for a mailbox.
  *
  * The schema stores the *name* of the secret, never the secret. The installed
  * plugin resolves it through the owner's secrets (`credentials.ts`); a caller
@@ -39,10 +37,6 @@ export const GMAIL_IMAP_HOST = 'imap.gmail.com';
 export const GMAIL_IMAP_PORT = 993;
 export const GMAIL_SMTP_HOST = 'smtp.gmail.com';
 export const GMAIL_SMTP_PORT = 465;
-
-/** The env var naming the account, and the vault key naming its app password. */
-export const GMAIL_USER_VAR = 'GMAIL_USER';
-export const GMAIL_SECRET_NAME = 'GMAIL_APP_PASSWORD';
 
 /** The mailbox the source polls. */
 export const INBOX = 'INBOX';
@@ -80,51 +74,44 @@ export function secretNameFor(address: string): string {
 }
 
 /**
- * Upsert the configured Gmail account. Returns `null` when `GMAIL_USER` is not
- * set — no mailbox configured is a valid, running state, not an error, and the
- * source simply has nothing to poll.
+ * Write down a Gmail mailbox as an account the owner added, with Gmail's hosts
+ * and the password's name derived from the address (`secretNameFor`).
  *
- * Re-running it is how the owner moves the account: the address is the key, the
- * hosts and auth mode are refreshed from these constants.
+ * The one caller outside tests is the gateway's one-time adoption of the
+ * mailbox `.env` used to name (`GMAIL_USER`): buddi no longer reads mailboxes
+ * from the environment, so that mailbox becomes a Settings → Email account.
+ * A row the old env seed left under the same address is converted *in place*
+ * — same id — so its folders, cursors, messages, triage and drafts, all keyed
+ * by the account's id, stay its own and nothing is read or triaged twice. A
+ * row the owner added on the page is returned untouched.
+ *
+ * It writes no password: the caller files that as the owner secret this row
+ * names, bound to its id.
  */
-export async function ensureGmailAccount(
-  pool: Db,
-  env: EnvLike = process.env,
-): Promise<AccountRecord | null> {
-  const address = env[GMAIL_USER_VAR]?.trim().toLowerCase();
-  if (!address) return null;
-
+export async function writeGmailAccount(pool: Db, rawAddress: string): Promise<AccountRecord> {
+  const address = rawAddress.trim().toLowerCase();
+  if (address === '') throw new Error('writeGmailAccount: an address is required');
   const { rows } = await pool.query(
     `insert into email.accounts
        (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
-     values ($1, $2, $3, $4, $5, 'app-password', $6, 'env')
+     values ($1, $2, $3, $4, $5, 'app-password', $6, 'page')
      on conflict (address) do update
        set imap_host = excluded.imap_host,
            imap_port = excluded.imap_port,
            smtp_host = excluded.smtp_host,
            smtp_port = excluded.smtp_port,
            auth_mode = excluded.auth_mode,
-           -- An account the owner added on the page owns its own vault secret
-           -- and its own provenance. The env seed refreshes the transport it
-           -- knows about and leaves both alone, so re-seeding a boot never
-           -- points a page-added account at GMAIL_APP_PASSWORD.
-           secret_name = case when email.accounts.added_via = 'page'
-                              then email.accounts.secret_name
-                              else excluded.secret_name end,
-           added_via = email.accounts.added_via
+           secret_name = excluded.secret_name,
+           added_via = 'page'
+     where email.accounts.added_via = 'env'
      returning ${ACCOUNT_COLUMNS}`,
-    [
-      address,
-      GMAIL_IMAP_HOST,
-      GMAIL_IMAP_PORT,
-      GMAIL_SMTP_HOST,
-      GMAIL_SMTP_PORT,
-      GMAIL_SECRET_NAME,
-    ],
+    [address, GMAIL_IMAP_HOST, GMAIL_IMAP_PORT, GMAIL_SMTP_HOST, GMAIL_SMTP_PORT, secretNameFor(address)],
   );
-  const row = rows[0];
-  if (!row) throw new Error('ensureGmailAccount: upsert returned no row');
-  return toAccount(row);
+  if (rows[0]) return toAccount(rows[0]);
+  // Already a page-added account: the owner's row, as they left it.
+  const { rows: kept } = await pool.query(`select ${ACCOUNT_COLUMNS} from email.accounts where address = $1`, [address]);
+  if (!kept[0]) throw new Error('writeGmailAccount: the account row was not written');
+  return toAccount(kept[0]);
 }
 
 /**

@@ -389,7 +389,6 @@ export {
 } from './sources/inbox-poll.js';
 export {
   ACCOUNT_SECRET_PREFIX,
-  ensureGmailAccount,
   findAccount,
   lastSyncByAccount,
   listAccounts,
@@ -397,11 +396,10 @@ export {
   secretNameFor,
   GMAIL_IMAP_HOST,
   GMAIL_IMAP_PORT,
-  GMAIL_SECRET_NAME,
   GMAIL_SMTP_HOST,
   GMAIL_SMTP_PORT,
-  GMAIL_USER_VAR,
   INBOX,
+  writeGmailAccount,
   type EnvLike,
 } from './config.js';
 export { ACCOUNT_KIND, accountDestination, mailboxAuth } from './credentials.js';

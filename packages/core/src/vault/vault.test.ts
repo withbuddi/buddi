@@ -247,7 +247,7 @@ describe('resolveSecret', () => {
     expect(out.env.TELEGRAM_BOT_TOKEN).toBe('from-vault');
     expect(out.env.TAVILY_API_KEY).toBe('from-env');
     expect(out.sources).toMatchObject({ TELEGRAM_BOT_TOKEN: 'vault', TAVILY_API_KEY: 'env' });
-    expect(Object.keys(out.problems)).toContain('GMAIL_APP_PASSWORD');
+    expect(Object.keys(out.problems)).toContain('OPENAI_API_KEY');
     expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
   });
 });

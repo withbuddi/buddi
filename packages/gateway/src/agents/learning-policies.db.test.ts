@@ -20,7 +20,7 @@ import {
   type CoreToolContext,
 } from '@buddi/core';
 import { testDatabaseUrl } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME, loadPolicies, manifest as emailManifest } from '@buddi/tool-email';
+import { loadPolicies, secretNameFor, writeGmailAccount, manifest as emailManifest } from '@buddi/tool-email';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { adoptPluginPolicies, createLearningManifest } from './learning.js';
@@ -30,7 +30,8 @@ const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
 const TEST_DB = `buddi_learning_policy_test_${process.pid}`;
 const NOW = new Date('2026-09-23T12:00:00Z');
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 
 /** A plugin that applies rules, recording what it was asked. */
 function rulesPlugin(calls: string[]): PluginManifest {
@@ -133,7 +134,7 @@ suite('learned policies through core (postgres)', () => {
   });
 
   it('moves the email plugin\'s old proposed rows to core on start, once', async () => {
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     await pool.query(
       `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
        values ($1, 'sender', 'ads@shop.test', 'ignore', '{}'::jsonb, 'learned', true),
@@ -148,7 +149,7 @@ suite('learned policies through core (postgres)', () => {
   });
 
   it('acceptance 3: an email learned rule appears in the same inbox as a skill proposal, and keeping it writes the rule', async () => {
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     const { rows: folder } = await pool.query(
       `insert into email.folders (account_id, name) values ($1, 'INBOX') returning id`,
       [account!.id],

@@ -9,7 +9,7 @@ import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createPool, runMigrations } from '@buddi/core/testing';
-import { ensureGmailAccount, GMAIL_SECRET_NAME } from '../config.js';
+import { secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
 import type { CoreSourceContext } from '@buddi/core/testing';
@@ -49,7 +49,8 @@ const suite = databaseUrl ? describe : describe.skip;
 
 const TEST_DB = `buddi_email_src_test_${process.pid}`;
 
-const ENV = { GMAIL_USER: 'owner@example.test', [GMAIL_SECRET_NAME]: 'app-password' };
+const OWNER_ADDRESS = 'owner@example.test';
+const ENV = { [secretNameFor(OWNER_ADDRESS)]: 'app-password' };
 
 suite('email.inbox-poll (postgres + fake imap)', () => {
   let admin: Pool;
@@ -79,7 +80,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
       'truncate email.dates, email.events, email.policies, email.drafts, email.triage, ' +
         'email.messages, email.folders, email.accounts cascade',
     );
-    const account = await ensureGmailAccount(pool, ENV);
+    const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = account!.id;
   });
 
@@ -521,11 +522,11 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     await source.poll(contextFor());
     expect(server.opens).toBe(0);
 
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
     const logged: string[] = [];
     const noSecret = createInboxPollSource({
       connect: server.factory(),
-      env: { GMAIL_USER: 'owner@example.test' },
+      env: {},
       backfill: FULL_SYNC,
     });
     const ctx = contextFor();

@@ -8,8 +8,7 @@
  * `.env` or the vault, at startup.
  *
  * The key is read by **name**, through the environment the composition root
- * already hydrated from the vault (`hydrateSecrets`), exactly as
- * `GMAIL_APP_PASSWORD` is. Nothing in this package opens a keychain, and
+ * already hydrated from the vault (`hydrateSecrets`). Nothing in this package opens a keychain, and
  * nothing in this package holds a key between calls: it is read at the moment
  * of the search and dropped.
  */

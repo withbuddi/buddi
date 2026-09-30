@@ -241,7 +241,8 @@ proposal loop deletes `held` rows older than a month. Delivered, pending,
 refused and failed rows are the owner's audit log and are never swept.
 
 **What plugins and accounts hold.** The email plugin's per-mailbox entries
-(`secretNameFor(address)`, and `GMAIL_APP_PASSWORD` for the first account) are
+(`secretNameFor(address)`; the old `.env` mailbox's `GMAIL_APP_PASSWORD` is
+renamed to its account's own name when that mailbox is adopted) are
 owner secrets bound to `email.account`, and the plugin never copies them into
 `process.env`. Provider account credentials (the Anthropic and Codex
 `secretRef` entries) are owner secrets bound to `accounts.provider`. The

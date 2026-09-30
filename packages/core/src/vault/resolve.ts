@@ -56,7 +56,6 @@ function unquote(value: string): string {
 export const KNOWN_SECRETS: readonly string[] = [
   'OPENAI_API_KEY',
   'TELEGRAM_BOT_TOKEN',
-  'GMAIL_APP_PASSWORD',
   // The web plugin's search backends. Two names because the backend is
   // swappable; an installation sets whichever one its provider needs, and
   // neither is required for the system to run.

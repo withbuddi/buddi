@@ -33,13 +33,13 @@ import { manifest as artifactsManifest } from '@buddi/tool-artifacts';
 import { createReminderManifest, createScheduleManifest } from './missions/reminders.js';
 import {
   createEmailManifest,
-  ensureGmailAccount,
   FakeImapServer,
   FakeSmtpServer,
   fakeMessage,
-  GMAIL_SECRET_NAME,
+  secretNameFor,
   TRIAGE_AGENT_ID,
   triageDedupKey,
+  writeGmailAccount,
 } from '@buddi/tool-email';
 import { fixturePluginManifest } from './__fixtures__/plugin-manifest.js';
 import { manifest as memoryManifest } from '@buddi/tool-memory';
@@ -65,9 +65,9 @@ const TEST_DB = `buddi_e2e_test_${process.pid}`;
 const OWNER_USER_ID = '4242';
 const OWNER_CHAT_ID = '4242';
 
+const OWNER_ADDRESS = 'owner@example.test';
 const ENV = {
-  GMAIL_USER: 'owner@example.test',
-  [GMAIL_SECRET_NAME]: 'app-password',
+  [secretNameFor(OWNER_ADDRESS)]: 'app-password',
   BUDDI_TZ: 'UTC',
   // A first contact plants the cursor at UIDNEXT-1 and reads no history, so
   // the one message this end-to-end seeds would otherwise be "before we
@@ -231,7 +231,7 @@ suite('end to end: mail in, approved send out', () => {
       externalChatId: OWNER_CHAT_ID,
       pairedVia: 'env',
     });
-    await ensureGmailAccount(pool, ENV);
+    await writeGmailAccount(pool, OWNER_ADDRESS);
   }, 60_000);
 
   afterAll(async () => {
@@ -249,7 +249,7 @@ suite('end to end: mail in, approved send out', () => {
       fakeMessage({
         messageId: '<debit-returned@bank.test>',
         from: 'noreply@bank.test',
-        to: [ENV.GMAIL_USER as string],
+        to: [OWNER_ADDRESS],
         subject: 'Your direct debit was returned',
         bodyText: 'We were unable to collect GBP 84.20 on 12 September.',
       }),

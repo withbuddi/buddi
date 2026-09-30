@@ -229,10 +229,18 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
     async execute(input, ctx) {
       const account = readNewAccount(input);
 
-      const { rows: existing } = await ctx.buddi!.db.query(`select 1 from email.accounts where address = $1`, [
-        account.address,
-      ]);
-      if (existing.length > 0) {
+      const { rows: existing } = await ctx.buddi!.db.query<{ id: string; added_via: string }>(
+        `select id::text as id, added_via from email.accounts where address = $1`,
+        [account.address],
+      );
+      /*
+       * A row the old `.env` seed left, which the start could not adopt
+       * because its password was not readable, is claimed rather than refused:
+       * adding it here writes the same row (same id), so the mail, the
+       * cursors and the triage it already has stay its own.
+       */
+      const claim = existing[0]?.added_via === 'env' ? existing[0].id : null;
+      if (existing.length > 0 && claim === null) {
         throw new AccountRefusal(
           `${account.address} is already here. Remove it first if you want to change its password.`,
         );
@@ -262,7 +270,26 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
 
       let written: AccountRecord;
       try {
-        const { rows } = await ctx.buddi!.db.query(
+        const { rows } = claim !== null
+          ? await ctx.buddi!.db.query(
+            `update email.accounts
+                set imap_host = $2, imap_port = $3, smtp_host = $4, smtp_port = $5,
+                    auth_mode = 'app-password', secret_name = $6, aliases = $7::text[],
+                    display_name = $8, enabled = true, added_via = 'page'
+              where id = $1::uuid and added_via = 'env'
+              returning ${ACCOUNT_COLUMNS}`,
+            [
+              claim,
+              account.imapHost,
+              account.imapPort,
+              account.smtpHost,
+              account.smtpPort,
+              secretName,
+              account.aliases,
+              account.displayName,
+            ],
+          )
+          : await ctx.buddi!.db.query(
           `insert into email.accounts
              (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name,
               aliases, display_name, enabled, added_via)
@@ -300,7 +327,15 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
           { kind: ACCOUNT_KIND, target: written.id, rule: 'pre-approved' },
         ]);
       } catch {
-        await ctx.buddi!.db.query(`delete from email.accounts where id = $1`, [written.id]).catch(() => {});
+        // Undone the way it was done: a claimed row goes back to what the seed
+        // left, so its mail is not lost with a password that was not kept.
+        await (claim !== null
+          ? ctx.buddi!.db.query(
+            `update email.accounts set secret_name = 'GMAIL_APP_PASSWORD', added_via = 'env' where id = $1`,
+            [written.id],
+          )
+          : ctx.buddi!.db.query(`delete from email.accounts where id = $1`, [written.id])
+        ).catch(() => {});
         throw new AccountRefusal('The password could not be kept safely. Unlock this machine and try again.');
       }
       /*
@@ -328,8 +363,7 @@ const removeInput = z.object({ id: z.string().uuid() }).strict();
  *
  * The row goes first: the mail, the drafts and the cursor go with it by
  * cascade. Then the owner secret, which is only removed when it is *this*
- * account's — the env-seeded account shares its secret with the variable that
- * named it, and deleting that from under `.env` would be a surprise.
+ * account's — a row the old `.env` seed left names a secret it never owned.
  */
 export function createRemoveAccountTool(
   opts: AccountToolOptions,
@@ -360,7 +394,7 @@ export function createRemoveAccountTool(
         secretRemoved,
         note: secretRemoved
           ? `${account.address} is gone, and its password with it.`
-          : `${account.address} is gone. Its password came from the environment and was left alone.`,
+          : `${account.address} is gone. It had no password of its own to remove.`,
       };
     },
   };

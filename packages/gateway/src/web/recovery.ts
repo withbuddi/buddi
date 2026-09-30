@@ -111,7 +111,6 @@ const RUNNING_PROVES = new Set(['DATABASE_URL', 'BUDDI_DB_PASSWORD', 'BUDDI_VAUL
 const SECRET_WORDS: Record<string, string> = {
   OPENAI_API_KEY: 'OpenAI — API key',
   TELEGRAM_BOT_TOKEN: 'Telegram — bot token',
-  GMAIL_APP_PASSWORD: 'Gmail — app password',
   TAVILY_API_KEY: 'Tavily — search key',
   BRAVE_SEARCH_API_KEY: 'Brave Search — search key',
 };

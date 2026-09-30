@@ -494,7 +494,7 @@ describe('the email row', () => {
   const account = {
     address: 'owner@example.test',
     enabled: true,
-    secretName: 'GMAIL_APP_PASSWORD',
+    secretName: 'EMAIL_OWNER_EXAMPLE_TEST_1a2b3c4d',
     secretPresent: true,
     lastSyncAt: '2026-09-21T11:00:00Z',
   };
@@ -521,7 +521,7 @@ describe('the email row', () => {
     );
     expect(row.status).toBe('ok');
     expect(row.detail).toContain('2 account(s)');
-    expect(row.detail).toContain('owner@example.test [GMAIL_APP_PASSWORD] last mail 1h ago');
+    expect(row.detail).toContain('owner@example.test [EMAIL_OWNER_EXAMPLE_TEST_1a2b3c4d] last mail 1h ago');
     expect(row.detail).toContain('owner@work.test [EMAIL_OWNER_WORK_TEST] never synced');
   });
 
@@ -538,6 +538,16 @@ describe('the email row', () => {
     expect(row.detail).toContain('EMAIL_OWNER_WORK_TEST MISSING');
     expect(row.detail).toContain('owner@work.test cannot open');
     expect(row.detail).toContain('Settings → Email');
+  });
+
+  it('warns that the old .env mailbox lines are ignored', () => {
+    const row = checkEmail([account], now, ['GMAIL_USER', 'GMAIL_APP_PASSWORD']);
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('owner@example.test');
+    expect(row.detail).toContain('GMAIL_USER and GMAIL_APP_PASSWORD are still in .env and ignored');
+    expect(row.detail).toContain('Settings → Email');
+    expect(checkEmail([], now, ['GMAIL_USER']).status).toBe('warn');
+    expect(checkEmail([account], now, []).status).toBe('ok');
   });
 
   it('says a disabled mailbox is off rather than silent, and does not warn about it', () => {

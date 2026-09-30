@@ -2,15 +2,17 @@
  * Owner secrets at the composition root (docs/owner-secrets.md §7,
  * docs/plugin-host-api.md §4.2, §6).
  *
- * Two jobs at start, both once:
+ * Three jobs at start, all once:
  *
+ *  - **Adopt the mailbox `.env` used to name** (`GMAIL_USER`, its password
+ *    `GMAIL_APP_PASSWORD`) as a Settings → Email account — `adoptEnvMailbox`.
+ *    After that buddi reads no mailbox from the environment.
  *  - **Adopt what the email plugin kept.** Each mailbox's password lived in
- *    the vault under the account row's `secret_name` (`EMAIL_<address>_<hash>`,
- *    or `GMAIL_APP_PASSWORD` for the account `.env` names) and was copied into
- *    `process.env` for the plugin to read. Each becomes an owner secret of the
- *    same name, bound to `email.account` with the account's id as its target,
- *    pre-approved. Idempotent; an old entry is deleted only after the new one
- *    reads back.
+ *    the vault under the account row's `secret_name` (`EMAIL_<address>_<hash>`)
+ *    and was copied into `process.env` for the plugin to read. Each becomes an
+ *    owner secret of the same name, bound to `email.account` with the
+ *    account's id as its target, pre-approved. Idempotent; an old entry is
+ *    deleted only after the new one reads back.
  *  - **Clear what nothing reads any more** from `process.env`: the mailbox
  *    passwords. What else can go, and what cannot yet, is said on
  *    `mailboxSecretNames`.
@@ -22,13 +24,15 @@ import {
   ownerSecretVaultName,
   putOwnerSecret,
   registerSecretDestination,
+  renameOwnerSecret,
+  VAULT_PLACEHOLDER,
   useOwnerSecret,
   type BuddiHost,
   type AdoptOutcome,
   type SecretDestination,
   type Vault,
 } from '@buddi/core';
-import { ACCOUNT_KIND, GMAIL_SECRET_NAME, listAccounts } from '@buddi/tool-email';
+import { ACCOUNT_KIND, listAccounts, secretNameFor, writeGmailAccount } from '@buddi/tool-email';
 import type { EnvTarget, SecretsPort } from '@buddi/tool-mcp';
 import type { Pool } from 'pg';
 
@@ -126,6 +130,148 @@ export async function deleteAccountSecret(
   }
 }
 
+/** The two `.env` lines that used to name a mailbox. Read once, by `adoptEnvMailbox`, and never again. */
+export const LEGACY_USER_VAR = 'GMAIL_USER';
+export const LEGACY_PASSWORD_VAR = 'GMAIL_APP_PASSWORD';
+
+/**
+ * The `email.settings` key that records the adoption ran to an end. With it
+ * there, `.env` is not read for a mailbox again — not even to re-create one
+ * the owner later removed in Settings while the old lines were still there.
+ */
+export const ENV_MAILBOX_ADOPTED_KEY = 'env_mailbox_adopted';
+
+export type EnvMailboxAdoption =
+  /** Adopted, or found nothing to adopt, on an earlier start: `.env` is not read. */
+  | { outcome: 'done' }
+  /** `GMAIL_USER` is not set: nothing to adopt, and nothing will be. */
+  | { outcome: 'none' }
+  /** Adopted on this start: the account exists and its password moved. */
+  | { outcome: 'adopted'; address: string; accountId: string }
+  /** A Settings → Email account of that address already exists; nothing touched. */
+  | { outcome: 'exists'; address: string }
+  /** No readable password (or no vault to keep one in): nothing created. */
+  | { outcome: 'no-password'; address: string; reason: string };
+
+/** A value that is really there: not empty, not the `"<vault>"` marker `import-env` leaves. */
+function realValue(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  const unquoted = trimmed.replace(/^(["'])(.*)\1$/, '$2');
+  if (trimmed === '' || unquoted === VAULT_PLACEHOLDER) return null;
+  return trimmed;
+}
+
+/**
+ * Adopt the mailbox `.env` names as a Settings → Email account, once, at start
+ * (the pattern of `adoptProviderAccountSecrets`).
+ *
+ * Buddi used to seed an account from `GMAIL_USER` on every boot, its password
+ * named `GMAIL_APP_PASSWORD` (in `.env`, in the vault, or — since owner
+ * secrets — an owner secret of that name bound to the account). Now only
+ * accounts added in Settings exist, so this turns that mailbox into one:
+ *
+ *  - The password is looked for where it may be: an owner secret already under
+ *    the account's own name (a start that stopped half way), the owner secret
+ *    `GMAIL_APP_PASSWORD`, the raw vault entry of that name, then `.env`.
+ *    None readable: nothing is created, and the caller says to add it in
+ *    Settings → Email.
+ *  - **Continuity.** Everything the mailbox has — folders and their UID
+ *    cursors, messages, threads, triage, drafts, rules — is keyed by the
+ *    account row's id, and the old seed's row is converted in place
+ *    (`writeGmailAccount`), so the id does not change and nothing is re-read,
+ *    re-triaged or dropped. There is nothing to re-key.
+ *  - The password moves to where a page-added account keeps it: the owner
+ *    secret `secretNameFor(address)`, bound to `email.account` with the row's
+ *    id, pre-approved. An owner secret `GMAIL_APP_PASSWORD` is *renamed* (same
+ *    id, same vault entry, its history kept); otherwise the value is written
+ *    under the new name and read back before the row changes hands, and the
+ *    raw vault entry goes last. `.env` is the owner's file and is not touched.
+ *
+ * Once: a run that adopts, finds the address already added in Settings, or
+ * finds no `GMAIL_USER` at all records that in `email.settings`
+ * (`ENV_MAILBOX_ADOPTED_KEY`), and every later start answers `done` without
+ * reading `.env`. Only a missing password leaves it to try again next start.
+ */
+export async function adoptEnvMailbox(
+  pool: Pool,
+  vault: Vault | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<EnvMailboxAdoption> {
+  let marked: unknown[];
+  try {
+    ({ rows: marked } = await pool.query(`select 1 from email.settings where key = $1`, [ENV_MAILBOX_ADOPTED_KEY]));
+  } catch (err) {
+    // No email schema: the mail plugin is not installed here, so there is no
+    // mailbox to adopt into.
+    if ((err as { code?: string }).code === '42P01' || (err as { code?: string }).code === '3F000') return { outcome: 'none' };
+    throw err;
+  }
+  if (marked.length > 0) return { outcome: 'done' };
+  const finished = async (result: EnvMailboxAdoption): Promise<EnvMailboxAdoption> => {
+    const address = 'address' in result ? result.address : null;
+    await pool.query(
+      `insert into email.settings (key, value, updated_at) values ($1, $2::jsonb, now())
+       on conflict (key) do nothing`,
+      [ENV_MAILBOX_ADOPTED_KEY, JSON.stringify({ outcome: result.outcome, address })],
+    );
+    return result;
+  };
+
+  const address = env[LEGACY_USER_VAR]?.trim().toLowerCase();
+  if (!address) return finished({ outcome: 'none' });
+
+  const { rows } = await pool.query<{ id: string; added_via: string }>(
+    `select id::text as id, added_via from email.accounts where address = $1`,
+    [address],
+  );
+  const row = rows[0];
+  if (row !== undefined && row.added_via !== 'env') return finished({ outcome: 'exists', address });
+
+  const name = secretNameFor(address);
+  if (vault === undefined) {
+    return { outcome: 'no-password', address, reason: 'this installation has no vault to keep its password in' };
+  }
+  const ownerValue = async (secretName: string): Promise<{ id: string; value: string } | null> => {
+    const secret = await findSecret(pool, secretName);
+    if (secret === null) return null;
+    const value = realValue(await vault.get(ownerSecretVaultName(secret.id)).catch(() => null));
+    return value === null ? null : { id: secret.id, value };
+  };
+  const resumed = await ownerValue(name);
+  const legacyOwner = resumed === null ? await ownerValue(LEGACY_PASSWORD_VAR) : null;
+  const rawVault = resumed === null && legacyOwner === null
+    ? realValue(await vault.get(LEGACY_PASSWORD_VAR).catch(() => null))
+    : null;
+  const value = resumed?.value ?? legacyOwner?.value ?? rawVault ?? realValue(env[LEGACY_PASSWORD_VAR]);
+  if (value === null) {
+    return { outcome: 'no-password', address, reason: `${LEGACY_PASSWORD_VAR} is not readable` };
+  }
+
+  // The row first when there is none, because the binding names its id; a
+  // password that cannot be kept takes a new row back out.
+  const inserted = row === undefined;
+  const accountId = row?.id ?? (await writeGmailAccount(pool, address)).id;
+  try {
+    if (legacyOwner !== null) await renameOwnerSecret(pool, LEGACY_PASSWORD_VAR, name);
+    const kept = await putOwnerSecret(pool, vault, {
+      name,
+      value,
+      bindings: [{ kind: ACCOUNT_KIND, target: accountId, rule: 'pre-approved' }],
+    });
+    if ((await vault.get(ownerSecretVaultName(kept.id))) !== value) {
+      throw new Error(`the owner secret "${name}" did not read back`);
+    }
+  } catch (err) {
+    if (inserted) await pool.query(`delete from email.accounts where id = $1::uuid`, [accountId]).catch(() => {});
+    throw err;
+  }
+  // The row changes hands only now, with its password already where it looks.
+  await writeGmailAccount(pool, address);
+  if (rawVault !== null) await vault.delete(LEGACY_PASSWORD_VAR).catch(() => false);
+  return finished({ outcome: 'adopted', address, accountId });
+}
+
 export interface MailboxAdoption {
   /** Account address → what happened to its password. Never a value. */
   outcomes: Record<string, AdoptOutcome | 'failed'>;
@@ -137,7 +283,6 @@ export interface MailboxAdoption {
 export async function adoptMailboxSecrets(
   pool: Pool,
   vault: Vault | undefined,
-  env: NodeJS.ProcessEnv,
 ): Promise<MailboxAdoption> {
   const result: MailboxAdoption = { outcomes: {}, problems: [] };
   if (vault === undefined) {
@@ -146,14 +291,14 @@ export async function adoptMailboxSecrets(
   }
   for (const account of await listAccounts(pool, { enabledOnly: false })) {
     if (account.authMode !== 'app-password') continue;
+    // A row the old `.env` seed left and `adoptEnvMailbox` could not adopt:
+    // its password is not readable, and the page is where it comes back.
+    if (account.addedVia === 'env') continue;
     try {
       result.outcomes[account.address] = await adoptVaultEntry(pool, vault, {
         from: account.secretName,
         name: account.secretName,
         bindings: [{ kind: ACCOUNT_KIND, target: account.id, rule: 'pre-approved' }],
-        // The account `.env` names may still have its password there, the
-        // day-1 path. Adopted the same way; `.env` is the owner's file.
-        fallback: account.secretName === GMAIL_SECRET_NAME ? env[GMAIL_SECRET_NAME] : undefined,
       });
     } catch (err) {
       result.outcomes[account.address] = 'failed';
@@ -186,7 +331,8 @@ export async function adoptMailboxSecrets(
  *  - `BUDDI_DB_PASSWORD`: assembled into `DATABASE_URL`, cleared with it.
  */
 export function mailboxSecretNames(env: NodeJS.ProcessEnv, accountSecretNames: readonly string[]): string[] {
-  const names = new Set<string>([GMAIL_SECRET_NAME, ...accountSecretNames]);
+  // `GMAIL_APP_PASSWORD` too: nothing reads it after `adoptEnvMailbox`.
+  const names = new Set<string>([LEGACY_PASSWORD_VAR, ...accountSecretNames]);
   for (const name of Object.keys(env)) if (MAILBOX_SECRET_RE.test(name)) names.add(name);
   return [...names].sort();
 }

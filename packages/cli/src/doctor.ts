@@ -733,7 +733,27 @@ export interface EmailAccountFact {
  * mailbox that quietly stopped polling is exactly the state an owner can sit in
  * for weeks.
  */
-export function checkEmail(accounts: readonly EmailAccountFact[], now: Date): ProbeResult {
+export function checkEmail(
+  accounts: readonly EmailAccountFact[],
+  now: Date,
+  /**
+   * The old `.env` mailbox lines still set (`GMAIL_USER`, `GMAIL_APP_PASSWORD`).
+   * buddi adopted that mailbox into Settings → Email once and reads neither
+   * again, so a line left there is a warning: it looks like configuration and
+   * configures nothing.
+   */
+  legacyEnv: readonly string[] = [],
+): ProbeResult {
+  const legacy = legacyEnv.length === 0
+    ? ''
+    : `${legacyEnv.join(' and ')} ${legacyEnv.length === 1 ? 'is' : 'are'} still in .env and ignored — ` +
+      'mailboxes live in Settings → Email; delete the line(s)';
+  const row = checkEmailAccounts(accounts, now);
+  if (legacy === '') return row;
+  return { status: 'warn', detail: `${row.detail}. ${legacy}` };
+}
+
+function checkEmailAccounts(accounts: readonly EmailAccountFact[], now: Date): ProbeResult {
   if (accounts.length === 0) {
     return { status: 'ok', detail: 'no mailbox configured (Settings → Email adds one)' };
   }
@@ -751,7 +771,7 @@ export function checkEmail(accounts: readonly EmailAccountFact[], now: Date): Pr
       status: 'warn',
       detail:
         `${accounts.length} account(s): ${details}. ` +
-        `${broken.map((a) => a.address).join(', ')} cannot open: the password is neither in the vault nor in the environment — ` +
+        `${broken.map((a) => a.address).join(', ')} cannot open: its password is not in the owner's secrets — ` +
         'add the account again under Settings → Email',
     };
   }

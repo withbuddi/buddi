@@ -239,7 +239,11 @@ export interface AccountRecord {
   displayName: string | null;
   /** A disabled account keeps everything and is simply not polled or read. */
   enabled: boolean;
-  /** 'env' is the GMAIL_USER seed; 'page' is one the owner added in Settings. */
+  /**
+   * 'page' is one the owner added in Settings. 'env' is a row the old
+   * `GMAIL_USER` seed left behind and the gateway has not yet adopted (its
+   * password was not readable); nothing seeds one any more.
+   */
   addedVia: 'env' | 'page';
   /**
    * When folder discovery last completed: every folder the plan named was

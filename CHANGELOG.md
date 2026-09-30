@@ -21,6 +21,8 @@ What changes in buddi from one release to the next, newest first.
 - An agent's connection tools that ask first are one folded group per connection, with how many ask and which are remembered in its summary; tools that delete or destroy are named once at the bottom instead of a disabled row and a sentence each.
 - An agent's Setup is four tabs instead of three: Identity, Brain, Tools (roles, tools and connections) and Team (who it may ask). The built-in context moved to Brain, and old links to Access open Tools.
 - The agents reference documents `{{today}}`, the one placeholder a persona can use.
+- Mailboxes now exist only as accounts added in Settings → Email; `GMAIL_USER` and `GMAIL_APP_PASSWORD` in `.env` are no longer read. On the first start after upgrading, a mailbox `.env` named is adopted once as a Settings → Email account, keeping its mail, its sync position and its triage (nothing is read or triaged again), and its password moves to that account's own secret; the log says the `GMAIL_*` lines can be deleted. If its password cannot be read, nothing is created and the log says to add the mailbox in Settings → Email, where adding it keeps its mail. `buddi doctor` warns while those lines are still in `.env`, and the start-up summary says how many mailboxes are configured.
+- `buddi doctor` finds a mailbox's password among the owner's secrets, where buddi keeps it, instead of reporting it missing.
 
 ## 0.1.0-pre.25 — 2026-09-30
 
