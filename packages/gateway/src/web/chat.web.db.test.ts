@@ -165,7 +165,7 @@ const fakeCatalog = (): AgentCatalog => {
     provider: {
       kind: 'anthropic' as const,
       model: 'claude-test',
-      credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+      credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
     },
     skills: [],
     systemPromptTemplate: 'you are a demo',
@@ -177,7 +177,7 @@ const fakeCatalog = (): AgentCatalog => {
       provider: {
         kind: 'anthropic' as const,
         model: 'claude-test',
-        credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+        credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
       },
       maxTurns: 6,
     }),

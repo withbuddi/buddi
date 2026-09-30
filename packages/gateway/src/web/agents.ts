@@ -141,7 +141,11 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
   }
 
   const ref = providerFromEnv(env, model, provider);
-  const resolution = resolveProvider(ref, env);
+  // The catalog's own verdict stands when the provider is unchanged: it knows
+  // about model accounts, which the environment never names for Anthropic.
+  const resolution = provider === agent.provider.kind && agent.available
+    ? ({ ok: true } as const)
+    : resolveProvider(ref, env);
 
   return {
     id: agent.id,

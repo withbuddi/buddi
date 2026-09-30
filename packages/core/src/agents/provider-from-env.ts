@@ -9,18 +9,18 @@
  * Provider-aware since the port grew a second adapter. The two paths are
  * deliberately *not* symmetric:
  *
- *  - Anthropic has two credential kinds, and which one is used depends on what
- *    the owner has (a `claude setup-token` subscription token, or an API key).
+ *  - Anthropic reads nothing from the environment. Its credentials live only
+ *    in named model accounts (Settings → Model accounts, kept in the vault), so
+ *    the ref built here names no variable and resolves to a "no model account"
+ *    problem until an account is bound to the agent.
  *  - OpenAI has one, `OPENAI_API_KEY`, and nothing is inferred: no token kind,
- *    no ambient discovery, no fallback to the Anthropic key.
+ *    no ambient discovery.
  *
  * Nor do the two share a default model. `BUDDI_MODEL` is an Anthropic model
  * name; letting it through to OpenAI would be exactly the silent migration the
  * design withdraws, so OpenAI reads `BUDDI_OPENAI_MODEL` or its own default.
  */
 import {
-  DEFAULT_ANTHROPIC_API_KEY_ENV,
-  DEFAULT_ANTHROPIC_TOKEN_ENV,
   DEFAULT_OPENAI_API_KEY_ENV,
   type ProviderKind,
   type ProviderRef,
@@ -42,9 +42,8 @@ export const PROVIDER_MODEL_DEFAULTS: Record<
 };
 
 /**
- * A subscription token if the owner ran `claude setup-token`, an API key
- * otherwise. Empty strings do not count as set — resolution would fail closed
- * anyway, but the choice should not silently land on the wrong kind.
+ * The environment-derived ref for an agent no model account answers for.
+ * OpenAI names `OPENAI_API_KEY`; Anthropic names nothing and fails closed.
  *
  * `model` may be pinned per agent; otherwise the provider's own environment
  * variable, otherwise the provider's default.
@@ -66,13 +65,9 @@ export function providerFromEnv(
     };
   }
 
-  const selection = env.BUDDI_ANTHROPIC_CREDENTIAL_KIND;
-  const hasSubscriptionToken = selection === 'subscription-token' || (selection !== 'api-key' && (env[DEFAULT_ANTHROPIC_TOKEN_ENV] ?? '').trim() !== '');
   return {
     kind: 'anthropic',
-    credential: hasSubscriptionToken
-      ? { kind: 'subscription-token', env: DEFAULT_ANTHROPIC_TOKEN_ENV }
-      : { kind: 'api-key', env: DEFAULT_ANTHROPIC_API_KEY_ENV },
+    credential: { kind: 'api-key', env: '' },
     model: pinned,
   };
 }

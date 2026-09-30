@@ -75,9 +75,9 @@ describe('buddi vault', () => {
   describe('import-env', () => {
     const envText = [
       'DATABASE_URL=postgres://buddi:buddi@localhost:5432/buddi',
-      'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-secret',
+      'OPENAI_API_KEY=sk-ant-oat01-secret',
       'TELEGRAM_BOT_TOKEN=123:abc',
-      'ANTHROPIC_API_KEY=',
+      'TAVILY_API_KEY=',
       'GMAIL_APP_PASSWORD="<vault>"',
       '',
     ].join('\n');
@@ -86,7 +86,7 @@ describe('buddi vault', () => {
       // DATABASE_URL is a known secret now: it *contains* the database
       // password, so `import-env` moves it like any other credential.
       expect(plannedImports(envText)).toEqual([
-        'CLAUDE_CODE_OAUTH_TOKEN',
+        'OPENAI_API_KEY',
         'TELEGRAM_BOT_TOKEN',
         'DATABASE_URL',
       ]);
@@ -119,12 +119,12 @@ describe('buddi vault', () => {
       ).toBe(0);
       expect(confirm).toHaveBeenCalledTimes(1);
       expect(await vault.get('TELEGRAM_BOT_TOKEN')).toBe('123:abc');
-      expect(await vault.get('CLAUDE_CODE_OAUTH_TOKEN')).toBe('sk-ant-oat01-secret');
+      expect(await vault.get('OPENAI_API_KEY')).toBe('sk-ant-oat01-secret');
 
       const rewritten = readFileSync(file, 'utf8');
       // Quoted: bare `<vault>` is a redirection, and `set -a; . ./.env` dies on it.
       expect(rewritten).toContain('TELEGRAM_BOT_TOKEN="<vault>"');
-      expect(rewritten).toContain('CLAUDE_CODE_OAUTH_TOKEN="<vault>"');
+      expect(rewritten).toContain('OPENAI_API_KEY="<vault>"');
       expect(rewritten).not.toMatch(/^[A-Z_]+=<vault>$/m);
       expect(rewritten).not.toContain('123:abc');
       expect(rewritten).not.toContain('sk-ant-oat01-secret');
@@ -134,7 +134,7 @@ describe('buddi vault', () => {
       expect(rewritten).toContain('DATABASE_URL="<vault>"');
       expect(rewritten).not.toContain('postgres://buddi:buddi@');
       // Untouched: an empty one has nothing to move.
-      expect(rewritten).toContain('ANTHROPIC_API_KEY=');
+      expect(rewritten).toContain('TAVILY_API_KEY=');
       expect(lines.join('\n')).toContain('Restart buddi');
     });
 

@@ -2,25 +2,20 @@
 /**
  * Live smoke check for the Anthropic adapter (subscription-token kind).
  *
- * Loads .env from the repo root, resolves the provider explicitly (no ambient
- * credentials), and asks for a single word. Prints the text and the usage.
- * The token itself is never printed.
+ * buddi keeps Anthropic credentials in named model accounts, not in `.env`, so
+ * the token is passed for this one run only, in BUDDI_SMOKE_TOKEN. Resolves the
+ * provider explicitly (no ambient credentials) and asks for a single word.
+ * Prints the text and the usage. The token itself is never printed.
  *
- *   node packages/runtime/scripts/smoke.mjs
+ *   BUDDI_SMOKE_TOKEN=sk-ant-oat01-… node packages/runtime/scripts/smoke.mjs
  */
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { config } from 'dotenv';
 import { resolveProvider } from '@buddi/core';
 import { createAnthropicProvider } from '../dist/index.js';
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-config({ path: path.join(repoRoot, '.env') });
 
 const resolution = resolveProvider(
   {
     kind: 'anthropic',
-    credential: { kind: 'subscription-token', env: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    credential: { kind: 'subscription-token', env: 'BUDDI_SMOKE_TOKEN' },
     model: 'claude-sonnet-5',
   },
   process.env,

@@ -54,8 +54,6 @@ function unquote(value: string): string {
  * this list; nothing else in `.env` (a timezone, a port) is a secret.
  */
 export const KNOWN_SECRETS: readonly string[] = [
-  'ANTHROPIC_API_KEY',
-  'CLAUDE_CODE_OAUTH_TOKEN',
   'OPENAI_API_KEY',
   'TELEGRAM_BOT_TOKEN',
   'GMAIL_APP_PASSWORD',

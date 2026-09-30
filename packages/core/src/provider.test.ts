@@ -13,13 +13,13 @@ import {
 
 const apiKeyRef: ProviderRef = {
   kind: 'anthropic',
-  credential: { kind: 'api-key', env: 'ANTHROPIC_API_KEY' },
+  credential: { kind: 'api-key', env: 'TEST_ANTHROPIC_KEY' },
   model: 'claude-sonnet-4-5',
 };
 
 describe('resolveProvider', () => {
   it('resolves an api-key credential and defaults the base URL', () => {
-    const r = resolveProvider(apiKeyRef, { ANTHROPIC_API_KEY: 'sk-ant-test' });
+    const r = resolveProvider(apiKeyRef, { TEST_ANTHROPIC_KEY: 'sk-ant-test' });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.provider).toEqual({
@@ -34,7 +34,7 @@ describe('resolveProvider', () => {
   it('honours an explicit base URL', () => {
     const r = resolveProvider(
       { ...apiKeyRef, baseUrl: 'https://proxy.internal' },
-      { ANTHROPIC_API_KEY: 'k' },
+      { TEST_ANTHROPIC_KEY: 'k' },
     );
     expect(r.ok && r.provider.baseUrl).toBe('https://proxy.internal');
   });
@@ -43,10 +43,10 @@ describe('resolveProvider', () => {
     const r = resolveProvider(
       {
         kind: 'anthropic',
-        credential: { kind: 'subscription-token', env: 'CLAUDE_CODE_OAUTH_TOKEN' },
+        credential: { kind: 'subscription-token', env: 'TEST_ANTHROPIC_TOKEN' },
         model: 'claude-opus-4-1',
       },
-      { CLAUDE_CODE_OAUTH_TOKEN: ' tok ' },
+      { TEST_ANTHROPIC_TOKEN: ' tok ' },
     );
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -63,7 +63,7 @@ describe('resolveProvider', () => {
 
   it('fails closed when the variable is empty or whitespace', () => {
     for (const value of ['', '   ']) {
-      const r = resolveProvider(apiKeyRef, { ANTHROPIC_API_KEY: value });
+      const r = resolveProvider(apiKeyRef, { TEST_ANTHROPIC_KEY: value });
       expect(r.ok).toBe(false);
       if (r.ok) return;
       expect(r.problem.code).toBe('empty-credential');
@@ -72,7 +72,7 @@ describe('resolveProvider', () => {
 
   it('rejects a provider kind this build has no adapter for', () => {
     const r = resolveProvider({ ...apiKeyRef, kind: 'mistral' } as unknown as ProviderRef, {
-      ANTHROPIC_API_KEY: 'k',
+      TEST_ANTHROPIC_KEY: 'k',
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -81,7 +81,7 @@ describe('resolveProvider', () => {
   });
 
   it('rejects a ref with no model pinned', () => {
-    const r = resolveProvider({ ...apiKeyRef, model: '' }, { ANTHROPIC_API_KEY: 'k' });
+    const r = resolveProvider({ ...apiKeyRef, model: '' }, { TEST_ANTHROPIC_KEY: 'k' });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.problem.code).toBe('unsupported');
@@ -98,7 +98,7 @@ describe('resolveProvider', () => {
   });
 
   it('maps credential kind to the right wire header', () => {
-    const a = resolveProvider(apiKeyRef, { ANTHROPIC_API_KEY: 'k' });
+    const a = resolveProvider(apiKeyRef, { TEST_ANTHROPIC_KEY: 'k' });
     expect(a.ok && providerAuthHeaders(a.provider)).toEqual({ 'x-api-key': 'k' });
     const b = resolveProvider(
       { ...apiKeyRef, credential: { kind: 'subscription-token', env: 'T' } },
@@ -139,7 +139,7 @@ describe('resolveProvider — openai', () => {
   });
 
   it('fails closed when OPENAI_API_KEY is absent, and never falls back to the Anthropic key', () => {
-    const r = resolveProvider(openAiRef, { ANTHROPIC_API_KEY: 'sk-ant' });
+    const r = resolveProvider(openAiRef, { TEST_ANTHROPIC_KEY: 'sk-ant' });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.problem.code).toBe('missing-credential');
@@ -173,7 +173,7 @@ describe('the provider/credential/wire invariant', () => {
     // Anthropic api-key: same.
     const withKey = resolveProvider(
       { ...apiKeyRef, baseUrl: 'https://proxy.internal' },
-      { ANTHROPIC_API_KEY: 'k' },
+      { TEST_ANTHROPIC_KEY: 'k' },
     );
     expect(withKey.ok).toBe(true);
 
@@ -215,7 +215,7 @@ describe('the model catalogue', () => {
   it('never migrates a model to the provider that does serve it', () => {
     const r = resolveProvider({ ...openAiRef, model: 'claude-sonnet-5' }, {
       OPENAI_API_KEY: 'k',
-      ANTHROPIC_API_KEY: 'k',
+      TEST_ANTHROPIC_KEY: 'k',
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -225,7 +225,7 @@ describe('the model catalogue', () => {
 
   it('treats a model no catalogue claims as a configuration problem', () => {
     const r = resolveProvider({ ...apiKeyRef, model: 'gpt-oss-120b' }, {
-      ANTHROPIC_API_KEY: 'k',
+      TEST_ANTHROPIC_KEY: 'k',
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;

@@ -20,11 +20,14 @@ import {
   isPaused,
   passwordInDatabaseUrl,
   providerAuthHeaders,
+  providerFromEnv,
   resolveProvider,
   timezoneFromEnv,
+  type AgentFrontmatter,
   type PluginManifest,
   type Vault,
 } from '@buddi/core';
+
 import {
   agentSearchPath,
   createToolRegistry,
@@ -101,6 +104,8 @@ class LazyPool {
   }
 }
 
+type ProviderSelection = NonNullable<Parameters<typeof loadGatewayCatalog>[0]>['providerSelection'];
+
 /** Every migration file the installation *should* have applied. */
 async function expectedMigrations(manifests: PluginManifest[]): Promise<Array<[string, string]>> {
   const dirs: Array<[string, string]> = [[CORE_SCHEMA, CORE_MIGRATIONS_DIR]];
@@ -166,6 +171,43 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       return null;
     }
   };
+
+  /**
+   * Which model account each agent is bound to, read from the database. Model
+   * credentials live in named accounts (Settings → Model accounts), so this is
+   * what "can this agent run" means. Undefined when the database cannot say.
+   */
+  let bindingsRead: Promise<Map<string, { label: string; enabled: boolean }> | undefined> | undefined;
+  const accountBindings = (): Promise<Map<string, { label: string; enabled: boolean }> | undefined> =>
+    (bindingsRead ??= (async () => {
+      const pool = await connected();
+      if (!pool) return undefined;
+      try {
+        const { rows } = await pool.query<{ agent_id: string; label: string; enabled: boolean }>(
+          `select b.agent_id, a.label, a.enabled from core.agent_provider_accounts b
+             join core.provider_accounts a on a.id = b.account_id`,
+        );
+        return new Map(rows.map((r) => [r.agent_id, { label: r.label, enabled: r.enabled }]));
+      } catch {
+        return undefined;
+      }
+    })());
+  /** The catalog's view of those bindings: a bound, enabled account can run. */
+  const accountSelection = (
+    bindings: Map<string, { label: string; enabled: boolean }> | undefined,
+  ): ProviderSelection =>
+    bindings === undefined
+      ? undefined
+      : (((agent: AgentFrontmatter) => {
+          const bound = bindings.get(agent.id);
+          if (!bound) return undefined;
+          return {
+            provider: providerFromEnv({}, agent.model, agent.provider),
+            availability: bound.enabled
+              ? { ok: true }
+              : { ok: false, problem: { code: 'missing-credential', message: `model account “${bound.label}” is disabled` } },
+          };
+        }) as ProviderSelection);
 
   return {
     nodeVersion(): ProbeResult {
@@ -289,28 +331,38 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
 
     async modelCredential(): Promise<ProbeResult> {
       const facts = await secrets();
-      let ref;
+      const providerSelection = accountSelection(await accountBindings());
+      let agent;
       try {
         const registry = createToolRegistry();
-        ref = loadGatewayCatalog({ env, registry }).defaultAgent().provider;
+        agent = loadGatewayCatalog({ env, registry, ...(providerSelection ? { providerSelection } : {}) }).defaultAgent();
       } catch (err) {
         return {
           status: 'fail',
           detail: `agent catalog will not load: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
-      const resolution = resolveProvider(ref, env);
+      /*
+       * Model credentials live in named model accounts (Settings → Model
+       * accounts, kept in the vault). The default agent bound to an enabled
+       * account is the healthy case; the account's own test lives in Settings.
+       */
+      const bound = (await accountBindings())?.get(agent.id);
+      if (bound) {
+        return bound.enabled
+          ? { status: 'ok', detail: `@${agent.handle} uses the model account “${bound.label}” (test it in Settings → Model accounts)` }
+          : { status: 'fail', detail: `@${agent.handle}'s model account “${bound.label}” is disabled — enable it in Settings → Model accounts` };
+      }
+      const resolution = resolveProvider(agent.provider, env);
       if (!resolution.ok) {
         // When the vault could not hand the credential over, say *that*: the
         // owner's next move is unlocking a keychain, not pasting a key.
-        const blocked = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']
-          .map((name) => facts.problems[name])
-          .find((p) => p !== undefined && p.code !== 'missing-secret');
+        const blocked = Object.values(facts.problems).find((p) => p.code !== 'missing-secret');
         return {
           status: 'fail',
           detail: blocked
             ? `${resolution.problem.message} — the ${facts.vault} vault could not supply it: ${blocked.message}`
-            : `${resolution.problem.message} — set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY`,
+            : `@${agent.handle} has no model account — add one in the dashboard's first-run wizard or Settings → Model accounts`,
         };
       }
       const provider = resolution.provider;
@@ -386,10 +438,11 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
      */
     async agents(): Promise<ProbeResult> {
       await secrets();
+      const providerSelection = accountSelection(await accountBindings());
       let facts: AgentEngineFact[];
       let defaultProblem: { code: string; message: string } | undefined;
       try {
-        const catalog = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+        const catalog = loadGatewayCatalog({ env, registry: createToolRegistry(env), ...(providerSelection ? { providerSelection } : {}) });
         defaultProblem = catalog.defaultProblem;
         facts = catalog.list().flatMap((summary) => {
           const agent = catalog.get(summary.id);

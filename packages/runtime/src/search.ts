@@ -6,8 +6,8 @@
  * Anthropic's Messages API can run a web search on its own servers. The model
  * asks, the API searches, the results come back inside the same response, and
  * the subscription credential this installation already holds pays for it —
- * verified live on 2026-09-15 against `claude-sonnet-4-5` with a
- * `CLAUDE_CODE_OAUTH_TOKEN`: a `server_tool_use` block, a
+ * verified live on 2026-09-15 against `claude-sonnet-4-5` with a Claude
+ * subscription token: a `server_tool_use` block, a
  * `web_search_tool_result` block with seven results, and
  * `usage.server_tool_use.web_search_requests: 1`.
  *

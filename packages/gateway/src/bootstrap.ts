@@ -266,7 +266,7 @@ export async function createWiringAsync(
   // a provider or catalog error is a distraction and the pg failure that
   // follows is an empty `AggregateError`. One probe, one sentence.
   await probeDatabase(env.DATABASE_URL);
-  const wiring = createWiring(env, { allowMissingDefault: true });
+  const wiring = createWiring(env);
   const providerSettings = new ProviderSettings({ pool: wiring.pool, env, reload: wiring.reloadProviders });
   const providerAccounts = new ProviderAccounts({ pool: wiring.pool, env, catalog: () => wiring.catalog, reload: wiring.reloadProviders });
   try {
@@ -311,7 +311,7 @@ export async function createWiringAsync(
 /**
  * Build the shared wiring or throw. The caller owns `pool` and must end it.
  */
-export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { allowMissingDefault?: boolean } = {}): Wiring {
+export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error('DATABASE_URL is not set (cp .env.example .env, then pnpm db:up)');
@@ -358,13 +358,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env, options: { al
 
   const now = (): Date => new Date();
   const timezone = timezoneFromEnv(env);
-  const resolution = resolveProvider(catalog.defaultAgent().provider, env);
-  if (!resolution.ok && !options.allowMissingDefault) {
-    throw new Error(
-      `provider not usable [${resolution.problem.code}]: ${resolution.problem.message}` +
-        '\nSet CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY in .env',
-    );
-  }
+  // No start-up check on the default agent's credential: Anthropic comes in
+  // only through a model account, bound after this wiring exists, and an agent
+  // without one is reported per agent ("Choose a provider account…").
 
   /**
    * One adapter per agent, memoised per provider ref. Fails closed and names

@@ -129,22 +129,15 @@ describe('permanent', () => {
   it('names the environment variable and how to set it', () => {
     const missing = new Error(
       'agent "mail-triage" (@postman) cannot run [missing-credential]: ' +
-        'environment variable ANTHROPIC_API_KEY is not set',
+        'environment variable OPENAI_API_KEY is not set',
     );
     const out = describeFailure(missing, { agentName: '@postman' });
     expect(out.class).toBe('permanent');
     expect(out.retryable).toBe(false);
-    expect(out.text).toContain('ANTHROPIC_API_KEY');
+    expect(out.text).toContain('OPENAI_API_KEY');
     expect(out.text).toContain('.env');
     expect(out.text).toContain('restart buddi');
     expect(out.text).toContain('@postman');
-  });
-
-  it('gives the subscription token its own instruction', () => {
-    const out = describeFailure(
-      new Error('[empty-credential]: environment variable CLAUDE_CODE_OAUTH_TOKEN is empty'),
-    );
-    expect(out.text).toContain('claude setup-token');
   });
 
   it('says a refused key is a key to replace, when it cannot name one', () => {

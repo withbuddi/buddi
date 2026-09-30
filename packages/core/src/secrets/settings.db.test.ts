@@ -115,7 +115,7 @@ suite('Keys and secrets', () => {
     const listed = (await produceList()) as { secrets: Array<{ name: string; totp: boolean }>; ownKeys: string[]; destinations: unknown[] };
     expect(listed.secrets).toEqual([expect.objectContaining({ name: NAME, totp: false })]);
     expect(JSON.stringify(listed)).not.toContain(VALUE);
-    expect(listed.ownKeys).toContain('ANTHROPIC_API_KEY');
+    expect(listed.ownKeys).toContain('OPENAI_API_KEY');
     expect(listed.destinations).toContainEqual({ kind: 'http.header', plugin: 'http', maxRule: 'pre-approved' });
   });
 

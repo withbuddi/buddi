@@ -23,7 +23,7 @@ describe('redact', () => {
   });
 
   it('cuts the values of credential variables, and leaves configuration alone', () => {
-    const known = knownSecrets({ GMAIL_APP_PASSWORD: 'plainvaultvalue', BUDDI_WEB_PORT: '4317', TOKEN_TTL: '86400000', ANTHROPIC_API_KEY_FILE: '/x/y' });
+    const known = knownSecrets({ GMAIL_APP_PASSWORD: 'plainvaultvalue', BUDDI_WEB_PORT: '4317', TOKEN_TTL: '86400000', OPENAI_API_KEY_FILE: '/x/y' });
     expect(known).toEqual(['plainvaultvalue']);
     expect(redactText('the password is plainvaultvalue on port 4317', known)).toBe(`the password is ${REDACTED} on port 4317`);
   });

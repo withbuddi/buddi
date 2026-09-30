@@ -619,7 +619,6 @@ order**. The "did NOT" list always includes the vault.
 The restore prints the exact commands, one per secret name the archive recorded:
 
 ```
-buddi vault set CLAUDE_CODE_OAUTH_TOKEN
 buddi vault set TELEGRAM_BOT_TOKEN
 buddi vault set GMAIL_APP_PASSWORD
 ```
@@ -633,8 +632,8 @@ If you use the **file vault** rather than the macOS keychain, you also need
 vault is locked, and buddi fails closed rather than falling back to anything.
 
 If a secret is genuinely gone — the machine it lived on is in the sea — this is the
-moment to **rotate** rather than recover: `claude setup-token` for a new subscription
-token, @BotFather for a new bot token, Google's app-password page for a new mail
+moment to **rotate** rather than recover: sign in again or paste a new key under
+Settings → Model accounts, @BotFather for a new bot token, Google's app-password page for a new mail
 password. A backup that could have restored these for you is a backup that could have
 leaked them for you.
 

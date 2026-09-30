@@ -237,8 +237,6 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       interactive,
       assumeYes,
       envFileExists: envFileExisted,
-      hasModelCredential:
-        !isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN') || !isBlank(known, 'ANTHROPIC_API_KEY'),
       hasBotToken: !isBlank(known, 'TELEGRAM_BOT_TOKEN'),
       hasTimezone: !isBlank(env, 'BUDDI_TZ'),
       hasOwnerName: !isBlank(env, 'BUDDI_OWNER_NAME'),
@@ -257,31 +255,10 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
       console.log(dim('\nnothing left to do — re-running changes nothing.'));
     }
 
-    /* 4. Model credential. */
-    if (willRun(plan, 'model-credential')) {
-      console.log(bold('\nModel credential'));
-      console.log(
-        'Two ways in:\n' +
-          '  1. Claude subscription — run `claude setup-token` in another shell. It prints a\n' +
-          '     token starting sk-ant-oat01-…; your Pro/Max subscription pays for the usage.\n' +
-          '  2. API key — an sk-ant-api03-… key from console.anthropic.com, billed per token.',
-      );
-      const choice = (await ask('Which? [1/2] ')).trim();
-      if (choice === '2') {
-        const key = (await ask('ANTHROPIC_API_KEY: ')).trim();
-        if (key !== '') remember('ANTHROPIC_API_KEY', key);
-      } else {
-        const token = (await ask('CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`): ')).trim();
-        if (token !== '') remember('CLAUDE_CODE_OAUTH_TOKEN', token);
-      }
-      const got = known.CLAUDE_CODE_OAUTH_TOKEN ?? known.ANTHROPIC_API_KEY ?? '';
-      console.log(got === '' ? dim('  (left empty — buddi chat will refuse to start)') : `  stored ${maskSecret(got)}`);
-    } else if (stepOf(plan, 'model-credential').action === 'done') {
-      const kind = !isBlank(known, 'CLAUDE_CODE_OAUTH_TOKEN')
-        ? 'CLAUDE_CODE_OAUTH_TOKEN'
-        : 'ANTHROPIC_API_KEY';
-      console.log(`\nModel credential: ${kind} already set ${dim(`(${sourceOf(secrets.sources[kind])})`)}`);
-    }
+    /*
+     * 4. No model credential here: the first-run wizard in the dashboard adds
+     *    a model account (Settings → Model accounts), kept in the vault.
+     */
 
     /* 5. Telegram bot token — validated against getMe, which also names the bot. */
     if (willRun(plan, 'telegram-token')) {

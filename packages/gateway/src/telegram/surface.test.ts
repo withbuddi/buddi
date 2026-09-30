@@ -555,7 +555,7 @@ function message(updateId: number, userId: number, chatId: number, text: string)
 const MODEL = 'claude-sonnet-5';
 const PROVIDER = {
   kind: 'anthropic' as const,
-  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
   model: MODEL,
 };
 

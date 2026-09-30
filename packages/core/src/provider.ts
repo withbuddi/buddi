@@ -23,9 +23,10 @@ export const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 /** OpenAI's base already carries the version segment; Anthropic's does not. */
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
-/** The environment variable each provider's API key is read from by default. */
-export const DEFAULT_ANTHROPIC_API_KEY_ENV = 'ANTHROPIC_API_KEY';
-export const DEFAULT_ANTHROPIC_TOKEN_ENV = 'CLAUDE_CODE_OAUTH_TOKEN';
+/**
+ * The environment variable OpenAI's API key is read from by default.
+ * Anthropic has none: its credentials live only in named model accounts.
+ */
 export const DEFAULT_OPENAI_API_KEY_ENV = 'OPENAI_API_KEY';
 
 export type ProviderKind = 'anthropic' | 'openai';
@@ -218,7 +219,9 @@ export function resolveProvider(
   if (!varName || varName.trim() === '') {
     return fail(
       'missing-credential',
-      'credential does not name an environment variable',
+      kind === 'anthropic'
+        ? 'no model account: add an Anthropic account in Settings → Model accounts'
+        : 'credential does not name an environment variable',
     );
   }
 

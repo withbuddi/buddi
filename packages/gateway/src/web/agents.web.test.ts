@@ -21,6 +21,7 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { testAnthropicAccount } from '@buddi/core/testing';
 import { createToolRegistry, loadGatewayCatalog, reloadableCatalog } from '../agents/catalog.js';
 import { setRecordedDefaultAgent } from '../agents/default-agent.js';
 import { bindPlatformTools } from '../agents/platform.js';
@@ -60,7 +61,7 @@ describe('the engine endpoint', () => {
   let server: ReturnType<typeof createWebApp>;
   let base: string;
 
-  const env = { ANTHROPIC_API_KEY: 'sk-test' } as NodeJS.ProcessEnv;
+  const env = {} as NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     dir = mkdtempSync(path.join(tmpdir(), 'buddi-web-agents-'));
@@ -71,6 +72,7 @@ describe('the engine endpoint', () => {
       dir: path.join(dir, 'agents'),
       env,
       registry: createToolRegistry({}),
+      providerSelection: testAnthropicAccount(),
     });
     server = createWebApp({
       // The engine route touches neither the pool nor the registry.
@@ -179,7 +181,7 @@ describe('the engine endpoint', () => {
   });
 
   it('reloads the shared catalog for new runs without changing a previously resolved agent', () => {
-    const live = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry: createToolRegistry({}) }));
+    const live = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry: createToolRegistry({}), providerSelection: testAnthropicAccount() }));
     const previous = live.resolve('demo');
     const result = setAgentEngineFromWeb({ catalog: live, env }, 'demo', { model: 'claude-opus-5' });
     expect(result).toMatchObject({ ok: true, body: { agent: { model: 'claude-opus-5', restartRequired: false }, note: expect.stringContaining('new runs') } });
@@ -250,7 +252,7 @@ describe('the default agent and the front-matter editor', () => {
   let base: string;
   let written: Array<[string, unknown[]]>;
 
-  const env = { ANTHROPIC_API_KEY: 'sk-test' } as NodeJS.ProcessEnv;
+  const env = {} as NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     setRecordedDefaultAgent(undefined);
@@ -261,7 +263,7 @@ describe('the default agent and the front-matter editor', () => {
     }
     const registry = createToolRegistry({});
     catalog = reloadableCatalog(() =>
-      loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry }),
+      loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry, providerSelection: testAnthropicAccount() }),
     );
     bindPlatformTools(registry, {
       catalog,

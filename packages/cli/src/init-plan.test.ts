@@ -23,7 +23,6 @@ const FRESH: InitFacts = {
   interactive: true,
   assumeYes: false,
   envFileExists: false,
-  hasModelCredential: false,
   hasBotToken: false,
   hasTimezone: false,
   hasOwnerName: false,
@@ -39,7 +38,6 @@ const FRESH: InitFacts = {
 const FINISHED: InitFacts = {
   ...FRESH,
   envFileExists: true,
-  hasModelCredential: true,
   hasBotToken: true,
   hasTimezone: true,
   hasOwnerName: true,
@@ -85,7 +83,6 @@ describe('planInit', () => {
 
   it('asks about everything on a fresh interactive machine', () => {
     const plan = planInit(FRESH);
-    expect(stepOf(plan, 'model-credential').action).toBe('ask');
     expect(stepOf(plan, 'timezone').action).toBe('ask');
     expect(stepOf(plan, 'owner-name').action).toBe('ask');
     expect(stepOf(plan, 'private-config').action).toBe('ask');
@@ -115,7 +112,7 @@ describe('idempotence', () => {
 
   it('marks a step already done as done, not as skipped', () => {
     const plan = planInit(FINISHED);
-    expect(stepOf(plan, 'model-credential').action).toBe('done');
+    expect(stepOf(plan, 'env-file').action).toBe('done');
     expect(stepOf(plan, 'telegram-pair').action).toBe('done');
     expect(stepOf(plan, 'telegram-pair').reason).toContain('1 device');
     expect(stepOf(plan, 'service').action).toBe('done');
@@ -155,7 +152,7 @@ describe('non-interactive', () => {
 
   it('skips every step that needs something typed, and says why', () => {
     const plan = planInit(HEADLESS);
-    for (const id of ['model-credential', 'telegram-token', 'timezone', 'owner-name'] as const) {
+    for (const id of ['telegram-token', 'timezone', 'owner-name'] as const) {
       expect(stepOf(plan, id).action, id).toBe('skipped');
       expect(stepOf(plan, id).reason, id).toContain('non-interactive');
     }

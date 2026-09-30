@@ -132,7 +132,7 @@ function vaultName(kind: string): string {
 
 export function providerName(a: Pick<ProviderAccount, 'kind' | 'auth'> & Partial<Pick<ProviderAccount, 'detectedContextWindowSource'>>): string {
   if (a.kind === 'codex') return 'ChatGPT subscription';
-  if (a.kind === 'anthropic') return a.auth === 'anthropic-oauth' ? 'Claude subscription' : a.auth === 'legacy-subscription-token' ? 'Claude setup token' : 'Anthropic API';
+  if (a.kind === 'anthropic') return a.auth === 'anthropic-oauth' ? 'Claude subscription' : 'Anthropic API';
   if (a.kind === 'openai') return 'OpenAI API';
   if (a.auth === 'device-key') return 'Ollama Cloud';
   if (isMlxhAccount(a)) return 'mlxh';
@@ -235,7 +235,6 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
       </Notice>}
       <Details summary="Details">
         <div className="ui-prose muted">
-          {a.auth === 'legacy-subscription-token' && <p>Legacy subscription token: not refreshable, token expiry and subscription renewal date unknown.</p>}
           {a.kind === 'codex' ? (
             <>
               <p>Talks to OpenAI’s Codex backend directly with your ChatGPT sign-in. The credential stays in buddi’s vault; buddi refreshes it and never reads your own Codex login.</p>
@@ -247,7 +246,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
           )}
           {a.auth === 'device-key' && <p>Ollama Cloud with a device key: buddi made a key pair and keeps it in the vault; ollama.com only ever saw the public half and this computer’s name. Each request to ollama.com is signed with the key, and nothing else is sent with it. Disconnect asks ollama.com to forget the device and removes the key from buddi either way.</p>}
           {a.auth === 'anthropic-oauth' && <p>Claude subscription sign-in. Tokens remain in Buddi’s vault and refresh before use. Uses your plan’s monthly Agent SDK credits; after them, an API key. Remaining credits are unknown here.</p>}
-          <p>Subscription login is separate from API-key access. Existing Claude setup tokens remain legacy accounts, without automatic refresh or a known expiry.</p>
+          <p>Subscription login is separate from API-key access.</p>
         </div>
       </Details>
     </section>

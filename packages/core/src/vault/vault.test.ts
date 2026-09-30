@@ -32,9 +32,9 @@ describe('memory vault', () => {
     const vault = createMemoryVault();
     expect(await vault.get('TELEGRAM_BOT_TOKEN')).toBeNull();
     await vault.set('TELEGRAM_BOT_TOKEN', 'abc:123');
-    await vault.set('ANTHROPIC_API_KEY', 'sk-ant-x');
+    await vault.set('TAVILY_API_KEY', 'sk-ant-x');
     expect(await vault.get('TELEGRAM_BOT_TOKEN')).toBe('abc:123');
-    expect(await vault.list()).toEqual(['ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN']);
+    expect(await vault.list()).toEqual(['TAVILY_API_KEY', 'TELEGRAM_BOT_TOKEN']);
     expect(await vault.delete('TELEGRAM_BOT_TOKEN')).toBe(true);
     expect(await vault.delete('TELEGRAM_BOT_TOKEN')).toBe(false);
     expect(await vault.get('TELEGRAM_BOT_TOKEN')).toBeNull();
@@ -241,12 +241,12 @@ describe('resolveSecret', () => {
   });
 
   it('builds an environment overlay without mutating the original', async () => {
-    const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: 'from-env' };
+    const env: NodeJS.ProcessEnv = { TAVILY_API_KEY: 'from-env' };
     const vault = createMemoryVault({ seed: { TELEGRAM_BOT_TOKEN: 'from-vault' } });
     const out = await resolveSecrets(KNOWN_SECRETS, { vault, env });
     expect(out.env.TELEGRAM_BOT_TOKEN).toBe('from-vault');
-    expect(out.env.ANTHROPIC_API_KEY).toBe('from-env');
-    expect(out.sources).toMatchObject({ TELEGRAM_BOT_TOKEN: 'vault', ANTHROPIC_API_KEY: 'env' });
+    expect(out.env.TAVILY_API_KEY).toBe('from-env');
+    expect(out.sources).toMatchObject({ TELEGRAM_BOT_TOKEN: 'vault', TAVILY_API_KEY: 'env' });
     expect(Object.keys(out.problems)).toContain('GMAIL_APP_PASSWORD');
     expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
   });

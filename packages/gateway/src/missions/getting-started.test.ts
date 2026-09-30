@@ -162,7 +162,7 @@ function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
       'mission-agents',
     ),
     registry,
-    env: { ANTHROPIC_API_KEY: 'test-key' },
+    env: {},
   });
 }
 
@@ -420,7 +420,7 @@ function realExecutorOver(db: FakeDb, provider: RuntimeProvider): MissionExecute
     catalog: fixtureCatalog(registry),
     provider,
     ctx,
-    env: { ANTHROPIC_API_KEY: 'test-key' } as NodeJS.ProcessEnv,
+    env: {} as NodeJS.ProcessEnv,
     now: () => NOW,
     deliver: async () => 'chat-42',
     log: () => {},

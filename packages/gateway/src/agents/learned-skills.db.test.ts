@@ -40,7 +40,7 @@ const AGENT: AgentDefinition = {
   name: 'Advisor',
   systemPrompt: 'You advise.',
   tools: ['page.read', 'learning.propose_skill'],
-  provider: { kind: 'anthropic', credential: { kind: 'api-key', env: 'ANTHROPIC_API_KEY' }, model: 'claude-test' },
+  provider: { kind: 'anthropic', credential: { kind: 'api-key', env: 'TEST_ANTHROPIC_KEY' }, model: 'claude-test' },
   maxTurns: 4,
 };
 

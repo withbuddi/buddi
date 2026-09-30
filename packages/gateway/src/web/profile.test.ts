@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Pool } from 'pg';
-import { ToolRegistry, type AgentCatalog, type PluginManifest, type CoreToolContext } from '@buddi/core';
+import { ToolRegistry, providerFromEnv, type AgentCatalog, type AgentFrontmatter, type PluginManifest, type CoreToolContext } from '@buddi/core';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadGatewayCatalog } from '../agents/catalog.js';
@@ -44,7 +44,13 @@ const TOKEN = 'a-test-dashboard-token-long-enough';
 /** The secret this installation holds. It must never appear in an answer. */
 const SECRET = 'sk-ant-the-owners-actual-key-0001';
 
-const env = { ANTHROPIC_API_KEY: SECRET } as NodeJS.ProcessEnv;
+const env = { WORK_CLAUDE_KEY: SECRET } as NodeJS.ProcessEnv;
+
+/** Every agent bound to one working model account, whose key lives in `env`. */
+const workAccount = (agent: AgentFrontmatter) => ({
+  provider: { ...providerFromEnv({}, agent.model, agent.provider), credential: { kind: 'api-key' as const, env: 'WORK_CLAUDE_KEY' } },
+  availability: { ok: true as const },
+});
 
 /**
  * One invented plugin with one tool of each tier — a read that runs on its own
@@ -134,7 +140,7 @@ describe('an agent profile', () => {
   };
 
   const load = (): void => {
-    catalog = loadGatewayCatalog({ dir: agentsDir, env, registry });
+    catalog = loadGatewayCatalog({ dir: agentsDir, env, registry, providerSelection: workAccount });
   };
 
   const profileOf = (id: string): AgentProfileView => {
@@ -211,7 +217,7 @@ describe('an agent profile', () => {
       maxTurns: 9,
       language: 'mirror',
       credentialKind: 'api-key',
-      credentialEnv: 'ANTHROPIC_API_KEY',
+      credentialEnv: 'WORK_CLAUDE_KEY',
     });
     // The whole answer, not just the engine block: a secret that leaked into a
     // reason, a path or a description would still be a leak.
@@ -222,7 +228,7 @@ describe('an agent profile', () => {
     catalog = loadGatewayCatalog({ dir: agentsDir, env: {} as NodeJS.ProcessEnv, registry });
     const profile = profileOf('keeper');
     expect(profile.available).toBe(false);
-    expect(profile.unavailableReason).toMatch(/ANTHROPIC_API_KEY/);
+    expect(profile.unavailableReason).toMatch(/model account/);
     // Still a complete answer: an agent you cannot run is exactly the one whose
     // configuration you are looking at.
     expect(profile.toolCount).toBe(4);

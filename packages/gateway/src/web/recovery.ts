@@ -82,7 +82,7 @@ const ACCOUNTS_ROUTE = '#/settings/accounts';
 const SYSTEM_ROUTE = '#/settings/system';
 
 /** Names that are a model credential wherever they turn up. */
-const MODEL_SECRETS = new Set(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY']);
+const MODEL_SECRETS = new Set(['OPENAI_API_KEY']);
 
 /** The names this machine's vault actually holds. Never a value. */
 async function vaultNames(env: NodeJS.ProcessEnv): Promise<Set<string>> {

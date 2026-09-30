@@ -167,11 +167,11 @@ suite('mailbox passwords as owner secrets (postgres)', () => {
       `insert into core.provider_accounts
          (id, label, kind, auth, base_url, default_model, secret_ref, enabled, legacy_env)
        values ('11111111-1111-4111-8111-111111111111', 'Work key', 'anthropic', 'api-key', 'https://api.anthropic.com', 'claude-sonnet-5', 'PROVIDER_ACCOUNT_ADOPTED_1', true, null),
-              ('22222222-2222-4222-8222-222222222222', 'Legacy key', 'anthropic', 'api-key', 'https://api.anthropic.com', 'claude-sonnet-5', 'ANTHROPIC_API_KEY', true, 'ANTHROPIC_API_KEY')`,
+              ('22222222-2222-4222-8222-222222222222', 'Legacy key', 'openai', 'api-key', 'https://api.openai.com/v1', 'gpt-5', 'OPENAI_API_KEY', true, 'OPENAI_API_KEY')`,
     );
     const vault = createMemoryVault({ seed: {
       PROVIDER_ACCOUNT_ADOPTED_1: 'sk-ant-adopted-credential',
-      ANTHROPIC_API_KEY: 'sk-ant-legacy-key',
+      OPENAI_API_KEY: 'sk-legacy-key',
     } });
 
     const first = await adoptProviderAccountSecrets(pool, vault);
@@ -196,7 +196,7 @@ suite('mailbox passwords as owner secrets (postgres)', () => {
     expect(await translated.get('PROVIDER_ACCOUNT_ADOPTED_1')).toBe('sk-ant-adopted-credential');
     await translated.set('PROVIDER_ACCOUNT_ADOPTED_1', 'sk-ant-refreshed-value');
     expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('sk-ant-refreshed-value');
-    expect(await translated.get('ANTHROPIC_API_KEY')).toBe('sk-ant-legacy-key'); // untouched: buddi's own key
+    expect(await translated.get('OPENAI_API_KEY')).toBe('sk-legacy-key'); // untouched: buddi's own key
     await expect(translated.get('NOTHING_BY_THAT_NAME')).resolves.toBeNull();
   }, 30_000);
 });

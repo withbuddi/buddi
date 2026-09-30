@@ -16,7 +16,7 @@ function setup() {
 const open = commandSchema.parse({ action: 'open', appId: 'com.google.Chrome' });
 describe('native computer driver', () => {
   it('does not pass application credentials or loader overrides to the helper', () => {
-    expect(computerEnvironment({ HOME: '/owner', PATH: '/bin', BUDDI_VAULT_KEY: 'secret', DATABASE_URL: 'secret', ANTHROPIC_API_KEY: 'secret', DYLD_INSERT_LIBRARIES: 'unsafe' })).toEqual({ HOME: '/owner', PATH: '/bin' });
+    expect(computerEnvironment({ HOME: '/owner', PATH: '/bin', BUDDI_VAULT_KEY: 'secret', DATABASE_URL: 'secret', OPENAI_API_KEY: 'secret', DYLD_INSERT_LIBRARIES: 'unsafe' })).toEqual({ HOME: '/owner', PATH: '/bin' });
   });
   it('defaults to the agents\' own browser and requires a permitted browser', () => {
     expect(settingsSchema.parse({}).mode).toBe('playwright');

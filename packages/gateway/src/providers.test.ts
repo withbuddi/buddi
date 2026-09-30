@@ -20,14 +20,14 @@ function fixture(env: NodeJS.ProcessEnv = {}) {
   return { pool, vault, env, reload, test, manager };
 }
 describe('owner provider management', () => {
-  it('keeps keys out of Postgres and responses, reloads credentials and preserves explicit auth selection', async () => {
+  it('keeps keys out of Postgres and responses and reloads credentials', async () => {
     const f = fixture();
     await f.manager.load();
-    await f.manager.credential('ANTHROPIC_API_KEY', 'save', { value: 'private-api-value' });
-    await f.manager.credential('CLAUDE_CODE_OAUTH_TOKEN', 'save', { value: 'private-token-value' });
+    await f.manager.credential('OPENAI_API_KEY', 'save', { value: 'private-api-value' });
     await f.manager.configure('anthropic', { credentialKind: 'api-key', defaultModel: 'claude-sonnet-5' });
-    expect(providerFromEnv(f.env).credential.env).toBe('ANTHROPIC_API_KEY');
-    expect(await f.vault.get('ANTHROPIC_API_KEY')).toBe('private-api-value');
+    expect(providerFromEnv(f.env, undefined, 'openai').credential.env).toBe('OPENAI_API_KEY');
+    expect(f.env.OPENAI_API_KEY).toBe('private-api-value');
+    expect(await f.vault.get('OPENAI_API_KEY')).toBe('private-api-value');
     expect(JSON.stringify(f.pool.writes)).not.toContain('private-');
     expect(JSON.stringify(f.manager.view())).not.toContain('private-');
     expect(f.reload).toHaveBeenCalled();
@@ -46,10 +46,12 @@ describe('owner provider management', () => {
     await restarted.credential('OPENAI_API_KEY', 'save', { value: 'replacement-key' });
     expect(env.OPENAI_API_KEY).toBe('replacement-key');
   });
-  it('never falls back to another auth kind when the owner explicitly selected a missing key', async () => {
-    const f = fixture({ CLAUDE_CODE_OAUTH_TOKEN: 'subscription' });
+  it('manages no Anthropic credential: those live in model accounts', async () => {
+    const f = fixture();
     await f.manager.configure('anthropic', { credentialKind: 'api-key', defaultModel: 'claude-sonnet-5' });
     expect(resolveProvider(providerFromEnv(f.env), f.env).ok).toBe(false);
+    expect(f.manager.view().providers.find(p => p.kind === 'anthropic')?.credentials).toEqual([]);
+    expect(() => f.manager.credential('SOME_ANTHROPIC_KEY', 'save', { value: 'x' })).toThrow('Unknown');
   });
   it('refuses invalid settings and arbitrary secret names without side effects', async () => {
     const f = fixture();

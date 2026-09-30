@@ -216,7 +216,7 @@ function scriptedProvider(
 
 const PROVIDER = {
   kind: 'anthropic' as const,
-  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
   model: 'fake-model-1',
 };
 

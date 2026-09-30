@@ -78,7 +78,7 @@ function machine(opts: {
     ...(platform === 'darwin' ? {
       keychain: {
         service: 'buddi.install.abc',
-        names: async () => { if (opts.names instanceof Error) throw opts.names; return opts.names ?? ['ANTHROPIC_API_KEY', 'BUDDI_DB_ADMIN_PASSWORD', 'BUDDI_DB_PASSWORD']; },
+        names: async () => { if (opts.names instanceof Error) throw opts.names; return opts.names ?? ['BRAVE_SEARCH_API_KEY', 'BUDDI_DB_ADMIN_PASSWORD', 'BUDDI_DB_PASSWORD']; },
         purge: async (names: string[]) => { if (opts.purge) throw opts.purge; m.purged.push(names); },
       },
     } : {}),
@@ -114,7 +114,7 @@ describe('uninstallPackaged', () => {
       'This removes buddi from this Mac:',
       `  - the background service: launchd agent ${label} (${plist})`,
       `  - the data directory ${data}: the database, agents and skills, the files library, logs, backups and the fetched Chromium`,
-      '  - secrets: 3 keychain entries under buddi.install.abc: ANTHROPIC_API_KEY, BUDDI_DB_ADMIN_PASSWORD, BUDDI_DB_PASSWORD',
+      '  - secrets: 3 keychain entries under buddi.install.abc: BRAVE_SEARCH_API_KEY, BUDDI_DB_ADMIN_PASSWORD, BUDDI_DB_PASSWORD',
       `  - the dashboard app ${home}/Applications/Buddi Dashboard.app`,
       `  - the extension pairing record ${data}/extension.json`,
       "  - the Telegram bot's command menu",
@@ -122,7 +122,7 @@ describe('uninstallPackaged', () => {
     ]);
     expect(m.exec).toContain(`launchctl bootout gui/501/${label}`);
     expect(m.removed).toEqual([plist, data, `${home}/Applications/Buddi Dashboard.app`]);
-    expect(m.purged).toEqual([['ANTHROPIC_API_KEY', 'BUDDI_DB_ADMIN_PASSWORD', 'BUDDI_DB_PASSWORD']]);
+    expect(m.purged).toEqual([['BRAVE_SEARCH_API_KEY', 'BUDDI_DB_ADMIN_PASSWORD', 'BUDDI_DB_PASSWORD']]);
     expect(m.menuCleared).toBe(true);
     // The backup left the data directory before it was deleted, envelope and all.
     expect(m.moved.map(([, to]) => to)).toEqual([

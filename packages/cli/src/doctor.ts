@@ -222,21 +222,13 @@ export interface VaultFacts {
 }
 
 /**
- * The model credential, under either of its two names. This is the only secret
- * the installation genuinely *requires*: a missing bot token costs a surface, a
- * missing app password costs a plugin, but with no model credential nothing
- * runs at all.
- */
-export const REQUIRED_SECRETS: readonly string[] = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'];
-
-/**
  * Turn hydration into a row.
  *
  * A locked vault fails *before* anything else is said about the secrets: every
  * probe downstream is about to report a credential it could not reach, and the
  * lock is the one fact that explains all of them.
  */
-export function checkVault(facts: VaultFacts, required: readonly string[] = REQUIRED_SECRETS): ProbeResult {
+export function checkVault(facts: VaultFacts): ProbeResult {
   const locked = Object.values(facts.problems).find((p) => p.code === 'vault-locked');
   if (locked || facts.state?.locked === true) {
     // The advice, when there is one, *is* the fix. It names the file, the
@@ -265,15 +257,6 @@ export function checkVault(facts: VaultFacts, required: readonly string[] = REQU
     ]
       .filter((s) => s !== '')
       .join('; ') || 'no secrets resolved';
-
-  if (!required.some((name) => facts.sources[name] !== undefined)) {
-    return {
-      status: 'fail',
-      detail:
-        `${facts.vault} — ${where}; no model credential ` +
-        `(\`buddi vault set CLAUDE_CODE_OAUTH_TOKEN\`, or set it in .env)`,
-    };
-  }
 
   // A file vault that opens is fine *today*. What it is not is backed up: the
   // key is the one thing an archive deliberately never contains, so the row

@@ -34,13 +34,14 @@ async function agentsDir(files: Record<string, string>): Promise<string> {
 
 it('builds the whole wiring with an agent granting a plugin that is not installed', async () => {
   const dir = await agentsDir({
-    keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\n'),
+    keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\nprovider: openai\nmodel: gpt-5\n'),
     credo: agentMd('credo', 'credo', 'finance.*, memory.note'),
   });
   const wiring = createWiring({
     DATABASE_URL: 'postgres://fixture:fixture@127.0.0.1:1/fixture',
     BUDDI_AGENTS_DIR: dir,
-    ANTHROPIC_API_KEY: 'sk-ant-fixture',
+    // Anthropic runs only through a model account; OpenAI still reads its key.
+    OPENAI_API_KEY: 'sk-fixture',
   });
   try {
     // The registry is built, and the catalog against it.
@@ -76,7 +77,7 @@ it('still refuses a grant no install could satisfy', async () => {
     createWiring({
       DATABASE_URL: 'postgres://fixture:fixture@127.0.0.1:1/fixture',
       BUDDI_AGENTS_DIR: dir,
-      ANTHROPIC_API_KEY: 'sk-ant-fixture',
+      OPENAI_API_KEY: 'sk-fixture',
     }),
   ).toThrow(/matches no registered tool/);
 });

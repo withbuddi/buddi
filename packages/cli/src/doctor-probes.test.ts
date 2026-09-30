@@ -16,17 +16,17 @@ import { createProbes } from './doctor-probes.js';
 import type { HttpTransport } from '@buddi/gateway';
 
 const VAULT_TOKEN = '9999999:telegram-from-the-vault';
-const VAULT_KEY = 'sk-ant-api03-from-the-vault';
+const VAULT_KEY = 'sk-openai-from-the-vault';
 
 /** `.env` exactly as `vault import-env` leaves it: names, markers, no values. */
 const importedEnv = (): NodeJS.ProcessEnv => ({
-  ANTHROPIC_API_KEY: VAULT_PLACEHOLDER,
+  OPENAI_API_KEY: VAULT_PLACEHOLDER,
   TELEGRAM_BOT_TOKEN: VAULT_PLACEHOLDER,
   BUDDI_TZ: 'Europe/Paris',
 });
 
 const seeded = createMemoryVault({
-  seed: { ANTHROPIC_API_KEY: VAULT_KEY, TELEGRAM_BOT_TOKEN: VAULT_TOKEN },
+  seed: { OPENAI_API_KEY: VAULT_KEY, TELEGRAM_BOT_TOKEN: VAULT_TOKEN },
 });
 
 interface Call {
@@ -69,9 +69,12 @@ describe('createProbes with a vault', () => {
     expect(telegram?.url).toContain(VAULT_TOKEN);
     expect(telegram?.url).not.toContain(VAULT_PLACEHOLDER);
 
-    expect(await probes.modelCredential()).toMatchObject({ status: 'ok' });
-    const models = calls.find((c) => c.url.includes('/v1/models'));
-    expect(models?.headers['x-api-key']).toBe(VAULT_KEY);
+    // Anthropic reads no key from the vault or .env: with no model account the
+    // row says where to add one, and nothing is sent to a models endpoint.
+    const model = await probes.modelCredential();
+    expect(model.status).toBe('fail');
+    expect(model.detail).toMatch(/model account/);
+    expect(calls.some((c) => c.url.includes('/v1/models'))).toBe(false);
 
     await probes.close();
   });
@@ -82,7 +85,7 @@ describe('createProbes with a vault', () => {
     const row = await createProbes(env, { vault: seeded, http }).vault();
     expect(row.status).toBe('ok');
     expect(row.detail).toContain('memory');
-    expect(row.detail).toContain('from the vault: ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN');
+    expect(row.detail).toContain('from the vault: OPENAI_API_KEY, TELEGRAM_BOT_TOKEN');
     expect(row.detail).not.toContain(VAULT_KEY);
     expect(row.detail).not.toContain(VAULT_TOKEN);
   });
@@ -101,7 +104,7 @@ describe('createProbes with a vault', () => {
     expect(await probes.botToken()).toMatchObject({ status: 'warn' });
     // …and nothing was sent anywhere.
     expect(calls).toEqual([]);
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
 
     await probes.close();
@@ -210,7 +213,8 @@ describe('the agents probe with a held-back agent', () => {
       BUDDI_PLUGINS_FILE: path.join(root, 'plugins.json'),
       BUDDI_DATA_DIR: path.join(root, 'data'),
       BUDDI_VAULT: 'none',
-      ANTHROPIC_API_KEY: VAULT_KEY,
+      // Anthropic runs only through a model account; OpenAI still reads its key.
+      OPENAI_API_KEY: VAULT_KEY,
     };
   }
 
@@ -219,7 +223,7 @@ describe('the agents probe with a held-back agent', () => {
 
   it('warns and names the agent instead of failing the whole row', async () => {
     const env = withAgents({
-      keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\n'),
+      keeper: agentMd('keeper', 'keeper', 'memory.note', 'default: true\nprovider: openai\nmodel: gpt-5\n'),
       credo: agentMd('credo', 'credo', 'finance.*'),
     });
     const probes = createProbes(env, { vault: undefined, http: recordHttp().http });

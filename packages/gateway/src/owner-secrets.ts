@@ -177,7 +177,7 @@ export async function adoptMailboxSecrets(
  *  - `BUDDI_VAULT_KEY`: every `createVault({ env: process.env })` made per
  *    request — provider settings and accounts, Telegram setup, the web token,
  *    recovery, backups. The file vault reads the key on each open.
- *  - `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`: provider
+ *  - `OPENAI_API_KEY`: provider
  *    resolution per agent (`providerFor`) and model-account reloads.
  *  - `TELEGRAM_BOT_TOKEN`: every `notifyOwner`, and Telegram started from the
  *    dashboard.

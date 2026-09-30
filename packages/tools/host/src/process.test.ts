@@ -8,10 +8,10 @@ describe('host command processes', () => {
       .toMatchObject({ state: 'completed', stdout: 'hello', stderr: 'problem', exitCode: 7 });
   });
   it('does not inherit application credentials or shell startup variables', () => {
-    const env = commandEnv({ HOME: '/tmp', DATABASE_URL: 'secret', ANTHROPIC_API_KEY: 'secret', BASH_ENV: '/tmp/evil', NODE_OPTIONS: '--inspect' });
+    const env = commandEnv({ HOME: '/tmp', DATABASE_URL: 'secret', OPENAI_API_KEY: 'secret', BASH_ENV: '/tmp/evil', NODE_OPTIONS: '--inspect' });
     expect(env.HOME).toBe('/tmp');
     expect(env).not.toHaveProperty('DATABASE_URL'); expect(env).not.toHaveProperty('BASH_ENV');
-    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY'); expect(env).not.toHaveProperty('NODE_OPTIONS');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY'); expect(env).not.toHaveProperty('NODE_OPTIONS');
   });
   it('closes stdin so a prompt cannot hang waiting for a password', async () => {
     expect((await runCommand({ ...base, command: 'read answer; printf "read:%s" "$?"' })).stdout).toBe('read:1');

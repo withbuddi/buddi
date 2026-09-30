@@ -997,7 +997,7 @@ export interface AgentFileEdit {
 
 export interface ProviderAccount {
   id: string; label: string; kind: 'anthropic' | 'openai' | 'openai-compatible' | 'codex';
-  auth: 'api-key' | 'none' | 'legacy-subscription-token' | 'chatgpt' | 'anthropic-oauth' | 'device-key'; baseUrl: string;
+  auth: 'api-key' | 'none' | 'chatgpt' | 'anthropic-oauth' | 'device-key'; baseUrl: string;
   defaultModel: string; enabled: boolean; revision: number; configured: boolean;
   /** The owner's context-window override, in tokens, or null for automatic. */
   contextWindowTokens?: number | null;

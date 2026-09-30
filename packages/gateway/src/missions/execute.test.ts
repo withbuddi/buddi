@@ -152,7 +152,7 @@ function fixtureCatalog(registry: ToolRegistry): AgentCatalog {
       'mission-agents',
     ),
     registry,
-    env: { ANTHROPIC_API_KEY: 'test-key' },
+    env: {},
   });
 }
 
@@ -213,7 +213,7 @@ function deps(overrides: Partial<Parameters<typeof createMissionExecutor>[0]> = 
     catalog: fixtureCatalog(registry),
     provider: fakeProvider('Cash 1200 EUR. Minimum 340 EUR on 2026-10-02.'),
     ctx,
-    env: { ANTHROPIC_API_KEY: 'test-key' } as NodeJS.ProcessEnv,
+    env: {} as NodeJS.ProcessEnv,
     now: () => new Date('2026-09-11T12:00:00Z'),
     deliver: async () => 'chat-42',
     log: () => {},

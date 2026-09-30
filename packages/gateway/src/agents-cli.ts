@@ -628,7 +628,7 @@ async function testCommand(
     console.error(
       agent.provider.kind === 'openai'
         ? 'Set OPENAI_API_KEY in .env (or the vault), or pin this agent to another provider.'
-        : 'Set CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) or ANTHROPIC_API_KEY.',
+        : 'Add an Anthropic model account in the dashboard (Settings → Model accounts) and choose it for this agent.',
     );
     return 1;
   }

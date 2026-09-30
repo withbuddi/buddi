@@ -150,9 +150,9 @@ describe('scrubText', () => {
   });
 
   it('buddi env keys with no vault are still scrubbed via the source', async () => {
-    const out = await scrubWith([{ name: 'ANTHROPIC_API_KEY', value: 'sk-ant-live-abc123' }],
+    const out = await scrubWith([{ name: 'OPENAI_API_KEY', value: 'sk-ant-live-abc123' }],
       'error: request to api.anthropic.com failed with key sk-ant-live-abc123');
-    expect(out).toBe(`error: request to api.anthropic.com failed with key ${secretMarker('ANTHROPIC_API_KEY')}`);
+    expect(out).toBe(`error: request to api.anthropic.com failed with key ${secretMarker('OPENAI_API_KEY')}`);
   });
 
   it('no source configured: identity', () => {

@@ -748,7 +748,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Keep a secret in the vault. It asks for the value with the typing hidden.',
     usage: 'buddi vault set <NAME>',
     flags: [],
-    example: 'buddi vault set ANTHROPIC_API_KEY',
+    example: 'buddi vault set TAVILY_API_KEY',
     applies: 'both',
   },
   {

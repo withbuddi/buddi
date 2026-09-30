@@ -334,7 +334,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   /*
    * The composition root, vault included. `createWiringAsync` hydrates the
    * secrets from the keychain before anything reads them — without it, a
-   * `.env` holding `ANTHROPIC_API_KEY=<vault>` after `buddi vault import-env`
+   * `.env` holding `TELEGRAM_BOT_TOKEN=<vault>` after `buddi vault import-env`
    * would be sent to the API as if the marker were the key.
    */
   let wiring: Wiring;

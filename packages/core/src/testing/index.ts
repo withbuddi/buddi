@@ -11,3 +11,4 @@
  */
 export * from '../index.js';
 export * from './database-url.js';
+export * from './accounts.js';

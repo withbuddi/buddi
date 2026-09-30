@@ -16,8 +16,11 @@ suite('named provider accounts', () => {
   }, 60_000);
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`drop database if exists ${name}`); await admin.end(); } });
   beforeEach(async () => { await pool.query('truncate core.agent_provider_accounts, core.provider_accounts, core.provider_account_migrations, core.provider_credential_state, core.provider_settings'); });
-  function fixture(env: NodeJS.ProcessEnv = { CLAUDE_CODE_OAUTH_TOKEN: 'legacy-fixture-token', OPENAI_API_KEY: 'legacy-fixture-api' }) {
-    const agents = ['ledger', 'scout'].map(id => ({ id, model: 'claude-sonnet-5', provider: providerFromEnv(env) } as CatalogAgent));
+  function fixture(env: NodeJS.ProcessEnv = { OPENAI_API_KEY: 'legacy-fixture-api' }) {
+    const agents = [
+      { id: 'ledger', model: 'claude-sonnet-5', provider: providerFromEnv(env) },
+      { id: 'scout', model: 'gpt-5', provider: providerFromEnv(env, 'gpt-5', 'openai') },
+    ] as CatalogAgent[];
     const catalog = { list: () => agents, get: (id: string) => agents.find(a => a.id === id) } as unknown as AgentCatalog;
     const vault = createMemoryVault(), reload = vi.fn(), test = vi.fn(async (_resolved: unknown) => {});
     const listModels = vi.fn(async (_provider: unknown) => ({ models: [{ id: 'claude-test', name: 'Test', isDefault: false }], truncated: false }));
@@ -248,10 +251,14 @@ suite('named provider accounts', () => {
   });
   it('migrates existing choices atomically and never reassigns on restart or discovers another key', async () => {
     const f = fixture(); await f.service.initialize();
-    expect(f.service.view().bindings).toEqual(expect.arrayContaining([{ agentId: 'ledger', accountId: 'legacy-anthropic-subscription', model: 'claude-sonnet-5' }]));
+    // OpenAI's legacy key becomes an account; Anthropic has no legacy variable,
+    // so the Anthropic agent is left for the owner to give an account.
+    expect(f.service.view().bindings).toEqual([{ agentId: 'scout', accountId: 'legacy-openai-api', model: 'gpt-5' }]);
+    expect(f.service.view().accounts.map(a => a.id)).toEqual(['legacy-openai-api']);
+    expect(f.service.selection({ id: 'ledger' } as AgentFrontmatter).availability.ok).toBe(false);
     const created = await f.service.save(settings);
     await f.service.assign('ledger', { accountId: created.id, model: 'claude-haiku-4-5' });
-    f.env.BUDDI_ANTHROPIC_CREDENTIAL_KIND = 'api-key';
+    f.env.OPENAI_API_KEY = 'another-fixture-api';
     await f.service.initialize();
     expect(f.service.view().bindings.find(b => b.agentId === 'ledger')).toMatchObject({ accountId: created.id, model: 'claude-haiku-4-5' });
     f.agents.push({ id: 'new-agent' } as CatalogAgent);
@@ -289,7 +296,7 @@ suite('named provider accounts', () => {
     await f.service.save({ ...metadata(f, a.id), label: 'Renamed' });
     await expect(f.service.save({ ...metadata(f, a.id), revision: 1 })).rejects.toThrow('changed');
     await expect(f.service.assign('ledger', { accountId: a.id, model: 'gpt-5' })).rejects.toThrow();
-    await expect(f.service.save({ ...settings, auth: 'legacy-subscription-token' })).rejects.toThrow('not supported');
+    await expect(f.service.save({ ...settings, auth: 'setup-token' })).rejects.toThrow('Invalid account settings');
     const local = await f.service.save({ ...settings, kind: 'openai-compatible', baseUrl: 'https://one.example/v1', defaultModel: 'custom-model' });
     await expect(f.service.save({ ...metadata(f, local.id), baseUrl: 'https://two.example/v1' })).rejects.toThrow('credential again');
   });

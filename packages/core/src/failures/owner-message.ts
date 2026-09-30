@@ -103,17 +103,8 @@ const UNKNOWN_TEXT =
   "Sorry — that went wrong on my side, and I can't tell you anything useful about why. " +
   'The details are in the log. Trying again is worth a go.';
 
-/**
- * Environment variables whose absence has a specific cure worth naming.
- *
- * Not a list of every credential — just the two an Anthropic install actually
- * uses, because "run claude setup-token" is a real instruction and "set the
- * credential" is not.
- */
+/** The cure for a credential variable that is not set. */
 function howToSet(envVar: string): string {
-  if (/OAUTH_TOKEN$/.test(envVar)) {
-    return `Run "claude setup-token", put what it gives you in ${envVar} in your .env, and restart buddi.`;
-  }
   return `Set ${envVar} in your .env and restart buddi.`;
 }
 

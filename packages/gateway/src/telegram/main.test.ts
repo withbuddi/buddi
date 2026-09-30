@@ -78,7 +78,7 @@ function identity(userId: string, chatId: string | null): SurfaceIdentity {
 
 const PROVIDER = {
   kind: 'anthropic' as const,
-  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
   model: 'claude-sonnet-5',
 };
 
@@ -401,7 +401,7 @@ describe('ownerCommandsFor', () => {
       roles: ['maker'],
       availability: {
         ok: false,
-        problem: { code: 'missing-credential', message: 'ANTHROPIC_API_KEY is not set' },
+        problem: { code: 'missing-credential', message: 'Choose a provider account for this agent in Settings → Agents.' },
       } as CatalogAgent['availability'],
     });
     expect(canMakeAgents(fakeCatalog([maker]))).toBe(false);

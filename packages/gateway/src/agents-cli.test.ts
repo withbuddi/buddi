@@ -98,7 +98,7 @@ describe('the listing', () => {
     isDefault: true,
     provider: 'anthropic',
     model: 'claude-sonnet-5',
-    credential: 'api-key from ANTHROPIC_API_KEY',
+    credential: 'account work-claude',
     available: true,
     roles: [],
     source: 'example',
@@ -111,7 +111,7 @@ describe('the listing', () => {
     expect(text).toContain('finance-advisor');
     expect(text).toContain('anthropic');
     expect(text).toContain('claude-sonnet-5');
-    expect(text).toContain('api-key from ANTHROPIC_API_KEY');
+    expect(text).toContain('account work-claude');
     expect(text).toContain('(default)');
     expect(text).toContain('available');
   });
@@ -156,11 +156,12 @@ describe('the before/after line', () => {
 
 describe('the model catalogue, rendered', () => {
   it('groups by provider, marks what is usable and names the default', () => {
-    const text = renderModelCatalogue(modelCatalogue({ ANTHROPIC_API_KEY: 'sk-test' }));
-    expect(text).toContain('anthropic — usable (api-key from ANTHROPIC_API_KEY)');
+    const text = renderModelCatalogue(modelCatalogue({ OPENAI_API_KEY: 'sk-test' }));
+    expect(text).toContain('openai — usable (api-key from OPENAI_API_KEY)');
     expect(text).toContain('default: claude-sonnet-5 (built-in default; override with BUDDI_MODEL)');
     expect(text).toContain('claude-opus-5');
-    expect(text).toContain('openai — unusable:');
+    // Anthropic reads nothing from the environment: it needs a model account.
+    expect(text).toContain('anthropic — unusable: no model account');
     expect(text).toContain('gpt-5');
   });
 });
@@ -189,7 +190,7 @@ describe('agentLine, over a real catalog', () => {
     );
     const catalog = loadGatewayCatalog({
       dir: path.join(dir, 'agents'),
-      env: { ANTHROPIC_API_KEY: 'sk-test' },
+      env: {},
       registry: createToolRegistry({}),
     });
     const row = agentLine(catalog.resolve('demo'));

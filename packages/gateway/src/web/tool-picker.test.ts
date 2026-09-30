@@ -16,7 +16,7 @@ import { withCoreTools } from '../agents/core-tools.js';
 import { readToolPicker, type ToolPickerView } from './tool-picker.js';
 import { createWebApp } from './server.js';
 
-const env = { ANTHROPIC_API_KEY: 'sk-ant-fixture' } as NodeJS.ProcessEnv;
+const env = {} as NodeJS.ProcessEnv;
 
 const tool = (name: string, description: string, tier: 'auto' | 'gated' = 'auto') => ({
   name,

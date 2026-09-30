@@ -9,7 +9,7 @@ describe('provider account domain', () => {
     expect(() => resolveProviderAccount({ ...local, kind: 'codex', auth: 'chatgpt' }, 'gpt-5', 'native-secret')).toThrow('fallback is forbidden');
   });
   it('cannot bypass an account assignment by resolving ambient credentials', () => {
-    const result = resolveProvider({ kind: 'anthropic', model: 'claude-sonnet-5', accountId: 'disabled-account', credential: { kind: 'api-key', env: 'ANTHROPIC_API_KEY' } }, { ANTHROPIC_API_KEY: 'fixture' });
+    const result = resolveProvider({ kind: 'anthropic', model: 'claude-sonnet-5', accountId: 'disabled-account', credential: { kind: 'api-key', env: 'SOME_KEY' } }, { SOME_KEY: 'fixture' });
     expect(result).toMatchObject({ ok: false, problem: { code: 'unsupported' } });
   });
   it('separates compatible model names and authentication from OpenAI', () => {
@@ -30,7 +30,7 @@ describe('provider account domain', () => {
   it('refuses disabled, missing-key, wrong-auth and redirected subscription accounts', () => {
     expect(() => resolveProviderAccount({ ...local, enabled: false }, local.defaultModel, null)).toThrow('disabled');
     expect(() => resolveProviderAccount({ ...local, auth: 'api-key' }, local.defaultModel, null)).toThrow('missing');
-    expect(() => resolveProviderAccount({ ...local, auth: 'legacy-subscription-token' }, local.defaultModel, 'token')).toThrow('does not belong');
-    expect(() => resolveProviderAccount({ ...local, kind: 'anthropic', auth: 'legacy-subscription-token' }, 'claude-sonnet-5', 'token')).toThrow('custom endpoint');
+    expect(() => resolveProviderAccount({ ...local, auth: 'anthropic-oauth' }, local.defaultModel, 'token')).toThrow('does not belong');
+    expect(() => resolveProviderAccount({ ...local, kind: 'anthropic', auth: 'anthropic-oauth' }, 'claude-sonnet-5', 'token')).toThrow('custom endpoint');
   });
 });

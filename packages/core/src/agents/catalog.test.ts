@@ -31,6 +31,20 @@ import {
 } from './frontmatter.js';
 import { DEFAULT_MODEL, DEFAULT_OPENAI_MODEL, providerFromEnv } from './provider-from-env.js';
 import { parseSkillFile } from './skills.js';
+import type { AgentFrontmatter } from './frontmatter.js';
+
+/**
+ * The gateway's account service, reduced to what the catalog asks: every
+ * Anthropic agent has a working model account (Anthropic reads nothing from
+ * the environment any more); an OpenAI agent falls through to its env key.
+ */
+const anthropicAccount = (env: NodeJS.ProcessEnv) =>
+  ((agent: AgentFrontmatter) =>
+    agent.provider === 'openai'
+      ? undefined
+      : { provider: providerFromEnv(env, agent.model), availability: { ok: true as const } }) as NonNullable<
+    Parameters<typeof loadAgentCatalog>[0]['providerSelection']
+  >;
 
 /** A stand-in plugin: core may not import a real one (dependency direction). */
 function fakeManifest(names: string[], plugin = 'finance'): PluginManifest {
@@ -378,7 +392,7 @@ describe('optional grants', () => {
     const dir = catalogDir({
       planner: agentFile('id: planner\nhandle: planner\nname: Planner\ndescription: Keeps the day.\ntools: [notes.*, weather.*?, calendar.*?]'),
     });
-    const planner = loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'k' } }).resolve('planner');
+    const planner = loadAgentCatalog({ dir, registry, env: {}, providerSelection: anthropicAccount({}) }).resolve('planner');
     expect(planner.heldBack).toBeUndefined();
     expect(planner.tools).toEqual(['notes.search']);
     expect(planner.available).toBe(true);
@@ -402,7 +416,7 @@ describe('grants to a disabled plugin', () => {
     const dir = catalogDir({
       planner: agentFile('id: planner\nhandle: planner\nname: Planner\ndescription: Keeps the day.\ntools: [notes.*, weather.*]'),
     });
-    const catalog = loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'k' }, disabledPlugins: ['weather'] });
+    const catalog = loadAgentCatalog({ dir, registry, env: {}, providerSelection: anthropicAccount({}), disabledPlugins: ['weather'] });
     const planner = catalog.resolve('planner');
     expect(planner.heldBack).toBeUndefined();
     expect(planner.available).toBe(true);
@@ -414,13 +428,14 @@ describe('grants to a disabled plugin', () => {
 });
 
 describe('loadAgentCatalog', () => {
-  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
-    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
+  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}, accounts = false) =>
+    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env, ...(accounts ? { providerSelection: anthropicAccount(env) } : {}) });
 
   it('lists every agent with its summary', () => {
     const catalog = load(
       { 'finance-advisor': FINANCE, concierge: CONCIERGE },
-      { ANTHROPIC_API_KEY: 'k' },
+      {},
+      true,
     );
     expect(catalog.list()).toEqual([
       {
@@ -564,7 +579,7 @@ describe('loadAgentCatalog', () => {
    */
   it('loads when two files claim the default, and says so', () => {
     const second = CONCIERGE.replace('tools: []', 'tools: []\ndefault: true');
-    const catalog = load({ 'finance-advisor': FINANCE, concierge: second }, { ANTHROPIC_API_KEY: 'k' });
+    const catalog = load({ 'finance-advisor': FINANCE, concierge: second }, {}, true);
     expect(catalog.list()).toHaveLength(2);
     expect(catalog.defaultProblem).toMatchObject({
       code: 'multiple-defaults',
@@ -606,7 +621,7 @@ describe('loadAgentCatalog', () => {
     );
 
     it('is held back rather than failing the whole catalog', () => {
-      const catalog = load({ mailer: MAILER, 'finance-advisor': FINANCE }, { ANTHROPIC_API_KEY: 'k' });
+      const catalog = load({ mailer: MAILER, 'finance-advisor': FINANCE }, {}, true);
       expect(catalog.list().map((a) => a.id).sort()).toEqual(['finance-advisor', 'mailer']);
       // Every other agent is untouched: tools, availability, the lot.
       const advisor = catalog.resolve('finance-advisor');
@@ -627,7 +642,7 @@ describe('loadAgentCatalog', () => {
     });
 
     it('cannot run, and says why in the same field every other refusal uses', () => {
-      const mailer = load({ mailer: MAILER }, { ANTHROPIC_API_KEY: 'k' }).resolve('mailer');
+      const mailer = load({ mailer: MAILER }, {}, true).resolve('mailer');
       expect(mailer.available).toBe(false);
       expect(mailer.availability.ok).toBe(false);
       expect(mailer.availability.ok ? '' : mailer.availability.problem.code).toBe('missing-plugin');
@@ -645,7 +660,7 @@ describe('loadAgentCatalog', () => {
       const catalog = loadAgentCatalog({
         dir: catalogDir({ owner: file, concierge: CONCIERGE }),
         registry: registryOf(),
-        env: { ANTHROPIC_API_KEY: 'k' },
+        env: {}, providerSelection: anthropicAccount({}),
         log: (line) => warned.push(line),
       });
       expect(warned.some((line) => line.includes('/owner/agent.md') && line.includes('is reserved'))).toBe(true);
@@ -663,7 +678,7 @@ describe('loadAgentCatalog', () => {
       const catalog = loadAgentCatalog({
         dir: catalogDir({ owner: file, concierge: CONCIERGE }),
         registry: registryOf(),
-        env: { ANTHROPIC_API_KEY: 'k' },
+        env: {}, providerSelection: anthropicAccount({}),
         // Even recorded as the default, it cannot be it: it is not an agent.
         defaultAgentId: 'owner',
         log: () => {},
@@ -693,7 +708,7 @@ describe('loadAgentCatalog', () => {
       const catalog = loadAgentCatalog({
         dir: catalogDir({ owner: refused, 'front-desk': real }),
         registry: registryOf(),
-        env: { ANTHROPIC_API_KEY: 'k' },
+        env: {}, providerSelection: anthropicAccount({}),
         log: () => {},
       });
       expect(catalog.byHandle('owner')?.id).toBe('front-desk');
@@ -718,7 +733,7 @@ describe('loadAgentCatalog', () => {
   });
 
   it('lands on the first runnable agent when no file claims the default', () => {
-    const catalog = load({ concierge: CONCIERGE }, { ANTHROPIC_API_KEY: 'k' });
+    const catalog = load({ concierge: CONCIERGE }, {}, true);
     expect(catalog.list()).toHaveLength(1);
     expect(catalog.defaultAgent().id).toBe('concierge');
     expect(catalog.defaultProblem).toMatchObject({ code: 'no-default-agent', agents: [] });
@@ -733,7 +748,7 @@ describe('loadAgentCatalog', () => {
       loadAgentCatalog({
         dir: catalogDir(files),
         registry: registryOf(),
-        env: { ANTHROPIC_API_KEY: 'k' },
+        env: {}, providerSelection: anthropicAccount({}),
         defaultAgentId,
       });
 
@@ -830,11 +845,11 @@ describe('loadAgentCatalog', () => {
     );
   });
 
-  it('pins the credential kind from the environment', () => {
-    const agent = load({ concierge: CONCIERGE }, { CLAUDE_CODE_OAUTH_TOKEN: 't' }).resolve(
-      'concierge',
-    );
-    expect(agent.provider.credential.kind).toBe('subscription-token');
+  it('reads no Anthropic credential from the environment: an agent needs a model account', () => {
+    const agent = load({ concierge: CONCIERGE }, { SOME_TOKEN: 't' }).resolve('concierge');
+    expect(agent.provider.credential).toEqual({ kind: 'api-key', env: '' });
+    expect(agent.availability).toMatchObject({ ok: false, problem: { code: 'missing-credential' } });
+    expect(agent.unavailableReason).toMatch(/model account/);
   });
 
   it('appends a generated section naming the resolved tools', () => {
@@ -1100,13 +1115,13 @@ const SCOUT = agentFile(
 );
 
 describe('a catalog with agents on two providers', () => {
-  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
-    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
+  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}, accounts = false) =>
+    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env, ...(accounts ? { providerSelection: anthropicAccount(env) } : {}) });
 
   const files = { 'finance-advisor': FINANCE, concierge: CONCIERGE, scout: SCOUT };
 
   it('pins each agent to its own provider and credential', () => {
-    const catalog = load(files, { ANTHROPIC_API_KEY: 'k', OPENAI_API_KEY: 'o' });
+    const catalog = load(files, { OPENAI_API_KEY: 'o' }, true);
     const scout = catalog.resolve('scout');
     expect(scout.provider.kind).toBe('openai');
     expect(scout.provider.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
@@ -1114,24 +1129,22 @@ describe('a catalog with agents on two providers', () => {
     expect(catalog.resolve('concierge').provider.kind).toBe('anthropic');
   });
 
-  it('never lets an Anthropic subscription token or BUDDI_MODEL leak to the openai agent', () => {
+  it('never lets BUDDI_MODEL leak to the openai agent', () => {
     const catalog = load(files, {
-      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01',
       BUDDI_MODEL: 'claude-opus-4-1',
       OPENAI_API_KEY: 'o',
-    });
+    }, true);
     const scout = catalog.resolve('scout');
     expect(scout.provider.credential.kind).toBe('api-key');
     expect(scout.provider.credential.env).toBe('OPENAI_API_KEY');
     expect(scout.model).toBe('gpt-5');
-    // The Anthropic agents still take the token and the env model.
-    expect(catalog.resolve('concierge').provider.credential.kind).toBe('subscription-token');
+    // The Anthropic agents still take the env model.
     expect(catalog.resolve('concierge').model).toBe('claude-opus-4-1');
   });
 
   it('loads every other agent when one agent\'s credential is missing', () => {
     // No OPENAI_API_KEY: exactly the machine this ships on.
-    const catalog = load(files, { ANTHROPIC_API_KEY: 'k' });
+    const catalog = load(files, {}, true);
     expect(catalog.list().map((a) => a.id)).toEqual(['concierge', 'finance-advisor', 'scout']);
     expect(catalog.defaultAgent().id).toBe('finance-advisor');
 
@@ -1152,14 +1165,14 @@ describe('a catalog with agents on two providers', () => {
   });
 
   it('never holds the secret itself, only whether one was reachable', () => {
-    const catalog = load(files, { ANTHROPIC_API_KEY: 'k', OPENAI_API_KEY: 'o-secret' });
+    const catalog = load(files, { OPENAI_API_KEY: 'o-secret' }, true);
     expect(JSON.stringify(catalog.resolve('scout').availability)).not.toContain('o-secret');
   });
 });
 
 describe('the model catalogue in an agent file', () => {
-  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) =>
-    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env });
+  const load = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}, accounts = false) =>
+    loadAgentCatalog({ dir: catalogDir(files), registry: registryOf(), env, ...(accounts ? { providerSelection: anthropicAccount(env) } : {}) });
 
   it('refuses a model that belongs to another provider', () => {
     const crossed = SCOUT.replace('model: gpt-5', 'model: claude-sonnet-5');
@@ -1180,19 +1193,15 @@ describe('the model catalogue in an agent file', () => {
 
 
 describe('providerFromEnv', () => {
-  it('reads the anthropic credential from what the owner has', () => {
-    expect(providerFromEnv({ ANTHROPIC_API_KEY: 'k' }).credential).toEqual({
+  it('names no anthropic variable, whatever the environment holds', () => {
+    expect(providerFromEnv({ SOME_KEY: 'k', SOME_TOKEN: 't' }).credential).toEqual({
       kind: 'api-key',
-      env: 'ANTHROPIC_API_KEY',
-    });
-    expect(providerFromEnv({ CLAUDE_CODE_OAUTH_TOKEN: 't' }).credential).toEqual({
-      kind: 'subscription-token',
-      env: 'CLAUDE_CODE_OAUTH_TOKEN',
+      env: '',
     });
   });
 
   it('gives openai one credential kind and discovers nothing', () => {
-    const ref = providerFromEnv({ CLAUDE_CODE_OAUTH_TOKEN: 't' }, undefined, 'openai');
+    const ref = providerFromEnv({ SOME_TOKEN: 't' }, undefined, 'openai');
     expect(ref.kind).toBe('openai');
     expect(ref.credential).toEqual({ kind: 'api-key', env: 'OPENAI_API_KEY' });
     expect(ref.model).toBe(DEFAULT_OPENAI_MODEL);
@@ -1218,7 +1227,7 @@ describe('tools registered while buddi runs', () => {
       concierge: CONCIERGE,
       'github-helper': agentFile(['id: github-helper', 'handle: gh', 'name: GitHub Helper', 'description: Repos.', 'tools: [notes.search, mcp.github.*]'].join('\n')),
     });
-    const load = () => loadAgentCatalog({ dir, registry, env: { ANTHROPIC_API_KEY: 'x' } });
+    const load = () => loadAgentCatalog({ dir, registry, env: {}, providerSelection: anthropicAccount({}) });
     // Nothing of `mcp` is registered yet: held back as a missing family, not an error.
     expect(load().get('github-helper')?.heldBack?.families).toEqual(['mcp']);
     const tool = (name: string) => ({ name, description: name, tier: 'auto' as const, inputSchema: { type: 'object' }, execute: async () => ({}) });

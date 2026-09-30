@@ -53,7 +53,6 @@ export interface ServiceManager {
 
 /** What `serve` cannot start without. Checked before a unit is ever written. */
 export const REQUIRED_ENV = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const;
-export const CREDENTIAL_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
 
 /** Parse `.env` shallowly: `KEY=value` lines, no interpolation, no quotes removed. */
 export function readEnvFile(file: string): Record<string, string> {
@@ -69,13 +68,12 @@ export function readEnvFile(file: string): Record<string, string> {
   return out;
 }
 
-/** The names that are missing or empty. Empty result means the unit may be written. */
+/**
+ * The names that are missing or empty. Empty result means the unit may be
+ * written. No model credential is required here: it lives in a model account.
+ */
 export function missingRequiredEnv(env: Record<string, string>): string[] {
-  const missing: string[] = REQUIRED_ENV.filter((k) => !env[k] || env[k].trim() === '');
-  if (!CREDENTIAL_ENV.some((k) => env[k] && env[k].trim() !== '')) {
-    missing.push(`${CREDENTIAL_ENV[0]} or ${CREDENTIAL_ENV[1]}`);
-  }
-  return missing;
+  return REQUIRED_ENV.filter((k) => !env[k] || env[k].trim() === '');
 }
 
 /** A `pnpm serve` / `node …/serve.js` already running would fight over the bot. */

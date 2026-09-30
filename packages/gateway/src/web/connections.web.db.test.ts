@@ -64,7 +64,7 @@ suite('connections routes', () => {
     mkdirSync(assets);
     writeFileSync(path.join(assets, 'index.html'), '<!doctype html><title>buddi</title>');
 
-    const env = { ANTHROPIC_API_KEY: 'sk-test' } as NodeJS.ProcessEnv;
+    const env = {} as NodeJS.ProcessEnv;
     const registry = createToolRegistry({});
     const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: path.join(dir, 'agents'), env, registry }));
     registry.onChange(() => catalog.reload());

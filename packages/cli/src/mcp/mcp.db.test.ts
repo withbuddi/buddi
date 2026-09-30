@@ -25,7 +25,7 @@ import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createPool, ensureOwner, type PluginManifest, type CoreToolContext } from '@buddi/core';
-import { testDatabaseUrl } from '@buddi/core/testing';
+import { testAnthropicAccount, testDatabaseUrl } from '@buddi/core/testing';
 import { demoPagesManifest } from '@buddi/core/testing/pages';
 import {
   bindPlatformTools,
@@ -63,7 +63,7 @@ const SEED = {
   oauth: 'ya29.a0SeedOauthAccessTokenValue123456',
 };
 const SECRET_ENV: NodeJS.ProcessEnv = {
-  ANTHROPIC_API_KEY: SEED.anthropic,
+  OPENAI_API_KEY: SEED.anthropic,
   TELEGRAM_BOT_TOKEN: SEED.telegram,
   DATABASE_URL: `postgres://buddi:${SEED.dbPassword}@127.0.0.1:5432/buddi`,
   // A vault entry hydrated into the environment, as `hydrateSecrets` does.
@@ -211,10 +211,10 @@ suite('buddi mcp', () => {
       mkdirSync(path.join(agents, id), { recursive: true });
       writeFileSync(path.join(agents, id, 'agent.md'), source);
     }
-    const env = { ANTHROPIC_API_KEY: SEED.anthropic } as NodeJS.ProcessEnv;
+    const env = {} as NodeJS.ProcessEnv;
     const registry = createToolRegistry({});
     registry.register(demoManifest);
-    const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: agents, env, registry }));
+    const catalog = reloadableCatalog(() => loadGatewayCatalog({ dir: agents, env, registry, providerSelection: testAnthropicAccount() }));
     bindPlatformTools(registry, {
       catalog,
       reload: () => catalog.reload(),

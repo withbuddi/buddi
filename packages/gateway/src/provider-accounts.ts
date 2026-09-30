@@ -44,7 +44,7 @@ const columns = `id, label, kind, auth, base_url as "baseUrl", default_model as 
 const saveSchema = z.object({
   id: z.string().min(1).max(100).optional(), revision: z.number().int().positive().optional(),
   label: z.string().trim().min(1).max(100), kind: z.enum(['anthropic', 'openai', 'openai-compatible', 'codex']),
-  auth: z.enum(['api-key', 'none', 'legacy-subscription-token', 'chatgpt', 'anthropic-oauth', 'device-key']),
+  auth: z.enum(['api-key', 'none', 'chatgpt', 'anthropic-oauth', 'device-key']),
   baseUrl: z.string().trim().max(2048).optional(), defaultModel: z.string().trim().min(1).max(150),
   enabled: z.boolean(), secret: z.string().trim().min(1).max(16384).optional(),
   /**
@@ -61,9 +61,9 @@ const probeSchema = z.object({
   baseUrl: z.string().trim().max(2048).optional(),
   secret: z.string().trim().min(1).max(16384).optional(),
 }).strict();
+// Anthropic's old variables are not read any more (migration 053 removed
+// their accounts); OpenAI's key is still migrated into a named account.
 const legacy = [
-  { id: 'legacy-anthropic-api', name: 'ANTHROPIC_API_KEY', label: 'Anthropic — existing API key', kind: 'anthropic', auth: 'api-key' },
-  { id: 'legacy-anthropic-subscription', name: 'CLAUDE_CODE_OAUTH_TOKEN', label: 'Claude — existing subscription token', kind: 'anthropic', auth: 'legacy-subscription-token' },
   { id: 'legacy-openai-api', name: 'OPENAI_API_KEY', label: 'OpenAI — existing API key', kind: 'openai', auth: 'api-key' },
 ] as const;
 
@@ -240,7 +240,7 @@ export class ProviderAccounts {
     const row = binding && this.#rows.get(binding.accountId);
     const provider: ProviderRef = row ? {
       kind: accountProtocol(row.kind), model: binding!.model, accountId: row.id,
-      credential: { kind: row.auth === 'legacy-subscription-token' || row.auth === 'anthropic-oauth' ? 'subscription-token' : 'api-key', env: row.secretRef ?? 'NO_CREDENTIAL' },
+      credential: { kind: row.auth === 'anthropic-oauth' ? 'subscription-token' : 'api-key', env: row.secretRef ?? 'NO_CREDENTIAL' },
     } as ProviderRef : { ...providerFromEnv(this.deps.env, agent.model, agent.provider), accountId: binding?.accountId ?? '' };
     const issue = !row ? 'Choose a provider account for this agent in Settings → Agents.'
       : row.kind === 'codex' && !this.codex ? SIGNIN_HIDDEN.codex
@@ -416,7 +416,6 @@ export class ProviderAccounts {
     if (old?.deleting) throw new ProviderAccountError(409, 'Removal is pending. Unlock the vault and finish removing this account.');
     if (old && input.revision !== old.revision) throw new ProviderAccountError(409, 'This account changed. Reload before saving.');
     if (old && (old.kind !== input.kind || old.auth !== input.auth)) throw new ProviderAccountError(400, 'Create a separate account to change provider or authentication type.');
-    if (input.auth === 'legacy-subscription-token' && (!old || input.secret)) throw new ProviderAccountError(400, 'Legacy subscription tokens are preserved for compatibility; new subscription sign-in is not supported here.');
     if (input.auth === 'none' && (input.kind !== 'openai-compatible' || input.secret)) throw new ProviderAccountError(400, 'No-key authentication is only available for compatible endpoints.');
     if (input.secret && /[\r\n\x00-\x1f]/.test(input.secret)) throw new ProviderAccountError(400, 'Credential cannot contain control characters.');
     let baseUrl: string;
@@ -631,9 +630,8 @@ export class ProviderAccounts {
     }
     if (row.auth !== 'anthropic-oauth') {
       if (row.auth === 'none' || row.secretRef === null) return this.#secret(row);
-      // A legacy account names buddi's own key (`CLAUDE_CODE_OAUTH_TOKEN`,
-      // `OPENAI_API_KEY`), which is not an owner secret and never will be until
-      // the owner replaces it. Asking owner secrets for it would only write a
+      // A legacy account names buddi's own key (`OPENAI_API_KEY`), which is
+      // not an owner secret and never will be until the owner replaces it. Asking owner secrets for it would only write a
       // refusal to the use log on every reload; the raw vault answers directly.
       if (row.legacyEnv !== null) return this.#secret(row);
       /*

@@ -134,7 +134,7 @@ const fakeCatalog = (): AgentCatalog => {
     provider: {
       kind: 'anthropic' as const,
       model: 'claude-test',
-      credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+      credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
     },
     skills: [{ name: 'house-rules', provenance: 'shared' as const, file: '/skills/house.md' }],
     systemPromptTemplate: 'you are a demo',
@@ -528,7 +528,7 @@ suite('the dashboard API', () => {
       id: 'demo-agent',
       handle: 'demo',
       tools: ['demo.send'],
-      provider: { kind: 'anthropic', credentialKind: 'api-key', credentialEnv: 'ANTHROPIC_API_KEY' },
+      provider: { kind: 'anthropic', credentialKind: 'api-key', credentialEnv: 'TEST_ANTHROPIC_KEY' },
     });
     // The credential *name* is reported; the credential never is.
     expect(JSON.stringify(agents)).not.toContain('secret');

@@ -146,7 +146,7 @@ const providers: Record<string, ScriptedProvider> = { playground: new ScriptedPr
 function agentOf(id: string, handle: string, name: string, tools: string[]): any {
   const definition = () => ({
     id, name, systemPrompt: `you are ${name}`, tools,
-    provider: { kind: 'anthropic' as const, model: 'claude-test', credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' } },
+    provider: { kind: 'anthropic' as const, model: 'claude-test', credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' } },
     maxTurns: 6,
   });
   return {

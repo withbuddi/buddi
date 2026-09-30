@@ -6,7 +6,7 @@ import { createPool, runMigrations, ToolRegistry, decideApproval, executeApprove
   listToolPermissions, revokeToolPermission, saveArtifact, getAction, readArtifactBytes, getArtifact,
   type CoreToolContext } from '@buddi/core';
 import { ensureOwner, completeOnboarding, pairSurfaceIdentity, configurePluginHost, createPluginHost, hostBindingOf } from '@buddi/core';
-import { testDatabaseUrl } from '@buddi/core/testing';
+import { testAnthropicAccount, testDatabaseUrl } from '@buddi/core/testing';
 import { createHostManifest, hostService, type HostService, execInput } from '@buddi/tool-host';
 import { startWebServer } from './web/server.js';
 import { csrfCookieName } from './web/http.js';
@@ -144,8 +144,7 @@ suite('host execution permissions and file workflow', () => {
     const agents = await mkdtemp(path.join(dir, 'agents-'));
     await mkdir(path.join(agents, 'ledger'));
     await writeFile(path.join(agents, 'ledger', 'agent.md'), '---\nid: ledger\nhandle: ledger\nname: Ledger\ndescription: Host fixture\ndefault: true\nprovider: anthropic\nmodel: claude-sonnet-5\ntools: [host.*]\nmaxTurns: 4\n---\nComplete the owner task.\n');
-    service.env.ANTHROPIC_API_KEY = 'fixture-unused';
-    const catalog = loadGatewayCatalog({ dir: agents, registry, env: service.env });
+    const catalog = loadGatewayCatalog({ dir: agents, registry, env: service.env, providerSelection: testAnthropicAccount() });
     let calls = 0;
     const complete = vi.fn(async () => (++calls === 1
       ? { content: [{ type: 'tool_use' as const, id: 'h1', name: 'host.exec', input: { command: 'printf 42' } }], stopReason: 'tool_use' as const }

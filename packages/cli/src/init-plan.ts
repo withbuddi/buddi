@@ -20,7 +20,6 @@
 /** Every step of the wizard, in the order it is executed. */
 export const STEP_IDS = [
   'env-file',
-  'model-credential',
   'telegram-token',
   'timezone',
   'owner-name',
@@ -65,7 +64,6 @@ export interface InitFacts {
   /** `--yes`. Consent given up front for anything that only needs a yes. */
   assumeYes: boolean;
   envFileExists: boolean;
-  hasModelCredential: boolean;
   hasBotToken: boolean;
   hasTimezone: boolean;
   hasOwnerName: boolean;
@@ -116,16 +114,8 @@ export function planInit(facts: InitFacts): PlannedStep[] {
     facts.envFileExists ? '.env already exists' : undefined,
   );
 
-  step(
-    'model-credential',
-    'a model credential (subscription token or API key)',
-    typed(facts.hasModelCredential, interactive),
-    facts.hasModelCredential
-      ? 'already set'
-      : interactive
-        ? undefined
-        : `${NO_TTY} — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env`,
-  );
+  // No model credential step: a model account is added in the web wizard
+  // (Settings → Model accounts), where it is kept in the vault.
 
   step(
     'telegram-token',

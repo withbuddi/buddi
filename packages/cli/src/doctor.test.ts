@@ -29,7 +29,7 @@ function fakeProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
     dockerVersion: async () => ok('Docker version 29'),
     postgres: async () => ok('PostgreSQL 16'),
     migrations: async () => ok('6 applied, none pending'),
-    vault: async () => ok('keychain — from the vault: ANTHROPIC_API_KEY'),
+    vault: async () => ok('keychain — from the vault: OPENAI_API_KEY'),
     modelCredential: async () => ok('api-key accepted'),
     agents: async () => ok('5 agents — 5 anthropic (claude-sonnet-5)'),
     botToken: async () => ok('@buddi_bot'),
@@ -173,7 +173,7 @@ describe('checkNodeVersion', () => {
 describe('checkVault', () => {
   const facts = (over: Partial<VaultFacts> = {}): VaultFacts => ({
     vault: 'keychain',
-    sources: { CLAUDE_CODE_OAUTH_TOKEN: 'vault', TELEGRAM_BOT_TOKEN: 'env' },
+    sources: { OPENAI_API_KEY: 'vault', TELEGRAM_BOT_TOKEN: 'env' },
     problems: {},
     ...over,
   });
@@ -182,7 +182,7 @@ describe('checkVault', () => {
     const row = checkVault(facts());
     expect(row.status).toBe('ok');
     expect(row.detail).toBe(
-      'keychain — from the vault: CLAUDE_CODE_OAUTH_TOKEN; from .env: TELEGRAM_BOT_TOKEN',
+      'keychain — from the vault: OPENAI_API_KEY; from .env: TELEGRAM_BOT_TOKEN',
     );
   });
 
@@ -191,7 +191,7 @@ describe('checkVault', () => {
       facts({
         sources: {},
         problems: {
-          CLAUDE_CODE_OAUTH_TOKEN: { code: 'vault-locked', message: 'the keychain is locked' },
+          OPENAI_API_KEY: { code: 'vault-locked', message: 'the keychain is locked' },
         },
       }),
     );
@@ -199,16 +199,15 @@ describe('checkVault', () => {
     expect(row.detail).toMatch(/locked/);
   });
 
-  it('fails when no model credential resolved anywhere', () => {
+  it('asks for no model credential: that lives in a model account', () => {
     const row = checkVault(facts({ sources: { TELEGRAM_BOT_TOKEN: 'env' } }));
-    expect(row.status).toBe('fail');
-    expect(row.detail).toMatch(/no model credential/);
+    expect(row.status).toBe('ok');
   });
 
   it('does not fail over an optional secret nobody set', () => {
     const row = checkVault(
       facts({
-        sources: { ANTHROPIC_API_KEY: 'vault' },
+        sources: { OPENAI_API_KEY: 'vault' },
         problems: { GMAIL_APP_PASSWORD: { code: 'missing-secret', message: 'not set' } },
       }),
     );
@@ -308,7 +307,7 @@ describe('the agents row', () => {
 
   it('FAILS only when the default agent cannot run', () => {
     const row = checkAgents([
-      agent({ isDefault: true, available: false, reason: 'ANTHROPIC_API_KEY is not set' }),
+      agent({ isDefault: true, available: false, reason: 'Choose a provider account for this agent in Settings → Agents.' }),
       agent({ id: 'other', handle: 'other' }),
     ]);
     expect(row.status).toBe('fail');

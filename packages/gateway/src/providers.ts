@@ -3,7 +3,9 @@ import { createVault, modelCatalogue, modelProblem, providerFromEnv, resolveProv
 import { createProvider } from '@buddi/runtime';
 import { z } from 'zod';
 
-const names = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY'] as const;
+// Anthropic credentials live only in named model accounts; OpenAI's legacy
+// key is the one global credential this service still manages.
+const names = ['OPENAI_API_KEY'] as const;
 const providerSchema = z.enum(['anthropic', 'openai']);
 const configSchema = z.object({ credentialKind: z.enum(['auto', 'api-key', 'subscription-token']), defaultModel: z.string().trim().min(1).max(150) }).strict();
 const credentialSchema = z.object({ value: z.string().trim().min(1).max(16384) }).strict();
@@ -41,12 +43,10 @@ export class ProviderSettings {
       }
     }
     for (const row of configs) {
-      if (row.provider === 'anthropic') {
-        env.BUDDI_ANTHROPIC_CREDENTIAL_KIND = row.credential_kind;
-        env.BUDDI_MODEL = row.default_model;
-      } else if (row.provider === 'openai') env.BUDDI_OPENAI_MODEL = row.default_model;
+      if (row.provider === 'anthropic') env.BUDDI_MODEL = row.default_model;
+      else if (row.provider === 'openai') env.BUDDI_OPENAI_MODEL = row.default_model;
     }
-    for (const name of [...names, 'BUDDI_ANTHROPIC_CREDENTIAL_KIND', 'BUDDI_MODEL', 'BUDDI_OPENAI_MODEL']) {
+    for (const name of [...names, 'BUDDI_MODEL', 'BUDDI_OPENAI_MODEL']) {
       if (env[name] === undefined) delete this.deps.env[name]; else this.deps.env[name] = env[name];
     }
     this.#sources = sources;
@@ -56,9 +56,9 @@ export class ProviderSettings {
   view() {
     return { vault: { kind: this.vault?.kind ?? 'none', ...vaultState({ env: this.deps.env }) },
       providers: modelCatalogue(this.deps.env).map(p => ({ ...p,
-        credentialKind: p.kind === 'anthropic' ? this.deps.env.BUDDI_ANTHROPIC_CREDENTIAL_KIND ?? 'auto' : 'api-key',
+        credentialKind: 'api-key',
         activeCredential: providerFromEnv(this.deps.env, undefined, p.kind).credential.env,
-        credentials: names.filter(name => p.kind === 'openai' ? name === 'OPENAI_API_KEY' : name !== 'OPENAI_API_KEY').map(name => ({
+        credentials: names.filter(() => p.kind === 'openai').map(name => ({
           name, configured: !!this.deps.env[name], source: this.#sources.get(name) ?? 'missing',
         })), test: this.#tests.get(p.kind) ?? null,
       })) };

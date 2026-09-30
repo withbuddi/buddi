@@ -72,7 +72,7 @@ function profile(over: Partial<AgentProfile> = {}): AgentProfile {
       maxTurns: 9,
       language: 'mirror',
       credentialKind: 'subscription-token',
-      credentialEnv: 'CLAUDE_CODE_OAUTH_TOKEN',
+      credentialEnv: 'TEST_CREDENTIAL',
     },
     tools: [
       {
@@ -250,7 +250,7 @@ describe('the properties panel', () => {
   it('names the credential without ever showing one', async () => {
     await open();
     expect(screen.getByText(/subscription-token from/)).toBeDefined();
-    expect(screen.getByText('CLAUDE_CODE_OAUTH_TOKEN')).toBeDefined();
+    expect(screen.getByText('TEST_CREDENTIAL')).toBeDefined();
   });
 
   it('says when the agent cannot run, and why', async () => {

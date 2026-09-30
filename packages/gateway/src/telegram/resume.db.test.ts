@@ -48,7 +48,7 @@ const sessionCalls: Array<{ what: string; ctx: CoreToolContext }> = [];
 
 const PROVIDER = {
   kind: 'anthropic' as const,
-  credential: { kind: 'api-key' as const, env: 'ANTHROPIC_API_KEY' },
+  credential: { kind: 'api-key' as const, env: 'TEST_ANTHROPIC_KEY' },
   model: 'claude-test',
 };
 

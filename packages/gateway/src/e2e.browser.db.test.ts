@@ -5,7 +5,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core';
-import { testDatabaseUrl } from '@buddi/core/testing';
+import { testAnthropicAccount, testDatabaseUrl } from '@buddi/core/testing';
 import { manifest as memory } from '@buddi/tool-memory';
 import { BrowserManager, BrowserService, createBrowserManifest, type BrowserDriver } from '@buddi/tool-browser';
 import type { RuntimeProvider } from '@buddi/runtime';
@@ -48,8 +48,8 @@ suite('browser authority across interactive surfaces', () => {
       screenshot: vi.fn(async () => undefined), close: vi.fn(async () => {}) };
     const browser = new BrowserService(driver); await browser.enable();
     const registry = new ToolRegistry(); registry.register(createBrowserManifest(browser));
-    const env = { ANTHROPIC_API_KEY: 'fixture-unused', BUDDI_AGENTS_DIR: dir };
-    const catalog = loadGatewayCatalog({ dir, registry, env });
+    const env = { BUDDI_AGENTS_DIR: dir };
+    const catalog = loadGatewayCatalog({ dir, registry, env, providerSelection: testAnthropicAccount() });
     let step = 0;
     const provider: RuntimeProvider = { async complete(request) {
       if (++step === 1) return { content: [{ type: 'tool_use', id: 'b1', name: 'browser.act', input: { action: 'navigate', url: 'https://example.com/' } }], stopReason: 'tool_use', usage: { input: 1, output: 1 }, model: 'fixture' };

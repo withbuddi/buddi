@@ -3,9 +3,10 @@
  *
  * The database half of this service is covered by `provider-accounts.db.test.ts`.
  * What is asserted here needs no database at all, because it is a decision
- * about the *environment*: an account named after `ANTHROPIC_API_KEY` may exist
- * only on a machine where `ANTHROPIC_API_KEY` is actually set. A packaged
- * install has none of them, and must come up with zero accounts.
+ * about the *environment*: an account named after `OPENAI_API_KEY` may exist
+ * only on a machine where `OPENAI_API_KEY` is actually set. A packaged
+ * install has none of them, and must come up with zero accounts. Anthropic
+ * has no legacy variable any more: it comes in only as a model account.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentCatalog } from '@buddi/core';
@@ -52,16 +53,15 @@ function service(env: NodeJS.ProcessEnv) {
 describe('legacy accounts are named after variables, so an unset variable is not an account', () => {
   it('names nothing when the environment holds none of them', () => {
     expect(legacyAccountsToSeed({})).toEqual([]);
-    expect(legacyAccountsToSeed({ ANTHROPIC_API_KEY: '   ' })).toEqual([]);
+    expect(legacyAccountsToSeed({ OPENAI_API_KEY: '   ' })).toEqual([]);
   });
 
   it('names exactly the ones that are set and non-empty', () => {
     const named = legacyAccountsToSeed({
-      ANTHROPIC_API_KEY: 'sk-ant-fixture',
-      CLAUDE_CODE_OAUTH_TOKEN: '',
+      SOME_TOKEN: 'sk-ant-fixture',
       OPENAI_API_KEY: 'sk-fixture',
     });
-    expect(named.map((item) => item.id)).toEqual(['legacy-anthropic-api', 'legacy-openai-api']);
+    expect(named.map((item) => item.id)).toEqual(['legacy-openai-api']);
   });
 
   it('seeds no account at all on a fresh install', async () => {
@@ -75,10 +75,9 @@ describe('legacy accounts are named after variables, so an unset variable is not
 
   it('seeds the checkout’s own accounts unchanged when the variables are there', async () => {
     const { accounts, seeded } = service({
-      ANTHROPIC_API_KEY: 'sk-ant-fixture',
       OPENAI_API_KEY: 'sk-fixture',
     });
     await accounts.initialize();
-    expect(seeded()).toEqual(['legacy-anthropic-api', 'legacy-openai-api']);
+    expect(seeded()).toEqual(['legacy-openai-api']);
   });
 });

@@ -288,10 +288,10 @@ These are not the wizard, but the wizard cannot be honest without them.
   The Money block and finance watchers are the owner's own plugin — `finance`
   lives in the `buddi-plugins` repository, is installed like any other, and is
   never in the tarball.
-- **No ghost accounts.** The legacy accounts named after `ANTHROPIC_API_KEY`,
-  `CLAUDE_CODE_OAUTH_TOKEN` and `OPENAI_API_KEY` are seeded only when that
-  variable is actually set. A fresh install has zero accounts until the owner
-  adds one.
+- **No ghost accounts.** buddi reads no Anthropic credential from `.env` or
+  the vault; Anthropic comes in only as a model account. The legacy account
+  named after `OPENAI_API_KEY` is seeded only when that variable is actually
+  set. A fresh install has zero accounts until the owner adds one.
 - **Examples do not pretend.** The shipped Concierge is the assistant the
   wizard creates: it is renamed, re-faced and bound to the chosen account
   rather than a second agent appearing beside it. Agent Father is not listed

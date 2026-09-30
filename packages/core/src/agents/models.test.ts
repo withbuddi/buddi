@@ -22,16 +22,18 @@ describe('the suggested models', () => {
 
 describe('modelCatalogue', () => {
   it('groups by provider and marks only the credentialed one usable', () => {
-    const groups = modelCatalogue({ ANTHROPIC_API_KEY: 'sk-test' });
+    const groups = modelCatalogue({ OPENAI_API_KEY: 'sk-test' });
     expect(groups.map((g) => g.kind)).toEqual([...PROVIDER_KINDS]);
 
-    const anthropic = groups.find((g) => g.kind === 'anthropic');
-    expect(anthropic?.usable).toBe(true);
-    expect(anthropic?.credentialEnv).toBe('ANTHROPIC_API_KEY');
-
     const openai = groups.find((g) => g.kind === 'openai');
-    expect(openai?.usable).toBe(false);
-    expect(openai?.problem?.message).toContain('OPENAI_API_KEY');
+    expect(openai?.usable).toBe(true);
+    expect(openai?.credentialEnv).toBe('OPENAI_API_KEY');
+
+    // Anthropic reads nothing from the environment: it needs a model account.
+    const anthropic = groups.find((g) => g.kind === 'anthropic');
+    expect(anthropic?.usable).toBe(false);
+    expect(anthropic?.credentialEnv).toBe('');
+    expect(anthropic?.problem?.message).toMatch(/model account/);
   });
 
   it('reports the default model and where it came from', () => {
@@ -42,13 +44,6 @@ describe('modelCatalogue', () => {
     const pinned = modelCatalogue({ BUDDI_MODEL: 'claude-opus-5' })[0];
     expect(pinned?.defaultModel).toBe('claude-opus-5');
     expect(pinned?.defaultFrom).toBe('BUDDI_MODEL');
-  });
-
-  it('prefers a subscription token when the owner has one', () => {
-    const groups = modelCatalogue({ CLAUDE_CODE_OAUTH_TOKEN: 'oat-test' });
-    const anthropic = groups.find((g) => g.kind === 'anthropic');
-    expect(anthropic?.credentialKind).toBe('subscription-token');
-    expect(anthropic?.usable).toBe(true);
   });
 
   it('can be asked about one provider alone', () => {

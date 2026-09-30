@@ -117,7 +117,7 @@ function state(over: Partial<PoolState> = {}): PoolState {
       { id: 'g2', agent_id: 'concierge', tool: 'host.exec', conversation_id: 'c1' },
     ],
     telegram: 1,
-    accounts: [{ secret_ref: 'ANTHROPIC_API_KEY', auth: 'api-key', label: 'work' }],
+    accounts: [{ secret_ref: 'OPENAI_API_KEY', auth: 'api-key', label: 'work' }],
     ...over,
   };
 }
@@ -140,7 +140,7 @@ it('lists what the restore left the owner to do, and says so on every page', asy
   // A backup carries no secret value, so every credential is on the list —
   // the account's, the bot's, and whatever the restored .env marked.
   expect(view.checklist.secrets).toEqual([
-    { name: 'ANTHROPIC_API_KEY', kind: 'account', settingsRoute: '#/settings/accounts' },
+    { name: 'OPENAI_API_KEY', kind: 'account', settingsRoute: '#/settings/accounts' },
     { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', settingsRoute: '#/settings/system' },
     { name: 'TAVILY_API_KEY', kind: 'plugin', settingsRoute: '#/settings/system' },
   ]);
@@ -208,13 +208,13 @@ it('refuses a body that is not what it says it is', async () => {
 
 it('reads the vault markers a scrubbed .env carries and nothing else', () => {
   expect(vaultMarkersIn([
-    'ANTHROPIC_API_KEY="<vault>"',
+    'BRAVE_SEARCH_API_KEY="<vault>"',
     "OPENAI_API_KEY='<vault>'",
     'export TAVILY_API_KEY=<vault>',
     'BUDDI_WEB_PORT=4317',
     'SOMETHING="not a marker"',
-    '# ANTHROPIC_API_KEY="<vault>"',
-  ].join('\n'))).toEqual(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'TAVILY_API_KEY']);
+    '# BRAVE_SEARCH_API_KEY="<vault>"',
+  ].join('\n'))).toEqual(['BRAVE_SEARCH_API_KEY', 'OPENAI_API_KEY', 'TAVILY_API_KEY']);
 });
 
 it('leaving when nothing was restored touches nothing', async () => {

@@ -70,7 +70,7 @@ const agent: AgentDefinition = {
   tools: [],
   provider: {
     kind: 'anthropic',
-    credential: { kind: 'api-key', env: 'ANTHROPIC_API_KEY' },
+    credential: { kind: 'api-key', env: 'TEST_ANTHROPIC_KEY' },
     model: 'claude-sonnet-5',
   },
   maxTurns: 3,

@@ -20,6 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { parseAgentFile } from '@buddi/core';
+import { testAnthropicAccount } from '@buddi/core/testing';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 
 const catalog = loadGatewayCatalog({ env: {} });
@@ -158,8 +159,9 @@ describe.skipIf(!OWNER_IDS.every((id) => installed.has(id)))('the installed agen
     // A missing key takes out the agents pinned to that provider and nothing
     // else — stated over whatever is installed rather than over a count, so an
     // owner who makes a sixth agent does not break the platform's suite.
-    const env = { ANTHROPIC_API_KEY: 'sk-ant-test' };
-    const withoutKey = loadGatewayCatalog({ env, registry: createToolRegistry(env) });
+    const env = {};
+    // Every Anthropic agent has a model account; OpenAI still reads its key.
+    const withoutKey = loadGatewayCatalog({ env, registry: createToolRegistry(env), providerSelection: testAnthropicAccount() });
     const mine = withoutKey.list().filter((a) => a.source !== 'example');
     expect(mine.length).toBeGreaterThan(0);
     for (const summary of mine) {

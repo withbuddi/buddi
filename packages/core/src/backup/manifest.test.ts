@@ -26,8 +26,8 @@ import {
 } from './manifest.js';
 
 const KNOWN = [
-  'ANTHROPIC_API_KEY',
-  'CLAUDE_CODE_OAUTH_TOKEN',
+  'TAVILY_API_KEY',
+  'BRAVE_SEARCH_API_KEY',
   'OPENAI_API_KEY',
   'TELEGRAM_BOT_TOKEN',
   'GMAIL_APP_PASSWORD',
@@ -81,17 +81,17 @@ describe('scrubbing .env', () => {
   it('replaces every known secret with the vault marker and names it', () => {
     const raw = [
       'DATABASE_URL=postgres://buddi:buddi@localhost:55433/buddi',
-      'CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-REALSECRETVALUE',
+      'BRAVE_SEARCH_API_KEY=sk-ant-oat01-REALSECRETVALUE',
       'TELEGRAM_BOT_TOKEN=123456:AAH-REALBOTTOKEN',
       'BUDDI_TZ=America/New_York',
     ].join('\n');
 
     const result = scrubEnv(raw, { known: KNOWN });
 
-    expect(result.text).toContain('CLAUDE_CODE_OAUTH_TOKEN="<vault>"');
+    expect(result.text).toContain('BRAVE_SEARCH_API_KEY="<vault>"');
     expect(result.text).toContain('TELEGRAM_BOT_TOKEN="<vault>"');
     expect(result.text).toContain('BUDDI_TZ=America/New_York');
-    expect(result.names).toEqual(['CLAUDE_CODE_OAUTH_TOKEN', 'TELEGRAM_BOT_TOKEN']);
+    expect(result.names).toEqual(['BRAVE_SEARCH_API_KEY', 'TELEGRAM_BOT_TOKEN']);
     expect(result.text).not.toContain('REALSECRETVALUE');
     expect(result.text).not.toContain('REALBOTTOKEN');
   });
@@ -129,7 +129,7 @@ describe('scrubbing .env', () => {
 
   it('scrubs a secret however oddly the line is written', () => {
     const raw = [
-      `ANTHROPIC_API_KEY='single-quoted-SECRET-1'`,
+      `TAVILY_API_KEY='single-quoted-SECRET-1'`,
       `  OPENAI_API_KEY = "spaced and quoted SECRET-2"  `,
       'export GMAIL_APP_PASSWORD=exported-SECRET-3',
       '# TELEGRAM_BOT_TOKEN=commented-out-SECRET-4',
@@ -163,7 +163,7 @@ describe('scrubbing .env', () => {
   });
 
   it('does not claim a name that had no value at all', () => {
-    const result = scrubEnv('ANTHROPIC_API_KEY=\n', { known: KNOWN });
+    const result = scrubEnv('TAVILY_API_KEY=\n', { known: KNOWN });
     expect(result.names).toEqual([]);
   });
 
@@ -199,7 +199,7 @@ describe('scrubbing .env', () => {
     expect(isSecretName('STRIPE_SECRET')).toBe(true);
     expect(isSecretName('GMAIL_USER')).toBe(false);
     expect(isSecretName('BUDDI_TZ')).toBe(false);
-    expect(isSecretName('ANTHROPIC_API_KEY', KNOWN)).toBe(true);
+    expect(isSecretName('TAVILY_API_KEY', KNOWN)).toBe(true);
   });
 });
 
@@ -218,11 +218,11 @@ describe('the manifest', () => {
     artifacts: { included: true, count: 2, bytes: 100 },
     private: { agents: null, skills: null },
     secrets: {
-      names: ['ANTHROPIC_API_KEY'],
-      fromVault: ['ANTHROPIC_API_KEY'],
+      names: ['TAVILY_API_KEY'],
+      fromVault: ['TAVILY_API_KEY'],
       redacted: [],
       note: 'n',
-      restoreWith: ['buddi vault set ANTHROPIC_API_KEY'],
+      restoreWith: ['buddi vault set TAVILY_API_KEY'],
       ownerSecrets: [],
     },
     members: [{ path: 'db/core.events.copy', bytes: 10, sha256: 'b'.repeat(64) }],
@@ -254,8 +254,8 @@ describe('the manifest', () => {
   });
 
   it('names the exact commands that put the secrets back', () => {
-    expect(restoreCommandsFor(['ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN'])).toEqual([
-      'buddi vault set ANTHROPIC_API_KEY',
+    expect(restoreCommandsFor(['TAVILY_API_KEY', 'TELEGRAM_BOT_TOKEN'])).toEqual([
+      'buddi vault set TAVILY_API_KEY',
       'buddi vault set TELEGRAM_BOT_TOKEN',
     ]);
   });
