@@ -46,6 +46,20 @@ export function fmtShortRelative(iso: string | null | undefined, now = Date.now(
   return `${Math.floor(abs / 86_400)} d`;
 }
 
+/**
+ * How long ago, compact, for the roster's quiet line: "just now", "18 min ago",
+ * "2 h ago", "yesterday", "3 d ago". Built on `fmtShortRelative`'s steps so the
+ * two never disagree about a unit; a time a skewed clock puts in the future
+ * reads as "just now" rather than as a promise.
+ */
+export function fmtAgo(iso: string | null | undefined, now = Date.now()): string {
+  const short = fmtShortRelative(iso, now);
+  if (short === '') return '';
+  if (short === 'now' || new Date(iso!).getTime() > now) return 'just now';
+  if (short === '1 d') return 'yesterday';
+  return `${short} ago`;
+}
+
 export function fmtMoney(value: number | null | undefined, currency: string | null): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—';
   try {

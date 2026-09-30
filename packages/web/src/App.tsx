@@ -12,7 +12,7 @@
  */
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AGENTS_CHANGED, api, chatApi, type ConnectionSignal, type VersionView } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
@@ -179,6 +179,9 @@ export function App(): JSX.Element {
    * the same dot on Settings, and a line on Home. One small read a minute.
    */
   const connectionSignals = useAsync(() => Promise.resolve().then(() => api.connectionSignals()), [], 60_000).data?.signals ?? [];
+  /** Who is working in the open conversation, for the roster's accent dot. */
+  const [workingAgentId, setWorkingAgentId] = useState<string | null>(null);
+  const working = useMemo(() => new Set(workingAgentId ? [workingAgentId] : []), [workingAgentId]);
   /** When each agent last spoke, for the roster's quiet line. */
   const [lastActivity, setLastActivity] = useState<Map<string, string>>(new Map());
   useEffect(() => {
@@ -419,6 +422,7 @@ export function App(): JSX.Element {
               attention={attention}
               onSelect={selectAgent}
               lastActivity={lastActivity}
+              working={working}
               groups={groups}
               currentGroupId={selectedGroup?.id ?? null}
               onSelectGroup={selectGroup}
@@ -438,6 +442,7 @@ export function App(): JSX.Element {
               requestedTab={chatLocation?.tab}
               onConversationOpened={conversationOpened}
               onSelectAgent={selectAgent}
+              onWorking={setWorkingAgentId}
               attention={attention}
               agentsInHeader={railNarrow}
               narrow={narrow}

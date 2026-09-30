@@ -31,6 +31,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The chat roster reads lighter: 36px faces instead of 24px, the name without the @handle (still in the chat header, the @-picker, the tooltip and what a screen reader hears), and a short quiet second line ("18 min ago", "yesterday", or the description for an agent that never spoke). A dot on the face says its state: the Home badge's colour when it needs you, the accent while it is working in the open conversation. Groups draw their faces in the same square.
 - The Chrome extension's popup is redrawn in buddi's own type and colours, with the Blob, in light and dark, and shows one state at a time: the address and Connect, Connecting, the pairing code (large, with Copy and **Open buddi settings**), or Connected with how many tabs it is working in and Forget this buddi. It no longer shows a pairing section with a placeholder code while already paired.
 - The extension's version is buddi's, in the four integers Chrome accepts: `0.1.0-pre.24` is `0.1.0.24` (the full string is its version name). Settings → Computer & browser says when the extension and buddi are different versions, and carries on.
 - A popup that cannot reach buddi says "buddi did not answer at this address. Is it running?" and offers Try again.

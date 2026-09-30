@@ -10,10 +10,11 @@
  *
  * Four rules, each of which is a way this could go wrong:
  *
- *  - **A badge means "waiting on you", and nothing else.** A pending approval,
- *    or a question the agent is holding for an answer. Not activity: a face
- *    that is always dotted is a face the owner stops reading, and this is the
- *    worst possible place to teach that lesson. There are no unread counts.
+ *  - **The dot on a face is state, never activity.** The Home badge's colour
+ *    means "waiting on you": a pending approval, or a question the agent is
+ *    holding for an answer. The accent means "working right now", and goes
+ *    when the run does. Nothing accumulates: a face that is always dotted is a
+ *    face the owner stops reading. There are no unread counts.
  *  - **An agent that cannot run says so.** Scout has no credential some days. A
  *    greyed, undimmable face with the reason on hover is a fixable
  *    configuration problem; a face that fails when clicked is a mystery.
@@ -32,8 +33,8 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import React, { useState } from 'react';
 import type { ChatAgent } from '../chat/types';
-import { fmtRelative } from '../format';
-import { badgeOf, canGroup, waitingText, type AgentAttention, type AgentGroups } from './roster';
+import { fmtAgo } from '../format';
+import { canGroup, faceState, waitingShort, waitingText, type AgentAttention, type AgentGroups, type FaceState } from './roster';
 import type { GroupView } from '../chat/types';
 import { FaceMark } from '../views/parts/Avatar';
 import { Icon } from '../ui/Icon';
@@ -50,6 +51,8 @@ export interface AgentRailProps {
   orientation?: 'vertical' | 'horizontal';
   /** When each agent last spoke, by id, for the quiet line under the name. */
   lastActivity?: Map<string, string>;
+  /** Who is working right now, by id: the accent dot on their face. */
+  working?: ReadonlySet<string>;
   /** The owner's groups, drawn under the agents with stacked faces. */
   groups?: GroupView[];
   currentGroupId?: string | null;
@@ -73,6 +76,7 @@ export function AgentRail({
   onSelect,
   orientation = 'vertical',
   lastActivity,
+  working,
   groups = [],
   currentGroupId = null,
   onSelectGroup,
@@ -90,6 +94,7 @@ export function AgentRail({
       side={side}
       onSelect={onSelect}
       lastAt={lastActivity?.get(agent.id) ?? null}
+      working={working?.has(agent.id) ?? false}
     />
   );
 
@@ -156,12 +161,13 @@ export function AgentRail({
                 aria-label={`${group.name}, ${group.members.length} agents`}
                 onClick={() => onSelectGroup(group.id)}
               >
-                <span className="wb-face-mark wb-group-stack" aria-hidden="true">
-                  {group.members.slice(0, 3).map((id) => {
+                {/* The first two faces, crossed on the diagonal inside the
+                    same square as an agent's face; the line below names everyone. */}
+                <span className="wb-group-stack" aria-hidden="true">
+                  {group.members.slice(0, 2).map((id) => {
                     const agent = everyone.find((a) => a.id === id);
                     return <FaceMark key={id} className="wb-group-chip" id={id} name={agent?.name ?? '?'} face={agent} initials={1} />;
                   })}
-                  {group.members.length > 3 ? <span className="wb-group-chip wb-group-more">+{group.members.length - 3}</span> : null}
                 </span>
                 <span className="wb-face-text">
                   <span className="wb-face-name">{group.name}</span>
@@ -215,6 +221,7 @@ export function AgentFace({
   side,
   onSelect,
   lastAt = null,
+  working = false,
 }: {
   agent: ChatAgent;
   active: boolean;
@@ -222,25 +229,30 @@ export function AgentFace({
   side: 'right' | 'bottom';
   onSelect: (agentId: string) => void;
   lastAt?: string | null;
+  /** A run of this agent's is going right now. */
+  working?: boolean;
 }): JSX.Element {
   const waiting = waitingText(attention);
-  const status = waiting
-    ? sentence(waiting)
-    : !agent.available
+  // Short and quiet: the claim on the owner, why it cannot run, how long ago
+  // it spoke, or — never having spoken — what it does, on one line.
+  const status = waitingShort(attention)
+    ?? (!agent.available
       ? (agent.unavailableReason ?? 'Cannot run right now')
       : lastAt
-        ? `Last spoke ${fmtRelative(lastAt)}`
-        : agent.description;
-  const badge = badgeOf(attention);
+        ? fmtAgo(lastAt)
+        : agent.description);
+  const state: FaceState | null = faceState(attention, working && agent.available);
   const reason = agent.unavailableReason ?? 'This agent cannot run on this machine right now.';
 
   // One sentence, in the order it matters: who, whether they can work, and
   // whether they want something. This is the whole of what a screen reader
-  // gets, because the chip itself says only "AB".
+  // gets, because the chip itself says only "AB". The handle is not drawn in
+  // the row any more, so it is said here, beside the name it belongs to.
   const label = [
-    agent.name,
+    `${agent.name} @${agent.handle}`,
     agent.available ? null : 'unavailable',
     waiting,
+    state === 'working' ? 'working now' : null,
     active ? 'current' : null,
   ]
     .filter((part): part is string => part !== null && part !== '')
@@ -260,27 +272,18 @@ export function AgentFace({
           disabled={!agent.available}
           onClick={() => agent.available && onSelect(agent.id)}
         >
-          <FaceMark className="wb-face-mark" id={agent.id} name={agent.name} face={agent} />
+          <span className="wb-face-frame">
+            <FaceMark className="wb-face-mark" id={agent.id} name={agent.name} face={agent} />
+            {state ? (
+              <span className="wb-face-dot" data-state={state} data-testid={`agent-dot-${agent.id}`} aria-hidden="true" />
+            ) : null}
+          </span>
+          {/* The name alone on the title line: the handle lives in the chat
+              header, the @-picker, the tooltip and this row's accessible name. */}
           <span className="wb-face-text" aria-hidden="true">
-            {/* The handle rides the title line, muted, because it is the other
-                half of the name: it is what the owner types. The second line
-                stays what it was — last spoke, or why nobody can. */}
-            <span className="wb-face-name">
-              {agent.name}
-              <span className="wb-face-handle">@{agent.handle}</span>
-            </span>
+            <span className="wb-face-name">{agent.name}</span>
             <span className="wb-face-status" data-tone={waiting ? 'critical' : undefined}>{status}</span>
           </span>
-          {badge ? (
-            <span
-              className="wb-face-badge"
-              data-kind={badge.count === null ? 'dot' : 'count'}
-              data-testid={`agent-badge-${agent.id}`}
-              aria-hidden="true"
-            >
-              {badge.count === null ? '' : badge.count}
-            </span>
-          ) : null}
           {agent.available ? null : (
             <span className="wb-face-out" aria-hidden="true">
               <Icon name="out" />

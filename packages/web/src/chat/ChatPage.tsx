@@ -75,6 +75,8 @@ export interface ChatPageProps {
   /** Open the group's sheet, where its members are changed. Shell-owned. */
   onEditGroup?: () => void;
   onSelectAgent: (agentId: string) => void;
+  /** Who is working in the open conversation right now, or null: the roster's accent dot. */
+  onWorking?: (agentId: string | null) => void;
   /** Who is waiting on the owner — drawn on the narrow strip's faces. */
   attention: Map<string, AgentAttention>;
   /**
@@ -100,6 +102,7 @@ export function ChatPage({
   group = null,
   onEditGroup,
   onSelectAgent,
+  onWorking,
   attention,
   agentsInHeader,
   narrow,
@@ -225,6 +228,12 @@ export function ChatPage({
   const members = group ? group.members.map((id) => everyone.find((a) => a.id === id)).filter((a): a is ChatAgent => Boolean(a)) : [];
   /** Who is speaking right now in a room, from the run's own event. */
   const [runningAgentId, setRunningAgentId] = useState<string | null>(null);
+
+  // The roster draws a dot on whoever is working here; tell it, and clear it
+  // when this page stops watching.
+  const workingId = running ? (runningAgentId ?? agentId ?? null) : null;
+  useEffect(() => { onWorking?.(workingId); }, [workingId, onWorking]);
+  useEffect(() => () => onWorking?.(null), [onWorking]);
 
   /* ---- what the page knows before anyone types ---- */
 
@@ -1218,6 +1227,7 @@ export function ChatPage({
               attention={attention}
               onSelect={onSelectAgent}
               orientation="horizontal"
+              {...(workingId ? { working: new Set([workingId]) } : {})}
             />
           ) : null}
         </header>

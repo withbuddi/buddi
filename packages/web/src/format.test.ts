@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withoutFence, fmtCached, fmtInOut, fmtShortRelative } from './format';
+import { withoutFence, fmtCached, fmtInOut, fmtShortRelative, fmtAgo } from './format';
 
 describe('withoutFence', () => {
   it('drops a plugin`s untrusted markers and keeps the words between them', () => {
@@ -34,5 +34,22 @@ describe('fmtShortRelative', () => {
   it('says nothing without a time', () => {
     expect(fmtShortRelative(null, now)).toBe('');
     expect(fmtShortRelative('not a date', now)).toBe('');
+  });
+});
+
+describe('fmtAgo', () => {
+  const now = Date.parse('2026-09-29T12:00:00Z');
+  const ago = (seconds: number): string => new Date(now - seconds * 1000).toISOString();
+  it('says how long ago in the roster`s compact steps', () => {
+    expect(fmtAgo(ago(20), now)).toBe('just now');
+    expect(fmtAgo(ago(18 * 60), now)).toBe('18 min ago');
+    expect(fmtAgo(ago(2 * 3600 + 600), now)).toBe('2 h ago');
+    expect(fmtAgo(ago(30 * 3600), now)).toBe('yesterday');
+    expect(fmtAgo(ago(3 * 86_400 + 60), now)).toBe('3 d ago');
+  });
+  it('reads a future time as just now, and says nothing without a time', () => {
+    expect(fmtAgo(new Date(now + 3 * 3600_000).toISOString(), now)).toBe('just now');
+    expect(fmtAgo(null, now)).toBe('');
+    expect(fmtAgo('not a date', now)).toBe('');
   });
 });

@@ -65,7 +65,7 @@ describe('an agent with no brain', () => {
     render(<App />);
     const face = await screen.findByTestId('agent-face-scout');
     expect(face.getAttribute('data-unavailable')).toBe('true');
-    expect(face.getAttribute('aria-label')).toBe('Scout — unavailable');
+    expect(face.getAttribute('aria-label')).toBe('Scout @scout — unavailable');
     expect(face).toBeDisabled();
     expect(screen.getByText(REASON)).toBeInTheDocument();
   });
@@ -127,7 +127,7 @@ describe('an agent held back for a missing plugin', () => {
     render(<App />);
     const face = await screen.findByTestId('agent-face-credo');
     expect(face.getAttribute('data-unavailable')).toBe('true');
-    expect(face.getAttribute('aria-label')).toBe('Credo — unavailable');
+    expect(face.getAttribute('aria-label')).toBe('Credo @credo — unavailable');
     expect(face).toBeDisabled();
     expect(screen.getByText(HELD)).toBeInTheDocument();
   });

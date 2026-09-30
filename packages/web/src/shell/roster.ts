@@ -104,14 +104,32 @@ export function waitingText(attention: AgentAttention | undefined): string | nul
 }
 
 /**
- * What the badge draws: a number when there are approvals to count, and a plain
- * dot when the only claim is a question, which is not a quantity.
+ * The roster's second line when somebody is waiting: the same claim as
+ * `waitingText`, cut to what fits beside a face. The long sentence still goes
+ * to the screen reader and the tooltip.
  */
-export function badgeOf(attention: AgentAttention | undefined): { count: number | null } | null {
+export function waitingShort(attention: AgentAttention | undefined): string | null {
   if (!attention) return null;
-  if (attention.approvals > 0) return { count: attention.approvals };
-  if (attention.question) return { count: null };
+  const n = attention.approvals;
+  const approvals = n === 1 ? '1 approval' : `${n} approvals`;
+  if (n > 0 && attention.question) return `${approvals} and a question`;
+  if (n > 0) return `${approvals} waiting`;
+  if (attention.question) return 'Has a question';
   return null;
+}
+
+/**
+ * The dot on a face. `needs` — an approval or a held question — wins over
+ * `working`, because the one the owner can act on is the one worth a colour
+ * they learned from the Home badge. Working is live state, not activity: it is
+ * there while a run is going and gone when it ends, so it never piles up into
+ * a dot the owner stops reading.
+ */
+export type FaceState = 'needs' | 'working';
+
+export function faceState(attention: AgentAttention | undefined, working: boolean): FaceState | null {
+  if (attention && (attention.approvals > 0 || attention.question)) return 'needs';
+  return working ? 'working' : null;
 }
 
 export function attentionMap(snapshot: AttentionSnapshot | null): Map<string, AgentAttention> {

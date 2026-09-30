@@ -15,11 +15,12 @@ import { App, AGENT_RAIL_QUERY, NARROW_QUERY } from '../App';
 import { AgentRail } from './AgentRail';
 import {
   attentionMap,
-  badgeOf,
   canGroup,
+  faceState,
   groupAgents,
   groupableAgents,
   orderAgents,
+  waitingShort,
   waitingText,
   type AgentAttention,
 } from './roster';
@@ -57,6 +58,7 @@ function draw(
   attention: Map<string, AgentAttention>,
   onSelect: (id: string) => void = () => {},
   currentId = 'ledger',
+  working?: ReadonlySet<string>,
 ): void {
   render(
     <Tooltip.Provider>
@@ -65,6 +67,7 @@ function draw(
         currentId={currentId}
         attention={attention}
         onSelect={onSelect}
+        {...(working ? { working } : {})}
       />
     </Tooltip.Provider>,
   );
@@ -84,20 +87,39 @@ function railOf(agents: ChatAgent[], defaultAgentId: string | null): void {
 }
 
 /*
- * The handle is the other half of the name: it is the word the owner types to
- * reach this agent, so it belongs on the title line rather than replacing the
- * second line, which still says when they last spoke or why they cannot.
+ * The row draws the name and one quiet line. The handle lives in the chat
+ * header and the @-picker; in the row it is only said — in the accessible name
+ * and the tooltip — so a screen reader still hears the word the owner types.
  */
-describe('the handle', () => {
-  it('draws @handle beside the name, and keeps the second line', () => {
+describe('the row', () => {
+  it('draws the name and the description, not the handle, and says the handle in its name', () => {
     railOf(
       [agent({ id: 'ledger', name: 'Ledger', handle: 'books', description: 'Keeps the books.' })],
       'ledger',
     );
     const face = screen.getByTestId('agent-face-ledger');
     expect(face.textContent).toContain('Ledger');
-    expect(face.textContent).toContain('@books');
     expect(face.textContent).toContain('Keeps the books.');
+    expect(face.textContent).not.toContain('@books');
+    expect(face.getAttribute('aria-label')).toBe('Ledger @books');
+  });
+
+  it('says how long ago an agent spoke, compactly, instead of what it does', () => {
+    const now = Date.now();
+    render(
+      <Tooltip.Provider>
+        <AgentRail
+          agents={groupAgents([agent({ id: 'ledger', name: 'Ledger', description: 'Keeps the books.' })], 'ledger')}
+          currentId={null}
+          attention={new Map()}
+          onSelect={() => {}}
+          lastActivity={new Map([['ledger', new Date(now - 18 * 60_000).toISOString()]])}
+        />
+      </Tooltip.Provider>,
+    );
+    const face = screen.getByTestId('agent-face-ledger');
+    expect(face.textContent).toContain('18 min ago');
+    expect(face.textContent).not.toContain('Keeps the books.');
   });
 });
 
@@ -214,53 +236,64 @@ describe('the order', () => {
   });
 });
 
-describe('what earns a badge', () => {
-  it('counts pending approvals, and says so in words', () => {
+describe('the state dot', () => {
+  it('needs you for pending approvals, and says so in words, short on the row', () => {
     const waiting: AgentAttention = {
       agentId: 'postman',
       approvals: 2,
       oldestApprovalAt: '2026-09-15T08:00:00Z',
       question: null,
     };
-    expect(badgeOf(waiting)).toEqual({ count: 2 });
+    expect(faceState(waiting, false)).toBe('needs');
     expect(waitingText(waiting)).toBe('2 approvals are waiting for you');
+    expect(waitingShort(waiting)).toBe('2 approvals waiting');
   });
 
-  it('marks a held question with a dot, because a question is not a quantity', () => {
+  it('needs you for a held question, and that wins over working', () => {
     const holding: AgentAttention = {
       agentId: 'ledger',
       approvals: 0,
       oldestApprovalAt: null,
       question: { at: '2026-09-15T08:00:00Z', conversationId: 'c1' },
     };
-    expect(badgeOf(holding)).toEqual({ count: null });
+    expect(faceState(holding, true)).toBe('needs');
     expect(waitingText(holding)).toMatch(/holding for the answer/);
+    expect(waitingShort(holding)).toBe('Has a question');
   });
 
-  it('earns nothing from an agent the server said nothing about', () => {
-    expect(badgeOf(undefined)).toBeNull();
+  it('is working while a run goes, and nothing otherwise', () => {
+    expect(faceState(undefined, true)).toBe('working');
+    expect(faceState(undefined, false)).toBeNull();
     expect(waitingText(undefined)).toBeNull();
-    // And an entry with neither claim — which the server does not send, but
-    // which must not draw anything if it ever did.
-    expect(
-      badgeOf({ agentId: 'x', approvals: 0, oldestApprovalAt: null, question: null }),
-    ).toBeNull();
+    // An entry with neither claim — which the server does not send, but which
+    // must not draw anything if it ever did.
+    expect(faceState({ agentId: 'x', approvals: 0, oldestApprovalAt: null, question: null }, false)).toBeNull();
   });
 
-  it('draws the badge on that agent alone', () => {
+  it('draws the needs-you dot on that agent alone', () => {
     draw(
       attentionMap({
         at: '2026-09-15T08:00:00Z',
         agents: [{ agentId: 'postman', approvals: 1, oldestApprovalAt: null, question: null }],
       }),
     );
-    expect(screen.getByTestId('agent-badge-postman').textContent).toBe('1');
-    expect(screen.queryByTestId('agent-badge-ledger')).toBeNull();
-    expect(screen.queryByTestId('agent-badge-front')).toBeNull();
-    // And the name, the state and the reason all reach a screen reader — the
-    // chip itself draws two letters, which are not a word.
+    expect(screen.getByTestId('agent-dot-postman').getAttribute('data-state')).toBe('needs');
+    expect(screen.queryByTestId('agent-dot-ledger')).toBeNull();
+    expect(screen.queryByTestId('agent-dot-front')).toBeNull();
+    expect(screen.getByTestId('agent-face-postman').textContent).toContain('1 approval waiting');
+    // And the name, the handle, the state and the reason all reach a screen
+    // reader — the chip itself draws two letters, which are not a word.
     expect(screen.getByTestId('agent-face-postman').getAttribute('aria-label')).toBe(
-      'Postman — one approval is waiting for you',
+      'Postman @postman — one approval is waiting for you',
+    );
+  });
+
+  it('draws the working dot on whoever is working, and says it', () => {
+    draw(new Map(), () => {}, 'ledger', new Set(['ledger']));
+    expect(screen.getByTestId('agent-dot-ledger').getAttribute('data-state')).toBe('working');
+    expect(screen.queryByTestId('agent-dot-postman')).toBeNull();
+    expect(screen.getByTestId('agent-face-ledger').getAttribute('aria-label')).toBe(
+      'Ledger @ledger — working now — current',
     );
   });
 });
@@ -273,7 +306,7 @@ describe('an agent that cannot run', () => {
     const face = screen.getByTestId('agent-face-scout') as HTMLButtonElement;
     expect(face.disabled).toBe(true);
     expect(face.getAttribute('data-unavailable')).toBe('true');
-    expect(face.getAttribute('aria-label')).toBe('Scout — unavailable');
+    expect(face.getAttribute('aria-label')).toBe('Scout @scout — unavailable');
     fireEvent.click(face);
     expect(onSelect).not.toHaveBeenCalled();
   });
@@ -332,7 +365,7 @@ describe('a badge that arrives while you are looking elsewhere', () => {
       render(<App />);
     });
     await waitFor(() => expect(screen.getByTestId('agent-face-postman')).toBeDefined());
-    expect(screen.queryByTestId('agent-badge-postman')).toBeNull();
+    expect(screen.queryByTestId('agent-dot-postman')).toBeNull();
 
     // The server's answer changes, and the stream says so. Nothing polls.
     await act(async () => {
@@ -341,7 +374,7 @@ describe('a badge that arrives while you are looking elsewhere', () => {
         agents: [{ agentId: 'postman', approvals: 1, oldestApprovalAt: null, question: null }],
       });
     });
-    await waitFor(() => expect(screen.getByTestId('agent-badge-postman').textContent).toBe('1'));
+    await waitFor(() => expect(screen.getByTestId('agent-dot-postman').getAttribute('data-state')).toBe('needs'));
   });
 });
 
