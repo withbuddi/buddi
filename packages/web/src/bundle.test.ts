@@ -159,6 +159,10 @@ describe('the canvas knows no domain', () => {
     // no plugin provides it, and a delegation draws a conversation of the
     // owner's rather than a domain's result.
     "'agent.delegate'",
+    // An agent telling the owner something is also the platform's own tool:
+    // core provides it on every install, and the canvas draws it as the
+    // message it sent rather than as a domain's result.
+    "'owner.notify'",
     "'canvas.clear'",
     "'run.started'",
     "'run.finished'",

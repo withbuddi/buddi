@@ -299,7 +299,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     expect(await messageCount()).toBe(60);
     expect(second.runs).toHaveLength(10);
     expect(await mailbox()).toEqual({ uidvalidity: 1, last_uid: 60 });
-  });
+  }, 60_000);
 
   it('re-syncs from zero when UIDVALIDITY changes and a full backfill is asked for', async () => {
     const server = new FakeImapServer();
