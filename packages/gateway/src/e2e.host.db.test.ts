@@ -9,7 +9,7 @@ import { ensureOwner, completeOnboarding, pairSurfaceIdentity, configurePluginHo
 import { testAnthropicAccount, testDatabaseUrl } from '@buddi/core/testing';
 import { createHostManifest, hostService, type HostService, execInput } from '@buddi/tool-host';
 import { startWebServer } from './web/server.js';
-import { csrfCookieName } from './web/http.js';
+import { csrfCookieName, sessionCookieName } from './web/http.js';
 import { mintTicket } from './web/token.js';
 import { readChatTranscript } from './web/chat.js';
 import { loadGatewayCatalog } from './agents/catalog.js';
@@ -163,8 +163,11 @@ suite('host execution permissions and file workflow', () => {
         'X-Buddi-CSRF': cookies.find(c => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length) };
       // Stale polling tabs cannot deny service to a valid session or recovery
       // ticket sharing the proxy's IP. Invalid authentication stays limited.
-      for (let i = 0; i < 10; i++) await fetch(`${origin}/api/host`);
-      expect((await fetch(`${origin}/api/host`)).status).toBe(429);
+      // A poller with no credential guesses nothing and is never counted.
+      for (let i = 0; i < 20; i++) expect((await fetch(`${origin}/api/host`)).status).toBe(401);
+      // Guessing — a new wrong session each time — is.
+      for (let i = 0; i < 10; i++) await fetch(`${origin}/api/host`, { headers: { Cookie: `${sessionCookieName(app.port)}=guess-${i}` } });
+      expect((await fetch(`${origin}/api/host`, { headers: { Cookie: `${sessionCookieName(app.port)}=guess-x` } })).status).toBe(429);
       expect((await fetch(`${origin}/?t=invalid`, { redirect: 'manual' })).status).toBe(429);
       expect((await fetch(`${origin}/api/host`, { headers })).status).toBe(200);
       const recoveryTicket = mintTicket('host-fixture-token', new Date());
