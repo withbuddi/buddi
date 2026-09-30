@@ -393,6 +393,30 @@ type WireBlock =
  */
 export const WEB_SEARCH_TOOL_TYPE = 'web_search_20250305';
 
+/**
+ * How a model takes thinking. Claude 4.6 and later think adaptively and 400 on
+ * a budget; Sonnet 5.5 turns thinking off with `between_tools`; Opus 5.5,
+ * Fable and Mythos cannot turn it off at all, so "off" sends nothing. Older
+ * models, and ids this cannot read, keep the budget.
+ */
+export function thinkingShape(
+  model: string,
+  thinking: 'on' | 'off' | undefined,
+): 'budget' | 'adaptive' | 'disabled' | 'between_tools' | null {
+  if (thinking !== 'on' && thinking !== 'off') return null;
+  const m = /claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?=$|[-@:])/.exec(model.toLowerCase());
+  const family = m?.[1];
+  const major = m ? Number(m[2]) : 0;
+  const minor = m?.[3] ? Number(m[3]) : 0;
+  const alwaysOn = family === 'fable' || family === 'mythos' || (family === 'opus' && (major > 5 || (major === 5 && minor >= 5)));
+  const adaptive = alwaysOn || (family !== 'haiku' && (major > 4 || (major === 4 && minor >= 6)));
+  if (!adaptive) return thinking === 'on' ? 'budget' : 'disabled';
+  if (thinking === 'on') return 'adaptive';
+  if (alwaysOn) return null;
+  if (family === 'sonnet' && (major > 5 || (major === 5 && minor >= 5))) return 'between_tools';
+  return 'disabled';
+}
+
 /** The smallest thinking budget the API accepts. */
 export const THINKING_MIN_BUDGET = 1024;
 export const WEB_SEARCH_TOOL_NAME = 'web_search';
@@ -404,7 +428,11 @@ type WireRequest = {
   model: string;
   max_tokens: number;
   stream?: boolean;
-  thinking?: { type: 'enabled'; budget_tokens: number } | { type: 'disabled' };
+  thinking?:
+    | { type: 'enabled'; budget_tokens: number }
+    | { type: 'adaptive' }
+    | { type: 'disabled' }
+    | { type: 'between_tools' };
   /** A plain string for `api-key`; blocks for `subscription-token`. */
   system: string | WireSystemBlock[];
   messages: { role: MessageRole; content: WireBlock[] }[];
@@ -793,13 +821,14 @@ export function createAnthropicProvider(
       });
     }
     if (tools.length > 0) wire.tools = tools;
-    if (req.thinking === 'on') {
+    const shape = thinkingShape(resolved.model, req.thinking);
+    if (shape === 'budget') {
       // The budget must sit under max_tokens; a fixed slice of it, never all.
       const budget = Math.max(THINKING_MIN_BUDGET, Math.floor(wire.max_tokens / 2));
       if (wire.max_tokens <= budget) wire.max_tokens = budget + THINKING_MIN_BUDGET;
       wire.thinking = { type: 'enabled', budget_tokens: budget };
-    } else if (req.thinking === 'off') {
-      wire.thinking = { type: 'disabled' };
+    } else if (shape) {
+      wire.thinking = { type: shape };
     }
     if (req.onDelta) wire.stream = true;
     applyCacheBreakpoints(wire);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveProvider, type ProviderRef } from '@buddi/core';
 import {
+  thinkingShape,
   ATTACHMENT_UNAVAILABLE,
   CLAUDE_CODE_SYSTEM_PREFIX,
   ProviderError,
@@ -209,6 +210,22 @@ describe('createAnthropicProvider — responses and errors', () => {
     ]);
   });
 
+  it('picks the thinking shape each model takes', () => {
+    const cases: Array<[string, 'on' | 'off', ReturnType<typeof thinkingShape>]> = [
+      ['claude-sonnet-5-5', 'on', 'adaptive'],
+      ['claude-sonnet-5-5', 'off', 'between_tools'],
+      ['claude-opus-5-5', 'off', null],
+      ['claude-fable-5-1', 'off', null],
+      ['claude-opus-5', 'off', 'disabled'],
+      ['claude-sonnet-4-6', 'on', 'adaptive'],
+      ['claude-haiku-4-5', 'on', 'budget'],
+      ['claude-sonnet-4-5-20250929', 'on', 'budget'],
+      ['anthropic.claude-opus-5-5', 'on', 'adaptive'],
+    ];
+    for (const [model, mode, shape] of cases) expect([model, mode, thinkingShape(model, mode)]).toEqual([model, mode, shape]);
+    expect(thinkingShape('claude-sonnet-5-5', undefined)).toBeNull();
+  });
+
   it('asks for thinking in the API\'s words, and only when told to', async () => {
     const bodies: any[] = [];
     const fetchMock = vi.fn(async (_url: unknown, init: any) => { bodies.push(JSON.parse(init.body)); return jsonResponse(200, okBody()); });
@@ -216,8 +233,7 @@ describe('createAnthropicProvider — responses and errors', () => {
     await provider.complete({ ...request, thinking: 'on' });
     await provider.complete({ ...request, thinking: 'off' });
     await provider.complete(request);
-    expect(bodies[0].thinking).toEqual({ type: 'enabled', budget_tokens: expect.any(Number) });
-    expect(bodies[0].max_tokens).toBeGreaterThan(bodies[0].thinking.budget_tokens);
+    expect(bodies[0].thinking).toEqual({ type: 'adaptive' });
     expect(bodies[1].thinking).toEqual({ type: 'disabled' });
     expect(bodies[2].thinking).toBeUndefined();
     expect(bodies[2].stream).toBeUndefined();
