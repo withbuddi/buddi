@@ -96,7 +96,7 @@ describe('the built extension', () => {
     }
   });
 
-  it('draws its own icons rather than shipping a fetched asset', async () => {
+  it('ships the Blob at every icon size Chrome asks for', async () => {
     for (const [size, file] of Object.entries(manifest['icons'] as Record<string, string>)) {
       const bytes = await readFile(path.join(dist, file));
       expect(bytes.subarray(1, 4).toString('ascii')).toBe('PNG');

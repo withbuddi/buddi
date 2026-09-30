@@ -62,7 +62,13 @@ export async function buildExtension({ clean = true } = {}) {
   }
 
   for (const asset of STATIC) await cp(path.join(root, 'static', asset), path.join(dist, asset));
-  for (const size of SIZES) await writeFile(path.join(dist, 'icons', `${size}.png`), icon(size));
+  // The Blob at the four sizes Chrome asks for, resized once from the
+  // dashboard's own app icon and kept in static/icons; the drawn mark in
+  // icons.mjs remains the fallback for a checkout without them.
+  for (const size of SIZES) {
+    const blob = path.join(root, 'static', 'icons', `${size}.png`);
+    await writeFile(path.join(dist, 'icons', `${size}.png`), await readFile(blob).catch(() => icon(size)));
+  }
 
   // The manifest's version is buddi's, in the four integers Chrome accepts
   // (`version.mjs`): one number for the popup, the hello frame and the tarball.
