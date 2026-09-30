@@ -332,6 +332,20 @@ export async function loadDatabase(
     const present = await tablesPresent(client, [...rebuilt]);
     const targets = tables.filter((t) => rebuilt.has(t.schema));
     const copyable = targets.filter((t) => present.has(`${t.schema}.${t.table}`));
+    /*
+     * Without replica mode the foreign keys stay on, and "parent first" is not
+     * enough: a cycle has no parent. email.threads points at its last message
+     * and every email.messages row points at its thread, so no order of COPYs
+     * satisfies both (a real restore failed on exactly this, 2026-09-29). The
+     * role owns these tables (its migrations created them), so it may drop
+     * their foreign keys for the load and add them back before the commit.
+     * Adding a key back validates every row, so data that really is broken
+     * still fails the restore, inside this transaction, with nothing changed.
+     */
+    const heldKeys = triggersLeftOn && copyable.length > 0 ? await foreignKeysOf(client, copyable) : [];
+    for (const key of heldKeys) {
+      await client.query(`alter table ${key.table} drop constraint ${quote(key.name)}`);
+    }
     if (copyable.length > 0) {
       // Seed rows a migration inserted would collide with the dump's own rows.
       // The dump is the truth here, so the freshly migrated tables are emptied.
@@ -359,6 +373,9 @@ export async function loadDatabase(
       const sink = client.query(copyFrom(`copy ${qualified} (${columns}) from stdin`));
       await pipeline(createReadStream(file), sink);
       loaded.push({ table: `${table.schema}.${table.table}`, rows: table.rows });
+    }
+    for (const key of heldKeys) {
+      await client.query(`alter table ${key.table} add constraint ${quote(key.name)} ${key.definition}`);
     }
 
     /* 3. the sequences ---------------------------------------------- */
@@ -433,4 +450,31 @@ export async function loadDatabase(
   } finally {
     client.release();
   }
+}
+
+/**
+ * The foreign keys defined on these tables, each as the statement that adds it
+ * back (`pg_get_constraintdef`), so the load can hold them off and restore them
+ * exactly. Only keys *on* the loaded tables: keys on other tables that point
+ * into them are left alone, and a truncate cascade already emptied those.
+ */
+async function foreignKeysOf(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> },
+  tables: ReadonlyArray<{ schema: string; table: string }>,
+): Promise<Array<{ table: string; name: string; definition: string }>> {
+  const { rows } = await client.query(
+    `select n.nspname as schema, c.relname as table, k.conname as name, pg_get_constraintdef(k.oid) as definition
+       from pg_constraint k
+       join pg_class c on c.oid = k.conrelid
+       join pg_namespace n on n.oid = c.relnamespace
+      where k.contype = 'f'
+        and (n.nspname || '.' || c.relname) = any($1)
+      order by n.nspname, c.relname, k.conname`,
+    [tables.map((t) => `${t.schema}.${t.table}`)],
+  );
+  return rows.map((r) => ({
+    table: `${quote(String(r.schema))}.${quote(String(r.table))}`,
+    name: String(r.name),
+    definition: String(r.definition),
+  }));
 }

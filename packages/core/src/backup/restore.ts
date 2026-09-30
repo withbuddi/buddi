@@ -480,8 +480,8 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
     }
     if (loaded.triggersLeftOn) {
       didNot.push(
-        'session_replication_role = replica — this role may not set it; the tables were loaded ' +
-          'parent-first instead, which is equivalent here',
+        'session_replication_role = replica — this role may not set it; the foreign keys were ' +
+          'held off during the load and added back, which validated every row',
       );
     }
     for (const missing of loaded.notLoaded) {

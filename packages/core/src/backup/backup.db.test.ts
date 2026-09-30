@@ -55,6 +55,10 @@ const ROLE_PASSWORD = 'drill_not_a_secret';
 const OLD_MIGRATION = `
 create table accounts (id serial primary key, name text not null, cents bigint not null);
 create table entries (id serial primary key, account int not null references accounts(id), note text);
+-- A cycle, the shape email.threads and email.messages have: an account points
+-- at its last entry and every entry at its account. No order of COPYs
+-- satisfies both keys, so a role refused replica mode must hold them off.
+alter table accounts add column last_entry int null references entries(id) on delete set null;
 -- An identity column, because it is the one column shape that COPY treats
 -- differently from every other: generated always refuses an INSERT without
 -- overriding system value, a clause COPY has no syntax for at all.
@@ -105,6 +109,7 @@ suite('a backup can actually be restored', () => {
          values (1, 'rent'), (1, 'groceries'), (2, 'transfer'), (2, 'interest'), (3, 'coffee')`,
       );
       await pool.query(`insert into drill.ledgers (label) values ('opening'), ('closing')`);
+      await pool.query(`update drill.accounts set last_entry = case id when 1 then 2 when 2 then 4 else 5 end`);
     } finally {
       await pool.end().catch(() => {});
     }
@@ -595,6 +600,10 @@ suite('a backup can actually be restored', () => {
       expect(report.triggersLeftOn).toBe(true);
       expect(report.notLoaded).toEqual([]);
       expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      // The cycle came back whole, and its keys are enforced again.
+      const { rows: last } = await pool.query<{ last_entry: number }>(`select last_entry from drill.accounts order by id`);
+      expect(last.map((r) => r.last_entry)).toEqual([2, 4, 5]);
+      await expect(pool.query(`update drill.accounts set last_entry = 999 where id = 1`)).rejects.toThrow(/foreign key/);
       const { rows: inserted } = await pool.query<{ id: number }>(
         `insert into drill.accounts (name, cents) values ('brokerage', 1) returning id`,
       );
