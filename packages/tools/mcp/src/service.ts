@@ -392,7 +392,7 @@ export class ConnectionsService {
    * Reading
    * ---------------------------------------------------------------- */
 
-  view(row: ConnectionRow, tools: readonly ToolRow[]): ConnectionView {
+  view(row: ConnectionRow, tools: readonly ToolRow[], device: { device?: DeviceView } = this.#deviceView(row.id)): ConnectionView {
     const mine = row.slug ? tools.filter((t) => t.connectionId === row.id) : [];
     return {
       id: row.id, slug: row.slug, name: row.name, url: row.url, host: row.host, state: row.state, authKind: row.authKind,
@@ -401,7 +401,7 @@ export class ConnectionsService {
       serverName: row.serverName, serverVersion: row.serverVersion, reviewedAt: row.reviewedAt,
       unreachableSince: row.state === 'unreachable' ? row.unreachableSince : null,
       heldTools: mine.filter((t) => t.changed).length,
-      ...this.#deviceView(row.id),
+      ...device,
       transport: row.transport,
       ...(row.program ? { program: programView(row) } : {}),
       ...(this.#starting.has(row.id) ? { phase: 'starting' as const } : {}),
@@ -426,8 +426,11 @@ export class ConnectionsService {
   }
 
   async get(id: string): Promise<ConnectionView> {
+    // The sign-in's state is taken before the row: a device sign-in that ends
+    // while the row is being read must not show "done" beside the row from before.
+    const device = this.#deviceView(id);
     const row = await this.#row(id);
-    return this.view(row, await listTools(this.deps.pool, id));
+    return this.view(row, await listTools(this.deps.pool, id), device);
   }
 
   /** The connections that need the owner, in a sentence each: Home's line and the rail's dot. */
@@ -1368,6 +1371,10 @@ export class ConnectionsService {
     const cached = this.#live.get(id);
     if (cached) return cached;
     const row = await this.#row(id);
+    // A write that landed while this read was out (a sign-in finishing) wins:
+    // a row read before it must not go back into the cache after it.
+    const landed = this.#live.get(id);
+    if (landed) return landed;
     this.#live.set(id, row);
     return row;
   }

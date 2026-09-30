@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Right after a device-code sign-in, a connection could briefly read "done" beside "not signed in", because the page read the connection before the sign-in landed and its state after. The state is now taken first, and a stale read no longer overwrites a fresher cached connection.
 - A connection's idle clock started when a request began, so a slow first start or a long call could be stopped under itself. It now starts only when the last request ends.
 - Once a connection was given to agents there was no way to change who holds it. Its sheet now has Change beside "Held by": tick an agent to give it the tools, untick one to take them away, in one save.
 - The floating Buddi button covered the footer of sheets and dialogs. It steps aside while one is open.
