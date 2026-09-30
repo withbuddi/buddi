@@ -2224,6 +2224,8 @@ export interface ExtensionState {
   pairedAt?: string;
   extension?: string;
   lastSeenAt?: string;
+  /** This buddi's own version, to compare with the extension's. Optional: an older gateway does not send it. */
+  buddi?: string;
 }
 export interface BrowserStatus {
   mode?: BrowserMode;

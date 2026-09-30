@@ -189,6 +189,22 @@ describe('finding the extension from the dashboard', () => {
     expect(screen.queryByText(/pointed at/)).not.toBeInTheDocument();
   });
 
+  it('says when the extension and buddi are different versions, and carries on', async () => {
+    answers({ installed: true, version: '0.1.0.24', state: 'paired', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.25' });
+    render(<Browser />);
+    expect(await screen.findByText('buddi is 0.1.0-pre.25; the extension is 0.1.0.24. Update it from chrome://extensions or the store.')).toBeInTheDocument();
+    expect(screen.getByText(/already paired/)).toBeInTheDocument();
+  });
+
+  it('says nothing about versions when they are the same one, spelled two ways', async () => {
+    answers({ installed: true, version: '0.1.0.25', state: 'paired', gateway: here() });
+    vi.mocked(api.extension).mockResolvedValue({ connected: true, pending: false, path: '/opt/buddi/extension', buddi: '0.1.0-pre.25' });
+    render(<Browser />);
+    expect(await screen.findByText(/has the extension, version 0\.1\.0\.25/)).toBeInTheDocument();
+    expect(screen.queryByText(/Update it from/)).not.toBeInTheDocument();
+  });
+
   it('points out an extension aimed at another buddi', async () => {
     answers({ installed: true, version: '0.1.0', state: 'disconnected', gateway: 'http://127.0.0.1:4999' });
     render(<Browser />);

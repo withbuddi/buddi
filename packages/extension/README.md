@@ -16,21 +16,55 @@ coordinate clicking, no passwords.
 
 ## Loading it
 
+**From the Chrome Web Store** (once the listing is live): install it, and it
+updates itself. The store gives it an id of its own (see below), which the
+dashboard also asks for.
+
+**Unpacked**, from your installation:
+
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
 3. Press **Load unpacked** and pick the `extension` folder inside your buddi
    installation. Settings, under Computer & browser, prints the exact path.
 
+Every GitHub release also carries `buddi-extension-<version>.zip`, the store
+upload: the same files, without the manifest's `key`
+(`node scripts/release/extension-zip.mjs <version> [dir]` makes one from a
+built `dist/`). `STORE.md` holds the listing text, the permission
+justifications, the data-use answers and the privacy page.
+
+## Its version
+
+Chrome takes one to four integers, so the manifest carries buddi's version
+mapped (`scripts/version.mjs`): `0.1.0` stays `0.1.0`, `0.1.0-pre.24` becomes
+`0.1.0.24`, and `version_name` keeps the full string. The build reads
+`BUDDI_RELEASE_VERSION` when a release names one, else the root
+`package.json`. Settings says when the extension and buddi differ, and carries
+on.
+
+## The popup
+
+One of four states, never two at once:
+
+1. **Not connected**: the address of your buddi (`http://127.0.0.1:4317`
+   unless you moved it) and **Connect**. After a failure, the worker's sentence
+   in red and **Try again**.
+2. **Connecting**: the address greyed out while your buddi mints a code.
+3. **Pairing**: the six-digit code, large, with **Copy**, the line saying where
+   to type it, **Open buddi settings** (Computer & browser, in a new tab) and
+   **Not this buddi** to go back to the address.
+4. **Connected**: which buddi, how many tabs it is working in, **Open buddi**
+   and **Forget this buddi**.
+
 ## Pairing it with your buddi
 
-1. Click the buddi icon in Chrome's toolbar. It shows the address of the buddi
-   on this machine (`http://127.0.0.1:4317` unless you moved it) and a
-   **Connect** button.
+1. Click the buddi icon in Chrome's toolbar and press **Connect**.
 2. Your buddi answers with a six-digit code, which the popup shows, with a
    **Copy** button beside it.
-3. In buddi, open Settings, Computer & browser. If you are reading the
-   dashboard in the same Chrome, the code is already in **Pair your browser**;
-   otherwise type it. The code is good for five minutes.
+3. In buddi, open Settings, Computer & browser (**Open buddi settings** in the
+   popup goes there). If you are reading the dashboard in the same Chrome, the
+   code is already in **Pair your browser**; otherwise type it. The code is
+   good for five minutes.
 
 That is once. From then on the extension reconnects on its own whenever Chrome
 and your buddi are both running. **Forget this buddi** in the popup, or *Forget
@@ -57,9 +91,11 @@ the dashboard, and checked against the manifest by `manifest.test.ts`:
 kmbckpnnjfggeffkkbmkggojnolkdokb
 ```
 
-**The private half is not in this repository and is not needed.** It signs a
-`.crx` for the Chrome Web Store; loading the folder unpacked uses the public
-key only. Nothing here is weakened by its absence, and nothing is gained by
+**The private half is not in this repository and is not needed.** Loading
+the folder unpacked uses the public key only, and the store build carries no
+key at all: the store assigns its own id, which goes into
+`STORE_EXTENSION_ID` (`src/id.ts`, mirrored in the dashboard) once the listing
+exists. Nothing here is weakened by its absence, and nothing is gained by
 keeping it around.
 
 The fixed id is what lets the dashboard find the extension. `manifest.json`
@@ -98,7 +134,7 @@ without holding your pairing gets nothing out of this browser.
 
 ```
 pnpm --filter @buddi/extension build      # esbuild into dist/, icons and all
-pnpm --filter @buddi/extension test       # protocol, tree builder, built manifest
+pnpm --filter @buddi/extension test       # protocol, tree builder, popup states, built manifest, store zip
 pnpm --filter @buddi/extension typecheck
 ```
 

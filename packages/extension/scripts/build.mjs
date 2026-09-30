@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { SIZES, icon } from './icons.mjs';
+import { stampManifest } from './version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
@@ -23,11 +24,32 @@ export const BUNDLES = [
   { entry: 'src/content.ts', out: 'content.js', format: 'iife' },
   { entry: 'src/popup.ts', out: 'popup.js', format: 'esm' },
 ];
-export const STATIC = ['manifest.json', 'popup.html', 'popup.css'];
+/*
+ * The popup's own files. The fonts and the Blob are copied in rather than
+ * fetched: an extension page loads nothing remote (Manifest V3's CSP forbids
+ * it, and the store asks), so DM Sans, DM Mono and the mascot travel with it.
+ */
+export const STATIC = [
+  'manifest.json', 'popup.html', 'popup.css', 'blob.png',
+  'fonts/dm-sans-latin-standard-normal.woff2', 'fonts/dm-sans-latin-ext-standard-normal.woff2',
+  'fonts/dm-mono-latin-400-normal.woff2', 'fonts/dm-mono-latin-500-normal.woff2',
+];
+
+/**
+ * The buddi version this build carries: the release's when one is being cut
+ * (`BUDDI_RELEASE_VERSION`, as `scripts/release/build.mjs` reads it), else the
+ * root package's.
+ */
+export async function buddiVersion() {
+  const named = (process.env.BUDDI_RELEASE_VERSION ?? '').trim();
+  if (named) return named;
+  return JSON.parse(await readFile(path.join(root, '..', '..', 'package.json'), 'utf8')).version;
+}
 
 export async function buildExtension({ clean = true } = {}) {
   if (clean) await rm(dist, { recursive: true, force: true });
   await mkdir(path.join(dist, 'icons'), { recursive: true });
+  await mkdir(path.join(dist, 'fonts'), { recursive: true });
 
   for (const bundle of BUNDLES) {
     await build({
@@ -42,11 +64,10 @@ export async function buildExtension({ clean = true } = {}) {
   for (const asset of STATIC) await cp(path.join(root, 'static', asset), path.join(dist, asset));
   for (const size of SIZES) await writeFile(path.join(dist, 'icons', `${size}.png`), icon(size));
 
-  // The manifest's version is the package's: one number for the popup, the
-  // hello frame and the tarball.
-  const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  const manifest = JSON.parse(await readFile(path.join(dist, 'manifest.json'), 'utf8'));
-  manifest.version = pkg.version;
+  // The manifest's version is buddi's, in the four integers Chrome accepts
+  // (`version.mjs`): one number for the popup, the hello frame and the tarball.
+  // This is the unpacked build, so it keeps its `key`; the store zip drops it.
+  const manifest = stampManifest(JSON.parse(await readFile(path.join(dist, 'manifest.json'), 'utf8')), await buddiVersion());
   await writeFile(path.join(dist, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   return dist;
 }

@@ -167,7 +167,7 @@ export async function connect(): Promise<void> {
   opening.addEventListener('close', () => {
     if (socket === opening) { socket = undefined; pending = []; }
     if (silence) { clearTimeout(silence); silence = undefined; }
-    protocol.closed('Not connected to buddi.');
+    protocol.closed('buddi did not answer at this address. Is it running?');
     schedule();
   });
 }

@@ -94,6 +94,8 @@ describe('the browser extension endpoint', () => {
     const headers = await session(origin);
     expect(await (await fetch(`${origin}/api/extension`, { headers })).json())
       .toMatchObject({ connected: false, pending: false, path: path.join(dir, 'extension') });
+    // Its own version, plain, so the page can compare it with the extension's.
+    expect(((await (await fetch(`${origin}/api/extension`, { headers })).json()) as { buddi?: string }).buddi).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
 
     const client = connect(socketUrl);
     await client.open;

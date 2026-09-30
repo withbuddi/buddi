@@ -2,34 +2,56 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=340" />
     <title>buddi</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
-  <body>
+  <body data-view="address">
     <header class="head">
-      <span class="mark" aria-hidden="true">b</span>
-      <span class="head-name">buddi</span>
-      <span class="state" id="state" data-tone="idle">Not connected</span>
+      <img class="blob" src="blob.png" alt="" width="28" height="28" />
+      <span class="wordmark">buddi</span>
+      <span class="pill" id="pill" data-tone="idle" role="status">Not connected</span>
     </header>
 
-    <section class="section">
-      <label class="label" for="gateway">Your buddi</label>
-      <input class="field" id="gateway" type="url" spellcheck="false" autocomplete="off" />
-      <p class="hint" id="hint">The address of the buddi running on this machine.</p>
-      <div class="actions"><button class="button" id="connect" type="button">Connect</button></div>
-    </section>
-
-    <section class="section" id="pairing" hidden>
-      <span class="label">Pair this browser</span>
-      <div class="code-row">
-        <p class="code" id="code">000 000</p>
-        <button class="button button-quiet" id="copy" type="button">Copy</button>
+    <!-- Not connected, and Connecting: the address of the buddi to pair with. -->
+    <section class="view" id="view-address" data-view="address">
+      <div class="field-group">
+        <label class="label" for="gateway">Your buddi</label>
+        <input class="field" id="gateway" type="url" value="http://127.0.0.1:4317" placeholder="http://127.0.0.1:4317" spellcheck="false" autocomplete="off" />
+        <p class="hint" id="hint">The address of the buddi running on this machine.</p>
       </div>
-      <p class="hint">Type this code into buddi, under Settings, Computer &amp; browser, within five minutes.</p>
+      <p class="notice" id="notice" data-tone="critical" role="alert" hidden></p>
+      <p class="quiet" id="asking" hidden>Asking your buddi for a code…</p>
+      <div class="actions" id="address-actions">
+        <button class="btn" data-variant="accent" id="connect" type="button">Connect</button>
+      </div>
     </section>
 
-    <section class="section">
-      <div class="actions actions-left"><button class="button button-quiet" id="forget" type="button">Forget this buddi</button></div>
+    <!-- Pairing: the six digits to type into buddi. -->
+    <section class="view" id="view-pairing" data-view="pairing" hidden>
+      <div class="code-tile">
+        <p class="code" id="code" aria-label="Pairing code"></p>
+        <button class="btn" data-size="sm" id="copy" type="button">Copy</button>
+      </div>
+      <p class="hint">Type it into buddi under Settings → Computer&nbsp;&amp;&nbsp;browser, within five minutes.</p>
+      <div class="actions actions-split">
+        <button class="link" id="not-this" type="button">Not this buddi</button>
+        <button class="btn" id="open-settings" type="button">Open buddi settings</button>
+      </div>
+    </section>
+
+    <!-- Connected: which buddi, and what it is doing here. -->
+    <section class="view" id="view-paired" data-view="paired" hidden>
+      <div class="facts">
+        <p class="fact" id="paired-to"></p>
+        <p class="quiet" id="working">Nothing open right now.</p>
+      </div>
+      <div class="actions">
+        <button class="btn" id="open-buddi" type="button">Open buddi</button>
+      </div>
+      <footer class="foot">
+        <button class="link" id="forget" type="button">Forget this buddi</button>
+      </footer>
     </section>
 
     <script src="popup.js" type="module"></script>

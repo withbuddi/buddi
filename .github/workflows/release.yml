@@ -5,7 +5,8 @@
 # `next` dist-tag once a stable version exists (until then it is `latest`), so after 0.1.0 `npm install @withbuddi/buddi` never resolves to one; a plain
 # version (`v0.1.0`) goes under `latest`. The GitHub release is created in
 # the same run, marked latest until a stable version exists, with the
-# tarball and the Linux install script attached.
+# tarball, the Chrome Web Store zip of the extension and the Linux install
+# script attached.
 #
 # Once, on npmjs.com: package `@withbuddi/buddi` → Settings → Publishing access →
 # add a trusted publisher: GitHub, owner `withbuddi`, repository `buddi`,
@@ -69,6 +70,10 @@ jobs:
           tgz="${out##*Release: }"
           test -f "$tgz" || { echo "release:pack printed no tarball: $out" >&2; exit 1; }
           echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+          # The Chrome Web Store zip, written beside the tarball (no `key`: the store assigns the id).
+          zip="$(dirname "$tgz")/buddi-extension-${{ steps.v.outputs.version }}.zip"
+          test -f "$zip" || { echo "release:pack wrote no extension zip at $zip" >&2; exit 1; }
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
       - name: Publish to npm
         # --provenance: npm attests the build to this public repository and
         # this workflow run, so an installer can verify where the tarball came from.
@@ -85,4 +90,4 @@ jobs:
           npm: \`npm install -g @withbuddi/buddi@${{ steps.v.outputs.version }}\` (dist-tag ${{ steps.v.outputs.tag }})."
           gh release create "$GITHUB_REF_NAME" $pre --title "buddi ${{ steps.v.outputs.version }}" \
             --notes "$notes" \
-            "${{ steps.pack.outputs.tgz }}" scripts/install-linux.sh
+            "${{ steps.pack.outputs.tgz }}" "${{ steps.pack.outputs.zip }}" scripts/install-linux.sh

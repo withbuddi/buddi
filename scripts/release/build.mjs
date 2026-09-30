@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { BINARY_VERSION } from '../../packages/core/dist/postgres/index.js';
 import { CHANGELOG, ChangelogError, sectionOf } from './changelog.mjs';
+import { writeExtensionZip } from './extension-zip.mjs';
+import { stampManifest } from '../../packages/extension/scripts/version.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 /** The one binary, relative to the package root. */
@@ -74,6 +76,14 @@ else {
     if (sha) product.version = `${product.version}-dev.${sha}`;
   } catch { /* no git: keep the version as written */ }
 }
+// The unpacked extension carries the release's version too (Chrome's four
+// integers, the full string in `version_name`), whatever the checkout's build
+// stamped; it keeps its `key`, so its id is the one the dashboard knows.
+{
+  const file = path.join(stage, 'extension', 'manifest.json');
+  const stamped = stampManifest(JSON.parse(await readFile(file, 'utf8')), product.version);
+  await writeFile(file, `${JSON.stringify(stamped, null, 2)}\n`);
+}
 // The release notes: the version's section of CHANGELOG.md, carried in the
 // manifest so the installation's daily check can show them before an upgrade.
 // A release must have them. A pre-release may go without when
@@ -127,4 +137,8 @@ if (filename === undefined) {
   filename = readdirSync(stage).find((name) => name.endsWith('.tgz'));
 }
 if (filename === undefined) throw new Error(`npm pack produced no tarball in ${stage}: ${packed.stdout.slice(0, 200)}`);
+// The Chrome Web Store upload, beside the tarball: same files, no `key`. The
+// release workflow attaches it to the GitHub release. The last line stays the
+// tarball, which is what callers read.
+console.log(`Extension zip: ${await writeExtensionZip(product.version, stage)}`);
 console.log(`Release: ${path.join(stage, filename)}`);

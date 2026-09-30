@@ -214,9 +214,11 @@ Setup, in the owner's words:
 2. Open `chrome://extensions`, turn on **Developer mode**, choose **Load
    unpacked**, and pick the folder the settings page prints.
 3. Press **Connect** in the extension popup. It shows a six-digit code, valid
-   for five minutes, with a **Copy** button beside it. If the dashboard is open
-   in that same Chrome it fills the code in for you; otherwise type it into
-   **Pair your browser** on the settings page.
+   for five minutes, with a **Copy** button and **Open buddi settings** beside
+   it. If the dashboard is open in that same Chrome it fills the code in for
+   you; otherwise type it into **Pair your browser** on the settings page. Once
+   paired, the popup shows only which buddi it is connected to, how many tabs
+   it is working in, and **Forget this buddi**.
 
 The settings page finds the extension itself. Its manifest pins a public key,
 so its id is the same on every machine, and it accepts one message —
@@ -224,7 +226,12 @@ so its id is the same on every machine, and it accepts one message —
 against `sender.origin` as well. The page sends that message every three
 seconds while **Your browser** is selected, and says either *Extension found,
 version x.y.z* or that it is not installed in this browser, with the
-load-unpacked line. It passes on the code while the extension is showing one,
+load-unpacked line. The extension's version is buddi's in the four integers
+Chrome accepts (`0.1.0-pre.24` is `0.1.0.24`); when it differs from the
+running buddi's, the page says so in one line and carries on. A Chrome Web
+Store install has its own id (the store build carries no key); the page asks
+that id too once it is known. Each release attaches the store upload,
+`buddi-extension-<version>.zip`. It passes on the code while the extension is showing one,
 says so when the browser is already paired, and, when the extension is aimed at
 a different address than the dashboard is served from, says which and asks for
 it to be changed in the popup. The answer carries no token.

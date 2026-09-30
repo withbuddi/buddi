@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Each release attaches `buddi-extension-<version>.zip`, the Chrome Web Store upload of the extension (the unpacked folder in the tarball is unchanged), and the dashboard is ready to recognise the store's extension id once the listing exists.
 - mlxh, local MLX models on a Mac, as a model account: Settings → Model accounts has a **mlxh, local MLX models on this Mac** choice (address filled in, no key, the model list next), and first run's "On this computer" card finds mlxh beside Ollama and starts on its first language model. `GET /api/onboarding/mlxh` says whether mlxh answers here and what it serves.
 - An mlxh account's context window follows mlxh's `max_prompt_tokens` when the server reports it, else its 8,192 default, and Settings says how to raise it; image models on mlxh are flagged in the model list as belonging to the Image plugin.
 - First run's "What should I take on for you?": tick My days, My mail, My money, Voice, My code or Pictures, and buddi fetches their plugins from withbuddi.com and installs them in the background while you answer the next chapters. It approves on your behalf only plugins made by buddi whose download matches the hash withbuddi.com lists; anything else waits on its card in Settings → Plugins, and every install shows there with its hash as usual. `POST`/`GET /api/onboarding/take-on`.
@@ -26,6 +27,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The Chrome extension's popup is redrawn in buddi's own type and colours, with the Blob, in light and dark, and shows one state at a time: the address and Connect, Connecting, the pairing code (large, with Copy and **Open buddi settings**), or Connected with how many tabs it is working in and Forget this buddi. It no longer shows a pairing section with a placeholder code while already paired.
+- The extension's version is buddi's, in the four integers Chrome accepts: `0.1.0-pre.24` is `0.1.0.24` (the full string is its version name). Settings → Computer & browser says when the extension and buddi are different versions, and carries on.
+- A popup that cannot reach buddi says "buddi did not answer at this address. Is it running?" and offers Try again.
 - First run is five chapters with a map: Hello (your name and clock on one card), A brain (five cards, each tested with one small call before "Use this brain" lights), What I take on, Reach me, and Your assistant (a name, a Blob colour and the persona). The map ticks each answered chapter with its answer and "change"; Back, Set up later, Start over and "I have a backup" are always where the kit puts them; at phone width the map folds into a strip of dots.
 - The first hello knows what exists: your clock, the weather at home when Weather was installed, and whether Mail Triage has a mailbox. Under it, four first questions you can tap, and one card with the things still waiting ("Mail Triage is waiting for a mailbox"), with Open Home.
 - The phone, a mailbox, the app and the browser are one optional chapter, before the assistant is made, instead of a Telegram offer after its hello; a mailbox is added with the email plugin's own form, in a sheet.

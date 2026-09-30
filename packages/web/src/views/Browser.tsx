@@ -213,6 +213,25 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
  * that key.
  */
 const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
+/**
+ * The Chrome Web Store's id for the same extension, once the listing exists
+ * (mirrors `STORE_EXTENSION_ID` in `packages/extension/src/id.ts`). The store
+ * build carries no key, so its id differs; the page asks both.
+ */
+const STORE_EXTENSION_ID = '';
+const EXTENSION_IDS = [EXTENSION_ID, STORE_EXTENSION_ID].filter(Boolean);
+
+/**
+ * buddi's version as Chrome spells it: `0.1.0-pre.25` is `0.1.0.25`, `0.1.0`
+ * stays, any other suffix is dropped. The same mapping as
+ * `packages/extension/scripts/version.mjs`, which stamps the manifest.
+ */
+function chromeVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/.exec(version.trim());
+  if (!match) return version;
+  const numbered = match[4] ? /^pre\.(\d+)$/.exec(match[4]) : null;
+  return [match[1], match[2], match[3], ...(numbered ? [numbered[1]] : [])].map(Number).join('.');
+}
 
 /** What the extension answers `buddi.status` with. */
 interface ExtensionProbe {
@@ -236,8 +255,13 @@ declare const chrome: { runtime?: { sendMessage?: (id: string, message: unknown)
 async function askExtension(): Promise<ExtensionProbe | null> {
   try {
     if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) return null;
-    const answer = await chrome.runtime.sendMessage(EXTENSION_ID, { type: 'buddi.status' }) as ExtensionProbe | undefined;
-    return answer?.installed ? answer : null;
+    for (const id of EXTENSION_IDS) {
+      try {
+        const answer = await chrome.runtime.sendMessage(id, { type: 'buddi.status' }) as ExtensionProbe | undefined;
+        if (answer?.installed) return answer;
+      } catch { /* not under this id */ }
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -298,6 +322,9 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
           {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
           {probe?.state === 'disconnected' ? ' It is not connected yet: press Connect in its popup.' : ''}
         </p>
+        {probe && data?.buddi && chromeVersion(data.buddi) !== probe.version ? (
+          <p className="muted">{`buddi is ${data.buddi}; the extension is ${probe.version}. Update it from chrome://extensions or the store.`}</p>
+        ) : null}
         {probe && !sameGateway(probe.gateway) ? (
           <Notice tone="warning">{`The extension is pointed at ${probe.gateway}; set it to ${window.location.origin} in the popup.`}</Notice>
         ) : null}

@@ -31,6 +31,7 @@ import { BrowserPreconditionError, NOT_CONNECTED, type ExtensionBridge, type Ext
 import { REPO_ROOT } from '../agents/catalog.js';
 import { dataDir } from './config.js';
 import { isLoopbackAddress } from './http.js';
+import { currentVersion } from './version.js';
 
 /** The one path this gateway ever upgrades. */
 export const EXTENSION_SOCKET_PATH = '/api/extension/socket';
@@ -68,6 +69,12 @@ export interface ExtensionView {
   pairedAt?: string;
   extension?: string;
   lastSeenAt?: string;
+  /**
+   * This buddi's own version (`0.1.0-pre.25`, without a checkout's git
+   * description), so the page can say when the extension is older or newer.
+   * A skew is said, never refused.
+   */
+  buddi: string;
 }
 
 export function extensionFile(env: NodeJS.ProcessEnv = process.env): string {
@@ -478,10 +485,14 @@ export class ExtensionEndpoint implements ExtensionBridge {
 
   /* ---------------- the three routes ---------------- */
 
+  /** Read once: in a checkout it asks git, and the page polls every three seconds. */
+  #buddiVersion?: Promise<string>;
+
   async view(): Promise<ExtensionView> {
     const record = await this.#read();
     const pending = !!this.#pair && this.#pair.expiresAt > this.#now();
-    return { connected: this.connected(), pending, path: await extensionDir(this.#env()),
+    this.#buddiVersion ??= currentVersion(this.#env()).then((version) => version.split(' ')[0] || version);
+    return { connected: this.connected(), pending, path: await extensionDir(this.#env()), buddi: await this.#buddiVersion,
       ...(record ? { pairedAt: record.pairedAt, extension: record.extension, lastSeenAt: record.lastSeenAt } : {}) };
   }
 

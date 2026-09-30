@@ -10,7 +10,10 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { BUNDLES, STATIC, buildExtension } from '../scripts/build.mjs';
+import { inflateRawSync } from 'node:zlib';
+import { BUNDLES, STATIC, buildExtension, buddiVersion } from '../scripts/build.mjs';
+import { chromeVersion, stampManifest } from '../scripts/version.mjs';
+import { storeZip } from '../scripts/zip.mjs';
 import { EXTENSION_ID } from './id.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,10 +28,11 @@ beforeAll(async () => {
 const exists = async (relative: string) => (await stat(path.join(dist, relative)).catch(() => null))?.isFile() ?? false;
 
 describe('the built extension', () => {
-  it('is a Manifest V3 extension carrying the package version', async () => {
-    const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  it('is a Manifest V3 extension carrying buddi\'s version, as Chrome spells it', async () => {
+    const version = await buddiVersion();
     expect(manifest['manifest_version']).toBe(3);
-    expect(manifest['version']).toBe(pkg.version);
+    expect(manifest['version']).toBe(chromeVersion(version));
+    expect(manifest['version']).toMatch(/^\d+(\.\d+){2,3}$/);
     expect(manifest['name']).toBe('buddi');
   });
 
@@ -41,6 +45,8 @@ describe('the built extension', () => {
     expect(manifest['permissions']).not.toContain('activeTab');
     expect(manifest['host_permissions']).toEqual(['http://*/*', 'https://*/*']);
     expect(String(manifest['description'])).toMatch(/sites it opens are the ones you ask/);
+    // The store refuses a manifest description longer than 132 characters.
+    expect(String(manifest['description']).length).toBeLessThanOrEqual(132);
   });
 
   /*
@@ -96,5 +102,72 @@ describe('the built extension', () => {
       expect(bytes.subarray(1, 4).toString('ascii')).toBe('PNG');
       expect(bytes.readUInt32BE(16)).toBe(Number(size));
     }
+  });
+
+  it('ships its fonts and the Blob, and its stylesheet fetches nothing remote', async () => {
+    for (const file of ['blob.png', 'fonts/dm-sans-latin-standard-normal.woff2', 'fonts/dm-mono-latin-500-normal.woff2'])
+      expect(await exists(file), `${file} is missing`).toBe(true);
+    const css = await readFile(path.join(dist, 'popup.css'), 'utf8');
+    expect(css).not.toMatch(/url\(\s*['"]?(https?:)?\/\//);
+    expect(css).not.toMatch(/@import/);
+  });
+});
+
+/*
+ * Chrome's version is one to four integers. buddi's is semver with a
+ * pre-release tag, so the two are mapped: a stable release as it is, a
+ * pre-release's number as the fourth part, the full string in `version_name`.
+ */
+describe('the version Chrome is given', () => {
+  it('keeps a stable release as it is', () => {
+    expect(chromeVersion('0.1.0')).toBe('0.1.0');
+    expect(chromeVersion('1.12.3')).toBe('1.12.3');
+    expect(stampManifest({ version: 'x' }, '0.1.0')).toEqual({ version: '0.1.0' });
+  });
+
+  it('carries a pre-release number as the fourth part', () => {
+    expect(chromeVersion('0.1.0-pre.24')).toBe('0.1.0.24');
+    expect(chromeVersion('0.1.0-pre.0')).toBe('0.1.0.0');
+    expect(stampManifest({ version: 'x' }, '0.1.0-pre.24')).toEqual({ version: '0.1.0.24', version_name: '0.1.0-pre.24' });
+  });
+
+  it('drops any other suffix, and refuses what is not a version', () => {
+    expect(chromeVersion('0.1.0-dev.abc1234')).toBe('0.1.0');
+    expect(() => chromeVersion('v0.1')).toThrow();
+    expect(() => chromeVersion('0.1.70000')).toThrow(/65535/);
+  });
+});
+
+/** Entries of a zip, read back from its local headers. Enough for what `zip.mjs` writes. */
+function unzip(bytes: Buffer): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  let at = 0;
+  while (bytes.readUInt32LE(at) === 0x04034b50) {
+    const method = bytes.readUInt16LE(at + 8);
+    const size = bytes.readUInt32LE(at + 18);
+    const nameLength = bytes.readUInt16LE(at + 26);
+    const extra = bytes.readUInt16LE(at + 28);
+    const name = bytes.subarray(at + 30, at + 30 + nameLength).toString('utf8');
+    const data = bytes.subarray(at + 30 + nameLength + extra, at + 30 + nameLength + extra + size);
+    out.set(name, method === 8 ? inflateRawSync(data) : Buffer.from(data));
+    at += 30 + nameLength + extra + size;
+  }
+  return out;
+}
+
+describe('the store zip', () => {
+  it('has the manifest at its root, without the key, stamped with the release', async () => {
+    const entries = unzip(await storeZip(dist, '0.1.0-pre.25'));
+    const names = [...entries.keys()];
+    expect(names[0]).toBe('manifest.json');
+    const store = JSON.parse(entries.get('manifest.json')!.toString('utf8'));
+    expect(store['key']).toBeUndefined();
+    expect(store['version']).toBe('0.1.0.25');
+    expect(store['version_name']).toBe('0.1.0-pre.25');
+    expect(store['permissions']).toEqual(manifest['permissions']);
+    for (const file of [...BUNDLES.map((b) => b.out), ...STATIC]) expect(names, file).toContain(file);
+    expect(entries.get('popup.js')!.equals(await readFile(path.join(dist, 'popup.js')))).toBe(true);
+    // The unpacked build keeps its key: that is what pins the id the tarball's copy has.
+    expect(typeof manifest['key']).toBe('string');
   });
 });
