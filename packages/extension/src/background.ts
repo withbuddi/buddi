@@ -32,6 +32,8 @@ declare const chrome: WorkerChrome & {
 export const DEFAULT_GATEWAY = 'http://127.0.0.1:4317';
 const GATEWAY_KEY = 'gateway';
 const MAX_BACKOFF = 30_000;
+/** How long a knock waits for buddi before the socket is left alone this round. */
+const KNOCK_MS = 3000;
 /** Three missed pings and the gateway is gone; reconnecting is cheap. */
 const SILENCE = 70_000;
 
@@ -149,6 +151,17 @@ export async function connect(): Promise<void> {
   let url: string;
   try { url = socketUrl(await gateway()); }
   catch (error) { protocol.closed(error instanceof Error ? error.message : String(error)); return; }
+  /*
+   * On a reconnect, knock first. A refused WebSocket is logged by Chrome as
+   * an extension error every time, and a buddi that is restarting or off
+   * would fill that page with them; a refused fetch is not logged. The first
+   * connect (and the owner's Connect click) still opens the socket at once.
+   */
+  if (attempt > 0 && !(await answering(url))) {
+    protocol.closed('buddi did not answer at this address. Is it running?');
+    schedule();
+    return;
+  }
   const opening = new WebSocket(url);
   socket = opening;
   opening.addEventListener('open', () => { attempt = 0; quiet(); flush(opening); safely(() => protocol.open()); });
@@ -170,6 +183,23 @@ export async function connect(): Promise<void> {
     protocol.closed('buddi did not answer at this address. Is it running?');
     schedule();
   });
+}
+
+/** Does anything answer on buddi's HTTP side? Any status counts; only no answer at all is a no. */
+async function answering(socket: string): Promise<boolean> {
+  let http: URL;
+  try {
+    http = new URL(socket);
+    http.protocol = http.protocol === 'wss:' ? 'https:' : 'http:';
+    http.pathname = '/api/version';
+    http.search = '';
+  } catch { return false; }
+  try {
+    await fetch(http.toString(), { method: 'GET', cache: 'no-store', signal: AbortSignal.timeout(KNOCK_MS) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function schedule(): void {

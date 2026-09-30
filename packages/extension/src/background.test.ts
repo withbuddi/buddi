@@ -88,6 +88,7 @@ async function load(): Promise<Worker> {
   return worker;
 }
 
+let knockAnswers = true;
 const rejections: unknown[] = [];
 const onRejection = (reason: unknown): void => { rejections.push(reason); };
 
@@ -100,6 +101,12 @@ beforeEach(() => {
   process.on('unhandledRejection', onRejection);
   (globalThis as Record<string, unknown>)['chrome'] = chrome;
   (globalThis as Record<string, unknown>)['WebSocket'] = FakeSocket;
+  // The reconnect knock. Never the real fetch: that would reach a real gateway.
+  knockAnswers = true;
+  (globalThis as Record<string, unknown>)['fetch'] = vi.fn(async () => {
+    if (!knockAnswers) throw new TypeError('Failed to fetch');
+    return new Response('{}', { status: 200 });
+  });
 });
 
 afterEach(() => {
@@ -108,6 +115,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete (globalThis as Record<string, unknown>)['chrome'];
   delete (globalThis as Record<string, unknown>)['WebSocket'];
+  delete (globalThis as Record<string, unknown>)['fetch'];
 });
 
 describe('sending while the socket is still connecting', () => {
@@ -203,6 +211,26 @@ describe('promises in the worker', () => {
     const worker = await load();
     await worker.connect();
     await settle();
+    expect(rejections).toEqual([]);
+  });
+
+  it('knocks on the HTTP side before reconnecting, and opens no socket while nobody answers', async () => {
+    const worker = await load();
+    const first = FakeSocket.live[0]!;
+    first.opened();
+    await settle();
+    knockAnswers = false;
+    first.close();
+    await settle();
+    await worker.connect();
+    await settle();
+    // The knock said no: one socket ever, no refused WebSocket for Chrome to log.
+    expect(FakeSocket.live).toHaveLength(1);
+    expect((globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch).toHaveBeenCalled();
+    knockAnswers = true;
+    await worker.connect();
+    await settle();
+    expect(FakeSocket.live).toHaveLength(2);
     expect(rejections).toEqual([]);
   });
 
