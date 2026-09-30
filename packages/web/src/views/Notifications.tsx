@@ -21,6 +21,7 @@ import {
   type NotificationSettings,
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
+import { settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, Field, List, ListRow, Notice, Section, Stack, useAsync } from '../ui';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
 
@@ -67,8 +68,6 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
 
   return (
     <Stack gap="lg">
-      <TelegramPanel timezone={timezone} onChange={view.reload} />
-
       <Section
         title="Notifications"
         aside="What buddi tells you when you are not looking at this page."
@@ -82,7 +81,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
               <Empty>Loading…</Empty>
             ) : channels.length === 0 ? (
               <p className="ui-card-meta">
-                No channel yet, so everything waits for you here. Pair Telegram and buddi can reach you on your phone.
+                No channel yet, so everything waits for you here. <a href={settingsRoute('telegram')}>Set up Telegram</a> and buddi can reach you on your phone.
               </p>
             ) : (
               <Stack gap="sm">
@@ -94,6 +93,9 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
                     onPick={() => change({ defaultChannel: channel.kind })}
                   />
                 ))}
+                {!channels.some((channel) => channel.kind === 'telegram') ? (
+                  <p className="ui-card-meta">Telegram is not set up. <a href={settingsRoute('telegram')}>Set up Telegram</a></p>
+                ) : null}
               </Stack>
             )}
           </Section>
@@ -215,8 +217,13 @@ export function TipsSwitch(): JSX.Element {
   );
 }
 
+/** Settings → Telegram: its own page, since Telegram is where you talk to buddi, not only how it reaches you. */
+export function TelegramSettings({ timezone }: { timezone: string }): JSX.Element {
+  return <TelegramPanel timezone={timezone} onChange={() => {}} />;
+}
+
 /**
- * Settings → Notifications → Telegram: the bot, the phones, pairing another.
+ * Settings → Telegram: the bot, the phones, pairing another.
  *
  * `onChange` is told whenever the bot or the phones change, so the channel
  * list below picks up Telegram the moment it can reach the owner.

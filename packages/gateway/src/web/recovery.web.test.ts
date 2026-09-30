@@ -150,7 +150,7 @@ it('lists what the restore left the owner to do, and says so on every page', asy
       name: 'OPENAI_API_KEY', kind: 'account', label: 'work — API key', accountId: 'acc-work',
       settingsRoute: '#/settings/accounts?account=acc-work',
     },
-    { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/notifications' },
+    { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/telegram' },
     { name: 'TAVILY_API_KEY', kind: 'plugin', label: 'Tavily — search key', settingsRoute: '#/settings/secrets' },
   ]);
   // The counts are the ones the restore took, not a fresh query.

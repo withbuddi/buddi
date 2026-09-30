@@ -58,7 +58,7 @@ type RecoveryPlugin = RecoveryView['checklist']['plugins'][number];
 /** Where a missing key is fixed: the account itself, the Telegram setting, or Keys and secrets. */
 export function secretFixRoute(secret: RecoverySecret): string {
   if (secret.kind === 'account') return secret.accountId ? accountRoute(secret.accountId) : settingsRoute('accounts');
-  if (secret.kind === 'telegram') return settingsRoute('notifications');
+  if (secret.kind === 'telegram') return settingsRoute('telegram');
   return settingsRoute('secrets');
 }
 

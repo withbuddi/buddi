@@ -1471,7 +1471,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, await readTakeOn(takeOnDeps()));
         case '/api/telegram':
           return sendJson(res, 200, await telegramStatus(telegramDeps()));
-        // Settings → Notifications: which bot, and which phones talk to it.
+        // Settings → Telegram: which bot, and which phones talk to it.
         case '/api/telegram/bot':
           return sendJson(res, 200, await telegramBot(telegramDeps()));
         case '/api/telegram/devices':

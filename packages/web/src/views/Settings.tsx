@@ -31,7 +31,7 @@ import { Memory } from './Memory';
 import { Markdown } from '../chat/markdown';
 import { Proposals } from './Proposals';
 import { PLUGINS_LEDE, Plugins } from './Plugins';
-import { Notifications } from './Notifications';
+import { Notifications, TelegramSettings } from './Notifications';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
 import { railKey, setRailHidden, useRailHidden } from '../shell/railHidden';
@@ -95,6 +95,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'you' ? <You embedded /> : null}
           {section === 'appearance' ? <AppearanceSection railPages={plugins.rail} /> : null}
           {section === 'notifications' ? <Notifications timezone={timezone} /> : null}
+          {section === 'telegram' ? <TelegramSettings timezone={timezone} /> : null}
           {section === 'memory' ? <Memory embedded agents={agents} timezone={timezone} /> : null}
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded account={parseAccountRoute(hash)} /> : null}

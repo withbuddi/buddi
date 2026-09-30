@@ -138,8 +138,11 @@ is a complete answer.
 
 ## Telegram
 
-Settings → Notifications starts with Telegram, for an owner who skipped it in
-the first-run thread or wants to pair a second phone.
+Settings → Telegram is its own page, beside Notifications: Telegram is where
+you talk to buddi, not only how it reaches you. It is there for an owner who
+skipped it in the first-run thread or wants to pair a second phone.
+Notifications lists Telegram as a channel once it is set up, and links to the
+Telegram page while it is not.
 
 - **The bot.** With no token, paste the one @BotFather gave you and save it.
   It goes into the vault and the bot starts in the running buddi, so Telegram

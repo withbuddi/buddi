@@ -160,7 +160,7 @@ export async function telegramPairing(deps: TelegramWebDeps): Promise<PairingOff
 }
 
 /* ------------------------------------------------------------------ *
- * Settings → Notifications: the bot, the phones, and letting one go
+ * Settings → Telegram: the bot, the phones, and letting one go
  * ------------------------------------------------------------------ */
 
 export interface TelegramBot {

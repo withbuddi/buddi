@@ -25,7 +25,7 @@ const view = (over: Partial<RecoveryView['checklist']> = {}): RecoveryView => ({
   checklist: {
     secrets: [
       { name: 'PROVIDER_ACCOUNT_1', kind: 'account', label: 'Gemini — API key', accountId: 'acc-1', settingsRoute: '#/settings/accounts' },
-      { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/notifications' },
+      { name: 'TELEGRAM_BOT_TOKEN', kind: 'telegram', label: 'Telegram — bot token', settingsRoute: '#/settings/telegram' },
       { name: 'TAVILY_API_KEY', kind: 'plugin', label: 'Tavily — search key', settingsRoute: '#/settings/secrets' },
     ],
     plugins: [
@@ -83,7 +83,7 @@ describe('the checklist', () => {
     expect(screen.getByText('Gemini — API key')).toBeInTheDocument();
     expect(screen.getByText('PROVIDER_ACCOUNT_1')).toHaveClass('mono');
     expect(screen.getByRole('link', { name: 'Fix Gemini — API key' })).toHaveAttribute('href', '#/settings/accounts?account=acc-1');
-    expect(screen.getByRole('link', { name: 'Fix Telegram — bot token' })).toHaveAttribute('href', '#/settings/notifications');
+    expect(screen.getByRole('link', { name: 'Fix Telegram — bot token' })).toHaveAttribute('href', '#/settings/telegram');
     expect(screen.getByRole('link', { name: 'Fix Tavily — search key' })).toHaveAttribute('href', '#/settings/secrets');
     expect(screen.getByRole('link', { name: 'Install finance again' })).toHaveAttribute(
       'href',

@@ -22,7 +22,7 @@ gives you. Then pair your phone in any of three places:
 
 - **First run.** The wizard asks for the token and draws a QR code; scan it
   with your phone and the chat opens paired.
-- **Settings → Notifications.** The Telegram panel saves or replaces the
+- **Settings → Telegram.** Its own page saves or replaces the
   token, lists the phones you paired, unpairs one, and pairs another with the
   same QR code.
 - **`buddi telegram pair`** does the same from a terminal.

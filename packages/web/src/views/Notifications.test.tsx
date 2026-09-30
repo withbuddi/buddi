@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api, type NotificationSettingsView } from '../api';
-import { Notifications } from './Notifications';
+import { Notifications, TelegramSettings } from './Notifications';
 
 vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
@@ -65,6 +65,10 @@ afterEach(() => cleanup());
 
 async function page(): Promise<void> {
   await act(async () => { render(<Notifications timezone="UTC" />); });
+}
+
+async function telegramPage(): Promise<void> {
+  await act(async () => { render(<TelegramSettings timezone="UTC" />); });
 }
 
 describe('Settings → Notifications', () => {
@@ -136,17 +140,18 @@ describe('Settings → Notifications', () => {
   it('says how to get a channel when there is none', async () => {
     vi.mocked(api.notificationSettings).mockResolvedValue({ ...VIEW, channels: [] });
     await page();
-    expect(screen.getByText(/Pair Telegram and buddi can reach you/)).toBeInTheDocument();
+    expect(screen.getByText(/and buddi can reach you on your phone/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Set up Telegram' })).toHaveAttribute('href', '#/settings/telegram');
     expect(screen.queryByRole('button', { name: 'Send a test' })).toBeNull();
   });
 });
 
-describe('Settings → Notifications → Telegram', () => {
+describe('Settings → Telegram', () => {
   it('asks for a token when there is none, and saves it', async () => {
     vi.mocked(api.telegramBot).mockResolvedValue({ configured: false, running: false, username: null });
     vi.mocked(api.telegramDevices).mockResolvedValue({ devices: [] });
     vi.mocked(api.saveTelegramToken).mockResolvedValue({ configured: true, running: true, paired: false, restartNeeded: false, botUsername: 'buddi_bot' });
-    await page();
+    await telegramPage();
     expect(screen.getByText('Ask @BotFather for a bot and paste its token here.')).toBeInTheDocument();
     expect(screen.getByText('No phone is paired yet.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pair a phone' })).toBeNull();
@@ -155,12 +160,10 @@ describe('Settings → Notifications → Telegram', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save token' })); });
     expect(api.saveTelegramToken).toHaveBeenCalledWith('8012345678:AAHfakeTokenForTestsOnly-1234567890');
     expect(await screen.findByText('Bot: @buddi_bot')).toBeInTheDocument();
-    // The channel list is read again: Telegram can appear there now.
-    expect(vi.mocked(api.notificationSettings).mock.calls.length).toBeGreaterThan(1);
   });
 
   it('names the bot, lists the phone, and unpairs it after asking in place', async () => {
-    await page();
+    await telegramPage();
     expect(screen.getByText('Bot: @buddi_bot')).toBeInTheDocument();
     expect(screen.queryByLabelText('Bot token')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Replace token' }));
@@ -180,7 +183,7 @@ describe('Settings → Notifications → Telegram', () => {
   it('pairs a phone: the square, the link to copy, then Paired. when a new phone arrives', async () => {
     const link = 'tg://resolve?domain=buddi_bot&start=ABC';
     vi.mocked(api.telegramPairing).mockResolvedValue({ code: 'ABC', link, expiresAt: new Date(Date.now() + 600_000).toISOString() });
-    await page();
+    await telegramPage();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pair a phone' })); });
     expect(await screen.findByText('Open this on your phone, then send /start to the bot.')).toBeInTheDocument();
     expect(await screen.findByRole('img', { name: link })).toBeInTheDocument();
@@ -193,7 +196,6 @@ describe('Settings → Notifications → Telegram', () => {
     vi.mocked(api.telegramDevices).mockResolvedValue({ devices: [PHONE, second] });
     expect(await screen.findByText('Paired.', {}, { timeout: 5_000 })).toBeInTheDocument();
     expect(await screen.findByText('Work phone')).toBeInTheDocument();
-    expect(vi.mocked(api.notificationSettings).mock.calls.length).toBeGreaterThan(1);
   });
 
   it('turns tips on Home off and on, saved at once', async () => {

@@ -2,7 +2,7 @@
  * Pairing a phone with the Telegram bot: a code, its square, and watching for
  * the phone to say hello.
  *
- * Shared by the first-run thread (`Meet.tsx`) and Settings → Notifications.
+ * Shared by the first-run thread (`Meet.tsx`) and Settings → Telegram.
  * Each decides what "the phone arrived" means — first run asks whether any
  * phone is paired, the settings page whether a new one is — and each draws
  * its own words around the square.

@@ -94,7 +94,7 @@ export interface RecoveryDeps {
 }
 
 const ACCOUNTS_ROUTE = '#/settings/accounts';
-const TELEGRAM_ROUTE = '#/settings/notifications';
+const TELEGRAM_ROUTE = '#/settings/telegram';
 const SECRETS_ROUTE = '#/settings/secrets';
 
 /** Names that are a model credential wherever they turn up. */
