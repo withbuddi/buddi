@@ -16,6 +16,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- An agent's connection tools that ask first are one folded group per connection, with how many ask and which are remembered in its summary; tools that delete or destroy are named once at the bottom instead of a disabled row and a sentence each.
 - An agent's Setup is four tabs instead of three: Identity, Brain, Tools (roles, tools and connections) and Team (who it may ask). The built-in context moved to Brain, and old links to Access open Tools.
 - The agents reference documents `{{today}}`, the one placeholder a persona can use.
 

@@ -3738,3 +3738,8 @@ a.home-glance-text:hover { color: var(--text); text-decoration: underline; text-
 .connections-another { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
 .connections-another p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
 .connections-holders { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+
+/* An agent's connection tools that ask first: one folded group per connection. */
+.remembered-summary { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1); min-width: 0; }
+.remembered-name { font-weight: var(--weight-semibold); }
+.remembered-always { margin: var(--space-3) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }

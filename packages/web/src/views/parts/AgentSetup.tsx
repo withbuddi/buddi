@@ -21,7 +21,7 @@
  */
 import { THINKING_UP_TO_MODEL, effectiveProviderKind, thinkingIsHonoured } from '../../shell/thinking';
 import { useEffect, useRef, useState } from 'react';
-import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView } from '../../api';
+import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView, type RememberedApproval } from '../../api';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
 import { agentRoute } from '../../routes';
@@ -579,6 +579,7 @@ function Access({ agent, all, onSaved }: { agent: AgentRow; all: readonly AgentR
  */
 export function RememberedApprovals({ agentId, version, disabled }: { agentId: string; version: string; disabled: boolean }): JSX.Element | null {
   const view = useAsync(() => Promise.resolve().then(() => api.rememberedApprovals(agentId)), [agentId, version]);
+  const names = useAsync(() => Promise.resolve().then(() => api.connections()).catch(() => null), []);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const tools = view.data?.tools ?? [];
@@ -595,27 +596,56 @@ export function RememberedApprovals({ agentId, version, disabled }: { agentId: s
       setBusy(null);
     }
   };
+  // One folded group per connection, in the order the server lists them.
+  const groups = new Map<string, RememberedApproval[]>();
+  for (const tool of tools) groups.set(tool.connection, [...(groups.get(tool.connection) ?? []), tool]);
+  const nameOf = (slug: string): string => names.data?.connections.find((c) => c.slug === slug)?.name ?? slug;
+  const short = (tool: RememberedApproval): string => tool.tool.split('.').slice(2).join('.') || tool.tool;
   return (
     <div className="ui-field">
       <span className="ui-field-label">Connection tools that ask first</span>
       <div className="ui-stack" data-gap="sm" role="group" aria-label="Remembered approvals">
-        {tools.map((tool) => (
-          <Stack key={tool.tool} gap="sm">
-            <label className="backup-check">
-              <input
-                type="checkbox"
-                checked={tool.remembered}
-                disabled={disabled || !tool.rememberable || busy !== null}
-                onChange={(event) => void toggle(tool.tool, event.target.checked)}
-              />
-              <span><span className="mono">{tool.tool}</span> · remember my approval</span>
-            </label>
-            {tool.why ? <p className="ui-card-meta">{tool.why}</p> : null}
-          </Stack>
-        ))}
+        {[...groups].map(([slug, list]) => {
+          const choosable = list.filter((t) => t.rememberable);
+          const always = list.filter((t) => !t.rememberable);
+          const remembered = choosable.filter((t) => t.remembered);
+          const summary = (
+            <span className="remembered-summary">
+              <span className="remembered-name">{nameOf(slug)}</span>
+              <span className="ui-card-meta">
+                {` · ${list.length} ask first`}
+                {remembered.length > 0 ? ` · ${remembered.length} remembered: ${remembered.map(short).join(', ')}` : ''}
+              </span>
+            </span>
+          );
+          return (
+            <Details key={slug} summary={summary} boxed>
+              <div className="ui-stack" data-gap="sm" role="group" aria-label={`${nameOf(slug)}: remember my approval`}>
+                {choosable.map((tool) => (
+                  <label key={tool.tool} className="backup-check">
+                    <input
+                      type="checkbox"
+                      checked={tool.remembered}
+                      disabled={disabled || busy !== null}
+                      onChange={(event) => void toggle(tool.tool, event.target.checked)}
+                      aria-label={`Remember my approval for ${tool.tool}`}
+                    />
+                    <span className="mono">{short(tool)}</span>
+                  </label>
+                ))}
+              </div>
+              {always.length > 0 ? (
+                <p className="ui-card-meta remembered-always">
+                  These can delete or destroy something, so they always ask and are never remembered:{' '}
+                  <span className="mono">{always.map(short).join(', ')}</span>
+                </p>
+              ) : null}
+            </Details>
+          );
+        })}
       </div>
       <ErrorBanner message={failure} />
-      <span className="ui-field-hint">Remembered, it asks once and then runs for this agent. Never for a tool that deletes or destroys.</span>
+      <span className="ui-field-hint">Tick a tool to remember your approval: it asks once, then runs for this agent.</span>
     </div>
   );
 }

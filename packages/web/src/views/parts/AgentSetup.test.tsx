@@ -291,18 +291,27 @@ it('shows no thinking switch on an OpenAI-compatible host, and says it is up to 
   expect(screen.getByText('Up to the model')).toBeInTheDocument();
 });
 
-it('lowers a gated connection tool to remembered approval for this agent, and says why a destructive one cannot', async () => {
+it('groups the tools that ask first by connection, folded, with remembered ones in the summary and the destructive ones named once', async () => {
   vi.mocked(api.rememberedApprovals).mockResolvedValue({ agent: 'demo', tools: [
     { tool: 'mcp.github.create_issue', connection: 'github', rememberable: true, why: null, remembered: false },
+    { tool: 'mcp.github.push_files', connection: 'github', rememberable: true, why: null, remembered: true },
     { tool: 'mcp.github.delete_repo', connection: 'github', rememberable: false, why: 'It can delete or destroy something, so it asks you every time and is never remembered.', remembered: false },
+    { tool: 'mcp.notion.create_pages', connection: 'notion', rememberable: true, why: null, remembered: false },
   ] });
+  vi.mocked(api.connections).mockResolvedValueOnce({ connections: [{ slug: 'github', name: 'GitHub' }, { slug: 'notion', name: 'Notion' }], catalog: [], agents: [], vault: true, callbackPath: '' } as never);
   vi.mocked(api.setRememberedApproval).mockResolvedValue({ agent: 'demo', tool: 'mcp.github.create_issue', remembered: true });
-  render(<RememberedApprovals agentId="demo" version="" disabled={false} />);
-  const group = await screen.findByRole('group', { name: 'Remembered approvals' });
-  const destructive = within(group).getByRole('checkbox', { name: /mcp\.github\.delete_repo/ });
-  expect(destructive).toBeDisabled();
-  expect(within(group).getByText(/never remembered/)).toBeInTheDocument();
-  fireEvent.click(within(group).getByRole('checkbox', { name: /mcp\.github\.create_issue/ }));
+  const { container } = render(<RememberedApprovals agentId="demo" version="" disabled={false} />);
+  await screen.findByText('GitHub');
+  const folds = container.querySelectorAll('details');
+  expect(folds).toHaveLength(2);
+  expect([...folds].every((d) => !d.open)).toBe(true);
+  // The summary says what matters without opening it.
+  expect(folds[0]!.querySelector('summary')!.textContent).toContain('3 ask first');
+  expect(folds[0]!.querySelector('summary')!.textContent).toContain('1 remembered: push_files');
+  // A destructive tool has no checkbox; it is named once under its group.
+  expect(screen.queryByRole('checkbox', { name: /delete_repo/, hidden: true })).toBeNull();
+  expect(folds[0]!.textContent).toContain('never remembered: delete_repo');
+  fireEvent.click(screen.getByRole('checkbox', { name: /mcp\.github\.create_issue/, hidden: true }));
   await waitFor(() => expect(api.setRememberedApproval).toHaveBeenCalledWith('demo', 'mcp.github.create_issue', true));
 });
 
