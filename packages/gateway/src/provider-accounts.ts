@@ -227,6 +227,14 @@ export class ProviderAccounts {
 
   refresh(): Promise<void> { return this.#serial(() => this.load()); }
 
+  /**
+   * Does an agent with this id exist now? A catalog that cannot answer counts
+   * as yes: better an account that looks in use than a model choice lost.
+   */
+  #agentExists(agentId: string): boolean {
+    try { return this.deps.catalog().get(agentId) !== undefined; } catch { return true; }
+  }
+
   selection: NonNullable<LoadAgentCatalogOptions['providerSelection']> = (agent: AgentFrontmatter) => {
     const binding = this.#bindings.get(agent.id);
     const row = binding && this.#rows.get(binding.accountId);
@@ -268,7 +276,7 @@ export class ProviderAccounts {
         ...(row.auth === 'anthropic-oauth' ? { ...this.#tokenInfo.get(row.id), login: this.anthropic?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         ...(row.kind === 'codex' ? { ...this.#tokenInfo.get(row.id), login: this.codex?.view(row.id) ?? null } : {}),
         ...(row.auth === 'device-key' ? { device: this.#devices.get(row.id) ?? null, login: this.ollama?.view(row.id, row.revision, ownerSession) ?? null } : {}),
-        assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id).map(b => b.agentId),
+        assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id && this.#agentExists(b.agentId)).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
         };
       }),
@@ -487,8 +495,16 @@ export class ProviderAccounts {
   remove(id: string, revision: number) { return this.#serial(async () => {
     const row = await this.#row(id);
     if (row.revision !== revision) throw new ProviderAccountError(409, 'This account changed. Reload before removing it.');
-    const assigned = await this.deps.pool.query('select agent_id from core.agent_provider_accounts where account_id=$1', [id]);
-    if (assigned.rows.length) throw new ProviderAccountError(409, 'Reassign the agents using this account before removing it. You can disable it instead.');
+    const assigned = await this.deps.pool.query<{ agent_id: string }>('select agent_id from core.agent_provider_accounts where account_id=$1', [id]);
+    // An assignment whose agent was deleted is not a use: it only lingered
+    // because deleting an agent never cleared its row. Those go now; an agent
+    // that still exists keeps the account in use.
+    const live = assigned.rows.filter((r) => this.#agentExists(r.agent_id));
+    if (live.length) throw new ProviderAccountError(409, 'Reassign the agents using this account before removing it. You can disable it instead.');
+    if (assigned.rows.length) {
+      await this.deps.pool.query('delete from core.agent_provider_accounts where account_id=$1 and agent_id = any($2)', [id, assigned.rows.map((r) => r.agent_id)]);
+      for (const r of assigned.rows) this.#bindings.delete(r.agent_id);
+    }
     if (row.kind === 'codex') await this.#cancelCodex(id);
     const lease = row.kind === 'codex' ? await this.#codexAccess(row, false) : undefined;
     const oauthLease = row.auth === 'anthropic-oauth' ? await this.#anthropicAccess(row, false) : undefined;

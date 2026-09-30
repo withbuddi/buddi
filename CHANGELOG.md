@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A model account could not be removed while an agent that had since been deleted was still recorded against it. A deleted agent no longer counts as using an account, the account list stops counting it, and removing the account clears what it left behind.
 - Restoring a backup into a packaged install failed on the mail tables (a thread points at its last message, a message at its thread) because an ordinary database role cannot switch off foreign-key checks and no table order satisfies a cycle. The restore now holds those keys off during the load and adds them back before the commit, which re-checks every row.
 - The extension knocks on buddi's HTTP side before each reconnect and opens the socket only when something answers, so a buddi that is off or restarting no longer fills chrome://extensions' error list with refused connections.
 - Listing the models of an OpenAI-compatible account asked every model Ollama's capability question, which on mlxh made its manager load a worker for each one, image models and the largest included. Only a host that answers as Ollama is asked now.

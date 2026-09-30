@@ -229,6 +229,23 @@ suite('named provider accounts', () => {
     await other.service.remove(account.id, 2);
     expect(other.service.view().accounts.some(a => a.id === account.id)).toBe(false);
   });
+  it('removes an account whose only assignment is an agent that was deleted', async () => {
+    const f = fixture({}); await f.service.initialize();
+    const account = await f.service.save(settings);
+    f.agents.push({ id: 'credit-coach' } as CatalogAgent);
+    await f.service.assign('credit-coach', { accountId: account.id, model: 'claude-sonnet-5' });
+    const still = f.service.view().accounts.find(a => a.id === account.id)!;
+    expect(still.assignedAgents).toEqual(['credit-coach']);
+    await expect(f.service.remove(account.id, still.revision)).rejects.toThrow('Reassign');
+    // The agent's file is deleted; its assignment row is not.
+    f.agents.splice(f.agents.findIndex(a => a.id === 'credit-coach'), 1);
+    const orphaned = f.service.view().accounts.find(a => a.id === account.id)!;
+    expect(orphaned.assignedAgents).toEqual([]);
+    await f.service.remove(account.id, orphaned.revision);
+    expect(f.service.view().accounts.some(a => a.id === account.id)).toBe(false);
+    const { rows } = await pool.query('select 1 from core.agent_provider_accounts where agent_id = $1', ['credit-coach']);
+    expect(rows).toHaveLength(0);
+  });
   it('migrates existing choices atomically and never reassigns on restart or discovers another key', async () => {
     const f = fixture(); await f.service.initialize();
     expect(f.service.view().bindings).toEqual(expect.arrayContaining([{ agentId: 'ledger', accountId: 'legacy-anthropic-subscription', model: 'claude-sonnet-5' }]));
