@@ -237,7 +237,7 @@ suite('reaching the owner from the gateway', () => {
       await presenceRoute(pool, { state: 'active' }, NOW);
       const result = await run({ title: 'Your parcel arrived', text: 'Signed by [the bank](https://evil.example).', link: '#/chat/scout-7/c-1' }, chatTurn());
       expect(result).toEqual({ ok: true, delivered: 'sent to Telegram' });
-      expect(texts).toEqual([{ text: '@scout: Your parcel arrived\n\nSigned by [the bank](https://evil.example).' }]);
+      expect(texts).toEqual([{ text: '@\u2060scout: Your parcel arrived\n\nSigned by [the bank](https://evil.example).' }]);
       expect(cards).toEqual([]);
     });
 

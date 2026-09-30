@@ -12,6 +12,16 @@
 import { getAction, proposalIdOfKey, type ActionRecord, type OwnerChannel, type Queryable } from '@buddi/core';
 import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
 
+/**
+ * Telegram turns any `@word` into a link to that public username, so an
+ * agent's signature ("@buddi: …", at a line's start or after a list dash)
+ * would point at a stranger's account. A word joiner after the `@` looks the
+ * same and is not a mention. Only the signature pattern is touched.
+ */
+export function unlinkSignatures(text: string): string {
+  return text.replace(/(^|\n|- )@(?=[A-Za-z0-9_-]+: )/g, '$1@\u2060');
+}
+
 /** The one message text a channel with no title field sends. */
 export function ownerMessageText(message: { title: string; text?: string }): string {
   const text = message.text?.trim();
@@ -65,7 +75,7 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
       // An agent's own message (`owner.notify`) is information only: plain
       // text, already signed "@agent: …", never a button or a card.
       const offers = message.kind === 'agent' ? [] : message.offers ?? [];
-      const chatId = await sendText(ownerMessageText(message), {
+      const chatId = await sendText(unlinkSignatures(ownerMessageText(message)), {
         pool: opts.pool,
         env: opts.env ?? process.env,
         ...(offers.length > 0 ? { offers } : {}),
