@@ -134,7 +134,8 @@ suite('connections (postgres + fake MCP server)', () => {
     const actionId = (gated as { actionId: string }).actionId;
     const { rows } = await pool.query('select envelope, preview from core.actions where id = $1', [actionId]);
     expect(rows[0].envelope).toEqual({ service: 'Fake Tracker', host: 'mcp.example.test', connection: 'tracker', tool: 'create_issue', arguments: { title: 'Hi' } });
-    expect(rows[0].preview).toContain('create_issue on Fake Tracker (mcp.example.test)');
+    expect(rows[0].preview).toContain('Create issue on Fake Tracker (mcp.example.test)');
+    expect(rows[0].preview).not.toContain('{');
     await decideApproval(pool, { actionId, decision: 'approved', by: 'owner', via: 'test', now: new Date() });
     const executed = await executeApproved(pool, { actionId, registry, ctx: ctx(), worker: 'test', now: new Date() });
     expect(executed).toMatchObject({ ok: true });

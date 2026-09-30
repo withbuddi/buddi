@@ -20,6 +20,7 @@ import path from 'node:path';
 import type { Pool } from 'pg';
 import { ToolRefusal, type JSONSchema7, type NetworkArea, type ToolContext, type ToolDefinition, type ToolsArea } from '@buddi/core/plugin';
 import type { DiscoveredAuthorization, EnvTarget, HttpTransport, OAuthPort, OAuthTokens, SecretsPort, VaultPort } from './ports.js';
+import { callPreview } from './preview.js';
 import { commandLine, ENV_NAME, openProgram, PROGRAM_HOST, specHash, StderrTail, START_TIMEOUT_MS, childEnv } from './program.js';
 import { CATALOG, PLACEHOLDER_CLIENT_ID, type CatalogCard, type DeviceAuth } from './catalog.js';
 import { pollDevice, startDevice } from './device.js';
@@ -45,7 +46,7 @@ import {
   type ToolRow,
   type TransportKind,
 } from './store.js';
-import { annotated, listHash, localNames, NAMESPACE, schemaProblem, SLUG, stableJson, suggestSlug, tierOf, toolHash, type ServerTool, type ToolTier } from './tiers.js';
+import { annotated, listHash, localNames, NAMESPACE, schemaProblem, SLUG, suggestSlug, tierOf, toolHash, type ServerTool, type ToolTier } from './tiers.js';
 import { ReconnectNeeded, TokenKeeper, vaultRefFor } from './tokens.js';
 
 /** A refusal a route answers with its status and sentence. */
@@ -1410,10 +1411,9 @@ export class ConnectionsService {
       describe: async (input) => {
         const row = await this.#current(id);
         if (row.state === 'needs-reconnect') throw new ToolRefusal(reconnectSentence(row.name));
-        const args = stableJson(input ?? {});
         return {
           envelope: ConnectionsService.envelope(row, t.name, input),
-          preview: `${t.destructive ? 'Change or delete' : 'Run'} ${t.name} on ${about(row)} with ${args.length > 600 ? `${args.slice(0, 600)}…` : args}`,
+          preview: callPreview({ tool: t.name, where: about(row), destructive: t.destructive, input }),
         };
       },
       execute: (input, ctx) => this.#call(id, t, input, ctx),

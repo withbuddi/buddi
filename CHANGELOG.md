@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- The approval card for a connected service's tool showed its arguments as raw, cut-off JSON. It now says what the call does and where, then one short line per argument; the exact arguments stay on the envelope beside it.
 - A question that needed a link to answer (a sign-in page, an approval code) could reach the owner without the link, which sat in a tool result they never see. Agents are now told to put the link and the code in the question itself, and the question card makes https links clickable.
 - Agents on Claude Sonnet 5.5, Opus 5.5 and other current Claude models failed every run with "provider rejected the request as invalid", because thinking was still asked for with a token budget. buddi now sends adaptive thinking to Claude 4.6 and later, `between_tools` to turn it off on Sonnet 5.5, and nothing on models where it cannot be turned off.
 - A model account could not be removed while an agent that had since been deleted was still recorded against it. A deleted agent no longer counts as using an account, the account list stops counting it, and removing the account clears what it left behind.
