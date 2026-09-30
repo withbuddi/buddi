@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A connection's idle clock started when a request began, so a slow first start or a long call could be stopped under itself. It now starts only when the last request ends.
 - Once a connection was given to agents there was no way to change who holds it. Its sheet now has Change beside "Held by": tick an agent to give it the tools, untick one to take them away, in one save.
 - The floating Buddi button covered the footer of sheets and dialogs. It steps aside while one is open.
 - A catalog service could be connected only once from the page. Its sheet now offers "Add another account" through the same sign-in, and rows with the same name show their name in buddi.

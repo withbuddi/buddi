@@ -33,6 +33,9 @@ describe('the SDK client over the shared transport', () => {
     const [a, b] = await Promise.all([sessions.get('c1', open), sessions.get('c1', open)]);
     expect(a).toBe(b);
     expect(opens).toBe(1);
+    // Idle counts from the end of the last use.
+    sessions.release('c1');
+    sessions.release('c1');
     await new Promise((r) => setTimeout(r, 60));
     expect(sessions.has('c1')).toBe(false);
     await sessions.get('c1', open);

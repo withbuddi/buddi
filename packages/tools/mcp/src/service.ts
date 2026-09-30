@@ -1082,6 +1082,8 @@ export class ConnectionsService {
         throw new ConnectionError(409, reconnectSentence(row.name));
       }
       throw new ConnectionError(502, `${row.name} did not list its tools: ${short(err)}`, row.transport === 'stdio' ? 'program-failed' : undefined);
+    } finally {
+      this.sessions.release(row.id);
     }
   }
 
@@ -1338,6 +1340,8 @@ export class ConnectionsService {
           }
           retry.attempts += 1;
           retry.nextAt = now + RETRY_MINUTES[Math.min(retry.attempts, RETRY_MINUTES.length - 1)]! * 60_000;
+        } finally {
+          this.sessions.release(row.id);
         }
       }
     } finally {
@@ -1464,6 +1468,8 @@ export class ConnectionsService {
       // A program's stderr stays on its row; only this sentence reaches the agent.
       if (err instanceof ProgramFailed) throw new Error(err.message);
       throw new Error(`${row.name} did not answer ${t.name}: ${short(err)}`);
+    } finally {
+      this.sessions.release(id);
     }
   }
 

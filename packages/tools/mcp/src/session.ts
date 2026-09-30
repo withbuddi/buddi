@@ -86,6 +86,8 @@ export async function listAllTools(client: Client, signal?: AbortSignal): Promis
 interface Held {
   opened: Promise<Opened>;
   timer?: NodeJS.Timeout;
+  /** Requests using the session now. It is idle only at zero. */
+  busy: number;
 }
 
 /** The sessions this process holds, by connection id. */
@@ -93,7 +95,11 @@ export class Sessions {
   readonly #held = new Map<string, Held>();
   constructor(private readonly idleMs = IDLE_MS) {}
 
-  /** The open session for `id`, opening it with `open` when there is none. */
+  /**
+   * The open session for `id`, opening it with `open` when there is none.
+   * Each `get` is a use: the idle clock stops until the matching `release`,
+   * so a slow first start or a long call is never stopped under itself.
+   */
   async get(id: string, open: () => Promise<Opened>): Promise<Opened> {
     let held = this.#held.get(id);
     if (held) {
@@ -103,15 +109,21 @@ export class Sessions {
       held = this.#held.get(id);
     }
     if (!held) {
-      held = { opened: open() };
+      held = { opened: open(), busy: 0 };
       this.#held.set(id, held);
       held.opened.catch(() => { if (this.#held.get(id) === held) this.#held.delete(id); });
     }
-    this.#touch(id, held);
+    held.busy += 1;
+    if (held.timer) { clearTimeout(held.timer); held.timer = undefined; }
     return held.opened;
   }
 
-  #touch(id: string, held: Held): void {
+  /** The end of one use; the idle clock starts when the last one ends. */
+  release(id: string): void {
+    const held = this.#held.get(id);
+    if (!held) return;
+    held.busy = Math.max(0, held.busy - 1);
+    if (held.busy > 0) return;
     if (held.timer) clearTimeout(held.timer);
     held.timer = setTimeout(() => { void this.close(id); }, this.idleMs);
     held.timer.unref?.();
