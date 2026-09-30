@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { api, type AgentsView } from '../../api';
 import { AgentSetup, RememberedApprovals } from './AgentSetup';
-vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn(), rememberedApprovals: vi.fn().mockResolvedValue({ agent: 'demo', tools: [] }), setRememberedApproval: vi.fn(), setDelegates: vi.fn() } }));
+vi.mock('../../api', () => ({ AGENTS_CHANGED: 'buddi:agents-changed', api: { uploadAgentPicture: vi.fn(), removeAgentPicture: vi.fn(), agents: vi.fn(), accountModels: vi.fn().mockResolvedValue({ models: [], truncated: false }), assignProviderAccount: vi.fn(), setAgentEngine: vi.fn(), agentTools: vi.fn(), agentFile: vi.fn(), updateAgentFile: vi.fn(), rememberedApprovals: vi.fn().mockResolvedValue({ agent: 'demo', tools: [] }), setRememberedApproval: vi.fn(), setDelegates: vi.fn(), connections: vi.fn().mockResolvedValue({ connections: [], catalog: [], agents: [], vault: true, callbackPath: '' }), setConnectionHolder: vi.fn() } }));
 const accounts = ['Personal', 'Work'].map((label, i) => ({ id: `account-${i}`, label, kind: 'anthropic' as const, auth: 'api-key' as const,
   baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, refreshable: false,
   tokenExpiresAt: null, subscriptionRenewsAt: null, assignedAgents: [], test: null }));

@@ -182,6 +182,7 @@ suite('connections routes', () => {
       'mcp.tracker.search_issues:auto', 'mcp.tracker.create_issue:gated', 'mcp.tracker.delete_repo:gated',
     ]);
     expect((await call(owner, 'POST', `/${id}/grant`, { agents: ['concierge'] })).status).toBe(409);
+    expect((await call(owner, 'POST', `/${id}/holders/concierge`, { held: true })).status).toBe(409);
     const kept = await call(owner, 'POST', `/${id}/review`, { slug: review.body.slug, hash: review.body.hash });
     expect(kept).toMatchObject({ status: 200, body: { state: 'connected', grant: 'mcp.tracker.*', toolCount: 3 } });
 
@@ -199,6 +200,23 @@ suite('connections routes', () => {
     expect(agentFile('helper')).toMatch(/mcp\.tracker\.\*/);
     expect((await call(owner, 'POST', `/${id}/grant`, { agents: ['concierge'], exact: true })).body.connection.agents).toEqual(['concierge']);
     expect(agentFile('helper')).not.toContain('mcp.tracker');
+
+    // One agent's switch in its editor: only that agent's file changes.
+    const on = await call(owner, 'POST', `/${id}/holders/helper`, { held: true });
+    expect(on).toMatchObject({ status: 200, body: { agent: 'helper', held: true } });
+    expect(on.body.connection.agents).toEqual(['concierge', 'helper']);
+    expect(agentFile('helper')).toMatch(/mcp\.tracker\.\*/);
+    expect((await call(owner, 'POST', `/${id}/holders/helper`, { held: true })).body.connection.agents).toEqual(['concierge', 'helper']);
+    const off = await call(owner, 'POST', `/${id}/holders/helper`, { held: false });
+    expect(off).toMatchObject({ status: 200, body: { agent: 'helper', held: false } });
+    expect(agentFile('helper')).not.toContain('mcp.tracker');
+    expect(agentFile('concierge')).toMatch(/mcp\.tracker\.\*/);
+    // The connection sheet reads the same holders.
+    expect((await call(owner, 'GET', `/${id}`)).body.agents).toEqual(['concierge']);
+    expect((await call(owner, 'POST', `/${id}/holders/helper`, { held: false })).status).toBe(200);
+    expect((await call(owner, 'POST', `/${id}/holders/helper`, {})).status).toBe(400);
+    expect((await call(owner, 'POST', `/${id}/holders/nobody`, { held: true })).status).toBe(404);
+    expect((await call(owner, 'GET', `/${id}/holders/helper`)).status).toBe(405);
 
     // Remembered approval, per agent: a gated tool may be; a destructive one says why not.
     const tools = await call(owner, 'GET', `/${id}/tools`);

@@ -15,6 +15,7 @@
  *   GET    /api/connections/:id/review      3. review: the tools as buddi would take them
  *   POST   /api/connections/:id/review      3. keep them: { slug?, hash }
  *   POST   /api/connections/:id/grant       4. grant: { agents: [id], exact?: true } (exact also takes it from agents not named)
+ *   POST   /api/connections/:id/holders/:agent  one agent's switch: { held: boolean }, touching only that agent's file
  *   DELETE /api/connections/:id             disconnect, taking the grants out of every agent file
  *   GET    /api/connections/signals         the ones that need the owner: Home's line, the rail's dot
  *   GET    /api/connections/:id/tools       its registered tools, with whether each may be remembered
@@ -136,20 +137,25 @@ export async function grantConnection(
   return { granted, failed };
 }
 
+/** Take `mcp.<slug>.…` out of one agent's file; nothing is written when it holds none. */
+export async function takeConnection(deps: Pick<ConnectionsRouteDeps, 'registry'>, slug: string, agentId: string): Promise<boolean> {
+  const prefix = ConnectionsService.grantPrefix(slug);
+  const file = readBoundAgentFile(deps.registry, agentId);
+  if (!file || !file.tools.some((entry) => entry.startsWith(prefix))) return false;
+  await updateAgentFromOwner(deps.registry, { id: agentId, tools: file.tools.filter((entry) => !entry.startsWith(prefix)) });
+  return true;
+}
+
 /** Take every `mcp.<slug>.…` entry out of every agent file that has one. */
 export async function revokeConnection(
   deps: Pick<ConnectionsRouteDeps, 'registry' | 'catalog'>,
   slug: string,
 ): Promise<{ touched: string[]; failed: Array<{ agent: string; message: string }> }> {
-  const prefix = ConnectionsService.grantPrefix(slug);
   const touched: string[] = [];
   const failed: Array<{ agent: string; message: string }> = [];
   for (const id of agentsHolding(deps.registry, deps.catalog, slug)) {
-    const file = readBoundAgentFile(deps.registry, id);
-    if (!file) continue;
     try {
-      await updateAgentFromOwner(deps.registry, { id, tools: file.tools.filter((entry) => !entry.startsWith(prefix)) });
-      touched.push(id);
+      if (await takeConnection(deps, slug, id)) touched.push(id);
     } catch (err) {
       failed.push({ agent: id, message: err instanceof Error ? err.message : String(err) });
     }
@@ -230,6 +236,8 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
     });
     return { status: 200, body: done };
   }
+  const holder = new RegExp(`^/api/connections/${ID}/holders/([a-z0-9][a-z0-9_-]{0,63})$`, 'i').exec(path);
+  if (holder) return holderRoute(deps, service, req, holder[1]!.toLowerCase(), holder[2]!);
   const one = new RegExp(`^/api/connections/${ID}(?:/(consent|reconnect|token|device|review|grant|tools|program))?$`, 'i').exec(path);
   if (!one) return { status: 404, body: { error: 'no such route' } };
   const id = one[1]!.toLowerCase();
@@ -328,6 +336,33 @@ async function route(deps: ConnectionsRouteDeps, service: ConnectionsService, re
       connection: withAgents(deps, await service.get(id)),
     },
   };
+}
+
+/**
+ * One agent's switch in its editor: give it the connection or take it away,
+ * writing only that agent's file, so it cannot undo a change another screen
+ * made to who else holds it. Taking away works in any state; giving needs the
+ * tools reviewed, as the grant does.
+ */
+async function holderRoute(deps: ConnectionsRouteDeps, service: ConnectionsService, req: ConnectionsRequest, id: string, agentId: string): Promise<RouteAnswer> {
+  if (req.method !== 'POST') return { status: 405, body: { error: 'method not allowed' } };
+  if (typeof req.body.held !== 'boolean') return { status: 400, body: { error: 'Say whether the agent holds it (held: true or false).' } };
+  const view = await service.get(id);
+  if (!deps.catalog.get(agentId)) return { status: 404, body: { error: 'No such agent.' } };
+  if (req.body.held) {
+    if (!view.slug || view.state === 'pending-review') return { status: 409, body: { error: 'Review the connection\'s tools before giving them to an agent.' } };
+    if (!agentChoices(deps.catalog).some((a) => a.id === agentId)) return { status: 409, body: { error: 'This agent makes and changes agents; it does not hold connections.' } };
+    const result = await grantConnection(deps, view.slug, [agentId]);
+    if (result.failed.length > 0) return { status: 409, body: { error: result.failed.map((f) => f.message).join('; ') } };
+  } else if (view.slug) {
+    try {
+      await takeConnection(deps, view.slug, agentId);
+    } catch (err) {
+      return { status: 409, body: { error: err instanceof Error ? err.message : String(err) } };
+    }
+  }
+  const connection = withAgents(deps, await service.get(id));
+  return { status: 200, body: { agent: agentId, held: connection.agents.includes(agentId), connection } };
 }
 
 /**

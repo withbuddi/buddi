@@ -2001,6 +2001,9 @@ export const api = {
   saveConnectionReview: (id: string, input: { slug?: string; hash: string }) => post<ConnectionView>(`/connections/${id}/review`, input),
   grantConnection: (id: string, agents: string[], exact = false) =>
     post<{ granted: string[]; failed: Array<{ agent: string; message: string }>; connection: ConnectionView }>(`/connections/${id}/grant`, exact ? { agents, exact: true } : { agents }),
+  /** One agent's switch: give it the connection or take it away, touching only that agent's file. */
+  setConnectionHolder: (id: string, agentId: string, held: boolean) =>
+    post<{ agent: string; held: boolean; connection: ConnectionView }>(`/connections/${id}/holders/${encodeURIComponent(agentId)}`, { held }),
   disconnect: (id: string) => del<{ id: string; name: string; touched: string[] }>(`/connections/${id}`),
   /** The connections that need the owner, a sentence each: Home's line and the Settings dot. */
   connectionSignals: () => get<{ signals: ConnectionSignal[] }>('/connections/signals'),

@@ -26,6 +26,7 @@ import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row
 import { ModelPicker } from '../../ModelPicker';
 import { agentRoute } from '../../routes';
 import { grantFrom, sameTools, ToolPicker } from './ToolPicker';
+import { AgentConnections } from './AgentConnections';
 import { Avatar, type Face } from './Avatar';
 import { FacePicker, mascotFile, type FaceChoice } from './FacePicker';
 import { KNOWN_ROLES, holderOf, isKnownRole, orderRoles } from '../../shell/roles';
@@ -282,6 +283,7 @@ function Agent({
       <div hidden={shown !== 'access'}>
         <Stack gap="lg">
           <Access agent={agent} all={all} onSaved={onSaved} />
+          <AgentConnections agentId={agent.id} agentName={agent.name} readOnly={agent.isExample === true} version={agent.tools.join(',')} onSaved={onSaved} />
           <Delegation agent={agent} all={all} onSaved={onSaved} />
           <Details summary="Built-in context" boxed>
             <p className="ui-card-meta">
@@ -454,7 +456,8 @@ function Identity({ agent, onSaved }: { agent: AgentRow; onSaved: () => void }):
  * these fields; the tools only when the selection changed.
  */
 function Access({ agent, all, onSaved }: { agent: AgentRow; all: readonly AgentRow[]; onSaved: () => void }): JSX.Element {
-  const picker = useAsync(() => api.agentTools(agent.id), [agent.id]);
+  // Read again when the file's grant changes elsewhere (a connection's switch below).
+  const picker = useAsync(() => api.agentTools(agent.id), [agent.id, agent.tools.join(',')]);
   const [picked, setPicked] = useState<string[] | null>(null);
   // The four roles the surfaces know are chips; anything else is a line of text.
   const [knownRoles, setKnownRoles] = useState<ReadonlySet<string>>(() => new Set((agent.roles ?? []).filter(isKnownRole)));

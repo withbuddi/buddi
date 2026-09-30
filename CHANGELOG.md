@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- An agent's Setup → Access now lists every connection with a switch for whether this agent holds it, saved as you flip it. A connection that needs review or a sign-in is shown with why and a link to Connections; the connection sheet's "Held by" shows the same.
+
 ### Fixed
 
 - A forgotten tab, an unpaired Chrome extension or any poller with no sign-in could lock the owner out of the dashboard: every refused request counted as a failed sign-in, and all tailnet and SSH-tunnel traffic shares one address. Now only a request that presents a credential counts, and the same stale cookie counts once however often it is sent; guessing still locks the address.
