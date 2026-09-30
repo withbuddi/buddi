@@ -1373,15 +1373,24 @@ export function SearchField({
 export function AppIcon({
   svg,
   icon = 'plug',
+  letter,
   size,
 }: {
   svg?: string | undefined;
   icon?: IconName;
+  /** A neutral monogram in the accent, for a service whose own logo is not ours to draw. */
+  letter?: string | undefined;
   size?: 'lg';
 }): JSX.Element {
   return (
-    <span className="ui-app-icon" data-size={size} data-tone={svg ? 'accent' : undefined} aria-hidden="true">
-      {svg ? <span className="ui-app-icon-svg" dangerouslySetInnerHTML={{ __html: svg }} /> : <Icon name={icon} />}
+    <span className="ui-app-icon" data-size={size} data-tone={svg || letter ? 'accent' : undefined} aria-hidden="true">
+      {svg ? (
+        <span className="ui-app-icon-svg" dangerouslySetInnerHTML={{ __html: svg }} />
+      ) : letter ? (
+        <span className="ui-app-icon-letter">{letter}</span>
+      ) : (
+        <Icon name={icon} />
+      )}
     </span>
   );
 }

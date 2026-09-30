@@ -3,9 +3,15 @@
  *
  * A service that speaks MCP — GitHub, Notion, Linear, any remote server — is
  * connected once: its address, its own consent page, a review of every tool it
- * brings with the tier buddi gives it, and which agents get them. The list
- * says where each connection stands, how many tools it brings and who holds
- * them; Disconnect names the agents it takes them from before it does.
+ * brings with the tier buddi gives it, and which agents get them.
+ *
+ * Drawn as Plugins' sibling (the kit's Settings → Connections): each
+ * connection is a compact row — its face, one quiet line, where it stands —
+ * and a row opens the detail in a sheet, with Review again, Reconnect or
+ * Change, and Disconnect, which asks in the same small dialog as Remove and
+ * names the agents it takes the tools from. The catalog leaves out what is
+ * already connected; "Add your own" is one block whose segment picks an
+ * address, a program or a pasted config, each opening its own screen.
  *
  * The four screens are one sheet, in the first-run wizard's voice: one
  * question per screen, the primary answer on the right. Signing in is the
@@ -31,17 +37,25 @@ import {
   type ProgramForm,
 } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { Button, Card, Code, Details, Empty, EmptyState, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Segment, Sheet, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
+import { AppIcon, Button, Code, Empty, ErrorBanner, Field, FormGrid, Icon, KV, List, ListRow, Modal, Notice, PageFrame, Panel, Pill, Section, Segment, Sheet, Spacer, Stack, Tag, Toolbar, useAsync, type Tone } from '../ui';
+import { settingsRoute } from '../routes';
 import { looksSecret, parsePastedServer, shellWords, type PastedConfig, type PastedHeader, type PastedProgram } from '@buddi/core/connection-config';
 import { SignInCode } from './parts/SignInCode';
 
-export const STATE_LABELS: Record<ConnectionState, { label: string; tone: Tone }> = {
-  connected: { label: 'Connected', tone: 'good' },
-  'needs-reconnect': { label: 'Needs reconnect', tone: 'warning' },
-  unreachable: { label: 'Unreachable', tone: 'critical' },
-  'pending-review': { label: 'Not finished', tone: 'muted' },
-  'needs-review': { label: 'Changed its tools', tone: 'warning' },
-};
+/**
+ * Where a connection stands, in the owner's words. A program that stopped
+ * answering failed; a server that did is unreachable and retried.
+ */
+export function connectionState(connection: ConnectionView): { label: string; tone: Tone; dot?: boolean } {
+  if (connection.phase === 'starting') return { label: 'Starting', tone: 'accent' };
+  switch (connection.state) {
+    case 'connected': return { label: 'Connected', tone: 'good', dot: true };
+    case 'needs-reconnect': return { label: 'Sign in again', tone: 'warning' };
+    case 'needs-review': return { label: 'Needs review', tone: 'warning' };
+    case 'unreachable': return { label: connection.transport === 'stdio' ? 'Failed' : 'Unreachable', tone: 'critical' };
+    default: return { label: 'Not finished', tone: 'muted' };
+  }
+}
 
 /** Why a tool's approval is never remembered: the server said it destroys something. */
 export const NEVER_REMEMBERED = 'It can delete or destroy something, so it asks you every time and is never remembered.';
@@ -69,79 +83,143 @@ interface FlowStart {
   keepGrants?: boolean;
 }
 
+/** The line under Connections' title; Settings draws the title when the page is one of its sections. */
+export const CONNECTIONS_LEDE = 'Services and programs your team can use, and the tools each one brings.';
+
+const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** The catalog card a connection was made from, when its address is one of theirs. */
+function cardOf(connection: ConnectionView, catalog: ConnectionCard[]): ConnectionCard | undefined {
+  return connection.transport === 'stdio' ? undefined : catalog.find((card) => sameAddress(card.url, connection.url));
+}
+
+/** The face: a catalog service's monogram, a globe for any other server, a terminal for a program. */
+function ConnectionFace({ connection, card, size }: { connection?: ConnectionView; card?: ConnectionCard; size?: 'lg' }): JSX.Element {
+  if (card) return <AppIcon letter={card.name.slice(0, 1).toUpperCase()} size={size} />;
+  return <AppIcon icon={connection?.transport === 'stdio' ? 'terminal' : 'globe'} size={size} />;
+}
+
+function StatePill({ connection }: { connection: ConnectionView }): JSX.Element {
+  const state = connectionState(connection);
+  return <Pill tone={state.tone} dot={state.dot}>{state.label}</Pill>;
+}
+
+/** Buttons inside a clickable row keep the click to themselves. */
+const stop =
+  (fn: () => void) =>
+  (event: { stopPropagation: () => void }): void => {
+    event.stopPropagation();
+    fn();
+  };
+
+/** The three ways to add your own, behind one segment like "Add a plugin". */
+type AddWay = 'address' | 'program' | 'paste';
+const ADD_WAYS: Array<{ value: AddWay; label: string; text: string; button: string }> = [
+  { value: 'address', label: 'An address', text: 'Any server on the web, by its https:// address. buddi opens it and reads what it offers, and nothing else until you have read its tools.', button: 'Give its address' },
+  { value: 'program', label: 'A program', text: 'A server buddi starts itself on this computer, like npx or uvx, with its arguments and variables.', button: 'Describe it' },
+  { value: 'paste', label: 'A config', text: 'The mcpServers block another app uses for it, or the claude mcp add line its docs print.', button: 'Paste it' },
+];
+const WAY_KEY = 'buddi.connections.add-way';
+function rememberedWay(): AddWay {
+  try {
+    const saved = window.localStorage.getItem(WAY_KEY);
+    return ADD_WAYS.some((w) => w.value === saved) ? (saved as AddWay) : 'address';
+  } catch {
+    return 'address';
+  }
+}
+
 export function Connections({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
   const view = useAsync(() => api.connections(), [], 30_000);
   const [flow, setFlow] = useState<FlowStart | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
   const data = view.data;
   const agentName = (id: string): string => data?.agents.find((a) => a.id === id)?.name ?? id;
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const connections = data?.connections ?? [];
+  const catalog = data?.catalog ?? [];
+  // A service already connected is not offered again.
+  const offer = catalog.filter((card) => !connections.some((c) => c.transport !== 'stdio' && sameAddress(card.url, c.url)));
+  const openedConnection = opened ? connections.find((c) => c.id === opened) : undefined;
+  const askingConnection = asking ? connections.find((c) => c.id === asking) : undefined;
+  const start = (next: FlowStart): void => { setOpened(null); setFlow(next); };
   return (
-    <PageFrame
-      embedded={embedded}
-      title="Connections"
-      lede="Services that speak MCP, connected once. Their tools become buddi tools: read at review, given to the agents you choose, approved like everything else."
-    >
+    <PageFrame embedded={embedded} title="Connections" lede={CONNECTIONS_LEDE}>
       <Stack gap="lg">
+        <p className="plugins-quiet connections-quiet">
+          <Icon name="plug" size={14} />
+          <span>
+            A connection is a service or program buddi talks to; a plugin is code buddi installs and runs.{' '}
+            <a href={settingsRoute('plugins')}>Plugins</a>
+          </span>
+        </p>
         {!data && !view.error ? <Empty>Reading your connections…</Empty> : null}
         <ErrorBanner message={view.error} />
         {data && !data.vault ? (
           <Notice tone="warning">This installation has no vault, so a service that asks for a sign-in cannot be connected. Turn the vault on first.</Notice>
         ) : null}
         {data ? (
-          <Section title="Your connections" aside="Each one's tools are named mcp.<connection>.<tool>." panel>
-            <Stack divided>
-              {data.connections.length === 0 ? (
-                <EmptyState icon="globe" title="Nothing connected yet">
-                  Pick a service below, or give the address of any remote MCP server.
-                </EmptyState>
-              ) : (
-                data.connections.map((connection) => (
-                  <ConnectionRow
-                    key={connection.id}
-                    connection={connection}
-                    agentName={agentName}
-                    timezone={timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}
-                    onFlow={setFlow}
-                    onChanged={view.reload}
-                  />
-                ))
-              )}
-            </Stack>
-          </Section>
+          <Panel flush title="Your connections" tool={connections.length > 0 ? plural(connections.length, 'connection', 'connections') : undefined}>
+            {connections.length === 0 ? (
+              <Empty title="Nothing connected yet">
+                Pick a service below, or add your own: an address, a program on this computer, or a config you already have.
+              </Empty>
+            ) : (
+              <div className="connections-rows">
+                <List>
+                  {connections.map((connection) => (
+                    <ConnectionRow
+                      key={connection.id}
+                      connection={connection}
+                      card={cardOf(connection, catalog)}
+                      onOpen={() => setOpened(connection.id)}
+                      onFlow={start}
+                    />
+                  ))}
+                </List>
+              </div>
+            )}
+          </Panel>
         ) : null}
-        {data ? (
-          <Section title="Connect a service" aside="Each has an official remote server. You sign in on the service's own page, or with a token.">
-            <div className="connections-cards">
-              {data.catalog.map((card) => (
-                <Card
-                  key={card.id}
-                  title={card.name}
-                  foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'address', card })}>Connect</Button></Toolbar>}
-                >
-                  <p className="ui-card-meta">{card.blurb}</p>
-                </Card>
+        {data && offer.length > 0 ? (
+          <Panel title="Connect a service">
+            <div className="connections-tiles">
+              {offer.map((card) => (
+                <div key={card.id} className="connections-tile">
+                  <ConnectionFace card={card} />
+                  <span className="connections-tile-main">
+                    <span className="connections-tile-name">{card.name}</span>
+                    <span className="connections-tile-blurb">{card.blurb}</span>
+                  </span>
+                  <Button size="sm" onClick={() => start({ step: 'address', card })} aria-label={`Connect ${card.name}`}>Connect</Button>
+                </div>
               ))}
-              <Card
-                title="Another server"
-                foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'address' })}>Connect</Button></Toolbar>}
-              >
-                <p className="ui-card-meta">Any remote MCP server, by its https address.</p>
-              </Card>
-              <Card
-                title="A program on this computer"
-                foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'program' })}>Add it</Button></Toolbar>}
-              >
-                <p className="ui-card-meta">A server buddi starts itself, like npx or uvx, with its arguments and variables.</p>
-              </Card>
-              <Card
-                title="I have a config"
-                foot={<Toolbar align="end"><Button size="sm" onClick={() => setFlow({ step: 'paste' })}>Paste it</Button></Toolbar>}
-              >
-                <p className="ui-card-meta">The mcpServers block another app uses, or a claude mcp add line.</p>
-              </Card>
             </div>
-          </Section>
+          </Panel>
         ) : null}
+        {data ? <AddYourOwn onFlow={(step) => start({ step })} /> : null}
       </Stack>
+      {openedConnection ? (
+        <ConnectionSheet
+          connection={openedConnection}
+          card={cardOf(openedConnection, catalog)}
+          agentName={agentName}
+          timezone={zone}
+          onClose={() => setOpened(null)}
+          onFlow={start}
+          onDisconnect={() => setAsking(openedConnection.id)}
+        />
+      ) : null}
+      {askingConnection ? (
+        <DisconnectDialog
+          key={askingConnection.id}
+          connection={askingConnection}
+          agentName={agentName}
+          onCancel={() => setAsking(null)}
+          onDone={() => { setAsking(null); setOpened(null); view.reload(); }}
+        />
+      ) : null}
       {flow && data ? (
         <ConnectFlow
           start={flow}
@@ -155,119 +233,241 @@ export function Connections({ embedded, timezone }: { embedded?: boolean; timezo
   );
 }
 
+/** One connection as a compact row: its face, its name, one quiet line and where it stands. */
 function ConnectionRow({
   connection,
+  card,
+  onOpen,
+  onFlow,
+}: {
+  connection: ConnectionView;
+  card: ConnectionCard | undefined;
+  onOpen: () => void;
+  onFlow: (flow: FlowStart) => void;
+}): JSX.Element {
+  const pending = connection.state === 'pending-review';
+  const program = connection.transport === 'stdio' ? connection.program : undefined;
+  const where = program ? program.line : connection.host;
+  const tools = pending ? 'its tools are not reviewed yet' : plural(connection.toolCount, 'tool', 'tools');
+  return (
+    <ListRow
+      onClick={onOpen}
+      label={`${connection.name}: details`}
+      lead={<ConnectionFace connection={connection} card={card} />}
+      title={connection.name}
+      sub={<span className="connections-sub" data-kind={program ? 'program' : undefined}>{`${where} · ${tools}`}</span>}
+      side={
+        <span className="plugins-side">
+          {pending ? (
+            <span className="connections-act">
+              <Button size="sm" variant="accent" onClick={stop(() => onFlow({ step: connection.signedIn ? 'review' : 'consent', connection }))}>Finish</Button>
+            </span>
+          ) : connection.state === 'needs-reconnect' && connection.authKind !== 'none' ? (
+            <span className="connections-act">
+              <Button size="sm" onClick={stop(() => onFlow({ step: 'consent', connection, keepGrants: true }))}>Sign in</Button>
+            </span>
+          ) : connection.state === 'needs-review' ? (
+            <span className="connections-act">
+              <Button size="sm" onClick={stop(() => onFlow({ step: 'review', connection, keepGrants: true }))}>Review</Button>
+            </span>
+          ) : null}
+          <StatePill connection={connection} />
+          <Icon name="chevron-right" size={14} />
+        </span>
+      }
+    />
+  );
+}
+
+const SIGN_IN_WORDS: Record<ConnectionView['authKind'], string> = {
+  oauth: 'Its own sign-in page. buddi keeps the sign-in in its vault.',
+  token: 'A token you pasted, kept in buddi’s vault and sent only here.',
+  none: 'Nothing; it asks for no sign-in.',
+};
+
+/** The detail of one connection: what it is, where it stands, and what can be done about it. */
+function ConnectionSheet({
+  connection,
+  card,
   agentName,
   timezone,
+  onClose,
   onFlow,
-  onChanged,
+  onDisconnect,
+}: {
+  connection: ConnectionView;
+  card: ConnectionCard | undefined;
+  agentName: (id: string) => string;
+  timezone: string;
+  onClose: () => void;
+  onFlow: (flow: FlowStart) => void;
+  onDisconnect: () => void;
+}): JSX.Element {
+  const pending = connection.state === 'pending-review';
+  const program = connection.transport === 'stdio' ? connection.program : undefined;
+  const signIn = (): void => onFlow({ step: 'consent', connection, keepGrants: true });
+  const review = (): void => onFlow({ step: 'review', connection, keepGrants: true });
+  const finish = (): void => onFlow({ step: connection.signedIn ? 'review' : 'consent', connection });
+  return (
+    <Sheet
+      title={
+        <span className="plugins-sheet-title">
+          <ConnectionFace connection={connection} card={card} size="lg" />
+          <span className="plugins-sheet-name">
+            <span>{connection.name}</span>
+            <span className="plugins-sheet-by">
+              {program ? 'A program on this computer' : 'A service at an address'}
+              {' · '}
+              <StatePill connection={connection} />
+            </span>
+          </span>
+        </span>
+      }
+      onClose={onClose}
+      foot={
+        <Toolbar>
+          <Button variant="danger-ghost" onClick={onDisconnect}>Disconnect…</Button>
+          <Spacer />
+          {program ? <Button onClick={() => onFlow({ step: 'program', connection, keepGrants: true })}>Change</Button> : null}
+          {connection.authKind !== 'none' && !pending ? (
+            <Button variant={connection.state === 'needs-reconnect' ? 'accent' : undefined} onClick={signIn}>Reconnect</Button>
+          ) : null}
+          {pending ? (
+            <Button variant="accent" onClick={finish}>Finish</Button>
+          ) : (
+            <Button variant={connection.state === 'needs-review' ? 'accent' : undefined} onClick={review}>Review again</Button>
+          )}
+        </Toolbar>
+      }
+    >
+      {pending ? <Notice>Not finished: its tools are not reviewed yet, so no agent can use them.</Notice> : null}
+      {connection.state === 'needs-reconnect' ? (
+        <Notice tone="warning" action={connection.authKind !== 'none' ? <Button size="sm" variant="accent" onClick={signIn}>Sign in again</Button> : undefined}>
+          Its sign-in ran out or was refused. Until you reconnect, each of its tools answers with one sentence instead of running.
+        </Notice>
+      ) : null}
+      {connection.state === 'needs-review' ? (
+        <Notice tone="warning" action={<Button size="sm" variant="accent" onClick={review}>Review it</Button>}>
+          It changed its tools since you reviewed them. The new and changed ones wait until you review it again
+          {connection.heldTools ? ` (${connection.heldTools} of the ones you kept ${connection.heldTools === 1 ? 'waits' : 'wait'})` : ''}; the others keep working.
+        </Notice>
+      ) : null}
+      {connection.state === 'unreachable' && connection.unreachableSince ? (
+        <Notice tone="critical">
+          {program ? `It stopped answering at ${fmtTime(connection.unreachableSince, timezone)}; the next call starts it again.` : `Unreachable since ${fmtTime(connection.unreachableSince, timezone)}, retrying.`}
+        </Notice>
+      ) : null}
+      {program?.changedSinceReview ? (
+        <Notice tone="warning">Its command changed since you reviewed it, so its tools wait until you review it again.</Notice>
+      ) : null}
+      {connection.phase === 'starting' ? (
+        <Notice tone="accent" role="status">Starting it… The first start can take a minute or two while it downloads.</Notice>
+      ) : null}
+      <div className="plugins-facts">
+        <KV
+          items={[
+            program
+              ? { label: 'Command', value: <span className="connections-line">{program.line}</span> }
+              : { label: 'Address', value: <span className="connections-line">{connection.url}</span> },
+            ...(program
+              ? [{ label: 'Runs', value: 'On this computer as you, with your PATH and only the variables you named. It stops after ten quiet minutes.' }]
+              : []),
+            ...(program && program.env.length > 0
+              ? [{ label: 'Variables', value: <span className="mono">{program.env.map((e) => `${e.name}${e.secret ? ' (secret)' : ''}`).join(', ')}</span> }]
+              : []),
+            ...(program ? [] : [{ label: 'Signs in with', value: SIGN_IN_WORDS[connection.authKind] }]),
+            {
+              label: 'Tools',
+              value: pending
+                ? 'Not reviewed yet'
+                : `${plural(connection.toolCount, 'tool', 'tools')}${connection.reviewedAt ? ` · reviewed ${fmtRelative(connection.reviewedAt)}` : ''}`,
+            },
+            ...(pending
+              ? []
+              : [{ label: 'Held by', value: connection.agents.length === 0 ? 'No agent holds these tools yet.' : connection.agents.map(agentName).join(', ') }]),
+          ]}
+        />
+      </div>
+      {connection.stderr && connection.stderr.length > 0 ? (
+        <Section title="What the program last said">
+          <Code label="Its last lines on stderr">{connection.stderr.join('\n')}</Code>
+        </Section>
+      ) : null}
+    </Sheet>
+  );
+}
+
+/** Disconnect, asked once in the same small dialog as Plugins' Disable and Remove. */
+function DisconnectDialog({
+  connection,
+  agentName,
+  onCancel,
+  onDone,
 }: {
   connection: ConnectionView;
   agentName: (id: string) => string;
-  timezone: string;
-  onFlow: (flow: FlowStart) => void;
-  onChanged: () => void;
+  onCancel: () => void;
+  onDone: () => void;
 }): JSX.Element {
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const state = STATE_LABELS[connection.state];
+  const holders = connection.agents.map(agentName);
   const disconnect = async (): Promise<void> => {
     setBusy(true);
     setFailure(null);
     try {
       await api.disconnect(connection.id);
-      setConfirming(false);
-      onChanged();
+      onDone();
     } catch (error) {
-      setFailure(error instanceof Error ? error.message : String(error));
+      setFailure(failureOf(error));
     } finally {
       setBusy(false);
     }
   };
-  const pending = connection.state === 'pending-review';
-  const program = connection.transport === 'stdio' ? connection.program : undefined;
   return (
-    <Stack gap="sm">
-      <div className="ui-card-head">
-        <h3 className="ui-card-title">{connection.name}</h3>
-        <Pill tone={state.tone} dot>{state.label}</Pill>
-        {connection.grant ? <Tag>{connection.grant}</Tag> : null}
-      </div>
-      {program ? <p className="ui-card-meta mono connections-line">{program.line}</p> : null}
-      <p className="ui-card-meta">
-        <span className={program ? undefined : 'mono'}>{program ? 'Runs on this computer as you' : connection.host}</span>
-        {connection.phase === 'starting' ? ' · starting…' : ''}
-        {pending ? ' · its tools are not reviewed yet' : ` · ${connection.toolCount} ${connection.toolCount === 1 ? 'tool' : 'tools'}`}
-        {connection.reviewedAt ? ` · reviewed ${fmtRelative(connection.reviewedAt)}` : ''}
+    <Modal
+      title={`Disconnect ${connection.name}?`}
+      onClose={onCancel}
+      foot={
+        <>
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
+          <Button variant="danger" disabled={busy} onClick={() => void disconnect()}>Disconnect</Button>
+        </>
+      }
+    >
+      <p className="plugins-dialog-text">
+        buddi forgets its sign-in and its tools.{' '}
+        {holders.length > 0
+          ? `${holders.join(' and ')} ${holders.length === 1 ? 'loses' : 'lose'} them.`
+          : 'No agent holds its tools.'}
       </p>
-      {!pending ? (
-        <p className="ui-card-meta">
-          {connection.agents.length === 0
-            ? 'No agent holds these tools yet.'
-            : `Held by ${connection.agents.map(agentName).join(', ')}.`}
-        </p>
-      ) : null}
-      {connection.state === 'needs-reconnect' ? (
-        <p className="ui-card-meta">Its sign-in ran out or was refused. Until you reconnect, each of its tools answers with one sentence instead of running.</p>
-      ) : null}
-      {connection.state === 'needs-review' ? (
-        <p className="ui-card-meta">
-          It changed its tools since you reviewed them. The new and changed ones wait until you review it again
-          {connection.heldTools ? ` (${connection.heldTools} of the ones you kept ${connection.heldTools === 1 ? 'waits' : 'wait'})` : ''}; the others keep working.
-        </p>
-      ) : null}
-      {connection.state === 'unreachable' && connection.unreachableSince ? (
-        <p className="ui-card-meta">
-          {program ? `It stopped answering at ${fmtTime(connection.unreachableSince, timezone)}; the next call starts it again.` : `Unreachable since ${fmtTime(connection.unreachableSince, timezone)}, retrying.`}
-        </p>
-      ) : null}
-      {program?.changedSinceReview ? (
-        <p className="ui-card-meta">Its command changed since you reviewed it, so its tools wait until you review it again.</p>
-      ) : null}
-      {connection.stderr && connection.stderr.length > 0 ? (
-        <Details summary="What the program last said">
-          <Code label="Its last lines on stderr">{connection.stderr.join('\n')}</Code>
-        </Details>
-      ) : null}
       <ErrorBanner message={failure} />
-      {confirming ? (
-        <Notice tone="critical" role="alert" title={`Disconnect ${connection.name}?`}>
-          <Stack gap="sm">
-            <p>
-              buddi forgets its sign-in and its tools.
-              {connection.agents.length > 0
-                ? ` ${connection.grant} comes out of ${connection.agents.map(agentName).join(', ')}.`
-                : ' No agent holds its tools.'}
-            </p>
-            <Toolbar align="end">
-              <Button size="sm" onClick={() => setConfirming(false)} disabled={busy}>Keep it</Button>
-              <Button size="sm" variant="danger" onClick={() => void disconnect()} disabled={busy}>Disconnect</Button>
-            </Toolbar>
-          </Stack>
-        </Notice>
-      ) : (
-        <Toolbar align="end">
-          {pending ? (
-            <Button size="sm" variant="accent" onClick={() => onFlow({ step: connection.signedIn ? 'review' : 'consent', connection })}>Finish</Button>
-          ) : null}
-          {!pending ? (
-            <Button size="sm" variant={connection.state === 'needs-review' ? 'accent' : undefined} onClick={() => onFlow({ step: 'review', connection, keepGrants: true })}>
-              Review again
-            </Button>
-          ) : null}
-          {program ? (
-            <Button size="sm" onClick={() => onFlow({ step: 'program', connection, keepGrants: true })}>Change</Button>
-          ) : null}
-          {connection.authKind !== 'none' && !pending ? (
-            <Button size="sm" variant={connection.state === 'needs-reconnect' ? 'accent' : undefined} onClick={() => onFlow({ step: 'consent', connection, keepGrants: true })}>
-              Reconnect
-            </Button>
-          ) : null}
-          <Button size="sm" variant="ghost" onClick={() => setConfirming(true)}>Disconnect</Button>
-        </Toolbar>
-      )}
-    </Stack>
+    </Modal>
+  );
+}
+
+/** "Add your own": one block like "Add a plugin"; its segment picks the way, its button opens that screen. */
+function AddYourOwn({ onFlow }: { onFlow: (step: AddWay) => void }): JSX.Element {
+  const [way, setWay] = useState<AddWay>(rememberedWay);
+  const chosen = ADD_WAYS.find((w) => w.value === way) ?? ADD_WAYS[0]!;
+  const choose = (next: AddWay): void => {
+    setWay(next);
+    try {
+      window.localStorage.setItem(WAY_KEY, next);
+    } catch {
+      // A browser that keeps nothing still works; it forgets the choice.
+    }
+  };
+  return (
+    <Panel
+      title="Add your own"
+      actions={<Segment<AddWay> label="How to add it" options={ADD_WAYS.map(({ value, label }) => ({ value, label }))} value={way} onChange={choose} />}
+    >
+      <div className="connections-add">
+        <p className="connections-add-text">{chosen.text}</p>
+        <Button variant="accent" onClick={() => onFlow(way)}>{chosen.button}</Button>
+      </div>
+    </Panel>
   );
 }
 

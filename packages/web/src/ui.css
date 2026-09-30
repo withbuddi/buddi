@@ -1212,6 +1212,8 @@ a.ui-list-row:hover .ui-list-title { color: var(--accent); }
 .ui-app-icon-svg { display: inline-flex; width: var(--space-5); height: var(--space-5); }
 .ui-app-icon[data-size='lg'] .ui-app-icon-svg { width: var(--space-6); height: var(--space-6); }
 .ui-app-icon-svg svg { width: 100%; height: 100%; }
+.ui-app-icon-letter { font-size: var(--text-md); font-weight: var(--weight-semibold); line-height: 1; }
+.ui-app-icon[data-size='lg'] .ui-app-icon-letter { font-size: var(--text-lg); }
 
 /* Where this is: muted steps with a chevron after each, the one you are on plain. */
 .ui-crumbs { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); min-width: 0; }

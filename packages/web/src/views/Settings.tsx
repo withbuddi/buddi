@@ -24,13 +24,13 @@ import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
 import { Secrets } from './Secrets';
-import { Connections } from './Connections';
+import { CONNECTIONS_LEDE, Connections } from './Connections';
 import { Watchers } from './Watchers';
 import { You } from './You';
 import { Memory } from './Memory';
 import { Markdown } from '../chat/markdown';
 import { Proposals } from './Proposals';
-import { Plugins } from './Plugins';
+import { PLUGINS_LEDE, Plugins } from './Plugins';
 import { Notifications } from './Notifications';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
@@ -69,13 +69,13 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       {narrow ? null : <SettingsNav {...list} />}
       <div className="settings-body">
         <div className="ui-page">
-          {section === 'plugins' ? (
-            /* Plugins is a page of its own inside Settings, as the kit draws it:
-               the way back to Settings, then its own title and lede. */
+          {section === 'plugins' || section === 'connections' ? (
+            /* Plugins and Connections are pages of their own inside Settings, as
+               the kit draws them: the way back to Settings, then their own title and lede. */
             <PageHeader
               before={<Breadcrumb inline items={[{ label: 'Settings', href: SETTINGS_ROUTE, onClick: () => navigate(SETTINGS_ROUTE) }]} />}
-              title="Plugins"
-              lede="New tools and pages for your team, written by someone else. Each one is read with you, fact by fact, before any of it runs."
+              title={section === 'plugins' ? 'Plugins' : 'Connections'}
+              lede={section === 'plugins' ? PLUGINS_LEDE : CONNECTIONS_LEDE}
             />
           ) : (
             <header className="ui-page-head">

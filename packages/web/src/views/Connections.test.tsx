@@ -1,6 +1,7 @@
 /**
- * Settings → Connections on the page: the list and its states, the cards,
- * Disconnect naming the agents it touches, and the four screens — address,
+ * Settings → Connections on the page: the rows and their states, a row's
+ * sheet and its actions, the catalog without what is connected, each way to
+ * add your own, Disconnect naming the agents it touches, and the four screens — address,
  * consent (the tab opened inside the click, the client-id escape hatch),
  * review (names, tiers, the sentence for a server that annotates nothing),
  * grant (the front desk preselected) — and the callback tab.
@@ -70,34 +71,87 @@ beforeEach(() => {
 });
 
 describe('the list', () => {
-  it('shows each connection, its state, tools and holders, and the cards', async () => {
+  it('shows each connection as a row with its state and tools, and leaves connected services out of the catalog', async () => {
     mocked.connections.mockResolvedValue(view([
       connection(),
-      connection({ id: '22222222-2222-4222-8222-222222222222', name: 'Linear', slug: 'linear', state: 'needs-reconnect', agents: [], grant: 'mcp.linear.*', toolCount: 1 }),
+      connection({ id: '22222222-2222-4222-8222-222222222222', name: 'Linear', slug: 'linear', url: 'https://mcp.linear.app/mcp', host: 'mcp.linear.app', state: 'needs-reconnect', agents: [], grant: 'mcp.linear.*', toolCount: 1 }),
     ]));
     render(<Connections embedded />);
-    // The row and the card.
-    expect(await screen.findAllByText('GitHub')).toHaveLength(2);
+    // GitHub is connected, so only its row: no catalog tile for it.
+    expect(await screen.findAllByText('GitHub')).toHaveLength(1);
+    expect(screen.getByLabelText('GitHub: details')).toHaveTextContent('api.githubcopilot.com · 12 tools');
     expect(screen.getByText('Connected')).toBeInTheDocument();
-    expect(screen.getByText('Needs reconnect')).toBeInTheDocument();
-    expect(screen.getByText('Held by Buddi.')).toBeInTheDocument();
-    expect(screen.getByText(/12 tools/)).toBeInTheDocument();
-    expect(screen.getByText(/each of its tools answers with one sentence/)).toBeInTheDocument();
-    expect(screen.getByText('Another server')).toBeInTheDocument();
-    expect(screen.getByText('I have a config')).toBeInTheDocument();
+    expect(screen.getByText('Sign in again')).toBeInTheDocument();
+    expect(screen.getByLabelText('Linear: details')).toHaveTextContent('1 tool');
+    // Notion is not connected: offered, with its own Connect.
     expect(screen.getByText('Notion')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect Notion' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect GitHub' })).toBeNull();
+    // No tool-name jargon on the page itself.
+    expect(screen.queryByText(/mcp\.[a-z]+\.\*/)).toBeNull();
+    // The way to plugins, told apart.
+    expect(screen.getByRole('link', { name: 'Plugins' })).toHaveAttribute('href', '#/settings/plugins');
+  });
+
+  it('says so when nothing is connected, and still offers every service', async () => {
+    mocked.connections.mockResolvedValue(view([]));
+    render(<Connections embedded />);
+    expect(await screen.findByText('Nothing connected yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect Notion' })).toBeInTheDocument();
+  });
+
+  it('opens a row into its sheet: address, sign-in, tools, holders and the actions', async () => {
+    mocked.connections.mockResolvedValue(view());
+    mocked.connectionReview.mockReturnValue(new Promise(() => {}));
+    render(<Connections embedded />);
+    fireEvent.click(await screen.findByLabelText('GitHub: details'));
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('https://api.githubcopilot.com/mcp/')).toBeInTheDocument();
+    expect(within(sheet).getByText(/Its own sign-in page/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/12 tools · reviewed/)).toBeInTheDocument();
+    expect(within(sheet).getByText('Buddi')).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+    expect(within(sheet).queryByRole('button', { name: 'Change' })).toBeNull();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Review again' }));
+    expect(await screen.findByRole('dialog', { name: 'What GitHub brings' })).toBeInTheDocument();
+    expect(mocked.connectionReview).toHaveBeenCalledWith(connection().id);
   });
 
   it('names the agents Disconnect takes the tools from, then disconnects', async () => {
     mocked.connections.mockResolvedValue(view());
     mocked.disconnect.mockResolvedValue({ id: 'x', name: 'GitHub', touched: ['concierge'] });
     render(<Connections embedded />);
-    await screen.findByText('Held by Buddi.');
-    fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
-    const alert = await screen.findByRole('alert');
-    expect(within(alert).getByText(/mcp\.github\.\* comes out of Buddi/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByLabelText('GitHub: details'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect…' }));
+    const alert = await screen.findByRole('alertdialog', { name: 'Disconnect GitHub?' });
+    expect(within(alert).getByText(/Buddi loses them/)).toBeInTheDocument();
     fireEvent.click(within(alert).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() => expect(mocked.disconnect).toHaveBeenCalledWith(connection().id));
+  });
+
+  it('opens each way to add your own on its own screen', async () => {
+    mocked.connections.mockResolvedValue(view());
+    render(<Connections embedded />);
+    const add = async (way: string, button: string): Promise<void> => {
+      fireEvent.click(await screen.findByRole('radio', { name: way }));
+      fireEvent.click(screen.getByRole('button', { name: button }));
+    };
+    await add('An address', 'Give its address');
+    expect(await screen.findByLabelText('Address')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await add('A program', 'Describe it');
+    expect(await screen.findByLabelText('Command')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await add('A config', 'Paste it');
+    expect(await screen.findByLabelText('Config')).toBeInTheDocument();
+  });
+
+  it('a catalog tile opens the address screen with its address', async () => {
+    mocked.connections.mockResolvedValue(view());
+    render(<Connections embedded />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect Notion' }));
+    expect(await screen.findByLabelText('Address')).toHaveValue('https://mcp.notion.com/mcp');
   });
 });
 
@@ -284,14 +338,22 @@ describe('review again, the states, remembered approval', () => {
   it('asks for another review when the tools changed, and says since when an unreachable one is retried', async () => {
     mocked.connections.mockResolvedValue(view([
       connection({ state: 'needs-review', heldTools: 1, toolCount: 11 }),
-      connection({ id: '22222222-2222-4222-8222-222222222222', name: 'Linear', slug: 'linear', state: 'unreachable', unreachableSince: '2026-09-28T09:05:00Z', grant: 'mcp.linear.*' }),
+      connection({ id: '22222222-2222-4222-8222-222222222222', name: 'Linear', slug: 'linear', url: 'https://mcp.linear.app/mcp', host: 'mcp.linear.app', state: 'unreachable', unreachableSince: '2026-09-28T09:05:00Z', grant: 'mcp.linear.*' }),
     ]));
     render(<Connections embedded timezone="UTC" />);
-    expect(await screen.findByText('Changed its tools')).toBeInTheDocument();
-    expect(screen.getByText(/The new and changed ones wait until you review it again \(1 of the ones you kept waits\)/)).toBeInTheDocument();
-    expect(screen.getByText('Unreachable since 28 Sept 2026, 09:05, retrying.'.replace('Sept', new Intl.DateTimeFormat('en-GB', { month: 'short' }).format(new Date('2026-09-28'))))).toBeInTheDocument();
-    const again = screen.getAllByRole('button', { name: 'Review again' });
-    expect(again[0]).toHaveAttribute('data-variant', 'accent');
+    expect(await screen.findByText('Needs review')).toBeInTheDocument();
+    expect(screen.getByText('Unreachable')).toBeInTheDocument();
+    // The row's own shortcut to the review.
+    expect(within(screen.getByLabelText('GitHub: details')).getByRole('button', { name: 'Review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('GitHub: details'));
+    let sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText(/The new and changed ones wait until you review it again \(1 of the ones you kept waits\)/)).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Review again' })).toHaveAttribute('data-variant', 'accent');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByLabelText('Linear: details'));
+    sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText('Unreachable since 28 Sept 2026, 09:05, retrying.'.replace('Sept', new Intl.DateTimeFormat('en-GB', { month: 'short' }).format(new Date('2026-09-28'))))).toBeInTheDocument();
   });
 
   it('shows what changed since the last review, tool by tool', async () => {
@@ -427,14 +489,21 @@ describe('the callback tab', () => {
       expect(mocked.addProgram).not.toHaveBeenCalled();
     });
 
-    it('shows the program on its row: the command, the last stderr lines, and Change', async () => {
+    it('shows the program as a row, and its sheet: the command, as you, the last stderr lines, and Change', async () => {
       mocked.connections.mockResolvedValue(view([program({ slug: 'trokky', state: 'unreachable', unreachableSince: '2026-09-29T10:00:00Z', stderr: ['boom: cannot reach'] })]));
       render(<Connections timezone="UTC" />);
-      expect(await screen.findByText('npx -y @trokky/mcp@3')).toBeInTheDocument();
-      expect(screen.getByText(/Runs on this computer as you/)).toBeInTheDocument();
-      expect(screen.getByText('boom: cannot reach')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Add it' })).toBeInTheDocument();
+      expect(await screen.findByText('npx -y @trokky/mcp@3 · 12 tools')).toBeInTheDocument();
+      expect(screen.getByText('Failed')).toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText('Trokky: details'));
+      const sheet = await screen.findByRole('dialog');
+      expect(within(sheet).getByText('npx -y @trokky/mcp@3')).toBeInTheDocument();
+      expect(within(sheet).getByText(/On this computer as you/)).toBeInTheDocument();
+      expect(within(sheet).getByText(/It stopped answering at/)).toBeInTheDocument();
+      expect(within(sheet).getByText('boom: cannot reach')).toBeInTheDocument();
+      expect(within(sheet).queryByRole('button', { name: 'Reconnect' })).toBeNull();
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Change' }));
+      expect(await screen.findByRole('dialog', { name: 'Change Trokky' })).toBeInTheDocument();
+      expect(screen.getByLabelText('Command')).toHaveValue('npx');
     });
 
     it('keeps a secret on a change unless a new value is typed', async () => {

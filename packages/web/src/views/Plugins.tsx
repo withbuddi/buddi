@@ -82,6 +82,23 @@ import {
 import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 import { PluginFolders } from './parts/PluginFolders';
 
+/** The line under Plugins' title, which Settings draws. */
+export const PLUGINS_LEDE =
+  'New tools and pages for your team, written by someone else. Each one is read with you, fact by fact, before any of it runs.';
+
+/** The quiet line that tells a plugin from a connection, the mirror of the one on Connections. */
+function NotAConnection(): JSX.Element {
+  return (
+    <p className="plugins-quiet connections-quiet">
+      <Icon name="globe" size={14} />
+      <span>
+        A plugin is code buddi installs and runs; a connection is a service or program buddi talks to.{' '}
+        <a href={settingsRoute('connections')}>Connections</a>
+      </span>
+    </p>
+  );
+}
+
 /** How often a running stage is asked where it has got to. */
 const JOB_POLL_MS = 1_500;
 
@@ -525,6 +542,7 @@ export function Plugins({
   if (tab === 'browse') {
     return (
       <Stack gap="lg">
+        <NotAConnection />
         {tabs}
         <ErrorBanner message={failed} />
         <Browse
@@ -544,6 +562,7 @@ export function Plugins({
   const builtIn = data?.builtIn ?? [];
   return (
     <Stack gap="lg">
+      <NotAConnection />
       {tabs}
       <ErrorBanner message={view.error ?? failed ?? jobError} />
       {data?.unavailable ? <Notice tone="warning">{data.unavailable}</Notice> : null}

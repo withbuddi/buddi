@@ -36,6 +36,8 @@ const GLYPHS = {
   plug: [20, 1.6, <><path d="M7.4 2.8v3.4M12.6 2.8v3.4" /><path d="M5 6.2h10v3.1a5 5 0 0 1-10 0Z" /><path d="M10 14.3v3" /></>],
   key: [20, 1.6, <><circle cx="6.6" cy="10" r="3.2" /><path d="M9.8 10h7.2M14.4 10v2.6M16.6 10v1.8" /></>],
   globe: [20, 1.6, <><circle cx="10" cy="10" r="7.1" /><path d="M2.9 10h14.2M10 2.9c3.4 3.7 3.4 10.5 0 14.2-3.4-3.7-3.4-10.5 0-14.2Z" /></>],
+  // A screen with a prompt: a program on this computer.
+  terminal: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="12.8" rx="1.6" /><path d="M6.2 8l2.6 2.4-2.6 2.4M10.6 12.8h3.4" /></>],
 
   // ---- the settings list: the core sections, on the rail's 20px grid ----
   // A head and shoulders: the owner's own profile.
