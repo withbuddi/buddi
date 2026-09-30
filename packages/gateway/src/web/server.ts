@@ -759,7 +759,8 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     const cookies = parseCookies(req.headers.cookie);
-    let session = sessions.get(cookies[sessionCookieName(cookiePort(req))], scope, now);
+    const presentedSession = cookies[sessionCookieName(cookiePort(req))];
+    let session = sessions.get(presentedSession, scope, now);
 
     /*
      * A Tailscale session is re-confirmed on every single request.
@@ -780,7 +781,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         // A hand this session was holding does not outlive the session.
         hand.revoke((lease) => lease === session!.id);
         if (limiter.blocked(key, now)) return sendEmpty(res, 429);
-        limiter.fail(key, now);
+        limiter.failCredential(key, presentedSession ?? '', now);
         return sendEmpty(res, 401);
       }
     }
@@ -827,8 +828,15 @@ export function createWebApp(deps: WebServerDeps): Server {
       // Rate-limit failed authentication, not authenticated traffic. A stale
       // tab behind the same proxy must not lock out a valid recovery ticket
       // or an already authenticated owner (nor direct local access).
+      //
+      // Only a request that presented a credential is an attempt. One with no
+      // cookie at all (a reconnect check, a health probe) guessed nothing, and
+      // the same stale cookie counts once however often it is sent: all tailnet
+      // and tunnel traffic shares 127.0.0.1, so a forgotten tab must not be
+      // able to lock the owner out of every way in.
+      if (!presentedSession) return sendEmpty(res, 401);
       if (limiter.blocked(key, now)) return sendEmpty(res, 429);
-      limiter.fail(key, now);
+      limiter.failCredential(key, presentedSession, now);
       return sendEmpty(res, 401);
     }
 

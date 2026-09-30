@@ -4,6 +4,15 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- A forgotten tab, an unpaired Chrome extension or any poller with no sign-in could lock the owner out of the dashboard: every refused request counted as a failed sign-in, and all tailnet and SSH-tunnel traffic shares one address. Now only a request that presents a credential counts, and the same stale cookie counts once however often it is sent; guessing still locks the address.
+- The installed app showed the browser's error page when buddi answered with an empty "too many requests" or a server error. It now shows its own offline page for those too.
+
+### Changed
+
+- The agents reference documents `{{today}}`, the one placeholder a persona can use.
+
 ## 0.1.0-pre.25 — 2026-09-30
 
 ### Fixed

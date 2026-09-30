@@ -62,8 +62,10 @@ self.addEventListener('activate', (event) => {
 /**
  * A page load: the network first, always, so a reload is the current build and
  * the gateway's session rules apply. Only when nobody answers (no response, a
- * proxy's 502/503, or silence past the timeout) is the kept shell served, and
- * the shell says buddi is out of reach.
+ * server error or a proxy's 502/503, a 429 from a locked-out address, or
+ * silence past the timeout) is the kept shell served, and the shell says buddi
+ * is out of reach. An empty 429 or 5xx would otherwise be the browser's own
+ * "this page isn't working".
  */
 async function navigate(request) {
   const cache = await caches.open(CACHE);
@@ -76,7 +78,7 @@ async function navigate(request) {
   });
   try {
     const response = await Promise.race([network, late]);
-    if (response && response.status !== 502 && response.status !== 503) return response;
+    if (response && response.status !== 429 && response.status < 500) return response;
     return shell;
   } catch {
     return shell;

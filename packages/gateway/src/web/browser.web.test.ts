@@ -3,7 +3,7 @@ import { ToolRegistry, createPluginHost, hostBindingOf, type AgentCatalog, type 
 import { BrowserService, BrowserManager, commandSchema, type BrowserController, type BrowserDriver } from '@buddi/tool-browser';
 import { startWebServer, type WebServer } from './server.js';
 import { mintTicket } from './token.js';
-import { csrfCookieName, portOf } from './http.js';
+import { csrfCookieName, portOf, sessionCookieName } from './http.js';
 import { hostFetch } from '../__fixtures__/host-fetch.js';
 
 /** The context core hands the browser plugin: these facts, with its `ctx.buddi` built over them. */
@@ -36,6 +36,31 @@ async function session(origin: string, ticket?: string, cookiePort = portOf(new 
   const csrf = pairs.find((p) => p.startsWith(name))?.slice(name.length) ?? '';
   return { Cookie: pairs.join('; '), 'X-Buddi-CSRF': csrf, Origin: origin, 'Content-Type': 'application/json' };
 }
+
+describe('the sign-in lockout behind the proxy', () => {
+  it('counts only presented credentials, each once: a poller without a cookie or with one stale cookie never locks the owner out', async () => {
+    const { origin } = await setup(true, undefined, 'https://host.example:9443');
+    const fetch = hostFetch;
+    const proxy = { Host: 'host.example:9443', 'X-Forwarded-For': '100.64.0.2' };
+    const cookie = (value: string) => ({ ...proxy, Cookie: `${sessionCookieName(9443)}=${value}` });
+    const statuses = async (headers: Record<string, string>, n: number) => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) out.push((await fetch(`${origin}/api/version`, { headers })).status);
+      return out;
+    };
+    // A reconnect check with no credential at all: never an attempt.
+    expect(new Set(await statuses(proxy, 25))).toEqual(new Set([401]));
+    // An old tab repeating one stale session: counted once.
+    expect(new Set(await statuses(cookie('stale-from-last-week'), 25))).toEqual(new Set([401]));
+    // Guessing — a new value each time — still locks the address.
+    const guesses: number[] = [];
+    for (let i = 0; i < 15; i++) guesses.push((await fetch(`${origin}/api/version`, { headers: cookie(`guess-${i}`) })).status);
+    expect(guesses).toContain(429);
+    // A valid ticket still gets in; the owner is never locked out by a poller.
+    const ticket = mintTicket(TOKEN, new Date());
+    expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(302);
+  });
+});
 
 describe('browser dashboard endpoints', () => {
   it('requires a remote ticket behind an HTTPS proxy and preserves write protection', async () => {

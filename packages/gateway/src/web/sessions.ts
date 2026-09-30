@@ -6,7 +6,7 @@
  * the correct behaviour for a page that can approve an effect. Nothing here
  * reaches the database, and nothing here is ever written to a log.
  */
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
  * How long a session is honoured **without any activity**, by where it was
@@ -284,5 +284,28 @@ export class RateLimiter {
 
   reset(key: string): void {
     this.#hits.delete(key);
+    this.#seen.delete(key);
+  }
+
+  /** Stale credentials already counted, per address, until their window ends. */
+  readonly #seen = new Map<string, { values: Set<string>; resetAt: number }>();
+
+  /**
+   * One failed attempt with a credential in it — a session cookie that is no
+   * longer valid, a ticket that is wrong. Guessing means presenting new values,
+   * so each distinct value counts once a window; the same stale cookie sent by
+   * a tab or an extension that nobody is watching counts once, however often
+   * it polls, and cannot hold the address locked out on its own.
+   */
+  failCredential(key: string, credential: string, now: Date = new Date()): void {
+    const digest = createHash('sha256').update(credential).digest('base64url').slice(0, 22);
+    let seen = this.#seen.get(key);
+    if (!seen || seen.resetAt <= now.getTime()) {
+      seen = { values: new Set(), resetAt: now.getTime() + this.#windowMs };
+      this.#seen.set(key, seen);
+    }
+    if (seen.values.has(digest)) return;
+    if (seen.values.size < 256) seen.values.add(digest);
+    this.fail(key, now);
   }
 }

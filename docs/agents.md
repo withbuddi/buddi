@@ -1,7 +1,7 @@
 ---
 title: "Agents"
 status: reference
-updated: 2026-09-28
+updated: 2026-09-30
 ---
 
 # Agents
@@ -15,6 +15,18 @@ provides holds the agent back until its plugin is there. A grant ending in
 the agent loads with the rest. Procedures it follows sit
 beside it in `skills/`. Your agents live in your private agents directory;
 Agent Father writes them there, and every write waits for your approval.
+
+## Placeholders in the persona
+
+The persona may use one placeholder, `{{today}}`. buddi replaces it with the
+owner's date, in the owner's timezone, as `YYYY-MM-DD` (`2026-09-30`), fresh on
+every turn: a conversation that crosses midnight gets the new date on its next
+message. It is filled in wherever an agent runs (the dashboard, Telegram, the
+terminal, a mission), by the agent catalog in `@buddi/core`.
+
+It is the only placeholder. Anything else between double braces, `{{date}}` or
+`{{owner}}`, stays in the persona as written, so the agent sees the braces
+rather than a value.
 
 ## Starter team
 
