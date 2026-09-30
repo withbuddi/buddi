@@ -1,5 +1,6 @@
 /**
- * Home's composer: the front desk, one keystroke from the first page.
+ * Home's composer: the front desk, one keystroke from the first page, under
+ * the glance — slim, one line that grows as it is typed into.
  *
  * The same composer the chat uses — files, the microphone, Shift+Enter — and
  * a send that opens a new conversation with the default agent, puts the
@@ -74,6 +75,7 @@ export function HomeAsk({ agent, navigate }: { agent: ChatAgent; navigate: (rout
         placeholder={`Message ${agent.name}…`}
         draft={draft}
         threadKey={`home.${agent.id}`}
+        slim
       />
       {rows.length > 0 ? (
         <div className="home-continue">

@@ -134,3 +134,16 @@ export function withoutFence(text: string): string {
   return text.replace(/<<<[^<>]*>>>/g, '');
 }
 
+
+/**
+ * A notification's title as the dashboard draws it. An agent's own message
+ * (`owner.notify`) is stored signed — "@ledger: Charged twice" — because
+ * Telegram and the end-of-day summary need to say who wrote it; on the
+ * dashboard the agent is already named beside it (its face, its name), so the
+ * signature is left off. Only the first "@handle: " of an agent message goes.
+ */
+export function notificationTitle(row: { kind: string; title: string }): string {
+  if (row.kind !== 'agent') return row.title;
+  const bare = row.title.replace(/^@[^\s:]+:\s+/, '');
+  return bare.trim() === '' ? row.title : bare;
+}

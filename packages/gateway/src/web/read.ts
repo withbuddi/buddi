@@ -41,6 +41,9 @@ import {
   type ToolRegistry,
   type HomeBlock,
   type Offer,
+  HOME_CARD_LINE_MAX,
+  HOME_CARD_TREND_MAX,
+  HOME_CARD_VALUE_MAX,
   HOME_GLANCE_MAX,
   TILE_ICONS,
   readWebSetting,
@@ -1081,7 +1084,48 @@ export interface HomeGlanceView {
   icon: string;
   text: string;
   link?: { plugin: string; page: string; place: 'rail' | 'settings' };
+  /** The glance as a card, checked and cut to size (`cardOf`). */
+  card?: HomeGlanceCardView;
   hidden: boolean;
+}
+
+export interface HomeGlanceCardView {
+  value: string;
+  caption?: string;
+  trend?: { label: string; points: number[] };
+  foot?: string;
+}
+
+/** A line cut to `max` characters with an ellipsis; nothing for a blank or a non-string. */
+function cutLine(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const text = value.trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/**
+ * A plugin's card, as the page may draw it: a figure it must have, lines cut
+ * to size, and a trend of two or more finite numbers (the first
+ * `HOME_CARD_TREND_MAX`). Anything else is dropped rather than drawn wrong.
+ */
+export function cardOf(card: unknown): HomeGlanceCardView | undefined {
+  if (!card || typeof card !== 'object') return undefined;
+  const c = card as Record<string, unknown>;
+  const value = cutLine(c.value, HOME_CARD_VALUE_MAX);
+  if (!value) return undefined;
+  const caption = cutLine(c.caption, HOME_CARD_LINE_MAX);
+  const foot = cutLine(c.foot, HOME_CARD_LINE_MAX);
+  const t = c.trend as { label?: unknown; points?: unknown } | undefined;
+  const points = t && Array.isArray(t.points)
+    ? t.points.slice(0, HOME_CARD_TREND_MAX).filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+    : [];
+  const label = t ? cutLine(t.label, HOME_CARD_LINE_MAX) : undefined;
+  return {
+    value,
+    ...(caption ? { caption } : {}),
+    ...(points.length >= 2 ? { trend: { label: label ?? '', points } } : {}),
+    ...(foot ? { foot } : {}),
+  };
 }
 
 async function readHomeSettings(pool: Pick<Pool, 'query'>): Promise<HomeSettings> {
@@ -1123,6 +1167,7 @@ export async function readGlances(deps: {
         const glance = await contribution.produce(deps.ctx);
         if (!glance || typeof glance.text !== 'string' || glance.text.trim() === '') return null;
         const text = glance.text.trim();
+        const card = cardOf(glance.card);
         const page = glance.link?.route?.page;
         const target = page === undefined ? undefined : pages.find((p) => p.plugin === plugin && p.id === page);
         return {
@@ -1132,6 +1177,7 @@ export async function readGlances(deps: {
           icon: ICONS.has(glance.icon) ? glance.icon : 'dot',
           text: text.length > HOME_GLANCE_MAX ? `${text.slice(0, HOME_GLANCE_MAX - 1).trimEnd()}…` : text,
           ...(target ? { link: { plugin, page: target.id, place: target.place } } : {}),
+          ...(card ? { card } : {}),
           hidden: hidden.has(contribution.id),
         };
       } catch {

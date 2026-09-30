@@ -93,8 +93,8 @@ export type {
   TilesLayout,
   WorkspaceFiles,
 } from '../pages.js';
-export type { HomeBlock, HomeBlockContribution, HomeContribution, HomeGlance, HomeGlanceContribution, HomeRow, HomeStat } from '../home.js';
-export { HOME_GLANCE_MAX } from '../home.js';
+export type { HomeBlock, HomeBlockContribution, HomeContribution, HomeGlance, HomeGlanceCard, HomeGlanceContribution, HomeRow, HomeStat } from '../home.js';
+export { HOME_CARD_LINE_MAX, HOME_CARD_TREND_MAX, HOME_CARD_VALUE_MAX, HOME_GLANCE_MAX } from '../home.js';
 export type { MetricDefinition, MetricDirection, MetricReading, MetricUnit } from '../metrics.js';
 export type {
   PolicyApplyResult,

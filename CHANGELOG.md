@@ -4,6 +4,16 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- Home opens on a glance: the date, a large greeting and what needs you as one line of counts, each a link to its list (failed jobs, urgent alerts, proposals; approvals and messages scroll to "Needs you"). On the right, the Weather plugin's card — now, sky and place, the next twelve hours as a small line, high and low — with the Blob in it; without the plugin the Blob stands there alone. The composer moved under the glance and is one line that grows as you type, with the Continue chips under it. On a phone it stacks.
+- The "Keep buddi one click away" card left the top of Home. Home now shows one quiet line at the foot, "Install buddi as an app, one click from your dock", only when the browser has offered an install; the owner menu has "Install the app" whenever it does, and Settings → System has "The dashboard as an app" with the bookmark tip and, on the Mac, `buddi dashboard --install-app`.
+- A plugin's Home glance can carry a card (a figure, one line, a run of numbers drawn as a sparkline, a foot); Home draws the first one on the right of the greeting. The Weather plugin sends one from its next release, and its glance opens the Weather page.
+
+### Fixed
+
+- A message an agent sent you repeated its "@handle:" at the start of the title on the dashboard, right under the agent's name. Home's Needs you, Settings → Notifications and the toasts now leave the signature off; Telegram keeps it.
+
 ## 0.1.0-pre.26 — 2026-09-30
 
 ### Added

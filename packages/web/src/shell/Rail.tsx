@@ -10,8 +10,9 @@
  *
  * Under a hairline at the foot, the owner's initial: a small menu with Focus
  * (Do not disturb or Urgent only, for a while; a moon on the initial while
- * one is on), the quick theme switch, the way to Appearance, and the running
- * version. Running
+ * one is on), the quick theme switch, the way to Appearance, Install the app
+ * (while the browser offers an install and this is not the installed app),
+ * and the running version. Running
  * as an installed app, which has no reload button of its own, it also has
  * Reload; after an upgrade, in any mode, that reads Reload to update, with the
  * accent and a dot on the initial.
@@ -27,6 +28,7 @@ import type { PluginPageDescriptor } from '../pages/types';
 import { pageIcon } from '../pages/icons';
 import type { ThemeChoice } from '../theme';
 import { Icon, Mark, Segment, useAsync } from '../ui';
+import { installApp, useInstallPrompt } from '../views/parts/KeepClose';
 
 /** What the Settings dot says when a connection needs the owner (the rail's, and Connections' in the settings nav). */
 export const CONNECTION_DOT = 'a connection needs you';
@@ -163,6 +165,8 @@ function OwnerMenu({
   // An installed app has no toolbar, so no reload button: this is it.
   const [standalone] = useState(isStandalone);
   const [hint] = useState(reloadHint);
+  // The browser offered an install, and this is not already the app.
+  const install = useInstallPrompt();
   const who = name ? `You: ${name}` : 'You';
   const focusWords = focus ? `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone)}` : null;
   const label = [who, focusWords, stale ? 'reload to update' : null].filter(Boolean).join(', ');
@@ -196,6 +200,11 @@ function OwnerMenu({
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
               Change appearance
             </DropdownMenu.Item>
+            {install ? (
+              <DropdownMenu.Item className="ui-menu-item" onSelect={() => { void installApp(install); }}>
+                Install the app
+              </DropdownMenu.Item>
+            ) : null}
             {standalone || stale ? (
               <DropdownMenu.Item className="ui-menu-item rail-owner-reload" data-update={stale ? 'true' : undefined} onSelect={() => reload()}>
                 <span>{stale ? 'Reload to update' : 'Reload'}</span>

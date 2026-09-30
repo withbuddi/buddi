@@ -5,11 +5,17 @@
  * team up to? What is coming? Everything here is a door to somewhere else:
  * an approval decides in place, a face opens a conversation, a mission opens
  * the agent that runs it.
+ *
+ * The top is a glance: the date, a large greeting and the counts that need
+ * the owner (each a link to its list) on the left; on the right a plugin's
+ * glance card (the Weather plugin's, say) with the Blob in it, or the Blob
+ * alone. The front desk's slim composer sits under it; the install line, when
+ * the browser offers one, at the foot.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
-import { fmtNumber, fmtRelative, fmtTime, truncate } from '../format';
+import { fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
 import { orderAgents, waitingText } from '../shell/roster';
@@ -41,7 +47,7 @@ import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
-import { HomeGlances } from './parts/HomeGlances';
+import { HomeGlanceCard, HomeGlances, cardGlance } from './parts/HomeGlances';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -119,32 +125,40 @@ export function Home({
   const onOffer = allOffers.slice(0, HOME_OFFERS);
   const tips = useTips();
   const moreOffers = allOffers.length - onOffer.length;
+  const card = cardGlance(data?.glances);
+  const counts = glanceCounts({
+    approvals: pending.length, failed: failedJobs, urgent, paused: data?.paused ?? false, proposals: proposed, agentsToSetUp: toSetUp.length, messages: told.length,
+  });
 
   return (
     <>
-      {/* The kit's hero: three short lines on the page's own field. */}
+      {/* The glance: the day, a large greeting and what needs you on the left;
+          a plugin's card with the Blob, or the Blob alone, on the right. */}
       <div className="home-band">
-        <header className="home-hero">
-          <div className="home-hero-text">
+        <header className="home-top" data-card={card ? 'true' : undefined}>
+          <div className="home-top-text">
             <p className="home-date">
               <span>{fmtDay(data?.now, timezone)}</span>
-              <HomeGlances glances={data?.glances} navigate={navigate} onChanged={() => overview.reload()} />
+              <HomeGlances glances={data?.glances} navigate={navigate} onChanged={() => overview.reload()} except={card?.id} />
+              <TipsButton tips={tips} />
             </p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
-            <p className="home-lede">{needsSentence(needs, pending.length, failedJobs, urgent, data?.paused ?? false, proposed, toSetUp.length, told.length)}</p>
+            <GlanceCounts items={counts} navigate={navigate} />
           </div>
-          <div className="home-hero-side">
-            <TipsButton tips={tips} />
-            <Mascot size="lg" anim="idle" />
+          <div className="home-side">
+            {card ? (
+              <HomeGlanceCard glance={card} navigate={navigate} onChanged={() => overview.reload()} blob={<Mascot size="lg" anim="idle" />} />
+            ) : (
+              <Mascot size="lg" anim="idle" />
+            )}
           </div>
         </header>
       </div>
     <div className="home">
+      {/* The front desk, under the glance: writing to it is the commonest thing done here. */}
+      {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
       {/* Every tip as a card, while the lightbulb is on. */}
       <TipsSection tips={tips} navigate={navigate} />
-      {/* The front desk, first: writing to it is the commonest thing done here. */}
-      {frontDesk ? <HomeAsk key={frontDesk.id} agent={frontDesk} navigate={navigate} /> : null}
-      <KeepClose />
       {/* One quiet tip a day, when something in buddi has gone unused. */}
       <TipCard navigate={navigate} preview={previewTipOf(hash)} hidden={tips.open} />
 
@@ -171,6 +185,7 @@ export function Home({
       {note ? <Notice tone="good" role="status">{note}</Notice> : null}
 
       {needs > 0 ? (
+        <div id={NEEDS_ID} className="home-needs">
         <Section
           title="Needs you"
           actions={told.length > 0 ? (
@@ -206,7 +221,7 @@ export function Home({
                       href={row.link ?? undefined}
                       onClick={() => openRow(row)}
                       lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
-                      title={row.title}
+                      title={notificationTitle(row)}
                       sub={fromOf(row)}
                       side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
                     />
@@ -257,6 +272,7 @@ export function Home({
             ))}
           </Stack>
         </Section>
+        </div>
       ) : null}
 
       <Section
@@ -319,6 +335,9 @@ export function Home({
           </div>
         </Section>
       ) : null}
+
+      {/* The browser offered an install: one quiet line, until Not now. */}
+      <KeepClose />
 
       {proposals.data?.digest?.latest ? (
         <LearnedThisWeek digest={proposals.data.digest.latest} go={go} />
@@ -585,18 +604,52 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
   );
 }
 
-export function needsSentence(needs: number, approvals: number, failed: number, urgent: number, paused: boolean, proposals = 0, agentsToSetUp = 0, messages = 0): string {
-  if (needs === 0) return 'Nothing needs you. Your agents are on it.';
-  const parts: string[] = [];
-  if (approvals > 0) parts.push(`${approvals} approval${approvals === 1 ? '' : 's'} waiting`);
-  if (failed > 0) parts.push(`${failed} failed job${failed === 1 ? '' : 's'}`);
-  if (urgent > 0) parts.push(`${urgent} urgent alert${urgent === 1 ? '' : 's'}`);
-  if (paused) parts.push('the installation is paused');
-  if (proposals > 0) parts.push(`${proposals} proposal${proposals === 1 ? '' : 's'} to review`);
-  if (agentsToSetUp > 0) parts.push(`${agentsToSetUp === 1 ? 'an agent' : `${agentsToSetUp} agents`} to set up`);
-  if (messages > 0) parts.push(`${messages} message${messages === 1 ? '' : 's'} for you`);
-  const list = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-  return `${capitalise(list)}.`;
+/** Where Home's "Needs you" starts: the counts listed on Home scroll to it. */
+const NEEDS_ID = 'home-needs';
+
+/** One count on the glance's line: a number and its words, and the list it opens (none: "Needs you" below). */
+export interface GlanceCount { key: string; count: number | null; label: string; tone?: 'critical'; route?: string }
+
+/**
+ * The counts under the greeting, each a door to its list: failed jobs and
+ * urgent alerts to Activity, proposals to Settings, and what Home lists itself
+ * (approvals, agents to set up, messages, a paused queue) to "Needs you".
+ */
+export function glanceCounts(c: { approvals: number; failed: number; urgent: number; paused: boolean; proposals: number; agentsToSetUp: number; messages: number }): GlanceCount[] {
+  const plural = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
+  const items: GlanceCount[] = [];
+  if (c.approvals > 0) items.push({ key: 'approvals', count: c.approvals, label: plural(c.approvals, 'approval') });
+  if (c.failed > 0) items.push({ key: 'failed', count: c.failed, label: plural(c.failed, 'failed job'), tone: 'critical', route: `${ACTIVITY_ROUTE}/jobs?state=failed` });
+  if (c.urgent > 0) items.push({ key: 'urgent', count: c.urgent, label: plural(c.urgent, 'urgent alert'), tone: 'critical', route: `${ACTIVITY_ROUTE}/alerts` });
+  if (c.paused) items.push({ key: 'paused', count: null, label: 'Paused' });
+  if (c.proposals > 0) items.push({ key: 'proposals', count: c.proposals, label: plural(c.proposals, 'proposal'), route: settingsRoute('proposals') });
+  if (c.agentsToSetUp > 0) items.push({ key: 'agents', count: c.agentsToSetUp, label: plural(c.agentsToSetUp, 'agent to set up', 'agents to set up') });
+  if (c.messages > 0) items.push({ key: 'messages', count: c.messages, label: plural(c.messages, 'message') });
+  return items;
+}
+
+function GlanceCounts({ items, navigate }: { items: GlanceCount[]; navigate: (route: string) => void }): JSX.Element {
+  if (items.length === 0) return <p className="home-calm">Nothing needs you. Your agents are on it.</p>;
+  const toNeeds = (): void => {
+    document.getElementById(NEEDS_ID)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  };
+  return (
+    <p className="home-counts">
+      {items.map((item, i) => {
+        const words = <>{item.count !== null ? <><strong>{item.count}</strong> </> : null}{item.label}</>;
+        return (
+          <Fragment key={item.key}>
+            {i > 0 ? <span className="home-count-sep" aria-hidden="true">·</span> : null}
+            {item.route ? (
+              <a className="home-count" data-tone={item.tone} href={item.route} onClick={(e) => { e.preventDefault(); navigate(item.route!); }}>{words}</a>
+            ) : (
+              <button type="button" className="home-count" data-tone={item.tone} onClick={toNeeds}>{words}</button>
+            )}
+          </Fragment>
+        );
+      })}
+    </p>
+  );
 }
 
 function capitalise(text: string): string {

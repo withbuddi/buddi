@@ -1,12 +1,13 @@
 /**
- * The install line on Home, and the manifest behind it.
+ * Installing the dashboard: Home's quiet line (only once the browser offered
+ * an install), Settings → System's section, and the manifest behind both.
  */
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { KEEP_CLOSE_KEY, KeepClose, installHint, resetInstallPrompt } from './KeepClose';
+import { AppInstallSection, KEEP_CLOSE_KEY, KeepClose, installHint, resetInstallPrompt } from './KeepClose';
 
 vi.mock('../../api', () => ({ api: { session: vi.fn(async () => ({ platform: 'darwin' })) } }));
 
@@ -58,22 +59,28 @@ describe('the web app manifest', () => {
   });
 });
 
+const LINE = 'Install buddi as an app, one click from your dock.';
+
 describe('KeepClose', () => {
-  it('offers Install app once the browser fired its prompt, and hands the prompt over', async () => {
-    render(<KeepClose />);
-    expect(screen.queryByRole('button', { name: 'Install app' })).toBeNull();
-    const prompt = firePrompt();
-    fireEvent.click(screen.getByRole('button', { name: 'Install app' }));
-    expect(prompt).toHaveBeenCalledOnce();
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(screen.queryByText('Keep buddi one click away.')).toBeNull();
+  it('says nothing until the browser offers an install: no hint, no command, no path', () => {
+    const { container } = render(<KeepClose />);
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('explains the browser menu item when there is no prompt', () => {
+  it('is one quiet line once the browser fired its prompt, and Install hands the prompt over', async () => {
     render(<KeepClose />);
-    expect(screen.getByText('Keep buddi one click away.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Install app' })).toBeNull();
-    expect(screen.getByText(/bookmark it with/)).toBeInTheDocument();
+    const prompt = firePrompt();
+    expect(screen.getByText(LINE)).toBeInTheDocument();
+    expect(screen.queryByText(/buddi dashboard/)).toBeNull();
+    expect(screen.queryByText(/bookmark/)).toBeNull();
+    // Not now, then Install: the primary action on the right.
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(buttons).toEqual(['Not now', 'Install']);
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    expect(prompt).toHaveBeenCalledOnce();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.queryByText(LINE)).toBeNull();
+    expect(window.localStorage.getItem(KEEP_CLOSE_KEY)).not.toBeNull();
   });
 
   it('names each browser’s own install item', () => {
@@ -87,16 +94,41 @@ describe('KeepClose', () => {
   it('is hidden inside the installed app', () => {
     standalone(true);
     render(<KeepClose />);
-    expect(screen.queryByText('Keep buddi one click away.')).toBeNull();
+    firePrompt();
+    expect(screen.queryByText(LINE)).toBeNull();
   });
 
   it('stays dismissed', () => {
     const first = render(<KeepClose />);
+    firePrompt();
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
-    expect(screen.queryByText('Keep buddi one click away.')).toBeNull();
+    expect(screen.queryByText(LINE)).toBeNull();
     expect(window.localStorage.getItem(KEEP_CLOSE_KEY)).not.toBeNull();
     first.unmount();
     render(<KeepClose />);
-    expect(screen.queryByText('Keep buddi one click away.')).toBeNull();
+    expect(screen.queryByText(LINE)).toBeNull();
+  });
+});
+
+describe('Settings → System: the dashboard as an app', () => {
+  it('keeps the bookmark tip and, on this Mac, the double-click app', async () => {
+    await act(async () => { render(<AppInstallSection />); });
+    expect(screen.getByText('The dashboard as an app')).toBeInTheDocument();
+    expect(screen.getByText(/bookmark it with/)).toBeInTheDocument();
+    expect(screen.getByText('buddi dashboard --install-app')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install the app' })).toBeNull();
+  });
+
+  it('offers Install the app once the browser fired its prompt', async () => {
+    await act(async () => { render(<AppInstallSection />); });
+    const prompt = firePrompt();
+    fireEvent.click(screen.getByRole('button', { name: 'Install the app' }));
+    expect(prompt).toHaveBeenCalledOnce();
+  });
+
+  it('is not there inside the installed app', async () => {
+    standalone(true);
+    const { container } = render(<AppInstallSection />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -1,7 +1,7 @@
 /** Home glances: produced side by side, hidden ones marked, links resolved, failures and blanks left out. */
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type HomeContribution, type PageDescriptor } from '@buddi/core';
-import { readGlances, readHome, setGlanceHidden } from './read.js';
+import { cardOf, readGlances, readHome, setGlanceHidden } from './read.js';
 
 /** `core.web_settings` as a map, answering the two statements the settings use. */
 function fakePool() {
@@ -50,6 +50,23 @@ describe('Home glances', () => {
     expect(views[1]!.link).toBeUndefined();
     // And a glance is never drawn as a block.
     expect((await readHome({ registry, ctx: {} as never })).map((b) => b.id)).toEqual(['weather.block']);
+  });
+
+  it('passes a card through, cut to size, and drops one without a figure or with a short trend', async () => {
+    const registry = registryWith([
+      {
+        id: 'weather.now', title: 'Weather at home', placement: 'glance',
+        produce: async () => ({
+          icon: 'sun', text: '70°F, clear in Somerset',
+          card: { value: '70°F', caption: 'Clear · Somerset', trend: { label: 'Next 12 hours', points: [70, 69, Number.NaN, 66] }, foot: 'High 74° · Low 58°' },
+        }),
+      },
+    ]);
+    const [view] = await readGlances({ pool: fakePool() as never, registry, ctx: {} as never });
+    expect(view!.card).toEqual({ value: '70°F', caption: 'Clear · Somerset', trend: { label: 'Next 12 hours', points: [70, 69, 66] }, foot: 'High 74° · Low 58°' });
+    expect(cardOf({ caption: 'no figure' })).toBeUndefined();
+    expect(cardOf('nope')).toBeUndefined();
+    expect(cardOf({ value: '18°C', trend: { label: 'x', points: [1] }, caption: 'y'.repeat(50) })).toEqual({ value: '18°C', caption: `${'y'.repeat(39)}…` });
   });
 
   it('remembers a hidden glance, shows it again, and refuses an id nobody contributes', async () => {

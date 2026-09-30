@@ -25,11 +25,14 @@ the session rules are in [Operations](operations.md).
 
 ### Install buddi as an app
 
-The dashboard is an installable web app: Chrome and Edge offer "Install buddi"
-(Home's **Install app** hands you that prompt), and Safari has File → Add to
-Dock. Installed, it opens in its own window with the Blob as its icon. Home
-suggests it once after setup, with the bookmark shortcut beside it, until you
-choose Not now. On a Mac, `buddi dashboard --install-app` is the other way: a
+The dashboard is an installable web app: Chrome and Edge offer "Install buddi",
+and Safari has File → Add to Dock. Installed, it opens in its own window with
+the Blob as its icon. When the browser offers an install, Home shows one quiet
+line at its foot ("Install buddi as an app, one click from your dock", with
+Install and Not now) and the owner menu has **Install the app**; neither shows
+inside the installed app. Settings → System → **The dashboard as an app** keeps
+the rest: where your browser puts its install item, the bookmark shortcut (⌘D
+or Ctrl+D) and, on the Mac buddi runs on, `buddi dashboard --install-app`, a
 double-clickable app in ~/Applications that signs you in with a fresh link each
 time. An app keeps the address it was installed from, so the tailnet address
 installs as its own app. The app has no reload button, so the owner menu at the
@@ -72,20 +75,29 @@ it keeps its conversation until you reload or press **New**.
 The page the dashboard opens on. It answers three questions in order: what
 needs me, what is my team up to, what is coming.
 
-- **The greeting** says the day and counts what needs you. When the front
-  desk's face is the Blob, it breathes there, as it does on the first-run
-  page; it thinks beside "is working" in the chat and in the corner button.
-  With reduced motion set on your computer, it stays a still picture.
-- **The composer** under it writes to your front desk (the default agent),
-  with files and voice like the chat; sending opens the new conversation
+- **The glance** at the top: the date (with plugins' one-line glances and the
+  Tips bulb), a large greeting, and what needs you as one line of counts, each
+  a link to its list (failed jobs and urgent alerts to Activity, proposals to
+  Settings; approvals, messages and agents to set up scroll to Needs you). On
+  the right, a plugin's glance card — the Weather plugin's: now, sky and
+  place, the next twelve hours as a small line, high and low — with the Blob
+  in it; without one, the Blob alone. When the front desk's face is the Blob,
+  it breathes there, as it does on the first-run page; with reduced motion set
+  on your computer, it stays a still picture. On a phone it stacks.
+- **The composer** under it writes to your front desk (the default agent):
+  one line that grows as you type, with files and voice like the chat; sending opens the new conversation
   where the answer arrives, and its last three conversations sit below as
   "Continue" links.
 - **Needs you**: approval cards you decide in place, messages kept for the
-  dashboard (a watcher's find, a reminder, a report), failed jobs, urgent
-  alerts, an agent a plugin needs, and proposals to keep or discard.
+  dashboard (a watcher's find, a reminder, a report, an agent's own message —
+  shown without its "@handle:", since the agent is named beside it), failed
+  jobs, urgent alerts, an agent a plugin needs, and proposals to keep or
+  discard.
 - **Your team**: one face per agent, with what it is waiting on or what it
   does. A face opens a conversation with it.
 - **On offer**: up to six next steps your agents suggested, each a chip.
+  Under it, when the browser has offered an install, one quiet line to
+  install buddi as an app.
 - **Coming up**: the next missions and reminders. **Lately**: the last five
   conversations.
 - Blocks plugins add, such as Goals, and "What buddi learned this week" when

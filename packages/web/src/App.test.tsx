@@ -13,7 +13,7 @@ import { App, NARROW_QUERY, PLACES, useMediaQuery } from './App';
 import { fmtMoney, truncate } from './format';
 import { api } from './api';
 import { legacyRedirect, placeOf, pluginSettingsRoute } from './routes';
-import { Home, greeting, needsSentence } from './views/Home';
+import { Home, glanceCounts, greeting } from './views/Home';
 
 afterEach(() => { cleanup(); window.history.replaceState(null, '', '#/'); });
 
@@ -79,11 +79,17 @@ describe('the shell', () => {
 });
 
 describe('home', () => {
-  it('says what needs a human, in one sentence', () => {
-    expect(needsSentence(0, 0, 0, 0, false)).toBe('Nothing needs you. Your agents are on it.');
-    expect(needsSentence(2, 2, 0, 0, false)).toBe('2 approvals waiting.');
-    expect(needsSentence(3, 1, 3, 1, false)).toBe('1 approval waiting, 3 failed jobs and 1 urgent alert.');
-    expect(needsSentence(1, 0, 0, 0, true)).toBe('The installation is paused.');
+  it('counts what needs a human, each count a door to its list', () => {
+    const none = { approvals: 0, failed: 0, urgent: 0, paused: false, proposals: 0, agentsToSetUp: 0, messages: 0 };
+    expect(glanceCounts(none)).toEqual([]);
+    expect(glanceCounts({ ...none, approvals: 2 })).toEqual([{ key: 'approvals', count: 2, label: 'approvals' }]);
+    expect(glanceCounts({ ...none, failed: 7, urgent: 1, proposals: 21, messages: 8 })).toEqual([
+      { key: 'failed', count: 7, label: 'failed jobs', tone: 'critical', route: '#/activity/jobs?state=failed' },
+      { key: 'urgent', count: 1, label: 'urgent alert', tone: 'critical', route: '#/activity/alerts' },
+      { key: 'proposals', count: 21, label: 'proposals', route: '#/settings/proposals' },
+      { key: 'messages', count: 8, label: 'messages' },
+    ]);
+    expect(glanceCounts({ ...none, paused: true, agentsToSetUp: 1 }).map((c) => [c.count, c.label])).toEqual([[null, 'Paused'], [1, 'agent to set up']]);
   });
 
   it('greets by the hour in the owner\'s time zone', () => {
@@ -117,7 +123,9 @@ describe('home', () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={agents} attention={new Map()} />);
     });
     await waitFor(() => expect(screen.getByText('Needs you')).toBeDefined());
-    expect(screen.getByText(/1 approval waiting, 3 failed jobs and 1 urgent alert/)).toBeDefined();
+    expect(screen.getByRole('link', { name: '3 failed jobs' })).toHaveAttribute('href', '#/activity/jobs?state=failed');
+    expect(screen.getByRole('button', { name: '1 approval' })).toBeDefined();
+    expect(screen.getByRole('link', { name: '1 urgent alert' })).toBeDefined();
     expect(screen.getByText('Send the invoice')).toBeDefined();
     // Sensitive: masked until asked, then shown.
     expect(screen.queryByText('$4,210')).toBeNull();

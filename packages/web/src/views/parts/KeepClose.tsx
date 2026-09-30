@@ -1,22 +1,26 @@
 /**
- * "Keep buddi one click away": the line on Home that offers the dashboard as
- * an app.
+ * Installing the dashboard as an app, in three places.
  *
- * When the browser has offered an install (`beforeinstallprompt`, Chrome and
- * Edge), **Install app** hands it that prompt. Otherwise one sentence says
- * where the browser keeps the item. The bookmark shortcut is always there, and
- * on the Mac buddi runs on, the double-clickable app `buddi dashboard
- * --install-app` writes. Shown until dismissed; never inside the installed app.
+ * - **Home**, at the foot: one quiet line, "Install buddi as an app, one click
+ *   from your dock", with Install and Not now — only when the browser has
+ *   actually offered an install (`beforeinstallprompt`, Chrome and Edge),
+ *   until dismissed, and never inside the installed app.
+ * - **The owner menu**: "Install the app", whenever the browser offers it and
+ *   this is not already the installed app (`useInstallPrompt`).
+ * - **Settings → System**: the rest (`AppInstallSection`) — where this
+ *   browser keeps "install", the bookmark shortcut, the tailnet note and, on
+ *   the Mac buddi runs on, the double-clickable app
+ *   `buddi dashboard --install-app` writes.
  */
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
-import { Button, Notice, Toolbar } from '../../ui';
+import { Button, Section, Stack, Toolbar } from '../../ui';
 
 /** Set once the owner dismissed the line or installed the app. */
 export const KEEP_CLOSE_KEY = 'buddi.keepClose';
 
 /** The part of Chrome's `BeforeInstallPromptEvent` used here. */
-interface InstallPrompt extends Event {
+export interface InstallPrompt extends Event {
   prompt: () => Promise<unknown>;
   userChoice?: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
@@ -44,17 +48,38 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * The browser's install prompt, when it offered one and it has not been used:
- * first run's chapter 4 hands it over from its "Install app" button.
+ * The browser's install prompt, when it offered one, it has not been used,
+ * and this is not already the installed app: first run's chapter 4, the owner
+ * menu, Home's line and Settings hand it over from their buttons.
  */
 export function useInstallPrompt(): InstallPrompt | null {
   const [prompt, setPrompt] = useState<InstallPrompt | null>(deferred);
   useEffect(() => {
     const listener = (): void => setPrompt(deferred);
     listeners.add(listener);
+    // It may have arrived between the first render and this effect.
+    listener();
     return () => { listeners.delete(listener); };
   }, []);
   return standalone() ? null : prompt;
+}
+
+/**
+ * Show the browser's install dialog. A prompt is good once, so it is
+ * forgotten whatever the answer; accepted, Home's line is not offered again.
+ */
+export async function installApp(prompt: InstallPrompt): Promise<boolean> {
+  try {
+    await prompt.prompt();
+    const choice = await prompt.userChoice;
+    if (deferred === prompt) deferred = null;
+    const accepted = choice?.outcome === 'accepted';
+    if (accepted) remember();
+    announce();
+    return accepted;
+  } catch {
+    return false;
+  }
 }
 
 /** For tests: forget a caught prompt. */
@@ -104,67 +129,74 @@ function isMac(userAgent: string): boolean {
   return /Mac|iPhone|iPad/.test(userAgent);
 }
 
+/** Home's line: only when the browser offered an install, until Not now. */
 export function KeepClose(): JSX.Element | null {
-  const [hidden, setHidden] = useState(() => dismissed() || standalone());
-  const [prompt, setPrompt] = useState<InstallPrompt | null>(deferred);
-  const [platform, setPlatform] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    const listener = (): void => {
-      setPrompt(deferred);
-      if (dismissed()) setHidden(true);
-    };
-    listeners.add(listener);
-    return () => { listeners.delete(listener); };
-  }, []);
-
-  useEffect(() => {
-    if (hidden) return undefined;
-    let live = true;
-    api.session().then((s) => { if (live) setPlatform(s.platform); }, () => undefined);
-    return () => { live = false; };
-  }, [hidden]);
-
-  if (hidden) return null;
-
-  const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
-  const local = onLoopback();
-  const hint = prompt ? null : installHint(agent);
+  const prompt = useInstallPrompt();
+  const [hidden, setHidden] = useState(dismissed);
+  if (hidden || !prompt) return null;
 
   const dismiss = (): void => {
     remember();
     setHidden(true);
   };
 
-  const install = (): void => {
-    const event = prompt;
-    if (!event) return;
-    void event.prompt().then(async () => {
-      const choice = await event.userChoice;
-      deferred = null;
-      setPrompt(null);
-      if (choice?.outcome === 'accepted') dismiss();
-    }, () => undefined);
-  };
+  return (
+    <div className="home-install" role="region" aria-label="Install buddi">
+      <p className="home-install-text">Install buddi as an app, one click from your dock.</p>
+      <Toolbar align="end">
+        <Button size="sm" variant="ghost" onClick={dismiss}>Not now</Button>
+        <Button size="sm" variant="accent" onClick={() => { void installApp(prompt).then((accepted) => { if (accepted) setHidden(true); }); }}>Install</Button>
+      </Toolbar>
+    </div>
+  );
+}
+
+/**
+ * Settings → System: every way to keep the dashboard one click away. Not
+ * shown inside the installed app, which is already that.
+ */
+export function AppInstallSection(): JSX.Element | null {
+  const prompt = useInstallPrompt();
+  const [platform, setPlatform] = useState<string | undefined>(undefined);
+  const [inApp] = useState(standalone);
+
+  useEffect(() => {
+    if (inApp) return undefined;
+    let live = true;
+    api.session().then((s) => { if (live) setPlatform(s.platform); }, () => undefined);
+    return () => { live = false; };
+  }, [inApp]);
+
+  if (inApp) return null;
+
+  const agent = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const local = onLoopback();
+  const hint = prompt ? null : installHint(agent);
 
   return (
-    <Notice tone="accent" title="Keep buddi one click away.">
-      <p>
-        {hint ? `${hint} ` : null}
-        Or bookmark it with {isMac(agent) ? '⌘D' : 'Ctrl+D'}.
-        {!local ? ' This tailnet address installs as its own app, separate from the one on the machine buddi runs on.' : null}
-      </p>
-      {local && platform === 'darwin' ? (
+    <Section
+      title="The dashboard as an app"
+      panel
+      foot={prompt ? (
+        <Toolbar align="end">
+          <Button variant="accent" onClick={() => { void installApp(prompt); }}>Install the app</Button>
+        </Toolbar>
+      ) : undefined}
+    >
+      <Stack>
         <p>
-          {/* The page names no outside host (bundle.test.ts), so the pointer is the doc's name: docs/cli.md, Everyday. */}
-          On this Mac, <span className="mono">buddi dashboard --install-app</span> puts a double-clickable app in
-          ~/Applications (docs/cli.md, under Everyday).
+          {prompt ? 'This browser can install buddi as an app: its own window, the Blob as its icon. ' : hint ? `${hint} ` : null}
+          Or bookmark it with {isMac(agent) ? '⌘D' : 'Ctrl+D'}.
+          {!local ? ' This tailnet address installs as its own app, separate from the one on the machine buddi runs on.' : null}
         </p>
-      ) : null}
-      <Toolbar align="end">
-        <Button variant="ghost" onClick={dismiss}>Not now</Button>
-        {prompt ? <Button variant="accent" onClick={install}>Install app</Button> : null}
-      </Toolbar>
-    </Notice>
+        {local && platform === 'darwin' ? (
+          <p>
+            {/* The page names no outside host (bundle.test.ts), so the pointer is the doc's name: docs/cli.md, Everyday. */}
+            On this Mac, <span className="mono">buddi dashboard --install-app</span> puts a double-clickable app in
+            ~/Applications that signs you in each time it opens (docs/cli.md, under Everyday).
+          </p>
+        ) : null}
+      </Stack>
+    </Section>
   );
 }

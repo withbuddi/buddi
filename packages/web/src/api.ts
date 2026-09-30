@@ -283,7 +283,16 @@ export interface HomeGlance {
   icon: string;
   text: string;
   link?: { plugin: string; page: string; place: 'rail' | 'settings' };
+  /** The same glance as a card for the right of the greeting, already formatted. Absent from an older gateway or plugin. */
+  card?: HomeGlanceCard;
   hidden: boolean;
+}
+
+export interface HomeGlanceCard {
+  value: string;
+  caption?: string;
+  trend?: { label: string; points: number[] };
+  foot?: string;
 }
 
 export interface Overview {

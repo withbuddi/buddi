@@ -134,7 +134,9 @@ export const Composer = forwardRef<ComposerHandle, {
   onReadAloud?: (on: boolean) => void;
   /** What the empty box says, when the page wants other words than "Message <agent>". */
   placeholder?: string;
-}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud, placeholder }, ref) {
+  /** One line that grows as it is typed into, the controls on its right (Home's box). */
+  slim?: boolean;
+}>(function Composer({ disabled, running, onSend, onStop, agentName, draft, model, setupHref, thinking, onThinking, onOpenFile, mentions, history, threadKey, conversationId, readAloud, onReadAloud, placeholder, slim }, ref) {
   /*
    * Where this thread's draft is kept, and the function that reads it.
    *
@@ -485,7 +487,7 @@ export const Composer = forwardRef<ComposerHandle, {
 
   return (
     // `data-busy`: something here a reload would lose (the shell's auto-reload waits, `shell/freshness.ts`).
-    <div className="wb-composer" data-testid="composer" data-busy={text.trim() !== '' || holdingFiles || listening ? 'true' : undefined}>
+    <div className="wb-composer" data-testid="composer" data-slim={slim || undefined} data-busy={text.trim() !== '' || holdingFiles || listening ? 'true' : undefined}>
       <div className="wb-composer-box" data-focused={focused || listening} data-disabled={disabled} data-listening={listening || undefined}>
         {attachments.length > 0 ? (
           <div className="wb-composer-files" role="list" aria-label="Files to send">
@@ -516,7 +518,7 @@ export const Composer = forwardRef<ComposerHandle, {
           id={COMPOSER_INPUT_ID}
           ref={area}
           value={text}
-          rows={2}
+          rows={slim ? 1 : 2}
           placeholder={running ? `${agentName} is working…` : placeholder ?? `Message ${agentName}`}
           onChange={(event) => {
             setText(event.target.value);

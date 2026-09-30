@@ -2535,14 +2535,6 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
  * ================================================================== */
 
 .home { display: flex; flex-direction: column; gap: var(--space-6); width: 100%; max-width: var(--page-max); margin-inline: auto; min-width: 0; }
-/* The band bleeds to the main column's edges and top; the words inside it
-   line up with the page below. */
-/* The kit's hero-inner: 24px above, 32px below, no band of its own. */
-.home-band { padding: var(--space-6) 0 var(--space-8); }
-.home-hero { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); width: 100%; max-width: var(--page-max); margin-inline: auto; }
-.home-hero .ui-mascot { margin-block: -2px; }
-.home-hero-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.home-hero-side { display: flex; align-items: center; gap: var(--space-3); flex: 0 0 auto; }
 .home-tips-btn { position: relative; }
 .home-tips-dot { position: absolute; top: var(--space-1); right: var(--space-1); width: var(--space-2); height: var(--space-2); border-radius: 50%; background: var(--accent); }
 .home-tips-btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
@@ -2554,16 +2546,74 @@ a.wb-record-title:hover { color: var(--accent); text-decoration: underline; text
 .tips-card > .ui-card { flex: 1 1 auto; }
 .tips-card-text { margin: 0; flex: 1 1 auto; line-height: var(--leading); }
 .tips-card[data-status='dismissed'] .tips-card-text, .tips-card[data-status='quiet'] .tips-card-text { color: var(--text-muted); }
-.home-date { margin: 0; color: var(--text-muted); font-size: var(--text-md); font-weight: var(--weight-medium); }
-.home-greeting {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -0.02em;
-  line-height: 1.15;
+/* ---- Home's glance: the day on the left, a plugin's glance card (or the Blob alone) on the right ---- */
+.home-band { padding: var(--space-8) 0 var(--space-6); }
+.home-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; max-width: var(--page-max); margin-inline: auto; }
+.home-top-text { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.home-date { margin: 0; font-size: var(--text-lg); color: var(--text-muted); font-weight: var(--weight-medium); }
+.home-date .home-tips-btn { margin-block: calc(-1 * var(--space-2)); }
+.home-greeting { margin: 0; font-family: var(--font-display); font-size: var(--text-5xl); font-weight: var(--weight-semibold); letter-spacing: -0.025em; line-height: 1.05; color: var(--text); }
+.home-counts { margin: var(--space-1) 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); font-size: var(--text-xl); font-weight: var(--weight-medium); line-height: var(--leading); }
+.home-count {
+  padding: 0; border: 0; background: none; font: inherit; color: var(--text); cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--line-strong); text-decoration-thickness: 0.08em; text-underline-offset: 0.25em;
 }
-.home-lede { margin: 0; font-size: var(--text-lg); color: var(--text); font-weight: var(--weight-medium); line-height: var(--leading); }
+.home-count:hover { color: var(--accent); text-decoration-color: currentColor; }
+.home-count:focus-visible { outline: none; border-radius: var(--radius-sm); box-shadow: var(--shadow-focus); }
+.home-count strong { font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
+.home-count[data-tone='critical'] strong { color: var(--critical); }
+.home-count-sep { color: var(--text-faint); }
+.home-calm { margin: var(--space-1) 0 0; font-size: var(--text-xl); font-weight: var(--weight-medium); color: var(--text-muted); line-height: var(--leading); }
+.home-side { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+/* The card: the figure large, one quiet line, the next hours as a line, the foot; the Blob beside it. */
+.home-weather { position: relative; display: flex; align-items: flex-end; gap: var(--space-5); padding: var(--space-5) var(--space-5) var(--space-5) var(--space-6); border: 1px solid var(--line); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-panel); min-width: 0; }
+.home-weather-main { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-1); min-width: 0; color: var(--text); text-decoration: none; }
+a.home-weather-main:hover { color: var(--text); text-decoration: none; }
+a.home-weather-main:hover .home-weather-caption { color: var(--accent); }
+a.home-weather-main:focus-visible { outline: none; border-radius: var(--radius); box-shadow: var(--shadow-focus); }
+.home-weather-now { display: inline-flex; align-items: center; gap: var(--space-3); }
+.home-weather-icon { display: inline-flex; color: var(--accent); }
+.home-weather-value { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: var(--weight-semibold); line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.home-weather-caption { font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--text-muted); }
+.home-weather-trend { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); font-size: var(--text-xs); color: var(--text-faint); }
+.home-spark { display: block; width: calc(var(--space-12) * 3); height: var(--space-6); color: var(--accent); overflow: visible; }
+.home-weather-foot { font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.home-weather .ui-mascot { box-shadow: none; }
+.home-weather-hide {
+  position: absolute; top: var(--space-2); right: var(--space-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--space-5); height: var(--space-5); padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--text-faint);
+  cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease;
+}
+.home-weather:hover .home-weather-hide, .home-weather-hide:focus-visible { opacity: 1; }
+.home-weather-hide:hover { color: var(--text); background: var(--surface-sunken); }
+@media (hover: none) { .home-weather-hide { opacity: 1; } }
+
+/* Home's composer: slim, one line that grows, the controls on its right. */
+.wb-composer[data-slim='true'] .wb-composer-box { display: flex; flex-wrap: wrap; align-items: flex-end; }
+.wb-composer[data-slim='true'] .wb-composer-box > * { flex: 1 0 100%; }
+.wb-composer[data-slim='true'] .wb-composer-box textarea { flex: 1 1 0; min-width: 0; min-height: 0; padding: var(--space-3) var(--space-2) var(--space-3) var(--space-5); }
+.wb-composer[data-slim='true'] .wb-composer-row { flex: 0 0 auto; gap: var(--space-1); padding: var(--space-1) var(--space-1) var(--space-1) 0; }
+.wb-composer[data-slim='true'] .wb-hint { display: none; }
+
+/* The browser offered an install: one quiet line at the foot of Home. */
+.home-install { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.home-install-text { margin: 0; font-size: var(--text-md); color: var(--text-muted); }
+.home-install .ui-toolbar { margin-left: auto; }
+
+@media (max-width: 720px) {
+  .home-band { padding: var(--space-4) 0 var(--space-5); }
+  .home-top { gap: var(--space-4); }
+  .home-top[data-card='true'] { grid-template-columns: minmax(0, 1fr); }
+  .home-greeting { font-size: var(--text-3xl); }
+  .home-counts, .home-calm { font-size: var(--text-lg); }
+  .home-side .ui-mascot { width: calc(var(--space-12) + var(--space-2)); height: calc(var(--space-12) + var(--space-2)); border-radius: var(--radius-xl); }
+  .home-top[data-card='true'] .home-side { justify-content: stretch; }
+  .home-weather { flex: 1 1 auto; justify-content: space-between; padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5); }
+  .home-weather-value { font-size: var(--text-3xl); }
+}
+
 /* Home's composer: the chat's box on the page's own field, and the front
    desk's last few conversations under it, quiet. */
 .home-ask { display: flex; flex-direction: column; gap: var(--space-2); }
@@ -2740,9 +2790,6 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .home-foot { margin: 0; font-size: var(--text-sm); }
 
 @media (max-width: 720px) {
-  .home-greeting { font-size: var(--text-2xl); }
-  .home-hero .ui-mascot { width: 56px; height: 56px; border-radius: var(--radius-xl); }
-  .home-band { padding: var(--space-4) 0 var(--space-5); }
   .home-columns { grid-template-columns: 1fr; }
 }
 

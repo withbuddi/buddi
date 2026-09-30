@@ -60,6 +60,11 @@ beforeEach(() => {
         actionId: null, state: 'sent', dueAt: null, channel: 'telegram.chat', createdAt: '2026-09-25T09:00:00.000Z', sentAt: null,
         seenAt: '2026-09-25T09:05:00.000Z', actedAt: null, error: null,
       },
+      {
+        id: 'n3', kind: 'agent', urgency: 'now', title: '@scout: Found three desks', text: null, link: null, agentId: 'scout', pluginId: null,
+        actionId: null, state: 'sent', dueAt: null, channel: 'telegram.chat', createdAt: '2026-09-25T08:00:00.000Z', sentAt: null,
+        seenAt: null, actedAt: null, error: null,
+      },
     ],
   });
 });
@@ -85,6 +90,10 @@ describe('Settings → Notifications', () => {
     expect(screen.getByText('Failed: no channel')).toBeInTheDocument();
     expect(screen.getByText(/failures · dashboard/)).toBeInTheDocument();
     expect(screen.getByText(/watchers · Telegram/)).toBeInTheDocument();
+    // An agent's own message: named in the line under it, so its title drops the signature.
+    expect(screen.getByText('Found three desks')).toBeInTheDocument();
+    expect(screen.queryByText('@scout: Found three desks')).toBeNull();
+    expect(screen.getByText(/from Scout · Telegram/)).toBeInTheDocument();
   });
 
   it('saves the whole value and says so', async () => {

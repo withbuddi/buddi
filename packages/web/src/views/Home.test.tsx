@@ -106,13 +106,11 @@ describe('the upgrade notice', () => {
 });
 
 describe('the tip', () => {
-  it('puts the Tips lightbulb on the greeting row, before the Blob', async () => {
+  it('puts the Tips lightbulb on the date line of the glance', async () => {
     await home(undefined);
     const bulb = screen.getByRole('button', { name: 'Tips' });
-    expect(bulb.closest('.home-hero')).not.toBeNull();
-    // First in the side cluster; the Blob follows it.
-    expect(bulb.parentElement?.className).toBe('home-hero-side');
-    expect(bulb.parentElement?.firstElementChild).toBe(bulb);
+    expect(bulb.closest('.home-top')).not.toBeNull();
+    expect(bulb.parentElement).toHaveClass('home-date');
   });
 
   it('sits under the greeting, above the notices', async () => {
@@ -187,7 +185,7 @@ describe('what buddi kept for you, under "Needs you"', () => {
     const navigate = vi.fn();
     window.localStorage.setItem('buddi.needsYouView', 'list');
     await home(null, navigate);
-    expect(screen.getByText('2 messages for you.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '2 messages' })).toBeInTheDocument();
     expect(screen.getByText('Needs you')).toBeInTheDocument();
     expect(screen.getByText('The weekly recap')).toBeInTheDocument();
     expect(screen.queryByText('Send the invoice?')).not.toBeInTheDocument();
@@ -368,6 +366,18 @@ describe('"Needs you" as a deck', () => {
     expect(region).toHaveTextContent('Concierge · also Mail Triage');
     fireEvent.click(screen.getByRole('radio', { name: 'List' }));
     expect(screen.getByRole('link', { name: /A mail from the bank/ })).toHaveTextContent('Concierge · also Mail Triage');
+  });
+
+  it("drops the \"@handle: \" signature of an agent's own message, which the card and the row already name", async () => {
+    const SIGNED = note({ id: 'n9', kind: 'agent', title: '@concierge: Your parcel is at the door', agentId: 'concierge' });
+    await deck([SIGNED]);
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    expect(region).toHaveTextContent('Concierge');
+    expect(region).toHaveTextContent('Your parcel is at the door');
+    expect(region).not.toHaveTextContent('@concierge:');
+    fireEvent.click(screen.getByRole('radio', { name: 'List' }));
+    const line = screen.getByRole('link', { name: /Your parcel is at the door/ });
+    expect(line).not.toHaveTextContent('@concierge:');
   });
 
   it('switches to the list and remembers it', async () => {

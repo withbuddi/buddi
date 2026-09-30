@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type NotificationKind, type NotificationRow } from '../api';
 import type { ChatAgent } from '../chat/types';
+import { notificationTitle } from '../format';
 import { AgentAvatar } from '../ui';
 
 /** How many cards are drawn before the rest fold into "and N more". */
@@ -115,7 +116,7 @@ export function NotificationToasts({
         <div key={row.id} className="ui-toast nt-toast" data-tone={toneOf(row.kind)} role="status">
           {row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : null}
           <div className="nt-toast-main">
-            <div className="ui-toast-title">{row.title}</div>
+            <div className="ui-toast-title">{notificationTitle(row)}</div>
             {row.text ? <div className="ui-toast-body nt-toast-line">{firstLine(row.text)}</div> : null}
             {row.link ? (
               <a
@@ -127,7 +128,7 @@ export function NotificationToasts({
               </a>
             ) : null}
           </div>
-          <button type="button" className="nt-toast-x" aria-label={`Dismiss ${row.title}`} onClick={() => onDismiss(row.id)}>
+          <button type="button" className="nt-toast-x" aria-label={`Dismiss ${notificationTitle(row)}`} onClick={() => onDismiss(row.id)}>
             ×
           </button>
         </div>

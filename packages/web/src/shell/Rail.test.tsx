@@ -3,11 +3,12 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { api } from '../api';
 import { CONNECTION_DOT, Rail, focusUntilLabel } from './Rail';
 import { buildDiffers } from '../build';
+import { resetInstallPrompt } from '../views/parts/KeepClose';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -121,6 +122,57 @@ describe('Reload in the owner menu', { timeout: 180_000 }, () => {
     const { userEvent } = await import('@testing-library/user-event');
     await userEvent.setup({ delay: null, pointerEventsCheck: 0 }).click(item);
     expect(reload).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Install the app in the owner menu', { timeout: 180_000 }, () => {
+  function offerInstall(prompt = vi.fn(async () => undefined)): typeof prompt {
+    const event = new Event('beforeinstallprompt', { cancelable: true }) as Event & { prompt: typeof prompt; userChoice: Promise<{ outcome: string }> };
+    event.prompt = prompt;
+    event.userChoice = Promise.resolve({ outcome: 'dismissed' });
+    act(() => { window.dispatchEvent(event); });
+    return prompt;
+  }
+  function displayMode(standalone: boolean): void {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(display-mode: standalone)' ? standalone : false,
+      media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    }));
+  }
+  async function openMenu(): Promise<import('@testing-library/user-event').UserEvent> {
+    const { userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    render(
+      <Tooltip.Provider>
+        <Rail attention={0} place="#/" onNavigate={vi.fn()} theme="system" onTheme={vi.fn()} />
+      </Tooltip.Provider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'You' }));
+    await screen.findByText('Change appearance');
+    return user;
+  }
+  afterEach(() => { resetInstallPrompt(); vi.unstubAllGlobals(); });
+
+  it('is not there until the browser offers an install', async () => {
+    displayMode(false);
+    await openMenu();
+    expect(screen.queryByRole('menuitem', { name: 'Install the app' })).not.toBeInTheDocument();
+  });
+
+  it('is there once it does, and hands the prompt over', async () => {
+    displayMode(false);
+    const prompt = offerInstall();
+    const user = await openMenu();
+    await user.click(screen.getByRole('menuitem', { name: 'Install the app' }));
+    expect(prompt).toHaveBeenCalledOnce();
+  });
+
+  it('is not there inside the installed app', async () => {
+    displayMode(true);
+    offerInstall();
+    await openMenu();
+    expect(screen.queryByRole('menuitem', { name: 'Install the app' })).not.toBeInTheDocument();
   });
 });
 

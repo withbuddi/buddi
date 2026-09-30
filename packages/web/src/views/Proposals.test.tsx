@@ -207,7 +207,8 @@ describe('Home', () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={[]} attention={new Map()} />);
     });
     expect(await screen.findByRole('link', { name: '2 proposals from your agents to keep or discard.' })).toHaveAttribute('href', '#/settings/proposals');
-    expect(screen.getByText('2 proposals to review.')).toBeInTheDocument();
+    // And on the glance's counts line, a link to the same inbox.
+    expect(screen.getByRole('link', { name: '2 proposals' })).toHaveAttribute('href', '#/settings/proposals');
   });
 
   it('draws a later version of a kept skill as a diff, with the page\'s sentence highlighted in it', async () => {

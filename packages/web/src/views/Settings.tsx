@@ -32,6 +32,7 @@ import { Markdown } from '../chat/markdown';
 import { Proposals } from './Proposals';
 import { PLUGINS_LEDE, Plugins } from './Plugins';
 import { Notifications, TelegramSettings } from './Notifications';
+import { AppInstallSection } from './parts/KeepClose';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
 import { railKey, setRailHidden, useRailHidden } from '../shell/railHidden';
@@ -271,6 +272,7 @@ function System({ timezone }: { timezone: string }): JSX.Element {
         ) : null}
       </Section>
       <Service />
+      <AppInstallSection />
       <Tailscale />
       <Section title="Mail and sources" panel>
         {!data ? (

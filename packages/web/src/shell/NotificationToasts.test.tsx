@@ -62,6 +62,15 @@ describe('the notification toasts', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it("draws an agent's own message without the signature its face already gives", async () => {
+    vi.mocked(api.notifications).mockResolvedValue({ notifications: [row({ kind: 'agent', agentId: 'ledger', title: '@ledger: Charged twice' })] });
+    render(<Harness />);
+    await act(async () => { fireEvent.click(screen.getByText('poll')); });
+    expect(screen.getByRole('status')).toHaveTextContent('Charged twice');
+    expect(screen.getByRole('status')).not.toHaveTextContent('@ledger:');
+    expect(screen.getByRole('button', { name: 'Dismiss Charged twice' })).toBeInTheDocument();
+  });
+
   it('draws three and folds the rest, marking only what it drew', async () => {
     vi.mocked(api.notifications).mockResolvedValue({
       notifications: [1, 2, 3, 4, 5].map((n) => row({ id: `n${n}`, title: `Thing ${n}`, kind: n === 1 ? 'failure' : 'recap', createdAt: `2026-09-25T10:0${9 - n}:00.000Z` })),

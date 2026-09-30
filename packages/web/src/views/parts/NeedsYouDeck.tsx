@@ -11,7 +11,7 @@ import { useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { NotificationRow } from '../../api';
 import type { ChatAgent } from '../../chat/types';
-import { fmtRelative } from '../../format';
+import { fmtRelative, notificationTitle } from '../../format';
 import { AgentAvatar, Button, Card, Empty, Icon, Toolbar } from '../../ui';
 
 export type NeedsYouView = 'deck' | 'list';
@@ -122,7 +122,7 @@ export function NeedsYouDeck({
         }
       >
         <div className="home-deck-body">
-          <p className="home-deck-title">{row.title}</p>
+          <p className="home-deck-title">{notificationTitle(row)}</p>
           {row.text ? <p className="home-deck-text">{row.text}</p> : null}
         </div>
       </Card>

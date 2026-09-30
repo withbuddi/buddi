@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withoutFence, fmtCached, fmtInOut, fmtShortRelative, fmtAgo } from './format';
+import { withoutFence, fmtCached, fmtInOut, fmtShortRelative, fmtAgo, notificationTitle } from './format';
 
 describe('withoutFence', () => {
   it('drops a plugin`s untrusted markers and keeps the words between them', () => {
@@ -51,5 +51,17 @@ describe('fmtAgo', () => {
     expect(fmtAgo(new Date(now + 3 * 3600_000).toISOString(), now)).toBe('just now');
     expect(fmtAgo(null, now)).toBe('');
     expect(fmtAgo('not a date', now)).toBe('');
+  });
+});
+
+describe('notificationTitle', () => {
+  it('drops the "@handle: " an agent message is signed with, and nothing else', () => {
+    expect(notificationTitle({ kind: 'agent', title: '@ledger: Charged twice at Monoprix' })).toBe('Charged twice at Monoprix');
+    expect(notificationTitle({ kind: 'agent', title: '@finance-bot: Rent: due Friday' })).toBe('Rent: due Friday');
+    // Only the signature at the start, only on an agent message.
+    expect(notificationTitle({ kind: 'agent', title: 'Ask @ledger: later' })).toBe('Ask @ledger: later');
+    expect(notificationTitle({ kind: 'watcher', title: '@ledger: from a watcher' })).toBe('@ledger: from a watcher');
+    // A signature with nothing after it stays as it was.
+    expect(notificationTitle({ kind: 'agent', title: '@ledger: ' })).toBe('@ledger: ');
   });
 });

@@ -54,9 +54,31 @@ export interface HomeGlance {
   /** Already formatted, at most `HOME_GLANCE_MAX` characters; longer is cut. */
   text: string;
   link?: { route: TileLink };
+  /**
+   * The same glance as a card, for the right of Home's greeting: a figure, a
+   * quiet line, a short run of numbers drawn as a sparkline, and a foot. The
+   * first shown glance with a card is drawn as one (with the Blob beside it)
+   * instead of on the date line; the others stay lines. An older dashboard
+   * ignores it and draws `text`.
+   */
+  card?: HomeGlanceCard;
+}
+
+export interface HomeGlanceCard {
+  /** The figure, already formatted: "70°F". At most `HOME_CARD_VALUE_MAX` characters. */
+  value: string;
+  /** One quiet line under it: "Clear · Somerset". At most `HOME_CARD_LINE_MAX`. */
+  caption?: string;
+  /** Numbers in order (the next hours, say), drawn as a line with no axis; two to `HOME_CARD_TREND_MAX`. */
+  trend?: { label: string; points: number[] };
+  /** The last line: "High 74° · Low 58°". At most `HOME_CARD_LINE_MAX`. */
+  foot?: string;
 }
 
 export const HOME_GLANCE_MAX = 60;
+export const HOME_CARD_VALUE_MAX = 12;
+export const HOME_CARD_LINE_MAX = 40;
+export const HOME_CARD_TREND_MAX = 48;
 
 export interface HomeBlockContribution {
   id: string;

@@ -22,7 +22,7 @@ import {
   type NotificationRow,
   type NotificationSettings,
 } from '../api';
-import { fmtRelative, fmtTime } from '../format';
+import { fmtRelative, fmtTime, notificationTitle } from '../format';
 import { settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, Field, List, ListRow, Notice, Section, Stack, useAsync } from '../ui';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
@@ -45,6 +45,17 @@ export const KIND_LABELS: Record<NotificationKind, { label: string; hint: string
 const OWN_SECTION: ReadonlySet<NotificationKind> = new Set(['agent']);
 
 const DEFAULT_AGENT_MESSAGES: AgentMessageSettings = { maxUrgency: 'now', muted: [] };
+
+/**
+ * The row's kind in words. An agent's own message names the agent, since its
+ * title is drawn without the "@handle: " it was sent with.
+ */
+function kindWords(row: NotificationRow, agents: ReadonlyArray<{ id: string; name: string }>): string {
+  const words = KIND_LABELS[row.kind].label.toLowerCase();
+  if (row.kind !== 'agent' || !row.agentId) return words;
+  const name = agents.find((agent) => agent.id === row.agentId)?.name ?? row.agentId;
+  return `from ${name}`;
+}
 
 export function Notifications({ timezone }: { timezone: string }): JSX.Element {
   const view = useAsync(() => api.notificationSettings(), []);
@@ -186,8 +197,8 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
             {recent.data.notifications.map((row) => (
               <ListRow
                 key={row.id}
-                title={row.title}
-                sub={`${fmtTime(row.createdAt, timezone)} · ${KIND_LABELS[row.kind].label.toLowerCase()} · ${whereItWent(row, channels)}`}
+                title={notificationTitle(row)}
+                sub={`${fmtTime(row.createdAt, timezone)} · ${kindWords(row, roster.data?.agents ?? [])} · ${whereItWent(row, channels)}`}
                 side={<RowState row={row} />}
               />
             ))}
@@ -261,7 +272,7 @@ function AgentMessages({ settings, agents, onChange }: {
         </div>
       ) : null}
       <p className="ui-field-hint">
-        An agent given the owner.notify tool can message you itself, shown as "@agent: title". Each agent may send 6
+        An agent given the owner.notify tool can message you itself, signed "@agent: title" on Telegram; here the agent is named beside it. Each agent may send 6
         urgent messages an hour and 20 a day. Off keeps them in the list below and never sends them.
       </p>
     </Stack>
