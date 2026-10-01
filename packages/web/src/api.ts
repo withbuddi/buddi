@@ -1366,6 +1366,8 @@ export interface RecoveryView {
       version: string;
       source: string;
       installed: boolean;
+      /** Installed since the gateway started; it loads at the next restart. */
+      loadsAtRestart?: boolean;
       install?: string;
       /** Data the restore kept for it; `note` is the sentence to show. */
       waiting?: { rows: number; note: string };

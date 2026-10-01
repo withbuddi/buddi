@@ -114,6 +114,24 @@ describe('the checklist', () => {
     expect(screen.getByText('developer.workspaces already had rows here.')).toBeInTheDocument();
   });
 
+  it('a plugin installed since the last start reads "loads at the next restart" and offers Restart', () => {
+    render(
+      <RecoveryChecklist
+        view={view({
+          plugins: [
+            {
+              name: 'finance', version: '0.2.0', source: 'npm @withbuddi/plugin-finance@0.2.0', installed: true,
+              loadsAtRestart: true, install: '@withbuddi/plugin-finance@0.2.0',
+            },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('installed — loads at the next restart')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Install finance again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Restart to load finance' })).toHaveAttribute('href', '#/settings/system');
+  });
+
   it('asks nothing when the backup left nothing behind', async () => {
     render(
       <RecoveryChecklist

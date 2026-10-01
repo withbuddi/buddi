@@ -14,7 +14,9 @@
  *    link to where it is fixed. A name in the vault's list proves nothing: an
  *    adopted credential is kept under `owner-secret:<id>`, not its name.
  *  - **plugins.** `plugins.json` came back in the archive; what is installed
- *    here is whatever this build has. The difference is the list.
+ *    here is what this build runs plus what the live plugins record holds (a
+ *    plugin approved since the last start, which loads at the next one). The
+ *    difference is the list.
  *  - **pending work.** Counts the restore took at the moment it loaded, so the
  *    number stays true even after the owner has dropped the rows.
  *  - **grants.** Standing tool permissions, one row each, keep or drop.
@@ -62,6 +64,12 @@ export interface RecoveryPlugin {
   version: string;
   source: string;
   installed: boolean;
+  /**
+   * Installed since the restart that loaded this gateway — in the plugins
+   * record (what `buddi plugins list` reads) but not running yet. Shown as
+   * "installed — loads at the next restart", never "install again".
+   */
+  loadsAtRestart?: true;
   /** `<npm name>@<version>` when it came from a registry: what Settings → Plugins can stage again. */
   install?: string;
   /**
@@ -285,10 +293,27 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
  */
 function pluginsFromArchive(env: NodeJS.ProcessEnv, pending: readonly PendingPluginData[] = []): RecoveryPlugin[] {
   const search = agentSearchPath(env);
-  const installed = new Set(installedManifests(env).map((m) => m.name));
+  const running = new Set(installedManifests(env).map((m) => m.name));
   const data = env.BUDDI_DATA_DIR?.trim();
   const restored = data ? path.join(data, 'restored-plugins.json') : undefined;
-  const from = restored && existsSync(restored) ? restored : pluginsFilePath({ ownerRoot: search.ownerRoot, env });
+  const live = pluginsFilePath({ ownerRoot: search.ownerRoot, env });
+  const fromArchive = restored !== undefined && existsSync(restored);
+  const from = fromArchive ? restored : live;
+  /*
+   * The live record, read on every call, is what `buddi plugins approve` and
+   * the dashboard's install write: a plugin there that is not running was
+   * installed since this gateway started. Only when the archive's list is its
+   * own file — without it the live record *is* the archive's list, and every
+   * plugin in it would read as installed.
+   */
+  const recorded = new Set<string>();
+  if (fromArchive) {
+    try {
+      for (const p of readPluginsFile(live).plugins) if (p.placing !== true) recorded.add(p.name);
+    } catch {
+      /* an unreadable record proves nothing is installed; the running set still counts */
+    }
+  }
   let listed: RecoveryPlugin[] = [];
   const schemaOf = new Map<string, string>();
   try {
@@ -299,7 +324,8 @@ function pluginsFromArchive(env: NodeJS.ProcessEnv, pending: readonly PendingPlu
         name: p.name,
         version: p.version,
         source: describeSource(p.source),
-        installed: installed.has(p.name),
+        installed: running.has(p.name) || recorded.has(p.name),
+        ...(!running.has(p.name) && recorded.has(p.name) ? { loadsAtRestart: true as const } : {}),
         ...(p.source.kind === 'registry' ? { install: `${p.source.name}@${p.source.version}` } : {}),
       };
     });

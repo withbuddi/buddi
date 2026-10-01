@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - A restored plugin's settings no longer wait forever because the plugin seeded a default at install: a settings table (a single text `key` plus a `value`, like finance's preferences) gets the backup's missing keys added, keeps the values already there, and leaves the recovery checklist. Other tables that already have rows are still kept aside.
 - `buddi doctor` on a packaged install now prints "Kept plugin data: …" while a restore's plugin data is waiting; the packaged doctor never ran the row the checkout's doctor had.
+- The recovery checklist no longer asks you to install a plugin again right after `buddi plugins approve` or the dashboard installed it: it reads the plugins record, says "installed — loads at the next restart", and links Restart to Settings → System.
 
 ### Changed
 

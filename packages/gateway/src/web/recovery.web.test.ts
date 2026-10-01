@@ -286,7 +286,7 @@ it('the checklist compares the archive plugins the restore wrote down, not the l
     }],
   }));
   const pool = fakePool(state());
-  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_DATA_DIR: data });
+  const { origin, headers } = await dashboard(pool, { BUDDI_VAULT: 'memory', BUDDI_DATA_DIR: data, BUDDI_PLUGINS_FILE: path.join(data, 'plugins.json') });
   const view = await (await fetch(`${origin}/api/recovery`, { headers })).json() as any;
   expect(view.checklist.plugins).toEqual([
     { name: 'ledger', version: '1.2.0', source: 'directory /plugins/ledger', installed: false },
@@ -369,7 +369,7 @@ it('a plugin from npm carries what Settings → Plugins needs to stage it again'
     }],
   }));
   const pool = fakePool(state());
-  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data }, vault: createMemoryVault() }, 'owner');
+  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data, BUDDI_PLUGINS_FILE: path.join(data, 'plugins.json') }, vault: createMemoryVault() }, 'owner');
   expect(view.checklist.plugins).toEqual([{
     name: 'weather', version: '0.1.0', source: 'npm @withbuddi/plugin-weather@0.1.0', installed: false,
     install: '@withbuddi/plugin-weather@0.1.0',
@@ -399,7 +399,7 @@ it('a missing plugin says its kept data loads when it is installed; a table left
       },
     ],
   }));
-  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data }, vault: createMemoryVault() }, 'owner');
+  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data, BUDDI_PLUGINS_FILE: path.join(data, 'plugins.json') }, vault: createMemoryVault() }, 'owner');
   expect(view.checklist.plugins).toEqual([{
     name: 'finance', version: '0.2.0', source: 'npm @withbuddi/plugin-finance@0.2.0', installed: false,
     install: '@withbuddi/plugin-finance@0.2.0',
@@ -409,4 +409,29 @@ it('a missing plugin says its kept data loads when it is installed; a table left
     schema: 'developer', table: 'developer.workspaces', rows: 3,
     sentence: "developer.workspaces already had rows here, so the backup's 3 were kept aside at /data/restore/pending/developer instead of loaded over them.",
   }]);
+});
+
+it('a plugin in the live record but not running reads installed, loading at the next restart', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-data-'));
+  const entry = (name: string) => ({
+    name, version: '0.2.0', entry: 'index.js', installedAt: RESTORED_AT.toISOString(), schema: name,
+    source: { kind: 'registry', name: `@withbuddi/plugin-${name}`, version: '0.2.0' },
+  });
+  await writeFile(path.join(data, 'restored-plugins.json'), JSON.stringify({ version: 1, plugins: [entry('finance'), entry('weather')] }));
+  const live = path.join(data, 'plugins.json');
+  await writeFile(live, JSON.stringify({ version: 1, plugins: [] }));
+  const env = { BUDDI_DATA_DIR: data, BUDDI_PLUGINS_FILE: live };
+  const pool = fakePool(state());
+  const before = await readRecoveryView({ pool: pool as never, env, vault: createMemoryVault() }, 'owner');
+  expect(before.checklist.plugins.map((p) => [p.name, p.installed, p.loadsAtRestart])).toEqual([
+    ['finance', false, undefined],
+    ['weather', false, undefined],
+  ]);
+  // `buddi plugins approve` wrote finance into the record; nothing restarted.
+  await writeFile(live, JSON.stringify({ version: 1, plugins: [{ ...entry('finance'), entry: '/nowhere/index.js' }] }));
+  const after = await readRecoveryView({ pool: pool as never, env, vault: createMemoryVault() }, 'owner');
+  expect(after.checklist.plugins.map((p) => [p.name, p.installed, p.loadsAtRestart])).toEqual([
+    ['finance', true, true],
+    ['weather', false, undefined],
+  ]);
 });

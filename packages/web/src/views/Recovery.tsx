@@ -67,6 +67,18 @@ export function pluginFixRoute(plugin: RecoveryPlugin): string {
   return plugin.install ? pluginInstallRoute(plugin.install) : PLUGINS_BROWSE_ROUTE;
 }
 
+/** Settings → System, where Restart gateway is. */
+const SYSTEM_ROUTE = settingsRoute('system');
+
+/** The row's sentence: installed and waiting for a restart, its kept data, or where it came from. */
+export function pluginSentence(plugin: RecoveryPlugin): string {
+  if (plugin.loadsAtRestart) {
+    const data = plugin.waiting ? `; ${plugin.waiting.note}` : '';
+    return `installed — loads at the next restart${data}`;
+  }
+  return plugin.waiting ? `${plugin.name} — ${plugin.waiting.note}` : plugin.source;
+}
+
 export const RECOVERY_BANNER =
   'This buddi was restored from a backup. Nothing runs on its own until you finish the checklist.';
 
@@ -122,8 +134,11 @@ export function RecoveryChecklist({
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [left, setLeft] = useState(false);
-  // An installed plugin still shows while the data kept for it has not loaded.
-  const missingPlugins = plugins.filter((plugin) => !plugin.installed || plugin.waiting !== undefined);
+  // An installed plugin still shows while the data kept for it has not loaded,
+  // or while it waits for the restart that loads it.
+  const missingPlugins = plugins.filter(
+    (plugin) => !plugin.installed || plugin.waiting !== undefined || plugin.loadsAtRestart === true,
+  );
   const pendingTotal = pending.jobs + pending.missions + pending.approvals + pending.telegramChats;
 
   const toggle = (id: string): void => {
@@ -189,9 +204,13 @@ export function RecoveryChecklist({
                 <ListRow
                   key={plugin.name}
                   title={<><span className="mono">{plugin.name}</span> {plugin.version}</>}
-                  sub={plugin.waiting ? `${plugin.name} — ${plugin.waiting.note}` : plugin.source}
+                  sub={pluginSentence(plugin)}
                   side={
-                    plugin.installed ? undefined : (
+                    plugin.loadsAtRestart ? (
+                      <ButtonLink size="sm" href={SYSTEM_ROUTE} aria-label={`Restart to load ${plugin.name}`}>
+                        Restart
+                      </ButtonLink>
+                    ) : plugin.installed ? undefined : (
                       <ButtonLink size="sm" href={pluginFixRoute(plugin)} aria-label={`Install ${plugin.name} again`}>
                         {plugin.install ? 'Install' : 'Find it'}
                       </ButtonLink>
