@@ -146,6 +146,17 @@ function dateText(at: Date, timezone: string, opts: { weekday?: boolean; year?: 
   }
 }
 
+/**
+ * A month as a heading, the owner's way: "October 2026" (short and long),
+ * "2026-10" (ISO), or the browser's own words on Auto ("octobre 2026").
+ */
+export function fmtMonth(year: number, month: number): string {
+  if (formats.date === 'iso') return `${year}-${String(month).padStart(2, '0')}`;
+  const at = new Date(Date.UTC(year, month - 1, 15));
+  const locale = formats.date === 'auto' ? browserLocale() : 'en-GB';
+  return intl(locale, { timeZone: 'UTC', month: 'long', year: 'numeric' }).format(at);
+}
+
 /** A calendar day (`2026-10-01`), the owner's way, read as that day wherever it is drawn. */
 export function fmtDay(day: string, opts: { weekday?: boolean; year?: boolean; compact?: boolean } = {}): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(day);

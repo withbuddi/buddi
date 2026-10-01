@@ -10,7 +10,7 @@
  */
 import { readPath } from '../canvas/resolve';
 import type { CalendarMap } from './types';
-import { displayFormats, fmtDay, fmtMinutes, monthFirst } from '../format';
+import { displayFormats, fmtDay, fmtMinutes, fmtMonth, monthFirst } from '../format';
 
 export type CalendarView = 'week' | 'month' | 'list';
 
@@ -39,10 +39,6 @@ export interface DayPart {
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
 function parts(date: string): [number, number, number] {
@@ -124,10 +120,10 @@ export function move(view: CalendarView, anchor: string, dir: -1 | 1): string {
   return new Date(Date.UTC(y, m - 1 + dir, 1)).toISOString().slice(0, 10);
 }
 
-/** "28 Sep – 4 Oct 2026", "September 2026". */
+/** "28 Sep – 4 Oct 2026"; a month in the owner's date format ("September 2026", "2026-09"). */
 export function rangeTitle(view: CalendarView, anchor: string, from: string, days: number): string {
   const [y, m] = parts(anchor);
-  if (view === 'month') return `${MONTH_NAMES[m - 1]} ${y}`;
+  if (view === 'month') return fmtMonth(y, m);
   const last = addDays(from, days - 1);
   const [fy, fm, fd] = parts(from);
   const [ly, lm, ld] = parts(last);

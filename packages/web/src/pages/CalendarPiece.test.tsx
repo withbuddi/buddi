@@ -13,6 +13,7 @@ import { api } from '../api';
 import { PluginPage } from './PluginPage';
 import { eventsOn, lanesOf, toEvents, rangeOf, move, rangeTitle } from './calendar';
 import type { PluginPageDescriptor } from './types';
+import { setDisplayFormats } from '../format';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
@@ -206,5 +207,18 @@ describe('the calendar arithmetic', () => {
     expect(rangeOf('list', '2026-09-28')).toEqual({ from: '2026-09-28', days: 7 });
     expect(move('month', '2026-01-31', 1)).toBe('2026-02-01');
     expect(rangeTitle('week', '2026-12-30', '2026-12-28', 7)).toBe('28 Dec 2026 – 3 Jan 2027');
+  });
+
+  it("titles a month in the owner's date format and the browser's words on Auto", () => {
+    try {
+      setDisplayFormats({ dateFormat: 'iso' });
+      expect(rangeTitle('month', '2026-09-15', '2026-08-31', 42)).toBe('2026-09');
+      setDisplayFormats({ dateFormat: 'short' });
+      expect(rangeTitle('month', '2026-09-15', '2026-08-31', 42)).toBe('September 2026');
+      setDisplayFormats({ dateFormat: null, locale: 'fr-FR' });
+      expect(rangeTitle('month', '2026-09-15', '2026-08-31', 42)).toBe('septembre 2026');
+    } finally {
+      setDisplayFormats({ dateFormat: null, locale: 'en-GB' });
+    }
   });
 });

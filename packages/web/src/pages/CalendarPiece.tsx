@@ -12,6 +12,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Button, Icon, List, ListRow, Panel, Segment } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
+import { fmtMonth } from '../format';
 import {
   addDays,
   dayLabel,
@@ -343,9 +344,7 @@ function MonthGrid({
 }): JSX.Element {
   const weeks = Array.from({ length: 6 }, (_, w) => dates.slice(w * 7, w * 7 + 7));
   const [y, m] = month.split('-').map(Number) as [number, number];
-  const name = new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(
-    new Date(Date.UTC(y, m - 1, 1)),
-  );
+  const name = fmtMonth(y, m);
   return (
     <Panel flush>
       <div className="cal-month" role="grid" aria-label={name}>
