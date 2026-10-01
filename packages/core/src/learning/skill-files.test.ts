@@ -52,6 +52,7 @@ function proposal(overrides: Partial<Proposal> = {}, payload: Record<string, unk
     reason: null,
     fingerprint: 'f',
     toldAt: null,
+    decidedBy: null,
     ...overrides,
   };
 }

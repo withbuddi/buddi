@@ -16,7 +16,8 @@
 import type { ToolPermission } from '../actions/permissions.js';
 import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/store.js';
 import type { ProposePolicyInput } from '../learning/policies.js';
-import type { CreateProposalResult } from '../learning/store.js';
+import type { CreateProposalResult, TrackRecord } from '../learning/store.js';
+import type { Proposal } from '../learning/types.js';
 import type { ResolvedProvider } from '../provider.js';
 import type { CodexImage, CodexImageOptions, CodexProfile, ProviderAccountListing } from '../provider-accounts.js';
 import type { ToolContext, ToolDefinition } from '../tools.js';
@@ -350,9 +351,30 @@ export interface ProposalsArea {
     input: Omit<ProposePolicyInput, 'plugin'>,
     /** A `db.transaction`'s handle, for a proposal that must commit with the plugin's own rows. */
     within?: DbTransaction,
+    /** `announce: false` for a proposal this plugin keeps itself in the same transaction. Since 1.14. */
+    opts?: { announce?: boolean },
   ): Promise<CreateProposalResult>;
   /** How many of this plugin's policy proposals are open. */
   countOpen(): Promise<number>;
+  /** This plugin's open policy proposals, oldest first. Since 1.14. */
+  listOpen(): Promise<Proposal[]>;
+  /**
+   * Keep one of this plugin's open policy proposals itself, recorded as
+   * decided by `auto`, after the plugin wrote the rule (in `within`, so both
+   * commit or neither). Only for what the plugin's own rule allows without
+   * asking (docs/learning.md §4). Null when it is not open, not a policy, or
+   * not this plugin's. Since 1.14.
+   */
+  keepItself(id: string, within?: DbTransaction): Promise<Proposal | null>;
+  /** The owner's track record with this plugin's policies of one kind. Since 1.14. */
+  trackRecord(kind: string): Promise<TrackRecord>;
+  /**
+   * The owner took back a kept policy of this plugin's (an Undo on its page):
+   * the proposal becomes the owner's discard as of now, so the same rule is
+   * not proposed again for 90 days and the kind's track record starts over.
+   * Since 1.14.
+   */
+  takeBack(id: string, opts?: { reason?: string; within?: DbTransaction }): Promise<Proposal | null>;
 }
 
 /** A run to start, as a source hands it over. */

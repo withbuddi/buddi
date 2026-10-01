@@ -3,7 +3,8 @@
  *
  * Everything an agent learns is a *proposal* with *provenance*. Nothing here
  * applies itself: a proposal is a row the owner reads, and keeping one is an
- * act the owner performs on a page. What a kept proposal becomes — a skill
+ * act the owner performs on a page — except a policy its plugin keeps itself
+ * under its own rule, recorded as `decided_by = 'auto'` (docs/learning.md §4). What a kept proposal becomes — a skill
  * file, a plugin's policy, a line in the agent file — is the kind's own job.
  */
 import type { Pool } from 'pg';
@@ -14,6 +15,13 @@ export type ProposalKind = 'skill' | 'policy' | 'change';
 export const PROPOSAL_KINDS: readonly ProposalKind[] = ['skill', 'policy', 'change'];
 
 export type ProposalState = 'open' | 'kept' | 'discarded' | 'expired';
+
+/**
+ * Who decided it: the owner, or the plugin that proposed it keeping it under
+ * its own rule (a policy only; docs/learning.md §4). Null while open, and for
+ * an expiry.
+ */
+export type ProposalDecider = 'owner' | 'auto';
 
 /**
  * Where untrusted text in a run came from.
@@ -93,6 +101,14 @@ export interface PolicyPayload {
   params?: Record<string, unknown>;
   verdicts: unknown[];
   why: string;
+  /**
+   * What kind of rule this is, in the plugin's own short terms
+   * (`quiet-promo-sender`). Not identifying. The owner's track record is
+   * counted per plugin and kind, and the inbox groups open cards by it.
+   */
+  kind?: string;
+  /** The kind, as the owner reads it ("Quiet a marketing sender"). */
+  kindLabel?: string;
 }
 
 /** `learning.propose_change`: a change to the proposing agent's own file. */
@@ -120,6 +136,8 @@ export interface Proposal {
   reason: string | null;
   fingerprint: string;
   toldAt: string | null;
+  /** Who decided it; null while open or once expired. */
+  decidedBy: ProposalDecider | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -129,6 +147,12 @@ export const DISCARD_MEMORY_MS = 90 * DAY_MS;
 export const PROPOSAL_TTL_MS = 30 * DAY_MS;
 /** Kept, discarded and expired proposals stay under the fold this long. */
 export const PROPOSAL_FOLD_MS = 7 * DAY_MS;
+/**
+ * A kind of rule the owner has kept this many times since their last discard
+ * of that kind keeps itself from then on (docs/learning.md §4). A discard
+ * turns it off again; only the owner's decisions count.
+ */
+export const TRUST_AFTER_KEPT = 5;
 /** How many sources a provenance keeps. A run that read more is marked either way. */
 export const MAX_SOURCES = 25;
 

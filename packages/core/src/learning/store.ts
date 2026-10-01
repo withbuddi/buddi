@@ -14,14 +14,16 @@ import {
   DISCARD_MEMORY_MS,
   PROPOSAL_FOLD_MS,
   PROPOSAL_TTL_MS,
+  TRUST_AFTER_KEPT,
   type Proposal,
+  type ProposalDecider,
   type ProposalKind,
   type ProposalProvenance,
   type ProposalState,
 } from './types.js';
 
 const COLUMNS =
-  'id, kind, agent, payload, provenance, untrusted, state, created_at, decided_at, reason, fingerprint, told_at';
+  'id, kind, agent, payload, provenance, untrusted, state, created_at, decided_at, reason, fingerprint, told_at, decided_by';
 
 const iso = (value: unknown): string | null =>
   value === null || value === undefined ? null : new Date(value as string).toISOString();
@@ -40,6 +42,7 @@ export function toProposal(row: Record<string, unknown>): Proposal {
     reason: (row.reason as string | null) ?? null,
     fingerprint: String(row.fingerprint),
     toldAt: iso(row.told_at),
+    decidedBy: row.decided_by === 'owner' || row.decided_by === 'auto' ? (row.decided_by as ProposalDecider) : null,
   };
 }
 
@@ -49,6 +52,12 @@ export interface CreateProposalInput {
   payload: Record<string, unknown>;
   provenance: ProposalProvenance;
   now: Date;
+  /**
+   * Tell the owner a card is waiting (the default). False for a proposal its
+   * plugin is about to keep itself in the same transaction: there is nothing
+   * waiting to hear about, and the plugin's own summary says what it did.
+   */
+  announce?: boolean;
 }
 
 export type CreateProposalResult =
@@ -119,7 +128,7 @@ export async function createProposal(db: Queryable, input: CreateProposalInput):
   if (rows[0]) {
     const proposal = toProposal(rows[0]);
     // The owner hears about it, at the end of their day. Never fails this.
-    await announceProposal(db, proposal, input.now);
+    if (input.announce !== false) await announceProposal(db, proposal, input.now);
     return { ok: true, proposal };
   }
   // Lost a race with an identical proposal: that one is the card.
@@ -172,14 +181,14 @@ export async function listClosedProposals(
  */
 export async function keepProposal(
   db: Queryable,
-  input: { id: string; payload?: Record<string, unknown>; now: Date },
+  input: { id: string; payload?: Record<string, unknown>; now: Date; decidedBy?: ProposalDecider },
 ): Promise<Proposal | null> {
   const { rows } = await db.query(
     `update core.proposals
-        set state = 'kept', decided_at = $2, payload = coalesce($3::jsonb, payload)
+        set state = 'kept', decided_at = $2, payload = coalesce($3::jsonb, payload), decided_by = $4
       where id::text = $1 and state = 'open'
       returning ${COLUMNS}`,
-    [input.id, input.now, input.payload ? JSON.stringify(input.payload) : null],
+    [input.id, input.now, input.payload ? JSON.stringify(input.payload) : null, input.decidedBy ?? 'owner'],
   );
   if (!rows[0]) return null;
   await proposalDecided(db, String(rows[0].id), input.now);
@@ -193,7 +202,7 @@ export async function discardProposal(
   const reason = (input.reason ?? '').trim().replace(/\s+/g, ' ').slice(0, 300) || null;
   const { rows } = await db.query(
     `update core.proposals
-        set state = 'discarded', decided_at = $2, reason = $3
+        set state = 'discarded', decided_at = $2, reason = $3, decided_by = 'owner'
       where id::text = $1 and state = 'open'
       returning ${COLUMNS}`,
     [input.id, input.now, reason],
@@ -209,7 +218,7 @@ export async function discardProposal(
  */
 export async function reopenProposal(db: Queryable, input: { id: string; payload?: Record<string, unknown> }): Promise<Proposal | null> {
   const { rows } = await db.query(
-    `update core.proposals set state = 'open', decided_at = null, payload = coalesce($2::jsonb, payload)
+    `update core.proposals set state = 'open', decided_at = null, decided_by = null, payload = coalesce($2::jsonb, payload)
       where id::text = $1 and state = 'kept'
       returning ${COLUMNS}`,
     [input.id, input.payload ? JSON.stringify(input.payload) : null],
@@ -230,12 +239,48 @@ export async function revokeKeptProposal(
   input: { id: string; now: Date; reason?: string },
 ): Promise<Proposal | null> {
   const { rows } = await db.query(
-    `update core.proposals set state = 'discarded', decided_at = $2, reason = $3, told_at = null
+    `update core.proposals set state = 'discarded', decided_at = $2, reason = $3, told_at = null, decided_by = 'owner'
       where id::text = $1 and state = 'kept'
       returning ${COLUMNS}`,
     [input.id, input.now, input.reason ?? REMOVED_REASON],
   );
   return rows[0] ? toProposal(rows[0]) : null;
+}
+
+/** The owner's record with one plugin's policies of one kind. */
+export interface TrackRecord {
+  /** Kept by the owner since their last discard of this kind (all of them, if none). */
+  kept: number;
+  /** Discarded by the owner, ever, including kept ones they took back. */
+  discarded: number;
+  /** `kept` has reached `TRUST_AFTER_KEPT`: new ones of this kind may keep themselves. */
+  trusted: boolean;
+}
+
+/**
+ * The owner's track record with one plugin's policy proposals of one kind
+ * (`payload.kind`). Only the owner's own decisions count: a rule that kept
+ * itself is not evidence the owner wanted it. Keeps are counted from the most
+ * recent discard, so a discard turns trust off until the owner has kept
+ * `TRUST_AFTER_KEPT` more. A kept rule the owner took back counts as a
+ * discard (`revokeKeptProposal`), from when it was taken back.
+ */
+export async function policyTrackRecord(db: Queryable, input: { plugin: string; kind: string }): Promise<TrackRecord> {
+  if (!input.plugin || !input.kind) return { kept: 0, discarded: 0, trusted: false };
+  const { rows } = await db.query(
+    `with mine as (
+       select state, decided_at from core.proposals
+        where kind = 'policy' and payload->>'plugin' = $1 and payload->>'kind' = $2
+          and decided_by = 'owner' and state in ('kept', 'discarded')
+     ),
+     last as (select max(decided_at) as at from mine where state = 'discarded')
+     select count(*) filter (where m.state = 'kept' and (last.at is null or m.decided_at > last.at))::int as kept,
+            count(*) filter (where m.state = 'discarded')::int as discarded
+       from mine m cross join last`,
+    [input.plugin, input.kind],
+  );
+  const kept = Number(rows[0]?.kept ?? 0);
+  return { kept, discarded: Number(rows[0]?.discarded ?? 0), trusted: kept >= TRUST_AFTER_KEPT };
 }
 
 /** What the sweep writes on a proposal nobody decided. */

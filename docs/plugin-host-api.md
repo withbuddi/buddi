@@ -47,7 +47,7 @@ Every plugin in both repositories is on the host. The areas each one declares
 | image | buddi-plugins | `accounts`, `files:library` |
 | speech | buddi-plugins | `accounts`, `files:library` |
 | developer | buddi-plugins | `files`, `secrets` |
-| email | buddi | `files`, `proposals`, `schedule`, `secrets` |
+| email | buddi | `files`, `proposals`, `schedule`, `secrets`, `owner:channel`, `owner:notify` |
 
 The families registered in the gateway (goal, learning, schedule, reminders,
 platform, canvas) are core's own surfaces over core's rows, not plugins, and
@@ -88,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.13'; see §7
+  readonly version: string;            // '1.14'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -260,6 +260,14 @@ name filled in ([learning.md](learning.md) §2), and the open count email's
 Settings page shows. `proposePolicy` takes a nullable call and a `within`
 transaction, and a policy handler's context carries the plugin's host. Never
 another plugin's proposals.
+Since 1.14 a plugin may also keep a rule itself, where its own rule allows
+it without asking ([learning.md](learning.md) §4): `proposePolicy(ctx,
+input, tx, { announce: false })`, write the rule in the same transaction,
+then `keepItself(id, tx)`, recorded as decided by `auto`. `trackRecord(kind)`
+is the owner's record with this plugin's rules of one `kind` (owner keeps
+since their last discard, and whether that reaches five), `listOpen()` its
+open cards, and `takeBack(id)` turns a kept one into the owner's discard (an
+Undo on the plugin's page).
 
 **schedule.** `enqueueRun(input)` and `remindersFor(key: { contextKey:
 string; values: string[] }, days: string[]): Promise<{ value: string; day:
@@ -352,7 +360,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.13`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.14`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -373,6 +381,10 @@ of them asks for `^1.12`.
 1.13 adds no method either: it is the first buddi that draws the
 `series-panel` page component (docs/plugin-pages.md §4). A plugin whose pages
 use it asks for `^1.13`.
+
+1.14 adds `proposals.listOpen`, `keepItself`, `trackRecord` and `takeBack`,
+and `proposePolicy`'s optional `{ announce }` (§4, proposals). A plugin that
+keeps rules itself asks for `^1.14`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

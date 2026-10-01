@@ -98,7 +98,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.13');
+    expect(host.version).toBe('1.14');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -440,6 +440,25 @@ suite('ctx.buddi', () => {
     expect(
       await host.schedule!.remindersFor({ contextKey: 'threadId', values: ['t1', 't2'] }, ['2026-09-25', '2026-09-26']),
     ).toEqual([{ value: 't1', day: '2026-09-25' }]);
+  });
+
+  it('keeps only its own open policy cards itself, and takes back only its own kept ones', async () => {
+    await pool.query('truncate core.proposals');
+    const mine = createPluginHost(hostBindingOf(plugin('email', { uses: ['proposals'] })), ctx());
+    const theirs = createPluginHost(hostBindingOf(plugin('finance', { uses: ['proposals'] })), ctx());
+    const input = { matcher: { sender: 'a@x.test' }, action: 'ignore', verdicts: [], why: 'w', sources: [], kind: 'quiet' };
+    const created = await mine.proposals!.proposePolicy(null, input, undefined, { announce: false });
+    if (!created.ok) throw new Error('not created');
+    expect((await mine.proposals!.listOpen()).map((p) => p.id)).toEqual([created.proposal.id]);
+    expect(await theirs.proposals!.listOpen()).toEqual([]);
+    expect(await theirs.proposals!.keepItself(created.proposal.id)).toBeNull();
+    const kept = await mine.proposals!.keepItself(created.proposal.id);
+    expect(kept).toMatchObject({ state: 'kept', decidedBy: 'auto' });
+    expect(await mine.proposals!.keepItself(created.proposal.id)).toBeNull();
+    expect(await mine.proposals!.trackRecord('quiet')).toEqual({ kept: 0, discarded: 0, trusted: false });
+    expect(await theirs.proposals!.takeBack(created.proposal.id)).toBeNull();
+    expect(await mine.proposals!.takeBack(created.proposal.id, { reason: 'undone' })).toMatchObject({ state: 'discarded', decidedBy: 'owner', reason: 'undone' });
+    expect(await mine.proposals!.trackRecord('quiet')).toMatchObject({ discarded: 1 });
   });
 
   it('hands a source the host of the plugin that ships it', async () => {

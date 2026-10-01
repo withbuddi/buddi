@@ -28,6 +28,8 @@ import {
   type EnvLike,
 } from '../artifacts/store.js';
 import { proposePolicy } from '../learning/policies.js';
+import { getProposal, keepProposal, policyTrackRecord, revokeKeptProposal, toProposal } from '../learning/store.js';
+import type { Proposal } from '../learning/types.js';
 import { registerChannel } from '../notifications/channels.js';
 import { notifyOwner } from '../notifications/notify.js';
 import type { DeliverableMessage } from '../notifications/types.js';
@@ -906,9 +908,36 @@ function filesArea(
 }
 
 function proposalsArea(binding: HostBinding, facts: HostFacts): ProposalsArea {
+  const ownPolicy = async (db: Parameters<typeof getProposal>[0], id: string): Promise<Proposal | null> => {
+    const proposal = await getProposal(db, id);
+    return proposal && proposal.kind === 'policy' && proposal.payload.plugin === binding.plugin ? proposal : null;
+  };
   return {
-    proposePolicy: (ctx, input, within) =>
-      proposePolicy(within ?? facts.db, ctx, { ...input, plugin: binding.plugin }, facts.now()),
+    proposePolicy: (ctx, input, within, opts) =>
+      proposePolicy(within ?? facts.db, ctx, { ...input, plugin: binding.plugin }, facts.now(), opts ?? {}),
+    async listOpen() {
+      const { rows } = await facts.db.query(
+        `select * from core.proposals
+          where kind = 'policy' and state = 'open' and payload->>'plugin' = $1
+          order by created_at asc, id asc`,
+        [binding.plugin],
+      );
+      return rows.map((row: Record<string, unknown>) => toProposal(row));
+    },
+    async keepItself(id, within) {
+      const db = within ?? facts.db;
+      // Only this plugin's own policy cards: a plugin keeps nothing it did not propose.
+      const mine = await ownPolicy(db, id);
+      if (!mine || mine.state !== 'open') return null;
+      return keepProposal(db, { id: mine.id, now: facts.now(), decidedBy: 'auto' });
+    },
+    trackRecord: (kind) => policyTrackRecord(facts.db, { plugin: binding.plugin, kind }),
+    async takeBack(id, opts) {
+      const db = opts?.within ?? facts.db;
+      const mine = await ownPolicy(db, id);
+      if (!mine || mine.state !== 'kept') return null;
+      return revokeKeptProposal(db, { id: mine.id, now: facts.now(), ...(opts?.reason ? { reason: opts.reason } : {}) });
+    },
     async countOpen() {
       const { rows } = await facts.db.query(
         `select count(*)::int as n from core.proposals

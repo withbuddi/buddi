@@ -14,7 +14,9 @@ import {
   keepProposal,
   listClosedProposals,
   listOpenProposals,
+  policyTrackRecord,
   readLearningWeek,
+  revokeKeptProposal,
   takeUntoldDecisions,
 } from './store.js';
 import type { ProposalProvenance } from './types.js';
@@ -144,5 +146,46 @@ suite('proposals (postgres)', () => {
     expect(week.kept.skill.names).toHaveLength(3);
     expect(week.kept.policy).toEqual({ count: 0, names: [] });
     expect(week.open).toBe(1);
+  });
+  describe('the track record', () => {
+    const rule = (sender: string, kind = 'quiet-promo-sender') => ({
+      plugin: 'mailer', matcher: { sender }, action: 'ignore', verdicts: [], why: 'w', kind,
+    });
+    const decide = async (sender: string, how: 'owner' | 'auto' | 'discard', when: Date, kind?: string) => {
+      const created = await createProposal(pool, { kind: 'policy', agent: 'mailer', payload: rule(sender, kind), provenance: provenance(), now: when });
+      if (!created.ok) throw new Error('not created');
+      if (how === 'discard') return discardProposal(pool, { id: created.proposal.id, now: when });
+      return keepProposal(pool, { id: created.proposal.id, now: when, decidedBy: how });
+    };
+
+    it('turns a kind on after five owner keeps, counts no auto keep, and starts over at a discard', async () => {
+      const record = () => policyTrackRecord(pool, { plugin: 'mailer', kind: 'quiet-promo-sender' });
+      for (let i = 0; i < 4; i += 1) await decide(`o${i}@x.test`, 'owner', at(i / 10));
+      for (let i = 0; i < 3; i += 1) await decide(`a${i}@x.test`, 'auto', at(1 + i / 10));
+      await decide('other@x.test', 'owner', at(1.5), 'quiet-low-sender');
+      expect(await record()).toEqual({ kept: 4, discarded: 0, trusted: false });
+      const fifth = await decide('o4@x.test', 'owner', at(2));
+      expect(fifth?.decidedBy).toBe('owner');
+      expect(await record()).toEqual({ kept: 5, discarded: 0, trusted: true });
+
+      await decide('d@x.test', 'discard', at(3));
+      expect(await record()).toEqual({ kept: 0, discarded: 1, trusted: false });
+      for (let i = 0; i < 5; i += 1) await decide(`n${i}@x.test`, 'owner', at(4 + i / 10));
+      expect(await record()).toMatchObject({ kept: 5, trusted: true });
+
+      // Taking a kept one back is a discard, from then on.
+      const auto = await decide('t@x.test', 'auto', at(5));
+      const back = await revokeKeptProposal(pool, { id: auto!.id, now: at(6) });
+      expect(back).toMatchObject({ state: 'discarded', decidedBy: 'owner' });
+      expect(await record()).toMatchObject({ kept: 0, discarded: 2, trusted: false });
+    });
+
+    it('does not announce a proposal created with announce off', async () => {
+      await pool.query('truncate core.owner_notifications cascade');
+      await createProposal(pool, { kind: 'policy', agent: 'mailer', payload: rule('q@x.test'), provenance: provenance(), now: NOW, announce: false });
+      await createProposal(pool, { kind: 'policy', agent: 'mailer', payload: rule('r@x.test'), provenance: provenance(), now: NOW });
+      const { rows } = await pool.query('select count(*)::int as n from core.owner_notifications');
+      expect(rows[0].n).toBe(1);
+    });
   });
 });

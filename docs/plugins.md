@@ -3354,8 +3354,12 @@ checks a request against, exactly like a manifest host.
 
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
-| `proposePolicy` | `(ctx, input, within?) => Promise<CreateProposalResult>` | yes | 1.0 | Core's `proposePolicy`, with your name and the clock filled in. `ctx` is the call that noticed (its agent, conversation and run are the provenance), or `null`; `within` is a `db.transaction` handle, for a proposal that must commit with your own rows. |
+| `proposePolicy` | `(ctx, input, within?, opts?) => Promise<CreateProposalResult>` | yes | 1.0 | Core's `proposePolicy`, with your name and the clock filled in. `ctx` is the call that noticed (its agent, conversation and run are the provenance), or `null`; `within` is a `db.transaction` handle, for a proposal that must commit with your own rows. `input.kind` and `input.kindLabel` name what kind of rule it is (the track record and the inbox's groups are per kind). Since 1.14, `opts.announce: false` for a card you keep yourself in the same transaction. |
 | `countOpen` | `() => Promise<number>` | yes | 1.0 | How many of your policy proposals are open. |
+| `listOpen` | `() => Promise<Proposal[]>` | yes | 1.14 | Your open policy proposals, oldest first. |
+| `keepItself` | `(id, within?) => Promise<Proposal \| null>` | yes | 1.14 | Keep one of your open policy cards yourself, recorded as decided by `auto`, after writing the rule in `within`. Only for what your own rule allows without asking ([learning.md](learning.md) §4). `null` when it is not open or not yours. |
+| `trackRecord` | `(kind) => Promise<TrackRecord>` | yes | 1.14 | The owner's record with your rules of one kind: `kept` (owner keeps since their last discard), `discarded`, and `trusted` once `kept` reaches five. Auto keeps never count. |
+| `takeBack` | `(id, opts?) => Promise<Proposal \| null>` | yes | 1.14 | The owner took back a kept rule of yours (an Undo on your page): it becomes the owner's discard as of now. `opts.reason`, `opts.within`. |
 
 #### `ScheduleArea`
 

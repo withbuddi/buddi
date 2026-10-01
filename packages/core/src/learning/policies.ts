@@ -32,6 +32,10 @@ export interface ProposePolicyInput {
   why: string;
   /** The untrusted inputs it was learned from: for mail, one per message, by subject and sender. */
   sources: UntrustedSource[];
+  /** What kind of rule it is, in the plugin's terms: the track record and the inbox's groups are per kind. */
+  kind?: string;
+  /** The kind as the owner reads it. */
+  kindLabel?: string;
 }
 
 /** Where the call stands, from the tool context alone. */
@@ -65,6 +69,7 @@ export async function proposePolicy(
   ctx: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null,
   input: ProposePolicyInput,
   now: Date,
+  opts: { announce?: boolean } = {},
 ): Promise<CreateProposalResult> {
   const provenance = pluginProvenance(ctx, input.plugin, input.sources);
   const payload: PolicyPayload = {
@@ -74,6 +79,8 @@ export async function proposePolicy(
     ...(input.params ? { params: input.params } : {}),
     verdicts: input.verdicts,
     why: input.why,
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.kindLabel ? { kindLabel: input.kindLabel } : {}),
   };
   return createProposal(db, {
     kind: 'policy',
@@ -81,5 +88,6 @@ export async function proposePolicy(
     payload: payload as unknown as Record<string, unknown>,
     provenance,
     now,
+    ...(opts.announce === false ? { announce: false } : {}),
   });
 }

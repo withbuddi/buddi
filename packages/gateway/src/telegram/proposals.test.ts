@@ -34,6 +34,7 @@ function proposal(over: Partial<Proposal> = {}): Proposal {
     reason: null,
     fingerprint: 'f',
     toldAt: null,
+    decidedBy: null,
     ...over,
   };
 }
