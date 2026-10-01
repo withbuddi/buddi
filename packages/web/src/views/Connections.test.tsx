@@ -392,7 +392,7 @@ describe('review again, the states, remembered approval', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     fireEvent.click(screen.getByLabelText('Linear: details'));
     sheet = await screen.findByRole('dialog');
-    expect(within(sheet).getByText('Unreachable since 28 Sept 2026, 09:05, retrying.'.replace('Sept', new Intl.DateTimeFormat('en-GB', { month: 'short' }).format(new Date('2026-09-28'))))).toBeInTheDocument();
+    expect(within(sheet).getByText('Unreachable since 28 Sep 2026, 09:05, retrying.')).toBeInTheDocument();
   });
 
   it('shows what changed since the last review, tool by tool', async () => {

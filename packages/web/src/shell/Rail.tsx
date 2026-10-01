@@ -30,6 +30,7 @@ import type { ThemeChoice } from '../theme';
 import { Icon, Mark, Segment, useAsync } from '../ui';
 import { installApp, useInstallPrompt } from '../views/parts/KeepClose';
 import { useLock } from './lock';
+import { fmtClock } from '../format';
 
 /** What the Settings dot says when a connection needs the owner (the rail's, and Connections' in the settings nav). */
 export const CONNECTION_DOT = 'a connection needs you';
@@ -268,11 +269,11 @@ const FOCUS_DURATIONS: ReadonlyArray<{ value: FocusDuration; label: string }> = 
 export function focusUntilLabel(focus: FocusState, timezone?: string, now: Date = new Date()): string {
   if (!focus.until) return 'until you turn it off';
   const end = new Date(focus.until);
-  const zone = timezone ? { timeZone: timezone } : {};
-  const day = (d: Date): string => new Intl.DateTimeFormat('en-CA', { ...zone, dateStyle: 'short' }).format(d);
-  const time = new Intl.DateTimeFormat('en-GB', { ...zone, hour: '2-digit', minute: '2-digit' }).format(end);
+  const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const day = (d: Date): string => new Intl.DateTimeFormat('en-CA', { timeZone: zone, dateStyle: 'short' }).format(d);
+  const time = fmtClock(end, zone);
   if (day(end) === day(now)) return `until ${time}`;
-  const weekday = new Intl.DateTimeFormat('en-GB', { ...zone, weekday: 'short' }).format(end);
+  const weekday = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short' }).format(end);
   return `until ${weekday} ${time}`;
 }
 

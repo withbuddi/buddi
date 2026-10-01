@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { withoutFence, fmtCached, fmtInOut, fmtShortRelative, fmtAgo, notificationTitle } from './format';
+import { afterEach, describe, expect, it } from 'vitest';
+import { withoutFence, fmtCached, fmtInOut, fmtShortRelative, fmtAgo, notificationTitle, fmtClock, fmtDate, fmtDay, fmtMinutes, fmtTime, setDisplayFormats, usesTwelveHours } from './format';
 
 describe('withoutFence', () => {
   it('drops a plugin`s untrusted markers and keeps the words between them', () => {
@@ -63,5 +63,50 @@ describe('notificationTitle', () => {
     expect(notificationTitle({ kind: 'watcher', title: '@ledger: from a watcher' })).toBe('@ledger: from a watcher');
     // A signature with nothing after it stays as it was.
     expect(notificationTitle({ kind: 'agent', title: '@ledger: ' })).toBe('@ledger: ');
+  });
+});
+
+describe('times and dates, the owner\'s way', () => {
+  const at = new Date('2026-10-01T18:05:00Z'); // 14:05 in New York, a Thursday
+  const zone = 'America/New_York';
+  afterEach(() => setDisplayFormats({ timeFormat: null, dateFormat: null, locale: 'en-US' }));
+
+  it('reads 12-hour and 24-hour as chosen, whatever the browser says', () => {
+    setDisplayFormats({ timeFormat: '12h', locale: 'en-GB' });
+    expect(fmtClock(at, zone)).toBe('2:05 PM');
+    expect(fmtMinutes(570)).toBe('9:30 AM');
+    expect(usesTwelveHours()).toBe(true);
+    setDisplayFormats({ timeFormat: '24h', locale: 'en-US' });
+    expect(fmtClock(at, zone)).toBe('14:05');
+    expect(fmtMinutes(570)).toBe('09:30');
+    expect(fmtMinutes(1440)).toBe('24:00');
+  });
+
+  it('follows the browser on Auto', () => {
+    setDisplayFormats({ timeFormat: null, dateFormat: null, locale: 'en-US' });
+    expect(fmtClock(at, zone)).toBe('2:05 PM');
+    expect(fmtDate(at, zone, { weekday: true })).toBe('Thursday, October 1');
+    setDisplayFormats({ locale: 'en-GB' });
+    expect(fmtClock(at, zone)).toBe('14:05');
+    expect(fmtDate(at, zone, { weekday: true })).toBe('Thursday 1 October');
+  });
+
+  it('draws the three date styles, in headings and in tables', () => {
+    setDisplayFormats({ dateFormat: 'short', timeFormat: '12h' });
+    expect(fmtDate(at, zone, { weekday: true })).toBe('Thu, Oct 1');
+    expect(fmtTime(at.toISOString(), zone)).toBe('Oct 1, 2026, 2:05 PM');
+    setDisplayFormats({ dateFormat: 'long', timeFormat: '24h' });
+    expect(fmtDate(at, zone, { weekday: true })).toBe('Thursday, 1 October');
+    expect(fmtTime(at.toISOString(), zone)).toBe('1 Oct 2026, 14:05');
+    setDisplayFormats({ dateFormat: 'iso' });
+    expect(fmtDate(at, zone)).toBe('2026-10-01');
+    expect(fmtDay('2026-10-01', { weekday: true })).toBe('Thursday 2026-10-01');
+    expect(fmtTime(at.toISOString(), zone)).toBe('2026-10-01, 14:05');
+  });
+
+  it('keeps the day the zone is in', () => {
+    setDisplayFormats({ dateFormat: 'iso' });
+    expect(fmtDate(new Date('2026-10-02T02:00:00Z'), zone)).toBe('2026-10-01');
+    expect(fmtTime(null, zone)).toBe('—');
   });
 });

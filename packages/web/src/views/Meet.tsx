@@ -96,6 +96,7 @@ import {
   type MeetAnswers,
 } from './meet/machine';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
+import { fmtClock } from '../format';
 
 /**
  * How long a silent, *living* run goes before buddi says something about it.
@@ -818,7 +819,7 @@ function Title({ children }: { children: ReactNode }): JSX.Element {
 /** Now, on the clock in `zone`, as "18:22"; empty for a zone the browser does not know. */
 function timeIn(zone: string): string {
   try {
-    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone }).format(new Date());
+    return fmtClock(new Date(), zone);
   } catch {
     return '';
   }

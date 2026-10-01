@@ -10,6 +10,7 @@
  */
 import { readPath } from '../canvas/resolve';
 import type { CalendarMap } from './types';
+import { displayFormats, fmtDay, fmtMinutes, monthFirst } from '../format';
 
 export type CalendarView = 'week' | 'month' | 'list';
 
@@ -73,8 +74,7 @@ export function mondayOf(date: string): string {
 
 /** "Mon 28 Sep". */
 export function dayLabel(date: string): string {
-  const [, m, d] = parts(date);
-  return `${weekdayName(date)} ${d} ${MONTHS[m - 1]}`;
+  return fmtDay(date, { weekday: true, compact: true });
 }
 
 /** "Today · Mon 28 Sep", "Tomorrow · Tue 29 Sep", then "Wed 30 Sep". */
@@ -84,8 +84,9 @@ export function dayTitle(date: string, today: string): string {
   return dayLabel(date);
 }
 
+/** Minutes after midnight as the owner's clock: "09:30" or "9:30 AM". */
 export function hm(minutes: number): string {
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  return fmtMinutes(minutes);
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
@@ -130,6 +131,12 @@ export function rangeTitle(view: CalendarView, anchor: string, from: string, day
   const last = addDays(from, days - 1);
   const [fy, fm, fd] = parts(from);
   const [ly, lm, ld] = parts(last);
+  if (displayFormats().date === 'iso') return `${from} – ${last}`;
+  if (monthFirst()) {
+    if (fm === lm && fy === ly) return `${MONTHS[fm - 1]} ${fd} – ${ld}, ${ly}`;
+    if (fy === ly) return `${MONTHS[fm - 1]} ${fd} – ${MONTHS[lm - 1]} ${ld}, ${ly}`;
+    return `${MONTHS[fm - 1]} ${fd}, ${fy} – ${MONTHS[lm - 1]} ${ld}, ${ly}`;
+  }
   if (fm === lm && fy === ly) return `${fd} – ${ld} ${MONTHS[lm - 1]} ${ly}`;
   if (fy === ly) return `${fd} ${MONTHS[fm - 1]} – ${ld} ${MONTHS[lm - 1]} ${ly}`;
   return `${fd} ${MONTHS[fm - 1]} ${fy} – ${ld} ${MONTHS[lm - 1]} ${ly}`;

@@ -15,15 +15,14 @@ import { useCallback, useState } from 'react';
 import { api, ApiError, type TipListRow } from '../../api';
 import { Button, Card, ErrorBanner, Pill, Section, Spacer, Toolbar, useAsync } from '../../ui';
 import { Icon } from '../../ui/Icon';
+import { fmtDay } from '../../format';
 
 /** Set to '1' while the Tips section on Home is open. */
 export const TIPS_OPEN_KEY = 'buddi.tipsOpen';
 
 /** `YYYY-MM-DD` as "Sep 27". */
 function fmtDate(day: string): string {
-  const at = new Date(`${day}T12:00:00Z`);
-  if (Number.isNaN(at.getTime())) return day;
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(at);
+  return fmtDay(day, { compact: true });
 }
 
 export function tipStatusWord(row: TipListRow): string {

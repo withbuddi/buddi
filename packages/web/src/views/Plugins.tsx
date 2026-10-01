@@ -307,6 +307,10 @@ function OpenPages({
 /** A plugin's state, in the tone it deserves. */
 function StatePill({ plugin }: { plugin: InstalledPluginView }): JSX.Element {
   if (plugin.enabled === false) return <Pill>disabled</Pill>;
+  // Held back by a requirement: what it needs first, named.
+  const need = plugin.needs?.[0];
+  if (need) return <Pill tone="warning">needs {need.plugin}</Pill>;
+  if (plugin.loaded && plugin.setup) return <Pill tone="warning">needs setup</Pill>;
   return plugin.loaded ? (
     <Pill tone="good" dot>
       loaded
@@ -482,6 +486,63 @@ export function Plugins({
     stageFrom(from ? api.updatePlugin(name, version, from) : api.updatePlugin(name, version));
   };
 
+  /*
+   * A requirement that is not installed: read it from withbuddi.com, the way
+   * Browse's Install does — the card, then the two yeses. The list is asked
+   * for here when Browse never was, because the owner just asked for it.
+   */
+  const installFirst = (name: string): void => {
+    setFailed(null);
+    const stage = (list: MarketView): void => {
+      const entry = list.plugins.find((e) => e.name === name || e.installed?.name === name);
+      if (!entry) {
+        setFailed(`${name} is not listed on withbuddi.com. Add it from npm, a file or a directory above, then install this one.`);
+        return;
+      }
+      stageFrom(api.stagePlugin(`${entry.npm}@${entry.version}`));
+    };
+    if (market && market.plugins.length > 0) return stage(market);
+    setStagingBusy(true);
+    api
+      .market(false)
+      .then((list) => {
+        setMarket(list);
+        stage(list);
+      })
+      .catch(fail)
+      .finally(() => setStagingBusy(false));
+  };
+  const routeOf = (plugin: string, page: { id: string; place: 'rail' | 'settings' } | undefined): string | undefined =>
+    page === undefined ? undefined : page.place === 'settings' ? pluginSettingsRoute(plugin, page.id) : pluginPageRoute(plugin, page.id);
+  /** The one thing that would let a waiting plugin start: its own setup, or what it requires. */
+  const firstStepFor = (plugin: InstalledPluginView): { label: string; run: () => void } | undefined => {
+    if (plugin.enabled === false) return undefined;
+    const need = plugin.needs?.[0];
+    if (need) {
+      switch (need.state) {
+        case 'missing':
+          return { label: `Install ${need.plugin}`, run: () => installFirst(need.plugin) };
+        case 'disabled':
+          return { label: `Enable ${need.plugin}`, run: () => enable(need.plugin) };
+        case 'range':
+          return { label: `Update ${need.plugin}`, run: () => update(need.plugin) };
+        case 'setup': {
+          const route = routeOf(need.plugin, need.page);
+          const go = route && navigate ? () => navigate(route) : settingsFor(need.plugin);
+          return go ? { label: `Set up ${need.plugin}`, run: go } : undefined;
+        }
+        default:
+          return { label: `See ${need.plugin}`, run: () => setOpened({ kind: 'installed', name: need.plugin }) };
+      }
+    }
+    if (plugin.loaded && plugin.setup) {
+      const route = routeOf(plugin.name, plugin.setup.page);
+      const go = route && navigate ? () => navigate(route) : settingsFor(plugin.name);
+      return go ? { label: 'Set it up', run: go } : undefined;
+    }
+    return undefined;
+  };
+
   const tabs = (
     <Tabs label="Plugins">
       <Tab href={TAB_ROUTES.installed} active={tab === 'installed'} count={updates} onClick={choose('installed')}>
@@ -500,6 +561,7 @@ export function Plugins({
   const onStagedInstalled = (name: string): void => {
     setOpened(null);
     setInstalled(name);
+    rememberInstalled(name);
     setJobId(null);
     view.reload();
   };
@@ -515,6 +577,7 @@ export function Plugins({
       staged={openedStage}
       onClose={() => setOpened(null)}
       onInstalled={onStagedInstalled}
+      onInstallFirst={installFirst}
       onGone={() => {
         setOpened(null);
         view.reload();
@@ -533,6 +596,7 @@ export function Plugins({
       onRemove={() => setAsking({ kind: 'remove', name: openedPlugin.name })}
       onUpdate={(version) => update(openedPlugin.name, version)}
       onSettings={openedPlugin.enabled === false ? undefined : settingsFor(openedPlugin.name)}
+      firstStep={firstStepFor(openedPlugin)}
       busy={stagingBusy}
     />
   ) : openedEntry ? (
@@ -599,7 +663,7 @@ export function Plugins({
       />
 
       {fresh ? (
-        <Staged key={fresh.id} staged={fresh} onInstalled={onStagedInstalled} onGone={() => view.reload()} />
+        <Staged key={fresh.id} staged={fresh} onInstalled={onStagedInstalled} onGone={() => view.reload()} onInstallFirst={installFirst} />
       ) : null}
 
       {waiting.length > 0 ? (
@@ -629,6 +693,7 @@ export function Plugins({
       ) : null}
 
       {installed || data?.restartNeeded ? <RestartToLoad checkout={checkout} name={installed} /> : null}
+      <FirstStep list={list} firstStepFor={firstStepFor} />
 
       <Panel flush title="Installed" tool={data ? plural(list.length, 'plugin', 'plugins') : undefined}>
         {!data ? (
@@ -653,6 +718,7 @@ export function Plugins({
                   onEnable={() => enable(plugin.name)}
                   onRemove={() => setAsking({ kind: 'remove', name: plugin.name })}
                   onUpdate={(version) => update(plugin.name, version)}
+                  firstStep={firstStepFor(plugin)}
                 />
               ))}
             </List>
@@ -929,7 +995,58 @@ function tellOpened(staged: StagedPluginView): void {
 }
 
 /** What a read package is and what it says about itself: the card's body, and the sheet's. */
-function StagedFacts({ staged, inSheet }: { staged: StagedPluginView; inSheet?: boolean }): JSX.Element {
+/**
+ * What a staged package requires, each with where it stands here; a missing
+ * one offers to install it first, through the same read-then-approve.
+ */
+function StagedRequires({ staged, onInstallFirst }: { staged: StagedPluginView; onInstallFirst?: ((name: string) => void) | undefined }): JSX.Element {
+  return (
+    <span className="plugins-requires">
+      {(staged.requires ?? []).map((need) => (
+        <span key={need.plugin} className="plugins-require">
+          <span className="mono">
+            {need.plugin} {need.range}
+          </span>
+          {need.state === 'ok' ? (
+            <span className="plugins-require-ok">{need.installed ? `${need.installed} is here` : 'here'}</span>
+          ) : need.state === 'missing' ? (
+            <>
+              <Pill tone="warning">not installed</Pill>
+              {onInstallFirst ? (
+                <Button size="sm" onClick={() => onInstallFirst(need.plugin)}>
+                  Install {need.plugin} first
+                </Button>
+              ) : null}
+            </>
+          ) : (
+            <Pill tone="warning">
+              {need.state === 'disabled'
+                ? 'disabled here'
+                : need.state === 'range'
+                  ? `${need.installed ?? 'another version'} is here`
+                  : need.state === 'failed'
+                    ? 'did not load here'
+                    : 'waiting here'}
+            </Pill>
+          )}
+        </span>
+      ))}
+      {(staged.requires ?? []).some((need) => need.state !== 'ok') ? (
+        <span className="muted">It installs either way, and waits — tools and widgets off, nothing lost — until each is here and set up.</span>
+      ) : null}
+    </span>
+  );
+}
+
+function StagedFacts({
+  staged,
+  inSheet,
+  onInstallFirst,
+}: {
+  staged: StagedPluginView;
+  inSheet?: boolean;
+  onInstallFirst?: ((name: string) => void) | undefined;
+}): JSX.Element {
   const deps = staged.dependencies;
   return (
     <div className="plugins-staged" data-in={inSheet ? 'sheet' : undefined}>
@@ -972,6 +1089,9 @@ function StagedFacts({ staged, inSheet }: { staged: StagedPluginView; inSheet?: 
                     }`,
             },
             { label: 'What it reaches', value: <StagedUses staged={staged} /> },
+            ...((staged.requires ?? []).length > 0
+              ? [{ label: 'Needs', value: <StagedRequires staged={staged} onInstallFirst={onInstallFirst} /> }]
+              : []),
             { label: 'Integrity', value: <Hash value={staged.integrity} /> },
             ...(staged.stagedHash ? [{ label: 'Files on disk', value: <Hash value={staged.stagedHash} /> }] : []),
           ]}
@@ -1060,10 +1180,12 @@ function Staged({
   staged,
   onInstalled,
   onGone,
+  onInstallFirst,
 }: {
   staged: StagedPluginView;
   onInstalled: (name: string) => void;
   onGone: () => void;
+  onInstallFirst?: (name: string) => void;
 }): JSX.Element {
   const { plan, busy, failed, approve, reject } = useStagedDecision(staged, onInstalled, onGone);
   // Shown in full is seen: it is kept a day.
@@ -1094,7 +1216,7 @@ function Staged({
         }
       >
         <ErrorBanner message={failed} />
-        <StagedFacts staged={staged} />
+        <StagedFacts staged={staged} onInstallFirst={onInstallFirst} />
       </Card>
 
       {plan && drift.length > 0 ? (
@@ -1150,11 +1272,13 @@ function StagedSheet({
   onClose,
   onInstalled,
   onGone,
+  onInstallFirst,
 }: {
   staged: StagedPluginView;
   onClose: () => void;
   onInstalled: (name: string) => void;
   onGone: () => void;
+  onInstallFirst?: (name: string) => void;
 }): JSX.Element {
   const { plan, busy, failed, approve, reject } = useStagedDecision(staged, onInstalled, onGone);
   const drift = plan?.drift ?? [];
@@ -1189,7 +1313,7 @@ function StagedSheet({
       }
     >
       <ErrorBanner message={failed} />
-      <StagedFacts staged={staged} inSheet />
+      <StagedFacts staged={staged} inSheet onInstallFirst={onInstallFirst} />
       {plan && drift.length > 0 ? (
         <DriftCard plan={plan} busy={busy} onReject={reject} onInstallAnyway={() => approve(true)} />
       ) : null}
@@ -1264,6 +1388,76 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
   );
 }
 
+/** Where the plugin just installed is remembered across the restart that loads it. */
+const JUST_INSTALLED_KEY = 'buddi.plugins.justInstalled';
+
+function rememberInstalled(name: string): void {
+  try {
+    window.sessionStorage.setItem(JUST_INSTALLED_KEY, name);
+  } catch {
+    // No session storage: no first-step notice after the restart, nothing worse.
+  }
+}
+
+function justInstalled(): string | null {
+  try {
+    return window.sessionStorage.getItem(JUST_INSTALLED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After the restart that loads a plugin: what to do first, when it says it
+ * cannot do anything yet or waits for another. Said once; Later or the step
+ * itself puts it away, and a plugin that is simply loaded says nothing.
+ */
+function FirstStep({
+  list,
+  firstStepFor,
+}: {
+  list: InstalledPluginView[];
+  firstStepFor: (plugin: InstalledPluginView) => { label: string; run: () => void } | undefined;
+}): JSX.Element | null {
+  const [name, setName] = useState<string | null>(() => justInstalled());
+  const plugin = name ? list.find((p) => p.name === name) : undefined;
+  const settled = plugin !== undefined && (plugin.loaded || plugin.needs !== undefined);
+  const waits = settled && (plugin.needs !== undefined || plugin.setup !== undefined);
+  const done = (): void => {
+    try {
+      window.sessionStorage.removeItem(JUST_INSTALLED_KEY);
+    } catch {
+      // Nothing kept, nothing to forget.
+    }
+    setName(null);
+  };
+  useEffect(() => {
+    // Loaded and ready: nothing to say, and nothing to remember.
+    if (settled && !waits) done();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settled, waits]);
+  if (!plugin || !waits) return null;
+  const step = firstStepFor(plugin);
+  return (
+    <Notice
+      tone="accent"
+      role="status"
+      action={
+        <>
+          <Button size="sm" variant="ghost" onClick={done}>Later</Button>
+          {step ? (
+            <Button size="sm" variant="accent" onClick={() => { done(); step.run(); }}>
+              {step.label}
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {plugin.needs ? `${plugin.name} is installed and waits. ${waitingWords(plugin)}.` : `${plugin.name} is loaded. First: ${plugin.setup?.note ?? 'set it up on its settings page.'}`}
+    </Notice>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * What is installed
  * ------------------------------------------------------------------ */
@@ -1280,6 +1474,14 @@ const stop =
 const pendingUnlocks = (plugin: InstalledPluginView): number =>
   plugin.unlocks.filter((unlock) => unlock.drift.state === 'not-accepted').length;
 
+/** A waiting plugin's line: what to do first, or what it lacks. */
+function waitingWords(plugin: InstalledPluginView): string {
+  if (plugin.needs && plugin.needs.length > 0) {
+    return plugin.needs.map((need) => (need.state === 'setup' && need.note ? `${need.words}: ${need.note}` : need.words)).join(' · ');
+  }
+  return plugin.setup?.note ?? 'Not set up yet. Its settings say what it needs.';
+}
+
 function InstalledRow({
   plugin,
   listing,
@@ -1293,6 +1495,7 @@ function InstalledRow({
   onEnable,
   onRemove,
   onUpdate,
+  firstStep,
 }: {
   plugin: InstalledPluginView;
   /** Its listing on withbuddi.com, once Browse was opened and found it. */
@@ -1309,9 +1512,12 @@ function InstalledRow({
   onEnable: () => void;
   onRemove: () => void;
   onUpdate: (version: string) => void;
+  /** Its first step when it waits: set itself up, or get what it requires. */
+  firstStep?: { label: string; run: () => void } | undefined;
 }): JSX.Element {
   const disabled = plugin.enabled === false;
   const pending = pendingUnlocks(plugin);
+  const waiting = !disabled && (plugin.needs !== undefined || (plugin.loaded && plugin.setup !== undefined));
   return (
     <ListRow
       onClick={onDetails}
@@ -1324,17 +1530,28 @@ function InstalledRow({
           {pending > 0 ? <span className="plugins-ask">{plural(pending, 'agent', 'agents')} to accept</span> : null}
         </>
       }
-      sub={`by ${byWords(plugin)} · from ${sourceShort(plugin.source)} · ${contributionWords(plugin.contribution)}`}
+      sub={
+        waiting ? (
+          <span className="plugins-sub" data-tone="warning">{waitingWords(plugin)}</span>
+        ) : (
+          `by ${byWords(plugin)} · from ${sourceShort(plugin.source)} · ${contributionWords(plugin.contribution)}`
+        )
+      }
       side={
         <span className="plugins-side">
+          {waiting && firstStep ? (
+            <Button size="sm" onClick={stop(firstStep.run)}>
+              {firstStep.label}
+            </Button>
+          ) : null}
           {listing?.update ? (
             <Button size="sm" disabled={busy} onClick={stop(() => onUpdate(listing.update as string))}>
               Update to {listing.update}
             </Button>
           ) : null}
-          {open}
+          {waiting ? null : open}
           {/* A plugin with no page of its own but a settings tab is set up there. */}
-          {!canOpen && onSettings ? (
+          {!waiting && !canOpen && onSettings ? (
             <Button
               size="sm"
               variant="ghost"
@@ -1475,6 +1692,7 @@ function InstalledSheet({
   onEnable,
   onRemove,
   onUpdate,
+  firstStep,
 }: {
   plugin: InstalledPluginView;
   listing: MarketEntryView | undefined;
@@ -1490,6 +1708,8 @@ function InstalledSheet({
   onRemove: () => void;
   /** No version: fetch whatever is newest and read it, like any update. */
   onUpdate: (version?: string) => void;
+  /** Its first step when it waits, as on its row. */
+  firstStep?: { label: string; run: () => void } | undefined;
 }): JSX.Element {
   const disabled = plugin.enabled === false;
   /*
@@ -1559,6 +1779,21 @@ function InstalledSheet({
       {notes && notes.length > 0 ? <Notice role="status">{notes.join(' ')}</Notice> : null}
       {disabled ? (
         <Notice>Disabled: its tools, pages and watchers are off and its missions are paused. Its data is kept.</Notice>
+      ) : null}
+      {!disabled && plugin.needs && plugin.needs.length > 0 ? (
+        <Notice
+          tone="warning"
+          action={firstStep ? <Button size="sm" variant="accent" onClick={firstStep.run}>{firstStep.label}</Button> : undefined}
+        >
+          Waiting: {waitingWords(plugin)}. Its tools and widgets stay off until then; its data is kept.
+        </Notice>
+      ) : !disabled && plugin.loaded && plugin.setup ? (
+        <Notice
+          tone="warning"
+          action={firstStep ? <Button size="sm" variant="accent" onClick={firstStep.run}>{firstStep.label}</Button> : undefined}
+        >
+          Not set up yet. {plugin.setup.note ?? 'Its settings say what it needs.'}
+        </Notice>
       ) : null}
       {description ? <p className="plugins-summary-full">{description}</p> : null}
       <div className="plugins-facts">

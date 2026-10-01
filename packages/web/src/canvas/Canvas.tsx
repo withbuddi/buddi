@@ -34,6 +34,7 @@ import { FilesView, type FilesViewProps } from './views/FilesView';
 import { NotifyView, type NotifyViewProps } from './views/NotifyView';
 import type { ChatAgent } from '../chat/types';
 import { Icon } from '../ui/Icon';
+import { fmtClock, fmtTime } from '../format';
 
 /** How many examples the empty state names. Two or three teach; eight lecture. */
 const MAX_EXAMPLES = 3;
@@ -169,7 +170,7 @@ export function Canvas({
                 <h2 className="ui-panel-title">{item.title}</h2>
                 <span className="ui-panel-tool mono">{item.tool}</span>
               </header> : null}
-              {item.tone === 'critical' ? <p className="muted">Recorded tool failure{item.at ? ` · ${new Date(item.at).toLocaleString()}` : ''}. This is history, not live session status.</p> : null}
+              {item.tone === 'critical' ? <p className="muted">Recorded tool failure{item.at ? ` · ${fmtTime(item.at, Intl.DateTimeFormat().resolvedOptions().timeZone)}` : ''}. This is history, not live session status.</p> : null}
               {/*
                 The properties panel is not a renderer and is deliberately not
                 in the registry: it describes the installation rather than a
@@ -365,11 +366,7 @@ function clock(at: string | null, timezone: string): string | null {
   if (!at) return null;
   const date = new Date(at);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
+  return fmtClock(date, timezone);
 }
 
 

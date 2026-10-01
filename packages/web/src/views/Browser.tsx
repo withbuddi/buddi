@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api';
-import { fmtTime } from '../format';
+import { fmtClock, fmtTime } from '../format';
 import { chatRoute } from '../routes';
 import { InstallProgress } from './parts/InstallProgress';
 import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
@@ -565,7 +565,7 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
         <div className="browser-task">
           <div className="ui-row"><strong>{data.session.agentId}</strong><span className="muted">{data.session.steps} / {data.session.maxSteps} steps</span></div>
           {!compact ? <p>{data.session.task}</p> : null}
-          <p className="muted">Last action: {data.lastAction ?? 'None'} · Access expires {new Date(data.session.expiresAt).toLocaleTimeString()}</p>
+          <p className="muted">Last action: {data.lastAction ?? 'None'} · Access expires {fmtClock(new Date(data.session.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}</p>
         </div>
       ) : (
         <p className="browser-task muted">{data?.enabled ? computer ? 'No agent is driving. Ask an agent granted browser.* to open a website or an allowed native app.' : 'No agent is driving. Ask an agent granted browser.* to open a website.' : 'The host browser is unavailable. Start buddi serve on a machine with a desktop session.'}</p>
@@ -584,7 +584,7 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
               {...(onScreenshotError ? { onError: onScreenshotError } : {})}
               {...(onScreenshotLoad ? { onLoad: onScreenshotLoad } : {})}
             />
-            <figcaption>Last observation · {new Date(data.page.capturedAt).toLocaleTimeString()} · {data.page.title || 'Untitled page'}</figcaption>
+            <figcaption>Last observation · {fmtClock(new Date(data.page.capturedAt), Intl.DateTimeFormat().resolvedOptions().timeZone)} · {data.page.title || 'Untitled page'}</figcaption>
           </figure>
         ) : (
           <div className="browser-empty"><strong>{computer ? 'Your selected app will appear here' : 'Your browser activity will appear here'}</strong><p>{computer ? 'Only the selected app window is captured, not the whole desktop. This preview is not interactive.' : 'This is a view of the host browser, not a second browser or a remote desktop.'}</p></div>

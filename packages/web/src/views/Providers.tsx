@@ -15,6 +15,7 @@ import { GEMINI_FALLBACK_MODEL, isGeminiPro, limited, pickGeminiFlash, pickGemin
 import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering, mlxhWindowNote } from '../mlxh';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
+import { fmtClock, fmtTime } from '../format';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 
@@ -204,7 +205,7 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
               </span>
             ),
           },
-          ...(a.tokenExpiresAt ? [{ label: 'Access token', value: `expires ${new Date(a.tokenExpiresAt).toLocaleString()} (not your subscription renewal date)` }] : []),
+          ...(a.tokenExpiresAt ? [{ label: 'Access token', value: `expires ${fmtTime(a.tokenExpiresAt, Intl.DateTimeFormat().resolvedOptions().timeZone)} (not your subscription renewal date)` }] : []),
         ]}
       />
       {a.removalPending && <Notice tone="warning">Removal is pending. Unlock the vault, then retry Remove account.</Notice>}
@@ -269,7 +270,7 @@ function CodexLogin({ account: a, busy, run }: { account: ProviderAccount; busy:
       <p>Here is your code: <strong>{a.login.userCode}</strong>. Open the link, enter it, and approve buddi on openai.com.</p>
       {a.login.userCode && <SignInCode code={a.login.userCode} />}
       {a.login.verificationUrl && <Toolbar><ButtonLink variant="accent" href={a.login.verificationUrl} target="_blank" rel="noreferrer">Open openai.com</ButtonLink></Toolbar>}
-      {a.login.expiresAt && <p className="muted">The code works until {new Date(a.login.expiresAt).toLocaleTimeString()}. Start again after that; this is the sign-in timeout, not your subscription expiry.</p>}
+      {a.login.expiresAt && <p className="muted">The code works until {fmtClock(new Date(a.login.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}. Start again after that; this is the sign-in timeout, not your subscription expiry.</p>}
     </Notice>}
     {a.login && a.login.state !== 'pending' && <p role="status" className="muted">{a.login.message ?? `Sign-in ${a.login.state}.`}</p>}
   </>;
@@ -401,7 +402,7 @@ function OllamaLogin({ account: a, busy, run }: { account: ProviderAccount; busy
     </Toolbar>
     {pending && <Notice tone="accent" role="status">
       <p><a href={pending.verificationUrl} target="_blank" rel="noreferrer">Open the ollama.com page</a> and press Connect. Sign in there first if it asks.</p>
-      <p className="muted">buddi stops waiting at {pending.expiresAt && new Date(pending.expiresAt).toLocaleTimeString()}.</p>
+      <p className="muted">buddi stops waiting at {pending.expiresAt && fmtClock(new Date(pending.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}.</p>
     </Notice>}
   </>;
 }
@@ -421,7 +422,7 @@ function ClaudeLogin({ account: a, enabled, busy, run }: { account: ProviderAcco
       void run(() => api.anthropicAccountAction(a.id, 'complete-login', a.revision, { attemptId: a.login!.attemptId!, code: pasted }), 'Claude connected. Edit account to load its model list, then assign it to an agent.');
     }}>
       <p><a href={a.login.verificationUrl} target="_blank" rel="noreferrer">Open Claude consent page</a></p>
-      <p className="muted">Use the Claude account you want to connect. Paste the entire code including #state. This attempt expires at {a.login.expiresAt && new Date(a.login.expiresAt).toLocaleTimeString()}; restarting Buddi also ends it.</p>
+      <p className="muted">Use the Claude account you want to connect. Paste the entire code including #state. This attempt expires at {a.login.expiresAt && fmtClock(new Date(a.login.expiresAt), Intl.DateTimeFormat().resolvedOptions().timeZone)}; restarting Buddi also ends it.</p>
       <Field label="Claude authorization code">
         <input type="password" autoComplete="off" spellCheck={false} maxLength={8192} value={code} onChange={e => setCode(e.target.value)} disabled={busy} />
       </Field>

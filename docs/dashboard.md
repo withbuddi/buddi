@@ -262,7 +262,19 @@ Try it: open a goal that is behind and ask its agent why.
 
 A list of sections in four groups.
 
-- **Profile**: your name and how the agents address you.
+- **Profile**: your name and how the agents address you, your timezone,
+  **Time** (Auto, 12-hour or 24-hour) and **Dates** (Auto, "Thu, Oct 1",
+  "Thursday, 1 October" or ISO "2026-10-01") — every date and time on the
+  dashboard reads that way, and agents write them that way; Auto follows the
+  browser's language. Under it, **Places**: Home and Work (offered until you
+  set them) and any other place you name. A row opens a sheet: the name, the
+  address with **Find**, the towns it may be (each with its coordinates and
+  zone, the best first), and its timezone, filled in from the match. Only the
+  town is looked up, on Open-Meteo; the address stays on this computer. A
+  place in another zone says its time there. The front desk is told your
+  places, and plugins that declare "reads your places" may read them (the
+  weather plugin offers them first). The weather plugin's Home and Work
+  moved here once, the first time this version started.
 - **Appearance**: theme, background and page width, kept in this browser;
   which plugin pages sit in the rail and which Home glances show, kept by the
   installation.

@@ -19,6 +19,7 @@ import { useMediaQuery } from '../useMediaQuery';
 import { WidgetBodyView } from '../views/parts/HomeWidgets';
 import { Button, Icon, Mark, Modal } from '../ui';
 import { FOCUS_LABELS, focusUntilLabel } from './Rail';
+import { fmtClock, fmtDate, fmtMoment } from '../format';
 
 /** A phone: the glance first, then the pad. */
 export const LOCK_PHONE_QUERY = '(max-width: 720px)';
@@ -29,9 +30,9 @@ const DELAY_WORDS: Record<number, string> = { 1: 'a minute', 5: '5 minutes', 15:
 
 function clock(date: Date, timezone: string): { time: string; day: string } {
   return {
-    time: new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit' }).format(date),
+    time: fmtClock(date, timezone),
     // "Thursday, 1 October", whatever this ICU's taste in commas.
-    day: `${new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'long' }).format(date)}, ${new Intl.DateTimeFormat('en-GB', { timeZone: timezone, day: 'numeric', month: 'long' }).format(date)}`,
+    day: fmtDate(date, timezone, { weekday: true }),
   };
 }
 
@@ -42,7 +43,7 @@ export function lockedLine(state: Pick<LockState, 'lockedAt' | 'reason' | 'delay
   const sameDay = clock(at, timezone).day === clock(now, timezone).day;
   const when = sameDay
     ? clock(at, timezone).time
-    : new Intl.DateTimeFormat('en-GB', { timeZone: timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(at);
+    : fmtMoment(at, timezone);
   if (state.reason === 'idle') return `Locked after ${state.delayMinutes ? DELAY_WORDS[state.delayMinutes] ?? `${state.delayMinutes} minutes` : 'a while'} away, at ${when}`;
   if (state.reason === 'start') return `Locked since this session began, at ${when}`;
   return `Locked by you at ${when}`;

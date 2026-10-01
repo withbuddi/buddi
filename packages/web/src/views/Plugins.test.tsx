@@ -88,6 +88,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.openedStaged).mockResolvedValue({ opened: 'x' });
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 const JOB = { id: 'job-1', kind: 'stage' as const, phase: 'fetching' as const, startedAt: new Date().toISOString() };
@@ -965,5 +966,97 @@ describe('browsing the market', () => {
     expect(api.stagePlugin).toHaveBeenCalledTimes(1);
     expect(api.market).not.toHaveBeenCalled();
     expect(window.location.hash).toBe('#/settings/plugins');
+  });
+});
+
+describe('readiness and requirements', () => {
+  const WEATHER_LISTING: MarketEntryView = {
+    name: 'weather',
+    npm: '@withbuddi/plugin-weather',
+    version: '0.2.0',
+    title: 'Weather',
+    summary: 'The weather for your places.',
+    category: 'days',
+    trust: 'by-buddi',
+    pricing: { kind: 'free' },
+    author: { name: 'withbuddi' },
+    claims: { manifest: { network: [] } },
+    usesWords: [],
+  };
+
+  it('says "needs setup" with what to do first, and opens the page where it is done', async () => {
+    const navigate = vi.fn();
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({ installed: [{ ...INSTALLED, name: 'calendar', setup: { ready: false, note: 'Link a calendar to start.', page: { id: 'settings', place: 'settings' } } }] }),
+    );
+    render(<Plugins navigate={navigate} />);
+    expect(await screen.findByText('needs setup')).toBeInTheDocument();
+    expect(screen.getByText('Link a calendar to start.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set it up' }));
+    expect(navigate).toHaveBeenCalledWith(pluginSettingsRoute('calendar', 'settings'));
+  });
+
+  it('names what a held-back plugin needs, with the one fix: setup elsewhere, enabling, installing', async () => {
+    const navigate = vi.fn();
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        installed: [
+          { ...INSTALLED, name: 'commute', loaded: false, needs: [{ plugin: 'weather', range: '^0.2.0', state: 'setup', note: 'Pick a place for the forecast.', page: { id: 'weather', place: 'rail' }, words: 'Needs setup in weather' }] },
+          { ...INSTALLED, name: 'tides', loaded: false, needs: [{ plugin: 'speech', range: '*', state: 'disabled', words: 'Needs speech, which is disabled' }] },
+          { ...INSTALLED, name: 'garden', loaded: false, needs: [{ plugin: 'weather', range: '^0.2.0', state: 'missing', words: 'Needs weather' }] },
+        ],
+      }),
+    );
+    vi.mocked(api.setPluginEnabled).mockResolvedValue({ notes: ['Enabled.'] } as never);
+    vi.mocked(api.market).mockResolvedValue({ plugins: [WEATHER_LISTING] });
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins navigate={navigate} />);
+    expect((await screen.findAllByText('needs weather')).length).toBe(2);
+    expect(screen.getByText('Needs setup in weather: Pick a place for the forecast.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set up weather' }));
+    expect(navigate).toHaveBeenCalledWith(pluginPageRoute('weather', 'weather'));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable speech' }));
+    await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('speech', true));
+    fireEvent.click(screen.getByRole('button', { name: 'Install weather' }));
+    await waitFor(() => expect(api.stagePlugin).toHaveBeenCalledWith('@withbuddi/plugin-weather@0.2.0'));
+  });
+
+  it('lists a staged package’s requirements and installs a missing one first, through the same reading', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        staged: [
+          {
+            ...STAGED,
+            name: 'commute',
+            requires: [
+              { plugin: 'weather', range: '^0.2.0', state: 'missing', words: 'Needs weather' },
+              { plugin: 'calendar', range: '*', state: 'ok', installed: '0.1.1', words: 'calendar 0.1.1 is here' },
+            ],
+          },
+        ],
+      }),
+    );
+    vi.mocked(api.market).mockResolvedValue({ plugins: [] });
+    render(<Plugins />);
+    expect(await screen.findByText('0.1.1 is here')).toBeInTheDocument();
+    expect(screen.getByText(/It installs either way, and waits/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Install weather first' }));
+    // Not listed: said, never staged from a guess.
+    expect(await screen.findByText(/weather is not listed on withbuddi.com/)).toBeInTheDocument();
+    expect(api.stagePlugin).not.toHaveBeenCalled();
+  });
+
+  it('after the restart, says what to do first with the plugin just installed, once', async () => {
+    window.sessionStorage.setItem('buddi.plugins.justInstalled', 'calendar');
+    const navigate = vi.fn();
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({ installed: [{ ...INSTALLED, name: 'calendar', setup: { ready: false, note: 'Link a calendar to start.', page: { id: 'settings', place: 'settings' } } }] }),
+    );
+    render(<Plugins navigate={navigate} />);
+    expect(await screen.findByText('calendar is loaded. First: Link a calendar to start.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    expect(screen.queryByText(/calendar is loaded\. First/)).not.toBeInTheDocument();
+    expect(window.sessionStorage.getItem('buddi.plugins.justInstalled')).toBeNull();
   });
 });

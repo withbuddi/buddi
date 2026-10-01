@@ -15,7 +15,7 @@
 import { useState } from 'react';
 import { ApiError, api, type MemoryNote, type MemoryPreference } from '../api';
 import type { ChatAgent } from '../chat/types';
-import { fmtRelative } from '../format';
+import { fmtDate, fmtRelative } from '../format';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, PageFrame, Pill, Section, Sheet, Stack, Table, Toolbar, useAsync } from '../ui';
 
 const KINDS = ['fact', 'observation', 'todo'] as const;
@@ -180,7 +180,7 @@ function NoteTable({ notes, empty, nameOf, timezone, onEditNote, onForgetNote }:
               <td className="muted">{note.createdByAgent ? nameOf(note.createdByAgent) : ''}</td>
               <td className="num muted" title={note.createdAt ?? ''}>
                 {note.createdAt ? fmtRelative(note.createdAt, Date.now()) : ''}
-                {note.expiresAt ? <span className="memory-expires"> · until {new Date(note.expiresAt).toLocaleDateString(undefined, { timeZone: timezone })}</span> : null}
+                {note.expiresAt ? <span className="memory-expires"> · until {fmtDate(new Date(note.expiresAt), timezone, { year: true, compact: true })}</span> : null}
               </td>
               <td className="num">
                 <Toolbar align="end">

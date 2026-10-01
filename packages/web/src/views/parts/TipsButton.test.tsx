@@ -111,7 +111,7 @@ describe('TipsButton', () => {
     expect(within(rowOf(sheet, 'b')).getByText('Waiting')).toBeInTheDocument();
     expect(within(rowOf(sheet, 'c')).getByText('Not needed now')).toBeInTheDocument();
     expect(within(rowOf(sheet, 'd')).getByText('Dismissed')).toBeInTheDocument();
-    expect(within(rowOf(sheet, 'e')).getByText('Shown on Sep 27')).toBeInTheDocument();
+    expect(within(rowOf(sheet, 'e')).getByText('Shown on 27 Sep')).toBeInTheDocument();
     expect(within(sheet).getAllByRole('button', { name: 'Bring back' })).toHaveLength(1);
     expect(within(rowOf(sheet, 'd')).queryByRole('button', { name: 'Do d' })).not.toBeInTheDocument();
     fireEvent.click(within(rowOf(sheet, 'b')).getByRole('button', { name: 'Do b' }));

@@ -1264,12 +1264,37 @@ export interface OwnerView {
   language: string | null;
   about: string | null;
   displayName: string | null;
+  /** How times and dates read; null is Auto. */
+  timeFormat?: '12h' | '24h' | null;
+  dateFormat?: 'short' | 'long' | 'iso' | null;
+  /** The owner's places, in their order. */
+  places?: OwnerPlaceView[];
   /** The zone this host runs in, offered as the default. */
   detectedTimezone: string;
   /** Every zone the host knows, for the picker. */
   zones: string[];
 }
+/** One of the owner's places (Settings → Profile). */
+export interface OwnerPlaceView {
+  id: string;
+  label: string;
+  address: string | null;
+  /** What the place finder matched: "Lyon, Auvergne-Rhône-Alpes, France". */
+  name: string;
+  latitude: number;
+  longitude: number;
+  timezone: string | null;
+}
+/** One answer from the place finder. */
+export interface FoundPlaceView {
+  name: string;
+  latitude: number;
+  longitude: number;
+  timezone?: string;
+}
 export interface OwnerPatch {
+  timeFormat?: '12h' | '24h' | null;
+  dateFormat?: 'short' | 'long' | 'iso' | null;
   preferredName?: string | null;
   timezone?: string | null;
   language?: string | null;
@@ -1551,6 +1576,10 @@ export interface InstalledPluginView {
   enabled?: false;
   /** Why its entry point did not load. Set only when `loaded` is false. */
   error?: string;
+  /** Loaded, but it says it cannot do anything yet: what to do first, and the page where. */
+  setup?: { ready: false; note?: string; page?: PluginPageRef };
+  /** Held back by what it requires: each need in the row's words. */
+  needs?: PluginNeedView[];
 }
 
 /**
@@ -1567,6 +1596,33 @@ export interface PluginPlan {
 }
 
 /** A package fetched and read, but not yet imported or installed. */
+/** One of a plugin's pages, by id and where it lives. */
+export interface PluginPageRef {
+  id: string;
+  place: 'rail' | 'settings';
+}
+
+/** What a plugin lacks of one it requires (docs/plugins.md §2.10). */
+export interface PluginNeedView {
+  plugin: string;
+  range: string;
+  state: 'missing' | 'disabled' | 'failed' | 'range' | 'waiting' | 'setup';
+  installed?: string;
+  note?: string;
+  page?: PluginPageRef;
+  /** "Needs weather", "Needs setup in weather". */
+  words: string;
+}
+
+/** A staged package's requirement, with where it stands here. */
+export interface PluginRequirementView {
+  plugin: string;
+  range: string;
+  state: 'ok' | PluginNeedView['state'];
+  installed?: string;
+  words: string;
+}
+
 export interface StagedPluginView {
   id: string;
   name: string;
@@ -1612,6 +1668,8 @@ export interface StagedPluginView {
    * declare and `dropped` is what it no longer does. Optional while the
    * gateway that sends it is still landing.
    */
+  /** The plugins it needs, each with where it stands here. */
+  requires?: PluginRequirementView[];
   uses?: {
     areas: Array<{ use: string; words: string; added: boolean }>;
     dropped: Array<{ use: string; words: string }>;
@@ -1930,7 +1988,7 @@ export const api = {
   extension: () => get<ExtensionState>('/extension'),
   pairExtension: (code: string) => post<ExtensionState>('/extension/pair', { code }),
   forgetExtension: () => del<ExtensionState>('/extension/pair'),
-  session: () => get<{ csrf: string; timezone: string; host: string; port: number; platform?: string; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
+  session: () => get<{ csrf: string; timezone: string; timeFormat?: '12h' | '24h' | null; dateFormat?: 'short' | 'long' | 'iso' | null; host: string; port: number; platform?: string; version?: string; signedInThrough?: 'ticket' | 'local' | 'tailscale'; tailscaleName?: string; tailscaleLogin?: string }>('/session'),
   overview: () => get<Overview>('/overview'),
   events: (q: Record<string, string | number | undefined>) => get<EventPage>('/events', q),
   eventKinds: () => get<{ kinds: Array<{ kind: string; count: number }> }>('/events/kinds'),
@@ -2148,6 +2206,10 @@ export const api = {
   /* ---- the owner ---- */
   owner: () => get<OwnerView>('/owner'),
   setOwner: (patch: OwnerPatch) => post<OwnerView>('/owner', patch),
+  findPlace: (address: string) => post<{ found: FoundPlaceView[] }>('/owner/places/find', { address }),
+  savePlace: (place: Omit<OwnerPlaceView, 'id' | 'timezone'> & { id?: string; timezone: string | null }) =>
+    post<{ place: OwnerPlaceView; places: OwnerPlaceView[] }>('/owner/places', place),
+  removePlace: (id: string) => post<{ places: OwnerPlaceView[] }>('/owner/places/remove', { id }),
   /* ---- memory ---- */
   /** Everything, or — with an agent id — what that agent sees: shared plus its own. */
   memory: (agentId?: string) => get<MemoryView>(agentId ? `/memory?agent=${encodeURIComponent(agentId)}` : '/memory'),

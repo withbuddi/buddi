@@ -81,3 +81,9 @@ Element.prototype.releasePointerCapture ??= (): void => {};
 Element.prototype.scrollIntoView ??= (): void => {};
 
 vi.stubGlobal('scrollTo', () => {});
+
+// Times and dates read the way the suites were written against: a British
+// browser on Auto (24-hour, "1 October"). A suite about the owner's choice
+// sets its own (format.test.ts).
+import { setDisplayFormats } from '../format';
+setDisplayFormats({ timeFormat: null, dateFormat: null, locale: 'en-GB' });

@@ -15,7 +15,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
-import { fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
+import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, NEEDS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
 import { orderAgents, waitingText } from '../shell/roster';
@@ -546,10 +546,7 @@ export function greeting(iso: string | undefined, timezone: string, name?: strin
 
 function fmtDay(iso: string | undefined, timezone: string): string {
   try {
-    const at = iso ? new Date(iso) : new Date();
-    const weekday = new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: timezone }).format(at);
-    const day = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', timeZone: timezone }).format(at);
-    return `${weekday}, ${day}`;
+    return fmtDate(iso ? new Date(iso) : new Date(), timezone, { weekday: true });
   } catch {
     return fmtTime(iso ?? null, timezone);
   }

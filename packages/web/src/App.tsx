@@ -67,6 +67,7 @@ import { RailStatus, StatusBar, linkKind, useLinkDown, type ShellStatus } from '
 import { useLostLink } from './shell/Unreachable';
 import { buildDiffers } from './build';
 import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
+import { FORMATS_CHANGED, setDisplayFormats } from './format';
 
 export { PLACES };
 
@@ -316,10 +317,22 @@ export function App(): JSX.Element {
    * for it, and a 401 from either puts them back to sleep.
    */
   const [signedIn, setSignedIn] = useState(false);
+  // The owner changed how times and dates read: the whole shell draws again.
+  const [, setFormatsDrawn] = useState(0);
+  useEffect(() => {
+    const redraw = (): void => setFormatsDrawn((n) => n + 1);
+    window.addEventListener(FORMATS_CHANGED, redraw);
+    return () => window.removeEventListener(FORMATS_CHANGED, redraw);
+  }, []);
   useEffect(() => {
     api
       .session()
-      .then((session) => { setTimezone(session.timezone); setSignedIn(true); })
+      .then((session) => {
+        // How the owner reads times and dates, before anything is drawn with it.
+        setDisplayFormats({ timeFormat: session.timeFormat ?? null, dateFormat: session.dateFormat ?? null });
+        setTimezone(session.timezone);
+        setSignedIn(true);
+      })
       .catch(() => {});
   }, []);
   const toasts = useToastQueue(signedIn);

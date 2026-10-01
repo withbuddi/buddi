@@ -22,6 +22,7 @@ import { Icon } from '../ui';
 import { FOCUS_LABELS, focusUntilLabel } from './Rail';
 import { LOOPBACK } from './Unreachable';
 import { useLock } from './lock';
+import { fmtClock } from '../format';
 
 export type LinkKind = 'local' | 'tailnet' | 'reconnecting';
 
@@ -116,7 +117,7 @@ export function statusItems(s: ShellStatus, now: Date, device: string = deviceZo
   }
   // The owner's zone; this device's until the session has said it.
   const zone = s.timezone || device;
-  const time = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit' }).format(now);
+  const time = fmtClock(now, zone);
   const differs = zone !== device;
   items.push({
     key: 'time',

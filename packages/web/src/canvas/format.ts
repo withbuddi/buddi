@@ -1,5 +1,5 @@
 /** Turning a resolved value into the string the canvas prints. */
-import { fmtMoney, fmtNumber } from '../format';
+import { fmtDay as fmtCalendarDay, fmtMoney, fmtNumber } from '../format';
 import type { ColumnType, Unit } from './types';
 
 /**
@@ -54,18 +54,14 @@ export function fmtMoneyPrecise(amount: number, currency: string | null): string
 export function fmtDate(value: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (!match) return value;
-  const date = new Date(`${match[0]}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+  return fmtCalendarDay(match[0], { year: true, compact: true });
 }
 
 /** A short axis label: `2026-09-20` → `20 Sep`. Anything else is left alone. */
 export function fmtDay(value: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (!match) return value;
-  const date = new Date(`${match[0]}T00:00:00Z`);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short' }).format(date);
+  return fmtCalendarDay(match[0], { compact: true });
 }
 
 function trim(value: number): string {

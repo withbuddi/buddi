@@ -42,6 +42,9 @@ const GLYPHS = {
   // ---- the settings list: the core sections, on the rail's 20px grid ----
   // A head and shoulders: the owner's own profile.
   person: [20, 1.6, <><circle cx="10" cy="7" r="3.2" /><path d="M4 16.6a6 6 0 0 1 12 0" /></>],
+  // The owner's places: a briefcase for Work, a pin for any other (Home is the house above).
+  briefcase: [20, 1.6, <><rect x="2.8" y="6" width="14.4" height="10.2" rx="1.6" /><path d="M7.4 6V4.6a1 1 0 0 1 1-1h3.2a1 1 0 0 1 1 1V6M2.8 10.4h14.4" /></>],
+  pin: [20, 1.6, <><path d="M10 17.2s5.2-4.9 5.2-9a5.2 5.2 0 0 0-10.4 0c0 4.1 5.2 9 5.2 9Z" /><circle cx="10" cy="8.2" r="1.9" /></>],
   // A sun: how the dashboard looks.
   sun: [20, 1.6, <><circle cx="10" cy="10" r="3.2" /><path d="M10 2.6v1.6M10 15.8v1.6M2.6 10h1.6M15.8 10h1.6M4.8 4.8l1.1 1.1M14.1 14.1l1.1 1.1M4.8 15.2l1.1-1.1M14.1 5.9l1.1-1.1" /></>],
   // A notebook with its spine: what the agents remember.
