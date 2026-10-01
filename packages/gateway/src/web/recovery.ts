@@ -11,7 +11,10 @@
  *    marked as living in the vault is looked up the way the runtime reads it
  *    on *this* machine — owner secret first, raw vault entry, then the
  *    environment — and only what buddi truly cannot read is listed, with a
- *    link to where it is fixed. A name in the vault's list proves nothing: an
+ *    link to where it is fixed. Mailbox passwords and connection sign-ins
+ *    (OAuth tokens, pasted tokens, a program's secret variables) are checked
+ *    the same way, by the names the email plugin and the connections service
+ *    read them under. A name in the vault's list proves nothing: an
  *    adopted credential is kept under `owner-secret:<id>`, not its name.
  *  - **plugins.** `plugins.json` came back in the archive; what is installed
  *    here is what this build runs plus what the live plugins record holds (a
@@ -32,6 +35,7 @@ import {
   createVault,
   describeSource,
   envValue,
+  findSecret,
   leaveRecovery,
   listPendingPluginData,
   listToolPermissions,
@@ -44,18 +48,29 @@ import {
   type Vault,
 } from '@buddi/core';
 import type { Pool } from 'pg';
+import { listAccounts, type AccountRecord } from '@buddi/tool-email';
 import { agentSearchPath, installedManifests } from '../agents/catalog.js';
 import { readOllamaDevice } from '../ollama-accounts.js';
-import { ownerSecretVault } from '../owner-secrets.js';
+import { LEGACY_PASSWORD_VAR, LEGACY_USER_VAR, ownerSecretVault } from '../owner-secrets.js';
 
 export interface RecoverySecret {
   /** The name the credential is kept under. Shown small, for the curious; never a value. */
   name: string;
-  kind: 'account' | 'telegram' | 'plugin';
-  /** What it is, in words: "Gemini — API key", "Telegram — bot token". */
+  kind: 'account' | 'telegram' | 'plugin' | 'email' | 'connection';
+  /**
+   * What it is, in words: "Gemini — API key", "Telegram — bot token",
+   * "Gmail — app password for you@example.com", "GitHub — sign-in",
+   * "Trokky — TROKKY_TOKEN".
+   */
   label: string;
   /** The model account this is the credential of, so the page can open that account. */
   accountId?: string;
+  /** The mailbox (`email.accounts.id`) whose password this is. */
+  mailboxId?: string;
+  /** The connection (`mcp.connections.id`) this credential belongs to. */
+  connectionId?: string;
+  /** An OAuth sign-in: the fix is signing in again, not pasting a key. */
+  signIn?: true;
   settingsRoute: string;
 }
 
@@ -123,6 +138,18 @@ export interface RecoveryDeps {
 const ACCOUNTS_ROUTE = '#/settings/accounts';
 const TELEGRAM_ROUTE = '#/settings/telegram';
 const SECRETS_ROUTE = '#/settings/secrets';
+const EMAIL_ROUTE = '#/settings/p.email.settings';
+const CONNECTIONS_ROUTE = '#/settings/connections';
+
+/** Settings → Keys and secrets with one secret's Replace value open. */
+function secretRoute(name: string): string {
+  return `${SECRETS_ROUTE}?secret=${encodeURIComponent(name)}`;
+}
+
+/** Settings → Connections with one connection's sheet open. */
+function connectionRoute(id: string): string {
+  return `${CONNECTIONS_ROUTE}?connection=${encodeURIComponent(id)}`;
+}
 
 /** Names that are a model credential wherever they turn up. */
 const MODEL_SECRETS = new Set(['OPENAI_API_KEY']);
@@ -133,6 +160,13 @@ const MODEL_SECRETS = new Set(['OPENAI_API_KEY']);
  * this page is already using them, so listing them would only ever be wrong.
  */
 const RUNNING_PROVES = new Set(['DATABASE_URL', 'BUDDI_DB_PASSWORD', 'BUDDI_VAULT_KEY']);
+
+/**
+ * Names a restored `.env` may mark that the runtime no longer reads by name:
+ * the old `.env` mailbox, adopted into a Settings → Email account whose
+ * password the mailbox check below looks for under its own name.
+ */
+const READ_ELSEWHERE = new Set([LEGACY_USER_VAR, LEGACY_PASSWORD_VAR]);
 
 /** What the known names are, in words. Anything else is shown by its name. */
 const SECRET_WORDS: Record<string, string> = {
@@ -217,6 +251,113 @@ export function vaultMarkersIn(envText: string): string[] {
   return names;
 }
 
+/** The provider a mailbox's IMAP host belongs to, the way the Mail settings page would name it. */
+const MAIL_PROVIDERS: Array<[RegExp, string]> = [
+  [/(^|\.)gmail\.com$|(^|\.)googlemail\.com$/, 'Gmail'],
+  [/(^|\.)office365\.com$|(^|\.)outlook\.com$/, 'Outlook'],
+  [/(^|\.)yahoo\.com$/, 'Yahoo Mail'],
+  [/(^|\.)me\.com$|(^|\.)icloud\.com$/, 'iCloud Mail'],
+  [/(^|\.)fastmail\.com$/, 'Fastmail'],
+];
+
+export function mailProvider(imapHost: string): string {
+  const host = imapHost.trim().toLowerCase();
+  return MAIL_PROVIDERS.find(([pattern]) => pattern.test(host))?.[1] ?? 'Email';
+}
+
+/**
+ * Every enabled mailbox whose password buddi cannot read here.
+ *
+ * Mirrors `mailboxAuth`: the password is the owner secret named by the row's
+ * `secret_name` (a raw vault entry of that name counts too: the start adopts
+ * it). A mailbox the old `.env` named that was never adopted reads the way
+ * `adoptEnvMailbox` will at the next start — its own name, then
+ * `GMAIL_APP_PASSWORD` as an owner secret, a vault entry or in the
+ * environment — and is added again on the Email page when none answers.
+ */
+async function missingMailboxes(vault: Vault | undefined, deps: RecoveryDeps): Promise<RecoverySecret[]> {
+  let accounts: AccountRecord[];
+  try {
+    accounts = await listAccounts(deps.pool);
+  } catch {
+    return []; // No email schema: no mailboxes here.
+  }
+  const out: RecoverySecret[] = [];
+  for (const account of accounts) {
+    if (account.authMode !== 'app-password') continue;
+    if ((await readable(vault, deps.pool, account.secretName)) !== null) continue;
+    const label = `${mailProvider(account.imapHost)} — app password for ${account.address}`;
+    if (account.addedVia === 'env') {
+      if ((await readable(vault, deps.pool, LEGACY_PASSWORD_VAR)) !== null) continue;
+      if (envValue(deps.env, LEGACY_PASSWORD_VAR) !== undefined) continue;
+      out.push({ name: account.secretName, kind: 'email', label, mailboxId: account.id, settingsRoute: EMAIL_ROUTE });
+      continue;
+    }
+    // Replace value on the owner secret is where a known mailbox takes its
+    // password again; the Email page only adds new ones.
+    const held = await findSecret(deps.pool, account.secretName).catch(() => null);
+    out.push({
+      name: account.secretName,
+      kind: 'email',
+      label,
+      mailboxId: account.id,
+      settingsRoute: held ? secretRoute(account.secretName) : EMAIL_ROUTE,
+    });
+  }
+  return out;
+}
+
+interface ConnectionRowLite {
+  id: string;
+  name: string;
+  transport: string;
+  auth_kind: string;
+  vault_ref: string | null;
+  state: string;
+  env: unknown;
+}
+
+/**
+ * Every connection credential buddi cannot read here, the way the
+ * connections service reads it: an OAuth sign-in is the vault entry the row's
+ * `vault_ref` names (`MCP_CONNECTION_<id>`), a pasted token the owner secret
+ * it names (`MCP_TOKEN_<id>`), and a program's secret variable the owner
+ * secret its `secretRef` names (`MCP_ENV_<id>_<VAR>`). A connection that never
+ * finished signing in is not listed: there was nothing to bring back.
+ */
+async function missingConnections(vault: Vault | undefined, deps: RecoveryDeps): Promise<RecoverySecret[]> {
+  let rows: ConnectionRowLite[];
+  try {
+    ({ rows } = await deps.pool.query<ConnectionRowLite>(
+      `select id::text as id, name, transport, auth_kind, vault_ref, state, env from mcp.connections order by created_at`,
+    ));
+  } catch {
+    return []; // No connections table: nothing connected here.
+  }
+  const out: RecoverySecret[] = [];
+  for (const row of rows) {
+    const route = connectionRoute(row.id);
+    if (row.auth_kind !== 'none' && row.vault_ref && (await readable(vault, deps.pool, row.vault_ref)) === null) {
+      out.push({
+        name: row.vault_ref,
+        kind: 'connection',
+        label: `${row.name} — sign-in`,
+        connectionId: row.id,
+        ...(row.auth_kind === 'oauth' ? { signIn: true as const } : {}),
+        settingsRoute: route,
+      });
+    }
+    if (row.transport !== 'stdio' || !Array.isArray(row.env)) continue;
+    for (const entry of row.env as Array<Record<string, unknown>>) {
+      const ref = entry.secretRef;
+      if (typeof ref !== 'string' || ref === '') continue;
+      if ((await readable(vault, deps.pool, ref)) !== null) continue;
+      out.push({ name: ref, kind: 'connection', label: `${row.name} — ${String(entry.name)}`, connectionId: row.id, settingsRoute: route });
+    }
+  }
+  return out;
+}
+
 async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
   const vault = openVault(deps);
   const out: RecoverySecret[] = [];
@@ -252,7 +393,7 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
    * key lives since the host API.
    */
   const add = async (name: string, kind: RecoverySecret['kind'], settingsRoute: string): Promise<void> => {
-    if (listed(name) || RUNNING_PROVES.has(name)) return;
+    if (listed(name) || RUNNING_PROVES.has(name) || READ_ELSEWHERE.has(name)) return;
     if (envValue(deps.env, name) !== undefined) return;
     if ((await readable(vault, deps.pool, name)) !== null) return;
     out.push({ name, kind, label: SECRET_WORDS[name] ?? name, settingsRoute });
@@ -277,6 +418,10 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
       else if (MODEL_SECRETS.has(name)) await add(name, 'account', ACCOUNTS_ROUTE);
       else await add(name, 'plugin', SECRETS_ROUTE);
     }
+  }
+
+  for (const item of [...(await missingMailboxes(vault, deps)), ...(await missingConnections(vault, deps))]) {
+    if (!listed(item.name)) out.push(item);
   }
   return out;
 }

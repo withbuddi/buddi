@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { parsePluginsInstall, parsePluginsTab, settingsSectionOf, tipsPageOf } from './routes';
+import {
+  connectionRoute,
+  parseConnectionRoute,
+  parsePluginsInstall,
+  parsePluginsTab,
+  parseSecretRoute,
+  secretRoute,
+  settingsSectionOf,
+  tipsPageOf,
+} from './routes';
 
 describe('tipsPageOf', () => {
   it('names the place, and the section for Settings and plugin places, never an id', () => {
@@ -33,5 +42,18 @@ describe('Settings → Plugins links', () => {
     expect(parsePluginsTab('#/settings/plugins?tab=browse')).toBe('browse');
     expect(parsePluginsTab('#/settings/plugins')).toBe('installed');
     expect(parsePluginsTab('#/settings/plugins?tab=browse&install=x')).toBe('installed');
+  });
+});
+
+describe('the recovery checklist links', () => {
+  it('round-trips a connection and a secret, and names their sections', () => {
+    expect(connectionRoute('c-1')).toBe('#/settings/connections?connection=c-1');
+    expect(parseConnectionRoute(connectionRoute('c-1'))).toBe('c-1');
+    expect(parseConnectionRoute('#/settings/connections')).toBeNull();
+    expect(settingsSectionOf(connectionRoute('c-1'))).toBe('connections');
+    expect(secretRoute('EMAIL_YOU_1a2b')).toBe('#/settings/secrets?secret=EMAIL_YOU_1a2b');
+    expect(parseSecretRoute(secretRoute('EMAIL_YOU_1a2b'))).toBe('EMAIL_YOU_1a2b');
+    expect(parseSecretRoute('#/settings/connections?secret=x')).toBeNull();
+    expect(settingsSectionOf(secretRoute('x'))).toBe('secrets');
   });
 });

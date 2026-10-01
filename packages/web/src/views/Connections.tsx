@@ -129,10 +129,15 @@ function rememberedWay(): AddWay {
   }
 }
 
-export function Connections({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
+/**
+ * `connection` is the id a link asked for (`#/settings/connections?connection=<id>`):
+ * that connection's sheet opens, and a new link opens it again.
+ */
+export function Connections({ embedded, timezone, connection: linked }: { embedded?: boolean; timezone?: string; connection?: string | null } = {}): JSX.Element {
   const view = useAsync(() => api.connections(), [], 30_000);
   const [flow, setFlow] = useState<FlowStart | null>(null);
-  const [opened, setOpened] = useState<string | null>(null);
+  const [opened, setOpened] = useState<string | null>(linked ?? null);
+  useEffect(() => { if (linked) setOpened(linked); }, [linked]);
   const [asking, setAsking] = useState<string | null>(null);
   const [holding, setHolding] = useState<string | null>(null);
   const data = view.data;

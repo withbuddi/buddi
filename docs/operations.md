@@ -722,8 +722,16 @@ own until you finish the checklist* — and `buddi doctor` says the same.
 
 The checklist is at the top of **Settings → Backup**:
 
-- **Keys to paste again**, by name, each a link to where it goes;
-- **Add-ons to install again**, from the plugin record the archive carried;
+- **Keys to paste again**, in words, each a link to where it goes: model
+  accounts, the Telegram token, plugin keys, mailbox passwords (to the
+  mailbox's secret in Settings → Keys and secrets, or Settings → Email for the
+  old `.env` mailbox) and connection credentials (a pasted token, a program's
+  secret variable, or an OAuth sign-in — *Sign in again* — each opening that
+  connection in Settings → Connections). Each is checked the way buddi reads
+  it, so only what is truly unreadable on this machine is listed;
+- **Add-ons to install again**, from the plugin record the archive carried; a
+  plugin installed since the gateway started reads *installed — loads at the
+  next restart*, with a link to Restart in Settings → System;
 - **Work that was waiting** — the jobs, missions, approvals and paired phones
   that were in flight, with *drop it* as the default: it was queued somewhere
   else, days ago;

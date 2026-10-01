@@ -13,7 +13,7 @@
  * buddi's own keys sit at the bottom, read-only: the vault is one place, so
  * the page shows everything it holds.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api, type SecretListingView, type SecretRule, type SecretsView } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { Button, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Stack, Tag, Toolbar, useAsync, EmptyState } from '../ui';
@@ -61,7 +61,12 @@ interface BindingDraft {
   rule: SecretRule;
 }
 
-export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?: string } = {}): JSX.Element {
+/**
+ * `secret` is the name a link asked for (`#/settings/secrets?secret=<name>`):
+ * that secret's Replace value opens, the way a restored mailbox gets its
+ * password back.
+ */
+export function Secrets({ embedded, timezone, secret: linked }: { embedded?: boolean; timezone?: string; secret?: string | null } = {}): JSX.Element {
   const view = useAsync(() => api.secrets(), []);
   // A model account's credential is stored under a generated name; the page names it by its account.
   const providerAccounts = useAsync(() => api.providerAccounts(), []);
@@ -102,7 +107,7 @@ export function Secrets({ embedded, timezone }: { embedded?: boolean; timezone?:
                 </EmptyState>
               ) : (
                 data.secrets.map((secret) => (
-                  <SecretRow key={secret.name} secret={secret} accounts={accounts} destinations={data.destinations} timezone={timezone} onChanged={view.reload} />
+                  <SecretRow key={secret.name} secret={secret} accounts={accounts} destinations={data.destinations} timezone={timezone} onChanged={view.reload} replacing={linked === secret.name} />
                 ))
               )}
             </Stack>
@@ -146,16 +151,20 @@ function SecretRow({
   destinations,
   timezone,
   onChanged,
+  replacing,
 }: {
   secret: SecretListingView;
   accounts: ReadonlyMap<string, AccountName>;
   destinations: SecretsView['destinations'];
   timezone?: string;
   onChanged: () => void;
+  /** A link named this secret: open its Replace value. */
+  replacing?: boolean;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<'replace' | 'rename' | 'rebind' | null>(null);
+  const [sheet, setSheet] = useState<'replace' | 'rename' | 'rebind' | null>(replacing ? 'replace' : null);
+  useEffect(() => { if (replacing) setSheet('replace'); }, [replacing]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const del = async (): Promise<void> => {

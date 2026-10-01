@@ -100,6 +100,12 @@ describe('the rows', () => {
     expect(await screen.findByText(/accounts\.provider, Ollama Cloud, or another service$/)).toBeInTheDocument();
   });
 
+  it('opens Replace value for the secret a link names', async () => {
+    render(<Secrets embedded timezone="UTC" secret="Mailbox" />);
+    await screen.findByText('PNC password');
+    expect(await screen.findByRole('dialog')).toHaveTextContent(/Mailbox/);
+  });
+
   it('fetches one secret’s use log when its row opens it', async () => {
     vi.mocked(api.secretUses).mockResolvedValue({
       uses: [

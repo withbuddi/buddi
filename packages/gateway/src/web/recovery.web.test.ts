@@ -35,6 +35,10 @@ interface PoolState {
   secrets?: Record<string, string>;
   /** Rows of `core.pending_plugin_data`. */
   pendingData?: Array<Record<string, unknown>>;
+  /** Rows of `email.accounts`, as the table holds them. */
+  mailboxes?: Array<Record<string, unknown>>;
+  /** Rows of `mcp.connections`. */
+  connections?: Array<Record<string, unknown>>;
 }
 
 /** Enough of a pool for the recovery row, the grants and the two counts. */
@@ -83,6 +87,8 @@ function fakePool(state: PoolState) {
       }
       if (/from core\.surface_identities/.test(sql)) return { rows: [{ n: String(state.telegram) }] };
       if (/from core\.pending_plugin_data/.test(sql)) return { rows: state.pendingData ?? [] };
+      if (/from email\.accounts/.test(sql)) return { rows: (state.mailboxes ?? []).filter((m) => !/where enabled/.test(sql) || m.enabled) };
+      if (/from mcp\.connections/.test(sql)) return { rows: state.connections ?? [] };
       return { rows: [] };
     }),
   };
@@ -434,4 +440,91 @@ it('a plugin in the live record but not running reads installed, loading at the 
     ['finance', true, true],
     ['weather', false, undefined],
   ]);
+});
+
+/*
+ * Mailbox passwords and connection sign-ins: on a new machine they silently
+ * fail, so the checklist names them — read under the names the email plugin
+ * and the connections service use, so a working one is never listed.
+ */
+const MAILBOX_SECRET_ID = '2d7f2e3a-7f4c-4e3d-9b5a-4c9f8e7d6c53';
+const TOKEN_SECRET_ID = '3e8a3f4b-8a5d-4f4e-8c6b-5daf9f8e7d64';
+const ENV_SECRET_ID = '4f9b4a5c-9b6e-4a5f-9d7c-6eb0a09f8e75';
+
+const mailbox = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: 'mb-1', address: 'you@gmail.com', imap_host: 'imap.gmail.com', imap_port: 993, smtp_host: 'smtp.gmail.com', smtp_port: 465,
+  auth_mode: 'app-password', secret_name: 'EMAIL_YOU_GMAIL_COM_1a2b3c4d', aliases: [], display_name: null, enabled: true,
+  added_via: 'page', folders_discovered_at: null, created_at: RESTORED_AT, ...over,
+});
+const connections = [
+  { id: 'c-gh', name: 'GitHub', transport: 'http', auth_kind: 'token', vault_ref: 'MCP_TOKEN_cgh', state: 'connected', env: [] },
+  { id: 'c-lin', name: 'Linear', transport: 'http', auth_kind: 'oauth', vault_ref: 'MCP_CONNECTION_clin', state: 'connected', env: [] },
+  {
+    id: 'c-tr', name: 'Trokky', transport: 'stdio', auth_kind: 'none', vault_ref: null, state: 'connected',
+    env: [{ name: 'TROKKY_TOKEN', secretRef: 'MCP_ENV_ctr_TROKKY_TOKEN' }, { name: 'MODE', value: 'fast' }],
+  },
+  // Never signed in: nothing to bring back.
+  { id: 'c-new', name: 'Notion', transport: 'http', auth_kind: 'oauth', vault_ref: null, state: 'pending-review', env: [] },
+];
+
+it('a mailbox password and every kind of connection credential are listed when buddi cannot read them', async () => {
+  const pool = fakePool(state({
+    telegram: 0, accounts: [],
+    mailboxes: [mailbox()],
+    connections,
+    secrets: { EMAIL_YOU_GMAIL_COM_1a2b3c4d: MAILBOX_SECRET_ID, MCP_TOKEN_cgh: TOKEN_SECRET_ID, MCP_ENV_ctr_TROKKY_TOKEN: ENV_SECRET_ID },
+  }));
+  const view = await readRecoveryView({ pool: pool as never, env: {}, vault: createMemoryVault() }, 'owner');
+  expect(view.checklist.secrets).toEqual([
+    {
+      name: 'EMAIL_YOU_GMAIL_COM_1a2b3c4d', kind: 'email', label: 'Gmail — app password for you@gmail.com', mailboxId: 'mb-1',
+      settingsRoute: '#/settings/secrets?secret=EMAIL_YOU_GMAIL_COM_1a2b3c4d',
+    },
+    { name: 'MCP_TOKEN_cgh', kind: 'connection', label: 'GitHub — sign-in', connectionId: 'c-gh', settingsRoute: '#/settings/connections?connection=c-gh' },
+    {
+      name: 'MCP_CONNECTION_clin', kind: 'connection', label: 'Linear — sign-in', connectionId: 'c-lin', signIn: true,
+      settingsRoute: '#/settings/connections?connection=c-lin',
+    },
+    {
+      name: 'MCP_ENV_ctr_TROKKY_TOKEN', kind: 'connection', label: 'Trokky — TROKKY_TOKEN', connectionId: 'c-tr',
+      settingsRoute: '#/settings/connections?connection=c-tr',
+    },
+  ]);
+});
+
+it('none of them is listed when buddi can read it the way the runtime does', async () => {
+  const pool = fakePool(state({
+    telegram: 0, accounts: [],
+    mailboxes: [mailbox(), mailbox({ id: 'mb-off', address: 'old@gmail.com', secret_name: 'EMAIL_OLD', enabled: false })],
+    connections,
+    secrets: { EMAIL_YOU_GMAIL_COM_1a2b3c4d: MAILBOX_SECRET_ID, MCP_TOKEN_cgh: TOKEN_SECRET_ID, MCP_ENV_ctr_TROKKY_TOKEN: ENV_SECRET_ID },
+  }));
+  const vault = createMemoryVault({
+    seed: {
+      [`owner-secret:${MAILBOX_SECRET_ID}`]: 'app-password-fixture',
+      [`owner-secret:${TOKEN_SECRET_ID}`]: 'ghp_fixture',
+      [`owner-secret:${ENV_SECRET_ID}`]: 'trokky-fixture',
+      // OAuth tokens are a raw vault entry under the row's vault_ref.
+      MCP_CONNECTION_clin: '{"accessToken":"fixture","state":"ready"}',
+    },
+  });
+  const view = await readRecoveryView({ pool: pool as never, env: {}, vault }, 'owner');
+  expect(view.checklist.secrets).toEqual([]);
+});
+
+it('the adopted .env mailbox counts GMAIL_APP_PASSWORD, and its <vault> marker is not listed by name', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-env-'));
+  const envFile = path.join(dir, '.env');
+  await writeFile(envFile, 'GMAIL_USER=you@gmail.com\nGMAIL_APP_PASSWORD="<vault>"\n');
+  const pool = fakePool(state({ telegram: 0, accounts: [], mailboxes: [mailbox({ added_via: 'env', secret_name: 'GMAIL_APP_PASSWORD' })] }));
+
+  const held = createMemoryVault({ seed: { GMAIL_APP_PASSWORD: 'app-password-fixture' } });
+  const fine = await readRecoveryView({ pool: pool as never, env: { BUDDI_ENV_FILE: envFile }, vault: held }, 'owner');
+  expect(fine.checklist.secrets).toEqual([]);
+
+  const missing = await readRecoveryView({ pool: pool as never, env: { BUDDI_ENV_FILE: envFile }, vault: createMemoryVault() }, 'owner');
+  expect(missing.checklist.secrets).toEqual([{
+    name: 'GMAIL_APP_PASSWORD', kind: 'email', label: 'Gmail — app password for you@gmail.com', mailboxId: 'mb-1',
+    settingsRoute: '#/settings/p.email.settings',
+  }]);
 });

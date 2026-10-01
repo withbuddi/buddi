@@ -1359,7 +1359,17 @@ export interface RecoveryView {
   archive: string | null;
   checklist: {
     /** `label` says what it is in words; `accountId` names the model account it belongs to. */
-    secrets: Array<{ name: string; kind: 'account' | 'telegram' | 'plugin'; label?: string; accountId?: string; settingsRoute: string }>;
+    secrets: Array<{
+      name: string;
+      kind: 'account' | 'telegram' | 'plugin' | 'email' | 'connection';
+      label?: string;
+      accountId?: string;
+      mailboxId?: string;
+      connectionId?: string;
+      /** An OAuth sign-in: the fix is "Sign in again", not a pasted key. */
+      signIn?: boolean;
+      settingsRoute: string;
+    }>;
     /** `install` is `<npm>@<version>` when the plugin came from a registry. */
     plugins: Array<{
       name: string;

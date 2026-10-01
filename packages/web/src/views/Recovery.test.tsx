@@ -114,6 +114,27 @@ describe('the checklist', () => {
     expect(screen.getByText('developer.workspaces already had rows here.')).toBeInTheDocument();
   });
 
+  it('a mailbox goes where the gateway says; a connection opens its sheet; an OAuth one says Sign in again', () => {
+    render(
+      <RecoveryChecklist
+        view={view({
+          secrets: [
+            { name: 'EMAIL_YOU_1a2b', kind: 'email', label: 'Gmail — app password for you@gmail.com', mailboxId: 'mb-1', settingsRoute: '#/settings/secrets?secret=EMAIL_YOU_1a2b' },
+            { name: 'MCP_TOKEN_cgh', kind: 'connection', label: 'GitHub — sign-in', connectionId: 'c-gh', settingsRoute: '#/settings/connections?connection=c-gh' },
+            { name: 'MCP_CONNECTION_clin', kind: 'connection', label: 'Linear — sign-in', connectionId: 'c-lin', signIn: true, settingsRoute: '#/settings/connections?connection=c-lin' },
+            { name: 'MCP_ENV_ctr_TROKKY_TOKEN', kind: 'connection', label: 'Trokky — TROKKY_TOKEN', connectionId: 'c-tr', settingsRoute: '#/settings/connections?connection=c-tr' },
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Fix Gmail — app password for you@gmail.com' })).toHaveAttribute('href', '#/settings/secrets?secret=EMAIL_YOU_1a2b');
+    expect(screen.getByRole('link', { name: 'Fix GitHub — sign-in' })).toHaveAttribute('href', '#/settings/connections?connection=c-gh');
+    const again = screen.getByRole('link', { name: 'Sign in again: Linear — sign-in' });
+    expect(again).toHaveTextContent('Sign in again');
+    expect(again).toHaveAttribute('href', '#/settings/connections?connection=c-lin');
+    expect(screen.getByRole('link', { name: 'Fix Trokky — TROKKY_TOKEN' })).toHaveAttribute('href', '#/settings/connections?connection=c-tr');
+  });
+
   it('a plugin installed since the last start reads "loads at the next restart" and offers Restart', () => {
     render(
       <RecoveryChecklist

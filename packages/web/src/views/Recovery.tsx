@@ -18,6 +18,7 @@ import {
   BACKUP_ROUTE,
   PLUGINS_BROWSE_ROUTE,
   accountRoute,
+  connectionRoute,
   pluginInstallRoute,
   settingsRoute,
 } from '../routes';
@@ -59,6 +60,9 @@ type RecoveryPlugin = RecoveryView['checklist']['plugins'][number];
 export function secretFixRoute(secret: RecoverySecret): string {
   if (secret.kind === 'account') return secret.accountId ? accountRoute(secret.accountId) : settingsRoute('accounts');
   if (secret.kind === 'telegram') return settingsRoute('telegram');
+  if (secret.kind === 'connection') return secret.connectionId ? connectionRoute(secret.connectionId) : settingsRoute('connections');
+  // A mailbox: the gateway says where (its secret's Replace value, or the Email page).
+  if (secret.kind === 'email') return secret.settingsRoute;
   return settingsRoute('secrets');
 }
 
@@ -185,9 +189,15 @@ export function RecoveryChecklist({
                   title={secret.label ?? secret.name}
                   sub={secret.name ? <span className="mono">{secret.name}</span> : undefined}
                   side={
-                    <ButtonLink size="sm" href={secretFixRoute(secret)} aria-label={`Fix ${secret.label ?? secret.name}`}>
-                      Fix
-                    </ButtonLink>
+                    secret.signIn ? (
+                      <ButtonLink size="sm" href={secretFixRoute(secret)} aria-label={`Sign in again: ${secret.label ?? secret.name}`}>
+                        Sign in again
+                      </ButtonLink>
+                    ) : (
+                      <ButtonLink size="sm" href={secretFixRoute(secret)} aria-label={`Fix ${secret.label ?? secret.name}`}>
+                        Fix
+                      </ButtonLink>
+                    )
                   }
                 />
               ))}

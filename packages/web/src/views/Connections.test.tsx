@@ -118,6 +118,13 @@ describe('the list', () => {
     expect(mocked.connectionReview).toHaveBeenCalledWith(connection().id);
   });
 
+  it('opens the connection a link names straight into its sheet', async () => {
+    mocked.connections.mockResolvedValue(view());
+    render(<Connections embedded connection={connection().id} />);
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+  });
+
   it('names the agents Disconnect takes the tools from, then disconnects', async () => {
     mocked.connections.mockResolvedValue(view());
     mocked.disconnect.mockResolvedValue({ id: 'x', name: 'GitHub', touched: ['concierge'] });

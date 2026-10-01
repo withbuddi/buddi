@@ -198,6 +198,45 @@ export function parseAccountRoute(hash: string): string | null {
   }
 }
 
+/** The value of `key` in a `#/settings/<section>?…` hash, or null. */
+function settingsParam(hash: string, section: string, key: string): string | null {
+  const match = new RegExp(`^#/settings/${section}\\?(.*)$`).exec(hash);
+  if (!match) return null;
+  try {
+    return new URLSearchParams(match[1]).get(key) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Settings → Connections with one connection's sheet open:
+ * `#/settings/connections?connection=<id>`. Where the recovery checklist sends
+ * the owner to sign in again or give a program's variable again.
+ */
+export function connectionRoute(connectionId: string): string {
+  return `${settingsRoute('connections')}?connection=${encodeURIComponent(connectionId)}`;
+}
+
+/** The connection a connections hash opens, or null. */
+export function parseConnectionRoute(hash: string): string | null {
+  return settingsParam(hash, 'connections', 'connection');
+}
+
+/**
+ * Settings → Keys and secrets with one secret's Replace value open:
+ * `#/settings/secrets?secret=<name>`. Where a mailbox's password is given
+ * again after a restore.
+ */
+export function secretRoute(name: string): string {
+  return `${settingsRoute('secrets')}?secret=${encodeURIComponent(name)}`;
+}
+
+/** The secret a secrets hash opens, or null. */
+export function parseSecretRoute(hash: string): string | null {
+  return settingsParam(hash, 'secrets', 'secret');
+}
+
 /**
  * Settings → Plugins with one install staged, the way a market link stages it:
  * `#/settings/plugins?install=<npm>@<version>`.
