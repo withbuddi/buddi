@@ -123,8 +123,8 @@ export class IdleWatchers {
     this.#opts = opts;
     managers.add(this);
     const listener = (change: AccountChange): void => {
-      if (change.password && change.accountId) void this.restart(change.accountId);
-      else void this.reconcile();
+      const done = change.password && change.accountId ? this.restart(change.accountId) : this.reconcile();
+      done.catch((err) => this.#opts.host.log(`email.idle: ${err instanceof Error ? err.message : String(err)}`));
     };
     changeListeners.add(listener);
     this.#unlisten = () => changeListeners.delete(listener);
@@ -212,9 +212,18 @@ class AccountWatcher {
   ) {}
 
   start(): void {
-    this.#connecting = this.#connect(false).finally(() => {
-      this.#connecting = null;
-    });
+    this.#launch(false);
+  }
+
+  /** Connect, never leaving a rejection unhandled: an unexpected error (a database read, the vault) retries with backoff. */
+  #launch(reconnect: boolean): void {
+    this.#connecting = this.#connect(reconnect)
+      .catch((err) => {
+        if (!this.#stopped) this.#retry(err);
+      })
+      .finally(() => {
+        this.#connecting = null;
+      });
   }
 
   #log(line: string): void {
@@ -279,9 +288,7 @@ class AccountWatcher {
     this.#log(`IDLE dropped (${err instanceof Error ? err.message : String(err)}); trying again in ${Math.round(delay / 1000)}s`);
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = null;
-      this.#connecting = this.#connect(true).finally(() => {
-        this.#connecting = null;
-      });
+      this.#launch(true);
     }, delay);
     this.#retryTimer.unref?.();
   }

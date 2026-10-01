@@ -536,7 +536,18 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       } finally {
         inFlight.delete(accountId);
         lastPolled.set(accountId, Date.now());
-        if (again.delete(accountId) && watcherCtx() !== null) void pollNow(accountId);
+        if (again.delete(accountId)) {
+          const ctx = watcherCtx();
+          // Like IDLE's own debounced poll: a failure is logged (a refused
+          // login was already recorded by the poll), never left unhandled.
+          if (ctx !== null) {
+            pollNow(accountId).catch((err) => {
+              (ctx.buddi?.log ?? ((line: string) => console.error(line)))(
+                `email.inbox-poll: follow-up poll failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            });
+          }
+        }
       }
     })();
     inFlight.set(accountId, running);

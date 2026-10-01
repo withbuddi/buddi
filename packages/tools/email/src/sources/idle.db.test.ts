@@ -53,6 +53,8 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
   let maxOpen: number;
   let connects: number;
   let connectDelayMs: number;
+  /** Connections from this one on fail like a dropped network. */
+  let failFromConnect: number;
   let watch: SourceWatch | null;
 
   beforeAll(async () => {
@@ -83,6 +85,7 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     maxOpen = 0;
     connects = 0;
     connectDelayMs = 0;
+    failFromConnect = Infinity;
     watch = null;
   });
 
@@ -93,6 +96,7 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
   /** The reader, counted: a poll is one connection, so two at once is two polls at once. */
   const connect: ImapClientFactory = async () => {
     connects += 1;
+    if (connects >= failFromConnect) throw new Error('connect ECONNRESET');
     open += 1;
     maxOpen = Math.max(maxOpen, open);
     if (connectDelayMs > 0) await sleep(connectDelayMs);
@@ -170,6 +174,30 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     await waitFor(() => open === 0);
     expect(maxOpen).toBe(1);
     expect(logs.some((l) => /being polled already/.test(l))).toBe(true);
+  });
+
+  it('a failing follow-up poll (a change during a poll) is logged, never an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const source = sourceWith();
+      await startWatch(source);
+      await waitFor(() => idleLive(accountId));
+      connectDelayMs = 150;
+      server.add('INBOX', fakeMessage({ messageId: '<a@x>' }));
+      await sleep(DEBOUNCE + 20);
+      // IDLE's poll is connecting; this change earns one more poll, which fails.
+      failFromConnect = connects + 1;
+      server.add('INBOX', fakeMessage({ messageId: '<b@x>' }));
+      await waitFor(() => logs.some((l) => /follow-up poll failed: .*ECONNRESET/.test(l)));
+      await sleep(20);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('slows the scheduled poll while IDLE is live, and keeps it while it is not', async () => {
