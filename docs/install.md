@@ -116,6 +116,17 @@ install; `docker compose` is only for a source checkout.
 
 Backups (§8) need no `pg_dump`, so the bundled Postgres is enough for them.
 
+**"Postgres failed to start" with `dyld: Library not loaded` (or a missing
+`.so` on Linux).** The platform package ships its libraries as real files and
+lists the version links between them in `native/pg-symlinks.json`; its install
+script makes those links, and npm with scripts off (or npm 11 holding scripts
+back) never runs it. buddi now makes the missing links itself before every
+Postgres start, keeps its runtime copy under `<data>/runtime` self-contained,
+and an upgrade checks that the new version's Postgres starts before switching
+to it. On 0.1.0-pre.26 or older, make the links by hand and restart:
+`cd "$(npm root -g)/@withbuddi/buddi/node_modules/@embedded-postgres/<platform>" && node scripts/hydrate-symlinks.js`
+(`<platform>` is e.g. `darwin-arm64` or `linux-x64`).
+
 ---
 
 ## 4. The data directory

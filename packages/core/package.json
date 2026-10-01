@@ -33,6 +33,10 @@
       "types": "./dist/semver.d.ts",
       "default": "./dist/semver.js"
     },
+    "./postgres-links": {
+      "types": "./dist/postgres/links.d.ts",
+      "default": "./dist/postgres/links.js"
+    },
     "./connection-config": {
       "types": "./dist/connection-config.d.ts",
       "default": "./dist/connection-config.js"

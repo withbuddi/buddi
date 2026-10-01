@@ -517,6 +517,8 @@ const UPGRADE_PHASES: Record<string, string> = {
   backup: 'Taking a backup first, so there is a way back.',
   stopping: 'Stopping the gateway. The database stays up.',
   installing: 'Installing the new version.',
+  verifying: 'Checking that the new version can start its database.',
+  'rolling-back': 'The new version could not start its database. Putting the previous one back.',
   restarting: 'Restarting buddi on the new version.',
   migrating: 'Bringing the database up to date.',
   done: 'Done.',

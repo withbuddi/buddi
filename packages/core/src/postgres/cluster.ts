@@ -182,7 +182,7 @@ export async function startManagedCluster({ root, dataDir, port, vault, logFile,
     password = randomBytes(32).toString('base64url');
     await vault.set('BUDDI_DB_PASSWORD', password);
   }
-  const bin = await prepareBinaries({ root, dataDir, env });
+  const bin = await prepareBinaries({ root, dataDir, env, log: diagnostic });
   if (!existsSync(path.join(cluster, 'PG_VERSION'))) {
     if (existsSync(cluster)) throw new Error('The postgres directory is incomplete or unrecognized. It was preserved; inspect it before retrying.');
     const stage = path.join(dataDir, `postgres-init-${process.pid}-${Date.now()}`);

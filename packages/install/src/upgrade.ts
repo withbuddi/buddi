@@ -54,6 +54,8 @@ import type { HttpTransport } from '@buddi/gateway';
 import { atomicJson, launchAgentLabel, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext, ReadyContext } from './environment.js';
 import { JobStore } from './backup.js';
+import { createPostgresCheck } from './postgres-check.js';
+import type { PostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
 
 const run = promisify(execFile);
@@ -665,6 +667,8 @@ export interface UpgradeServiceOptions {
   /** Shut down and hand over to the newly installed code. Never returns. */
   restart: () => void;
   install?: UpgradeInstaller | undefined;
+  /** Does the newly installed Postgres binary start? Asked before the hand-over. */
+  checkPostgres?: PostgresCheck | undefined;
   http?: HttpTransport | undefined;
   log?: ((line: string) => void) | undefined;
   checkIntervalMs?: number | undefined;
@@ -683,6 +687,7 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
   const registry = registryFor(ctx.env);
   const checkInterval = opts.checkIntervalMs ?? (Number(ctx.env.BUDDI_UPGRADE_CHECK_INTERVAL_MS) || CHECK_INTERVAL_MS);
   const install = opts.install ?? createInstaller();
+  const checkPostgres = opts.checkPostgres ?? createPostgresCheck({ env: ctx.env });
   const backupWait = opts.backupWaitMs ?? BACKUP_WAIT_MS;
   let running: UpgradeJob | undefined;
   /** Has the code under this process already been replaced? See `perform`. */
@@ -831,6 +836,32 @@ export function createUpgradeService(opts: UpgradeServiceOptions): UpgradeContro
       return await give('installing', `${to} was asked for and ${installed.version} was installed`, true);
     }
     to = installed.version;
+
+    /*
+     * The new code's database has to start, and this is the last moment the
+     * old code can still say no: past the hand-over a Postgres that dies in
+     * the loader is a supervisor looping "Postgres failed to start" with
+     * nothing to go back to. So the binary is run here, from the new install,
+     * and a failure puts the previous version back on disk and starts its
+     * gateway again — the database never stopped.
+     */
+    if (ctx.state.database !== 'external') {
+      jobs.phase(job, 'verifying', `checking that ${to} can start its database`);
+      const verdict = await checkPostgres(ctx.root);
+      if (!verdict.ok) {
+        const refused = `${verdict.error} buddi did not switch to ${to}.`;
+        if (!isVersion(current)) return await give('verifying', `${refused} Reinstall the previous version with npm before restarting.`, false);
+        jobs.phase(job, 'rolling-back', `reinstalling ${current}`);
+        try {
+          await install(`${PACKAGE_NAME}@${current}`, { registry, root: ctx.root, target });
+          const back = await installedPackage(ctx.root);
+          if (back.version !== current) throw new Error(`${back.version ?? 'nothing'} is installed`);
+        } catch (err) {
+          return await give('verifying', `${refused} Putting ${current} back also failed (${message(err)}); run \`npm install -g ${PACKAGE_NAME}@${current}\` before restarting.`, false);
+        }
+        return await give('verifying', `${refused} It is still running on ${current}.`, true);
+      }
+    }
 
     replaced = true;
     jobs.phase(job, 'restarting', `handing over to ${to}`);

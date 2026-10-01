@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
+import { createPostgresCheck } from './postgres-check.js';
 import type { BackupControl, BackupJob } from './backup.js';
 import type { ReadyContext } from './environment.js';
 import {
@@ -61,12 +62,13 @@ function service(ctx: ReadyContext, opts: Partial<Parameters<typeof createUpgrad
   const stopGateway = vi.fn(async () => {});
   const startGateway = vi.fn(() => {});
   const restart = vi.fn(() => {});
+  const checkPostgres = vi.fn(async () => ({ ok: true as const }));
   ctx.env.BUDDI_NPM_REGISTRY = ctx.env.BUDDI_NPM_REGISTRY ?? 'https://registry.example';
   const upgrade = createUpgradeService({
     ctx, current: '0.1.0', backup: backupControl(), stopGateway, startGateway, restart,
-    install, http: registry('0.1.1') as never, log: () => {}, ...opts,
+    install, checkPostgres, http: registry('0.1.1') as never, log: () => {}, ...opts,
   });
-  return { upgrade, install, stopGateway, startGateway, restart };
+  return { upgrade, install, stopGateway, startGateway, restart, checkPostgres };
 }
 
 /** The job is asynchronous by construction; this is the only way to read it. */
@@ -317,7 +319,7 @@ describe('an upgrade', () => {
     const started = upgrade.start('0.1.0');
     expect('status' in started).toBe(false);
     const job = await settled(upgrade, (started as BackupJob).id);
-    expect(job.phases).toEqual(['starting', 'backup', 'stopping', 'installing', 'restarting']);
+    expect(job.phases).toEqual(['starting', 'backup', 'stopping', 'installing', 'verifying', 'restarting']);
     expect(stopGateway).toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
     expect(install).toHaveBeenCalledWith('@withbuddi/buddi@0.1.0', { registry: 'https://registry.example', root: ctx.root, target: { prefix: path.dirname(ctx.root), global: false } });
@@ -549,5 +551,87 @@ describe('finishing in the new code', () => {
     const lines = upgradeDoctorLines(versionView(await readUpgradeState(ctx.data, '0.1.1')), 'upgrade-failed');
     expect(lines[0]).toBe('Version: 0.1.1');
     expect(lines.at(-1)).toMatch(/^Upgrade to 0\.1\.1 failed while migrating/);
+  });
+});
+
+/**
+ * The new install's Postgres package, as npm leaves it with scripts off: a
+ * `postgres` that is a shell script, a library file and the manifest naming
+ * the link npm never created.
+ */
+async function postgresPackage(root: string, script: string): Promise<string> {
+  const name = `@embedded-postgres/${process.platform}-${process.arch}`;
+  const pkg = path.join(root, 'node_modules', name);
+  await mkdir(path.join(pkg, 'native/bin'), { recursive: true });
+  await mkdir(path.join(pkg, 'native/lib'), { recursive: true });
+  await mkdir(path.join(pkg, 'dist'), { recursive: true });
+  await writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name, version: '18.4.0', main: 'dist/index.js' }));
+  await writeFile(path.join(pkg, 'dist/index.js'), 'module.exports = {};');
+  await writeFile(path.join(pkg, 'native/lib/libicuuc.77.1.dylib'), 'a library');
+  await writeFile(path.join(pkg, 'native/pg-symlinks.json'), JSON.stringify([
+    { source: 'native/lib/libicuuc.77.1.dylib', target: 'native/lib/libicuuc.77.dylib' },
+  ]));
+  await writeFile(path.join(pkg, 'native/bin/postgres'), `#!/bin/sh\n${script}\n`);
+  await chmod(path.join(pkg, 'native/bin/postgres'), 0o755);
+  return pkg;
+}
+
+describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('the new version\'s database, before the hand-over', () => {
+  test('a Postgres that starts is handed over to, with its links made first', async () => {
+    const ctx = await installation('0.1.1');
+    const pkg = await postgresPackage(ctx.root, 'echo "postgres (PostgreSQL) 18.4"');
+    const { upgrade, restart, startGateway } = service(ctx, { checkPostgres: createPostgresCheck() });
+    const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
+    expect(job.phase).toBe('restarting');
+    expect(restart).toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+    expect(await readlink(path.join(pkg, 'native/lib/libicuuc.77.dylib'))).toBe('libicuuc.77.1.dylib');
+  });
+
+  test('a Postgres that does not start is never handed over to; the previous version goes back and keeps running', async () => {
+    const ctx = await installation('0.1.1');
+    await postgresPackage(ctx.root, 'echo "dyld: Library not loaded: @loader_path/../lib/libicuuc.77.dylib" >&2; exit 134');
+    // The rollback install puts 0.1.0 back on disk.
+    const install = vi.fn(async (spec: string) => {
+      if (spec === '@withbuddi/buddi@0.1.0') await writeFile(path.join(ctx.root, 'package.json'), JSON.stringify({ name: '@withbuddi/buddi', version: '0.1.0' }));
+    });
+    const { upgrade, restart, startGateway } = service(ctx, { install, checkPostgres: createPostgresCheck() });
+    const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
+    expect(job.phase).toBe('failed');
+    expect(job.phases).toContain('rolling-back');
+    expect(job.error).toMatch(/Postgres binary does not start: dyld: Library not loaded/);
+    expect(job.error).toMatch(/did not switch to 0\.1\.1\. It is still running on 0\.1\.0\./);
+    expect(install).toHaveBeenLastCalledWith('@withbuddi/buddi@0.1.0', expect.anything());
+    expect(restart).not.toHaveBeenCalled();
+    expect(startGateway).toHaveBeenCalled();
+    expect(ctx.state.phase).toBe('ready');
+    expect((await upgrade.view()).history.at(-1)).toMatchObject({ outcome: 'failed', step: 'verifying', from: '0.1.0', to: '0.1.1' });
+  });
+
+  test('when the previous version cannot be put back, nothing is started and the way back is named', async () => {
+    const ctx = await installation('0.1.1');
+    await postgresPackage(ctx.root, 'exit 1');
+    const install = vi.fn(async (spec: string) => { if (spec.endsWith('@0.1.0')) throw new Error('offline'); });
+    const { upgrade, restart, startGateway } = service(ctx, { install, checkPostgres: createPostgresCheck() });
+    const job = await settled(upgrade, (upgrade.start('0.1.1') as BackupJob).id);
+    expect(job.phase).toBe('failed');
+    expect(job.error).toMatch(/npm install -g @withbuddi\/buddi@0\.1\.0/);
+    expect(restart).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+  });
+
+  test('a new version without the binaries at all is refused the same way', async () => {
+    const ctx = await installation('0.1.1');
+    const verdict = await createPostgresCheck()(ctx.root);
+    expect(verdict).toMatchObject({ ok: false, error: expect.stringMatching(/no Postgres binaries/) });
+  });
+
+  test('an external database needs no check', async () => {
+    const ctx = await installation();
+    ctx.state.database = 'external';
+    const { upgrade, checkPostgres, restart } = service(ctx);
+    await settled(upgrade, (upgrade.start('0.1.0') as BackupJob).id);
+    expect(checkPostgres).not.toHaveBeenCalled();
+    expect(restart).toHaveBeenCalled();
   });
 });

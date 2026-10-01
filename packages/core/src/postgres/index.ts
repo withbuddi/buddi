@@ -3,3 +3,4 @@
 // checkout CLI share this one implementation.
 export * from './binaries.js';
 export * from './cluster.js';
+export * from './links.js';

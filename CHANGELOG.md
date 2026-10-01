@@ -12,6 +12,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- An upgrade could leave Postgres unable to start ("Library not loaded: …libicuuc.77.dylib"), because npm did not run the Postgres package's script that makes its library links and buddi's own copy pointed back into npm's folder. buddi now makes the missing links itself before every Postgres start and keeps its copy self-contained, and an upgrade first checks that the new version's Postgres starts; if it does not, buddi puts the previous version back, keeps running, and the upgrade result says why.
 - A message an agent sent you repeated its "@handle:" at the start of the title on the dashboard, right under the agent's name. Home's Needs you, Settings → Notifications and the toasts now leave the signature off; Telegram keeps it.
 
 ## 0.1.0-pre.26 — 2026-09-30

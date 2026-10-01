@@ -8,7 +8,7 @@
  * it describes actually created. Making those links is this module's job, and
  * this is the test that says so.
  */
-import { chmod, mkdir, mkdtemp, readlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readlink, symlink, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -49,6 +49,31 @@ describe('the runtime copy of the Postgres binaries', () => {
     expect(await readlink(link)).toBe('libpq.so.5.18');
     // And again on a copy that is already there: nothing throws on EEXIST.
     await expect(prepareBinaries({ root, dataDir, env: process.env })).resolves.toBe(bin);
+  });
+
+  test('every start heals the copy it runs from, and says so once', async () => {
+    const { root, dataDir } = await fakePackage();
+    const bin = await prepareBinaries({ root, dataDir, env: process.env });
+    const link = path.join(path.dirname(bin), 'lib/libpq.so.5');
+    // What an older release's copy left: an absolute link back into the npm
+    // tree, which an upgrade replaces without the links.
+    await unlink(link);
+    await symlink(path.join(root, 'node_modules/gone/libpq.so.5.18'), link);
+    const lines: string[] = [];
+    await prepareBinaries({ root, dataDir, env: process.env, log: line => lines.push(line) });
+    expect(await readlink(link)).toBe('libpq.so.5.18');
+    expect(lines).toEqual(['postgres: restored 1 library links npm did not create']);
+    // Nothing to restore, nothing said.
+    await prepareBinaries({ root, dataDir, env: process.env, log: line => lines.push(line) });
+    expect(lines).toHaveLength(1);
+  });
+
+  test('copies a link the package already has as a relative link, never an absolute one', async () => {
+    const { root, dataDir } = await fakePackage();
+    const pkg = path.join(root, 'node_modules', `@embedded-postgres/${process.platform}-${process.arch}`);
+    await symlink('libpq.so.5.18', path.join(pkg, 'native/lib/libpq.so.5'));
+    const bin = await prepareBinaries({ root, dataDir, env: process.env });
+    expect(await readlink(path.join(path.dirname(bin), 'lib/libpq.so.5'))).toBe('libpq.so.5.18');
   });
 
   test('says which package is missing rather than failing obscurely', async () => {

@@ -5,12 +5,13 @@
  * root, so core gains no dependency on `@embedded-postgres/*`: whoever ships
  * those binaries says where they are.
  */
-import { cp, mkdir, readFile, writeFile, symlink, chmod, stat } from 'node:fs/promises';
+import { cp, mkdir, writeFile, chmod, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { hydratePostgresLinks } from './links.js';
 
 const exec = promisify(execFile);
 
@@ -29,10 +30,12 @@ export interface BinaryOptions {
   /** Private, writable storage: the runtime copy lives under `<dataDir>/runtime`. */
   dataDir: string;
   env?: NodeJS.ProcessEnv;
+  /** Where the one line about repaired links goes; defaults to stderr. */
+  log?: (line: string) => void;
 }
 
 /** Copy into writable private storage; --ignore-scripts and read-only global installs work. */
-export async function prepareBinaries({ root, dataDir, env = process.env }: BinaryOptions): Promise<string> {
+export async function prepareBinaries({ root, dataDir, env = process.env, log = line => console.error(line) }: BinaryOptions): Promise<string> {
   if (!['darwin', 'linux'].includes(process.platform)) throw new Error('Managed Postgres startup is currently supported on macOS and Linux only. Windows process management is not implemented yet.');
   const pkg = `@embedded-postgres/${process.platform}-${process.arch}`;
   let entry: string;
@@ -45,21 +48,10 @@ export async function prepareBinaries({ root, dataDir, env = process.env }: Bina
   const dest = path.join(dataDir, 'runtime', `postgres-${BINARY_VERSION}-${process.platform}-${process.arch}`);
   if (!existsSync(path.join(dest, '.ready'))) {
     await mkdir(dest, { recursive: true, mode: 0o700 });
-    await cp(native, dest, { recursive: true, force: true });
-    const links = JSON.parse(await readFile(path.join(native, 'pg-symlinks.json'), 'utf8').catch(() => '[]')) as { source: string; target: string }[];
-    // Upstream's source is the link destination; target is the link to create.
-    for (const { source, target } of links) {
-      const rebase = (value: string): string => {
-        const normalized = value.replaceAll('\\', '/');
-        const suffix = normalized.includes('/native/') ? normalized.split('/native/').pop() as string : normalized.replace(/^native\//, '');
-        const resolved = path.resolve(dest, suffix);
-        if (!resolved.startsWith(dest + path.sep)) throw new Error('Invalid path in Postgres symlink manifest');
-        return resolved;
-      };
-      const from = rebase(source), to = rebase(target);
-      try { await symlink(path.relative(path.dirname(to), from), to); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    }
+    // Links copied verbatim: without it `cp` rewrites a relative link into an
+    // absolute one back into the npm tree, which an upgrade then replaces.
+    await cp(native, dest, { recursive: true, force: true, verbatimSymlinks: true });
+    await hydratePostgresLinks(dest);
     // This upstream binary distribution contains server tools only. Packaged
     // backup/restore is deliberately disabled until client tools are shipped.
     for (const name of ['initdb', 'postgres', 'pg_ctl']) {
@@ -68,6 +60,12 @@ export async function prepareBinaries({ root, dataDir, env = process.env }: Bina
       await exec(file, ['--version'], { timeout: 10_000, env: nativeEnvironment(env) });
     }
     await writeFile(path.join(dest, '.ready'), BINARY_VERSION, { mode: 0o600 });
+  } else {
+    // Every start, not only the first copy: a copy made by an older release
+    // (or one whose links went missing since) heals itself here. The binary
+    // runs from this copy, so this copy is the one whose links matter.
+    const restored = await hydratePostgresLinks(dest);
+    if (restored.length > 0) log(`postgres: restored ${restored.length} library links npm did not create`);
   }
   return path.join(dest, 'bin');
 }
