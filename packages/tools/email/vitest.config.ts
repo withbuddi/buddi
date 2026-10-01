@@ -11,5 +11,9 @@ const resolve = createRequire(import.meta.url).resolve;
 export default defineConfig({
   test: {
     globalSetup: [resolve('@buddi/core/testing/global-setup')],
+    // A DB suite's afterAll drops its throwaway database, and DROP DATABASE
+    // waits for a checkpoint. With every package's suites dropping at once on
+    // a slow disk (Docker Desktop on macOS), those queue past the 10 s default.
+    hookTimeout: 60_000,
   },
 });
