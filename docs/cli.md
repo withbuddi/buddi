@@ -25,12 +25,14 @@ a Claude or ChatGPT sign-in, or a model server on your network). Then put an age
 under Agents → the agent → Setup → Brain, or from a terminal:
 
 ```sh
+buddi accounts
 buddi agents set ledger --account <id>
 buddi agents test ledger
 ```
 
-[`buddi agents set`](#buddi-agents-set) takes the account's id ([`buddi agents show`](#buddi-agents-show) prints it for an agent already
-on that account); [`buddi agents test`](#buddi-agents-test) runs one cheap turn to prove the account answers.
+[`buddi accounts`](#buddi-accounts) prints each account's id and whether it can run now (the account's page on the
+dashboard shows the id too, with Copy); [`buddi agents set`](#buddi-agents-set) takes it, and [`buddi agents test`](#buddi-agents-test) runs one
+cheap turn to prove the account answers.
 
 ### Change an agent's model or step budget
 
@@ -281,6 +283,8 @@ Your agents, what they have scheduled, and the plugins they use.
 - [`buddi agents`](#buddi-agents): List every agent, its engine, and whether it can run.
 - [`buddi agents show`](#buddi-agents-show): Show one agent in full: engine, tools, skills and its last run.
 - [`buddi agents set`](#buddi-agents-set): Change an agent's account, model, step budget, language or when its chats start fresh.
+- [`buddi accounts`](#buddi-accounts): List the model accounts: id, provider, default model, whether each can run now, and the agents on it.
+- [`buddi accounts show`](#buddi-accounts-show): Show one model account in full: its address, default model, state, agents and last connection test.
 - [`buddi agents models`](#buddi-agents-models): List the models this build knows, and which of them this machine can reach.
 - [`buddi agents test`](#buddi-agents-test): Run one cheap live turn on an agent's provider, to prove it answers.
 - [`buddi agents migrate`](#buddi-agents-migrate): Move agents/ and skills/ out of the checkout and into your private directory. Source checkout only.
@@ -380,7 +384,7 @@ buddi agents set <handle> [--account <id>] [--model <id>] [--max-turns <n>] [--l
 
 **Flags**
 
-- `--account <id>`: Run it on this model account, added on the dashboard under Settings → Model accounts. buddi agents show prints the id of the one an agent is on.
+- `--account <id>`: Run it on this model account, added on the dashboard under Settings → Model accounts. buddi accounts prints every account with its id.
 - `--provider anthropic|openai`: Where its conversations go, on an agent without an account.
 - `--model <id>`: Checked against that provider's models.
 - `--max-turns <n>`: How many steps one run may take.
@@ -401,6 +405,66 @@ buddi agents set ledger --max-turns 20
 - `1`: It failed; the message says why.
 - `2`: The command was not typed right.
 - `3`: No agent has that handle or id.
+
+### buddi accounts
+
+List the model accounts: id, provider, default model, whether each can run now, and the agents on it.
+
+```sh
+buddi accounts [list] [--json]
+```
+
+**Flags**
+
+- `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+
+**Example**
+
+```sh
+buddi accounts
+```
+
+**Then**: To put an agent on one: `buddi agents set <handle> --account <id>`.
+
+**JSON**: [{ id, label, kind, provider, auth, defaultModel, enabled, configured, state, rateLimit: { scope, until, limit, unit, freeTier, provider, model } | null, agents: [{ id, handle, model }] }]. state is ready, rate-limited, needs-credential, needs-sign-in or disabled; rateLimit is set only while rate-limited, and scope is day (a daily quota used up) or burst. Never a key or a token.
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable, or not configured.
+
+**See also**: [`buddi accounts show`](#buddi-accounts-show)
+
+### buddi accounts show
+
+Show one model account in full: its address, default model, state, agents and last connection test.
+
+```sh
+buddi accounts show <id> [--json]
+```
+
+**Flags**
+
+- `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+
+**Example**
+
+```sh
+buddi accounts show 6b2f9c1e-0d4a-4f7e-9a51-3c8e2d7b4a10
+```
+
+**Then**: To put an agent on it: `buddi agents set <handle> --account <id>`.
+
+**JSON**: The fields of buddi accounts list, plus { baseUrl, contextWindowTokens, detectedContextWindowTokens, test: { state, message, checkedAt } | null }. The account may be named by its id or its label.
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: No account has that id or label, or the database is not reachable.
 
 ### buddi agents models
 

@@ -79,6 +79,8 @@ export type Command =
   | { kind: 'chat-cli'; argv: string[] }
   /** Delegated verbatim to the gateway's missions CLI. */
   | { kind: 'missions'; argv: string[] }
+  /** The model accounts, read-only: delegated to the gateway's accounts CLI. */
+  | { kind: 'accounts'; argv: string[] }
   /** Install, uninstall, list and inspect plugins. The gateway's CLI owns it. */
   | { kind: 'plugins'; argv: string[] }
   /** One-off reminders the agents set. Delegated to the gateway's CLI. */
@@ -331,6 +333,7 @@ export function parseArgs(argv: string[]): Command {
     return { kind: 'serve' };
   }
   if (head === 'missions') return { kind: 'missions', argv: rest };
+  if (head === 'accounts') return { kind: 'accounts', argv: rest };
   if (head === 'plugins') return { kind: 'plugins', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'nudges') return { kind: 'nudges', argv: rest };

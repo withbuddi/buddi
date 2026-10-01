@@ -27,6 +27,7 @@ import {
   parseAgentsArgs,
   parseChatArgs,
   parseMissionsArgs,
+  parseAccountsArgs,
   parseNudgesArgs,
   parsePluginsArgs,
   parseRemindersArgs,
@@ -37,6 +38,7 @@ import {
   requireDatabase,
   runChatCli,
   runMissionsCli,
+  runAccountsCli,
   runNudgesCli,
   runPluginsCli,
   runRemindersCli,
@@ -193,6 +195,12 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       if (blocked !== 0) return blocked;
       await runMissionsCli(withJson(command.argv, json));
       return process.exitCode === undefined ? 0 : Number(process.exitCode);
+    }
+    case 'accounts': {
+      await loadEnvironment();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
+      return runAccountsCli(withJson(command.argv, json));
     }
     case 'reminders': {
       await loadEnvironment();
@@ -357,6 +365,7 @@ function checkDelegated(command: Command, json: boolean): void {
       if (argv[0] === 'agents') parseAgentsArgs(argv.slice(1));
       else parseChatArgs(argv);
     } else if (command.kind === 'missions') parseMissionsArgs(argv);
+    else if (command.kind === 'accounts') parseAccountsArgs(argv);
     else if (command.kind === 'plugins') parsePluginsArgs(argv);
     else if (command.kind === 'reminders') parseRemindersArgs(argv);
     else if (command.kind === 'nudges') parseNudgesArgs(argv);

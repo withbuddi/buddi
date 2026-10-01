@@ -7,6 +7,7 @@ import {
   parseAgentsArgs,
   parseChatArgs,
   parseMissionsArgs,
+  parseAccountsArgs,
   parseNudgesArgs,
   parsePluginsArgs,
   parseRemindersArgs,
@@ -47,6 +48,7 @@ function parseFully(argv: string[], json = false): Command {
     if (delegated[0] === 'agents') parseAgentsArgs(delegated.slice(1));
     else parseChatArgs(delegated);
   } else if (command.kind === 'missions') parseMissionsArgs(delegated);
+  else if (command.kind === 'accounts') parseAccountsArgs(delegated);
   else if (command.kind === 'plugins') parsePluginsArgs(delegated);
   else if (command.kind === 'reminders') parseRemindersArgs(delegated);
   else if (command.kind === 'nudges') parseNudgesArgs(delegated);
@@ -184,6 +186,8 @@ describe('the command table', () => {
       'ask',
       'agents',
       'agents show',
+      'accounts',
+      'accounts show',
       'agents models',
       'missions list',
       'reminders',
