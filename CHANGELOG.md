@@ -12,6 +12,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A mailbox without a stored password no longer writes "no IDLE … checking on the poll" to the log on every poll; it is said once, and again only when that changes.
 - A mailbox change or undo interrupted part-way (a dropped connection, or buddi stopping) no longer loses track of what it did: the change is recorded before the server is touched, the next poll checks with the server and finishes the record, and an undo that stopped part-way can be run again to put back the rest. Recent changes shows "Partly done", "Partly undone", "Checking" or "Unconfirmed" when that happens, and Undo says beforehand when some messages were moved in another app since and will stay where they are.
 
 ## 0.1.0-pre.28 — 2026-10-01

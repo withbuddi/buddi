@@ -119,7 +119,7 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     });
   }
 
-  function sourceWith(over: { slowPollSeconds?: number } = {}): Source {
+  function sourceWith(over: { slowPollSeconds?: number; env?: Record<string, string> } = {}): Source {
     return createInboxPollSource({
       connect,
       idle: server.idleFactory(),
@@ -227,6 +227,19 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     expect(connects).toBe(before + 1);
     const answer = (await accountsQuery().produce({}, ctx as never)) as { accounts: Array<{ arrival: string }> };
     expect(answer.accounts[0]!.arrival).toBe('Checking every 5 min');
+  });
+
+  it('says "no IDLE" for a mailbox without a password once, not on every poll', async () => {
+    const source = sourceWith({ env: {} });
+    const ctx = contextFor();
+    watch = source.watch!(ctx);
+    await waitFor(() => logs.some((l) => /no IDLE: .*checking on the poll/.test(l)));
+    for (let i = 0; i < 4; i += 1) {
+      await source.poll(ctx).catch(() => {});
+      await sleep(20);
+    }
+    expect(logs.filter((l) => /no IDLE: /.test(l))).toHaveLength(1);
+    expect(server.idleConnects).toBe(0);
   });
 
   it('reconnects with backoff after a drop, and polls for what came meanwhile', async () => {

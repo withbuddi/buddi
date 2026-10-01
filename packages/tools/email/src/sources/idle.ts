@@ -123,6 +123,12 @@ export interface IdleWatchersOptions {
 export class IdleWatchers {
   readonly #opts: IdleWatchersOptions;
   readonly #watchers = new Map<string, AccountWatcher>();
+  /**
+   * The last "no IDLE" line said per account. A watcher with no password is
+   * replaced on every reconcile (the password may be readable now), so the
+   * line is said once per change of state rather than once per poll.
+   */
+  readonly #said = new Map<string, string>();
   readonly #unlisten: () => void;
   #stopped = false;
   #reconciling: Promise<void> = Promise.resolve();
@@ -177,7 +183,7 @@ export class IdleWatchers {
       if (this.#stopped || this.#watchers.has(account.id)) continue;
       // A row whose password the provider refused waits for a new one.
       if (account.loginFailedAt) continue;
-      const watcher = new AccountWatcher(account, this.#opts);
+      const watcher = new AccountWatcher(account, this.#opts, this.#said);
       this.#watchers.set(account.id, watcher);
       watcher.start();
     }
@@ -220,6 +226,7 @@ class AccountWatcher {
   constructor(
     public account: AccountRecord,
     private readonly opts: IdleWatchersOptions,
+    private readonly said: Map<string, string> = new Map(),
   ) {}
 
   start(): void {
@@ -241,6 +248,13 @@ class AccountWatcher {
     this.opts.host.log(`email.idle: ${this.account.address}: ${line}`);
   }
 
+  /** Say a line only when it differs from the last one said for this account. */
+  #logOnChange(line: string): void {
+    if (this.said.get(this.account.id) === line) return;
+    this.said.set(this.account.id, line);
+    this.#log(line);
+  }
+
   async #connect(reconnect: boolean): Promise<void> {
     if (this.#stopped) return;
     this.state = 'connecting';
@@ -248,9 +262,11 @@ class AccountWatcher {
     if (this.#stopped) return;
     if (!auth.ok) {
       this.state = 'no-password';
-      this.#log(`no IDLE: ${auth.problem.message}; checking on the poll`);
+      this.#logOnChange(`no IDLE: ${auth.problem.message}; checking on the poll`);
       return;
     }
+    // Past the password: a later "no IDLE" is news again.
+    this.said.delete(this.account.id);
     let session: ImapIdleSession | 'unsupported';
     try {
       session = await this.opts.idle(this.account, auth.value, () => this.#changed());
