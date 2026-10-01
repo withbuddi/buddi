@@ -1040,3 +1040,76 @@ export function withPluginHost<C extends HostFacts & { buddi?: BuddiHost }>(bind
   }
   return { ...ctx, buddi: host };
 }
+
+/**
+ * The host an export runs with (`ctx.buddi.plugins.call`): a whitelist of the
+ * parts that only read. Another plugin is asking, so the target's own
+ * write-capable services — a scheduled run, a notice to the owner, a tool, a
+ * declared host, a file, a secret, a proposal, a channel — are not the
+ * caller's to reach through it. What is not copied here is absent or throws;
+ * an area added to the host later is absent until it is listed.
+ *
+ * The pool is already read-only (`metricContext`); `http` keeps GET and HEAD.
+ */
+export function readOnlyHostOf(host: BuddiHost, what: string): BuddiHost {
+  const refused = (area: string): never => {
+    throw new PluginCallRefusal(`${what} is a read-only call: ctx.buddi.${area} is not open to it.`);
+  };
+  /** An area of which only `keep` is passed through; every other member throws when called. */
+  const only = <T extends object>(area: string, source: T, keep: readonly string[]): T =>
+    new Proxy(Object.create(null) as T, {
+      get(_target, prop) {
+        if (typeof prop !== 'string' || prop === 'then') return undefined;
+        if (keep.includes(prop)) {
+          const value = (source as Record<string, unknown>)[prop];
+          return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(source) : value;
+        }
+        return (..._args: unknown[]) => refused(`${area}.${prop}`);
+      },
+    });
+  const owner: BuddiHost['owner'] = {
+    id: host.owner.id,
+    timezone: host.owner.timezone,
+    agentForRole: (role) => host.owner.agentForRole(role),
+    hasAgent: (id) => host.owner.hasAgent(id),
+    protectedPaths: host.owner.protectedPaths,
+    language: () => host.owner.language(),
+    ...(host.owner.formats ? { formats: () => host.owner.formats!() } : {}),
+    ...(host.owner.places ? { places: () => host.owner.places!() } : {}),
+    ...(host.owner.notify ? { notify: async () => refused('owner.notify') } : {}),
+  };
+  const view: BuddiHost = {
+    version: host.version,
+    plugin: host.plugin,
+    log: host.log,
+    scrub: host.scrub,
+    owner,
+    clock: host.clock,
+    db: host.db,
+    dir: host.dir,
+    approvals: host.approvals,
+    pages: host.pages,
+    tools: only('tools', host.tools, ['registered']),
+    network: only('network', host.network, ['declared']),
+  };
+  if (host.http) {
+    const http = host.http;
+    view.http = {
+      request: async (req) => {
+        const method = (req.method ?? 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') refused(`http.request with ${method}`);
+        return http.request(req);
+      },
+    };
+  }
+  if (host.files) view.files = only('files', host.files, ['get', 'read', 'list']);
+  if (host.accounts) view.accounts = only('accounts', host.accounts, ['list']);
+  if (host.memory) view.memory = only('memory', host.memory, ['recall']);
+  if (host.secrets) view.secrets = only('secrets', host.secrets, ['list']);
+  if (host.proposals) view.proposals = only('proposals', host.proposals, []);
+  if (host.schedule) view.schedule = only('schedule', host.schedule, []);
+  if (host.channels) view.channels = only('channels', host.channels, []);
+  // Another export, under the same rules: it is read-only in its turn.
+  if (host.plugins) view.plugins = host.plugins;
+  return view;
+}

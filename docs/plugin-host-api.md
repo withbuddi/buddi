@@ -182,7 +182,12 @@ requires. Core enforces every edge of it: the target must be in the
 manifest's `requires`, loaded, at a version in the range, and export that
 name; `args` pass the export's own zod `params`; the export runs with the
 target's own host over the read-only pool (a write fails as a page query's
-does), within five seconds. A refusal is a `PluginCallRefusal` naming why. No
+does), and of that host only the parts that read: owner facts and places,
+the clock, `db`, `dir`, `approvals`, `pages`, `http` for GET and HEAD,
+`network.declared`, `tools.registered`, `files.get|read|list`,
+`accounts.list`, `memory.recall`, `secrets.list` and `plugins.call`. Anything
+else — `schedule`, `owner.notify`, `proposals`, `channels`, registering a tool
+or a host, a POST — throws a `PluginCallRefusal`. It runs within five seconds. A refusal is a `PluginCallRefusal` naming why. No
 tool is ever reachable this way, and no schema but the target's own.
 
 **owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,

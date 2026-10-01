@@ -27,7 +27,7 @@ import type { HomeContribution } from './home.js';
 import { parseMetrics, metricContext, type RegisteredMetric } from './metrics.js';
 import { parseWidgets, type RegisteredWidget } from './widgets.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
-import { hostBindingOf, networkAreaOf, registerHostOf, releaseHostBinding, withPluginHost, type HostBinding } from './host/build.js';
+import { hostBindingOf, networkAreaOf, readOnlyHostOf, registerHostOf, releaseHostBinding, withPluginHost, type HostBinding } from './host/build.js';
 import { registerSecretDestination, unregisterSecretDestinations } from './secrets/destinations.js';
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
@@ -800,8 +800,14 @@ export class ToolRegistry {
       throw new PluginCallRefusal(`${target}.${name}: ${parsed.error.issues.map((i: { path: unknown[]; message: string }) => `${i.path.join('.') || 'arguments'}: ${i.message}`).join('; ')}`);
     }
     const ctx = { ...(facts as CoreToolContext), agentId: OWNER_AGENT_ID };
+    // The target's host with only its reading parts: the caller must not reach
+    // the target's schedule, notices, tools or other effects through it.
+    const exportCtx = (): CoreToolContext => {
+      const hosted = this.#host(target, metricContext(ctx));
+      return hosted.buddi ? { ...hosted, buddi: readOnlyHostOf(hosted.buddi, `${target}.${name}`) } : hosted;
+    };
     return withinMs(
-      Promise.resolve().then(() => exported.produce(parsed.data, this.#host(target, metricContext(ctx)))),
+      Promise.resolve().then(() => exported.produce(parsed.data, exportCtx())),
       PLUGIN_CALL_TIMEOUT_MS,
       `${target}.${name}`,
     );

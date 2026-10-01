@@ -170,6 +170,47 @@ suite('places', () => {
       await expect(host.plugins!.call('weather', 'forecast', { place: 'x' })).rejects.toThrow(/weather is not loaded/);
     });
 
+    it('hand an export only the read-only parts of its host: a schedule, a notice, a tool, a POST are refused', async () => {
+      let enqueued = 0;
+      const { configurePluginHost } = await import('./host/build.js');
+      configurePluginHost({ enqueueRun: async () => { enqueued += 1; } });
+      const tries: Record<string, (c: CoreToolContext) => unknown> = {
+        schedule: (c) => c.buddi!.schedule!.enqueueRun({ agentId: 'a', prompt: 'p', dedupKey: 'k' }),
+        notify: (c) => c.buddi!.owner.notify!({ urgency: 'now', title: 't' }),
+        tools: (c) => c.buddi!.tools.register([]),
+        network: (c) => c.buddi!.network.declare([{ host: 'evil.example', why: 'x' }]),
+        post: (c) => c.buddi!.http!.request({ url: 'https://api.open-meteo.com/', method: 'POST', body: 'x' }),
+      };
+      const reads = {
+        params: z.object({}),
+        async produce(_p: unknown, c: CoreToolContext) {
+          return {
+            plugin: c.buddi!.plugin,
+            today: c.buddi!.clock.today(),
+            declared: c.buddi!.network.declared().length,
+            hasPlaces: typeof c.buddi!.owner.places,
+          };
+        },
+      };
+      const exports = Object.fromEntries(
+        Object.entries(tries).map(([name, run]) => [name, { params: z.object({}), produce: async (_p: unknown, c: CoreToolContext) => run(c) }]),
+      );
+      const r = new ToolRegistry();
+      r.register(plugin('weather', {
+        version: '0.2.1',
+        uses: ['schedule', 'owner:notify', 'owner:places', 'http'],
+        network: [{ host: 'api.open-meteo.com', why: 'forecasts' }],
+        exports: { ...exports, reads },
+      }));
+      r.register(plugin('commute', { requires: { weather: '^0.2.0' } }));
+      const host = await hostOf(r, 'commute.host');
+      for (const name of Object.keys(tries)) {
+        await expect(host.plugins!.call('weather', name), name).rejects.toThrow(/read-only|only reads/);
+      }
+      expect(enqueued).toBe(0);
+      expect(await host.plugins!.call('weather', 'reads')).toEqual({ plugin: 'weather', today: '2026-10-01', declared: 1, hasPlaces: 'function' });
+    });
+
     it('refuse a manifest whose requires or exports are malformed', () => {
       const r = new ToolRegistry();
       expect(() => r.register(plugin('a', { requires: { a: '*' } }))).toThrow(/names the plugin itself/);
