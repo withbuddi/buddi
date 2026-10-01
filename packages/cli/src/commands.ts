@@ -38,6 +38,11 @@ export interface CommandEntry {
   usage: string;
   flags: CommandFlag[];
   example?: string;
+  /**
+   * What it tells you to do once it is done, in the words it prints
+   * (`buddi service restart`, `buddi backup verify <archive>`).
+   */
+  next?: string;
   /** Codes beyond 0, 1 and 2, or a sharper meaning for one of them. */
   exitCodes?: Array<{ code: number; meaning: string }>;
   applies: Applies;
@@ -101,6 +106,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     exitCodes: [
       { code: 3, meaning: 'The run stopped for an approval, the agent does not exist or cannot run, or the database is not reachable.' },
     ],
+    next: 'When the run stops for an approval: approve it on the dashboard or Telegram, then `buddi ask --resume <conversation id>` finishes it.',
     applies: 'both',
     json:
       '{ text, runId, conversationId, artifacts: [{ id, filename }] }, plus pendingActionId when the run stopped for an approval. ' +
@@ -133,6 +139,7 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--uninstall-app', meaning: 'Remove it.' },
     ],
     example: 'buddi dashboard --token',
+    next: 'With --off: put `BUDDI_WEB=0` in .env, then `buddi service restart`.',
     applies: 'both',
   },
 
@@ -164,17 +171,19 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'agents set',
     group: 'Agents',
-    summary: "Change an agent's account, model, turn budget or language.",
-    usage: 'buddi agents set <handle> [--account <id>] [--model <id>] [--max-turns <n>] [--language mirror|en|fr]',
+    summary: "Change an agent's account, model, step budget, language or when its chats start fresh.",
+    usage: 'buddi agents set <handle> [--account <id>] [--model <id>] [--max-turns <n>] [--language mirror|en|fr] [--idle-rollover 3h|1d|1w|never]',
     flags: [
-      { flag: '--account <id>', meaning: 'Run it on this provider account, from the dashboard\'s Providers page.' },
+      { flag: '--account <id>', meaning: 'Run it on this model account, added on the dashboard under Settings → Model accounts. buddi agents show prints the id of the one an agent is on.' },
       { flag: '--provider anthropic|openai', meaning: 'Where its conversations go, on an agent without an account.' },
       { flag: '--model <id>', meaning: "Checked against that provider's models." },
       { flag: '--max-turns <n>', meaning: 'How many steps one run may take.' },
       { flag: '--language mirror|en|fr', meaning: 'Which language it answers in.' },
+      { flag: '--idle-rollover 3h|1d|1w|never', meaning: 'How long a chat may sit idle before your next message starts a fresh one.' },
     ],
     example: 'buddi agents set ledger --max-turns 20',
     exitCodes: [{ code: 3, meaning: 'No agent has that handle or id.' }],
+    next: '`buddi service restart`, so the running service, Telegram and the scheduler load the change; then `buddi agents test <handle>` to check it.',
     applies: 'both',
   },
   {
@@ -204,6 +213,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi agents migrate [--dry-run]',
     flags: [{ flag: '--dry-run', meaning: 'Say what would move, and move nothing.' }],
     example: 'buddi agents migrate --dry-run',
+    next: '`buddi service restart`, so the service reloads the files from their new place.',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('agents migrate', 'A packaged install keeps its agents in its data directory already.'),
   },
@@ -227,6 +237,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi missions add-defaults',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi missions add-defaults',
     applies: 'both',
   },
   {
@@ -236,6 +247,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi missions add-recap',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi missions add-recap',
     applies: 'both',
   },
   {
@@ -245,6 +257,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi missions add-friday-recap',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi missions add-friday-recap',
     applies: 'both',
   },
   {
@@ -264,6 +277,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi missions enable <id>',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi missions enable recap',
     applies: 'both',
   },
   {
@@ -273,6 +287,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi missions disable <id>',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi missions disable recap',
     applies: 'both',
   },
   {
@@ -297,6 +312,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi reminders cancel <id>',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi reminders cancel 3f2a9c1e',
     applies: 'both',
   },
   {
@@ -306,6 +322,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi nudges [status]',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi nudges',
     applies: 'both',
   },
   {
@@ -315,6 +332,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi nudges stop',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi nudges stop',
     applies: 'both',
   },
   {
@@ -324,6 +342,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi nudges resume',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi nudges resume',
     applies: 'both',
   },
   {
@@ -333,8 +352,11 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi plugins list [--json]',
     flags: [JSON_FLAG],
     example: 'buddi plugins list',
+    exitCodes: [{ code: 1, meaning: 'An installed plugin did not load. The rest of the list is still printed.' }],
     applies: 'both',
-    json: '[{ name, version, origin, health, detail }]. origin is built-in or installed; health is ok, warn or fail.',
+    json:
+      '[{ name, version, installedAs?, origin, health, detail }]. origin is built-in or installed; health is ok, warn, fail or off. ' +
+      "For a plugin installed from a folder, version is the folder's package.json now and installedAs the version recorded at install, when they differ.",
   },
   {
     name: 'plugins describe',
@@ -352,6 +374,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Show what a plugin is, what it brought, and what it proposes.',
     usage: 'buddi plugins info <name>',
     flags: [],
+    example: 'buddi plugins info finance',
+    exitCodes: [{ code: 1, meaning: 'No plugin has that name here, or it did not load.' }],
     applies: 'both',
   },
   {
@@ -365,7 +389,8 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--registry <url>', meaning: 'Fetch from this npm registry.' },
     ],
     example: 'buddi plugins install @you/buddi-plugin-finance',
-    exitCodes: [{ code: 3, meaning: 'Staged, not installed: approve it with --yes --integrity <hash>.' }],
+    exitCodes: [{ code: 3, meaning: '--yes came without --integrity for a package from npm or a .tgz: staged, not installed. Without --yes it stages and exits 0.' }],
+    next: 'Without --yes: `buddi plugins approve <id> --integrity <hash>` (a folder needs no hash). Once it is installed: `buddi service restart`, which registers its tools.',
     applies: 'both',
   },
   {
@@ -378,6 +403,9 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--yes', meaning: 'Approve it.' },
       { flag: '--integrity <hash>', meaning: 'The hash the staged card printed.' },
     ],
+    example: 'buddi plugins update weather',
+    exitCodes: [{ code: 3, meaning: '--yes came without --integrity: staged, not installed.' }],
+    next: 'Without --yes: `buddi plugins approve <id> --integrity <hash>`. Once it is installed: `buddi service restart`, which loads the new version.',
     applies: 'both',
   },
   {
@@ -386,6 +414,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'List what is staged and waiting for you.',
     usage: 'buddi plugins staged',
     flags: [],
+    example: 'buddi plugins staged',
     applies: 'both',
   },
   {
@@ -397,6 +426,9 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--integrity <hash>', meaning: 'The hash the staged card printed.' },
       { flag: '--acknowledge-drift', meaning: 'Approve it although what is on disk changed since it was staged.' },
     ],
+    example: 'buddi plugins approve 7c1e2a90',
+    exitCodes: [{ code: 1, meaning: 'Its files changed since it was staged: nothing was installed. --acknowledge-drift approves it anyway.' }],
+    next: '`buddi service restart`, which registers its tools. When its files changed since it was staged: `buddi plugins approve <id> --acknowledge-drift`.',
     applies: 'both',
   },
   {
@@ -405,6 +437,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Delete a stage and everything it fetched.',
     usage: 'buddi plugins reject <id>',
     flags: [],
+    example: 'buddi plugins reject 7c1e2a90',
     applies: 'both',
   },
   {
@@ -414,6 +447,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi plugins disable <name>',
     flags: [],
     example: 'buddi plugins disable finance',
+    next: 'When the running buddi could not take the change: `buddi service restart`.',
     applies: 'both',
   },
   {
@@ -423,6 +457,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi plugins enable <name>',
     flags: [],
     example: 'buddi plugins enable finance',
+    next: 'When the running buddi could not take the change: `buddi service restart`.',
     applies: 'both',
   },
   {
@@ -435,6 +470,8 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--detach-agents', meaning: 'Also take its tools out of the agents that were given them.' },
       { flag: '--purge --confirm <name>', meaning: 'Also drop its schema and everything in it. This cannot be undone.' },
     ],
+    example: 'buddi plugins uninstall weather --yes',
+    next: 'With --yes: `buddi service restart`, so no running process keeps registering its tools.',
     applies: 'both',
   },
   {
@@ -448,6 +485,7 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--author <name>', meaning: 'Who made it, shown on the install card. Asked otherwise, with git config user.name as the default.' },
     ],
     example: 'buddi plugins init weather',
+    next: '`cd <name>`, `pnpm install && pnpm build && pnpm test`, `buddi plugins install . --yes`, then `buddi service restart`.',
     applies: 'both',
   },
   {
@@ -489,7 +527,8 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--to <agent,agent>', meaning: 'Give the tools to these agents without asking. --to nobody keeps the connection waiting.' },
     ],
     example: 'buddi connections add github --to buddi',
-    exitCodes: [NOT_RUNNING],
+    exitCodes: [{ code: 2, meaning: 'Not typed right, or no card has that name.' }, NOT_RUNNING],
+    next: 'When the tools were not kept: `buddi connections review <name> --keep` once you have read them.',
     applies: 'both',
     jsonTakesValue: true,
   },
@@ -505,6 +544,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     ],
     example: 'buddi connections review github',
     exitCodes: [NOT_RUNNING],
+    next: 'Without --keep: `buddi connections review <name> --keep` once you have read them.',
     applies: 'both',
     json: '{ connection, slug, slugEditable, host, hash, tools: [{ name, fullName, description, tier, destructive, annotated, problem, change }], annotatedNothing, changes }. tier is auto or gated.',
   },
@@ -537,6 +577,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi telegram pair',
     flags: [],
     exitCodes: [{ code: 3, meaning: 'The database is not reachable, or no Telegram bot is configured.' }],
+    example: 'buddi telegram pair',
+    next: 'Scan the code or open the link on the phone within ten minutes. The service must be running to receive it.',
     applies: 'both',
   },
   {
@@ -546,6 +588,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi telegram devices [--json]',
     flags: [JSON_FLAG],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi telegram devices',
+    next: 'With no device paired: `buddi telegram pair`.',
     applies: 'both',
     json: '[{ id, surface, label, externalUserId, externalChatId, pairedAt, lastSeenAt }]',
   },
@@ -555,7 +599,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Unpair a device, so it can no longer reach your agents.',
     usage: 'buddi telegram unpair <id>',
     flags: [],
-    exitCodes: [NEEDS_DATABASE],
+    exitCodes: [{ code: 1, meaning: 'No paired device has that id.' }, NEEDS_DATABASE],
+    example: 'buddi telegram unpair 12',
     applies: 'both',
   },
   {
@@ -576,15 +621,21 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi doctor',
     flags: [],
     example: 'buddi doctor',
+    exitCodes: [{ code: 1, meaning: 'A critical check failed. Warnings alone exit 0.' }],
     applies: 'both',
   },
   {
     name: 'upgrade',
     group: 'Operate',
     summary: 'Back up, move to the new version, migrate, and restart.',
-    usage: 'buddi upgrade [--no-backup]',
-    flags: [{ flag: '--no-backup', meaning: 'In a source checkout, skip the archive it takes first. A packaged upgrade always takes one.' }],
+    usage: 'buddi upgrade [<version>] [--no-backup]',
+    flags: [
+      { flag: '<version>', meaning: 'In a packaged install, move to this version instead of the newest.' },
+      { flag: '--no-backup', meaning: 'In a source checkout, skip the archive it takes first. A packaged upgrade always takes one.' },
+    ],
     example: 'buddi upgrade',
+    exitCodes: [{ code: 1, meaning: 'A step failed, or buddi doctor found something afterwards. The backup taken first is kept.' }],
+    next: 'When it fails: `buddi doctor`, which says what is wrong and, in a packaged install, which archive to restore from and how.',
     applies: 'both',
   },
   {
@@ -593,6 +644,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Print the version, with the commit in a source checkout.',
     usage: 'buddi version',
     flags: [],
+    example: 'buddi version',
     applies: 'both',
   },
   {
@@ -602,6 +654,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi service status [--json]',
     flags: [JSON_FLAG],
     exitCodes: [{ code: 1, meaning: 'It is not running.' }],
+    example: 'buddi service status',
     applies: 'both',
     json:
       "The service's state. Packaged: { phase, supervisorPid, installRoot, nodePath, database, databasePid, gateway, gatewayPid, current?, upgrading? }. " +
@@ -613,6 +666,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Start the background service.',
     usage: 'buddi service start [--json]',
     flags: [JSON_FLAG],
+    example: 'buddi service start',
     applies: 'both',
     json:
       "The service's state. Packaged: { phase, supervisorPid, installRoot, nodePath, database, databasePid, gateway, gatewayPid, current?, upgrading? }. " +
@@ -624,6 +678,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Stop the background service. Running work finishes first.',
     usage: 'buddi service stop [--json]',
     flags: [JSON_FLAG],
+    example: 'buddi service stop',
     applies: 'both',
     json:
       "The service's state. Packaged: { phase, supervisorPid, installRoot, nodePath, database, databasePid, gateway, gatewayPid, current?, upgrading? }. " +
@@ -635,6 +690,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Restart the background service, to load a change.',
     usage: 'buddi service restart [--json]',
     flags: [JSON_FLAG],
+    example: 'buddi service restart',
     applies: 'both',
     json:
       "The service's state. Packaged: { phase, supervisorPid, installRoot, nodePath, database, databasePid, gateway, gatewayPid, current?, upgrading? }. " +
@@ -646,6 +702,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: "Follow the service's log. Ctrl-C stops following.",
     usage: 'buddi service logs',
     flags: [],
+    example: 'buddi service logs',
     applies: 'both',
   },
   {
@@ -654,6 +711,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Install the background service, started at login.',
     usage: 'buddi service install',
     flags: [],
+    example: 'buddi service install',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('service install', 'A packaged install sets up its service the first time you run buddi.'),
   },
@@ -663,6 +721,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Remove the background service. Your data stays.',
     usage: 'buddi service uninstall',
     flags: [],
+    example: 'buddi service uninstall',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('service uninstall', 'A packaged install stops with buddi service stop, and buddi uninstall removes it.'),
   },
@@ -693,6 +752,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     ],
     example: 'buddi backup create --encrypt',
     exitCodes: [NEEDS_DATABASE],
+    next: '`buddi backup verify <archive>`, to check what it wrote.',
     applies: 'both',
   },
   {
@@ -712,6 +772,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi backup verify <archive> [--passphrase "<words>"]',
     flags: [{ flag: '--passphrase "<words>"', meaning: 'For an encrypted archive from another machine.' }],
     example: 'buddi backup verify buddi-backup-20260914-033000.tar.gz.age',
+    exitCodes: [{ code: 1, meaning: 'The archive is not there, or is not whole: do not rely on it.' }],
     applies: 'both',
   },
   {
@@ -726,6 +787,8 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--force', meaning: 'Restore over a database that has data in it.' },
       { flag: '--passphrase "<words>"', meaning: 'For an encrypted archive. Without it: the vault, then a prompt.' },
     ],
+    example: 'buddi backup restore buddi-backup-20260914-033000.tar.gz.age --files',
+    next: 'Packaged: `buddi doctor`, then open the dashboard, which opens in recovery. Source checkout: it lists what to do in order, ending with `buddi doctor` and `buddi service restart`.',
     applies: 'both',
   },
   {
@@ -734,6 +797,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Delete old archives and keep the newest ones.',
     usage: 'buddi backup prune [--keep <n>]',
     flags: [{ flag: '--keep <n>', meaning: 'How many to keep.' }],
+    example: 'buddi backup prune --keep 7',
     applies: 'both',
   },
   {
@@ -742,6 +806,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'The nightly backup at 03:30, prune included: status, install or uninstall.',
     usage: 'buddi backup schedule [status | install | uninstall] [--keep <n>]',
     flags: [{ flag: '--keep <n>', meaning: 'How many archives the nightly prune keeps.' }],
+    example: 'buddi backup schedule install',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('backup schedule', 'A packaged install sets its nightly backup on the dashboard, in Settings → Backup.'),
   },
@@ -752,14 +817,16 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi vault set <NAME>',
     flags: [],
     example: 'buddi vault set TAVILY_API_KEY',
+    exitCodes: [{ code: 1, meaning: 'The vault is locked or not usable, or nothing was typed.' }],
     applies: 'both',
   },
   {
     name: 'vault get',
     group: 'Operate',
-    summary: 'Print a secret from the vault.',
+    summary: 'Say whether a secret is in the vault. It never prints the value.',
     usage: 'buddi vault get <NAME>',
     flags: [],
+    example: 'buddi vault get TAVILY_API_KEY',
     applies: 'both',
   },
   {
@@ -768,6 +835,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Remove a secret from the vault.',
     usage: 'buddi vault delete <NAME>',
     flags: [],
+    example: 'buddi vault delete TAVILY_API_KEY',
     applies: 'both',
   },
   {
@@ -776,6 +844,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'List the names of the secrets in the vault, never their values.',
     usage: 'buddi vault list',
     flags: [],
+    example: 'buddi vault list',
     applies: 'both',
   },
   {
@@ -784,6 +853,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Move the secrets in .env into the vault.',
     usage: 'buddi vault import-env',
     flags: [],
+    example: 'buddi vault import-env',
+    next: '`buddi service restart`, so the running process reads the secrets from the vault.',
     applies: 'both',
   },
   {
@@ -792,6 +863,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: "Say which browser the agents' own browser uses here.",
     usage: 'buddi browser [status]',
     flags: [],
+    example: 'buddi browser',
     applies: 'both',
   },
   {
@@ -800,6 +872,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: "Download Chromium for the agents' own browser, about 150 MB.",
     usage: 'buddi browser install',
     flags: [],
+    example: 'buddi browser install',
     applies: 'both',
   },
   {
@@ -808,6 +881,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Say which local speech models are downloaded, and their size.',
     usage: 'buddi speech [status]',
     flags: [],
+    example: 'buddi speech',
     applies: 'both',
   },
   {
@@ -857,6 +931,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi jobs cancel <id>',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi jobs cancel 1234',
     applies: 'both',
   },
   {
@@ -866,6 +941,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi pause',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi pause',
     applies: 'both',
   },
   {
@@ -875,6 +951,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi resume',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi resume',
     applies: 'both',
   },
 
@@ -895,6 +972,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Start the Postgres container of a source checkout.',
     usage: 'buddi db up',
     flags: [],
+    example: 'buddi db up',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('db', 'A packaged install runs its own database; buddi status says whether it is up.'),
   },
@@ -904,6 +982,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Stop the Postgres container.',
     usage: 'buddi db down',
     flags: [],
+    example: 'buddi db down',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('db', 'A packaged install runs its own database; buddi status says whether it is up.'),
   },
@@ -913,6 +992,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Say whether the Postgres container is running.',
     usage: 'buddi db status',
     flags: [],
+    example: 'buddi db status',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('db', 'A packaged install runs its own database; buddi status says whether it is up.'),
   },
@@ -922,6 +1002,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Give the database a generated password, kept in the vault.',
     usage: 'buddi db secure',
     flags: [],
+    example: 'buddi db secure',
+    next: '`buddi service restart`, so what is running picks up the new password.',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('db', 'A packaged install runs its own database; buddi status says whether it is up.'),
   },
@@ -932,6 +1014,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     usage: 'buddi migrate',
     flags: [],
     exitCodes: [NEEDS_DATABASE],
+    example: 'buddi migrate',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('migrate', 'A packaged install migrates when it starts and when it upgrades.'),
   },
@@ -941,6 +1024,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     summary: 'Run the gateway in this terminal instead of the service.',
     usage: 'buddi serve',
     flags: [],
+    example: 'buddi serve',
     applies: 'checkout',
     elsewhere: CHECKOUT_ONLY('serve', 'A packaged install runs in the background; buddi service status says how it is.'),
   },
@@ -1132,6 +1216,7 @@ export function renderCommandHelp(
     for (const f of entry.flags) out.push(`  ${f.flag.padEnd(width)}  ${f.meaning}`);
   }
   if (entry.example) out.push('', style.bold('Example'), `  ${entry.example}`);
+  if (entry.next) out.push('', style.bold('Then'), `  ${entry.next}`);
   if (entry.json) out.push('', style.bold('JSON'), `  ${entry.json}`);
   out.push('', style.bold('Exit codes'));
   for (const c of exitCodesOf(entry)) out.push(`  ${c.code}  ${c.meaning}`);
@@ -1172,6 +1257,139 @@ const GROUP_NOTES: Record<Group, string> = {
 };
 
 /**
+ * The heading anchor GitHub gives `### buddi backup create`:
+ * `buddi-backup-create`. The bare command is `#buddi`.
+ */
+export function anchorOf(entry: CommandEntry): string {
+  return ['buddi', ...entry.name.split(' ').filter((w) => w !== '')].join('-');
+}
+
+/** `buddi backup create`: the command's words, without its arguments. */
+function commandLine(entry: CommandEntry): string {
+  return ['buddi', entry.name].filter((w) => w !== '').join(' ');
+}
+
+/** `[`buddi backup create`](#buddi-backup-create)`, for a command in the table. */
+function link(name: string, table: readonly CommandEntry[]): string {
+  const entry = table.find((e) => e.name === name);
+  if (entry === undefined) throw new Error(`the reference links to buddi ${name}, which the table does not have`);
+  return `[\`${commandLine(entry)}\`](#${anchorOf(entry)})`;
+}
+
+/**
+ * The short recipes at the top of the page. Each step is checked against the
+ * code that prints it, and each command links to its section below, so a
+ * recipe naming a command the table lost fails the render.
+ */
+function commonTasks(table: readonly CommandEntry[]): string[] {
+  const l = (name: string): string => link(name, table);
+  return [
+    '## Common tasks',
+    '',
+    '### Add a model account',
+    '',
+    'Accounts are added on the dashboard: Settings → Model accounts → Add account (an API key,',
+    'a Claude or ChatGPT sign-in, or a model server on your network). Then put an agent on it',
+    'under Agents → the agent → Setup → Brain, or from a terminal:',
+    '',
+    '```sh',
+    'buddi agents set ledger --account <id>',
+    'buddi agents test ledger',
+    '```',
+    '',
+    `${l('agents set')} takes the account's id (${l('agents show')} prints it for an agent already`,
+    `on that account); ${l('agents test')} runs one cheap turn to prove the account answers.`,
+    '',
+    "### Change an agent's model or step budget",
+    '',
+    '```sh',
+    'buddi agents models --provider anthropic',
+    'buddi agents set ledger --model claude-sonnet-5',
+    'buddi agents set ledger --max-turns 30',
+    'buddi service restart',
+    '```',
+    '',
+    `${l('agents models')} lists the model ids this build knows. ${l('agents set')} prints the change`,
+    'and asks for a restart so the running service, Telegram and the scheduler pick it up;',
+    '`--max-turns` is how many steps one run may take.',
+    '',
+    '### Back up and restore',
+    '',
+    '```sh',
+    'buddi backup create --encrypt',
+    'buddi backup verify <archive>',
+    'buddi backup restore <archive> --files',
+    '```',
+    '',
+    `${l('backup create')} prints the archive's path and the ${l('backup verify')} line to check it;`,
+    `${l('backup list')} shows every archive. ${l('backup restore')} asks you to type a word first.`,
+    'A packaged install always encrypts (the passphrase is in its vault), reads archives from',
+    'its own backups directory, and stops the gateway for the restore; then run `buddi doctor`',
+    'and open the dashboard, which opens in recovery. In a source checkout, `--files` also',
+    'puts back agents, skills and files, and `--force` restores over a database that has data.',
+    '',
+    '### Pair Telegram',
+    '',
+    '```sh',
+    'buddi vault set TELEGRAM_BOT_TOKEN',
+    'buddi service restart',
+    'buddi telegram pair',
+    '```',
+    '',
+    `Ask @BotFather for a bot and keep its token with ${l('vault set')}, then restart so the service`,
+    'starts the bot; pasting it in Settings → Telegram on the dashboard does both.',
+    `${l('telegram pair')} prints a QR code, a link and a code, good for ten minutes: open it on the phone`,
+    `while the service runs. ${l('telegram devices')} lists what is paired and ${l('telegram unpair')} removes one.`,
+    '',
+    '### Add a local connection',
+    '',
+    '```sh',
+    'buddi connections add files -- npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+    'buddi connections add github-local --secret GITHUB_PERSONAL_ACCESS_TOKEN -- npx -y @modelcontextprotocol/server-github',
+    '```',
+    '',
+    `${l('connections add')} with \`-- <command>\` registers an MCP server that runs on this computer as you.`,
+    'It starts the program once to read its tools, prints each with its tier, and asks to keep them',
+    'and which agents get them (`--keep` and `--to <agent,agent>` answer ahead). `--secret K` asks for a',
+    `value with the echo off and keeps it in the vault. The service must be running. ${l('connections list')}`,
+    `shows it; ${l('connections remove')} takes it away.`,
+    '',
+    '### Upgrade',
+    '',
+    '```sh',
+    'buddi status',
+    'buddi upgrade',
+    '```',
+    '',
+    `${l('status')} says whether a newer buddi is out. In a packaged install ${l('upgrade')} takes a backup,`,
+    'installs the new version, migrates and restarts itself (`buddi upgrade <version>` picks one).',
+    'In a source checkout, `git pull` first: it upgrades the code on disk (backup, stop, install',
+    'and build, migrate, start, `buddi doctor`).',
+  ];
+}
+
+/** One command in full: what `buddi help <command>` prints, as markdown. */
+function commandSection(entry: CommandEntry, table: readonly CommandEntry[]): string[] {
+  const group = entry.group;
+  const only = entry.applies === 'checkout' && group !== 'Develop' ? ' Source checkout only.' : '';
+  const out: string[] = [`### ${commandLine(entry)}`, '', `${entry.summary}${only}`];
+  if (entry.applies !== 'both' && entry.elsewhere) out.push('', entry.elsewhere);
+  out.push('', '```sh', entry.usage, '```');
+  if (entry.flags.length > 0) {
+    out.push('', '**Flags**', '');
+    for (const f of entry.flags) out.push(`- \`${f.flag}\`: ${f.meaning}`);
+  }
+  if (entry.example && entry.example !== entry.usage) out.push('', '**Example**', '', '```sh', entry.example, '```');
+  if (entry.next) out.push('', `**Then**: ${entry.next}`);
+  if (entry.json) out.push('', `**JSON**: ${entry.json}`);
+  out.push('', '**Exit codes**', '');
+  for (const c of exitCodesOf(entry)) out.push(`- \`${c.code}\`: ${c.meaning}`);
+  const related = entry.name === '' ? [] : entriesUnder(entry.name, table);
+  if (related.length > 0) out.push('', `**See also**: ${related.map((r) => link(r.name, table)).join(', ')}`);
+  return out;
+}
+
+/**
  * `docs/cli.md`, without its frontmatter: the script adds that, and the test
  * compares what follows it.
  */
@@ -1181,11 +1399,15 @@ export function renderReference(table: readonly CommandEntry[] = COMMANDS): stri
     '',
     'Every command, grouped the way `buddi help` groups them. The same words work in a',
     'packaged install and in a source checkout; what does not apply where you run it is',
-    'left out of `buddi help`, and says what to do instead when typed. `buddi help <command>`',
-    'and `buddi <command> --help` print one command with an example and its exit codes.',
+    'left out of `buddi help`, and says what to do instead when typed. Each group lists its',
+    'commands, then gives each one its own section: usage, flags, an example, what it tells',
+    'you to do next, and its exit codes, the same words `buddi help <command>` and',
+    '`buddi <command> --help` print.',
     '',
     'This page is generated from the command table (`packages/cli/src/commands.ts`) by',
     '`pnpm docs:cli`; a test fails when the two differ.',
+    '',
+    ...commonTasks(table),
     '',
     '## What it is for',
     '',
@@ -1220,13 +1442,13 @@ export function renderReference(table: readonly CommandEntry[] = COMMANDS): stri
     '  change something ignore it.',
   ];
   for (const group of GROUPS) {
+    const entries = table.filter((e) => e.group === group);
     out.push('', `## ${group}`, '', GROUP_NOTES[group], '');
-    for (const entry of table.filter((e) => e.group === group)) {
+    for (const entry of entries) {
       const only = entry.applies === 'checkout' && group !== 'Develop' ? ' Source checkout only.' : '';
-      out.push(`- \`${entry.usage}\`: ${entry.summary}${only}`);
-      for (const f of entry.flags) out.push(`  - \`${f.flag}\`: ${f.meaning}`);
-      if (entry.json) out.push(`  - JSON: ${entry.json}`);
+      out.push(`- ${link(entry.name, table)}: ${entry.summary}${only}`);
     }
+    for (const entry of entries) out.push('', ...commandSection(entry, table));
   }
   return `${out.join('\n')}\n`;
 }

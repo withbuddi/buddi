@@ -22,6 +22,7 @@ import {
   type Command,
 } from './args.js';
 import {
+  anchorOf,
   COMMANDS,
   editDistance,
   entryFor,
@@ -147,7 +148,13 @@ describe('the command table', () => {
       expect(entry.summary, entry.name).toMatch(/^[A-Z].*\.$/);
       for (const flag of entry.flags) expect(flag.meaning, `${entry.name} ${flag.flag}`).toMatch(/\.$/);
       expect(entry.usage.startsWith('buddi'), entry.name).toBe(true);
+      if (entry.next !== undefined) expect(entry.next, `${entry.name} next`).toMatch(/^[A-Z`].*\.$/);
+      for (const code of entry.exitCodes ?? []) expect(code.meaning, `${entry.name} exit ${code.code}`).toMatch(/^([A-Z-]|buddi ).*\.$/);
     }
+  });
+
+  it('gives every command an example', () => {
+    expect(COMMANDS.filter((e) => e.example === undefined).map((e) => e.name)).toEqual([]);
   });
 
   it('uses the five groups, in order', () => {
@@ -240,6 +247,12 @@ describe('renderCommandHelp', () => {
     for (const part of ['Usage', 'Flags', '--encrypt', 'Example', 'Exit codes', '  3  ']) expect(text).toContain(part);
   });
 
+  it('says what it tells you to do next', () => {
+    const text = renderCommandHelp(COMMANDS.find((e) => e.name === 'plugins approve')!);
+    expect(text).toContain('Then');
+    expect(text).toContain('buddi service restart');
+  });
+
   it('documents the JSON fields of a read', () => {
     expect(renderCommandHelp(COMMANDS.find((e) => e.name === 'ask')!)).toContain('conversationId');
   });
@@ -274,10 +287,66 @@ describe('nearestCommand', () => {
   });
 });
 
+/** The anchors GitHub gives a page's headings: lowercase, punctuation dropped, spaces to hyphens. */
+function headingAnchors(page: string): string[] {
+  return [...page.matchAll(/^#{1,6} (.+)$/gm)].map((m) =>
+    (m[1] as string).toLowerCase().replace(/[^a-z0-9 _-]/g, '').replace(/ /g, '-'),
+  );
+}
+
 describe('renderReference', () => {
-  it('has every command once, under its group', () => {
-    const page = renderReference(COMMANDS);
+  const page = renderReference(COMMANDS);
+
+  it('gives every command one section, under its group, with its usage, example and exit codes', () => {
     for (const group of GROUPS) expect(page).toContain(`## ${group}`);
-    for (const entry of COMMANDS) expect(page).toContain(`- \`${entry.usage}\`: `);
+    for (const entry of COMMANDS) {
+      const heading = `### ${['buddi', entry.name].filter((w) => w !== '').join(' ')}\n`;
+      expect(page.split(heading).length - 1, entry.name).toBe(1);
+      const section = page.slice(page.indexOf(heading)).split(/\n#{2,3} /)[0] as string;
+      expect(section, entry.name).toContain(`\`\`\`sh\n${entry.usage}\n\`\`\``);
+      if (entry.example !== entry.usage) expect(section, entry.name).toContain(`${entry.example}\n`);
+      if (entry.next) expect(section, entry.name).toContain(`**Then**: ${entry.next}`);
+      for (const flag of entry.flags) expect(section, `${entry.name} ${flag.flag}`).toContain(`- \`${flag.flag}\`: ${flag.meaning}`);
+      expect(section, entry.name).toContain('**Exit codes**');
+    }
+  });
+
+  it('links each command from its group list, and every link lands on a heading', () => {
+    const anchors = headingAnchors(page);
+    expect(new Set(anchors).size).toBe(anchors.length);
+    for (const entry of COMMANDS) expect(anchors, entry.name).toContain(anchorOf(entry));
+    const links = [...page.matchAll(/\]\(#([^)]+)\)/g)].map((m) => m[1] as string);
+    expect(links.length).toBeGreaterThan(COMMANDS.length);
+    expect(links.filter((target) => !anchors.includes(target))).toEqual([]);
+  });
+
+  it('opens with the common tasks, each linking to its commands', () => {
+    const tasks = page.slice(page.indexOf('## Common tasks'), page.indexOf('## What it is for'));
+    for (const title of [
+      'Add a model account',
+      "Change an agent's model or step budget",
+      'Back up and restore',
+      'Pair Telegram',
+      'Add a local connection',
+      'Upgrade',
+    ]) {
+      expect(tasks).toContain(`### ${title}\n`);
+    }
+    for (const name of ['agents set', 'agents test', 'agents models', 'backup create', 'backup restore', 'telegram pair', 'connections add', 'upgrade']) {
+      expect(tasks, name).toContain(`(#${anchorOf(COMMANDS.find((e) => e.name === name)!)})`);
+    }
+    expect(page.indexOf('## Common tasks')).toBeLessThan(page.indexOf('## Everyday'));
+  });
+
+  it('parses every command line the common tasks print', () => {
+    const tasks = page.slice(page.indexOf('## Common tasks'), page.indexOf('## What it is for'));
+    const lines = [...tasks.matchAll(/```sh\n([\s\S]*?)```/g)].flatMap((m) => (m[1] as string).trim().split('\n'));
+    expect(lines.length).toBeGreaterThan(10);
+    for (const line of lines) {
+      // `<id>` and `<archive>` stand for what the owner has; fill them in to parse.
+      const argv = words(line.replace(/<([a-z]+)>/g, '$1')).slice(1);
+      expect(() => parseFully(argv), line).not.toThrow();
+      expect(entryFor(argv), line).toBeDefined();
+    }
   });
 });
