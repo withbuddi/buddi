@@ -231,6 +231,9 @@ import { marketAssetRoute, marketRoute } from './market.js';
 import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
 import { createWidgets, widgetsRoute } from './widgets.js';
+import { createRequirements, type Requirements } from '../plugins/requires.js';
+import { placesList, placesRoute } from './places.js';
+import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, type HttpArea } from '@buddi/core';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
 import {
@@ -268,6 +271,13 @@ import {
 /** How often approvals past their expiry are swept, and waiting delegations told. */
 export const EXPIRY_SWEEP_MS = 60_000;
 export interface WebServerDeps {
+  /**
+   * Plugin readiness and requirements, shared with `serve`'s minute loop
+   * (plugins/requires.ts). Made here when absent.
+   */
+  requirements?: Requirements;
+  /** The place finder's road, for a test; Open-Meteo through core's guard otherwise. */
+  placesHttp?: HttpArea;
   /** Host controller; test instances can inject a fake. Reads never enable it. */
   browser?: BrowserController;
   pool: Pool;
@@ -539,6 +549,10 @@ export function createWebApp(deps: WebServerDeps): Server {
       return [own, preview].filter((port): port is number => typeof port === 'number');
     },
   });
+  // Plugin readiness and requirements: serve's, or this server's own.
+  const requirements =
+    deps.requirements ??
+    createRequirements({ registry: deps.registry, ctx: deps.ctx, env: deps.env ?? process.env, pool: deps.pool, now: deps.now, log });
   // Home's widgets: one cache per server (web/widgets.ts).
   const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
   /*
@@ -1084,6 +1098,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       log,
       pool: deps.pool,
       registry: deps.registry,
+      requirements,
       ...(deps.plugins ? { engine: deps.plugins } : {}),
     });
     /** Is a mailbox connected? The email plugin's own read, the one Home's offer asks. */
@@ -1158,6 +1173,22 @@ export function createWebApp(deps: WebServerDeps): Server {
             now: deps.now,
             agents: () => deps.catalog.list(),
             plugins: () => deps.registry.manifests().map((m) => m.name),
+            needsSetup: async () => {
+              const out: Array<{ plugin: string; note?: string; route?: string }> = [];
+              for (const manifest of deps.registry.manifests()) {
+                if (manifest.setup === undefined) continue;
+                const ready = await requirements.readiness.of(manifest.name);
+                if (!ready || ready.ready) continue;
+                const page = ready.page === undefined ? undefined : deps.registry.pages().find((p) => p.plugin === manifest.name && p.id === ready.page);
+                const route = page === undefined
+                  ? undefined
+                  : page.place === 'settings'
+                    ? `#/settings/p.${manifest.name}${page.id === manifest.name ? '' : `.${page.id}`}`
+                    : `#/p/${encodeURIComponent(manifest.name)}/${encodeURIComponent(page.id)}`;
+                out.push({ plugin: manifest.name, ...(ready.note ? { note: ready.note } : {}), ...(route ? { route } : {}) });
+              }
+              return out;
+            },
             mailboxSet: async () => {
               const answer = await runPageQuery(pagesDeps(), 'email', 'triage_offer', new URLSearchParams()).catch(() => null);
               return answer?.status === 200 && (answer.body as { data?: { wanted?: unknown } } | null)?.data?.wanted === true;
@@ -1402,10 +1433,14 @@ export function createWebApp(deps: WebServerDeps): Server {
           res.end(method === 'HEAD' ? undefined : bytes);
           return;
         }
-        case '/api/session':
+        case '/api/session': {
+          // How the owner reads times and dates: every page formats with it.
+          const formats = await getOwnerProfile(deps.pool).catch(() => null);
           return sendJson(res, 200, {
             csrf: session.csrf,
             timezone: deps.timezone,
+            timeFormat: formats?.timeFormat ?? null,
+            dateFormat: formats?.dateFormat ?? null,
             host: deps.config.host,
             port: deps.config.port,
             // Where buddi runs: a page opened from another machine is still
@@ -1429,6 +1464,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             // the old one" without a second route.
             version: await currentVersion(deps.env ?? process.env),
           });
+        }
         /*
          * The Tailscale panel's whole payload: what is stored, whether a
          * daemon is here to ask, who this machine is signed in as (so the
@@ -1704,7 +1740,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 200, await telegramDevices(telegramDeps()));
         case '/api/owner': {
           const profile = await getOwnerProfile(deps.pool);
-          return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+          return sendJson(res, 200, { ...profile, places: await placesList(deps.pool), detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
         }
         case '/api/memory': {
           try {
@@ -2989,11 +3025,30 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (given !== null && typeof given !== 'string') return sendJson(res, 400, { error: `\`${key}\` must be a string or null` });
         patch[key] = given as string | null;
       }
+      // How times and dates read: a known word, or null for Auto.
+      if (body.timeFormat !== undefined) {
+        if (body.timeFormat !== null && !(OWNER_TIME_FORMATS as readonly unknown[]).includes(body.timeFormat)) return sendJson(res, 400, { error: '`timeFormat` is 12h, 24h or null (Auto).' });
+        patch.timeFormat = body.timeFormat as OwnerProfilePatch['timeFormat'];
+      }
+      if (body.dateFormat !== undefined) {
+        if (body.dateFormat !== null && !(OWNER_DATE_FORMATS as readonly unknown[]).includes(body.dateFormat)) return sendJson(res, 400, { error: '`dateFormat` is short, long, iso or null (Auto).' });
+        patch.dateFormat = body.dateFormat as OwnerProfilePatch['dateFormat'];
+      }
       if (patch.timezone && !isKnownTimezone(patch.timezone)) return sendJson(res, 400, { error: `"${patch.timezone}" is not a timezone this host knows.` });
       if (patch.preferredName && patch.preferredName.length > 80) return sendJson(res, 400, { error: 'The name is too long (80 characters at most).' });
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
       const profile = await setOwnerProfile(deps.pool, patch);
-      return sendJson(res, 200, { ...profile, detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+      return sendJson(res, 200, { ...profile, places: await placesList(deps.pool), detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
+    }
+
+    /* The owner's places beside the timezone: find one, save one, remove one (web/places.ts). */
+    if (path.startsWith('/api/owner/places')) {
+      const answered = await placesRoute({ pool: deps.pool, log, ...(deps.placesHttp ? { http: deps.placesHttp } : {}) }, path, body);
+      if (answered) {
+        // Plugins that read the places answer their setup again now.
+        requirements.readiness.forget();
+        return sendJson(res, answered.status, answered.body);
+      }
     }
 
     /* Memory, the owner's side: correct a preference, retire one, edit or forget a note. */

@@ -20,8 +20,9 @@ export interface TipRule {
   when: (facts: Facts) => boolean;
   /** How many days `when` must have held before the tip may show. */
   holdsForDays: number;
-  text: string;
-  action: TipAction;
+  /** One sentence; a function when it names something from the facts (a plugin). */
+  text: string | ((facts: Facts) => string);
+  action: TipAction | ((facts: Facts) => TipAction);
   /** Days before a tip shown, or put off with ×, may show again. */
   cooldownDays: number;
   /**
@@ -86,6 +87,21 @@ export const TIPS: readonly TipRule[] = [
     action: { label: 'Ask buddi to open a website', route: '#/chat' },
     cooldownDays: 7,
     plugin: 'browser',
+  },
+  {
+    id: 'plugin-setup',
+    when: (f) => f.needsSetup.length > 0,
+    holdsForDays: 1,
+    text: (f) => {
+      const first = f.needsSetup[0];
+      if (!first) return 'A plugin you installed cannot do anything yet. Its row on the Plugins page says what it needs.';
+      return `The ${first.plugin} plugin is installed, but it cannot do anything yet. ${first.note ?? 'It needs setting up first.'}`;
+    },
+    action: (f) => {
+      const first = f.needsSetup[0];
+      return first?.route ? { label: `Set up ${first.plugin}`, route: first.route } : { label: 'See what it needs', route: '#/settings/plugins' };
+    },
+    cooldownDays: 3,
   },
   {
     id: 'recommended-plugins',

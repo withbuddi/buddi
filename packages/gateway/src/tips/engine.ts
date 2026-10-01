@@ -63,8 +63,11 @@ function applies(rule: TipRule, facts: Facts): boolean {
   }
 }
 
-function viewOf(rule: TipRule): TipView {
-  return { id: rule.id, text: rule.text, action: { ...rule.action } };
+/** The card a rule draws, its sentence and action filled in from the facts. */
+export function viewOf(rule: TipRule, facts: Facts): TipView {
+  const text = typeof rule.text === 'function' ? rule.text(facts) : rule.text;
+  const action = typeof rule.action === 'function' ? rule.action(facts) : rule.action;
+  return { id: rule.id, text, action: { ...action } };
 }
 
 /**
@@ -100,7 +103,7 @@ export function pickTip(
   if (todays) {
     const entry = state[todays.id]!;
     const live = holding.has(todays.id) && !entry.dismissed && entry.laterAt !== today;
-    return { tip: live ? viewOf(todays) : null, state };
+    return { tip: live ? viewOf(todays, facts) : null, state };
   }
 
   const ready = rules
@@ -116,7 +119,7 @@ export function pickTip(
   const chosen = ready[0];
   if (!chosen) return { tip: null, state };
   state[chosen.rule.id] = { ...chosen.entry, shownAt: today };
-  return { tip: viewOf(chosen.rule), state };
+  return { tip: viewOf(chosen.rule, facts), state };
 }
 
 /** "Not this again": never again, until the Tips list brings it back. */
@@ -157,7 +160,7 @@ export function listTips(rules: readonly TipRule[], facts: Facts, previous: Tips
   return rules.map((rule) => {
     const before = previous[rule.id] ?? {};
     const after = state[rule.id] ?? {};
-    const row: TipListRow = viewOf(rule) as TipListRow;
+    const row: TipListRow = viewOf(rule, facts) as TipListRow;
     const last = [before.shownAt, before.laterAt].filter((d): d is string => !!d).sort().pop();
     if (before.shownAt) row.shownAt = before.shownAt;
     if (before.dismissed) {

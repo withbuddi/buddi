@@ -18,6 +18,7 @@ export function facts(over: Partial<Facts> = {}): Facts {
     browserUsed: true,
     toolsUsed: new Set(['browser.act']),
     pagesVisited: new Set(),
+    needsSetup: [],
     ...over,
   };
 }

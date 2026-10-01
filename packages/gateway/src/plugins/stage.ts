@@ -43,7 +43,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { authorOfPackageJson, hostApiProblem, parsePluginUses, type PluginAuthor, type PluginSource, type PluginUse } from '@buddi/core';
+import { authorOfPackageJson, hostApiProblem, parsePluginRequires, parsePluginUses, type PluginAuthor, type PluginSource, type PluginUse } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
 import { parseBuddiMd, type PluginClaims } from './claims.js';
 import { createNpmRunner, type NpmPackument, type NpmRunner } from './npm.js';
@@ -141,7 +141,12 @@ export interface StagedPlugin {
    */
   coreAsDependency?: boolean;
   /** The `buddi` field of package.json, if any. */
-  buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string };
+  buddi?: { manifest?: string; core?: string; uses?: unknown; hostApi?: string; requires?: unknown };
+  /**
+   * The plugins it needs — `buddi.requires` in its package.json — by name,
+   * with a semver range. The card lists each with where it stands here.
+   */
+  requires?: Record<string, string>;
   /**
    * The areas of buddi it says it reaches beyond itself — `buddi.uses` in its
    * package.json, read without importing anything, which is what the card
@@ -708,6 +713,8 @@ export async function stagePlugin(
      */
     const uses = parsePluginUses(pkg.buddi?.uses, `${String(pkg.name)}'s package.json buddi.uses`);
     if (!uses.ok) throw new StageRefusal('bad-uses', `${uses.message}. Nothing of it is kept.`);
+    const requires = parsePluginRequires(pkg.buddi?.requires, `${String(pkg.name)}'s package.json buddi.requires`, declaredName);
+    if (!requires.ok) throw new StageRefusal('bad-requires', `${requires.message}. Nothing of it is kept.`);
     if (pkg.buddi?.hostApi !== undefined) {
       const problem =
         typeof pkg.buddi.hostApi === 'string'
@@ -773,9 +780,11 @@ export async function stagePlugin(
               core: pkg.buddi.core,
               ...(pkg.buddi.uses === undefined ? {} : { uses: pkg.buddi.uses }),
               ...(typeof pkg.buddi.hostApi === 'string' ? { hostApi: pkg.buddi.hostApi } : {}),
+              ...(pkg.buddi.requires === undefined ? {} : { requires: pkg.buddi.requires }),
             },
           }),
       uses: uses.uses,
+      ...(Object.keys(requires.requires).length === 0 ? {} : { requires: requires.requires }),
       ...(author === undefined ? {} : { author }),
       ...(opts.previousUses === undefined ? {} : { previousUses: opts.previousUses }),
       ...(typeof pkg.peerDependencies?.['@buddi/core'] === 'string'

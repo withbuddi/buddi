@@ -40,6 +40,12 @@ export interface Facts {
   browserUsed: boolean;
   toolsUsed: Set<string>;
   pagesVisited: Set<string>;
+  /**
+   * Installed plugins that say they cannot do anything yet (their `setup`,
+   * docs/plugins.md §2.9), each with what to do first and the dashboard
+   * route where it is done.
+   */
+  needsSetup: Array<{ plugin: string; note?: string; route?: string }>;
 }
 
 interface Queryable {
@@ -55,6 +61,8 @@ export interface FactsDeps {
   plugins: () => readonly string[];
   /** Whether the email plugin has a mailbox; its own page query answers it. */
   mailboxSet: () => Promise<boolean>;
+  /** The plugins not set up yet; none when absent. */
+  needsSetup?: () => Promise<Facts['needsSetup']>;
 }
 
 /** Mail Triage's agent id, as the email plugin proposes it. */
@@ -163,5 +171,6 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
     browserUsed: [...toolsUsed].some((t) => t.startsWith('browser.')),
     toolsUsed,
     pagesVisited: new Set(Object.keys(await readPagesSeen(webSettingsStore(pool)))),
+    needsSetup: (await deps.needsSetup?.().catch(() => [])) ?? [],
   };
 }

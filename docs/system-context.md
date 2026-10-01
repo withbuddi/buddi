@@ -18,6 +18,14 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   explicit fallback when the profile is missing, invalid or unavailable.
 - The resolved owner timezone also applies to tools in that run. Existing
   scheduled commitments retain their stored timezone; no schedules are rewritten.
+- How the owner reads times and dates (Settings → Profile: 12-hour or 24-hour,
+  "Thu, Oct 1", "Thursday, 1 October" or ISO) is one line under "About the
+  owner" for every agent, so a reply writes "2:05 PM" to someone who reads
+  12-hour time. Auto adds nothing.
+- The front desk alone is also told the owner's places — each label, the
+  address as typed, the town it was matched to and its zone — as context, the
+  way it is told the timezone. Other agents are not; a plugin reads them only
+  through its declared `owner:places`.
 
 Host means the machine/environment running the Buddi server, not the browser
 or Telegram client. macOS product version and hardware model identifier are read

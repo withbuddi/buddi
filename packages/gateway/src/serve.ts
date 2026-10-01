@@ -23,6 +23,7 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  importWeatherPlaces,
   configurePluginHost,
   createVault,
   notificationsTick,
@@ -90,6 +91,7 @@ import { createReminderTick } from './missions/reminders.js';
 import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
 import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './agents/learning-digest.js';
 import { startLoop } from './loop.js';
+import { createRequirements } from './plugins/requires.js';
 import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
 import { memoryPreambleFor, memoryPreambleForGroup } from './agents/catalog.js';
 import { createCoreArtifactStore } from './telegram/attachments.js';
@@ -1026,6 +1028,34 @@ export async function main(): Promise<void> {
         console.error(`learning digest: not scheduled: ${err instanceof Error ? err.message : String(err)}`),
       );
     }
+    // The weather plugin's Home and Work move into the owner's places, once
+    // (docs/dashboard.md, Profile); the plugin reads them from core after.
+    if (!recovering) {
+      await importWeatherPlaces(pool)
+        .then((n) => (n ? console.log(`places: brought ${n} place${n === 1 ? '' : 's'} in from the weather plugin`) : undefined))
+        .catch((err) => console.error(`places: the weather plugin's places were not brought in: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    // Plugin readiness and requirements (plugins/requires.ts): a plugin whose
+    // requirement is not set up is held back now, and let in once it is;
+    // checked every minute and whenever the Plugins page asks.
+    const requirements = createRequirements({
+      registry: wiring.registry,
+      ctx: wiring.ctx,
+      env: process.env,
+      pool,
+      now,
+      log: (line) => console.log(line),
+    });
+    if (!recovering) await requirements.reconcile();
+    const requirementsLoop = recovering ? idle.loop : startLoop({
+      name: 'requirements',
+      everyMs: 60_000,
+      abortAfterMs: 60_000,
+      run: async () => {
+        await requirements.reconcile();
+      },
+      log: logErr,
+    });
     // A plugin's rules proposed before they came through core move here once.
     if (!recovering) await adoptPluginPolicies(pool, wiring.registry.manifests(), now(), (line) => console.log(line), wiring.timezone);
     const proposalLoop = recovering ? idle.loop : startLoop({
@@ -1069,6 +1099,7 @@ export async function main(): Promise<void> {
         dashboard = await startWebServer({
           pool,
           registry: wiring.registry,
+          requirements,
           catalog: wiring.catalog,
           ctx: wiring.ctx,
           timezone: wiring.timezone,
@@ -1115,7 +1146,7 @@ export async function main(): Promise<void> {
         );
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
-          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop();
+          sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop(); requirementsLoop.stop();
           await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop(), sourceWatches.stopAll()]);
           throw err;
         }
@@ -1202,6 +1233,7 @@ export async function main(): Promise<void> {
       deadLetterLoop.stop();
       notificationsLoop.stop();
       proposalLoop.stop();
+      requirementsLoop.stop();
       telegramChannel?.();
       closingDashboard = dashboard?.close();
       closingDashboard?.catch(() => {});

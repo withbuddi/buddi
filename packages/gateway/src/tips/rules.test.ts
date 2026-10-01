@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Facts } from './facts.js';
 import { TIPS } from './rules.js';
+import { viewOf } from './engine.js';
 import { facts } from '../__fixtures__/tip-facts.js';
 
 const RULE_CASES: Record<string, { fires: Partial<Facts>; quiet: Partial<Facts> }> = {
@@ -37,6 +38,10 @@ const RULE_CASES: Record<string, { fires: Partial<Facts>; quiet: Partial<Facts> 
     fires: { browserUsed: false, toolsUsed: new Set() },
     quiet: { browserUsed: true },
   },
+  'plugin-setup': {
+    fires: { needsSetup: [{ plugin: 'weather', note: 'Pick a place for the forecast.', route: '#/settings/p.weather.settings' }] },
+    quiet: { needsSetup: [] },
+  },
 };
 
 describe('TIPS', () => {
@@ -55,10 +60,11 @@ describe('TIPS', () => {
     describe(rule.id, () => {
       const cases = RULE_CASES[rule.id];
       it('has one sentence or two of copy and one action', () => {
-        expect(rule.text.trim()).toMatch(/^[A-Z].*[.!?]$/);
-        expect(rule.text.length).toBeLessThanOrEqual(140);
-        expect(rule.action.label.trim()).not.toBe('');
-        expect(rule.action.route).toMatch(/^#\//);
+        const view = viewOf(rule, facts(cases?.fires ?? {}));
+        expect(view.text.trim()).toMatch(/^[A-Z].*[.!?]$/);
+        expect(view.text.length).toBeLessThanOrEqual(140);
+        expect(view.action.label.trim()).not.toBe('');
+        expect(view.action.route).toMatch(/^#\//);
         expect(rule.holdsForDays).toBeGreaterThanOrEqual(0);
         expect(rule.cooldownDays).toBeGreaterThan(0);
       });
@@ -72,4 +78,14 @@ describe('TIPS', () => {
       });
     });
   }
+});
+
+describe('the setup tip', () => {
+  it('names the plugin, says what it needs and opens where it is done', () => {
+    const rule = TIPS.find((r) => r.id === 'plugin-setup')!;
+    const view = viewOf(rule, facts({ needsSetup: [{ plugin: 'calendar', note: 'Link a calendar.', route: '#/settings/p.calendar' }] }));
+    expect(view.text).toBe('The calendar plugin is installed, but it cannot do anything yet. Link a calendar.');
+    expect(view.action).toEqual({ label: 'Set up calendar', route: '#/settings/p.calendar' });
+    expect(viewOf(rule, facts()).action.route).toBe('#/settings/plugins');
+  });
 });

@@ -13,7 +13,7 @@
  * State lives in `core.web_settings`: `tips.state` (the engine's), `tips.enabled`
  * (absent is on) and `tips.pages`.
  */
-import { dayIn, dismissTip, laterTip, listTips, pickTip, restoreTip, type TipsState } from './engine.js';
+import { dayIn, dismissTip, laterTip, listTips, pickTip, restoreTip, viewOf, type TipsState } from './engine.js';
 import { PAGE_NAME, recordPageSeen, type Facts, type SettingsStore } from './facts.js';
 import { TIPS, type TipRule } from './rules.js';
 
@@ -79,7 +79,7 @@ export async function tipsRoute(
     if (preview !== null) {
       const rule = rules.find((r) => r.id === preview);
       return rule
-        ? { status: 200, body: { tip: { id: rule.id, text: rule.text, action: { ...rule.action } }, enabled: true, preview: true } }
+        ? { status: 200, body: { tip: viewOf(rule, await deps.facts()), enabled: true, preview: true } }
         : { status: 404, body: { error: `No tip called "${preview}". Known: ${rules.map((r) => r.id).join(', ')}.` } };
     }
     if (!(await tipsEnabled(deps.store))) return { status: 200, body: { tip: null, enabled: false } };

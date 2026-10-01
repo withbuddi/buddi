@@ -32,7 +32,10 @@ import { pathToFileURL } from 'node:url';
 import {
   contributionOf,
   isPluginSchemaName,
+  satisfiesRange,
+  parsePluginRequires,
   parsePluginUses,
+  pluginRequiresMismatch,
   pluginUsesMismatch,
   pluginsFilePath,
   readPluginsFile,
@@ -154,6 +157,37 @@ export interface LoadedPlugins {
    * the schema left exactly where it is. Absent means none.
    */
   disabled?: InstalledPlugin[];
+  /**
+   * Imported, but held back because something it requires is missing,
+   * disabled, outside its range or not set up (docs/plugins.md §2.10):
+   * nothing of it is registered and its data stays. `requires.ts` lets it in
+   * once every need is met. Absent means none.
+   */
+  waiting?: WaitingPlugin[];
+}
+
+/** What a plugin needs of one it requires and does not have. */
+export interface PluginNeed {
+  plugin: string;
+  range: string;
+  /**
+   * `missing`: not installed. `disabled`: installed and switched off.
+   * `failed`: installed, did not load. `range`: loaded at a version outside
+   * the range. `waiting`: itself held back. `setup`: loaded, not set up.
+   */
+  state: 'missing' | 'disabled' | 'failed' | 'range' | 'waiting' | 'setup';
+  /** The version installed, when there is one. */
+  installed?: string;
+  /** For `setup`: what that plugin says to do first, and where. */
+  note?: string;
+  page?: string;
+}
+
+/** A plugin held back by its requirements. */
+export interface WaitingPlugin {
+  record: InstalledPlugin;
+  manifest: PluginManifest;
+  needs: PluginNeed[];
 }
 
 /** Where this installation's record lives. */
@@ -217,23 +251,50 @@ export function manifestProblem(
  * with no package.json above it at all (a bare built file, in a test).
  */
 export function packageUses(entry: string): { ok: true; uses: PluginUse[] } | { ok: false; message: string } {
+  const pkg = packageBuddi(entry);
+  if (!pkg.ok) return pkg;
+  return parsePluginUses(pkg.buddi?.uses, "its package.json's buddi.uses");
+}
+
+/** The `buddi.requires` of the package an entry point belongs to, as `packageUses` reads `uses`. */
+export function packageRequires(entry: string): { ok: true; requires: Record<string, string> } | { ok: false; message: string } {
+  const pkg = packageBuddi(entry);
+  if (!pkg.ok) return pkg;
+  return parsePluginRequires(pkg.buddi?.requires, "its package.json's buddi.requires");
+}
+
+/** The `buddi` field of the nearest package.json above an entry point. */
+function packageBuddi(entry: string): { ok: true; buddi: { uses?: unknown; requires?: unknown } | undefined } | { ok: false; message: string } {
   let dir = path.dirname(entry);
   for (let i = 0; i < 8; i += 1) {
     const file = path.join(dir, 'package.json');
     if (existsSync(file)) {
-      let pkg: { buddi?: { uses?: unknown } };
+      let pkg: { buddi?: { uses?: unknown; requires?: unknown } };
       try {
         pkg = JSON.parse(readFileSync(file, 'utf8')) as typeof pkg;
       } catch (err) {
         return { ok: false, message: `its package.json cannot be read: ${err instanceof Error ? err.message : String(err)}` };
       }
-      return parsePluginUses(pkg.buddi?.uses, "its package.json's buddi.uses");
+      return { ok: true, buddi: pkg.buddi };
     }
     const up = path.dirname(dir);
     if (up === dir) break;
     dir = up;
   }
-  return { ok: true, uses: [] };
+  return { ok: true, buddi: undefined };
+}
+
+/**
+ * Why a loaded manifest's `requires` cannot register, or undefined: a map
+ * this build cannot read, or not the one its package.json — and so the
+ * install card — declared (docs/plugins.md §2.10).
+ */
+export function requiresProblem(manifest: PluginManifest, entry: string): string | undefined {
+  const declared = parsePluginRequires(manifest.requires, `plugin "${manifest.name}"'s manifest requires`, manifest.name);
+  if (!declared.ok) return declared.message;
+  const shown = packageRequires(entry);
+  if (!shown.ok) return shown.message;
+  return pluginRequiresMismatch(manifest.name, declared.requires, shown.requires);
 }
 
 /**
@@ -272,6 +333,8 @@ export async function loadManifest(
   if (problem !== undefined) return { ok: false, message: problem };
   const uses = usesProblem(candidate as PluginManifest, entry);
   if (uses !== undefined) return { ok: false, message: uses };
+  const requires = requiresProblem(candidate as PluginManifest, entry);
+  if (requires !== undefined) return { ok: false, message: requires };
   return { ok: true, manifest: candidate as PluginManifest };
 }
 
@@ -325,7 +388,68 @@ export async function loadInstalledPlugins(
     schemas.set(result.manifest.schema, record.name);
     loaded.push({ record, manifest: result.manifest, contribution: contributionOf(result.manifest) });
   }
-  return { file, loaded, problems, ...(disabled.length === 0 ? {} : { disabled }) };
+  // What can be known before anything runs: a requirement missing,
+  // disabled, failed or out of range holds the plugin back. Whether a
+  // requirement is set up is asked once the registry exists (`requires.ts`).
+  const held = holdBack({ file, loaded, problems, ...(disabled.length === 0 ? {} : { disabled }) }, env);
+  return held;
+}
+
+/**
+ * Move every loaded plugin whose requirements are not met (as far as the
+ * record and the load can tell) into `waiting`, until nothing moves: a
+ * plugin held back is itself a need for whatever requires it.
+ */
+export function holdBack(plugins: LoadedPlugins, env: NodeJS.ProcessEnv = process.env): LoadedPlugins {
+  let loaded = [...plugins.loaded];
+  const waiting = [...(plugins.waiting ?? [])];
+  for (let pass = 0; pass < 10; pass += 1) {
+    const current: LoadedPlugins = { ...plugins, loaded, waiting };
+    const moving = loaded
+      .map((p) => ({ p, needs: staticNeeds(p.manifest, current, env) }))
+      .filter(({ needs }) => needs.length > 0);
+    if (moving.length === 0) break;
+    loaded = loaded.filter((p) => !moving.some((m) => m.p === p));
+    for (const { p, needs } of moving) waiting.push({ record: p.record, manifest: p.manifest, needs });
+  }
+  for (const w of waiting) w.needs = staticNeeds(w.manifest, { ...plugins, loaded, waiting }, env);
+  const { waiting: _old, ...rest } = plugins;
+  return { ...rest, loaded, ...(waiting.length === 0 ? {} : { waiting }) };
+}
+
+/**
+ * What a manifest's requirements lack, from the record and the load alone:
+ * missing, disabled, failed, out of range or held back. A plugin this build
+ * ships satisfies any range.
+ */
+export function staticNeeds(manifest: PluginManifest, plugins: LoadedPlugins, env: NodeJS.ProcessEnv = process.env): PluginNeed[] {
+  const needs: PluginNeed[] = [];
+  for (const [name, range] of Object.entries(manifest.requires ?? {})) {
+    if (isBuiltInPlugin(name, env)) continue;
+    const loaded = plugins.loaded.find((p) => p.record.name === name);
+    const version = loaded?.manifest.version;
+    if (loaded) {
+      if (satisfiesRange(version as string, range) !== true) needs.push({ plugin: name, range, state: 'range', installed: version as string });
+      continue;
+    }
+    const held = plugins.waiting?.find((w) => w.record.name === name);
+    if (held) {
+      needs.push({ plugin: name, range, state: satisfiesRange(held.manifest.version, range) === true ? 'waiting' : 'range', installed: held.manifest.version });
+      continue;
+    }
+    const off = plugins.disabled?.find((r) => r.name === name);
+    if (off) {
+      needs.push({ plugin: name, range, state: 'disabled', installed: off.version });
+      continue;
+    }
+    const failed = plugins.problems.find((p) => p.name === name);
+    if (failed) {
+      needs.push({ plugin: name, range, state: 'failed', ...(failed.record ? { installed: failed.record.version } : {}) });
+      continue;
+    }
+    needs.push({ plugin: name, range, state: 'missing' });
+  }
+  return needs;
 }
 
 /* ------------------------------------------------------------------ *
@@ -390,6 +514,7 @@ export function demoteToLoadFailure(
       { name, entry: failed.record.entry, message, record: failed.record },
     ],
     ...(plugins.disabled === undefined ? {} : { disabled: plugins.disabled }),
+    ...(plugins.waiting === undefined ? {} : { waiting: plugins.waiting }),
   });
 }
 

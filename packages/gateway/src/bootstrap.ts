@@ -60,6 +60,7 @@ import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
 import { sweepIncoming, sweepStages } from './plugins/stage.js';
 import { sweepPluginDirs } from './plugins/paths.js';
+import { ROLE_FRONT_DESK } from './agents/roles.js';
 
 export { REPO_ROOT };
 
@@ -534,7 +535,11 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
           return accounts.pluginAccess().generateCodexImage(id, options);
         },
       },
-      systemContext: (run) => systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run),
+      systemContext: (run) =>
+        systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run, {
+          // Only the front desk is told the owner's places (docs/agents.md).
+          isFrontDesk: (agentId) => catalog.agentsWithRole(ROLE_FRONT_DESK).some((agent) => agent.id === agentId),
+        }),
       /*
        * A getter, not a value: this object is built before anything is bound,
        * and the preview listener publishes its port into the environment the

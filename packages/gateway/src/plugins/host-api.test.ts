@@ -76,14 +76,23 @@ describe('staging', () => {
   });
 
   it('refuses a plugin built for a newer host, with both numbers', async () => {
-    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.18' } }), { env });
+    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.19' } }), { env });
     await expect(staging).rejects.toBeInstanceOf(StageRefusal);
-    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.18' } }), { env })).rejects.toThrow(
-      /it was built for host API \^1\.18, and this buddi has 1\.17/,
+    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.19' } }), { env })).rejects.toThrow(
+      /it was built for host API \^1\.19, and this buddi has 1\.18/,
     );
     await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.0' } }), { env })).resolves.toMatchObject({
       buddi: { hostApi: '^1.0' },
     });
+  });
+
+  it('reads what a package requires from package.json, and refuses a range it cannot read', async () => {
+    await expect(stagePlugin(pluginDir({ buddi: { requires: { weather: '^0.2.0' } } }), { env })).resolves.toMatchObject({
+      requires: { weather: '^0.2.0' },
+    });
+    await expect(stagePlugin(pluginDir({ buddi: { requires: { weather: 'latest' } } }), { env })).rejects.toThrow(
+      /asks for weather "latest", which is not a version range/,
+    );
   });
 
   it('shows what an upgrade adds as a change', () => {

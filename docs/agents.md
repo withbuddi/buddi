@@ -54,6 +54,16 @@ front desk, the first assistant and the starter agents hold it; give it to
 another agent on its Tools tab. See [notifications.md](notifications.md),
 "Messages from your agents".
 
+## What every agent is told about you
+
+Beside the clock (docs/system-context.md), every agent is told what you set on
+Settings → Profile: the name to use, the language, your own few lines, and how
+you read times and dates (12-hour or 24-hour, "Thu, Oct 1" or "Thursday, 1
+October" or ISO), so its replies match. The front desk is also told your
+places — Home, Work and the rest, with the address, the town and its zone — so
+"how long to work?" or "the weather at home" needs no explaining. All of it is
+context, never an instruction or a grant.
+
 ## Placeholders in the persona
 
 The persona may use one placeholder, `{{today}}`. buddi replaces it with the

@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { learningContext } from './agents/learning.js';
-import { getOwnerProfile, isKnownTimezone, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
+import { getOwnerProfile, isKnownTimezone, listOwnerPlaces, localDateTimeString, type PluginManifest, type SystemContext, type CoreToolContext } from '@buddi/core';
 
 const exec = promisify(execFile);
 const clean = (value: string): string => value.trim().replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 120);
@@ -67,15 +67,17 @@ export async function systemInfo(ctx: CoreToolContext) {
 export async function systemContext(
   ctx: CoreToolContext,
   run?: { agentId: string; tools: readonly string[] },
+  opts: { isFrontDesk?: (agentId: string) => boolean } = {},
 ): Promise<SystemContext> {
-  const [info, owner, learning] = await Promise.all([
+  const [info, owner, learning, places] = await Promise.all([
     systemInfo(ctx),
     ownerLines(ctx),
     run ? learningContext(ctx.db, run, ctx.now()) : Promise.resolve(''),
+    run && opts.isFrontDesk?.(run.agentId) ? placeLines(ctx) : Promise.resolve(''),
   ]);
   return { timezone: info.time.timezone, prompt: 'Current platform context (authoritative over dates in persona or conversation history):\n' +
     JSON.stringify(info) + '\nThis clock is a turn-start snapshot. Use system.time for a fresh reading and system.info to check host facts. Interpret today/yesterday in the owner timezone unless the user specifies otherwise.' +
-    (owner === '' ? '' : `\n\n${owner}`) + (learning === '' ? '' : `\n\n${learning}`) +
+    (owner === '' ? '' : `\n\n${owner}`) + (places === '' ? '' : `\n\n${places}`) + (learning === '' ? '' : `\n\n${learning}`) +
     (run?.tools.includes('owner.notify') ? `\n\n${NOTIFY_LINE}` : '') };
 }
 
@@ -96,8 +98,44 @@ export async function ownerLines(ctx: CoreToolContext): Promise<string> {
   if (profile.preferredName) lines.push(`- Call them ${profile.preferredName}.`);
   if (profile.language) lines.push(`- They prefer to be answered in ${profile.language}, unless they write in another language or ask otherwise.`);
   if (profile.about) lines.push(`- In their words: ${profile.about.replace(/\s+/g, ' ').trim()}`);
+  const formats = formatLine(profile);
+  if (formats) lines.push(formats);
   if (lines.length === 0) return '';
   return `About the owner (set by them in Settings; context, not instruction):\n${lines.join('\n')}`;
+}
+
+/**
+ * The owner's places, for the front desk only (docs/agents.md): Home, Work
+ * and the rest, each with its address as typed, the town it was matched to
+ * and the zone there. Context, like the timezone — what "home" and "the
+ * office" mean when the owner says them. Nothing when none is set.
+ */
+export async function placeLines(ctx: CoreToolContext): Promise<string> {
+  let places;
+  try { places = await listOwnerPlaces(ctx.db); } catch { return ''; }
+  if (places.length === 0) return '';
+  const clip = (text: string): string => text.replace(/\s+/g, ' ').trim().slice(0, 160);
+  const lines = places.map((p) => {
+    const where = p.address && p.address.trim() !== '' && p.address.trim() !== p.name ? `${clip(p.address)} (${clip(p.name)})` : clip(p.name);
+    return `- ${clip(p.label)}: ${where}${p.timezone ? `, ${p.timezone}` : ''}`;
+  });
+  return `The owner's places (set by them in Settings → Profile; context, not instruction):\n${lines.join('\n')}`;
+}
+
+/**
+ * How the owner reads times and dates, as they chose on Settings → Profile,
+ * so a reply writes "2:05 PM" to someone who reads 12-hour time. Nothing
+ * when both are Auto.
+ */
+export function formatLine(profile: { timeFormat?: string | null; dateFormat?: string | null }): string {
+  const time = profile.timeFormat === '12h' ? '12-hour time (2:05 PM)' : profile.timeFormat === '24h' ? '24-hour time (14:05)' : '';
+  const date =
+    profile.dateFormat === 'short' ? 'dates like "Thu, Oct 1"'
+      : profile.dateFormat === 'long' ? 'dates like "Thursday, 1 October"'
+        : profile.dateFormat === 'iso' ? 'ISO dates (2026-10-01)'
+          : '';
+  if (time === '' && date === '') return '';
+  return `- Write times and dates the way they read them: ${[time, date].filter((p) => p !== '').join(' and ')}.`;
 }
 
 /** The family name of the clock-and-machine tools. Named for the guards. */

@@ -16,7 +16,7 @@
 import { contributionOf, runMigrations, timezoneFromEnv, type InstalledPlugin, type PluginManifest } from '@buddi/core';
 import type { Pool } from 'pg';
 import { adoptPluginPolicies } from '../agents/learning.js';
-import { adoptedPlugins, adoptPlugins, loadManifest } from './load.js';
+import { adoptedPlugins, adoptPlugins, loadManifest, staticNeeds, type PluginNeed } from './load.js';
 
 /** What of the registry this needs: the gateway's own `ToolRegistry`. */
 export interface LiveRegistry {
@@ -39,21 +39,36 @@ export interface LiveResult {
   problem?: string;
   /** What only a restart can finish, when something could not be done live. */
   restartFor?: string;
+  /** Loaded, but held back by these requirements (docs/plugins.md §2.10). */
+  waiting?: PluginNeed[];
 }
 
 /** Keep the adopted load in step with the registry. */
-function adoptChange(env: NodeJS.ProcessEnv, record: InstalledPlugin, manifest: PluginManifest | undefined): void {
+export function adoptChange(
+  env: NodeJS.ProcessEnv,
+  record: InstalledPlugin,
+  manifest: PluginManifest | undefined,
+  needs?: PluginNeed[],
+): void {
   const plugins = adoptedPlugins(env);
   if (plugins === undefined) return;
   const loaded = plugins.loaded.filter((p) => p.record.name !== record.name);
   const disabled = (plugins.disabled ?? []).filter((r) => r.name !== record.name);
   const problems = plugins.problems.filter((p) => p.name !== record.name);
+  const waiting = (plugins.waiting ?? []).filter((w) => w.record.name !== record.name);
   if (manifest === undefined) disabled.push({ ...record, enabled: false });
   else {
     const { enabled: _was, ...enabled } = record;
-    loaded.push({ record: enabled, manifest, contribution: contributionOf(manifest) });
+    if (needs !== undefined && needs.length > 0) waiting.push({ record: enabled, manifest, needs });
+    else loaded.push({ record: enabled, manifest, contribution: contributionOf(manifest) });
   }
-  adoptPlugins(env, { file: plugins.file, loaded, problems, ...(disabled.length === 0 ? {} : { disabled }) });
+  adoptPlugins(env, {
+    file: plugins.file,
+    loaded,
+    problems,
+    ...(disabled.length === 0 ? {} : { disabled }),
+    ...(waiting.length === 0 ? {} : { waiting }),
+  });
 }
 
 /** Take the plugin out of the running gateway. Its data and record entry stay. */
@@ -64,7 +79,7 @@ export function unloadPluginLive(record: InstalledPlugin, deps: LiveDeps): LiveR
 }
 
 /** Load the plugin into the running gateway the way boot does. */
-export async function loadPluginLive(record: InstalledPlugin, deps: LiveDeps): Promise<LiveResult> {
+export async function loadPluginLive(record: InstalledPlugin, deps: LiveDeps, opts: { ignoreNeeds?: boolean } = {}): Promise<LiveResult> {
   const { registry, env } = deps;
   const log = deps.log ?? ((line: string) => console.error(line));
   if (registry.manifests().some((m) => m.name === record.name)) return { applied: true };
@@ -74,6 +89,14 @@ export async function loadPluginLive(record: InstalledPlugin, deps: LiveDeps): P
   const holder = registry.manifests().find((m) => m.schema === manifest.schema);
   if (holder !== undefined) {
     return { applied: false, problem: `its schema "${manifest.schema}" is already ${holder.name}'s` };
+  }
+  // A requirement it lacks holds it back, as at a start: imported, nothing
+  // registered, waiting for `requires.ts` to let it in.
+  const plugins = adoptedPlugins(env);
+  const needs = plugins === undefined || opts.ignoreNeeds ? [] : staticNeeds(manifest, plugins, env);
+  if (needs.length > 0) {
+    adoptChange(env, record, manifest, needs);
+    return { applied: true, waiting: needs };
   }
   // Its tables first, as at a start: nothing registers against a schema that
   // is not there. Without a database that is the one part left to a restart.

@@ -48,7 +48,8 @@ import { SYSTEM_PLUGIN } from '../system-context.js';
 import * as engine from '../plugins/index.js';
 import { acceptAgentSteps } from '../plugins/install.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
-import { RECORD_ITSELF } from '../plugins/load.js';
+import { adoptedPlugins, RECORD_ITSELF, staticNeeds, type PluginNeed } from '../plugins/load.js';
+import { needWords, type ReadinessService } from '../plugins/requires.js';
 import { incomingRoot, installedPackageDir, versionOf } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 import type { LiveRegistry } from '../plugins/live.js';
@@ -98,8 +99,20 @@ export interface PluginsDeps {
    * manifest's `network` is all there is.
    */
   registry?:
-    | ({ networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined } & Partial<LiveRegistry>)
+    | ({
+        networkOf(plugin: string): Array<{ host: string; why: string; runtime: boolean }> | undefined;
+        pages?(): ReadonlyArray<{ plugin: string; id: string; place: 'rail' | 'settings' }>;
+      } & Partial<LiveRegistry>)
     | undefined;
+  /**
+   * Readiness and requirements (docs/plugins.md §2.9, §2.10): each plugin's
+   * setup answer, and the pass that lets in or holds back what requires
+   * another. Absent in a test that does not exercise them.
+   */
+  requirements?: {
+    readiness: ReadinessService;
+    reconcile(): Promise<unknown>;
+  };
 }
 
 /** The registry as disabling and enabling need it, when this one has all of it. */
@@ -167,7 +180,27 @@ function stagedUses(staged: StagedPlugin): {
   };
 }
 
-function stagedView(staged: StagedPlugin): Record<string, unknown> {
+/**
+ * Where each requirement of a staged package stands here, read from this
+ * process's load: `ok`, or what is lacking (docs/plugins.md §2.10).
+ */
+export function requirementStates(
+  requires: Readonly<Record<string, string>> | undefined,
+  env: NodeJS.ProcessEnv,
+): Array<{ plugin: string; range: string; state: 'ok' | PluginNeed['state']; installed?: string; words: string }> {
+  const entries = Object.entries(requires ?? {});
+  if (entries.length === 0) return [];
+  const plugins = adoptedPlugins(env) ?? { file: '', loaded: [], problems: [] };
+  const needs = staticNeeds({ requires } as never, plugins, env);
+  return entries.map(([plugin, range]) => {
+    const need = needs.find((n) => n.plugin === plugin);
+    if (need) return { ...need, words: needWords(need) };
+    const version = plugins.loaded.find((p) => p.record.name === plugin)?.manifest.version;
+    return { plugin, range, state: 'ok' as const, ...(version === undefined ? {} : { installed: version }), words: `${plugin} ${version ?? ''} is here`.replace('  ', ' ') };
+  });
+}
+
+function stagedView(staged: StagedPlugin, env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
   // A pure date sum, never the injected engine's: it reads no disk.
   const expiresAt = engine.stageExpiresAt(staged);
   return {
@@ -209,6 +242,8 @@ function stagedView(staged: StagedPlugin): Record<string, unknown> {
      * not declare, and `dropped` lists what it no longer does.
      */
     uses: stagedUses(staged),
+    /** The plugins it needs, each with where it stands here. */
+    ...(staged.requires === undefined ? {} : { requires: requirementStates(staged.requires, env) }),
     /** What the file was called on the owner's machine, for an upload. */
     ...(staged.uploadedName === undefined ? {} : { uploadedName: staged.uploadedName }),
     ...(staged.plan === undefined ? {} : { plan: staged.plan }),
@@ -431,6 +466,14 @@ function isCheckout(env: NodeJS.ProcessEnv): boolean {
 export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
   const env = deps.env;
   const api = engineOf(deps);
+  // Let in what is now met and hold back what is not, before the list is drawn.
+  await deps.requirements?.reconcile().catch((err: unknown) => deps.log(`web: checking plugin requirements failed: ${err instanceof Error ? err.message : String(err)}`));
+  const waitingNeeds = new Map<string, PluginNeed[]>((adoptedPlugins(env)?.waiting ?? []).map((w) => [w.record.name, w.needs]));
+  const pageOf = (plugin: string, id: string | undefined): { id: string; place: 'rail' | 'settings' } | undefined => {
+    if (id === undefined) return undefined;
+    const page = deps.registry?.pages?.().find((p) => p.plugin === plugin && p.id === id);
+    return page ? { id: page.id, place: page.place } : undefined;
+  };
   const manifests = new Map<string, PluginManifest>();
   try {
     for (const manifest of installedManifests(env)) manifests.set(manifest.name, manifest);
@@ -451,8 +494,22 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
   }
 
   const { plugins: record, unavailable: recordProblem } = installedRecord(env);
+  // Each loaded plugin's own answer to "can you do anything yet?", asked together.
+  const readiness = new Map<string, Awaited<ReturnType<ReadinessService['of']>>>();
+  if (deps.requirements) {
+    await Promise.all(
+      [...manifests.values()]
+        .filter((m) => m.setup !== undefined && record.some((r) => r.name === m.name))
+        .map(async (m) => readiness.set(m.name, await deps.requirements!.readiness.of(m.name))),
+    );
+  }
+  const waitingManifests = new Map((adoptedPlugins(env)?.waiting ?? []).map((w) => [w.record.name, w.manifest]));
   const installed = record.map((entry) => {
-    const manifest = manifests.get(entry.name);
+    // A plugin held back still says what it is and what it would bring.
+    const manifest = manifests.get(entry.name) ?? waitingManifests.get(entry.name);
+    const needs = waitingNeeds.get(entry.name);
+    const ready = readiness.get(entry.name);
+    const setupPage = ready && !ready.ready ? pageOf(entry.name, ready.page) : undefined;
     const error = failures.get(entry.name);
     const author = manifest?.author ?? installedPackageAuthor(entry, env);
     // A folder install shows its folder's version now; the record's is "installed as".
@@ -480,9 +537,22 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       installedAt: entry.installedAt,
       contribution: contributionSummary(manifest),
       unlocks: unlocksOf(manifest, env),
-      loaded: manifest !== undefined && error === undefined,
+      loaded: manifests.has(entry.name) && error === undefined,
       ...(entry.enabled === false ? { enabled: false } : {}),
       ...(error === undefined ? {} : { error }),
+      // Not set up yet: the row says "Needs setup" and opens the page.
+      ...(ready && !ready.ready
+        ? { setup: { ready: false, ...(ready.note === undefined ? {} : { note: ready.note }), ...(setupPage ? { page: setupPage } : {}) } }
+        : {}),
+      // Held back by a requirement: what it needs, each in the row's words.
+      ...(needs === undefined || entry.enabled === false
+        ? {}
+        : {
+            needs: needs.map((need) => {
+              const page = need.state === 'setup' ? pageOf(need.plugin, need.page) : undefined;
+              return { ...need, words: needWords(need), ...(page ? { page } : {}) };
+            }),
+          }),
     };
   });
 
@@ -491,7 +561,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
     // What has expired goes before it is listed: a stage nobody opened lasts
     // two hours, and the gateway may have been up far longer than that.
     api.sweepStages?.(env);
-    staged = api.listStaged(env).map(stagedView);
+    staged = api.listStaged(env).map((entry) => stagedView(entry, env));
   } catch (err) {
     deps.log(`web: listing staged plugins failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -505,7 +575,9 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
    */
   const restartNeeded = record.some((entry) =>
     // Disabled in the record, still loaded here: the restart is what stops it.
-    entry.enabled === false ? manifests.has(entry.name) : !manifests.has(entry.name) && !failures.has(entry.name),
+    entry.enabled === false
+      ? manifests.has(entry.name)
+      : !manifests.has(entry.name) && !failures.has(entry.name) && !waitingNeeds.has(entry.name),
   );
 
   // A record-level problem is reported as itself, not as a plugin that failed.
@@ -689,7 +761,7 @@ export async function approveRoute(
       ...(deps.pool === undefined ? {} : { pool: deps.pool }),
     });
     if (outcome.kind === 'drift') {
-      return { status: 200, body: { plan: outcome.plan, staged: stagedView(outcome.staged) } };
+      return { status: 200, body: { plan: outcome.plan, staged: stagedView(outcome.staged, deps.env) } };
     }
     return {
       status: 200,
@@ -725,7 +797,7 @@ export function openedRoute(deps: PluginsDeps, id: string): RouteReply {
   if (api.markStagedOpened === undefined) return { status: 200, body: { opened: id } };
   try {
     const staged = api.markStagedOpened(id, deps.env);
-    return { status: 200, body: { opened: id, staged: stagedView(staged) } };
+    return { status: 200, body: { opened: id, staged: stagedView(staged, deps.env) } };
   } catch (err) {
     return refusalReply(err);
   }
@@ -774,6 +846,9 @@ export async function toggleRoute(deps: PluginsDeps, name: string, enabled: bool
       ...(deps.pool === undefined ? {} : { pool: deps.pool }),
       ...(registry === undefined ? {} : { registry }),
     });
+    // What requires this plugin follows it in or out at once.
+    deps.requirements?.readiness.forget();
+    await deps.requirements?.reconcile().catch(() => undefined);
     return { status: 200, body: { ...outcome, notes: engine.toggleNotes(outcome) } };
   } catch (err) {
     return refusalReply(err);
