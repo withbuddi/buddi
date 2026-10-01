@@ -39,6 +39,7 @@
  */
 import { classifyFailure, type FailureClass } from '../queue/retry-policy.js';
 import { timezoneFromEnv } from '../time.js';
+import { ownerClock, ownerDate, type OwnerFormats } from '../owner-format.js';
 import { describeCause } from './cause.js';
 
 /** What the owner reads, what the log gets, and whether a retry is honest. */
@@ -72,6 +73,10 @@ export interface DescribeFailureOptions {
   toolsCalled?: number | undefined;
   /** The zone a reset time is said in. The installation's (`BUDDI_TZ`) by default. */
   timeZone?: string | undefined;
+  /** The owner's Profile time format (`12h`, `24h`; null is Auto, 24-hour). */
+  timeFormat?: string | null | undefined;
+  /** The owner's Profile date format (`short`, `long`, `iso`; null is Auto). */
+  dateFormat?: string | null | undefined;
   /** The clock a reset time is measured against. */
   now?: Date | undefined;
 }
@@ -224,16 +229,15 @@ export function rateLimitOf(err: unknown): FailureRateLimit | undefined {
  * When a reset happens, in the owner's words: "14:20" today, "tomorrow at
  * 09:00", "on Fri 2 Oct at 09:00" further out.
  */
-export function resetPhrase(iso: string, timeZone: string, now: Date = new Date()): string {
+export function resetPhrase(iso: string, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
   const at = new Date(iso);
   let zone = timeZone;
   try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); } catch { zone = 'UTC'; }
   const day = (d: Date): string => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
-  const time = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at);
+  const time = ownerClock(at, zone, formats);
   if (day(at) === day(now)) return time;
   if (day(at) === day(new Date(now.getTime() + 86_400_000))) return `tomorrow at ${time}`;
-  const date = new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'short', day: 'numeric', month: 'short' }).format(at);
-  return `on ${date} at ${time}`;
+  return `on ${ownerDate(at, zone, formats)} at ${time}`;
 }
 
 /**
@@ -247,12 +251,15 @@ function rateLimitText(err: unknown, options: DescribeFailureOptions): Omit<Owne
   const who = limit.provider ?? 'The provider';
   const zone = options.timeZone ?? timezoneFromEnv();
   const now = options.now ?? new Date();
-  const when = limit.retryAt ? resetPhrase(limit.retryAt, zone, now) : undefined;
+  const when = limit.retryAt ? resetPhrase(limit.retryAt, zone, now, options) : undefined;
   if (limit.scope === 'day') {
     const what = limit.unit === 'tokens' ? 'tokens' : 'requests';
-    const allowance = limit.limit !== undefined
-      ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString('en-US')} ${what} a day`
-      : `${who} says this account has used up today's allowance`;
+    // ChatGPT's plan windows are hours or a week, not a calendar day.
+    const allowance = limit.provider === 'ChatGPT'
+      ? 'This ChatGPT plan has reached its usage limit'
+      : limit.limit !== undefined
+        ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString('en-US')} ${what} a day`
+        : `${who} says this account has used up today's allowance`;
     const reset = when ? `; it resets ${/^(tomorrow|on )/.test(when) ? when : `at ${when}`}.` : '.';
     const billing = limit.freeTier && limit.provider === 'Gemini' ? ', or turn on billing for the key at aistudio.google.com' : '';
     return {

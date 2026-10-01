@@ -314,6 +314,13 @@ describe('the message', () => {
     );
   });
 
+  it("says the window in the owner's Profile formats when it has them", () => {
+    const auto = formatDeadLetterMessage(THE_WAVE.slice(0, 4), { timezone: TZ, formats: {} });
+    expect(auto).toContain('4 emails between 13:25 and 13:35 on Mon 14 Sep were never looked at');
+    const twelve = formatDeadLetterMessage(THE_WAVE.slice(0, 4), { timezone: TZ, formats: { timeFormat: '12h', dateFormat: 'short' } });
+    expect(twelve).toContain('between 1:25 PM and 1:35 PM on Mon, Sep 14 were never');
+  });
+
   it('carries no job ids, no kinds and no tool names', () => {
     const text = formatDeadLetterMessage(THE_WAVE, { timezone: TZ });
     expect(text).not.toContain('agent-run');

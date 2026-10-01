@@ -41,7 +41,11 @@ import {
   appendEvent,
   getFlag,
   listDeadJobs,
+  getOwnerProfile,
   localDateTimeString,
+  ownerClock,
+  ownerDate,
+  type OwnerFormats,
   setFlag,
   UNATTENDED_JOB_KINDS,
   type Job,
@@ -164,10 +168,18 @@ function commonError(jobs: readonly Job[]): { text: string; shared: boolean } {
 }
 
 /** `2026-09-14 13:21 EDT`, and just `13:34` for the end of the same day. */
-function window(jobs: readonly Job[], timezone: string): string {
+function window(jobs: readonly Job[], timezone: string, formats?: OwnerFormats): string {
   const times = jobs.map((j) => j.createdAt.getTime()).sort((a, b) => a - b);
   const from = new Date(times[0] as number);
   const to = new Date(times[times.length - 1] as number);
+  if (formats) {
+    // The owner's Profile formats: "between 13:25 and 13:35 on Mon 14 Sep".
+    const clock = (d: Date): string => ownerClock(d, timezone, formats);
+    const day = (d: Date): string => ownerDate(d, timezone, formats);
+    if (from.getTime() === to.getTime()) return `at ${clock(from)} on ${day(from)}`;
+    if (day(from) === day(to)) return `between ${clock(from)} and ${clock(to)} on ${day(from)}`;
+    return `between ${day(from)} at ${clock(from)} and ${day(to)} at ${clock(to)}`;
+  }
   const fromText = localDateTimeString(from, timezone);
   if (from.getTime() === to.getTime()) return `at ${fromText}`;
   const toText = localDateTimeString(to, timezone);
@@ -181,7 +193,7 @@ function window(jobs: readonly Job[], timezone: string): string {
  */
 export function formatDeadLetterMessage(
   jobs: readonly Job[],
-  opts: { timezone: string },
+  opts: { timezone: string; formats?: OwnerFormats | undefined },
 ): string {
   if (jobs.length === 0) throw new Error('formatDeadLetterMessage: nothing to report');
 
@@ -203,13 +215,13 @@ export function formatDeadLetterMessage(
     ? `every attempt failed the same way: ${error.text}`
     : `most of them failed the same way: ${error.text}`;
   lines.push(
-    `${count(lead.jobs.length, lead.description.noun)} ${window(lead.jobs, opts.timezone)} ` +
+    `${count(lead.jobs.length, lead.description.noun)} ${window(lead.jobs, opts.timezone, opts.formats)} ` +
       `${lead.description.outcome}, and nothing is still trying — ${cause}.`,
   );
 
   for (const group of ordered.slice(1, 3)) {
     lines.push(
-      `Also ${count(group.jobs.length, group.description.noun)} ${window(group.jobs, opts.timezone)}: ` +
+      `Also ${count(group.jobs.length, group.description.noun)} ${window(group.jobs, opts.timezone, opts.formats)}: ` +
         `${group.description.headline.toLowerCase()}`,
     );
   }
@@ -328,7 +340,11 @@ export function createDeadLetterWatch(
     });
     if (wave.length === 0) return { collected: deaths.length };
 
-    const text = formatDeadLetterMessage(wave, { timezone: deps.timezone });
+    const profile = await getOwnerProfile(deps.pool).catch(() => null);
+    const text = formatDeadLetterMessage(wave, {
+      timezone: profile?.timezone ?? deps.timezone,
+      formats: { timeFormat: profile?.timeFormat ?? null, dateFormat: profile?.dateFormat ?? null },
+    });
     let delivered = true;
     try {
       await deps.deliver(text);

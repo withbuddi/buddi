@@ -229,6 +229,22 @@ describe('a provider rate limit', () => {
     expect(failure.retryable).toBe(false);
   });
 
+  it("says the reset in the owner's Profile time and date formats", () => {
+    const twelve = describeFailure(daily, { timeZone: 'Europe/Paris', now, timeFormat: '12h' });
+    expect(twelve.text).toContain('it resets tomorrow at 9:00 AM.');
+    const later = Object.assign(new Error('q'), { status: 429, limit: { ...daily.limit, retryAt: '2026-10-03T07:00:00.000Z' } });
+    expect(describeFailure(later, { timeZone: 'Europe/Paris', now }).text).toContain('it resets on Sat 3 Oct at 09:00.');
+    expect(describeFailure(later, { timeZone: 'Europe/Paris', now, dateFormat: 'iso' }).text).toContain('it resets on Sat 2026-10-03 at 09:00.');
+    expect(describeFailure(later, { timeZone: 'Europe/Paris', now, dateFormat: 'short', timeFormat: '12h' }).text).toContain('it resets on Sat, Oct 3 at 9:00 AM.');
+  });
+
+  it("says a ChatGPT plan's usage limit as the plan's, with its reset and no retry", () => {
+    const plan = Object.assign(new Error('x'), { status: 429, limit: { scope: 'day', retryAt: '2026-10-01T14:20:00.000Z', waitMs: 1, provider: 'ChatGPT' } });
+    const failure = describeFailure(plan, { timeZone: 'UTC', now });
+    expect(failure.text).toBe('This ChatGPT plan has reached its usage limit; it resets at 14:20. Until then, give this agent another account in Settings → Model accounts.');
+    expect(failure.retryable).toBe(false);
+  });
+
   it('says a short burst with its window, and offers the retry', () => {
     const burst = Object.assign(new Error('slow'), { status: 429, limit: { scope: 'burst', retryAt: '2026-10-01T12:02:00.000Z', waitMs: 120_000, provider: 'OpenAI' } });
     const failure = describeFailure(burst, { timeZone: 'UTC', now });

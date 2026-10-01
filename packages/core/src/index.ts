@@ -7,6 +7,7 @@ export * from './metrics.js';
 export * from './widgets.js';
 export * from './widget-settings.js';
 export * from './clock-widget.js';
+export * from './owner-format.js';
 export * from './pages.js';
 export * from './surfaces.js';
 export * from './registry.js';

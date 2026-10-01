@@ -230,9 +230,13 @@ function LimitNotice({ account: a, provider }: { account: ProviderAccount; provi
   if (limit.scope === 'day') {
     const agents = a.assignedAgents;
     const them = agents.length === 1 ? agents[0]! : 'its agents';
-    const allowance = limit.limit !== null
-      ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString()} ${limit.unit ?? 'requests'} a day`
-      : `${who} says this account has used today's allowance`;
+    // ChatGPT's plan windows are hours or a week, not a calendar day.
+    const plan = limit.provider === 'ChatGPT';
+    const allowance = plan
+      ? 'This ChatGPT plan has reached its usage limit'
+      : limit.limit !== null
+        ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString()} ${limit.unit ?? 'requests'} a day`
+        : `${who} says this account has used today's allowance`;
     const billing = limit.freeTier && limit.provider === 'Gemini' ? ', or turn on billing for the key at aistudio.google.com' : '';
     return (
       <Notice
@@ -240,7 +244,7 @@ function LimitNotice({ account: a, provider }: { account: ProviderAccount; provi
         title={allowance}
         action={agents.length > 0 ? <ButtonLink size="sm" href={agents.length === 1 ? agentRoute(agents[0]!, 'setup', 'brain') : AGENTS_ROUTE}>{agents.length === 1 ? `Change ${agents[0]}'s account` : 'Change their accounts'}</ButtonLink> : undefined}
       >
-        <p>It resets {/^tomorrow/.test(when) ? when : `at ${when}`}. Until then buddi doesn't send this account's requests to {who}, so {agents.length ? `${them}'s runs stop with this note` : 'a run on it stops with this note'} instead of failing again and again. To keep going today, {agents.length ? `give ${them} another account` : 'use another account'}{billing}.</p>
+        <p>It resets {/^tomorrow/.test(when) ? when : `at ${when}`}. Until then buddi doesn't send this account's requests to {who}, so {agents.length ? `${them}'s runs stop with this note` : 'a run on it stops with this note'} instead of failing again and again. To keep going {plan ? 'before then' : 'today'}, {agents.length ? `give ${them} another account` : 'use another account'}{billing}.</p>
       </Notice>
     );
   }

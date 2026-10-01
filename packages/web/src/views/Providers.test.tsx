@@ -371,6 +371,16 @@ it('says a spent daily quota on the row and the detail, with when it resets and 
   expect(notice).toHaveTextContent('aistudio.google.com');
   expect(screen.getByRole('link', { name: "Change ledger's account" })).toHaveAttribute('href', expect.stringContaining('ledger'));
 });
+it("says a ChatGPT plan's usage limit as the plan's, not a day's", async () => {
+  const until = new Date(Date.now() + 2 * 3600_000).toISOString();
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, label: 'ChatGPT', kind: 'codex', assignedAgents: ['ledger'],
+    rateLimit: { scope: 'day', until, limit: null, unit: null, freeTier: false, provider: 'ChatGPT', model: null } }] });
+  render(<Providers />);
+  const notice = (await screen.findByText('This ChatGPT plan has reached its usage limit')).closest('.ui-notice');
+  expect(notice).toHaveTextContent(/It resets (at|tomorrow at) /);
+  expect(notice).toHaveTextContent('To keep going before then, give ledger another account.');
+  expect(notice).not.toHaveTextContent('a day');
+});
 it('says a burst limit with its window and no fix, and forgets a limit that has lapsed', async () => {
   vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [
     { ...view.accounts[0]!, rateLimit: { scope: 'burst', until: new Date(Date.now() + 60_000).toISOString(), limit: null, unit: null, freeTier: false, provider: 'OpenAI', model: null } },

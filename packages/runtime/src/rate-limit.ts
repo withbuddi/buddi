@@ -236,3 +236,68 @@ export function readRateLimit(args: {
     ...(model !== undefined ? { model } : {}),
   };
 }
+
+/**
+ * ChatGPT's own refusal, from the Codex backend a ChatGPT sign-in talks to.
+ *
+ * A plan's usage limit (`usage_limit_reached`, sometimes `usage_not_included`)
+ * is not a burst: the plan's window — five hours, or the week — has to roll
+ * over, so it reads as `scope: 'day'` (no retry, the account held until the
+ * reset), with the reset taken from the body (`resets_at` in Unix seconds, or
+ * `resets_in_seconds`) or else the spent window's `x-codex-*-reset-after-seconds`
+ * header. Anything else at 429 is a short window like any provider's.
+ */
+export function readCodexLimit(args: {
+  status: number;
+  headers?: HeaderBag | undefined;
+  body?: string | undefined;
+  now?: number | undefined;
+}): RateLimitInfo | null {
+  const now = args.now ?? Date.now();
+  let parsed: Record<string, unknown> = {};
+  try {
+    const raw = args.body ? JSON.parse(args.body) as unknown : undefined;
+    if (raw && typeof raw === 'object') parsed = raw as Record<string, unknown>;
+  } catch { /* not JSON */ }
+  const error = (parsed.error && typeof parsed.error === 'object' ? parsed.error : parsed) as Record<string, unknown>;
+  const code = [error.type, error.code].filter((v): v is string => typeof v === 'string').join(' ');
+  const plan = /usage_limit|usage_not_included/i.test(code);
+  if (args.status !== 429 && !plan) return null;
+  const get = (name: string): string | null => args.headers?.get?.(name)?.trim() || null;
+
+  if (plan) {
+    let reset: number | undefined;
+    const at = Number(error.resets_at);
+    if (Number.isFinite(at) && at > 0) reset = at > 1e12 ? at : at * 1000;
+    const inSeconds = Number(error.resets_in_seconds);
+    if (reset === undefined && Number.isFinite(inSeconds) && inSeconds > 0) reset = now + inSeconds * 1000;
+    if (reset === undefined) {
+      // The window that is spent: used at 100 %, else the later of the two.
+      const windows = (['primary', 'secondary'] as const).map((w) => ({
+        used: Number(get(`x-codex-${w}-used-percent`)),
+        after: Number(get(`x-codex-${w}-reset-after-seconds`)),
+      })).filter((w) => Number.isFinite(w.after) && w.after > 0);
+      const spent = windows.filter((w) => w.used >= 100);
+      const pick = (spent.length > 0 ? spent : windows).map((w) => w.after);
+      if (pick.length > 0) reset = now + Math.max(...pick) * 1000;
+    }
+    if (reset === undefined) {
+      const wait = headerWaitMs(args.headers, now);
+      if (wait !== undefined) reset = now + wait;
+    }
+    const valid = reset !== undefined && reset > now && reset <= now + 31 * 86_400_000;
+    return {
+      scope: 'day',
+      retryAt: valid ? new Date(reset as number).toISOString() : null,
+      waitMs: valid ? (reset as number) - now : null,
+      provider: 'ChatGPT',
+    };
+  }
+  const wait = headerWaitMs(args.headers, now);
+  return {
+    scope: 'burst',
+    retryAt: wait !== undefined ? new Date(now + wait).toISOString() : null,
+    waitMs: wait ?? null,
+    provider: 'ChatGPT',
+  };
+}

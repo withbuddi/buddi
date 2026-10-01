@@ -27,6 +27,7 @@ import {
   type Usage,
 } from './anthropic.js';
 import { providerCapabilities } from './capabilities.js';
+import { readCodexLimit, type RateLimitInfo } from './rate-limit.js';
 import { parseToolArguments, wireCacheKey } from './openai.js';
 import type { AccountModels } from './provider-models.js';
 import { MAX_CONTEXT_WINDOW_TOKENS, MIN_CONTEXT_WINDOW_TOKENS } from './context-window.js';
@@ -101,15 +102,18 @@ export function codexInput(req: CompletionRequest, names: Map<string, string>): 
 }
 
 /** Classify a failure without echoing provider text. */
-export function codexError(status: number, code: string, message: string, retryAt: string | null = null): ProviderError {
-  const make = (s: number, type: string, text: string) => new ProviderError({ status: s, type, message: text, retryAt });
+export function codexError(status: number, code: string, message: string, retryAt: string | null = null, limit: RateLimitInfo | null = null): ProviderError {
+  const make = (s: number, type: string, text: string) => new ProviderError({ status: s, type, message: text, retryAt: retryAt ?? limit?.retryAt ?? null, ...(limit && s === 429 ? { limit } : {}) });
   if (/model.{0,200}(?:not supported|unsupported|not available|does not exist)/i.test(message) && (status === 400 || status === 404 || status === 0)) {
     return make(400, 'model_not_supported', CODEX_MODEL_UNAVAILABLE);
   }
   if (status === 401 || /invalid_api_key|token_expired|unauthorized/i.test(code)) {
     return make(401, 'authentication_error', 'ChatGPT rejected this account’s sign-in. Reconnect the account in Settings → Model accounts.');
   }
-  if (status === 429 || /usage_limit|rate_limit/i.test(code)) {
+  if (status === 429 || /usage_limit|usage_not_included|rate_limit/i.test(code)) {
+    // A plan's usage limit holds the account until its window rolls over: the
+    // gateway keeps it rate-limited until the reset, and says so in plain words.
+    limit ??= /usage_limit|usage_not_included/i.test(code) ? { scope: 'day', retryAt, waitMs: null, provider: 'ChatGPT' } : null;
     return make(429, 'rate_limit_error', 'Your ChatGPT plan’s limit is reached. Wait for it to reset, or use another account.');
   }
   if (/context_length|context_window/i.test(code)) return make(400, 'context_window_exceeded', 'The conversation is longer than this model accepts.');
@@ -119,9 +123,10 @@ export function codexError(status: number, code: string, message: string, retryA
 }
 
 async function httpError(res: TransportResponse): Promise<ProviderError> {
-  let code = ''; let message = '';
+  let code = ''; let message = ''; let body = '';
   try {
-    const data = record(JSON.parse(await res.text()));
+    body = await res.text();
+    const data = record(JSON.parse(body));
     const error = record(data.error);
     const detail = record(data.detail);
     const c = error.code ?? error.type ?? detail.code ?? data.code;
@@ -129,9 +134,10 @@ async function httpError(res: TransportResponse): Promise<ProviderError> {
     const m = error.message ?? data.detail ?? data.message;
     message = typeof m === 'string' ? m.slice(0, 2000) : '';
   } catch { /* status is enough */ }
+  const limit = readCodexLimit({ status: res.status, headers: res.headers, body });
   const retryAfter = res.headers?.get?.('retry-after');
-  const retryAt = retryAfter && /^\d{1,6}$/.test(retryAfter) ? new Date(Date.now() + Number(retryAfter) * 1000).toISOString() : null;
-  return codexError(res.status, code, message, retryAt);
+  const retryAt = limit?.retryAt ?? (retryAfter && /^\d{1,6}$/.test(retryAfter) ? new Date(Date.now() + Number(retryAfter) * 1000).toISOString() : null);
+  return codexError(res.status, code, message, retryAt, limit);
 }
 
 /** The Responses SSE vocabulary, assembled into buddi's content blocks. */

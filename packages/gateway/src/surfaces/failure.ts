@@ -49,6 +49,7 @@
  * typing the message again would not have.
  */
 import {
+  getOwnerProfile,
   MAX_OFFER_PROMPT,
   offerActions,
   renderFailure,
@@ -266,9 +267,16 @@ export async function failedTurnReply(
   pool: Queryable,
   turn: FailedTurn,
 ): Promise<FailureOutcome> {
+  // A reset time is said in the owner's zone and Profile formats; a profile
+  // that cannot be read costs only the formats, never the message.
+  const profile = await getOwnerProfile(pool).catch(() => null);
   const failure = renderFailure(turn.error, {
     agentName: turn.agentName,
     toolsCalled: turn.toolsCalled,
+    now: turn.now,
+    ...(profile?.timezone ? { timeZone: profile.timezone } : {}),
+    timeFormat: profile?.timeFormat ?? null,
+    dateFormat: profile?.dateFormat ?? null,
   });
 
   const where = turn.agentName ? `${turn.agentName}: ` : '';

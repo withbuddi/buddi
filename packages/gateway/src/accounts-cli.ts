@@ -11,7 +11,7 @@
  * narrowed field by field: nothing here prints a key, a token, a vault name or
  * a sign-in in progress.
  */
-import { MLXH_BASE_URL, resetPhrase, timezoneFromEnv } from '@buddi/core';
+import { getOwnerProfile, MLXH_BASE_URL, resetPhrase, timezoneFromEnv, type OwnerFormats } from '@buddi/core';
 import type { AccountRateLimit } from './account-limits.js';
 import { createWiringAsync, hydrateSecrets, loadEnvironment } from './bootstrap.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
@@ -130,12 +130,12 @@ export function accountLines(
 }
 
 /** "rate-limited until 14:20 · Gemini free tier, 20 requests a day". */
-export function stateText(line: Pick<AccountLine, 'state' | 'rateLimit'>, timeZone: string, now: Date = new Date()): string {
+export function stateText(line: Pick<AccountLine, 'state' | 'rateLimit'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
   if (line.state === 'needs-credential') return 'needs a credential';
   if (line.state === 'needs-sign-in') return 'needs signing in again';
   if (line.state !== 'rate-limited' || !line.rateLimit) return line.state;
   const r = line.rateLimit;
-  const when = resetPhrase(r.until, timeZone, now).replace(/^on /, '');
+  const when = resetPhrase(r.until, timeZone, now, formats).replace(/^on /, '');
   const quota = r.scope === 'day'
     ? r.limit !== null ? ` · ${r.freeTier ? 'free tier, ' : ''}${r.limit} ${r.unit ?? 'requests'} a day` : ' · daily quota used up'
     : '';
@@ -147,21 +147,21 @@ function agentsText(line: AccountLine): string {
 }
 
 /** The listing, as text: label, provider, model, state and agents; the id under each. */
-export function renderAccountLines(lines: readonly AccountLine[], style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date()): string {
+export function renderAccountLines(lines: readonly AccountLine[], style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
   if (lines.length === 0) return 'No model accounts yet. Add one on the dashboard: Settings → Model accounts → Add account.';
   const color = style.color;
   const w = (pick: (l: AccountLine) => string): number => Math.max(...lines.map((l) => pick(l).length));
   const label = w((l) => l.label);
   const provider = w((l) => l.provider);
   const model = w((l) => l.defaultModel);
-  const state = w((l) => stateText(l, timeZone, now));
+  const state = w((l) => stateText(l, timeZone, now, formats));
   const out: string[] = [];
   for (const line of lines) {
     out.push([
       bold(line.label.padEnd(label), color),
       line.provider.padEnd(provider),
       line.defaultModel.padEnd(model),
-      stateText(line, timeZone, now).padEnd(state),
+      stateText(line, timeZone, now, formats).padEnd(state),
       agentsText(line),
     ].join('  ').trimEnd());
     out.push(dim(`  ${line.id} · ${line.kind} · ${line.auth}`, color));
@@ -170,7 +170,7 @@ export function renderAccountLines(lines: readonly AccountLine[], style: Pick<Te
 }
 
 /** One account in full, as text. */
-export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseUrl' | 'contextWindowTokens' | 'detectedContextWindowTokens' | 'test'>, style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date()): string {
+export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseUrl' | 'contextWindowTokens' | 'detectedContextWindowTokens' | 'test'>, style: Pick<TerminalStyle, 'color'>, timeZone: string, now: Date = new Date(), formats: OwnerFormats = {}): string {
   const color = style.color;
   const row = (name: string, value: string): string => `  ${dim(name.padEnd(15), color)}${value}`;
   const out = [`${bold(line.label, color)} ${dim(line.id, color)}`];
@@ -180,7 +180,7 @@ export function renderAccount(line: AccountLine, extra: Pick<ViewAccount, 'baseU
   out.push(row('default model', line.defaultModel || '—'));
   const window = extra.contextWindowTokens ?? extra.detectedContextWindowTokens;
   if (window) out.push(row('context window', `${window.toLocaleString('en-US')} tokens${extra.contextWindowTokens ? '' : ' (detected)'}`));
-  out.push(row('state', stateText(line, timeZone, now)));
+  out.push(row('state', stateText(line, timeZone, now, formats)));
   out.push(row('agents', line.agents.length === 0 ? 'no agents' : line.agents.map((a) => `${a.handle ? `@${a.handle}` : a.id} (${a.model})`).join(', ')));
   if (extra.test) out.push(row('last test', `${extra.test.message} ${dim(`(${extra.test.checkedAt})`, color)}`));
   out.push('', dim(`  Put an agent on it: buddi agents set <handle> --account ${line.id}`, color));
@@ -202,9 +202,12 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
   await loadEnvironment();
   await hydrateSecrets(process.env);
   const style = styleFor(process.env, process.stdout);
-  const timeZone = timezoneFromEnv(process.env);
   const wiring = await createWiringAsync(process.env);
   try {
+    // Times in the owner's Profile zone and formats, as the dashboard says them.
+    const profile = await getOwnerProfile(wiring.pool).catch(() => null);
+    const timeZone = profile?.timezone ?? timezoneFromEnv(process.env);
+    const formats: OwnerFormats = { timeFormat: profile?.timeFormat ?? null, dateFormat: profile?.dateFormat ?? null };
     if (!wiring.providerAccounts) {
       console.error('Model accounts are unavailable here: buddi could not open the accounts table.');
       return 3;
@@ -215,7 +218,7 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
     };
     const lines = accountLines(view, handleOf);
     if (command.action === 'list') {
-      console.log(command.json ? JSON.stringify(lines, null, 2) : renderAccountLines(lines, style, timeZone));
+      console.log(command.json ? JSON.stringify(lines, null, 2) : renderAccountLines(lines, style, timeZone, new Date(), formats));
       return 0;
     }
     const wanted = command.id.trim().toLowerCase();
@@ -231,7 +234,7 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
       ...(account.detectedContextWindowTokens !== undefined ? { detectedContextWindowTokens: account.detectedContextWindowTokens } : {}),
       test: account.test ? { state: account.test.state, message: account.test.message, checkedAt: account.test.checkedAt } : null,
     };
-    console.log(command.json ? JSON.stringify({ ...line, ...extra }, null, 2) : renderAccount(line, extra, style, timeZone));
+    console.log(command.json ? JSON.stringify({ ...line, ...extra }, null, 2) : renderAccount(line, extra, style, timeZone, new Date(), formats));
     return 0;
   } finally {
     await wiring.pool.end();

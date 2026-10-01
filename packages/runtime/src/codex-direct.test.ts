@@ -140,6 +140,14 @@ describe('Codex direct adapter', () => {
     expect(error.message).not.toContain('SECRET');
   });
 
+  it("carries a plan's usage limit with its reset, so the account is held until then", async () => {
+    const resets = Math.floor(Date.now() / 1000) + 7200;
+    const error = await adapter(streaming(429, JSON.stringify({ error: { type: 'usage_limit_reached', message: 'SECRET', resets_at: resets } }))).complete(request()).catch(e => e);
+    expect(error).toMatchObject({ status: 429, type: 'rate_limit_error', retryAt: new Date(resets * 1000).toISOString(),
+      limit: { scope: 'day', provider: 'ChatGPT', retryAt: new Date(resets * 1000).toISOString() } });
+    expect(error.message).not.toContain('SECRET');
+  });
+
   it('classifies a failed response and a stream cut', async () => {
     const failed = await adapter(streaming(200, sse({ type: 'response.failed', response: { error: { code: 'rate_limit_exceeded', message: 'SECRET' } } })))
       .complete(request()).catch(e => e);

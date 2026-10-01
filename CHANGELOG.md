@@ -31,6 +31,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- Times in failure messages — when a provider's limit resets, when lost background work happened — are written in your Profile's timezone, time format and date format, as the dashboard writes them; `buddi accounts` too.
 - A group chat's ⋯ menu is about the group instead of linking to each member: Members (a sheet with the coordinator first, Make coordinator, Remove, Add a member), Rename…, Clear history… and Delete group…. On a phone, this menu and an agent's rise from the bottom as a sheet. The group sheet's edit mode and its Archive button are gone.
 - A group that lost an agent to an uninstall says so: with its coordinator gone the composer gives way to "Choose a coordinator"; with one member left a line offers "Add a member". Such a group can be renamed and the missing agent taken out, which the server used to refuse.
 - The lock screen: tapping the notifications count opens Notifications once you unlock (approvals open Needs you); a widget with only a sentence to say takes one column instead of a hollow card; the mail widget says "3 conversations", and "Nobody's waiting on you." at zero.
@@ -42,6 +43,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A ChatGPT account that reaches its plan's usage limit is held until the limit resets, as a spent Gemini quota is: buddi reads the reset ChatGPT sends, stops calling the account until then, and says "This ChatGPT plan has reached its usage limit; it resets at 14:20" instead of a generic refusal, with Settings → Model accounts saying the same.
 - A provider's "retry in 20s" is honoured: buddi waits the window a 429 names (Retry-After, OpenAI's and Anthropic's reset headers, Google's RetryInfo and "Please retry in …"), at most twice and never more than a minute in all; a longer window ends the turn saying when to try again, and a background run is requeued for that time instead of failing.
 - A Tailscale dashboard session is no longer ended when the local Tailscale daemon is slow or cannot be asked (as on the first requests after a restart): the request answers "Tailscale didn't answer, try again" and the session stays. Questions about one address asked at once share one `tailscale whois`, a failed one is never remembered, and only an answer naming another login ends the session.
 - The sign-in lockout counts only a wrong credential that was presented. A Tailscale session that ends, Tailscale being busy, the signed-out page and its Try again no longer count, a refused cookie is expired in the browser so a forgotten tab stops presenting it, and Tailscale sign-in works during a lockout. The "too many failed sign-ins from here to ask the local tailscaled" log line is gone with the cause.

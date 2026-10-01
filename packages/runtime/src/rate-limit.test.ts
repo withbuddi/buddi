@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { resolveProvider, type ProviderRef } from '@buddi/core';
 import { ProviderError, createAnthropicProvider } from './anthropic.js';
 import { createOpenAiProvider } from './openai.js';
-import { headerWaitMs, nextMidnight, parseDuration, providerFromBaseUrl, readRateLimit } from './rate-limit.js';
+import { headerWaitMs, nextMidnight, parseDuration, providerFromBaseUrl, readCodexLimit, readRateLimit } from './rate-limit.js';
 import { HINTED_RETRIES, STATUS_WAIT_BUDGET_MS, statusRetryDelayMs } from './retry.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00Z');
@@ -167,5 +167,27 @@ describe('the adapters honour the window', () => {
     expect(error.limit).toMatchObject({ scope: 'day', limit: 20, freeTier: true, provider: 'Gemini' });
     expect(error.retryAt).toBe('2026-10-02T07:00:00.000Z');
     expect(error.message).not.toContain('gm-secret');
+  });
+});
+
+describe("ChatGPT's usage limit (the Codex backend)", () => {
+  it('reads a plan limit as held until its reset, from resets_at or resets_in_seconds', () => {
+    const at = Math.floor((NOW + 3 * 3600_000) / 1000);
+    expect(readCodexLimit({ status: 429, body: JSON.stringify({ error: { type: 'usage_limit_reached', message: 'x', plan_type: 'plus', resets_at: at } }), now: NOW }))
+      .toEqual({ scope: 'day', retryAt: new Date(at * 1000).toISOString(), waitMs: 3 * 3600_000, provider: 'ChatGPT' });
+    expect(readCodexLimit({ status: 429, body: JSON.stringify({ error: { code: 'usage_limit_reached', resets_in_seconds: 600 } }), now: NOW }))
+      .toMatchObject({ scope: 'day', retryAt: new Date(NOW + 600_000).toISOString() });
+  });
+
+  it("falls back to the spent window's reset header", () => {
+    const headers = bag({ 'x-codex-primary-used-percent': '100', 'x-codex-primary-reset-after-seconds': '1200', 'x-codex-secondary-used-percent': '40', 'x-codex-secondary-reset-after-seconds': '400000' });
+    expect(readCodexLimit({ status: 429, headers, body: '{"error":{"type":"usage_limit_reached"}}', now: NOW }))
+      .toMatchObject({ scope: 'day', retryAt: new Date(NOW + 1_200_000).toISOString() });
+  });
+
+  it('reads any other 429 as a short window, and anything else as no limit', () => {
+    expect(readCodexLimit({ status: 429, headers: bag({ 'retry-after': '7' }), body: '{"error":{"code":"rate_limit_exceeded"}}', now: NOW }))
+      .toMatchObject({ scope: 'burst', waitMs: 7000, provider: 'ChatGPT' });
+    expect(readCodexLimit({ status: 400, body: '{"error":{"code":"bad"}}', now: NOW })).toBeNull();
   });
 });
