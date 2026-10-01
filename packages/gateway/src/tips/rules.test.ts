@@ -10,6 +10,10 @@ import { viewOf } from './engine.js';
 import { facts } from '../__fixtures__/tip-facts.js';
 
 const RULE_CASES: Record<string, { fires: Partial<Facts>; quiet: Partial<Facts> }> = {
+  'lock-pin': {
+    fires: { pinSet: false, secondDevice: true, daysSinceInstall: 1 },
+    quiet: { pinSet: true, secondDevice: true, mailboxSet: true },
+  },
   'second-agent': {
     fires: { agents: 1, agentIds: new Set(['concierge']), daysSinceInstall: 3 },
     quiet: { agents: 1, agentIds: new Set(['concierge']), daysSinceInstall: 2 },
@@ -87,5 +91,22 @@ describe('the setup tip', () => {
     expect(view.text).toBe('The calendar plugin is installed, but it cannot do anything yet. Link a calendar.');
     expect(view.action).toEqual({ label: 'Set up calendar', route: '#/settings/p.calendar' });
     expect(viewOf(rule, facts()).action.route).toBe('#/settings/plugins');
+  });
+});
+
+describe('the lock tip', () => {
+  const rule = TIPS.find((r) => r.id === 'lock-pin')!;
+  it('comes once there is something to lock, and only without a PIN', () => {
+    const young = { pinSet: false, daysSinceInstall: 1 };
+    expect(rule.when(facts(young))).toBe(false);
+    expect(rule.when(facts({ ...young, secondDevice: true }))).toBe(true);
+    expect(rule.when(facts({ ...young, mailboxSet: true }))).toBe(true);
+    expect(rule.when(facts({ ...young, financeConnected: true }))).toBe(true);
+    expect(rule.when(facts({ pinSet: false, daysSinceInstall: 7 }))).toBe(true);
+    expect(rule.when(facts({ pinSet: true, daysSinceInstall: 7, secondDevice: true }))).toBe(false);
+  });
+  it('opens Settings → Lock screen, and × silences it for good', () => {
+    expect(viewOf(rule, facts({ pinSet: false })).action).toEqual({ label: 'Lock buddi with a PIN', route: '#/settings/lock' });
+    expect(rule.cooldownDays).toBeGreaterThanOrEqual(36_500);
   });
 });

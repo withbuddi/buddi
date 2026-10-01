@@ -13,6 +13,8 @@ import { ROLE_MAKER } from '../agents/roles.js';
 
 /** The `core.web_settings` key the dashboard's page views are kept under. */
 export const TIPS_PAGES_KEY = 'tips.pages';
+/** Set once a second device has signed in, so an expired session does not forget it. */
+export const TIPS_SECOND_DEVICE_KEY = 'tips.secondDevice';
 /** How many distinct pages are remembered; the oldest seen goes first. */
 export const TIPS_PAGES_CAP = 64;
 
@@ -46,6 +48,15 @@ export interface Facts {
    * route where it is done.
    */
   needsSetup: Array<{ plugin: string; note?: string; route?: string }>;
+  /** A dashboard PIN is set (Settings → Lock screen). */
+  pinSet: boolean;
+  /**
+   * The dashboard has been signed in to from a second device: a session from
+   * another address than the first. Remembered once seen, as sessions expire.
+   */
+  secondDevice: boolean;
+  /** The finance plugin holds at least one account. */
+  financeConnected: boolean;
 }
 
 interface Queryable {
@@ -154,6 +165,23 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
     `select count(*)::int as n from core.artifacts where kind = 'audio' and created_by = 'owner' and deleted_at is null`,
   );
 
+  // Devices signed in, by where they came from: this Mac, a tailnet address,
+  // or a sign-in ticket (a phone that scanned the code). Two is a second device.
+  const settings = webSettingsStore(pool);
+  let secondDevice = (await settings.read<boolean>(TIPS_SECOND_DEVICE_KEY).catch(() => null)) === true;
+  if (!secondDevice) {
+    const devices = await count(
+      pool,
+      `select count(distinct case when tailscale_address is not null then 'tailnet:' || tailscale_address
+                                  when scope = 'local' then 'local' else 'via:' || via end)::int as n
+         from core.dashboard_sessions where client = 'browser'`,
+    );
+    if (devices >= 2) {
+      secondDevice = true;
+      await settings.write(TIPS_SECOND_DEVICE_KEY, true).catch(() => {});
+    }
+  }
+
   return {
     daysSinceInstall,
     firstRun,
@@ -172,5 +200,8 @@ export async function readFacts(deps: FactsDeps): Promise<Facts> {
     toolsUsed,
     pagesVisited: new Set(Object.keys(await readPagesSeen(webSettingsStore(pool)))),
     needsSetup: (await deps.needsSetup?.().catch(() => [])) ?? [],
+    pinSet: (await count(pool, `select count(*)::int as n from core.web_settings where key = 'lock.pin'`)) > 0,
+    secondDevice,
+    financeConnected: plugins.has('finance') && (await count(pool, `select count(*)::int as n from finance.accounts`)) > 0,
   };
 }

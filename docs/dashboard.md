@@ -152,6 +152,10 @@ needs me, what is my team up to, what is coming.
 agent, a group, a mission, voice, the browser, a mailbox nobody reads, or no
 recommended plugin at all (finance, image, speech, weather, calendar), which
 points at Browse, Home may show one quiet card under the composer: one sentence and one action.
+"Lock buddi with a PIN" comes while no PIN is set, once there is something to
+lock: a second device signed in (a session from another address than the
+first), a mailbox or money connected, or a week of use; it opens Settings →
+Lock screen, and its × silences it for good.
 At most one tip a day, never during first run, and never about a plugin that
 is not installed. "Not this again" removes that tip for good; the × puts it off
 for a week. A tip whose reason goes away disappears on its own. Settings →

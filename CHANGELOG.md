@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A tip on Home, "Lock buddi with a PIN", while no PIN is set and once there is something to lock — a second device signed in, a mailbox or money connected, or a week of use; it opens Settings → Lock screen, and dismissing it silences it for good.
 - A plugin installed from a folder can be reinstalled from it at the same version: "Reinstall from folder" in its row's menu and its detail, and `buddi plugins update <name>`, read and approved like any update, the card saying it is the same version read again.
 - On a phone, the status dot's menu ends with Lock now while a PIN is set, as the footer's padlock does on a wider screen.
 - docs/api.md, the HTTP API reference: every route the dashboard uses (255 of them) by area, with what it takes, what it answers, how it fails, since when, whether an API token may call it and a curl line, plus the base URL, how to authenticate, the error format and the sign-in lockout. Generated from the gateway's route table by `pnpm docs:api`; a test fails when a route has no entry or the page is behind.

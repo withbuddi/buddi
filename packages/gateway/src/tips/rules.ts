@@ -104,6 +104,16 @@ export const TIPS: readonly TipRule[] = [
     cooldownDays: 3,
   },
   {
+    // Once there is something worth locking: a second device signed in, a
+    // mailbox or money connected, or a week of use. × silences it for good.
+    id: 'lock-pin',
+    when: (f) => !f.pinSet && (f.secondDevice || f.mailboxSet || f.financeConnected || f.daysSinceInstall >= 7),
+    holdsForDays: 0,
+    text: 'Anyone at a screen you signed in on can open me, your mail and money included. A PIN locks me when you step away.',
+    action: { label: 'Lock buddi with a PIN', route: '#/settings/lock' },
+    cooldownDays: 36_500,
+  },
+  {
     id: 'recommended-plugins',
     when: (f) => f.daysSinceInstall >= 0 && !RECOMMENDED_PLUGINS.some((name) => f.plugins.has(name)),
     holdsForDays: 0,
