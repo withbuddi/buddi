@@ -1004,8 +1004,8 @@ function StagedRequires({ staged, onInstallFirst }: { staged: StagedPluginView; 
     <span className="plugins-requires">
       {(staged.requires ?? []).map((need) => (
         <span key={need.plugin} className="plugins-require">
-          <span className="mono">
-            {need.plugin} {need.range}
+          <span title={need.range}>
+            <span className="mono">{need.plugin}</span> {need.rangeWords ?? need.range}
           </span>
           {need.state === 'ok' ? (
             <span className="plugins-require-ok">{need.installed ? `${need.installed} is here` : 'here'}</span>

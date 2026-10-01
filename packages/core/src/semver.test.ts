@@ -4,7 +4,7 @@
  * "older", because the callers turn the second into an upgrade offer.
  */
 import { describe, expect, test } from 'vitest';
-import { compareSemver, compareVersions, isNewerRelease, isSemverRange, parseSemver, satisfiesRange } from './semver.js';
+import { compareSemver, compareVersions, isNewerRelease, isSemverRange, parseSemver, rangeWords, satisfiesRange } from './semver.js';
 
 describe('versions', () => {
   test('are parsed into the four fields semver 2.0.0 names, or not at all', () => {
@@ -61,5 +61,27 @@ describe('ranges', () => {
     expect(satisfiesRange('one', '^1.0.0')).toBeUndefined();
     expect(isSemverRange('^0.1')).toBe(true);
     expect(isSemverRange('next')).toBe(false);
+  });
+});
+
+describe('ranges in words', () => {
+  test.each([
+    ['^0.2.0', '0.2 or newer'],
+    ['~1.4.2', '1.4.2 or newer'],
+    ['>=1.0.0 <2', '1.0 or newer, before 2.0'],
+    ['>=0.1.0', '0.1 or newer'],
+    ['*', 'any version'],
+    ['', 'any version'],
+    ['1.2.3', '1.2.3'],
+    ['<2.0.0', 'before 2.0'],
+    ['^1.0.0 || ^2.0.0', '1.0 or newer or 2.0 or newer'],
+    ['not a range', 'not a range'],
+  ])('%s reads as "%s"', (range, words) => {
+    expect(rangeWords(range)).toBe(words);
+  });
+
+  test("says a caret's ceiling only when the installed version is past it", () => {
+    expect(rangeWords('^0.2.0', { installed: '0.1.0' })).toBe('0.2 or newer');
+    expect(rangeWords('^0.2.0', { installed: '0.3.1' })).toBe('0.2 or newer, before 0.3');
   });
 });

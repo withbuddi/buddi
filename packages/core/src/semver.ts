@@ -203,3 +203,41 @@ export function satisfiesRange(version: string, range: string): boolean | undefi
     }),
   );
 }
+
+/** A bound the way people say it: 0.2.0 is "0.2", 1.2.3 stays "1.2.3". */
+function versionWords(v: Semver): string {
+  const pre = v.prerelease.length > 0 ? `-${v.prerelease.join('.')}` : '';
+  return v.patch === 0 && pre === '' ? `${v.major}.${v.minor}` : `${v.major}.${v.minor}.${v.patch}${pre}`;
+}
+
+/**
+ * A range in words, for the owner: `^0.2.0` is "0.2 or newer", `>=1 <2` is
+ * "1.0 or newer, before 2.0", `*` is "any version", `1.2.3` is "1.2.3".
+ * The ceiling a `^` or `~` keeps is said only when `installed` is at or past
+ * it ("0.2 or newer, before 0.3"), the one time it explains a refusal. A
+ * range this module cannot read is given back as written.
+ */
+export function rangeWords(range: string, opts: { installed?: string | undefined } = {}): string {
+  const sets = parseRange(range);
+  if (sets === undefined) return range;
+  const alternatives = range.trim() === '' ? ['*'] : range.split('||');
+  const said = sets.map((set, i) => {
+    if (set.length === 0) return 'any version';
+    const exact = set.find((c) => c.op === '=');
+    if (exact && set.length === 1) return versionWords(exact.version);
+    const low = set.find((c) => c.op === '>=' || c.op === '>');
+    const high = set.find((c) => c.op === '<' || c.op === '<=');
+    const installed = opts.installed === undefined ? undefined : parseSemver(opts.installed);
+    const past = high !== undefined && installed !== undefined && compareSemver(installed, high.version) >= 0;
+    const loose = /^\s*[\^~]/.test(alternatives[i] ?? '') && !past;
+    const parts: string[] = [];
+    if (low) parts.push(low.op === '>=' ? `${versionWords(low.version)} or newer` : `newer than ${versionWords(low.version)}`);
+    if (high && !(loose && low)) {
+      // `<0.0.0-0` is how "below anything" reads: no version fits.
+      if (high.op === '<' && high.version.major === 0 && high.version.minor === 0 && high.version.patch === 0) return 'no version';
+      parts.push(high.op === '<' ? `before ${versionWords(high.version)}` : `${versionWords(high.version)} or older`);
+    }
+    return parts.length > 0 ? parts.join(', ') : range.trim();
+  });
+  return said.join(' or ');
+}

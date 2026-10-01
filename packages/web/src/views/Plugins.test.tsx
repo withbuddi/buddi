@@ -1030,8 +1030,8 @@ describe('readiness and requirements', () => {
             ...STAGED,
             name: 'commute',
             requires: [
-              { plugin: 'weather', range: '^0.2.0', state: 'missing', words: 'Needs weather' },
-              { plugin: 'calendar', range: '*', state: 'ok', installed: '0.1.1', words: 'calendar 0.1.1 is here' },
+              { plugin: 'weather', range: '^0.2.0', rangeWords: '0.2 or newer', state: 'missing', words: 'Needs weather' },
+              { plugin: 'calendar', range: '*', rangeWords: 'any version', state: 'ok', installed: '0.1.1', words: 'calendar 0.1.1 is here' },
             ],
           },
         ],
@@ -1040,6 +1040,9 @@ describe('readiness and requirements', () => {
     vi.mocked(api.market).mockResolvedValue({ plugins: [] });
     render(<Plugins />);
     expect(await screen.findByText('0.1.1 is here')).toBeInTheDocument();
+    // The range in words, the raw one on hover.
+    expect(screen.getByTitle('^0.2.0')).toHaveTextContent('weather 0.2 or newer');
+    expect(screen.queryByText(/\^0\.2\.0/)).not.toBeInTheDocument();
     expect(screen.getByText(/It installs either way, and waits/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Install weather first' }));
     // Not listed: said, never staged from a guess.

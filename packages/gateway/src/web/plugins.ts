@@ -33,6 +33,7 @@ import {
   PLUGIN_USE_WORDS,
   pluginUsesChange,
   pluginsFilePath,
+  rangeWords,
   readPluginsFile,
   type InstalledPlugin,
   type PluginAuthor,
@@ -187,16 +188,16 @@ function stagedUses(staged: StagedPlugin): {
 export function requirementStates(
   requires: Readonly<Record<string, string>> | undefined,
   env: NodeJS.ProcessEnv,
-): Array<{ plugin: string; range: string; state: 'ok' | PluginNeed['state']; installed?: string; words: string }> {
+): Array<{ plugin: string; range: string; rangeWords: string; state: 'ok' | PluginNeed['state']; installed?: string; words: string }> {
   const entries = Object.entries(requires ?? {});
   if (entries.length === 0) return [];
   const plugins = adoptedPlugins(env) ?? { file: '', loaded: [], problems: [] };
   const needs = staticNeeds({ requires } as never, plugins, env);
   return entries.map(([plugin, range]) => {
     const need = needs.find((n) => n.plugin === plugin);
-    if (need) return { ...need, words: needWords(need) };
+    if (need) return { ...need, rangeWords: rangeWords(range), words: needWords(need) };
     const version = plugins.loaded.find((p) => p.record.name === plugin)?.manifest.version;
-    return { plugin, range, state: 'ok' as const, ...(version === undefined ? {} : { installed: version }), words: `${plugin} ${version ?? ''} is here`.replace('  ', ' ') };
+    return { plugin, range, rangeWords: rangeWords(range), state: 'ok' as const, ...(version === undefined ? {} : { installed: version }), words: `${plugin} ${version ?? ''} is here`.replace('  ', ' ') };
   });
 }
 
@@ -550,7 +551,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
         : {
             needs: needs.map((need) => {
               const page = need.state === 'setup' ? pageOf(need.plugin, need.page) : undefined;
-              return { ...need, words: needWords(need), ...(page ? { page } : {}) };
+              return { ...need, rangeWords: rangeWords(need.range), words: needWords(need), ...(page ? { page } : {}) };
             }),
           }),
     };

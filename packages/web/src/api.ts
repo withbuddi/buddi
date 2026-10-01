@@ -1703,6 +1703,8 @@ export interface PluginPageRef {
 export interface PluginNeedView {
   plugin: string;
   range: string;
+  /** The range in words: "0.2 or newer". */
+  rangeWords?: string;
   state: 'missing' | 'disabled' | 'failed' | 'range' | 'waiting' | 'setup';
   installed?: string;
   note?: string;
@@ -1715,6 +1717,8 @@ export interface PluginNeedView {
 export interface PluginRequirementView {
   plugin: string;
   range: string;
+  /** The range in words: "0.2 or newer". */
+  rangeWords?: string;
   state: 'ok' | PluginNeedView['state'];
   installed?: string;
   words: string;

@@ -16,7 +16,7 @@
  * the way enabling loads one; one whose requirement stopped being met (it was
  * disabled, or its setup was undone) leaves the registry. Its data stays.
  */
-import type { CoreToolContext, InstalledPlugin, PluginReadiness } from '@buddi/core';
+import { rangeWords, type CoreToolContext, type InstalledPlugin, type PluginReadiness } from '@buddi/core';
 import type { Pool } from 'pg';
 import { adoptedPlugins, adoptPlugins, staticNeeds, type LoadedPlugins, type PluginNeed } from './load.js';
 import { adoptChange, loadPluginLive, type LiveRegistry } from './live.js';
@@ -182,7 +182,7 @@ export function needWords(need: PluginNeed): string {
     case 'setup':
       return `Needs setup in ${need.plugin}`;
     case 'range':
-      return `Needs ${need.plugin} ${need.range}${need.installed ? ` (${need.installed} is installed)` : ''}`;
+      return `Needs ${need.plugin} ${rangeWords(need.range, { installed: need.installed })}${need.installed ? ` (${need.installed} is installed)` : ''}`;
     case 'disabled':
       return `Needs ${need.plugin}, which is disabled`;
     case 'failed':

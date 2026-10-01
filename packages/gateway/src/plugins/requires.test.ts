@@ -71,15 +71,15 @@ describe('requires, at load', () => {
     const old = holdBack({ ...base, loaded: [await loaded(oldWeather), c] }, env);
     expect(old.loaded.map((p) => p.record.name)).toEqual(['weather']);
     expect(old.waiting?.[0]?.needs).toEqual([{ plugin: 'weather', range: '^1.0.0', state: 'range', installed: '0.9.0' }]);
-    expect(needWords(old.waiting![0]!.needs[0]!)).toBe('Needs weather ^1.0.0 (0.9.0 is installed)');
+    expect(needWords(old.waiting![0]!.needs[0]!)).toBe('Needs weather 1.0 or newer (0.9.0 is installed)');
     expect(holdBack({ ...base, loaded: [await loaded(weather), c] }, env).waiting).toBeUndefined();
   });
 
   it('tells the install card where each requirement stands', async () => {
     adoptPlugins(env, { file: '', loaded: [await loaded(oldWeather)], problems: [] });
     expect(requirementStates({ weather: '^1.0.0', speech: '*' }, env)).toEqual([
-      { plugin: 'weather', range: '^1.0.0', state: 'range', installed: '0.9.0', words: 'Needs weather ^1.0.0 (0.9.0 is installed)' },
-      { plugin: 'speech', range: '*', state: 'missing', words: 'Needs speech' },
+      { plugin: 'weather', range: '^1.0.0', rangeWords: '1.0 or newer', state: 'range', installed: '0.9.0', words: 'Needs weather 1.0 or newer (0.9.0 is installed)' },
+      { plugin: 'speech', range: '*', rangeWords: 'any version', state: 'missing', words: 'Needs speech' },
     ]);
     adoptPlugins(env, { file: '', loaded: [await loaded(weather)], problems: [] });
     expect(requirementStates({ weather: '^1.0.0' }, env)[0]).toMatchObject({ state: 'ok', installed: '1.2.0' });

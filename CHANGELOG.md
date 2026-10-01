@@ -31,6 +31,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- A plugin's requirements read in words: "weather 0.2 or newer" on the install card (the range itself on hover) and "Needs weather 0.2 or newer" on a waiting row, the upper limit said only when the installed version is past it.
 - The calendar's month title follows your Profile date format: "September 2026", "2026-09" with ISO dates, and your browser's own words on Auto.
 - Times in failure messages — when a provider's limit resets, when lost background work happened — are written in your Profile's timezone, time format and date format, as the dashboard writes them; `buddi accounts` too.
 - A group chat's ⋯ menu is about the group instead of linking to each member: Members (a sheet with the coordinator first, Make coordinator, Remove, Add a member), Rename…, Clear history… and Delete group…. On a phone, this menu and an agent's rise from the bottom as a sheet. The group sheet's edit mode and its Archive button are gone.
