@@ -12,6 +12,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type RecoveryView } from '../api';
 import { RecoveryChecklist, useRecovery } from './Recovery';
+import { resetRestart, restartState } from '../shell/restart';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
@@ -44,16 +45,29 @@ const view = (over: Partial<RecoveryView['checklist']> = {}): RecoveryView => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetRestart();
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   vi.mocked(api.leaveRecovery).mockResolvedValue({ accepted: true });
 });
 
 describe('the checklist', () => {
   it('drops the pending work and every permission unless the owner says otherwise', async () => {
+    vi.mocked(api.leaveRecovery).mockResolvedValue({ accepted: true, restarting: true });
     render(<RecoveryChecklist view={view()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Leave recovery mode' }));
+    // Leaving restarts buddi: the restart screen is up from the click.
+    expect(restartState()?.kind).toBe('recovery');
     await waitFor(() =>
       expect(api.leaveRecovery).toHaveBeenCalledWith({ dropPending: true, keepGrants: [] }),
     );
+  });
+
+  it('takes the restart screen away again where there is nothing to restart it', async () => {
+    vi.mocked(api.leaveRecovery).mockResolvedValue({ accepted: true, restarting: false });
+    render(<RecoveryChecklist view={view()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Leave recovery mode' }));
+    await waitFor(() => expect(api.leaveRecovery).toHaveBeenCalled());
+    await waitFor(() => expect(restartState()).toBeNull());
   });
 
   it('keeps the permissions that were ticked, in the order they were ticked', async () => {

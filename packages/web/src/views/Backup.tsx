@@ -23,6 +23,7 @@ import { formatBytes } from '../chat/attachments';
 import { fmtRelative } from '../format';
 import { Button, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Section, Stack, Table, Toolbar, useAsync, EmptyState } from '../ui';
 import { RecoveryChecklist, useRecovery } from './Recovery';
+import { UPGRADE_PATIENCE_MS, beginRestart, cancelRestart, updateRestart } from '../shell/restart';
 
 /** How often a running job is asked where it has got to. */
 const JOB_POLL_MS = 2_000;
@@ -57,11 +58,14 @@ function finished(job: BackupJob | undefined): boolean {
  * One job, watched to its end.
  *
  * A restore takes the gateway down with it, so losing contact is part of the
- * job rather than an error: the poll keeps asking, and the first answer after
- * the silence means the gateway is back — at which point this page is reading
- * a database it no longer matches, and the honest thing is to reload it.
+ * job rather than an error. A restore draws "Restoring buddi" from the start
+ * (`shell/Restarting.tsx`), fed each step from here; once the gateway stops
+ * answering the screen waits for the new process and reloads the page, which
+ * is reading a database it no longer matches. A restore that fails while the
+ * gateway still answers takes the screen away and says so here. Any other
+ * job that loses contact keeps asking, and reloads on the first answer.
  */
-function useJob(id: string | null): { job: BackupJob | undefined; away: boolean; error: string | null } {
+function useJob(id: string | null, restoring = false): { job: BackupJob | undefined; away: boolean; error: string | null } {
   const [job, setJob] = useState<BackupJob | undefined>(undefined);
   const [away, setAway] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,10 +79,15 @@ function useJob(id: string | null): { job: BackupJob | undefined; away: boolean;
     }
     let stopped = false;
     const ask = (): void => {
+      if (restoring && lost.current) return;
       api
         .backupJob(id)
         .then((next) => {
           if (stopped) return;
+          if (restoring) {
+            updateRestart({ step: phaseWords(next) });
+            if (next.phase === 'failed' || next.phase === 'rolled-back') cancelRestart();
+          }
           if (lost.current) {
             // The gateway answered again after going away: whatever this page
             // is holding was read before the restore.
@@ -94,11 +103,12 @@ function useJob(id: string | null): { job: BackupJob | undefined; away: boolean;
           // A gateway that is restarting refuses or never answers. Both are
           // the middle of a restore, not a failure to report.
           if (err instanceof ApiError && err.status !== 0 && err.status < 500) {
+            if (restoring) cancelRestart();
             setError(err.message);
             return;
           }
           lost.current = true;
-          setAway(true);
+          if (!restoring) setAway(true);
         });
     };
     ask();
@@ -107,7 +117,7 @@ function useJob(id: string | null): { job: BackupJob | undefined; away: boolean;
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [id]);
+  }, [id, restoring]);
   return { job, away, error };
 }
 
@@ -143,7 +153,8 @@ export function Backup(): JSX.Element {
   const recovery = useRecovery();
   const service = useAsync(() => api.service(), []);
   const [jobId, setJobId] = useState<string | null>(null);
-  const job = useJob(jobId);
+  const [restoring, setRestoring] = useState(false);
+  const job = useJob(jobId, restoring);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /** Set when the server says this installation cannot restore under itself. */
@@ -159,11 +170,17 @@ export function Backup(): JSX.Element {
 
   const archives = view.data?.archives ?? [];
 
-  const run = (work: Promise<{ job: BackupJob }>): void => {
+  const run = (work: () => Promise<{ job: BackupJob }>, restore = false): void => {
     setBusy(true);
     setFailed(null);
-    work
-      .then((answer) => setJobId(answer.job?.id ?? null))
+    setRestoring(restore);
+    // The screen goes up once the restore is accepted, not while an archive
+    // of gigabytes is still on its way up.
+    work()
+      .then((answer) => {
+        if (restore && answer.job) beginRestart({ kind: 'restore', patienceMs: UPGRADE_PATIENCE_MS });
+        setJobId(answer.job?.id ?? null);
+      })
       .catch((error: unknown) => {
         if (error instanceof ApiError && error.status === 409) setNoSupervisor(error.message);
         else setFailed(error instanceof ApiError ? error.message : String(error));
@@ -192,7 +209,7 @@ export function Backup(): JSX.Element {
         title="Backups"
         panel
         actions={
-          <Button variant="accent" size="sm" disabled={busy} onClick={() => run(api.startBackup(true))}>
+          <Button variant="accent" size="sm" disabled={busy} onClick={() => run(() => api.startBackup(true))}>
             Back up now
           </Button>
         }
@@ -228,9 +245,9 @@ export function Backup(): JSX.Element {
                       busy={busy}
                       database={view.data?.database}
                       checkout={checkout}
-                      onVerify={() => run(api.verifyArchive(archive.name))}
+                      onVerify={() => run(() => api.verifyArchive(archive.name))}
                       onRestore={(passphrase, confirm) =>
-                        run(api.restoreArchive({ name: archive.name, ...(passphrase ? { passphrase } : {}), ...(confirm ? { confirm } : {}) }))
+                        run(() => api.restoreArchive({ name: archive.name, ...(passphrase ? { passphrase } : {}), ...(confirm ? { confirm } : {}) }), true)
                       }
                     />
                   ))}
@@ -248,7 +265,7 @@ export function Backup(): JSX.Element {
         checkout={checkout}
         checkoutSaid={noSupervisor}
         database={view.data?.database}
-        onRestore={(file, passphrase, confirm) => run(api.restoreUpload(file, { passphrase, confirm }))}
+        onRestore={(file, passphrase, confirm) => run(() => api.restoreUpload(file, { passphrase, confirm }), true)}
       />
     </Stack>
   );

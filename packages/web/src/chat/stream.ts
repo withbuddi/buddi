@@ -27,6 +27,7 @@ const KNOWN: ChatEventName[] = [
   'live.settle',
   'live.snapshot',
   'attention',
+  'closing',
   'ping',
 ];
 

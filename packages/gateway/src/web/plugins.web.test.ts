@@ -20,6 +20,7 @@ import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName } from './http.js';
 import type { PluginsEngine } from './plugins.js';
 import type { StagedPlugin } from '../plugins/index.js';
+import { adoptPlugins } from '../plugins/load.js';
 
 const servers: WebServer[] = [];
 afterEach(async () => {
@@ -314,6 +315,45 @@ it('does not ask for a restart for a plugin that will not load', async () => {
   expect(body.restartNeeded).toBe(false);
   expect(body.installed[0].loaded).toBe(false);
   expect(body.installed[0].error).toMatch(/importing it threw/);
+});
+
+it('says which plugins load at the next restart: new, or moved on since this process imported it', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-plugins-'));
+  const file = path.join(dir, 'plugins.json');
+  const entry = (name: string, version: string, installedAt: string) => ({
+    name, version, entry: `/p/${name}/index.js`, schema: name, installedAt, source: { kind: 'registry', name, version },
+  });
+  const write = async (plugins: unknown[]): Promise<void> => writeFile(file, JSON.stringify({ version: 2, plugins }), 'utf8');
+  const env: NodeJS.ProcessEnv = { BUDDI_PLUGINS_FILE: file };
+  // What this process imported at start: weather 0.1.2, and clock.
+  const imported = [entry('weather', '0.1.2', '2026-01-01T00:00:00.000Z'), entry('clock', '1.0.0', '2026-01-01T00:00:00.000Z')];
+  adoptPlugins(env, {
+    file,
+    loaded: imported.map((record) => ({
+      record: record as never,
+      manifest: { name: record.name, version: record.version, tools: [] } as never,
+      contribution: { tools: [], sentinels: [], views: [], agents: [] } as never,
+    })),
+    problems: [],
+  });
+  const { origin, headers } = await dashboard(fakeEngine(), env);
+  const read = async (): Promise<any> => (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+
+  // As imported: nothing waits for a restart.
+  await write(imported);
+  let body = await read();
+  expect(body.restartNeeded).toBe(false);
+  expect(body.installed.map((p: any) => [p.name, p.loaded, p.loadsAtRestart])).toEqual([['weather', true, undefined], ['clock', true, undefined]]);
+
+  // weather updated to 0.1.3 and mail installed since: both wait, clock does not.
+  await write([entry('weather', '0.1.3', '2026-02-01T00:00:00.000Z'), imported[1], entry('mail', '0.2.0', '2026-02-01T00:00:00.000Z')]);
+  body = await read();
+  expect(body.restartNeeded).toBe(true);
+  expect(body.installed.map((p: any) => [p.name, p.version, p.loadsAtRestart])).toEqual([
+    ['weather', '0.1.3', true],
+    ['clock', '1.0.0', undefined],
+    ['mail', '0.2.0', true],
+  ]);
 });
 
 it("shows a folder install at its folder's version now, and what it was installed as", async () => {

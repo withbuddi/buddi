@@ -4300,3 +4300,26 @@ button.lk-chip:disabled { cursor: default; }
 .at-try { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; }
 .at-cant { margin: 0; padding-left: var(--space-5); list-style: disc; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); }
 .at-foot { margin: var(--space-3) 0 0; padding-top: var(--space-3); border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--text-muted); }
+
+/* Restarting buddi (src/shell/Restarting.tsx; kit Restarting.jsx): the whole window while buddi restarts, then a reload. Calm, never red. */
+.rs-host { display: contents; }
+.rs-field { position: fixed; inset: 0; z-index: 200; overflow: auto; }
+.rs { position: relative; z-index: 1; min-height: 100%; display: grid; place-items: center; padding: var(--space-10) var(--space-4); outline: none; }
+.rs-body { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); width: 100%; max-width: calc(var(--space-12) * 9); text-align: center; }
+.rs-blob { margin-bottom: var(--space-2); }
+.rs-title { margin: 0; font-family: var(--font-display); font-size: var(--text-2xl); font-weight: var(--weight-semibold); line-height: var(--leading-tight); letter-spacing: var(--tracking-display); color: var(--text); }
+.rs-line { margin: 0; font-size: var(--text-base); line-height: var(--leading); color: var(--text-muted); overflow-wrap: anywhere; }
+.rs-step { margin: 0; font-size: var(--text-sm); color: var(--text-faint); }
+.rs-track { position: relative; width: calc(var(--space-12) * 3); height: var(--space-1); margin-top: var(--space-2); border-radius: var(--radius-pill); background: color-mix(in oklab, var(--accent) 14%, transparent); overflow: hidden; }
+.rs-track span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--accent); opacity: 0.7; animation: rs-slide 1.6s var(--ease) infinite; }
+.rs-help { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; margin-top: var(--space-3); text-align: left; }
+.rs-help-line { margin: 0; font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); }
+.rs-cmd { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); }
+.rs-cmd-text { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: var(--text-md); color: var(--text); overflow-wrap: anywhere; }
+.rs-foot { display: flex; align-items: center; justify-content: center; gap: var(--space-3); width: 100%; margin-top: var(--space-2); }
+.rs[data-state='long'] .rs-foot, .rs[data-state='stopped'] .rs-foot { justify-content: space-between; padding-top: var(--space-3); border-top: 1px solid var(--line); text-align: left; }
+.rs-meta { font-size: var(--text-sm); color: var(--text-faint); font-variant-numeric: tabular-nums; }
+@keyframes rs-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) {
+  .rs-track span { animation: none; width: 100%; opacity: 0.35; }
+}

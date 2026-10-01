@@ -119,3 +119,56 @@ it('reports a launchd job as supervised, with nothing to control from here', asy
   const c2 = s2.headers.getSetCookie().map((c) => c.split(';')[0]!);
   expect(await (await fetch(`${o2}/api/service`, { headers: { Cookie: c2.join('; '), Origin: o2 } })).json()).toEqual({ supervised: false });
 });
+
+/** A 64-hex challenge, as `buddi mcp` and the dashboard's restart screen send. */
+const CHALLENGE = 'ab'.repeat(32);
+
+it('answers /_buddi/ready with this process\'s boot, to anyone, without spending sign-in tries', async () => {
+  const one = await dashboard({});
+  const two = await dashboard({});
+  const ask = async (app: WebServer): Promise<Response> => fetch(`http://127.0.0.1:${app.port}/_buddi/ready?challenge=${CHALLENGE}`, { headers: { 'X-Forwarded-For': '100.64.0.2' } });
+  const first = await ask(one);
+  expect(first.status).toBe(200);
+  expect(first.headers.get('cache-control')).toBe('no-store');
+  const body = (await first.json()) as { proof: string; boot: string };
+  expect(body.proof).toMatch(/^[a-f0-9]{64}$/);
+  expect(body.boot).toMatch(/^[0-9a-f-]{36}$/);
+  // The same process says the same boot every time — far past the ten a
+  // minute a failed sign-in may spend — and another process says another.
+  for (let i = 0; i < 15; i += 1) expect(((await (await ask(one)).json()) as { boot: string }).boot).toBe(body.boot);
+  expect(((await (await ask(two)).json()) as { boot: string }).boot).not.toBe(body.boot);
+  // Asking it never locked anyone out: a session is still handed out here.
+  expect((await fetch(`http://127.0.0.1:${one.port}/api/session`)).status).toBe(200);
+});
+
+it('tells its open streams it is closing, and that a restart was asked for', async () => {
+  const { socket, seen } = await fakeSupervisor();
+  const app = await dashboard({ BUDDI_SUPERVISOR_SOCKET: socket });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const session = await fetch(`${origin}/api/session`);
+  const cookies = session.headers.getSetCookie().map((c) => c.split(';')[0]!);
+  const csrf = cookies.find((c) => c.startsWith(`${csrfCookieName(app.port)}=`))!.slice(`${csrfCookieName(app.port)}=`.length);
+  const headers = { Cookie: cookies.join('; '), Origin: origin, 'X-Buddi-CSRF': csrf };
+
+  const stream = await fetch(`${origin}/api/chat/attention/stream`, { headers: { ...headers, Accept: 'text/event-stream' } });
+  expect(stream.status).toBe(200);
+  const reader = stream.body!.getReader();
+  const decoder = new TextDecoder();
+  let heard = '';
+  const until = async (text: string): Promise<void> => {
+    while (!heard.includes(text)) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      heard += decoder.decode(value, { stream: true });
+    }
+  };
+  await until('event: ping');
+
+  expect((await fetch(`${origin}/api/service/restart`, { method: 'POST', headers })).status).toBe(202);
+  await vi.waitFor(() => expect(seen).toContain('POST /restart'));
+  const closing = app.close();
+  await until('event: closing');
+  await closing;
+  servers.splice(servers.indexOf(app), 1);
+  expect(heard).toContain('event: closing\ndata: {"for":"restart"}\n\n');
+});

@@ -29,6 +29,7 @@ import { useEffect, useState } from 'react';
 import { get } from '../api';
 import { openChatStream } from '../chat/stream';
 import { announceReconnect } from './freshness';
+import { noticeClosing } from './restart';
 import type { ChatAgent } from '../chat/types';
 
 /** One agent's claim on the owner, exactly as the attention endpoint sends it. */
@@ -162,7 +163,12 @@ export function useAttention(): Map<string, AgentAttention> {
     refresh();
     // The shell's one always-open stream: when it comes back after a drop,
     // the gateway may have restarted onto a new build (`freshness.ts`).
-    const handle = openChatStream({ url: ATTENTION_STREAM, onEvent: () => refresh(), onReconnect: announceReconnect });
+    // Its last frame before a restart says so: the shell draws "Restarting buddi" (`restart.ts`).
+    const handle = openChatStream({
+      url: ATTENTION_STREAM,
+      onEvent: (event) => (event.name === 'closing' ? noticeClosing(event.data) : refresh()),
+      onReconnect: announceReconnect,
+    });
     return () => {
       cancelled = true;
       handle.close();

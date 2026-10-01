@@ -67,6 +67,7 @@ import { useRecovery } from './views/Recovery';
 import { BannerSlot, shellBanners } from './shell/BannerSlot';
 import { RailStatus, StatusBar, linkKind, useLinkDown, type ShellStatus } from './shell/StatusBar';
 import { useLostLink } from './shell/Unreachable';
+import { useRestart } from './shell/Restarting';
 import { buildDiffers } from './build';
 import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
 import { FORMATS_CHANGED, setDisplayFormats } from './format';
@@ -388,6 +389,8 @@ export function App(): JSX.Element {
   /* Reconnecting while requests go unanswered; lost — the banner — after thirty seconds of it. */
   const linkDown = useLinkDown();
   const lost = useLostLink();
+  /* A restart being waited for has the whole window (shell/Restarting.tsx): the banner and Reconnecting… defer to it. */
+  const restarting = useRestart() !== null;
   const phone = useMediaQuery(PHONE_QUERY);
 
   // The tips learn which pages were opened: one report per page per day.
@@ -406,7 +409,7 @@ export function App(): JSX.Element {
   }, [hash, signedIn, navigate]);
 
   const status: ShellStatus = {
-    link: linkKind(window.location.hostname, linkDown),
+    link: linkKind(window.location.hostname, linkDown && !restarting),
     focus: focusRead.data?.focus ?? null,
     working: badges.running,
     paused: badges.paused,
@@ -415,7 +418,7 @@ export function App(): JSX.Element {
     version: version ? { current: version.current, latest: version.latest, updateAvailable: !version.checkout && version.updateAvailable } : undefined,
     timezone,
   };
-  const banners = shellBanners({ recovery: recovery.data?.active === true, lost, paused: badges.paused });
+  const banners = shellBanners({ recovery: recovery.data?.active === true, lost: lost && !restarting, paused: badges.paused });
 
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);

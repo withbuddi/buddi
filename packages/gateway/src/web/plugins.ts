@@ -505,6 +505,19 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
     );
   }
   const waitingManifests = new Map((adoptedPlugins(env)?.waiting ?? []).map((w) => [w.record.name, w.manifest]));
+  /*
+   * What this process imported, as the record said then. A record entry that
+   * moved on since (an update, a reinstall) is running its old copy until the
+   * next start, and an entry it never imported at all is new: both load at
+   * the next restart, unless they failed to load or wait on a requirement.
+   */
+  const running = new Map((adoptedPlugins(env)?.loaded ?? []).map((p) => [p.record.name, p.record]));
+  const loadsAtRestart = (entry: InstalledPlugin): boolean => {
+    if (entry.enabled === false || failures.has(entry.name) || waitingNeeds.has(entry.name)) return false;
+    if (!manifests.has(entry.name)) return true;
+    const was = running.get(entry.name);
+    return was !== undefined && (was.version !== entry.version || was.installedAt !== entry.installedAt);
+  };
   const installed = record.map((entry) => {
     // A plugin held back still says what it is and what it would bring.
     const manifest = manifests.get(entry.name) ?? waitingManifests.get(entry.name);
@@ -539,6 +552,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
       contribution: contributionSummary(manifest),
       unlocks: unlocksOf(manifest, env),
       loaded: manifests.has(entry.name) && error === undefined,
+      ...(loadsAtRestart(entry) ? { loadsAtRestart: true } : {}),
       ...(entry.enabled === false ? { enabled: false } : {}),
       ...(error === undefined ? {} : { error }),
       // Not set up yet: the row says "Needs setup" and opens the page.
@@ -576,9 +590,7 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
    */
   const restartNeeded = record.some((entry) =>
     // Disabled in the record, still loaded here: the restart is what stops it.
-    entry.enabled === false
-      ? manifests.has(entry.name)
-      : !manifests.has(entry.name) && !failures.has(entry.name) && !waitingNeeds.has(entry.name),
+    entry.enabled === false ? manifests.has(entry.name) : loadsAtRestart(entry),
   );
 
   // A record-level problem is reported as itself, not as a plugin that failed.

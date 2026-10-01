@@ -280,6 +280,9 @@ export type ChatEventName =
   // The attention stream's only frame: "some agent's claim on you may have
   // changed, ask again". It carries no payload on purpose.
   | 'attention'
+  // Every stream's last frame from a gateway about to close (a restart, a
+  // stop): the shell draws "Restarting buddi" and reloads when it is back.
+  | 'closing'
   | 'ping';
 
 export interface ChatEvent {

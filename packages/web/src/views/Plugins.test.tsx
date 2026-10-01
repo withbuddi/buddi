@@ -11,10 +11,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
+import { ApiError, api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
 import { pluginPageRoute, pluginSettingsRoute } from '../routes';
 import { Plugins } from './Plugins';
+import { resetRestart, restartState } from '../shell/restart';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -86,6 +87,9 @@ const PLAN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetRestart();
+  // The restart screen's question to /_buddi/ready finds nobody here.
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   vi.mocked(api.openedStaged).mockResolvedValue({ opened: 'x' });
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -469,12 +473,47 @@ describe('the plugins section', () => {
     expect(screen.queryByRole('button', { name: 'Restart to load it' })).not.toBeInTheDocument();
   });
 
-  it('offers the service restart on a packaged installation', async () => {
-    vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: false }));
+  it('offers the service restart on a packaged installation, under the restart screen', async () => {
+    const waiting = (name: string, version: string): InstalledPluginView => ({ ...INSTALLED, name, version, loadsAtRestart: true });
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        restartNeeded: true,
+        checkout: false,
+        installed: [waiting('weather', '0.1.3'), INSTALLED, ...['mail', 'clock', 'speech', 'notes'].map((n) => waiting(n, '1.0.0'))],
+      }),
+    );
     vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true });
     render(<Plugins />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Restart to load it' }));
+    expect(await screen.findByText(/weather 0\.1\.3 and 4 more are installed\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Restart to load it' }));
+    // The screen goes up with the click, before the gateway has said a word.
+    expect(restartState()).toMatchObject({ kind: 'plugins', line: 'Loading weather 0.1.3 and 4 more…' });
     await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('restart'));
+  });
+
+  it('takes the screen away and says why when the restart is refused', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ restartNeeded: true, checkout: false }));
+    vi.mocked(api.serviceAction).mockRejectedValue(new ApiError(503, 'The supervisor is not answering on its control socket.'));
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Restart to load it' }));
+    expect(await screen.findByText('The supervisor is not answering on its control socket.')).toBeInTheDocument();
+    expect(restartState()).toBeNull();
+  });
+
+  it('draws the restart notice from what the gateway says, so it is gone once the plugin is loaded', async () => {
+    vi.mocked(api.plugins)
+      .mockResolvedValueOnce(view({ restartNeeded: true, checkout: false, installed: [{ ...INSTALLED, name: 'weather', version: '0.1.3', loadsAtRestart: true }] }))
+      .mockResolvedValue(view({ restartNeeded: false, checkout: false, installed: [{ ...INSTALLED, name: 'weather', version: '0.1.3' }] }));
+    const { unmount } = render(<Plugins />);
+    expect(await screen.findByText(/weather 0\.1\.3 is installed\. Its tools appear once buddi restarts/)).toBeInTheDocument();
+    // The row says the same, rather than "did not load" or "loaded".
+    expect(screen.getByText('loads at restart')).toBeInTheDocument();
+    unmount();
+    // The same page, after the restart: the row says loaded and nothing asks for a restart.
+    render(<Plugins />);
+    expect(await screen.findByText('weather')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restart to load it' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/is installed\./)).not.toBeInTheDocument();
   });
   /**
    * The three ways in are three different questions, and the page asks the

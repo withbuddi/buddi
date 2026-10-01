@@ -10,7 +10,8 @@
  * this script's URL (`sw.js?v=<build>`, src/serviceWorker.ts), so a new build
  * is a new worker, a new cache, and the old cache goes on activate.
  *
- * What it never touches: `/api/*`, `/stream`, `/preview/*`, and anything that
+ * What it never touches: `/api/*`, `/stream`, `/preview/*`, `/_buddi/*` (the
+ * restart screen asks `/_buddi/ready` which process answers), and anything that
  * is not a GET. Those go to the network exactly as if it were not here, and
  * nothing buddi knows is ever written to a cache.
  *
@@ -32,7 +33,7 @@ function passThrough(request) {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return true;
   const path = url.pathname.slice(new URL(self.registration.scope).pathname.length - 1);
-  return path === '/api' || path.startsWith('/api/') || path === '/stream' || path.startsWith('/stream/') || path.startsWith('/preview/');
+  return path === '/api' || path.startsWith('/api/') || path === '/stream' || path.startsWith('/stream/') || path.startsWith('/preview/') || path.startsWith('/_buddi/');
 }
 
 self.addEventListener('install', (event) => {

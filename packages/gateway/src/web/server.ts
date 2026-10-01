@@ -249,7 +249,7 @@ import {
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
 import { readRail, setRailPageHidden } from './rail.js';
 import { BUILD_MISSING, serveAsset, serveShellAtRoot } from './static.js';
-import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
+import { StreamBudget, frame, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
@@ -400,6 +400,18 @@ const WEB_CHATS = new WeakMap<Server, WebChat>();
  * it down, and a caller that built a bare `createWebApp` is unaffected.
  */
 const PREVIEW_APPS = new WeakMap<Server, PreviewApp>();
+
+/**
+ * What a dashboard says to its open pages just before it closes: one
+ * `closing` frame on every live stream, naming the restart or stop the page
+ * itself asked for when it was one (`for`), so a page another device or the
+ * CLI restarted under draws "Restarting buddi" rather than errors, and
+ * reloads once the next process answers `/_buddi/ready` with a new `boot`.
+ */
+const CLOSING_SAYS = new WeakMap<Server, () => Promise<void>>();
+
+/** How long a closing frame may take to reach the pages before the sockets go. */
+const CLOSING_FLUSH_MS = 250;
 
 /** The chat surface this server is running, if any. */
 /** The most of a text file a preview shows; the download has the whole. */
@@ -568,6 +580,14 @@ export function createWebApp(deps: WebServerDeps): Server {
    */
   const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, log });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
+  /*
+   * This process's boot: answered by `/_buddi/ready`, so a page that watches a
+   * restart can tell the process that went from the one that came back.
+   * Random, and nothing else: it says which run this is, not when or where.
+   */
+  const boot = randomUUID();
+  /** Set when a page asked the supervisor to restart or stop this process: what the closing frame says. */
+  let goingAway: 'restart' | 'stop' | undefined;
   /*
    * The session a live API token acts through: minted on its first request,
    * kept in memory only, one per token (and scope), so a stream budget or a
@@ -835,6 +855,24 @@ export function createWebApp(deps: WebServerDeps): Server {
 
   if (chat) WEB_CHATS.set(server, chat);
   PREVIEW_APPS.set(server, previews);
+  CLOSING_SAYS.set(server, async () => {
+    const said = frame('closing', goingAway === undefined ? {} : { for: goingAway });
+    const flushed: Array<Promise<void>> = [];
+    for (const { responses } of openStreams.values()) {
+      for (const res of responses) {
+        if (res.writableEnded || res.destroyed) continue;
+        // Ended, not just written: an ended response is flushed before its
+        // socket goes, where a frame still queued would be dropped with it.
+        flushed.push(new Promise<void>((resolve) => {
+          try { res.end(said, () => resolve()); } catch { resolve(); }
+        }));
+      }
+    }
+    if (flushed.length === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([Promise.all(flushed), new Promise<void>((resolve) => { timer = setTimeout(resolve, CLOSING_FLUSH_MS); })]);
+    clearTimeout(timer);
+  });
   // "Your browser": the only path this server ever upgrades. Attached here
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
@@ -858,7 +896,12 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (method === 'GET' && url.pathname === '/_buddi/ready') {
       const challenge = url.searchParams.get('challenge') ?? '';
       if (!/^[a-f0-9]{64}$/.test(challenge)) return sendEmpty(res, 400);
-      return sendJson(res, 200, { proof: createHmac('sha256', deps.token).update(`buddi-ready-v1:${challenge}`).digest('hex') });
+      return sendJson(
+        res,
+        200,
+        { proof: createHmac('sha256', deps.token).update(`buddi-ready-v1:${challenge}`).digest('hex'), boot },
+        { 'Cache-Control': 'no-store' },
+      );
     }
 
     // A remote socket or proxy metadata can only earn remote access. It
@@ -2793,8 +2836,10 @@ export function createWebApp(deps: WebServerDeps): Server {
         now,
       );
       if (socket) {
+        goingAway = 'restart';
         res.once('finish', () => {
           void supervisorCall(socket, '/restart', 'POST').catch((err: unknown) => {
+            goingAway = undefined;
             log(`web: supervisor restart after leaving recovery failed: ${err instanceof Error ? err.message : String(err)}`);
           });
         });
@@ -2832,8 +2877,10 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(res, 503, { error: 'The supervisor is not answering on its control socket. Run buddi in a terminal.' });
         }
       }
+      goingAway = action === 'stop' ? 'stop' : 'restart';
       res.once('finish', () => {
         void supervisorCall(socket, `/${action}`, 'POST').catch((err: unknown) => {
+          goingAway = undefined;
           log(`web: supervisor ${action} failed: ${err instanceof Error ? err.message : String(err)}`);
         });
       });
@@ -3578,6 +3625,8 @@ export async function startWebServer(
     chat: webChatOf(server),
     close: async () => {
       if (expirySweep) clearInterval(expirySweep);
+      // Said before anything closes, while the streams can still carry it.
+      await CLOSING_SAYS.get(server)?.();
       // Both listeners, both awaited. A preview socket still open is a port
       // still held, and the next thing to want it — the next test, the
       // gateway coming back up — finds it taken.

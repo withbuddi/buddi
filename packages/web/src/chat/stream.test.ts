@@ -43,6 +43,11 @@ describe('parsing', () => {
     expect(events[0]).toMatchObject({ id: '9', data: { value: 'not json' } });
   });
 
+  it("reads a gateway's closing frame, which says what it is closing for", () => {
+    const { events } = parseSse('event: closing\ndata: {"for":"restart"}\n\n');
+    expect(events).toEqual([{ id: null, name: 'closing', data: { for: 'restart' } }]);
+  });
+
   it('joins multi-line data, as the protocol says', () => {
     const { events } = parseSse('event: message.appended\ndata: {"text":\ndata: "hi"}\n\n');
     expect(events[0]?.data).toEqual({ text: 'hi' });

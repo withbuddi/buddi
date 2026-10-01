@@ -23,6 +23,7 @@ import {
   settingsRoute,
 } from '../routes';
 import { Button, ButtonLink, Empty, ErrorBanner, KV, List, ListRow, Notice, Panel, Section, Stack, Toolbar, useAsync } from '../ui';
+import { cancelRestart, restartWhile } from '../shell/restart';
 
 /** How often a page asks whether recovery is still on. Slow: it rarely changes. */
 const POLL_MS = 30_000;
@@ -123,9 +124,11 @@ export function RecoveryChecklist({
   const leave = (): void => {
     setBusy(true);
     setFailed(null);
-    api
-      .leaveRecovery({ dropPending, keepGrants: keep })
-      .then(() => {
+    // Leaving is finished by a restart, under "Restarting buddi"; a checkout
+    // has no supervisor to restart it and says so in the answer.
+    void restartWhile({ kind: 'recovery' }, () => api.leaveRecovery({ dropPending, keepGrants: keep }))
+      .then((answer) => {
+        if (answer && answer.restarting === false) cancelRestart();
         setLeft(true);
         onLeft?.();
       })

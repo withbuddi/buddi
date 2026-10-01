@@ -1673,6 +1673,8 @@ export interface InstalledPluginView {
   contribution: { tools: number; sentinels: number; views: number; agents: number };
   unlocks: PluginUnlock[];
   loaded: boolean;
+  /** Installed or updated since this buddi started: the next restart loads this version. */
+  loadsAtRestart?: true;
   /** `false` when the owner disabled it: installed, kept, not loaded. */
   enabled?: false;
   /** Why its entry point did not load. Set only when `loaded` is false. */
@@ -2531,7 +2533,7 @@ export const api = {
     ),
   recovery: () => get<RecoveryView>('/recovery'),
   leaveRecovery: (body: { dropPending: boolean; keepGrants: string[] }) =>
-    post<{ accepted?: boolean }>('/recovery/leave', body),
+    post<{ accepted?: boolean; restarting?: boolean }>('/recovery/leave', body),
   /**
    * The restore first run offers, before a single question has been answered.
    * No typed-back guard: there is nothing in this installation to lose.

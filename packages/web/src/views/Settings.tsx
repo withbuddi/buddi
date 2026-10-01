@@ -37,6 +37,7 @@ import { Notifications, TelegramSettings } from './Notifications';
 import { AppInstallSection } from './parts/KeepClose';
 import { SettingsMenu, SettingsNav, settingsEntries } from './SettingsNav';
 import { CONNECTION_DOT } from '../shell/Rail';
+import { UPGRADE_PATIENCE_MS, cancelRestart, restartWhile, updateRestart } from '../shell/restart';
 import { railKey, setRailHidden, useRailHidden } from '../shell/railHidden';
 import type { PluginPageDescriptor } from '../pages/types';
 
@@ -426,7 +427,9 @@ async function copyText(text: string): Promise<void> {
  * control and no command to recommend.
  *
  * Stop and restart end the process serving this page, which is why both ask
- * once before they act and say what will happen.
+ * once before they act and say what will happen. Either then draws its
+ * full-window screen (`shell/Restarting.tsx`), which reloads the page once a
+ * new process answers.
  */
 export function Service(): JSX.Element | null {
   const view = useAsync(() => api.service(), [], 10_000);
@@ -438,11 +441,10 @@ export function Service(): JSX.Element | null {
   const act = (action: 'stop' | 'restart'): void => {
     setBusy(true);
     setFailed(null);
-    void api
-      .serviceAction(action)
+    void restartWhile({ kind: action }, () => api.serviceAction(action))
       .then(() => { setPending(null); })
-      .catch((error: Error) => { setFailed(error.message); })
-      .finally(() => { setBusy(false); view.reload(); });
+      .catch((error: Error) => { setFailed(error.message); view.reload(); })
+      .finally(() => { setBusy(false); });
   };
   return (
     <Section title="Service" panel>
@@ -463,7 +465,7 @@ export function Service(): JSX.Element | null {
               <Notice tone="warning" role="alert">
                 {pending === 'stop'
                   ? 'Stopping the gateway closes this dashboard. The database keeps running; run buddi in a terminal to bring the dashboard back.'
-                  : 'Restarting the gateway closes this dashboard for a few seconds. If it does not come back on its own, run buddi in a terminal.'}
+                  : 'Restarting the gateway takes a few seconds. This page waits for it and comes back by itself.'}
               </Notice>
             ) : (
               <p className="ui-card-meta">Stopping the gateway ends this dashboard until buddi is run again.</p>
@@ -538,22 +540,19 @@ const CHECK_DISCLOSURE = 'The check asks the npm registry for the newest version
 
 /** What an upgrade does, said before it is allowed to start. */
 const UPGRADE_WARNING =
-  'This takes a backup, installs the new version and restarts buddi. This page closes and comes back on its own.';
+  'This takes a backup, installs the new version and restarts buddi. This page waits for it and comes back by itself.';
 
 /** The one line a checkout gets instead of an upgrade button. */
 const CHECKOUT_UPGRADE_LINE = 'A checkout upgrades with git pull, then buddi upgrade in a terminal.';
 
 /**
- * How long a page waits for a buddi that went away to come back.
+ * How long after it ended a failed upgrade is still news on this page.
  *
- * Long enough for a backup-sized restart on a slow disk, short enough that an
- * owner is not left watching a spinner into the evening. What ends the wait is
- * a sentence naming the one command that can still say what happened.
+ * An upgrade that fails after the hand-over comes back as the old version,
+ * and the restart screen reloads the page onto it: the reloaded page is where
+ * the owner reads what happened and the way back.
  */
-const UPGRADE_RETURN_MS = 10 * 60_000;
-
-/** The end of the wait, when nothing came back. */
-const NEVER_CAME_BACK = 'buddi did not come back. Run buddi doctor in a terminal.';
+const RECENT_FAILURE_MS = 15 * 60_000;
 
 /** The way back from an upgrade that failed under the new code. */
 export function recoveryLine(attempt: UpgradeAttempt): string {
@@ -562,110 +561,72 @@ export function recoveryLine(attempt: UpgradeAttempt): string {
     `The backup taken first is ${attempt.backup ?? 'not available'}. Run buddi doctor in a terminal; it prints the way back.`;
 }
 
+/** The last attempt, when it failed in the last quarter of an hour. */
+export function recentFailure(history: UpgradeAttempt[], now = Date.now()): UpgradeAttempt | null {
+  const last = history[history.length - 1];
+  if (last?.outcome !== 'failed') return null;
+  const at = Date.parse(last.finishedAt ?? last.startedAt);
+  return Number.isFinite(at) && now - at < RECENT_FAILURE_MS ? last : null;
+}
+
 /** What the page is watching, and what it has to say about it. */
 interface UpgradeWatch {
   job: UpgradeJob | undefined;
-  away: boolean;
   error: string | null;
 }
 
 /**
- * One upgrade, watched past the death of the gateway reporting it.
+ * One upgrade, followed for as long as the gateway reporting it answers.
  *
- * An upgrade restarts buddi, so losing contact is part of the job rather than
- * an error: the poll keeps asking, and once the gateway is gone the question
- * becomes `/api/session` — which answers again when the *new* gateway is up.
- * A different version in that answer is what "it came back" means, and then
- * the only honest thing is to reload, because this page was served by code
- * that no longer runs.
- *
- * Two things end the wait instead. A gateway that answers again on the old
- * version while `/api/version` — which the supervisor writes to disk, so it
- * outlives both — says the last attempt failed: that is the upgrade having
- * failed and buddi having been started again, and the page says so rather
- * than waiting for a version that is never coming. And a deadline, because
- * "restarting" with nothing behind it is the one state a page must not show
- * for ever.
+ * The restart screen (`shell/Restarting.tsx`) is up from the moment the
+ * upgrade starts, and this feeds it the step. A gateway that stops answering
+ * is the upgrade doing what it said it would: the screen waits for the new
+ * process and reloads the page, and a failure after the hand-over is read off
+ * the record on the reloaded page (`recentFailure`). A failure *before* the
+ * hand-over is the end of it here: the screen goes and the page says so.
  */
-function useUpgrade(
-  id: string | null,
-  startedOn: string | undefined,
-  reload: () => void,
-  onFailed?: (job: UpgradeJob) => void,
-): UpgradeWatch {
+function useUpgrade(id: string | null, onFailed?: (job: UpgradeJob) => void): UpgradeWatch {
   const [job, setJob] = useState<UpgradeJob | undefined>(undefined);
-  const [away, setAway] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const lost = useRef(false);
-  // Held in refs so that a caller passing a fresh closure on every render does
-  // not tear the poll down and start it again on every render.
-  const reloadRef = useRef(reload);
+  // Held in a ref so that a caller passing a fresh closure on every render
+  // does not tear the poll down and start it again on every render.
   const failedRef = useRef(onFailed);
-  reloadRef.current = reload;
   failedRef.current = onFailed;
   useEffect(() => {
     if (!id) {
       setJob(undefined);
-      setAway(false);
-      lost.current = false;
       return undefined;
     }
     let stopped = false;
-    let deadline = 0;
-    const gone = (): void => {
-      lost.current = true;
-      deadline = Date.now() + UPGRADE_RETURN_MS;
-      setAway(true);
-    };
-    const waiting = (): void => {
-      if (Date.now() < deadline) {
-        // Has a gateway come back, and is it a new one?
-        void api.session()
-          .then((next) => {
-            if (stopped) return;
-            if (next.version !== undefined && next.version === startedOn) return;
-            stopped = true;
-            reloadRef.current();
-          })
-          .catch(() => {});
-        // Whatever is answering, the record on disk is what says how it ended.
-        void api.version()
-          .then((view) => {
-            const last = view.history[view.history.length - 1];
-            if (stopped || last?.outcome !== 'failed') return;
-            stopped = true;
-            setAway(false);
-            setError(recoveryLine(last));
-          })
-          .catch(() => {});
-        return;
-      }
-      stopped = true;
-      setAway(false);
-      setError(NEVER_CAME_BACK);
-    };
+    let lost = false;
     const ask = (): void => {
-      if (stopped) return;
-      if (lost.current) return waiting();
+      if (stopped || lost) return;
       api
         .upgradeJob(id)
         .then((next) => {
           if (stopped) return;
           setJob(next);
           setError(null);
+          updateRestart({ step: UPGRADE_PHASES[next.phase] ?? next.detail ?? next.phase });
           if (UPGRADE_ENDED.has(next.phase) || next.finishedAt) {
             // Nothing follows an ended job: a failure before the hand-over is
             // the end of this upgrade, and the button is the owner's again.
             stopped = true;
-            if (next.phase === 'failed') failedRef.current?.(next);
+            if (next.phase === 'failed') {
+              cancelRestart();
+              failedRef.current?.(next);
+            }
           }
         })
         .catch((err: unknown) => {
           if (stopped) return;
-          // A refusal is news; a gateway that stopped answering is the upgrade
-          // doing exactly what it said it would.
-          if (err instanceof ApiError && err.status !== 0 && err.status < 500) setError(err.message);
-          else gone();
+          // A refusal while the old gateway still answers is news; a gateway
+          // that stopped answering is the upgrade, and the screen's to watch.
+          if (err instanceof ApiError && err.status !== 0 && err.status < 500) {
+            stopped = true;
+            cancelRestart();
+            setError(err.message);
+          } else lost = true;
         });
     };
     ask();
@@ -674,8 +635,8 @@ function useUpgrade(
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [id, startedOn]);
-  return { job, away, error };
+  }, [id]);
+  return { job, error };
 }
 
 /**
@@ -686,7 +647,7 @@ function useUpgrade(
  * daily. The upgrade is the supervisor's work; this page only starts it and
  * then waits to be replaced. A checkout has neither, and gets the command.
  */
-export function Version({ reload }: { reload?: () => void }): JSX.Element {
+export function Version(): JSX.Element {
   const view = useAsync(() => api.version(), []);
   const [jobId, setJobId] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
@@ -698,10 +659,8 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
    * button back rather than following a job that has already ended.
    */
   const [ended, setEnded] = useState<UpgradeJob | null>(null);
-  const startedOn = view.data?.current;
-  const reloadPage = reload ?? ((): void => window.location.reload());
   const onFailed = useCallback((job: UpgradeJob): void => { setJobId(null); setEnded(job); }, []);
-  const upgrade = useUpgrade(jobId, startedOn, reloadPage, onFailed);
+  const upgrade = useUpgrade(jobId, onFailed);
   const data = view.data;
 
   const check = (): void => {
@@ -724,9 +683,16 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
     setBusy(true);
     setFailed(null);
     setEnded(null);
-    api
-      .startUpgrade(data?.latest)
-      .then((answer) => { setAsking(false); setJobId(answer.job?.id ?? null); })
+    void restartWhile(
+      {
+        kind: 'upgrade',
+        line: data?.latest ? `Upgrading to ${data.latest}…` : 'Upgrading…',
+        step: UPGRADE_PHASES.starting,
+        patienceMs: UPGRADE_PATIENCE_MS,
+      },
+      () => api.startUpgrade(data?.latest),
+    )
+      .then((answer) => { setAsking(false); setJobId(answer?.job?.id ?? null); })
       .catch((error: unknown) => setFailed(error instanceof ApiError ? error.message : String(error)))
       .finally(() => setBusy(false));
   };
@@ -797,6 +763,9 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
         <Section>
           <Stack gap="sm">
             <UpgradeProgress {...upgrade} job={upgrade.job ?? ended ?? undefined} />
+            {!upgrade.job && !ended && !upgrade.error && data && recentFailure(data.history) ? (
+              <Notice tone="critical" role="alert">{recoveryLine(recentFailure(data.history)!)}</Notice>
+            ) : null}
             {asking ? (
               <Notice tone="warning" role="alert">
                 {UPGRADE_WARNING}
@@ -844,15 +813,8 @@ export function Version({ reload }: { reload?: () => void }): JSX.Element {
 }
 
 /** Where an upgrade has got to, or what it left behind when it stopped. */
-function UpgradeProgress({ job, away, error }: UpgradeWatch): JSX.Element | null {
+function UpgradeProgress({ job, error }: UpgradeWatch): JSX.Element | null {
   if (error) return <ErrorBanner message={error} />;
-  if (away) {
-    return (
-      <Notice tone="warning" role="status">
-        buddi is restarting. This page comes back on its own when it answers again.
-      </Notice>
-    );
-  }
   if (!job) return null;
   if (job.phase === 'failed') {
     return (

@@ -8,6 +8,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApiError, api } from '../api';
 import { Version } from './Settings';
+import { UPGRADE_PATIENCE_MS, resetRestart, restartState } from '../shell/restart';
 
 vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
@@ -35,8 +36,8 @@ const AVAILABLE = {
   checkout: false,
 };
 
-beforeEach(() => { vi.clearAllMocks(); });
-afterEach(() => { vi.useRealTimers(); });
+beforeEach(() => { vi.clearAllMocks(); resetRestart(); vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); })); });
+afterEach(() => { resetRestart(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('the version panel', () => {
   it('offers a checkout the command instead of a button', async () => {
@@ -92,7 +93,7 @@ describe('the version panel', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Upgrade to 0.1.1' }));
     expect(api.startUpgrade).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'This takes a backup, installs the new version and restarts buddi. This page closes and comes back on its own.',
+      'This takes a backup, installs the new version and restarts buddi. This page waits for it and comes back by itself.',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
     await waitFor(() => expect(api.startUpgrade).toHaveBeenCalledWith('0.1.1'));
@@ -107,93 +108,62 @@ describe('the version panel', () => {
     expect(api.startUpgrade).not.toHaveBeenCalled();
   });
 
-  it('waits for the gateway to come back on a different version, then reloads once', async () => {
+  it('puts up the upgrade screen at once, feeds it each step, and leaves the waiting to it', async () => {
     vi.useFakeTimers();
-    const reload = vi.fn();
     vi.mocked(api.version).mockResolvedValue(AVAILABLE);
     vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
     vi.mocked(api.upgradeJob)
       .mockResolvedValueOnce({ id: 'job-1', phase: 'installing', startedAt: new Date().toISOString() })
       // The gateway is stopped from under this page: that is the upgrade working.
       .mockRejectedValue(new ApiError(0, 'failed to fetch'));
-    vi.mocked(api.session)
-      .mockResolvedValueOnce({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 8787, version: '0.1.0' })
-      .mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 8787, version: '0.1.1' });
 
-    render(<Version reload={reload} />);
+    render(<Version />);
     const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
     await tick(0);
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
+    expect(restartState()).toMatchObject({ kind: 'upgrade', line: 'Upgrading to 0.1.1…', patienceMs: UPGRADE_PATIENCE_MS });
     await tick(0);
     expect(api.startUpgrade).toHaveBeenCalled();
+    expect(restartState()?.step).toBe('Installing the new version.');
 
-    // Once it is being followed: a phase, then silence, then the old version
-    // still answering, then the new one.
-    expect(screen.getByRole('status')).toHaveTextContent('Installing the new version.');
+    // Once nothing answers, the job is not asked again: the screen waits for the new process.
     await tick(2_000);
-    expect(screen.getByRole('status')).toHaveTextContent('buddi is restarting.');
-    await tick(2_000);
-    expect(reload).not.toHaveBeenCalled();
-    await tick(2_000);
-    expect(reload).toHaveBeenCalledTimes(1);
-
-    // And it stops: the loop does not keep reloading a page it already reloaded.
+    const asked = vi.mocked(api.upgradeJob).mock.calls.length;
     await tick(10_000);
-    expect(reload).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.upgradeJob).mock.calls.length).toBe(asked);
+    expect(restartState()?.kind).toBe('upgrade');
   });
 
-  it('gives up after ten minutes and names the command that can still answer', async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
+  it('takes the screen away and says so when the upgrade is refused', async () => {
     vi.mocked(api.version).mockResolvedValue(AVAILABLE);
-    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
-    // The gateway goes and never comes back: nothing answers, for ever.
-    vi.mocked(api.upgradeJob).mockRejectedValue(new ApiError(0, 'failed to fetch'));
-    vi.mocked(api.session).mockRejectedValue(new ApiError(0, 'failed to fetch'));
-
-    render(<Version reload={reload} />);
-    const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
-    await tick(0);
+    vi.mocked(api.startUpgrade).mockRejectedValue(new ApiError(409, 'An upgrade is already running.'));
+    render(<Version />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Upgrade to 0.1.1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
-    await tick(0);
-    await tick(2_000);
-    expect(screen.getByRole('status')).toHaveTextContent('buddi is restarting.');
-
-    await tick(10 * 60_000);
-    expect(reload).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent('buddi did not come back. Run buddi doctor in a terminal.');
+    expect(await screen.findByText('An upgrade is already running.')).toBeInTheDocument();
+    expect(restartState()).toBeNull();
   });
 
-  it('reads the verdict off the record on disk when buddi comes back unchanged', async () => {
-    vi.useFakeTimers();
-    const reload = vi.fn();
+  it('reads a failure after the hand-over off the record, on the page reloaded onto the old version', async () => {
     const failed = {
       from: '0.1.0', to: '0.1.1', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
       outcome: 'failed' as const, step: 'migrating', error: 'relation "core.jobs" already exists',
       backup: 'buddi-backup-20260101-000000.tar.gz',
     };
-    vi.mocked(api.version)
-      .mockResolvedValueOnce(AVAILABLE)
-      .mockResolvedValue({ ...AVAILABLE, history: [failed] });
-    vi.mocked(api.startUpgrade).mockResolvedValue({ job: { id: 'job-1', phase: 'backup', startedAt: new Date().toISOString() } });
-    vi.mocked(api.upgradeJob).mockRejectedValue(new ApiError(0, 'failed to fetch'));
-    // A gateway answers again, on the version this page started on.
-    vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 8787, version: '0.1.0' });
-
-    render(<Version reload={reload} />);
-    const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
-    await tick(0);
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
-    await tick(0);
-    await tick(4_000);
-    expect(reload).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent(
+    vi.mocked(api.version).mockResolvedValue({ ...AVAILABLE, history: [failed] });
+    const { unmount } = render(<Version />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
       'The upgrade to 0.1.1 failed at migrating: relation "core.jobs" already exists. ' +
       'The backup taken first is buddi-backup-20260101-000000.tar.gz. Run buddi doctor in a terminal; it prints the way back.',
     );
+    unmount();
+    // An old failure is history, not news.
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    vi.mocked(api.version).mockResolvedValue({ ...AVAILABLE, history: [{ ...failed, startedAt: old, finishedAt: old }] });
+    render(<Version />);
+    await screen.findByText('Upgrades so far');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('hands the button back when an upgrade fails before anything was replaced', async () => {
@@ -205,13 +175,15 @@ describe('the version panel', () => {
       error: 'npm install buddi@0.1.1 failed: 404 Not Found',
     });
 
-    render(<Version reload={() => {}} />);
+    render(<Version />);
     const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
     await tick(0);
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
     fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.1.1' }));
     await tick(0);
     expect(screen.getByRole('alert')).toHaveTextContent('buddi is still running on the version it had.');
+    // The screen that went up with the click is gone again.
+    expect(restartState()).toBeNull();
     // The job ended, so nothing is polled again and the button works.
     const asked = vi.mocked(api.upgradeJob).mock.calls.length;
     await tick(10_000);

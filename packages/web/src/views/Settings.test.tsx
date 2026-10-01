@@ -1,12 +1,13 @@
 /**
  * The Service section: only where there is a supervisor, and never a stop or a
- * restart the owner did not confirm after being told it closes the page.
+ * restart the owner did not confirm after being told what it does to the page.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api } from '../api';
 import { Service } from './Settings';
+import { resetRestart, restartState } from '../shell/restart';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
@@ -18,7 +19,11 @@ const STATUS = {
   database: 'running', databasePid: 22, gateway: 'running', gatewayPid: 33,
 };
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetRestart();
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+});
 
 describe('the service section', () => {
   it('is absent when nothing supervises this gateway', async () => {
@@ -37,16 +42,27 @@ describe('the service section', () => {
     expect(screen.getAllByText('running')).toHaveLength(2);
   });
 
-  it('warns that a restart closes the dashboard, and only then restarts', async () => {
+  it('says what a restart does, and only then restarts, under the restart screen', async () => {
     vi.mocked(api.service).mockResolvedValue({ supervised: true, status: STATUS });
-    vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true, status: STATUS });
+    vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true, pending: 'restart' });
     render(<Service />);
     fireEvent.click(await screen.findByRole('button', { name: 'Restart gateway' }));
     expect(api.serviceAction).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent(/closes this dashboard/);
-    expect(screen.getByRole('alert')).toHaveTextContent(/run buddi in a terminal/);
+    expect(screen.getByRole('alert')).toHaveTextContent('Restarting the gateway takes a few seconds. This page waits for it and comes back by itself.');
+    expect(restartState()).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Restart it' }));
+    expect(restartState()?.kind).toBe('restart');
     await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('restart'));
+  });
+
+  it('draws a stop as stopped, not as a restart', async () => {
+    vi.mocked(api.service).mockResolvedValue({ supervised: true, status: STATUS });
+    vi.mocked(api.serviceAction).mockResolvedValue({ supervised: true, pending: 'stop' });
+    render(<Service />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop gateway' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop it' }));
+    expect(restartState()?.kind).toBe('stop');
+    await waitFor(() => expect(api.serviceAction).toHaveBeenCalledWith('stop'));
   });
 
   it('lets a stop be reconsidered before it happens', async () => {

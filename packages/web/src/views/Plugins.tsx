@@ -48,6 +48,7 @@ import { fmtRelative } from '../format';
 import { AGENTS_ROUTE, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { announcePagesChanged } from '../pages/usePages';
+import { pluginWords, restartWhile } from '../shell/restart';
 import {
   ActionMenu,
   AppIcon,
@@ -310,6 +311,8 @@ function StatePill({ plugin }: { plugin: InstalledPluginView }): JSX.Element {
   // Held back by a requirement: what it needs first, named.
   const need = plugin.needs?.[0];
   if (need) return <Pill tone="warning">needs {need.plugin}</Pill>;
+  // Installed or updated since buddi started: not a failure, a restart away.
+  if (plugin.loadsAtRestart) return <Pill tone="accent">loads at restart</Pill>;
   if (plugin.loaded && plugin.setup) return <Pill tone="warning">needs setup</Pill>;
   return plugin.loaded ? (
     <Pill tone="good" dot>
@@ -357,7 +360,6 @@ export function Plugins({
   const [jobId, setJobId] = useState<string | null>(null);
   const { job, error: jobError } = useStageJob(jobId);
   const [failed, setFailed] = useState<string | null>(null);
-  const [installed, setInstalled] = useState<string | null>(null);
   const [tab, setTab] = useState<PluginsTab>(() => parsePluginsTab(hash));
   useEffect(() => setTab(parsePluginsTab(hash)), [hash]);
   const [opened, setOpened] = useState<Opened | null>(null);
@@ -388,7 +390,6 @@ export function Plugins({
 
   const onStaged = (id: string): void => {
     setFailed(null);
-    setInstalled(null);
     setJobId(id);
   };
   const fail = (error: unknown): void => setFailed(errorText(error));
@@ -560,7 +561,6 @@ export function Plugins({
   const waiting = allStaged.filter((entry) => entry.id !== freshId);
   const onStagedInstalled = (name: string): void => {
     setOpened(null);
-    setInstalled(name);
     rememberInstalled(name);
     setJobId(null);
     view.reload();
@@ -692,7 +692,7 @@ export function Plugins({
         </Panel>
       ) : null}
 
-      {installed || data?.restartNeeded ? <RestartToLoad checkout={checkout} name={installed} /> : null}
+      {data?.restartNeeded ? <RestartToLoad checkout={checkout} waiting={list.filter((plugin) => plugin.loadsAtRestart)} /> : null}
       <FirstStep list={list} firstStepFor={firstStepFor} />
 
       <Panel flush title="Installed" tool={data ? plural(list.length, 'plugin', 'plugins') : undefined}>
@@ -1345,15 +1345,19 @@ export function freshStageId(staged: StagedPluginView[], ownId: string | undefin
 /**
  * The restart that actually loads it.
  *
- * A packaged installation restarts the gateway through the supervisor, which
- * is the same button the Service section offers and says the same thing about
- * closing this page. A checkout has no supervisor and gets the command.
+ * Drawn from what the gateway says — `restartNeeded`, and each plugin whose
+ * installed version this process has not loaded — never from what this page
+ * remembers doing, so it is gone the moment the plugins are loaded. A packaged
+ * installation restarts through the supervisor, under "Restarting buddi"
+ * (`shell/Restarting.tsx`), which reloads the page once buddi is back. A
+ * checkout has no supervisor and gets the command.
  */
-function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | null }): JSX.Element {
+function RestartToLoad({ checkout, waiting }: { checkout: boolean; waiting: InstalledPluginView[] }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const what = name
-    ? `${name} is installed.`
+  const named = pluginWords(waiting);
+  const what = named
+    ? `${named} ${waiting.length === 1 ? 'is' : 'are'} installed.`
     : 'A plugin was installed, disabled or enabled since buddi started, and this buddi has not caught up.';
   return (
     <Stack gap="sm">
@@ -1370,8 +1374,10 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
               onClick={() => {
                 setBusy(true);
                 setFailed(null);
-                void api
-                  .serviceAction('restart')
+                void restartWhile(
+                  { kind: 'plugins', ...(named ? { line: `Loading ${named}…` } : { line: 'Applying your plugin changes…' }) },
+                  () => api.serviceAction('restart'),
+                )
                   .catch((error: unknown) => setFailed(errorText(error)))
                   .finally(() => setBusy(false));
               }}
@@ -1384,7 +1390,7 @@ function RestartToLoad({ checkout, name }: { checkout: boolean; name: string | n
         {what}{' '}
         {checkout
           ? CHECKOUT_RESTART
-          : `${name ? 'Its tools appear' : 'It takes effect'} once buddi restarts. That closes this dashboard for a few seconds.`}
+          : `${named ? (waiting.length === 1 ? 'Its tools appear' : 'Their tools appear') : 'It takes effect'} once buddi restarts, which takes a few seconds. This page waits and comes back by itself.`}
       </Notice>
     </Stack>
   );

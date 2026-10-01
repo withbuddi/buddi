@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { App, PHONE_QUERY } from '../App';
 import { RECOVERY_BANNER } from '../views/Recovery';
+import { api, resetLink } from '../api';
+import { beginRestart, cancelRestart, resetRestart } from './restart';
 
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
@@ -40,7 +42,7 @@ function phoneWidth(on: boolean): void {
 }
 
 beforeEach(() => stubServer());
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, '', '#/'); });
+afterEach(() => { cleanup(); resetRestart(); resetLink(); vi.useRealTimers(); vi.unstubAllGlobals(); window.history.replaceState(null, '', '#/'); });
 
 describe("the shell's edges", () => {
   it('draws one banner, recovery first with a count of the rest, where the separate banners were', async () => {
@@ -73,5 +75,32 @@ describe("the shell's edges", () => {
     const places = screen.getByLabelText('Places');
     expect(within(places).getByRole('button', { name: 'Status' })).toBeInTheDocument();
     await waitFor(() => expect(within(places).getByTestId('rail-status-dot')).toHaveAttribute('data-tone', 'critical'));
+  });
+
+  it('defers the lost banner and Reconnecting… to a restart being waited for', async () => {
+    phoneWidth(false);
+    ANSWERS['/api/recovery'] = { active: false, restoredAt: null, archive: null, checklist: { secrets: [], plugins: [] } };
+    try {
+      render(<App />);
+      const bar = await screen.findByRole('contentinfo', { name: 'Status' });
+      await waitFor(() => expect(within(bar).getByRole('link', { name: 'Connection: Local' })).toBeInTheDocument());
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+      // buddi stops answering: Reconnecting… at once, the banner after thirty seconds.
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+      await act(async () => { await api.version().catch(() => {}); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+      expect(within(bar).getByRole('link', { name: 'Connection: Reconnecting…' })).toBeInTheDocument();
+      expect(document.querySelector('.shell-banner[data-banner="lost"]')).not.toBeNull();
+
+      // A restart being waited for has the window: neither says a thing.
+      act(() => beginRestart({ kind: 'restart' }));
+      expect(within(bar).getByRole('link', { name: 'Connection: Local' })).toBeInTheDocument();
+      expect(document.querySelector('.shell-banner[data-banner="lost"]')).toBeNull();
+
+      act(() => cancelRestart());
+      expect(document.querySelector('.shell-banner[data-banner="lost"]')).not.toBeNull();
+    } finally {
+      ANSWERS['/api/recovery'] = { active: true, restoredAt: null, archive: null, checklist: { secrets: [], plugins: [] } };
+    }
   });
 });

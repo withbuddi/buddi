@@ -4,6 +4,16 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- Restarting buddi from the dashboard — Restart to load it on Plugins, Restart gateway, an upgrade, a restore, leaving recovery mode — now covers the window with a calm "Restarting buddi" screen (the Blob, what the restart is for, such as "Loading weather 0.1.3 and 4 more…", and the time it has taken), waits until the old process is gone and the new one answers, then reloads the page. After ninety seconds (five minutes for an upgrade) it says buddi may need a hand, names `buddi status` and offers Reload. Stop gateway shows the same screen, still, with `buddi service start`.
+- A restart started elsewhere (another device, `buddi service restart`) shows the same screen instead of red "buddi isn't answering" banners: the gateway tells open pages it is closing, and a page that finds a new process after the link comes back reloads too (unless you are typing).
+- `/_buddi/ready` also answers a random `boot` id for the running process, so a page can tell the process that went from the one that came back.
+
+### Fixed
+
+- After plugin updates, the "is installed — Restart to load it" notice comes from what buddi is actually running: it lists every plugin waiting for the restart and is gone once they are loaded, instead of staying after the restart. A plugin waiting for the restart says "loads at restart" on its row rather than "did not load".
+
 ## 0.1.0-pre.29 — 2026-10-01
 
 ### Added
