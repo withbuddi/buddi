@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Changed
+
+- While a mailbox has instant mail (IDLE), buddi also checks its Sent folder every minute over the same connection, so a reply you send from your phone moves the conversation to "waiting on them" within a minute instead of up to 15.
+
 ## 0.1.0-pre.28 — 2026-10-01
 
 ### Added

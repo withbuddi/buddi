@@ -342,6 +342,14 @@ export interface ImapIdleSession {
    * error when the server or the network dropped it. Never rejects.
    */
   readonly ended: Promise<{ error?: unknown }>;
+  /**
+   * A folder's UIDNEXT — the Sent folder's — asked over this same connection
+   * (`STATUS <folder> (UIDNEXT)`; the IDLE is broken for that one command
+   * and re-armed). How mail the owner sends from another app is noticed
+   * while IDLE is live without a second connection. Null when the server
+   * would not say.
+   */
+  sentUidNext?(folder: string): Promise<number | null>;
   /** Log out and release the socket. Idempotent. */
   close(): Promise<void>;
 }

@@ -104,6 +104,8 @@ export class FakeImapServer {
     | { op: 'move'; mailbox: string; uids: number[]; destination: string }
     | { op: 'labels'; mailbox: string; uids: number[]; labels: string[] }
   > = [];
+  /** How many times an IDLE session asked for Sent's UIDNEXT. */
+  sentChecks = 0;
 
   /**
    * IDLE (RFC 2177): sessions open on this server, every IDLE login it
@@ -336,6 +338,15 @@ class FakeIdleSession implements ImapIdleSession {
   push(mailbox: string, change: IdleChange): void {
     if (this.#done || mailbox !== this.mailbox) return;
     this.onChange(change);
+  }
+
+  /** `STATUS <Sent> (UIDNEXT)` over this connection, as the real session asks it. */
+  async sentUidNext(folder: string): Promise<number | null> {
+    if (this.#done) throw new Error('fake imap: IDLE connection is closed');
+    if (!this.server.mailboxes.has(folder)) return null;
+    this.server.sentChecks += 1;
+    const box = this.server.mailbox(folder);
+    return Math.max(0, ...box.messages.map((m) => m.uid), box.uidNextFloor ?? 0) + 1;
   }
 
   drop(error: unknown): void {

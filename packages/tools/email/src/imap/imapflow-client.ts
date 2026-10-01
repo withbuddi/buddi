@@ -501,6 +501,7 @@ interface ImapFlowIdleLike {
   close(): void;
   mailboxOpen(path: string, opts?: { readOnly?: boolean }): Promise<unknown>;
   idle(): Promise<unknown>;
+  status(path: string, query: Record<string, boolean>): Promise<{ uidNext?: number | bigint } | undefined>;
   capabilities: Map<string, unknown>;
   on(event: string, listener: (...args: unknown[]) => void): unknown;
 }
@@ -560,6 +561,14 @@ export const imapflowIdleFactory: ImapIdleFactory = async (account, auth, onChan
   }
   const session: ImapIdleSession = {
     ended,
+    // STATUS on this connection: imapflow breaks the IDLE for the one
+    // command and re-arms it afterwards. The selected mailbox (INBOX) is
+    // never STATUSed (RFC 3501 advises against it) and is never Sent.
+    async sentUidNext(folder: string) {
+      if (folder.toUpperCase() === 'INBOX') return null;
+      const status = await client.status(folder, { uidNext: true });
+      return status?.uidNext !== undefined ? Number(status.uidNext) : null;
+    },
     async close() {
       if (closing) return;
       closing = true;

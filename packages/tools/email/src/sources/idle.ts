@@ -8,8 +8,13 @@
  *
  *  - **Its own connection.** Never the poll's reader and never the write
  *    port's, so a mailbox action (a MOVE, a STORE) cannot break IDLE, and an
- *    IDLE that dies costs the poll nothing. INBOX only, opened read-only;
- *    Sent stays on the poll.
+ *    IDLE that dies costs the poll nothing. INBOX only, opened read-only.
+ *  - **Sent, cheaply.** IDLE watches one mailbox, and mail the owner sends
+ *    from another app lands in Sent, not INBOX. So while IDLE is live, every
+ *    `IDLE_SENT_CHECK_MS` (1 min) the same connection asks `STATUS <Sent>
+ *    (UIDNEXT)` — one line each way, the IDLE re-armed after it — and a
+ *    UIDNEXT past the poll's Sent cursor starts the poll. No second
+ *    connection; "the owner wrote back" is fresh within a minute.
  *  - **Coalesced.** A burst of EXISTS/EXPUNGE/FLAGS starts one timer
  *    (`IDLE_DEBOUNCE_MS`, 2s) and the poll runs when it fires. The source
  *    never runs two polls of one account at once; a change that lands during
@@ -42,6 +47,8 @@ export const IDLE_BACKOFF_FIRST_MS = 5_000;
 export const IDLE_BACKOFF_MAX_MS = 5 * 60_000;
 /** A session that lived this long counts as healthy: the backoff starts over. */
 export const IDLE_STABLE_MS = 60_000;
+/** How often a live IDLE connection asks for Sent's UIDNEXT. */
+export const IDLE_SENT_CHECK_MS = 60_000;
 /** The poll's period for an account whose IDLE is live: the safety net. */
 export const IDLE_SLOW_POLL_SECONDS = 15 * 60;
 
@@ -109,6 +116,7 @@ export interface IdleWatchersOptions {
   backoffFirstMs?: number;
   backoffMaxMs?: number;
   stableMs?: number;
+  sentCheckMs?: number;
 }
 
 /** Every enabled account's watcher, kept in step with `email.accounts`. */
@@ -203,6 +211,9 @@ class AccountWatcher {
   #connecting: Promise<void> | null = null;
   #retryTimer: NodeJS.Timeout | null = null;
   #debounceTimer: NodeJS.Timeout | null = null;
+  #sentTimer: NodeJS.Timeout | null = null;
+  /** The Sent UIDNEXT a poll was last asked for, so one sent message asks once. */
+  #sentAsked: number | null = null;
   #attempt = 0;
   #stopped = false;
 
@@ -269,13 +280,57 @@ class AccountWatcher {
     this.#log(reconnect ? 'IDLE is back' : 'IDLE on INBOX');
     // Mail that arrived while the connection was down is the poll's to find.
     if (reconnect) this.#changed();
+    if (session.sentUidNext) this.#watchSent(session);
     void session.ended.then(({ error }) => {
       if (this.#session !== session) return;
       this.#session = null;
+      this.#clearSent();
       if (this.#stopped) return;
       if (Date.now() - since >= (this.opts.stableMs ?? IDLE_STABLE_MS)) this.#attempt = 0;
       this.#retry(error ?? new Error('the server closed the connection'));
     });
+  }
+
+  /** This account's synced Sent folder and the poll's cursor in it, or null. */
+  async #sentFolder(): Promise<{ name: string; lastUid: number } | null> {
+    const { rows } = await this.opts.host.db.query(
+      `select name, last_uid from email.folders where account_id = $1 and kind = 'sent' and synced limit 1`,
+      [this.account.id],
+    );
+    const row = rows[0] as { name?: string; last_uid?: unknown } | undefined;
+    return row?.name ? { name: row.name, lastUid: Number(row.last_uid ?? 0) } : null;
+  }
+
+  /** While live: ask Sent's UIDNEXT now and then; past the poll's cursor, poll. */
+  #watchSent(session: ImapIdleSession): void {
+    this.#clearSent();
+    let quiet = false;
+    this.#sentTimer = setInterval(() => {
+      if (this.#stopped || this.#session !== session) return;
+      void (async () => {
+        // Looked up each time: a Sent folder discovered after IDLE connected counts at once.
+        const sent = await this.#sentFolder();
+        if (sent === null) return;
+        const uidNext = await session.sentUidNext!(sent.name);
+        if (uidNext === null) return;
+        quiet = false;
+        if (uidNext - 1 > sent.lastUid && this.#sentAsked !== uidNext) {
+          this.#sentAsked = uidNext;
+          this.#changed();
+        }
+      })().catch((err) => {
+        // A dropped connection ends the session (and is retried there); say
+        // anything else once per streak rather than once a minute.
+        if (!quiet) this.#log(`could not check Sent: ${err instanceof Error ? err.message : String(err)}`);
+        quiet = true;
+      });
+    }, this.opts.sentCheckMs ?? IDLE_SENT_CHECK_MS);
+    this.#sentTimer.unref?.();
+  }
+
+  #clearSent(): void {
+    if (this.#sentTimer) clearInterval(this.#sentTimer);
+    this.#sentTimer = null;
   }
 
   #retry(err: unknown): void {
@@ -311,6 +366,7 @@ class AccountWatcher {
     this.state = 'stopped';
     if (this.#retryTimer) clearTimeout(this.#retryTimer);
     if (this.#debounceTimer) clearTimeout(this.#debounceTimer);
+    this.#clearSent();
     this.#retryTimer = null;
     this.#debounceTimer = null;
     await this.#connecting?.catch(() => {});

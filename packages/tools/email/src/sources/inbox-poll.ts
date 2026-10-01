@@ -183,7 +183,7 @@ export interface InboxPollOptions {
    */
   idle?: ImapIdleFactory;
   /** Debounce and backoff, for tests. */
-  idleTuning?: Pick<IdleWatchersOptions, 'debounceMs' | 'backoffFirstMs' | 'backoffMaxMs' | 'stableMs'>;
+  idleTuning?: Pick<IdleWatchersOptions, 'debounceMs' | 'backoffFirstMs' | 'backoffMaxMs' | 'stableMs' | 'sentCheckMs'>;
   /** The poll period, in seconds, for an account whose IDLE is live. Default 15 minutes. */
   slowPollSeconds?: number;
 }

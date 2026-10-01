@@ -207,7 +207,7 @@ IMAP IDLE connection per enabled mailbox, on INBOX only
 (`src/sources/idle.ts`). When the server reports a change there (a new
 message, one expunged, a flag changed) that account's ordinary poll runs
 within about two seconds; nothing in the poll changes, so a poll IDLE started
-keeps every guarantee of a scheduled one. Sent stays on the poll.
+keeps every guarantee of a scheduled one.
 
 - **Its own connection.** Not the poll's reader and not the write port's:
   a mailbox action (§11) cannot break IDLE, and INBOX is opened read-only.
@@ -233,6 +233,13 @@ keeps every guarantee of a scheduled one. Sent stays on the poll.
   page tools say so to the watcher; the next poll would also catch it);
   taking the plugin out stops every watcher within a source tick (30s), and
   buddi stopping closes them before the database pool.
+- **Sent, on the same connection.** IDLE watches INBOX, and a reply the owner
+  sends from his phone lands in Sent. So while IDLE is live, every minute the
+  IDLE connection asks `STATUS <Sent> (UIDNEXT)` — one line each way; IDLE is
+  broken for it and re-armed — and a UIDNEXT past the poll's Sent cursor
+  starts the poll. Every poll, IDLE's or the schedule's, also reads Sent.
+  "The owner wrote back" is fresh within a minute, without a second
+  connection per mailbox.
 - **On the page.** The mailbox row's "New mail" cell says "Instant" while
   this process has a live IDLE on that inbox, and "Checking every 5 min"
   otherwise.

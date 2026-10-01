@@ -322,4 +322,37 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     await waitFor(() => server.idlers.size === 0);
     expect(idleLive(accountId)).toBe(false);
   });
+  it('notices mail the owner sent from another app while IDLE is live, without a second connection', async () => {
+    server.mailboxes.set('Sent', { uidValidity: 2, messages: [], specialUse: '\\Sent' });
+    const source = createInboxPollSource({
+      connect,
+      idle: server.idleFactory(),
+      env: ENV,
+      backfill: 10_000,
+      idleTuning: { debounceMs: DEBOUNCE, backoffFirstMs: BACKOFF, backoffMaxMs: 10_000, stableMs: 60_000, sentCheckMs: 40 },
+    });
+    await startWatch(source);
+    await waitFor(() => idleLive(accountId));
+    server.add('INBOX', fakeMessage({ messageId: '<lunch@friend.test>', from: 'friend@friend.test', to: [OWNER], subject: 'Lunch?' }));
+    const threadState = async (): Promise<string | null> =>
+      ((await pool.query(`select state from email.threads where subject ilike '%lunch%'`)).rows[0]?.state as string | undefined) ?? null;
+    await waitFor(async () => (await threadState()) === 'waiting-on-me');
+    const idleConnects = server.idleConnects;
+
+    // Answered from the phone: it lands in Sent; INBOX hears nothing.
+    server.add('Sent', fakeMessage({
+      messageId: '<reply@owner>', from: OWNER, to: ['friend@friend.test'], subject: 'Re: Lunch?',
+      inReplyTo: '<lunch@friend.test>', references: ['<lunch@friend.test>'],
+      date: new Date('2026-09-13T10:00:00Z'),
+    }));
+    await waitFor(async () => (await threadState()) === 'waiting-on-them');
+    expect(server.sentChecks).toBeGreaterThan(0);
+    expect(server.idleConnects).toBe(idleConnects);
+    // Once seen, the same Sent message asks for no further polls (one already
+    // asked for may still be finishing; after that, quiet).
+    await sleep(200);
+    const fetches = server.fetches.length;
+    await sleep(200);
+    expect(server.fetches.length).toBe(fetches);
+  });
 });
