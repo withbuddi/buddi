@@ -73,6 +73,7 @@ import {
   checkConfig,
   checkDatabaseExposure,
   checkEmail,
+  checkPairedDevices,
   checkRecovery,
   checkPendingPluginData,
   checkTailscale,
@@ -602,12 +603,8 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       const pool = await connected();
       if (!pool) return { status: 'warn', detail: DB_UNREACHABLE };
       const devices = await listDevices(pool);
-      return devices.length === 0
-        ? { status: 'warn', detail: 'none paired — run `buddi telegram pair`' }
-        : {
-            status: 'ok',
-            detail: devices.map((d) => `${d.surface}:${d.label ?? d.externalUserId}`).join(', '),
-          };
+      const legacyEnv = ['TELEGRAM_OWNER_USER_ID', 'TELEGRAM_OWNER_CHAT_ID'].filter((name) => (env[name] ?? '').trim() !== '');
+      return checkPairedDevices(devices, legacyEnv);
     },
 
     /**

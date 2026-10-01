@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createPool, runMigrations, ensureOwner, completeOnboarding, ToolRegistry, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core';
+import { createPool, runMigrations, ensureOwner, completeOnboarding, pairSurfaceIdentity, ToolRegistry, createPluginHost, hostBindingOf, type CoreToolContext } from '@buddi/core';
 import { testAnthropicAccount, testDatabaseUrl } from '@buddi/core/testing';
 import { manifest as memory } from '@buddi/tool-memory';
 import { BrowserManager, BrowserService, createBrowserManifest, type BrowserDriver } from '@buddi/tool-browser';
@@ -157,8 +157,9 @@ suite('browser authority across interactive surfaces', () => {
     };
     const defaultProvider = { complete: vi.fn(async () => { throw new Error('Must use the selected agent provider'); }) };
     const providerFor = vi.fn(() => fixture.provider);
+    await pairSurfaceIdentity(pool, { surface: 'telegram', externalUserId: '4242', externalChatId: '4242', pairedVia: 'code' });
     const telegram = await startTelegram({ ...fixture, provider: defaultProvider, providerFor, pool, now: () => new Date(),
-      env: { ...fixture.env, TELEGRAM_OWNER_USER_ID: '4242', TELEGRAM_OWNER_CHAT_ID: '4242' },
+      env: fixture.env,
       api: api as unknown as TelegramApi, log: () => {} });
     try {
       await vi.waitFor(() => expect(replies.some((r) => r.includes('Fixture browser opened.'))).toBe(true), { timeout: 5000 });

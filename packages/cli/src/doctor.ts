@@ -748,6 +748,31 @@ export interface EmailAccountFact {
   lastSyncAt: string | null;
 }
 
+/** One paired device, as the doctor names it. */
+export interface PairedDeviceFact {
+  surface: string;
+  label: string | null;
+  externalUserId: string;
+}
+
+/**
+ * The paired devices row. `legacyEnv` is the retired Telegram owner lines
+ * still set (`TELEGRAM_OWNER_USER_ID`, `TELEGRAM_OWNER_CHAT_ID`): buddi
+ * adopted that identity once and reads neither again, so a line left there
+ * looks like configuration and configures nothing.
+ */
+export function checkPairedDevices(devices: readonly PairedDeviceFact[], legacyEnv: readonly string[] = []): ProbeResult {
+  const row: ProbeResult = devices.length === 0
+    ? { status: 'warn', detail: 'none paired — pair a phone in Settings → Telegram or run `buddi telegram pair`' }
+    : { status: 'ok', detail: devices.map((d) => `${d.surface}:${d.label ?? d.externalUserId}`).join(', ') };
+  if (legacyEnv.length === 0) return row;
+  return {
+    status: 'warn',
+    detail: `${row.detail}. ${legacyEnv.join(' and ')} ${legacyEnv.length === 1 ? 'is' : 'are'} still in .env and ignored — ` +
+      'pair in Settings → Telegram; delete the line(s)',
+  };
+}
+
 /**
  * Every mailbox, and when each last saw mail.
  *

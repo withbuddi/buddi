@@ -19,7 +19,6 @@ import {
   getSurfaceCursor,
   askQuestion,
   listSurfaceIdentities,
-  pairSurfaceIdentity,
   resumeJob,
   TELEGRAM_SURFACE,
   ToolRegistry,
@@ -66,6 +65,7 @@ import { ROLE_MAKER } from '../agents/roles.js';
 import { bindOwnerTools } from '../agents/owner-tools.js';
 import { createWiringAsync, loadEnvironment } from '../bootstrap.js';
 import { TelegramApprovals } from './approvals.js';
+import { adoptEnvOwner } from './env-owner.js';
 import { syncProfilePhoto } from './profile-photo.js';
 import { MascotStickers } from './stickers.js';
 import { TelegramApi, type TelegramBotCommand } from './api.js';
@@ -228,16 +228,6 @@ function watchCatalogReloads(catalog: AgentCatalog, listener: () => void): () =>
 export const AWAITING_APPROVAL_REPLY =
   'I need your approval before I can do that — see the request just below.';
 
-/** Numeric ids only: a username is not an identity. */
-export function numericId(value: string | undefined, label: string): string | undefined {
-  const raw = (value ?? '').trim();
-  if (raw === '') return undefined;
-  if (!/^-?\d+$/.test(raw)) {
-    throw new Error(`${label} must be a numeric id, got: ${raw}`);
-  }
-  return raw;
-}
-
 export interface TelegramDeps {
   pool: Pool;
   registry: ToolRegistry;
@@ -325,18 +315,10 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
 
   await ensureOwner(pool, 'owner');
 
-  const ownerUserId = numericId(env.TELEGRAM_OWNER_USER_ID, 'TELEGRAM_OWNER_USER_ID');
-  const ownerChatId = numericId(env.TELEGRAM_OWNER_CHAT_ID, 'TELEGRAM_OWNER_CHAT_ID');
-  if (ownerUserId) {
-    // The startup allowlist. `paired_via` is recorded, and core keeps the
-    // first value, so a device that paired by code is never relabelled 'env'.
-    await pairSurfaceIdentity(pool, {
-      surface: SURFACE,
-      externalUserId: ownerUserId,
-      externalChatId: ownerChatId ?? ownerUserId,
-      pairedVia: 'env',
-    });
-  }
+  // The retired `.env` owner lines, adopted once and never read again: an
+  // unpaired phone stays unpaired across restarts.
+  const adoption = await adoptEnvOwner(pool, env);
+  if (adoption.outcome === 'adopted') log(`telegram: paired ${adoption.userId} from TELEGRAM_OWNER_USER_ID once; .env is not read for it again`);
 
   const paired = await listSurfaceIdentities(pool, SURFACE);
   const cursor = await getSurfaceCursor(pool, SURFACE);
@@ -745,7 +727,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
 /** How the startup banner renders a paired identity list. */
 export function describePaired(paired: readonly SurfaceIdentity[]): string {
   if (paired.length === 0) {
-    return 'none — messages will be ignored until TELEGRAM_OWNER_USER_ID is set';
+    return 'none — messages are ignored until a phone pairs (Settings → Telegram, or `buddi telegram pair`)';
   }
   return paired
     .map((p) => `${p.externalUserId}${p.externalChatId ? `@chat:${p.externalChatId}` : ''}`)

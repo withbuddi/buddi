@@ -20,7 +20,7 @@ import { offersKeyboard, SURFACE } from './surface.js';
 export class OwnerNotPairedError extends Error {
   override readonly name = 'OwnerNotPairedError';
   readonly code = 'owner-not-paired';
-  constructor(message = 'no Telegram owner chat is paired (set TELEGRAM_OWNER_USER_ID and message the bot once)') {
+  constructor(message = 'no Telegram owner chat is paired (pair a phone in Settings → Telegram, or run `buddi telegram pair`)') {
     super(message);
   }
 }

@@ -33,7 +33,8 @@ export interface SurfaceIdentityRef {
 }
 
 /**
- * `env` — the startup allowlist (`TELEGRAM_OWNER_USER_ID`).
+ * `env` — the retired `.env` allowlist (`TELEGRAM_OWNER_USER_ID`), adopted once
+ *   at start by the Telegram surface and never read again.
  * `code` — a one-time pairing code the owner minted.
  * `manual` — written directly, by a human with database access.
  */

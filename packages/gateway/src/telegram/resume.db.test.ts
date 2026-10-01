@@ -21,6 +21,7 @@ import {
   completeOnboarding,
   createPool,
   ensureOwner,
+  pairSurfaceIdentity,
   roleProblemMessage,
   runMigrations,
   ToolRegistry,
@@ -246,6 +247,7 @@ suite('a Telegram approval wakes the run as an owner request', () => {
     };
 
     await handle?.stop();
+    await pairSurfaceIdentity(pool, { surface: 'telegram', externalUserId: OWNER_CHAT, externalChatId: OWNER_CHAT, pairedVia: 'code' });
     handle = await startTelegram({
       pool,
       registry,
@@ -253,8 +255,6 @@ suite('a Telegram approval wakes the run as an owner request', () => {
       provider,
       ctx,
       env: {
-        TELEGRAM_OWNER_USER_ID: OWNER_CHAT,
-        TELEGRAM_OWNER_CHAT_ID: OWNER_CHAT,
         BUDDI_DATA_DIR: dir,
         BUDDI_VAULT: 'memory',
       },

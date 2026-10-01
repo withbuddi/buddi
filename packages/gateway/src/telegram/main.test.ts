@@ -256,6 +256,7 @@ describe('applyCommandMenus', () => {
 describe('startTelegram', () => {
   it('sets the menu for every paired chat and clears the default scope', async () => {
     const db = new FakeDb();
+    db.identities.push({ id: 'id-0', owner_id: 'owner', surface: 'telegram', external_user_id: '4242', external_chat_id: '9001' });
     const menu = fakeMenuApi();
     const api = {
       ...menu.api,
@@ -271,7 +272,7 @@ describe('startTelegram', () => {
       catalog: fakeCatalog(),
       provider: {} as any,
       ctx: {} as any,
-      env: { TELEGRAM_OWNER_USER_ID: '4242', TELEGRAM_OWNER_CHAT_ID: '9001' },
+      env: {},
       now: () => new Date('2026-09-13T00:00:00Z'),
       api: api as unknown as TelegramApi,
       log: (line) => lines.push(line),
@@ -290,6 +291,7 @@ describe('startTelegram', () => {
 
   it('re-publishes the menu when the catalog reloads a maker into existence', async () => {
     const db = new FakeDb();
+    db.identities.push({ id: 'id-0', owner_id: 'owner', surface: 'telegram', external_user_id: '4242', external_chat_id: '9001' });
     const menu = fakeMenuApi();
     const api = {
       ...menu.api,
@@ -309,7 +311,7 @@ describe('startTelegram', () => {
       catalog,
       provider: {} as any,
       ctx: {} as any,
-      env: { TELEGRAM_OWNER_USER_ID: '4242', TELEGRAM_OWNER_CHAT_ID: '9001' },
+      env: {},
       now: () => new Date('2026-09-13T00:00:00Z'),
       api: api as unknown as TelegramApi,
       log: () => {},

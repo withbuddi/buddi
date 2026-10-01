@@ -4,6 +4,7 @@ import {
   checkAgents,
   checkDatabaseExposure,
   checkEmail,
+  checkPairedDevices,
   checkNodeVersion,
   checkPendingPluginData,
   checkPlugins,
@@ -489,6 +490,26 @@ describe('checkDatabaseExposure', () => {
   });
 });
 
+
+describe('the paired devices row', () => {
+  const phone = { surface: 'telegram', label: 'phone', externalUserId: '4242' };
+
+  it('names the devices, and says where to pair when there are none', () => {
+    expect(checkPairedDevices([phone])).toEqual({ status: 'ok', detail: 'telegram:phone' });
+    const none = checkPairedDevices([]);
+    expect(none.status).toBe('warn');
+    expect(none.detail).toContain('Settings → Telegram');
+  });
+
+  it('warns that the old Telegram owner lines in .env are ignored', () => {
+    const row = checkPairedDevices([phone], ['TELEGRAM_OWNER_USER_ID', 'TELEGRAM_OWNER_CHAT_ID']);
+    expect(row.status).toBe('warn');
+    expect(row.detail).toContain('telegram:phone');
+    expect(row.detail).toContain('TELEGRAM_OWNER_USER_ID and TELEGRAM_OWNER_CHAT_ID are still in .env and ignored');
+    expect(row.detail).toContain('pair in Settings → Telegram');
+    expect(checkPairedDevices([phone], ['TELEGRAM_OWNER_USER_ID']).detail).toContain('TELEGRAM_OWNER_USER_ID is still in .env');
+  });
+});
 
 describe('the email row', () => {
   const now = new Date('2026-09-21T12:00:00Z');

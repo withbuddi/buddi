@@ -27,7 +27,13 @@ gives you. Then pair your phone in any of three places:
   same QR code.
 - **`buddi telegram pair`** does the same from a terminal.
 
-`/devices` in the chat lists what is paired.
+`/devices` in the chat lists what is paired. A phone you unpair stays
+unpaired until you pair it again.
+
+The old `.env` lines `TELEGRAM_OWNER_USER_ID` and `TELEGRAM_OWNER_CHAT_ID` are
+no longer read. An installation that had them pairs that account once, at
+the first start of this version, and records it; after that the lines are
+ignored and `buddi doctor` warns until you delete them.
 
 ## What arrives
 
