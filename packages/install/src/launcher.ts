@@ -104,7 +104,10 @@ async function backupThroughSupervisor(ctx: InstallContext, rest: string[]): Pro
   }
   console.log('Backing up. buddi keeps running while it does.');
   try {
-    console.log(`Wrote ${await supervisedBackup(ctx)}.`);
+    const started = Date.now();
+    const { file, report } = await supervisedBackupJob(ctx);
+    const { backupCreatedLines } = await import('./backup.js');
+    for (const line of backupCreatedLines(file, report, (Date.now() - started) / 1000)) console.log(line);
     return 0;
   } catch (error) {
     console.error(`buddi: ${(error as Error).message}`);
@@ -114,6 +117,11 @@ async function backupThroughSupervisor(ctx: InstallContext, rest: string[]): Pro
 
 /** Ask the supervisor for a backup and follow it to the end: the archive's full path. */
 async function supervisedBackup(ctx: InstallContext): Promise<string> {
+  return (await supervisedBackupJob(ctx)).file;
+}
+
+/** The same, with the job's report. */
+async function supervisedBackupJob(ctx: InstallContext): Promise<{ file: string; report: Record<string, unknown> }> {
   const { job } = await ask<{ job: { id: string } }>(ctx, 'POST', '/backup', {});
   let last = '';
   for (;;) {
@@ -123,8 +131,9 @@ async function supervisedBackup(ctx: InstallContext): Promise<string> {
       console.log(`  ${state.phase}${state.detail === undefined ? '' : ` — ${state.detail}`}`);
     }
     if (state.finishedAt !== undefined) {
-      const name = (state.report as { archive?: string } | undefined)?.archive;
-      if (state.phase === 'done' && name) return path.join(ctx.data, 'backups', name);
+      const report = (state.report ?? {}) as Record<string, unknown>;
+      const name = typeof report.archive === 'string' ? report.archive : undefined;
+      if (state.phase === 'done' && name) return { file: path.join(ctx.data, 'backups', name), report };
       throw new Error(`the backup did not finish: ${state.error ?? 'no reason given'}`);
     }
     await new Promise(resolve => setTimeout(resolve, 1000));

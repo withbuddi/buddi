@@ -869,3 +869,43 @@ function summarizeRestore(report: RestoreReport): Record<string, unknown> {
     rolledBack: report.rolledBack,
   };
 }
+
+/** What a finished backup job reports, as far as `backupCreatedLines` reads it. */
+export interface BackupCreatedReport {
+  archive?: string;
+  bytes?: number;
+  encrypted?: boolean;
+  manifest?: { tables?: number; rows?: number; artifacts?: number; secrets?: string[] };
+}
+
+/**
+ * What a packaged `buddi backup create` prints once the supervisor's job is
+ * done: the archive, its size and how long it took, what is inside, and the
+ * line that checks it — what docs/cli.md promises, as the checkout prints it.
+ */
+export function backupCreatedLines(file: string, report: BackupCreatedReport, seconds: number): string[] {
+  const lines = [`Wrote ${file}.`];
+  const size = typeof report.bytes === 'number' ? `${formatSize(report.bytes)} in ` : '';
+  lines.push(`  ${size}${seconds.toFixed(1)}s${report.encrypted ? ', encrypted with your backup passphrase' : ''}`);
+  const m = report.manifest;
+  if (m !== undefined) {
+    const inside = [
+      typeof m.tables === 'number' ? `${m.tables} tables` : undefined,
+      typeof m.rows === 'number' ? `${m.rows} rows` : undefined,
+      typeof m.artifacts === 'number' ? `${m.artifacts} file(s)` : undefined,
+    ].filter((part): part is string => part !== undefined);
+    if (inside.length > 0) lines.push(`  inside: ${inside.join(', ')}`);
+    if (m.secrets !== undefined && m.secrets.length > 0) lines.push(`  secrets: ${m.secrets.length} name(s), no values — set them again after a restore`);
+  }
+  lines.push('', `Check it: buddi backup verify ${path.basename(file)}`);
+  return lines;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i += 1; }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+}

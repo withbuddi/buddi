@@ -31,6 +31,7 @@ What changes in buddi from one release to the next, newest first.
 - A plugin installed from a folder now shows the folder's current version (its package.json) on the Plugins page and in `buddi plugins list`, with "installed as" beside it when that differs from the version recorded at install; a dev install used to show every such plugin as 0.1.0. Reinstalling from the folder records the folder's package.json version, even when the plugin's manifest spells an older one.
 - The recovery checklist no longer asks you to install a plugin again right after `buddi plugins approve` or the dashboard installed it: it reads the plugins record, says "installed — loads at the next restart", and links Restart to Settings → System.
 - The recovery checklist now lists mailbox passwords ("Gmail — app password for you@…") and connection credentials ("GitHub — sign-in", "Trokky — TROKKY_TOKEN") that this machine cannot read, which used to fail silently after a restore. A mailbox's Fix opens Set password for that mailbox on Settings → Email; a connection's opens its sheet in Settings → Connections (new `?connection=` link), and an OAuth one says Sign in again.
+- `buddi backup create` on a packaged install now prints what the docs promise: the archive's size and how long it took, what is inside, and the `buddi backup verify` line to check it. It used to print only the path.
 
 ### Changed
 

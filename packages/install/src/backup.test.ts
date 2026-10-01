@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+  backupCreatedLines,
   DEFAULT_SCHEDULE,
   backupDue,
   createBackupService,
@@ -493,5 +494,22 @@ describe('uploads nobody restored from', () => {
     expect(await sweepIncoming(data)).toEqual(['upload-old.tar.gz']);
     expect(existsSync(old)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+  });
+});
+
+describe('what a packaged `buddi backup create` prints', () => {
+  test('the archive, its size and time, what is inside, and the verify line', () => {
+    const lines = backupCreatedLines('/data/backups/buddi-backup-20261001-024139.tar.gz.age', {
+      archive: 'buddi-backup-20261001-024139.tar.gz.age', bytes: 22_528, encrypted: true,
+      manifest: { tables: 83, rows: 140, artifacts: 1, secrets: ['BUDDI_DB_PASSWORD', 'BUDDI_WEB_TOKEN'] },
+    }, 2.34);
+    expect(lines).toEqual([
+      'Wrote /data/backups/buddi-backup-20261001-024139.tar.gz.age.',
+      '  22 KB in 2.3s, encrypted with your backup passphrase',
+      '  inside: 83 tables, 140 rows, 1 file(s)',
+      '  secrets: 2 name(s), no values — set them again after a restore',
+      '',
+      'Check it: buddi backup verify buddi-backup-20261001-024139.tar.gz.age',
+    ]);
   });
 });
