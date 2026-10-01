@@ -29,7 +29,7 @@ import { createArchive, extractAll } from './archive.js';
 import { createBackup } from './create.js';
 import { encryptFile } from './crypt.js';
 import { loadDatabase } from './load.js';
-import { listPendingPluginData, loadPendingForSchemas, loadPendingPluginData } from './pending.js';
+import { isKeyValueTable, listPendingPluginData, loadPendingForSchemas, loadPendingPluginData } from './pending.js';
 import { generatePassphrase } from './passphrase.js';
 import { urlForDatabase } from './restore.js';
 import { restoreBackup } from './restore.js';
@@ -64,6 +64,9 @@ alter table accounts add column last_entry int null references entries(id) on de
 -- differently from every other: generated always refuses an INSERT without
 -- overriding system value, a clause COPY has no syntax for at all.
 create table ledgers (id int generated always as identity primary key, label text not null);
+-- A settings table, the shape finance.preferences has: a plugin may seed
+-- defaults here at install, and the restore merges rather than keeps aside.
+create table preferences (key text primary key, value jsonb not null);
 `;
 const NEW_MIGRATION = `alter table accounts add column note text;`;
 
@@ -110,6 +113,9 @@ suite('a backup can actually be restored', () => {
          values (1, 'rent'), (1, 'groceries'), (2, 'transfer'), (2, 'interest'), (3, 'coffee')`,
       );
       await pool.query(`insert into drill.ledgers (label) values ('opening'), ('closing')`);
+      await pool.query(
+        `insert into drill.preferences (key, value) values ('currency', '"EUR"'), ('week_start', '"monday"'), ('rounding', '2')`,
+      );
       await pool.query(`update drill.accounts set last_entry = case id when 1 then 2 when 2 then 4 else 5 end`);
     } finally {
       await pool.end().catch(() => {});
@@ -660,7 +666,7 @@ suite('a backup can actually be restored', () => {
         expect(new Set(tables.map((t) => t.schema))).toEqual(new Set([DRILL_SCHEMA]));
         const pending = await listPendingPluginData(pool);
         expect(pending).toHaveLength(1);
-        expect(pending[0]).toMatchObject({ schema: DRILL_SCHEMA, stagedPath: stagedDir(), rows: 10, migrations: ['001_tables.sql'] });
+        expect(pending[0]).toMatchObject({ schema: DRILL_SCHEMA, stagedPath: stagedDir(), rows: 13, migrations: ['001_tables.sql'] });
 
         // Installing the plugin: its migrations run, then the kept data goes in.
         await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
@@ -714,6 +720,66 @@ suite('a backup can actually be restored', () => {
         expect(again.map((o) => o.kind)).toEqual(['partial']);
         expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
         expect((await listPendingPluginData(pool))[0]?.tables.map((t) => t.table)).toEqual(['drill.ledgers']);
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('merges a seeded settings table: missing keys added, keys already there keep their value', async () => {
+      await restoreWithoutDrill(oldDir);
+      const pool = createPool(url);
+      try {
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
+        // What a plugin's install does: one default row before the load.
+        await pool.query(`insert into drill.preferences (key, value) values ('currency', '"USD"')`);
+        // And a non-settings table the owner already wrote to.
+        await pool.query(`insert into drill.ledgers (label) values ('made after the restore')`);
+        const outcome = await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} });
+        expect(outcome.kind).toBe('partial');
+        const { rows: prefs } = await pool.query<{ key: string; value: unknown }>(
+          `select key, value from drill.preferences order by key`,
+        );
+        expect(prefs).toEqual([
+          { key: 'currency', value: 'USD' },
+          { key: 'rounding', value: 2 },
+          { key: 'week_start', value: 'monday' },
+        ]);
+        if (outcome.kind === 'partial') {
+          expect(outcome.tables).toContainEqual({ table: 'drill.preferences', rows: 2 });
+        }
+        // The settings table is no longer waiting; the ledger still is.
+        expect((await listPendingPluginData(pool))[0]?.tables.map((t) => t.table)).toEqual(['drill.ledgers']);
+        expect(existsSync(path.join(stagedDir(), 'db', 'drill.preferences.copy'))).toBe(false);
+        // Once the ledger is out of the way the record — and the checklist item — are gone.
+        await pool.query(`truncate drill.ledgers`);
+        expect((await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} })).kind).toBe('loaded');
+        expect(await listPendingPluginData(pool)).toEqual([]);
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('merging alone empties the record, so nothing is left on the checklist', async () => {
+      await restoreWithoutDrill(oldDir);
+      const pool = createPool(url);
+      try {
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
+        await pool.query(`insert into drill.preferences (key, value) values ('currency', '"USD"')`);
+        expect((await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} })).kind).toBe('loaded');
+        expect(await listPendingPluginData(pool)).toEqual([]);
+        const { rows } = await pool.query<{ n: string }>(`select count(*)::text as n from drill.preferences`);
+        expect(rows[0]?.n).toBe('3');
+
+        // The rule is narrow: a text key without a value column (weather.alert's
+        // shape), or a text id with one, is not a settings table.
+        await pool.query(`create table drill.alert_shape (key text primary key, place_id text not null)`);
+        await pool.query(`create table drill.id_shape (id text primary key, value text)`);
+        await pool.query(`create table drill.pair_shape (key text, scope text, value text, primary key (key, scope))`);
+        expect(await isKeyValueTable(pool, DRILL_SCHEMA, 'preferences')).toBe(true);
+        expect(await isKeyValueTable(pool, DRILL_SCHEMA, 'alert_shape')).toBe(false);
+        expect(await isKeyValueTable(pool, DRILL_SCHEMA, 'id_shape')).toBe(false);
+        expect(await isKeyValueTable(pool, DRILL_SCHEMA, 'pair_shape')).toBe(false);
+        expect(await isKeyValueTable(pool, DRILL_SCHEMA, 'ledgers')).toBe(false);
       } finally {
         await pool.end().catch(() => {});
       }

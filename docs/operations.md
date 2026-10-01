@@ -618,6 +618,11 @@ What it does, in this order:
   already has rows is never overwritten: it stays staged, the log says so once,
   and the recovery checklist shows it as its own item so you can decide (empty
   the table and restart to load it, or delete its staged directory to drop it).
+  The one exception is a settings table — a primary key that is a single text
+  column named `key`, plus a column named `value`, the shape of
+  `finance.preferences` — which a plugin may seed with defaults at install:
+  there the backup's keys that are missing are added, every key present on
+  both sides keeps its current value, and the table counts as loaded.
   `buddi doctor` shows a *kept plugin data* row while anything waits. **The staged
   files are plaintext table data, even when the archive was encrypted**: they
   are written owner-only (directories `0700`, files `0600`) inside the data dir,

@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- A restored plugin's settings no longer wait forever because the plugin seeded a default at install: a settings table (a single text `key` plus a `value`, like finance's preferences) gets the backup's missing keys added, keeps the values already there, and leaves the recovery checklist. Other tables that already have rows are still kept aside.
+
 ### Changed
 
 - The Continue on the "Turn budget reached" line is now an outlined button you can see and tap (taller on a touch screen), not a word that read as plain text.

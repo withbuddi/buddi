@@ -19,7 +19,10 @@
  *    at — data from a newer schema than the installed plugin's is not forced
  *    into older tables;
  *  - only into tables that exist and are empty — a table with rows is never
- *    overwritten; it stays staged and is named, so the owner can decide;
+ *    overwritten; it stays staged and is named, so the owner can decide —
+ *    except a settings table (see `isKeyValueTable`), which a plugin often
+ *    seeds with defaults at install: there the backup's keys that are missing
+ *    are added and every key already present keeps its current value;
  *  - with foreign keys held off and added back, which re-checks every row;
  *  - sequences moved forward to the archive's, never back;
  *  - all in one transaction per schema, with the record updated in it, so a
@@ -232,6 +235,38 @@ export type PendingLoadOutcome =
   /** Nothing loaded; `reason` says why, and the record says it too. */
   | { kind: 'waiting'; schema: string; reason: string };
 
+/**
+ * Whether a table is a settings table the loader may merge into.
+ *
+ * The rule, kept narrow on purpose: the primary key is exactly one column,
+ * named `key`, of a text type (text, varchar, citext), and the table also has
+ * a column named `value`. That is the shape every plugin's preferences table
+ * has (`finance.preferences (key text primary key, value jsonb)`), and it is
+ * a shape where "the same key" means "the same setting". A table keyed by an
+ * id — even a text one — is not: two rows with different ids may still be the
+ * same thing, so merging could duplicate it, and such a table stays kept
+ * aside as before.
+ */
+export async function isKeyValueTable(db: Queryable, schema: string, table: string): Promise<boolean> {
+  const qualified = `${quote(schema)}.${quote(table)}`;
+  const { rows: pk } = await db.query<{ name: string; type: string }>(
+    `select a.attname as name, t.typname as type
+       from pg_index i
+       join pg_attribute a on a.attrelid = i.indrelid and a.attnum = any(i.indkey)
+       join pg_type t on t.oid = a.atttypid
+      where i.indrelid = $1::regclass and i.indisprimary`,
+    [qualified],
+  );
+  if (pk.length !== 1) return false;
+  const only = pk[0] as { name: string; type: string };
+  if (only.name !== 'key' || !['text', 'varchar', 'citext', 'bpchar'].includes(only.type)) return false;
+  const { rows: value } = await db.query(
+    `select 1 from information_schema.columns where table_schema = $1 and table_name = $2 and column_name = 'value'`,
+    [schema, table],
+  );
+  return value.length > 0;
+}
+
 /** The next value a sequence hands out, as a bigint. */
 function nextOf(lastValue: string, isCalled: boolean): bigint {
   return BigInt(lastValue) + (isCalled ? 1n : 0n);
@@ -320,6 +355,7 @@ export async function loadPendingPluginData(
     }
 
     const loadable: DumpedTable[] = [];
+    const mergeable: DumpedTable[] = [];
     const kept: PendingTable[] = [];
     const missing: string[] = [];
     for (const table of tables) {
@@ -341,6 +377,10 @@ export async function loadPendingPluginData(
       }
       const { rows: counted } = await client.query<{ n: string }>(`select count(*)::text as n from ${qualified}`);
       const existing = Number(counted[0]?.n ?? '0');
+      if (existing > 0 && (await isKeyValueTable(client, table.schema, table.table))) {
+        mergeable.push(table);
+        continue;
+      }
       if (existing > 0) {
         kept.push({
           table: name,
@@ -371,6 +411,24 @@ export async function loadPendingPluginData(
     for (const key of heldKeys) {
       await client.query(`alter table ${key.table} add constraint ${quote(key.name)} ${key.definition}`);
     }
+    // A settings table that already has rows: the backup's rows go into a
+    // scratch copy first, then only the keys that are missing are added. A
+    // key on both sides keeps the value it has now — the plugin's default or
+    // whatever the owner set since — rather than being overwritten.
+    const merged: Array<{ table: string; rows: number }> = [];
+    for (const [i, table] of mergeable.entries()) {
+      const qualified = `${quote(table.schema)}.${quote(table.table)}`;
+      const scratch = quote(`buddi_merge_${i}`);
+      const columns = table.columns.map(quote).join(', ');
+      await client.query(`create temp table ${scratch} (like ${qualified} including defaults) on commit drop`);
+      const sink = client.query(copyFrom(`copy ${scratch} (${columns}) from stdin`));
+      await pipeline(createReadStream(path.join(pending.stagedPath, copyFileName(table.schema, table.table))), sink);
+      const added = await client.query(
+        `insert into ${qualified} (${columns}) overriding system value
+          select ${columns} from ${scratch} on conflict (key) do nothing`,
+      );
+      merged.push({ table: `${table.schema}.${table.table}`, rows: added.rowCount ?? 0 });
+    }
 
     // Forward only. A table that was kept may already have handed out ids
     // past the archive's, and moving its sequence back would collide.
@@ -395,7 +453,7 @@ export async function loadPendingPluginData(
       }
     }
 
-    const done = loadable.map((t) => ({ table: `${t.schema}.${t.table}`, rows: t.rows }));
+    const done = [...loadable.map((t) => ({ table: `${t.schema}.${t.table}`, rows: t.rows })), ...merged];
     if (kept.length === 0) {
       await client.query(`delete from core.pending_plugin_data where schema = $1`, [schema]);
     } else {
@@ -416,12 +474,14 @@ export async function loadPendingPluginData(
     const rows = done.reduce((sum, t) => sum + t.rows, 0);
     if (kept.length === 0) {
       await rm(pending.stagedPath, { recursive: true, force: true }).catch(() => {});
-      log(`restore: loaded ${schema} data from ${pending.archive} — ${done.length} table(s), ${rows} row(s)`);
+      const mergedNote =
+        merged.length > 0 ? `; merged into ${merged.map((m) => m.table).join(', ')}, keeping the keys already set` : '';
+      log(`restore: loaded ${schema} data from ${pending.archive} — ${done.length} table(s), ${rows} row(s)${mergedNote}`);
       return { kind: 'loaded', schema, tables: done, sequences: reset };
     }
     // The loaded tables' files are not needed again; the list on disk follows
     // the record, though the record is what is read.
-    for (const table of loadable) {
+    for (const table of [...loadable, ...mergeable]) {
       await rm(path.join(pending.stagedPath, copyFileName(table.schema, table.table)), { force: true }).catch(() => {});
     }
     const keptNames = new Set(kept.map((k) => k.table));
