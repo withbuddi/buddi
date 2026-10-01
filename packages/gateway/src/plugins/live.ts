@@ -13,7 +13,7 @@
  * page and `installedManifests` read it: a disabled plugin must not show as
  * loaded, nor an enabled one as waiting for a restart.
  */
-import { contributionOf, runMigrations, timezoneFromEnv, type InstalledPlugin, type PluginManifest } from '@buddi/core';
+import { contributionOf, runMigrations, ownerTimezone, type InstalledPlugin, type PluginManifest } from '@buddi/core';
 import type { Pool } from 'pg';
 import { adoptPluginPolicies } from '../agents/learning.js';
 import { adoptedPlugins, adoptPlugins, loadManifest, staticNeeds, type PluginNeed } from './load.js';
@@ -118,7 +118,7 @@ export async function loadPluginLive(record: InstalledPlugin, deps: LiveDeps, op
   }
   adoptChange(env, record, manifest);
   if (deps.pool !== undefined) {
-    await adoptPluginPolicies(deps.pool, [manifest], new Date(), log, timezoneFromEnv(env)).catch(() => undefined);
+    await adoptPluginPolicies(deps.pool, [manifest], new Date(), log, ownerTimezone(env)).catch(() => undefined);
   }
   return { applied: true };
 }

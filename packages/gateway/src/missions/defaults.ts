@@ -24,7 +24,7 @@
 import {
   getActiveSchedule,
   setSchedule,
-  timezoneFromEnv,
+  ownerTimezone,
   upsertMission,
   type AgentCatalog,
   type MisfirePolicy,
@@ -300,7 +300,7 @@ export async function addDefaultMissions(
   env: NodeJS.ProcessEnv,
   opts: AddDefaultMissionsOptions = {},
 ): Promise<RegistrationOutcome[]> {
-  const timezone = timezoneFromEnv(env);
+  const timezone = ownerTimezone(env);
   const catalog = opts.catalog ?? gatewayCatalog(env);
   const now = (opts.now ?? ((): Date => new Date()))();
   const arc = opts.arc ?? (await readArcRegistration(pool, now));

@@ -35,7 +35,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AgentDefinition, ThinkingSetting } from '../agent.js';
 import { resolveProvider, type ProviderKind, type ProviderProblem, type ProviderRef } from '../provider.js';
-import { localDateString, timezoneFromEnv } from '../time.js';
+import { localDateString, ownerTimezone } from '../time.js';
 import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontmatter.js';
 import { resolveDelegates } from './delegates.js';
 import { providerFromEnv } from './provider-from-env.js';
@@ -398,7 +398,7 @@ export interface LoadAgentCatalogOptions {
  * dates. UTC is never the answer: at 8 PM in New York it is already tomorrow
  * there, and the agent would greet the owner with the wrong day.
  */
-export function toDateString(now: Date, timezone: string = timezoneFromEnv()): string {
+export function toDateString(now: Date, timezone: string = ownerTimezone()): string {
   return localDateString(now, timezone);
 }
 
@@ -852,9 +852,10 @@ function buildAgent(
           message: heldBackMessage(missingFamilies, opts.pluginForFamily),
         });
   const tools = heldBack === undefined ? granted : [];
-  // The owner's zone, read from the env the caller passed — the catalog still
-  // never reaches for `process.env` itself.
-  const catalogTimezone = timezoneFromEnv(opts.env);
+  // The owner's zone when the caller names none: the profile's at the moment
+  // of the call, else `BUDDI_TZ` from the env the caller passed — the catalog
+  // still never reaches for `process.env` itself.
+  const catalogTimezone = (): string => ownerTimezone(opts.env);
   const language: AgentLanguage = frontmatter.language ?? 'mirror';
   const selection = opts.providerSelection?.(frontmatter);
   const provider = selection?.provider ?? providerFromEnv(opts.env, frontmatter.model, frontmatter.provider);
@@ -922,7 +923,7 @@ function buildAgent(
       file: skillFile,
     })),
     systemPromptTemplate,
-    definition(now: Date, timezone: string = catalogTimezone): AgentDefinition {
+    definition(now: Date, timezone: string = catalogTimezone()): AgentDefinition {
       return {
         id: frontmatter.id,
         name: frontmatter.name,

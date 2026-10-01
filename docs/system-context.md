@@ -14,10 +14,16 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
 - `system.info` returns the same time information plus OS/version, kernel,
   architecture, hardware model when detectable, and host timezone. Host facts
   are cached for five minutes; unknown hardware or virtualization is not guessed.
-- Owner profile timezone takes priority over configured `BUDDI_TZ`, with an
-  explicit fallback when the profile is missing, invalid or unavailable.
-- The resolved owner timezone also applies to tools in that run. Existing
-  scheduled commitments retain their stored timezone; no schedules are rewritten.
+- The owner's zone is the one in Settings → Profile. `BUDDI_TZ` only fills an
+  empty profile at start and is the fallback while the profile names none (or
+  is unreadable), then New York. The same zone drives the turn clock,
+  `{{today}}` in agent prompts, tools, widgets ("here" on the World clock),
+  reminders, digests and the dashboard's footer and lock clocks.
+- A change in Settings → Profile (or through `owner.set_profile`) applies at
+  once, with no restart: the server keeps the profile's zone in memory, updates
+  it on every save and re-reads it every minute. Schedules kept in the old zone
+  (the recap, the learning digest, recurring reminders) move to the new one as
+  a new schedule revision; a schedule a plugin set in a zone of its own stays.
 - How the owner reads times and dates (Settings → Profile: 12-hour or 24-hour,
   "Thu, Oct 1", "Thursday, 1 October" or ISO) is one line under "About the
   owner" for every agent, so a reply writes "2:05 PM" to someone who reads

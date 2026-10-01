@@ -26,6 +26,8 @@ import {
   resolveProvider,
   resolveSecrets,
   timezoneFromEnv,
+  ownerTimezone,
+  refreshOwnerTimezone,
   vaultSelection,
   type DatabaseUrlResolution,
   type AgentCatalog,
@@ -200,8 +202,12 @@ export interface Wiring {
   /** Which provider the default agent runs on. */
   providerKind: string;
   now: () => Date;
-  /** The owner's timezone (`BUDDI_TZ`), the one the scheduler already uses. */
-  timezone: string;
+  /**
+   * The owner's timezone, read at each use: Settings → Profile, else
+   * `BUDDI_TZ`, else New York (`ownerTimezone`). Copy it into a long-lived
+   * object only as a getter, or a change in Settings will not reach it.
+   */
+  readonly timezone: string;
   ctx: CoreToolContext;
   /** Where secrets came from this boot. Absent when nothing hydrated them. */
   secrets?: SecretHydration;
@@ -269,6 +275,15 @@ export async function createWiringAsync(
   // follows is an empty `AggregateError`. One probe, one sentence.
   await probeDatabase(env.DATABASE_URL);
   const wiring = createWiring(env);
+  /*
+   * The owner's zone is the profile's (Settings → Profile), with `BUDDI_TZ`
+   * only the fallback. Read now, and again every minute so a change made by
+   * another process (or straight in the database) lands without a restart;
+   * a write in this process applies at once (`setOwnerProfile`).
+   */
+  await refreshOwnerTimezone(wiring.pool);
+  const zoneRefresh = setInterval(() => { void refreshOwnerTimezone(wiring.pool); }, 60_000);
+  if (typeof zoneRefresh.unref === 'function') zoneRefresh.unref();
   const providerSettings = new ProviderSettings({ pool: wiring.pool, env, reload: wiring.reloadProviders });
   const providerAccounts = new ProviderAccounts({ pool: wiring.pool, env, catalog: () => wiring.catalog, reload: wiring.reloadProviders });
   try {
@@ -359,7 +374,8 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   });
 
   const now = (): Date => new Date();
-  const timezone = timezoneFromEnv(env);
+  const configuredTimezone = timezoneFromEnv(env);
+  const zone = (): string => ownerTimezone(configuredTimezone);
   // No start-up check on the default agent's credential: Anthropic comes in
   // only through a model account, bound after this wiring exists, and an agent
   // without one is reported per agent ("Choose a provider account…").
@@ -415,7 +431,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
   // zone, with links on the dashboard's public origin when there is one.
   configurePluginHost({
     db: pool,
-    timezone,
+    timezone: configuredTimezone,
     ...(env.BUDDI_WEB_PUBLIC_ORIGIN?.trim() ? { publicOrigin: env.BUDDI_WEB_PUBLIC_ORIGIN.trim() } : {}),
   });
   /*
@@ -512,8 +528,9 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     credentialKind: catalog.defaultAgent().provider.credential.kind,
     providerKind: catalog.defaultAgent().provider.kind,
     now,
-    timezone,
-    ctx: { db: pool, ownerId: OWNER_ID, now, timezone,
+    get timezone() { return zone(); },
+    ctx: { db: pool, ownerId: OWNER_ID, now,
+      get timezone() { return zone(); },
       protectedPaths: protectedWritePaths(),
       /*
        * Stable, and late-bound like the getter below: the account service is
@@ -536,7 +553,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
         },
       },
       systemContext: (run) =>
-        systemContext({ db: pool, ownerId: OWNER_ID, now, timezone }, run, {
+        systemContext({ db: pool, ownerId: OWNER_ID, now, timezone: zone() }, run, {
           // Only the front desk is told the owner's places (docs/agents.md).
           isFrontDesk: (agentId) => catalog.agentsWithRole(ROLE_FRONT_DESK).some((agent) => agent.id === agentId),
         }),

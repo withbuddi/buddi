@@ -32,6 +32,7 @@ import type {
   OwnerTimeFormat,
 } from './types.js';
 import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS } from './types.js';
+import { rememberOwnerTimezone } from '../time.js';
 
 /** Every column, in one place, so the row mapper and the SQL cannot drift. */
 const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done, details,
@@ -329,6 +330,18 @@ export async function getOwnerProfile(pool: Queryable): Promise<OwnerProfile> {
   return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
 }
 
+/**
+ * Read the profile's zone into the process (`ownerTimezone`). Failures leave
+ * the last known zone in place: a database hiccup is no reason to jump zones.
+ */
+export async function refreshOwnerTimezone(pool: Queryable): Promise<void> {
+  try {
+    rememberOwnerTimezone((await getOwnerProfile(pool)).timezone);
+  } catch {
+    // Keep what we had.
+  }
+}
+
 const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null, timeFormat: null, dateFormat: null };
 
 /**
@@ -385,5 +398,8 @@ export async function setOwnerProfile(
       dateFormat ?? null,
     ],
   );
-  return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
+  const profile = rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
+  // The zone is read synchronously all over the process: the new one applies now.
+  if (timezone !== undefined) rememberOwnerTimezone(profile.timezone);
+  return profile;
 }

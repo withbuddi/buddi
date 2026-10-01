@@ -10,7 +10,7 @@
  * The code is a bearer credential for the length of its TTL, so it is printed
  * once, never written to disk, and never logged.
  */
-import { createPool, localDateTimeString, timezoneFromEnv } from '@buddi/core';
+import { createPool, localDateTimeString, ownerTimezone, refreshOwnerTimezone } from '@buddi/core';
 import { createPairingCode, listDevices, unpairDevice } from '@buddi/gateway';
 import qrcode from 'qrcode-terminal';
 import type { TelegramAction } from './args.js';
@@ -120,9 +120,10 @@ export async function runTelegram(
         console.log('no paired devices — run `buddi telegram pair`');
         return 0;
       }
-      // Every date here is the owner's wall clock (`BUDDI_TZ`): the stamp for
-      // the record, the relative age for the glance.
-      const timezone = timezoneFromEnv(env);
+      // Every date here is the owner's wall clock (Settings → Profile, else
+      // `BUDDI_TZ`): the stamp for the record, the relative age for the glance.
+      await refreshOwnerTimezone(pool);
+      const timezone = ownerTimezone(env);
       const now = new Date();
       for (const d of devices) {
         const paired = d.pairedAt ? localDateTimeString(d.pairedAt, timezone) : 'unknown';

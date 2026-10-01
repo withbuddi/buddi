@@ -6,6 +6,8 @@ import {
   localMinutesOfDay,
   minutesOfLocalTime,
   nextLocalTime,
+  ownerTimezone,
+  rememberOwnerTimezone,
   timezoneFromEnv,
 } from './time.js';
 
@@ -51,6 +53,23 @@ describe('timezoneFromEnv', () => {
     expect(timezoneFromEnv({ BUDDI_TZ: 'Europe/Paris' } as NodeJS.ProcessEnv)).toBe(
       'Europe/Paris',
     );
+  });
+});
+
+describe('ownerTimezone', () => {
+  it('takes the profile zone over the fallback and BUDDI_TZ, and lets go of it when cleared', () => {
+    const env = { BUDDI_TZ: 'Europe/Paris' } as NodeJS.ProcessEnv;
+    rememberOwnerTimezone(null);
+    expect(ownerTimezone(env)).toBe('Europe/Paris');
+    expect(ownerTimezone('Asia/Tokyo')).toBe('Asia/Tokyo');
+    rememberOwnerTimezone(' Europe/Lisbon ');
+    expect(ownerTimezone(env)).toBe('Europe/Lisbon');
+    expect(ownerTimezone('Asia/Tokyo')).toBe('Europe/Lisbon');
+    // A name Intl does not know is no zone at all.
+    rememberOwnerTimezone('Mars/Olympus');
+    expect(ownerTimezone(env)).toBe('Europe/Paris');
+    rememberOwnerTimezone(null);
+    expect(ownerTimezone({} as NodeJS.ProcessEnv)).toBe(DEFAULT_TIMEZONE);
   });
 });
 

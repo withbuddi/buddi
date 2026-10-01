@@ -36,7 +36,7 @@ import {
   checkAgentLink,
   notifyFromAgent,
   markStepDone,
-  setOwnerProfile,
+  saveOwnerProfile,
   updateAgentFrontmatter,
   type PluginManifest,
   type ToolDefinition,
@@ -287,7 +287,8 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
             'and try again; nothing was recorded.',
         };
       }
-      const profile = await setOwnerProfile(ctx.db, input);
+      // The zone applies at once; schedules kept in the old one move with it.
+      const { profile } = await saveOwnerProfile(ctx.db, input);
       // The steps the shipped skill records. Free-form strings in core, so an
       // owner's own first-run skill is free to record something else entirely.
       if (input.preferredName !== undefined) await markStepDone(ctx.db, 'name');

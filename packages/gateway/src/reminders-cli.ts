@@ -9,7 +9,7 @@ import {
   cancelReminder,
   listReminders,
   localDateTimeString,
-  timezoneFromEnv,
+  ownerTimezone,
   type Reminder,
 } from '@buddi/core';
 import type { Pool } from 'pg';
@@ -132,7 +132,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   await loadEnvironment();
   const wiring = await createWiringAsync(process.env);
   const { pool } = wiring;
-  const timezone = timezoneFromEnv(process.env);
+  const timezone = ownerTimezone(process.env);
   try {
     if (command.action === 'list') {
       await listCommand(pool, timezone, {

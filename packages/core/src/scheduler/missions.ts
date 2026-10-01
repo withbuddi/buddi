@@ -135,6 +135,33 @@ export async function setSchedule(
   }
 }
 
+/**
+ * Move every active schedule kept in `from` to `to`: a new revision each, same
+ * cron, misfire policy and deadline. Used when the owner's zone changes, so a
+ * mission set for "8 AM" in the owner's zone stays 8 AM where the owner now is.
+ * A schedule in any other zone (a plugin that named its own) is left alone.
+ * Returns the mission ids moved.
+ */
+export async function rezoneSchedules(pool: Pool, from: string, to: string): Promise<string[]> {
+  if (from === to) return [];
+  const { rows } = await pool.query<ScheduleSpecRow>(
+    `select ${SPEC_COLUMNS} from core.schedule_specs where active and timezone = $1 order by mission_id`,
+    [from],
+  );
+  const moved: string[] = [];
+  for (const row of rows) {
+    const spec = toScheduleSpec(row);
+    await setSchedule(pool, spec.missionId, {
+      cron: spec.cron,
+      timezone: to,
+      misfirePolicy: spec.misfirePolicy,
+      deadlineMinutes: spec.deadlineMinutes,
+    });
+    moved.push(spec.missionId);
+  }
+  return moved;
+}
+
 /** All missions, oldest first. */
 export async function listMissions(pool: Pool): Promise<Mission[]> {
   const { rows } = await pool.query<MissionRow>(

@@ -720,7 +720,7 @@ export async function main(): Promise<void> {
     // An unattended run has no chat of its own. When one proposes a gated
     // effect, the request is posted to the paired owner chat on its behalf —
     // same preview, same buttons, same bound action as an interactive turn.
-    const notifyDeps = { now, timezone: wiring.timezone, log: logErr };
+    const notifyDeps = { now, get timezone() { return wiring.timezone; }, log: logErr };
     const askApproval = async (action: ActionRecord): Promise<void> => {
       const result = await notifyApproval(pool, notifyDeps, action);
       if (result.state === 'failed') {
@@ -838,7 +838,8 @@ export async function main(): Promise<void> {
     const reminderTick = createReminderTick({
       pool,
       now,
-      timezone: wiring.timezone,
+      // The owner's zone at each read (Settings → Profile can change it).
+      get timezone() { return wiring.timezone; },
       enqueueRun: async (input) => {
         const job = await enqueue(pool, {
           kind: AGENT_RUN_JOB_KIND,
@@ -992,7 +993,8 @@ export async function main(): Promise<void> {
     const deadLetterTick = createDeadLetterWatch({
       pool,
       now,
-      timezone: wiring.timezone,
+      // The owner's zone at each read (Settings → Profile can change it).
+      get timezone() { return wiring.timezone; },
       deliver: ownerText(pool, notifyDeps, { kind: 'failure', dedupeKey: 'dead-letter', link: '#/activity' }),
       log: logErr,
     });
@@ -1106,7 +1108,8 @@ export async function main(): Promise<void> {
           requirements,
           catalog: wiring.catalog,
           ctx: wiring.ctx,
-          timezone: wiring.timezone,
+          // The owner's zone at each read (Settings → Profile can change it).
+      get timezone() { return wiring.timezone; },
           now,
           config: web,
           token,

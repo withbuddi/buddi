@@ -38,7 +38,7 @@
  * Telegram (where a backtick is a backtick), in a terminal, and on a page.
  */
 import { classifyFailure, type FailureClass } from '../queue/retry-policy.js';
-import { timezoneFromEnv } from '../time.js';
+import { ownerTimezone } from '../time.js';
 import { ownerClock, ownerDate, type OwnerFormats } from '../owner-format.js';
 import { describeCause } from './cause.js';
 
@@ -71,7 +71,7 @@ export interface DescribeFailureOptions {
    * `retryWithheldText`.
    */
   toolsCalled?: number | undefined;
-  /** The zone a reset time is said in. The installation's (`BUDDI_TZ`) by default. */
+  /** The zone a reset time is said in. The owner's (profile, else `BUDDI_TZ`) by default. */
   timeZone?: string | undefined;
   /** The owner's Profile time format (`12h`, `24h`; null is Auto, 24-hour). */
   timeFormat?: string | null | undefined;
@@ -249,7 +249,7 @@ function rateLimitText(err: unknown, options: DescribeFailureOptions): Omit<Owne
   const limit = rateLimitOf(err);
   if (limit === undefined) return undefined;
   const who = limit.provider ?? 'The provider';
-  const zone = options.timeZone ?? timezoneFromEnv();
+  const zone = options.timeZone ?? ownerTimezone();
   const now = options.now ?? new Date();
   const when = limit.retryAt ? resetPhrase(limit.retryAt, zone, now, options) : undefined;
   if (limit.scope === 'day') {

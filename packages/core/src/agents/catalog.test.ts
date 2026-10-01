@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rememberOwnerTimezone } from '../time.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -898,6 +899,19 @@ describe('loadAgentCatalog', () => {
       .resolve('finance-advisor')
       .definition(instant);
     expect(home.systemPrompt).toContain('Today is 2026-09-13.');
+  });
+
+  it('takes the profile zone over BUDDI_TZ, read when the definition is asked for', () => {
+    const instant = new Date('2026-09-14T00:30:00Z');
+    const agent = load({ 'finance-advisor': FINANCE }, { BUDDI_TZ: 'America/New_York' }).resolve('finance-advisor');
+    try {
+      expect(agent.definition(instant).systemPrompt).toContain('Today is 2026-09-13.');
+      // Settings → Profile moved the owner to Lisbon after the catalog was loaded.
+      rememberOwnerTimezone('Europe/Lisbon');
+      expect(agent.definition(instant).systemPrompt).toContain('Today is 2026-09-14.');
+    } finally {
+      rememberOwnerTimezone(null);
+    }
   });
 });
 

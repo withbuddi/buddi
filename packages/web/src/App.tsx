@@ -331,10 +331,14 @@ export function App(): JSX.Element {
    * for it, and a 401 from either puts them back to sleep.
    */
   const [signedIn, setSignedIn] = useState(false);
-  // The owner changed how times and dates read: the whole shell draws again.
+  // The owner changed how times and dates read: the whole shell draws again,
+  // in the zone the server now keeps (Settings → Profile may have moved it).
   const [, setFormatsDrawn] = useState(0);
   useEffect(() => {
-    const redraw = (): void => setFormatsDrawn((n) => n + 1);
+    const redraw = (): void => {
+      setFormatsDrawn((n) => n + 1);
+      api.session().then((session) => setTimezone(session.timezone)).catch(() => {});
+    };
     window.addEventListener(FORMATS_CHANGED, redraw);
     return () => window.removeEventListener(FORMATS_CHANGED, redraw);
   }, []);

@@ -357,7 +357,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     pool,
     registry: deps.registry,
     ctx: deps.ctx,
-    timezone: deps.ctx.timezone,
+    get timezone() { return deps.ctx.timezone; },
     ...(jobs ? { jobs } : {}),
     log,
     now,
@@ -436,7 +436,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     api,
     pool,
     catalog: deps.catalog,
-    timezone: deps.ctx.timezone,
+    get timezone() { return deps.ctx.timezone; },
     // The bot's own @username, so Telegram's mention of it is stripped before
     // the owner's `@handle` is read.
     ...(me.username ? { botUsername: me.username } : {}),
@@ -460,7 +460,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
     engagement: createEngagementHooks({
       pool,
       now,
-      timezone: deps.ctx.timezone,
+      get timezone() { return deps.ctx.timezone; },
       unavailableText: QUIET_UNAVAILABLE_TEXT,
       log,
     }),

@@ -7,16 +7,41 @@
  * York onwards, which is exactly when the owner is most likely to be talking to
  * their agents about today.
  *
- * The owner's zone is `BUDDI_TZ` — the same variable the scheduler already
- * reads for mission cron — defaulting to `America/New_York`.
+ * The owner's zone is the one in Settings → Profile (`core.owner.timezone`).
+ * `BUDDI_TZ` is only the initial default and the fallback while the profile
+ * names none, and New York is the fallback after that.
+ *
+ * The profile lives in the database and most readers are synchronous, so the
+ * process keeps the last zone it read or wrote (`rememberOwnerTimezone`):
+ * every profile write refreshes it, the wiring reads it at start and again
+ * every minute, and `ownerTimezone()` answers from it — a change in Settings
+ * applies to the next clock, `{{today}}`, schedule or digest without a restart.
  */
 
 /** The owner's timezone when `BUDDI_TZ` says nothing. */
 export const DEFAULT_TIMEZONE = 'America/New_York';
 
-/** The owner's timezone: `BUDDI_TZ`, else New York. */
+/** The configured default zone: `BUDDI_TZ`, else New York. The profile's zone wins over it — see `ownerTimezone`. */
 export function timezoneFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   return (env.BUDDI_TZ ?? '').trim() || DEFAULT_TIMEZONE;
+}
+
+let profileTimezone: string | null = null;
+
+/** Keep the zone the owner's profile names (null or an unknown name: none). */
+export function rememberOwnerTimezone(zone: string | null | undefined): void {
+  const name = (zone ?? '').trim();
+  profileTimezone = name !== '' && isKnownTimezone(name) ? name : null;
+}
+
+/**
+ * The owner's zone: the profile's, else `fallback` (a configured zone the
+ * caller was handed), else `BUDDI_TZ`, else New York.
+ */
+export function ownerTimezone(fallback?: string | NodeJS.ProcessEnv): string {
+  if (profileTimezone !== null) return profileTimezone;
+  if (typeof fallback === 'string') return fallback.trim() || timezoneFromEnv();
+  return timezoneFromEnv(fallback ?? process.env);
 }
 
 const formatters = new Map<string, Intl.DateTimeFormat>();

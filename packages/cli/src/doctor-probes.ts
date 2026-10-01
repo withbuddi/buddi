@@ -23,6 +23,8 @@ import {
   providerFromEnv,
   resolveProvider,
   timezoneFromEnv,
+  getOwnerProfile,
+  isKnownTimezone,
   type AgentFrontmatter,
   type PluginManifest,
   type Vault,
@@ -854,12 +856,18 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
       return checkSubscriptionSignIns(subscriptionSignIns(env));
     },
 
-    timezone(): ProbeResult {
+    // Settings → Profile is the owner's zone; BUDDI_TZ only the fallback.
+    async timezone(): Promise<ProbeResult> {
+      const pool = await connected().catch(() => null);
+      const profile = pool === null ? null : await getOwnerProfile(pool).catch(() => null);
+      if (profile?.timezone && isKnownTimezone(profile.timezone)) {
+        return { status: 'ok', detail: `${profile.timezone.trim()} (Settings → Profile)` };
+      }
       const tz = timezoneFromEnv(env);
       const set = env.BUDDI_TZ && env.BUDDI_TZ.trim() !== '';
       return {
         status: 'ok',
-        detail: set ? `${tz} (BUDDI_TZ)` : `${tz} (default — set BUDDI_TZ to change it)`,
+        detail: set ? `${tz} (BUDDI_TZ — set one in Settings → Profile)` : `${tz} (default — set one in Settings → Profile)`,
       };
     },
 

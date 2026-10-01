@@ -103,7 +103,7 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, saveOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
 import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
@@ -566,7 +566,7 @@ export function createWebApp(deps: WebServerDeps): Server {
    * stream are asked again, so one left idle past the delay is locked and cut
    * off even if its page never says a word.
    */
-  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, timezone: deps.timezone, widgets, log });
+  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, log });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
   /*
    * The session a live API token acts through: minted on its first request,
@@ -629,7 +629,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         registry: deps.registry,
         ctx: deps.ctx,
         now: deps.now,
-        timezone: deps.timezone,
+        get timezone() { return deps.timezone; },
         log,
         ...deps.chat,
       })
@@ -3135,7 +3135,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (patch.timezone && !isKnownTimezone(patch.timezone)) return sendJson(res, 400, { error: `"${patch.timezone}" is not a timezone this host knows.` });
       if (patch.preferredName && patch.preferredName.length > 80) return sendJson(res, 400, { error: 'The name is too long (80 characters at most).' });
       if (patch.about && patch.about.length > 1000) return sendJson(res, 400, { error: 'Keep the line about you under 1,000 characters.' });
-      const profile = await setOwnerProfile(deps.pool, patch);
+      // The zone applies at once; schedules kept in the old one move with it.
+      const { profile, zoneChange } = await saveOwnerProfile(deps.pool, patch, deps.env ?? process.env);
+      if (zoneChange) log(`owner: timezone ${zoneChange.from} → ${zoneChange.to}${zoneChange.missions.length > 0 ? `; moved ${zoneChange.missions.join(', ')}` : ''}`);
       return sendJson(res, 200, { ...profile, places: await placesList(deps.pool), detectedTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, zones: knownTimezones() });
     }
 
@@ -3524,7 +3526,8 @@ export async function startWebServer(
   deps: Omit<WebServerDeps, 'token'> & { token?: string },
 ): Promise<WebServer> {
   const token = deps.token ?? (await ensureWebToken()).token;
-  const server = createWebApp({ ...deps, token });
+  // The zone stays a getter through the spread: Settings → Profile can change it.
+  const server = createWebApp({ ...deps, token, get timezone() { return deps.timezone; } });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(deps.config.port, deps.config.host, () => {

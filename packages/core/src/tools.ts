@@ -517,7 +517,7 @@ export interface SuggestedMission {
   agentId?: string;
   /** Five-field cron. Missions with no schedule are infrastructure, not this. */
   cron: string;
-  /** IANA zone; the installation's own (`BUDDI_TZ`) when omitted. */
+  /** IANA zone; the owner's (Settings → Profile, else `BUDDI_TZ`) when omitted. */
   timezone?: string;
   misfirePolicy?: MisfirePolicy;
   prompt: string;

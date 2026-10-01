@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
+import { rememberOwnerTimezone } from '@buddi/core';
 import { createWiring } from './bootstrap.js';
 
 it('rotates adapters for new runs and refuses removed credentials without invalidating old adapters', async () => {
@@ -51,6 +52,29 @@ it('carries the preview port the gateway published, and nothing when there is no
   } finally {
     if (previous === undefined) delete process.env.BUDDI_PREVIEW_PORT;
     else process.env.BUDDI_PREVIEW_PORT = previous;
+    await wiring.pool.end();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * The owner's zone is Settings → Profile, read at each use: the wiring and its
+ * context are built once, so a getter carries a profile change to every
+ * surface, `{{today}}` and schedule without a restart. `BUDDI_TZ` is the fallback.
+ */
+it('reads the owner zone at each use: the profile first, BUDDI_TZ only as the fallback', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-owner-zone-'));
+  const wiring = createWiring({ DATABASE_URL: 'postgres://fixture:fixture@127.0.0.1:1/fixture', BUDDI_AGENTS_DIR: dir, BUDDI_TZ: 'America/Chicago' });
+  try {
+    rememberOwnerTimezone(null);
+    expect(wiring.timezone).toBe('America/Chicago');
+    expect(wiring.ctx.timezone).toBe('America/Chicago');
+    rememberOwnerTimezone('Europe/Lisbon');
+    expect(wiring.timezone).toBe('Europe/Lisbon');
+    // A per-call copy of the context, the way runs take it, carries the new zone.
+    expect({ ...wiring.ctx }.timezone).toBe('Europe/Lisbon');
+  } finally {
+    rememberOwnerTimezone(null);
     await wiring.pool.end();
     await rm(dir, { recursive: true, force: true });
   }

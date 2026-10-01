@@ -1026,7 +1026,7 @@ export interface SuggestedMission {
   agentRole?: string;            // resolved through the agent catalog
   agentId?: string;              // or pinned by name
   cron: string;                  // five fields
-  timezone?: string;             // the installation's BUDDI_TZ when omitted
+  timezone?: string;             // the owner's zone when omitted (Settings → Profile, else BUDDI_TZ)
   misfirePolicy?: MisfirePolicy; // 'coalesce' | 'latest-only' | 'skip-after-deadline'
   prompt: string;
   alwaysDeliver?: boolean;       // default false
@@ -3363,7 +3363,7 @@ closed when it is absent rather than guess.
 | `prompt` | `string` | yes | The run's instructions. Unless `alwaysDeliver`, say what counts as worth speaking and to call `mission.silent` otherwise. |
 | `agentRole` | `string` | no | Which agent runs it, by capability. Resolved through the agent catalog; a role nobody claims is skipped out loud. |
 | `agentId` | `string` | no | Or pinned by name, when the mission is meaningless on any other agent. |
-| `timezone` | `string` | no | IANA zone; the installation's own (`BUDDI_TZ`) when omitted. |
+| `timezone` | `string` | no | IANA zone; the owner's (Settings → Profile, else `BUDDI_TZ`) when omitted. |
 | `misfirePolicy` | `MisfirePolicy` | no | What a closed laptop owes the owner: `coalesce` (default), `latest-only`, `skip-after-deadline`. |
 | `alwaysDeliver` | `boolean` | no | The owner asked for this message whatever it says. Default false. |
 | `enabledByDefault` | `boolean` | no | Default true; false registers a placeholder switched off. |

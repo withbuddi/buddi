@@ -11,7 +11,7 @@
  * narrowed field by field: nothing here prints a key, a token, a vault name or
  * a sign-in in progress.
  */
-import { getOwnerProfile, MLXH_BASE_URL, resetPhrase, timezoneFromEnv, type OwnerFormats } from '@buddi/core';
+import { getOwnerProfile, MLXH_BASE_URL, resetPhrase, ownerTimezone, type OwnerFormats } from '@buddi/core';
 import type { AccountRateLimit } from './account-limits.js';
 import { createWiringAsync, hydrateSecrets, loadEnvironment } from './bootstrap.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
@@ -206,7 +206,7 @@ export async function main(argv: string[] = process.argv.slice(3)): Promise<numb
   try {
     // Times in the owner's Profile zone and formats, as the dashboard says them.
     const profile = await getOwnerProfile(wiring.pool).catch(() => null);
-    const timeZone = profile?.timezone ?? timezoneFromEnv(process.env);
+    const timeZone = profile?.timezone ?? ownerTimezone(process.env);
     const formats: OwnerFormats = { timeFormat: profile?.timeFormat ?? null, dateFormat: profile?.dateFormat ?? null };
     if (!wiring.providerAccounts) {
       console.error('Model accounts are unavailable here: buddi could not open the accounts table.');

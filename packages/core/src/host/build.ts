@@ -41,7 +41,7 @@ import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
 import { listOwnerPlaces } from '../places.js';
-import { localDateString, timezoneFromEnv } from '../time.js';
+import { localDateString, ownerTimezone } from '../time.js';
 import { createHttpArea, isOwnUrlBinding, registerHttpHeaderDestination, registerHttpUrlDestination, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
 import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
@@ -174,7 +174,7 @@ export interface PluginHostServices {
    * channel is called by core's routing, outside any context.
    */
   db?: Pool;
-  /** The owner's zone for that host. `BUDDI_TZ` when absent. */
+  /** The configured fallback zone for that host; the owner profile's zone wins (`ownerTimezone`). `BUDDI_TZ` when absent. */
   timezone?: string;
   /** The dashboard's public origin, when there is one: a channel's links become URLs on it. */
   publicOrigin?: string;
@@ -630,7 +630,7 @@ function channelsArea(binding: HostBinding): ChannelsArea {
     return createPluginHost(binding, {
       db,
       now: () => new Date(),
-      timezone: services.timezone ?? timezoneFromEnv(env as NodeJS.ProcessEnv),
+      timezone: ownerTimezone(services.timezone ?? (env as NodeJS.ProcessEnv)),
     });
   };
   return {

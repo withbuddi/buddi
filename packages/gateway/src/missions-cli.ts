@@ -19,6 +19,7 @@ import {
   listMissions,
   listOccurrences,
   nextAfter,
+  ownerTimezone,
   registerChannel,
   renderOffers,
   setMissionEnabled,
@@ -37,7 +38,7 @@ import {
 } from './missions/defaults.js';
 import { createMissionExecutor } from './missions/execute.js';
 import { missionOwnerAgent } from './missions/reminders.js';
-import { createDigestPrepare, recapMissionId, timezoneFromEnv } from './missions/recap.js';
+import { createDigestPrepare, recapMissionId } from './missions/recap.js';
 import { ownerDeliver } from './owner-notify.js';
 import { createTelegramChannel } from './telegram/channel.js';
 import { createLocalNotificationChannel } from './channels/local-notification.js';
@@ -53,7 +54,7 @@ const USAGE = `buddi missions — scheduled missions
   buddi missions enable <id>
   buddi missions disable <id>
 
-Timezone comes from BUDDI_TZ (default America/New_York).`;
+Timezone comes from Settings → Profile, else BUDDI_TZ (default America/New_York).`;
 
 export type MissionsCommand =
   | 'list'
@@ -309,7 +310,7 @@ async function commandAddRecap(pool: Pool, env: NodeJS.ProcessEnv): Promise<void
     process.exitCode = 1;
     return;
   }
-  console.log(describeOutcome(await registerDefault(pool, entry, timezoneFromEnv(env))));
+  console.log(describeOutcome(await registerDefault(pool, entry, ownerTimezone(env))));
 }
 
 async function commandAddDefaults(pool: Pool, env: NodeJS.ProcessEnv): Promise<void> {
@@ -416,7 +417,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // Through the owner's notifications like any report; strict, so a
       // message no channel took is printed as a skipped delivery. This
       // process registers Telegram's text path itself: it is not `serve`.
-      deliver: ownerDeliver(pool, { now, timezone: timezoneFromEnv(), strict: true }),
+      deliver: ownerDeliver(pool, { now, timezone: ownerTimezone(), strict: true }),
       requireDelivery: false,
       prepare: createDigestPrepare(pool, { now }),
       onToolCall: (name, input) => console.error(`⚙ ${name} ${JSON.stringify(input)}`),

@@ -715,7 +715,7 @@ async function chat(
     pool,
     registry,
     ctx,
-    timezone,
+    get timezone() { return wiring.timezone; },
     ownerId: ctx.ownerId,
   });
 
@@ -740,7 +740,7 @@ async function chat(
     registry,
     ctx,
     now,
-    timezone,
+    get timezone() { return wiring.timezone; },
     providerFor: (a) => wiring.providerFor(a),
     agent: selected,
     conversationId,
@@ -757,7 +757,7 @@ async function chat(
     engagement: createEngagementHooks({
       pool,
       now,
-      timezone,
+      get timezone() { return wiring.timezone; },
       unavailableText: QUIET_UNAVAILABLE_TEXT,
     }),
     // Which mission `/recap` runs is the installed plugins' suggestion for the

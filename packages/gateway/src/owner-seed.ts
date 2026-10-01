@@ -7,7 +7,7 @@
  * overwritten by a stale line in a file.
  */
 import type { Pool } from 'pg';
-import { getOwnerProfile, isKnownTimezone, setOwnerProfile } from '@buddi/core';
+import { getOwnerProfile, isKnownTimezone, saveOwnerProfile } from '@buddi/core';
 
 export async function seedOwnerFromEnv(pool: Pool, env: NodeJS.ProcessEnv): Promise<string[]> {
   const name = (env.BUDDI_OWNER_NAME ?? '').trim();
@@ -18,6 +18,6 @@ export async function seedOwnerFromEnv(pool: Pool, env: NodeJS.ProcessEnv): Prom
   if (name !== '' && !profile.preferredName) patch.preferredName = name;
   if (zone !== '' && !profile.timezone && isKnownTimezone(zone)) patch.timezone = zone;
   if (Object.keys(patch).length === 0) return [];
-  await setOwnerProfile(pool, patch);
+  await saveOwnerProfile(pool, patch, env);
   return Object.keys(patch);
 }

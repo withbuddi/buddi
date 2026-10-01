@@ -103,7 +103,7 @@ export interface DoctorProbes {
    * Optional for the same reason `config` is.
    */
   subscriptionSignIns?(): ProbeResult;
-  timezone(): ProbeResult;
+  timezone(): ProbeResult | Promise<ProbeResult>;
 }
 
 /** Name, whether it is critical, and how to find out — in the printed order. */

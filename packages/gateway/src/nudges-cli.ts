@@ -10,7 +10,7 @@
  * preference an agent writes when the owner says "stop suggesting things" — so
  * the command line and the conversation cannot disagree about it.
  */
-import { getMission, localDateTimeString, setMissionEnabled, timezoneFromEnv } from '@buddi/core';
+import { getMission, localDateTimeString, setMissionEnabled, ownerTimezone } from '@buddi/core';
 import type { Pool } from 'pg';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
 import { GETTING_STARTED_ID } from './missions/getting-started.js';
@@ -123,7 +123,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   await loadEnvironment();
   const wiring = await createWiringAsync(process.env);
   const { pool, now } = wiring;
-  const timezone = timezoneFromEnv(process.env);
+  const timezone = ownerTimezone(process.env);
   try {
     if (command === 'status') {
       console.log(statusText(await buildStatus(pool, now()), timezone));
