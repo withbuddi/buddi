@@ -209,6 +209,19 @@ describe('Continue under a step-budget stop', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
+  it('is a real, outlined small button labelled Continue that takes keyboard focus', () => {
+    show([run({ stopped: 'max_turns', turns: 40 })], { onContinue: vi.fn() });
+    const button = screen.getByRole('button', { name: 'Continue' });
+    expect(button).toBe(screen.getByTestId('budget-continue'));
+    expect(button.tagName).toBe('BUTTON');
+    expect(button).toHaveAttribute('data-size', 'sm');
+    // The default (outlined) variant, not the borderless ghost that read as text.
+    expect(button).not.toHaveAttribute('data-variant');
+    button.focus();
+    expect(button).toHaveFocus();
+    expect(screen.getByTestId('budget-stop')).toContainElement(button);
+  });
+
   it('is not offered for a length stop or a clean finish', () => {
     show([run({ stopped: 'max_tokens' })], { onContinue: vi.fn() });
     expect(screen.queryByTestId('budget-continue')).toBeNull();

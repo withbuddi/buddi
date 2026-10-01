@@ -344,7 +344,7 @@ export function MessageList({
               <div className="wb-msg-budget" data-testid="budget-stop">
                 <span>{budgetLine(stop)}</span>
                 {continuable === message.id ? (
-                  <Button size="sm" variant="ghost" data-testid="budget-continue" onClick={onContinue}>Continue</Button>
+                  <Button size="sm" className="wb-msg-budget-continue" data-testid="budget-continue" onClick={onContinue}>Continue</Button>
                 ) : null}
               </div>
             ) : null}
