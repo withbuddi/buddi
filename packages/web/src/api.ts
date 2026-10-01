@@ -1452,6 +1452,12 @@ export interface StagedPluginView {
   id: string;
   name: string;
   version: string;
+  /** When it was read. Only the newest, read minutes ago, opens as the full card. */
+  createdAt?: string;
+  /** When the owner first saw its full card or pressed Review. An opened stage is kept a day. */
+  openedAt?: string;
+  /** When the sweep deletes it if nobody decides: two hours unopened, a day opened. */
+  expiresAt?: string;
   source: PluginSource;
   publisher?: string;
   /** From its package.json: the manifest cannot be read before approval. */
@@ -2151,6 +2157,8 @@ export const api = {
   approveStaged: (id: string, body: { integrity?: string; acknowledgeDrift?: boolean }) =>
     post<PluginApproval>(`/plugins/staged/${encodeURIComponent(id)}/approve`, body),
   rejectStaged: (id: string) => post<{ rejected: string }>(`/plugins/staged/${encodeURIComponent(id)}/reject`),
+  /** The owner looked at it: its full card shown, or Review pressed. Keeps it a day instead of two hours. */
+  openedStaged: (id: string) => post<{ opened: string }>(`/plugins/staged/${encodeURIComponent(id)}/opened`),
   /**
    * Stage the next version. `from` names the npm package to take it from
    * when the installed one came from elsewhere (a directory, a file) and is

@@ -10,6 +10,7 @@ What changes in buddi from one release to the next, newest first.
 - Agent Father can now give an agent up to 500 steps per reply when it creates or updates one (it was capped at 64), the same range as Setup → Brain; the approval card names the number.
 - Hiding a glance on Home with its × now leaves "<Title> hidden · Undo" in its place for about eight seconds; Undo brings it back (the same setting as Settings → Appearance).
 - `TELEGRAM_OWNER_USER_ID` and `TELEGRAM_OWNER_CHAT_ID` are no longer read: a phone you unpaired in Settings → Telegram used to come back at the next restart. The first start of this version pairs the account they name once (if it is not paired yet) and records it; after that pairing is only by code or QR (Settings → Telegram, `buddi telegram pair`), and `buddi doctor` warns while the lines are still in `.env`.
+- Settings → Plugins opens only the plugin you just read as the full review card; every other package read but not installed waits as a compact row under "Waiting for you", above Installed, with Review (the full card in the side sheet) and Not this one. A stage you opened is kept a day; one nobody opened (made by a script or the CLI) is deleted after two hours, and `buddi plugins staged` prints when each one goes.
 
 ## 0.1.0-pre.27 — 2026-10-01
 

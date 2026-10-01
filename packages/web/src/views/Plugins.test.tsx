@@ -27,6 +27,7 @@ vi.mock('../api', async (load) => {
       pluginJob: vi.fn(),
       approveStaged: vi.fn(),
       rejectStaged: vi.fn(),
+      openedStaged: vi.fn(),
       updatePlugin: vi.fn(),
       uninstallPlugin: vi.fn(),
       setPluginEnabled: vi.fn(),
@@ -58,7 +59,14 @@ const STAGED: StagedPluginView = {
   claims: { schema: 'weather', hosts: ['api.example.test'], text: 'It tells you the weather.', missing: false },
   scripts: [],
   state: 'staged',
+  // Read just now: the one stage drawn as the full card.
+  createdAt: new Date().toISOString(),
 };
+
+/** Read hours ago and never decided on: a row under "Waiting for you". */
+const hoursAgo = (hours: number): string => new Date(Date.now() - hours * 3_600_000).toISOString();
+const OLD_STAGED: StagedPluginView = { ...STAGED, id: 'stage-old', name: 'tides', version: '1.0.2', createdAt: hoursAgo(3) };
+const OLDER_STAGED: StagedPluginView = { ...STAGED, id: 'stage-older', name: 'recipes', version: '0.3.0', createdAt: hoursAgo(20), openedAt: hoursAgo(19) };
 
 function view(over: Partial<PluginsView> = {}): PluginsView {
   return {
@@ -78,6 +86,7 @@ const PLAN = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.openedStaged).mockResolvedValue({ opened: 'x' });
   window.localStorage.clear();
 });
 
@@ -211,6 +220,73 @@ describe('the plugins section', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Not this one' }));
     await waitFor(() => expect(api.rejectStaged).toHaveBeenCalledWith('stage-1'));
     expect(api.approveStaged).not.toHaveBeenCalled();
+  });
+
+  it('draws only the stage just read as the full card, and every older one as a row waiting for you', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED, OLD_STAGED, OLDER_STAGED] }));
+    render(<Plugins />);
+    // One card: one Install, and the fresh stage's claim on the page.
+    expect(await screen.findByText('“It tells you the weather.”')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Install' })).toHaveLength(1);
+    expect(screen.getByText('Waiting for you')).toBeInTheDocument();
+    expect(screen.getByText('2 packages')).toBeInTheDocument();
+    expect(screen.getByText(/from npm · read 3 hours ago/)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Review' })).toHaveLength(2);
+    // Shown in full is opened: the gateway keeps it a day. The rows were not opened.
+    await waitFor(() => expect(api.openedStaged).toHaveBeenCalledWith('stage-1'));
+    expect(api.openedStaged).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws nothing as a card when every stage is old: all of them wait as rows', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [OLD_STAGED, OLDER_STAGED] }));
+    render(<Plugins />);
+    expect(await screen.findByText('Waiting for you')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
+    expect(api.openedStaged).not.toHaveBeenCalled();
+  });
+
+  it('opens a waiting stage in the sheet on Review, says it was opened, and installs from there', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [OLD_STAGED] }));
+    vi.mocked(api.approveStaged).mockResolvedValue({ installed: { name: 'tides', version: '1.0.2' }, restartNeeded: true });
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet).toHaveTextContent('What it says about itself');
+    expect(sheet).toHaveTextContent('Nothing of it has run.');
+    expect(api.openedStaged).toHaveBeenCalledWith('stage-old');
+    fireEvent.click(screen.getByRole('button', { name: 'Install' }));
+    await waitFor(() => expect(api.approveStaged).toHaveBeenCalledWith('stage-old', { integrity: 'sha512-AAAA' }));
+  });
+
+  it('does not tell the gateway again about a stage already opened', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [OLDER_STAGED] }));
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(api.openedStaged).not.toHaveBeenCalled();
+  });
+
+  it('rejects a waiting stage from its row, without a dialog and without approving', async () => {
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [OLD_STAGED] }));
+    vi.mocked(api.rejectStaged).mockResolvedValue({ rejected: 'stage-old' });
+    render(<Plugins />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Not this one' }));
+    await waitFor(() => expect(api.rejectStaged).toHaveBeenCalledWith('stage-old'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(api.approveStaged).not.toHaveBeenCalled();
+  });
+
+  it('opens the stage this visit read as the card, even when another is newer', async () => {
+    const mine = { ...OLD_STAGED, id: 'stage-mine', name: 'mine' };
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [STAGED, mine] }));
+    vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue({ ...JOB, phase: 'done', stagedId: 'stage-mine' });
+    render(<Plugins />);
+    fireEvent.change(await screen.findByPlaceholderText('buddi-plugin-weather'), { target: { value: 'mine' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Read it first' }));
+    await waitFor(() => expect(api.openedStaged).toHaveBeenCalledWith('stage-mine'));
+    // The other one, newer or not, is a row.
+    expect(await screen.findByLabelText('weather: review')).toBeInTheDocument();
   });
 
   it('keeps the data by default, and needs the name typed back to drop it', async () => {

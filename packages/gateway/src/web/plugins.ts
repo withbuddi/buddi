@@ -80,7 +80,7 @@ export type PluginsEngine = Pick<
   | 'pluginLoadReport'
   | 'verifyInstalledHash'
 > &
-  Partial<Pick<typeof engine, 'setPluginEnabled'>>;
+  Partial<Pick<typeof engine, 'setPluginEnabled' | 'sweepStages' | 'markStagedOpened'>>;
 
 export interface PluginsDeps {
   env: NodeJS.ProcessEnv;
@@ -168,10 +168,17 @@ function stagedUses(staged: StagedPlugin): {
 }
 
 function stagedView(staged: StagedPlugin): Record<string, unknown> {
+  // A pure date sum, never the injected engine's: it reads no disk.
+  const expiresAt = engine.stageExpiresAt(staged);
   return {
     id: staged.id,
     name: staged.name,
     version: staged.version,
+    // When it was read and whether the owner has looked at it: the page opens
+    // only the newest as a card, and the sweep keeps an opened one longer.
+    createdAt: staged.createdAt,
+    ...(staged.openedAt === undefined ? {} : { openedAt: staged.openedAt }),
+    ...(expiresAt === undefined ? {} : { expiresAt: expiresAt.toISOString() }),
     source: staged.source,
     ...(staged.publisher === undefined ? {} : { publisher: staged.publisher }),
     ...(staged.author === undefined ? {} : { author: staged.author }),
@@ -478,6 +485,9 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
 
   let staged: Array<Record<string, unknown>> = [];
   try {
+    // What has expired goes before it is listed: a stage nobody opened lasts
+    // two hours, and the gateway may have been up far longer than that.
+    api.sweepStages?.(env);
     staged = api.listStaged(env).map(stagedView);
   } catch (err) {
     deps.log(`web: listing staged plugins failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -698,6 +708,21 @@ export function rejectRoute(deps: PluginsDeps, id: string): RouteReply {
   try {
     const gone = engineOf(deps).rejectStaged(id, deps.env);
     return { status: 200, body: { rejected: id, existed: gone } };
+  } catch (err) {
+    return refusalReply(err);
+  }
+}
+
+/**
+ * The owner looked at a stage: its full card was shown, or they pressed
+ * Review. Recorded once; it keeps the stage a day instead of two hours.
+ */
+export function openedRoute(deps: PluginsDeps, id: string): RouteReply {
+  const api = engineOf(deps);
+  if (api.markStagedOpened === undefined) return { status: 200, body: { opened: id } };
+  try {
+    const staged = api.markStagedOpened(id, deps.env);
+    return { status: 200, body: { opened: id, staged: stagedView(staged) } };
   } catch (err) {
     return refusalReply(err);
   }

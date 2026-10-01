@@ -48,6 +48,8 @@ import {
   integrityOfFile,
   lifecycleScripts,
   listStaged,
+  markStagedOpened,
+  readStaged,
   rejectStaged,
   resolveCoreDir,
   scanDependencies,
@@ -56,7 +58,7 @@ import {
   TRUST_SENTENCE,
 } from './stage.js';
 import type { NpmRunner } from './npm.js';
-import { renderStaged } from '../plugins-cli.js';
+import { renderStaged, stagedListing } from '../plugins-cli.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MARKER_FIXTURE = path.join(HERE, 'fixtures', 'marker-plugin');
@@ -296,6 +298,35 @@ describe('staging', () => {
     });
     expect(sweepStages(env)).toEqual([old.id]);
     expect(existsSync(old.dir)).toBe(false);
+  });
+
+  it('keeps a stage nobody opened two hours, and one the owner opened a day', async () => {
+    const read = new Date('2026-09-30T10:00:00.000Z');
+    const unopened = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm(), now: () => read });
+    const opened = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm(), now: () => read });
+    markStagedOpened(opened.id, env, new Date('2026-09-30T10:30:00.000Z'));
+    // Only the first opening counts.
+    markStagedOpened(opened.id, env, new Date('2026-09-30T11:00:00.000Z'));
+    expect(readStaged(opened.id, env).openedAt).toBe('2026-09-30T10:30:00.000Z');
+
+    const at = (iso: string): Date => new Date(iso);
+    expect(sweepStages(env, { now: at('2026-09-30T11:59:00.000Z') })).toEqual([]);
+    expect(sweepStages(env, { now: at('2026-09-30T12:00:00.000Z') })).toEqual([unopened.id]);
+    expect(existsSync(unopened.dir)).toBe(false);
+    expect(sweepStages(env, { now: at('2026-10-01T09:59:00.000Z') })).toEqual([]);
+    expect(sweepStages(env, { now: at('2026-10-01T10:00:00.000Z') })).toEqual([opened.id]);
+  });
+
+  it('lists each stage with when it is deleted', async () => {
+    const read = new Date('2026-09-30T10:00:00.000Z');
+    const unopened = await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm(), now: () => read });
+    const opened = markStagedOpened(
+      (await stagePlugin('buddi-plugin-fixture-marker', { env, npm: fakeNpm(), now: () => read })).id,
+      env,
+    );
+    const lines = stagedListing([unopened, opened], new Date('2026-09-30T10:48:00.000Z')).join('\n');
+    expect(lines).toContain('never opened, kept two hours: deleted 2026-09-30T12:00:00.000Z (in 1h 12m)');
+    expect(lines).toContain('opened, kept a day: deleted 2026-10-01T10:00:00.000Z (in 23h 12m)');
   });
 
   it('says the sentence the owner is agreeing to, in one place', () => {

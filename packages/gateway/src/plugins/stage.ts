@@ -62,8 +62,15 @@ export const TRUST_SENTENCE =
   'plugin that wants to can bypass tool approvals and the network allowlist. Install only what you ' +
   'would run as yourself.';
 
-/** How long an abandoned stage is kept before the sweep removes it. */
+/** How long a stage the owner opened is kept, undecided, before the sweep removes it. */
 export const STAGE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long a stage nobody ever opened is kept: one a script or the CLI made and
+ * the owner never looked at. It is unapproved code on disk that nobody is
+ * reading, so it goes sooner.
+ */
+export const STAGE_UNOPENED_TTL_MS = 2 * 60 * 60 * 1000;
 
 export const STAGED_FILE = 'staged.json';
 
@@ -92,6 +99,12 @@ export interface StagedPlugin {
   /** The extracted package: `<dir>/package`, or the directory source itself. */
   packageDir: string;
   createdAt: string;
+  /**
+   * When the owner first looked at it: its full card shown on the Plugins
+   * page, or Review pressed on its row. An opened stage is kept a day; one
+   * never opened, two hours (`stageExpiresAt`).
+   */
+  openedAt?: string;
   source: PluginSource;
   name: string;
   version: string;
@@ -254,22 +267,47 @@ export function rejectStaged(id: string, env: NodeJS.ProcessEnv = process.env): 
 }
 
 /**
- * Remove stages nobody decided on. Called once at gateway start.
+ * When the sweep removes this stage: a day after it was made when the owner
+ * opened it, two hours after when nobody ever did. `undefined` for a record
+ * whose date cannot be read, which the sweep leaves alone.
+ */
+export function stageExpiresAt(staged: Pick<StagedPlugin, 'createdAt' | 'openedAt'>): Date | undefined {
+  const created = Date.parse(staged.createdAt);
+  if (!Number.isFinite(created)) return undefined;
+  return new Date(created + (staged.openedAt === undefined ? STAGE_UNOPENED_TTL_MS : STAGE_TTL_MS));
+}
+
+/**
+ * Note that the owner has looked at a stage. Only the first time counts, and
+ * it never moves the stage's date: opening keeps it a day from when it was
+ * made, not a day from now. Answers the record as it now stands.
+ */
+export function markStagedOpened(
+  id: string,
+  env: NodeJS.ProcessEnv = process.env,
+  now: Date = new Date(),
+): StagedPlugin {
+  const staged = readStaged(id, env);
+  if (staged.openedAt !== undefined) return staged;
+  const opened = { ...staged, openedAt: now.toISOString() };
+  writeStaged(opened);
+  return opened;
+}
+
+/**
+ * Remove stages nobody decided on, each at its own `stageExpiresAt`. Called at
+ * gateway start, and again whenever the stages are listed.
  *
  * A stage holds an unpacked package and its dependencies; leaving them for ever
  * means the data directory grows by every plugin the owner looked at and did
  * not install, and each one is unapproved third-party code sitting on disk.
  */
-export function sweepStages(
-  env: NodeJS.ProcessEnv = process.env,
-  opts: { olderThanMs?: number; now?: Date } = {},
-): string[] {
-  const ttl = opts.olderThanMs ?? STAGE_TTL_MS;
+export function sweepStages(env: NodeJS.ProcessEnv = process.env, opts: { now?: Date } = {}): string[] {
   const now = (opts.now ?? new Date()).getTime();
   const swept: string[] = [];
   for (const staged of listStaged(env)) {
-    const age = now - Date.parse(staged.createdAt);
-    if (Number.isFinite(age) && age > ttl) {
+    const expires = stageExpiresAt(staged);
+    if (expires !== undefined && now >= expires.getTime()) {
       rejectStaged(staged.id, env);
       swept.push(staged.id);
     }

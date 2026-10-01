@@ -211,6 +211,7 @@ import {
   pluginJobRoute,
   receivePluginUpload,
   rejectRoute,
+  openedRoute,
   stageRoute,
   toggleRoute,
   uninstallRoute,
@@ -2297,9 +2298,10 @@ export function createWebApp(deps: WebServerDeps): Server {
      * read about. `plugins.ts` holds every one of those decisions.
      */
     if (path === '/api/plugins/stage') return reply(res, stageRoute(pluginDeps(), body));
-    const stagedApprove = /^\/api\/plugins\/staged\/([A-Za-z0-9._-]{1,128})\/(approve|reject)$/.exec(path);
+    const stagedApprove = /^\/api\/plugins\/staged\/([A-Za-z0-9._-]{1,128})\/(approve|reject|opened)$/.exec(path);
     if (stagedApprove) {
       const id = stagedApprove[1] as string;
+      if (stagedApprove[2] === 'opened') return reply(res, openedRoute(pluginDeps(), id));
       return reply(res, stagedApprove[2] === 'approve'
         ? await approveRoute(pluginDeps(), id, body)
         : rejectRoute(pluginDeps(), id));

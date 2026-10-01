@@ -2578,8 +2578,13 @@ among it), the integrity hash and publisher, your `buddi.md`, and which
 packages in the installed tree declare `preinstall`/`install`/`postinstall` or
 ship a `binding.gyp` (node-gyp is an install script nobody wrote down).
 Nothing is imported, nothing is registered, no schema exists. The staged package
-sits in `<data>/plugins/staging/<id>/`, and a stage nobody decides on is deleted
-after a day.
+sits in `<data>/plugins/staging/<id>/`, and a stage nobody decides on is deleted:
+a day after it was read when the owner opened it (its full card was shown on the
+Plugins page, or they pressed Review on its row), two hours after when nobody
+ever did — one a script or the CLI made and nobody looked at. `buddi plugins
+staged` prints each stage's deletion time. On the Plugins page only the stage
+just read opens as the full card; every other one waits as a row under
+*Waiting for you*, above Installed, with Review and Not this one.
 
 Four things are checked before any of that is shown, and each one refuses
 rather than warns:

@@ -330,8 +330,8 @@ type PluginsTab = 'installed' | 'browse';
 const PLUGINS_ROUTE = settingsRoute('plugins');
 const TAB_ROUTES: Record<PluginsTab, string> = { installed: PLUGINS_ROUTE, browse: `${PLUGINS_ROUTE}?tab=browse` };
 
-/** What the sheet is showing: an installed plugin, or a listing. */
-type Opened = { kind: 'installed' | 'market'; name: string };
+/** What the sheet is showing: an installed plugin, a listing, or a waiting stage (by id). */
+type Opened = { kind: 'installed' | 'market' | 'staged'; name: string };
 /** What the dialog is asking. */
 type Asking = { kind: 'disable' | 'remove'; name: string };
 
@@ -493,12 +493,34 @@ export function Plugins({
     </Tabs>
   );
 
+  const allStaged = data?.staged ?? [];
+  const freshId = freshStageId(allStaged, job?.phase === 'done' ? job.stagedId : undefined);
+  const fresh = allStaged.find((entry) => entry.id === freshId);
+  const waiting = allStaged.filter((entry) => entry.id !== freshId);
+  const onStagedInstalled = (name: string): void => {
+    setOpened(null);
+    setInstalled(name);
+    setJobId(null);
+    view.reload();
+  };
+  const openedStage = opened?.kind === 'staged' ? waiting.find((entry) => entry.id === opened.name) : undefined;
   const openedPlugin = opened?.kind === 'installed' ? list.find((p) => p.name === opened.name) : undefined;
   const openedEntry =
     opened?.kind === 'market' ? market?.plugins.find((entry) => entry.name === opened.name) : undefined;
   const pageNotes = said && !(openedPlugin && openedPlugin.name === said.name) && said.notes.length > 0 ? said.notes : null;
 
-  const sheet = openedPlugin ? (
+  const sheet = openedStage ? (
+    <StagedSheet
+      key={openedStage.id}
+      staged={openedStage}
+      onClose={() => setOpened(null)}
+      onInstalled={onStagedInstalled}
+      onGone={() => {
+        setOpened(null);
+        view.reload();
+      }}
+    />
+  ) : openedPlugin ? (
     <InstalledSheet
       plugin={openedPlugin}
       listing={listingOf(openedPlugin)}
@@ -576,18 +598,35 @@ export function Plugins({
         onFailed={setFailed}
       />
 
-      {(data?.staged ?? []).map((staged) => (
-        <Staged
-          key={staged.id}
-          staged={staged}
-          onInstalled={(name) => {
-            setInstalled(name);
-            setJobId(null);
-            view.reload();
-          }}
-          onGone={() => view.reload()}
-        />
-      ))}
+      {fresh ? (
+        <Staged key={fresh.id} staged={fresh} onInstalled={onStagedInstalled} onGone={() => view.reload()} />
+      ) : null}
+
+      {waiting.length > 0 ? (
+        <Panel flush title="Waiting for you" tool={plural(waiting.length, 'package', 'packages')}>
+          <div className="plugins-rows">
+            <List>
+              {waiting.map((staged) => (
+                <WaitingRow
+                  key={staged.id}
+                  staged={staged}
+                  onReview={() => {
+                    tellOpened(staged);
+                    setOpened({ kind: 'staged', name: staged.id });
+                  }}
+                  onReject={() => {
+                    setFailed(null);
+                    api
+                      .rejectStaged(staged.id)
+                      .then(() => view.reload())
+                      .catch(fail);
+                  }}
+                />
+              ))}
+            </List>
+          </div>
+        </Panel>
+      ) : null}
 
       {installed || data?.restartNeeded ? <RestartToLoad checkout={checkout} name={installed} /> : null}
 
@@ -823,15 +862,18 @@ function StagedUses({ staged }: { staged: StagedPluginView }): JSX.Element {
   );
 }
 
-function Staged({
-  staged,
-  onInstalled,
-  onGone,
-}: {
-  staged: StagedPluginView;
-  onInstalled: (name: string) => void;
-  onGone: () => void;
-}): JSX.Element {
+/** Approving and rejecting one stage: the card's and the sheet's answers. */
+function useStagedDecision(
+  staged: StagedPluginView,
+  onInstalled: (name: string) => void,
+  onGone: () => void,
+): {
+  plan: PluginPlan | null;
+  busy: boolean;
+  failed: string | null;
+  approve: (acknowledgeDrift: boolean) => void;
+  reject: () => void;
+} {
   const [plan, setPlan] = useState<PluginPlan | null>(staged.plan ?? null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -873,8 +915,161 @@ function Staged({
       .finally(() => setBusy(false));
   };
 
-  const drift = plan?.drift ?? [];
+  return { plan, busy, failed, approve, reject };
+}
+
+/**
+ * Tell the gateway the owner has seen this stage: an opened stage is kept a
+ * day instead of two hours. The server keeps only the first time, so saying
+ * it twice is harmless; losing the call costs nothing worse than two hours.
+ */
+function tellOpened(staged: StagedPluginView): void {
+  if (staged.openedAt) return;
+  void api.openedStaged(staged.id).catch(() => {});
+}
+
+/** What a read package is and what it says about itself: the card's body, and the sheet's. */
+function StagedFacts({ staged, inSheet }: { staged: StagedPluginView; inSheet?: boolean }): JSX.Element {
   const deps = staged.dependencies;
+  return (
+    <div className="plugins-staged" data-in={inSheet ? 'sheet' : undefined}>
+      <div className="plugins-facts">
+        <KV
+          items={[
+            ...(staged.author ? [{ label: 'By', value: <AuthorName author={staged.author} /> }] : []),
+            {
+              label: 'From',
+              value: staged.uploadedName ? `a file you chose · ${staged.uploadedName}` : sourceWords(staged.source),
+            },
+            { label: 'Published by', value: publisherWords(staged.source, staged.publisher) },
+            ...(staged.previousSource && staged.previous
+              ? [{ label: 'Replaces', value: `${staged.previous.version}, installed from ${sourceWords(staged.previousSource)}` }]
+              : []),
+            ...(staged.source.kind === 'directory'
+              ? []
+              : [
+                  {
+                    label: 'Installs as',
+                    value: staged.installsAs ? (
+                      <span className="mono">{staged.installsAs}</span>
+                    ) : (
+                      'the name its manifest gives, read when you approve — it declares no buddi.name'
+                    ),
+                  },
+                ]),
+            ...(staged.coreAsDependency
+              ? [{ label: 'Core', value: "It asks npm for buddi's core; buddi provides its own." }]
+              : []),
+            {
+              label: 'Dependencies',
+              value:
+                deps.count === 0
+                  ? 'none'
+                  : `${deps.count}${
+                      deps.withScripts.length === 0
+                        ? ', none of which run install scripts'
+                        : `, of which these run install scripts: ${deps.withScripts.join(', ')}`
+                    }`,
+            },
+            { label: 'What it reaches', value: <StagedUses staged={staged} /> },
+            { label: 'Integrity', value: <Hash value={staged.integrity} /> },
+            ...(staged.stagedHash ? [{ label: 'Files on disk', value: <Hash value={staged.stagedHash} /> }] : []),
+          ]}
+        />
+      </div>
+      <div className="plugins-claim">
+        <div className="plugins-claim-head">What it says about itself</div>
+        <div className="plugins-claim-note">From its own buddi.md. Nothing has checked it yet.</div>
+        {staged.claims.missing ? (
+          <p className="plugins-claim-text">It ships no buddi.md, so it says nothing about itself at all.</p>
+        ) : (
+          <p className="plugins-claim-text">“{staged.claims.text}”</p>
+        )}
+        <div className="plugins-facts">
+          <KV
+            items={[
+              {
+                label: 'Schema it owns',
+                value: staged.claims.schema ? <span className="mono">{staged.claims.schema}</span> : 'it claims none',
+              },
+              {
+                label: 'Hosts it reaches',
+                value:
+                  staged.claims.hosts.length === 0 ? (
+                    'it claims none'
+                  ) : (
+                    <span className="mono">{staged.claims.hosts.join(', ')}</span>
+                  ),
+              },
+            ]}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The second card: the package's prose and its manifest disagree. */
+function DriftCard({
+  plan,
+  busy,
+  onReject,
+  onInstallAnyway,
+}: {
+  plan: PluginPlan;
+  busy: boolean;
+  onReject: () => void;
+  onInstallAnyway: () => void;
+}): JSX.Element {
+  return (
+    <Card
+      tone="warning"
+      title="What it said, and what it does"
+      meta={<Pill tone="warning">read this first</Pill>}
+      foot={
+        <Toolbar>
+          <span className="plugins-foot-note">Install anyway says you read these.</span>
+          <Spacer />
+          <Button variant="ghost" disabled={busy} onClick={onReject}>
+            Not this one
+          </Button>
+          <Button variant="danger" disabled={busy} onClick={onInstallAnyway}>
+            Install anyway
+          </Button>
+        </Toolbar>
+      }
+    >
+      <p className="plugins-note">
+        Its prose and its manifest do not agree. Neither is authoritative; the manifest is what actually runs.
+      </p>
+      <ul className="plugins-drift">
+        {plan.drift.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <Unlocks unlocks={plan.agents ?? []} />
+    </Card>
+  );
+}
+
+/**
+ * The package the owner just read: the facts, and the first yes. Only that
+ * one is drawn as a card; anything else waiting is a row (`WaitingRow`).
+ */
+function Staged({
+  staged,
+  onInstalled,
+  onGone,
+}: {
+  staged: StagedPluginView;
+  onInstalled: (name: string) => void;
+  onGone: () => void;
+}): JSX.Element {
+  const { plan, busy, failed, approve, reject } = useStagedDecision(staged, onInstalled, onGone);
+  // Shown in full is seen: it is kept a day.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => tellOpened(staged), [staged.id]);
+  const drift = plan?.drift ?? [];
   return (
     <Stack gap="sm">
       <Card
@@ -899,113 +1094,122 @@ function Staged({
         }
       >
         <ErrorBanner message={failed} />
-        <div className="plugins-staged">
-          <div className="plugins-facts">
-            <KV
-              items={[
-                ...(staged.author ? [{ label: 'By', value: <AuthorName author={staged.author} /> }] : []),
-                {
-                  label: 'From',
-                  value: staged.uploadedName ? `a file you chose · ${staged.uploadedName}` : sourceWords(staged.source),
-                },
-                { label: 'Published by', value: publisherWords(staged.source, staged.publisher) },
-                ...(staged.previousSource && staged.previous
-                  ? [{ label: 'Replaces', value: `${staged.previous.version}, installed from ${sourceWords(staged.previousSource)}` }]
-                  : []),
-                ...(staged.source.kind === 'directory'
-                  ? []
-                  : [
-                      {
-                        label: 'Installs as',
-                        value: staged.installsAs ? (
-                          <span className="mono">{staged.installsAs}</span>
-                        ) : (
-                          'the name its manifest gives, read when you approve — it declares no buddi.name'
-                        ),
-                      },
-                    ]),
-                ...(staged.coreAsDependency
-                  ? [{ label: 'Core', value: "It asks npm for buddi's core; buddi provides its own." }]
-                  : []),
-                {
-                  label: 'Dependencies',
-                  value:
-                    deps.count === 0
-                      ? 'none'
-                      : `${deps.count}${
-                          deps.withScripts.length === 0
-                            ? ', none of which run install scripts'
-                            : `, of which these run install scripts: ${deps.withScripts.join(', ')}`
-                        }`,
-                },
-                { label: 'What it reaches', value: <StagedUses staged={staged} /> },
-                { label: 'Integrity', value: <Hash value={staged.integrity} /> },
-                ...(staged.stagedHash ? [{ label: 'Files on disk', value: <Hash value={staged.stagedHash} /> }] : []),
-              ]}
-            />
-          </div>
-          <div className="plugins-claim">
-            <div className="plugins-claim-head">What it says about itself</div>
-            <div className="plugins-claim-note">From its own buddi.md. Nothing has checked it yet.</div>
-            {staged.claims.missing ? (
-              <p className="plugins-claim-text">It ships no buddi.md, so it says nothing about itself at all.</p>
-            ) : (
-              <p className="plugins-claim-text">“{staged.claims.text}”</p>
-            )}
-            <div className="plugins-facts">
-              <KV
-                items={[
-                  {
-                    label: 'Schema it owns',
-                    value: staged.claims.schema ? <span className="mono">{staged.claims.schema}</span> : 'it claims none',
-                  },
-                  {
-                    label: 'Hosts it reaches',
-                    value:
-                      staged.claims.hosts.length === 0 ? (
-                        'it claims none'
-                      ) : (
-                        <span className="mono">{staged.claims.hosts.join(', ')}</span>
-                      ),
-                  },
-                ]}
-              />
-            </div>
-          </div>
-        </div>
+        <StagedFacts staged={staged} />
       </Card>
 
-      {drift.length > 0 ? (
-        <Card
-          tone="warning"
-          title="What it said, and what it does"
-          meta={<Pill tone="warning">read this first</Pill>}
-          foot={
-            <Toolbar>
-              <span className="plugins-foot-note">Install anyway says you read these.</span>
-              <Spacer />
-              <Button variant="ghost" disabled={busy} onClick={reject}>
-                Not this one
-              </Button>
-              <Button variant="danger" disabled={busy} onClick={() => approve(true)}>
-                Install anyway
-              </Button>
-            </Toolbar>
-          }
-        >
-          <p className="plugins-note">
-            Its prose and its manifest do not agree. Neither is authoritative; the manifest is what actually runs.
-          </p>
-          <ul className="plugins-drift">
-            {drift.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          <Unlocks unlocks={plan?.agents ?? []} />
-        </Card>
+      {plan && drift.length > 0 ? (
+        <DriftCard plan={plan} busy={busy} onReject={reject} onInstallAnyway={() => approve(true)} />
       ) : null}
     </Stack>
   );
+}
+
+/** Read earlier, not decided on: one row, in the Installed list's style. */
+function WaitingRow({
+  staged,
+  onReview,
+  onReject,
+}: {
+  staged: StagedPluginView;
+  onReview: () => void;
+  onReject: () => void;
+}): JSX.Element {
+  const read = fmtRelative(staged.createdAt);
+  return (
+    <ListRow
+      onClick={onReview}
+      label={`${staged.name}: review`}
+      lead={<AppIcon svg={undefined} />}
+      title={
+        <>
+          {staged.name} <span className="plugins-ver">{staged.version}</span>
+        </>
+      }
+      sub={`from ${sourceShort(staged.source)}${read ? ` · read ${read}` : ''}`}
+      side={
+        <span className="plugins-side">
+          {/* Below 720px only Review stays on the row; the sheet has Not this one. */}
+          <span className="plugins-wait-extra">
+            <Pill>read, not installed</Pill>
+            <Button size="sm" variant="ghost" onClick={stop(onReject)}>
+              Not this one
+            </Button>
+          </span>
+          <Button size="sm" onClick={stop(onReview)}>
+            Review
+          </Button>
+        </span>
+      }
+    />
+  );
+}
+
+/** Review: the full card of one waiting package, in the sheet, with its two answers. */
+function StagedSheet({
+  staged,
+  onClose,
+  onInstalled,
+  onGone,
+}: {
+  staged: StagedPluginView;
+  onClose: () => void;
+  onInstalled: (name: string) => void;
+  onGone: () => void;
+}): JSX.Element {
+  const { plan, busy, failed, approve, reject } = useStagedDecision(staged, onInstalled, onGone);
+  const drift = plan?.drift ?? [];
+  return (
+    <Sheet
+      title={
+        <SheetTitle
+          svg={undefined}
+          name={staged.name}
+          version={staged.version}
+          by={staged.author ? <AuthorName author={staged.author} /> : publisherWords(staged.source, staged.publisher)}
+          pills={
+            <>
+              {' · '}
+              <Pill>read, not installed</Pill>
+            </>
+          }
+        />
+      }
+      onClose={onClose}
+      foot={
+        <Toolbar>
+          <span className="plugins-foot-note">Nothing of it has run.</span>
+          <Spacer />
+          <Button variant="ghost" disabled={busy} onClick={reject}>
+            Not this one
+          </Button>
+          <Button variant="accent" disabled={busy || drift.length > 0} onClick={() => approve(false)}>
+            Install
+          </Button>
+        </Toolbar>
+      }
+    >
+      <ErrorBanner message={failed} />
+      <StagedFacts staged={staged} inSheet />
+      {plan && drift.length > 0 ? (
+        <DriftCard plan={plan} busy={busy} onReject={reject} onInstallAnyway={() => approve(true)} />
+      ) : null}
+    </Sheet>
+  );
+}
+
+/** How recent a stage must be to open as the card when this visit did not make it. */
+const FRESH_MS = 10 * 60 * 1000;
+
+/**
+ * The one stage drawn as the full card: the one this visit's own "Read it
+ * first" or install made, or else the newest, if it was read minutes ago.
+ */
+export function freshStageId(staged: StagedPluginView[], ownId: string | undefined, now = Date.now()): string | null {
+  if (ownId && staged.some((entry) => entry.id === ownId)) return ownId;
+  const newest = [...staged].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))[0];
+  if (!newest?.createdAt) return null;
+  const age = now - Date.parse(newest.createdAt);
+  return Number.isFinite(age) && age < FRESH_MS ? newest.id : null;
 }
 
 /* ------------------------------------------------------------------ *

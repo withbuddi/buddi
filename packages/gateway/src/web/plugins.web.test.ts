@@ -142,6 +142,32 @@ it('shows the trust sentence and what is staged', async () => {
   expect(body.checkout).toBe(true);
 });
 
+it('sweeps before it lists, and says when each stage was read and when it goes', async () => {
+  const sweepStages = vi.fn(() => []);
+  const engine = fakeEngine({ listStaged: vi.fn(() => [STAGED, { ...STAGED, id: 'stage-2', openedAt: '2026-01-01T00:05:00.000Z' }]), sweepStages });
+  const { origin, headers } = await dashboard(engine, await emptyRecord());
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  expect(sweepStages).toHaveBeenCalled();
+  expect(body.staged[0].createdAt).toBe('2026-01-01T00:00:00.000Z');
+  expect(body.staged[0].openedAt).toBeUndefined();
+  // Never opened: two hours. Opened: a day from when it was read.
+  expect(body.staged[0].expiresAt).toBe('2026-01-01T02:00:00.000Z');
+  expect(body.staged[1].expiresAt).toBe('2026-01-02T00:00:00.000Z');
+});
+
+it('records that the owner opened a stage, behind the CSRF gate', async () => {
+  const markStagedOpened = vi.fn(() => ({ ...STAGED, openedAt: '2026-01-01T00:10:00.000Z' }));
+  const engine = fakeEngine({ markStagedOpened });
+  const { origin, headers } = await dashboard(engine, await emptyRecord());
+  const refused = await fetch(`${origin}/api/plugins/staged/stage-1/opened`, { method: 'POST', headers: json({ Cookie: headers.Cookie, Origin: origin }), body: '{}' });
+  expect(refused.status).toBe(403);
+  expect(markStagedOpened).not.toHaveBeenCalled();
+  const opened = await fetch(`${origin}/api/plugins/staged/stage-1/opened`, { method: 'POST', headers: json(headers), body: '{}' });
+  expect(opened.status).toBe(200);
+  expect(markStagedOpened).toHaveBeenCalledWith('stage-1', expect.anything());
+  expect(((await opened.json()) as any).staged.expiresAt).toBe('2026-01-02T00:00:00.000Z');
+});
+
 it('passes the integrity back and answers with the plan when the drift has not been read', async () => {
   const seen: Array<Record<string, unknown>> = [];
   const approveStaged = vi.fn(async (_id: string, opts: Record<string, unknown>) => {

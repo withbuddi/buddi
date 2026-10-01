@@ -62,7 +62,9 @@ import {
   readStaged,
   rejectStaged,
   resolveCoreDir,
+  stageExpiresAt,
   stagePlugin,
+  sweepStages,
   StageRefusal,
   TRUST_SENTENCE,
   type StagedPlan,
@@ -672,18 +674,44 @@ async function commandUpdate(
   return approveAndReport(staged, args, pool, env);
 }
 
+/** "1h 12m", "21h", "4m": how long until a stage is deleted. */
+function untilWords(ms: number): string {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours === 0) return `${rest}m`;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+/** What `buddi plugins staged` prints for each stage, its expiry included. */
+export function stagedListing(staged: StagedPlugin[], now: Date = new Date()): string[] {
+  const lines: string[] = [];
+  for (const entry of staged) {
+    lines.push(`  ${entry.id}  ${entry.name} ${entry.version}  ${entry.state}  staged ${entry.createdAt}`);
+    lines.push(`      ${describeSource(entry.source)}`);
+    const expires = stageExpiresAt(entry);
+    const kept = entry.openedAt === undefined ? 'never opened, kept two hours' : 'opened, kept a day';
+    lines.push(
+      expires === undefined
+        ? `      ${kept}`
+        : `      ${kept}: deleted ${expires.toISOString()} (in ${untilWords(expires.getTime() - now.getTime())})`,
+    );
+  }
+  return lines;
+}
+
 function commandStaged(env: NodeJS.ProcessEnv): number {
+  // What has already expired goes first, so the list is what is really kept.
+  sweepStages(env);
   const staged = listStaged(env);
   if (staged.length === 0) {
     console.log('Nothing is staged. `buddi plugins install <spec>` stages one.');
     return 0;
   }
-  for (const entry of staged) {
-    console.log(`  ${entry.id}  ${entry.name} ${entry.version}  ${entry.state}  staged ${entry.createdAt}`);
-    console.log(`      ${describeSource(entry.source)}`);
-  }
+  console.log(stagedListing(staged).join('\n'));
   console.log('');
-  console.log('A stage nobody decides on is deleted after a day.');
+  console.log('A stage you opened on the Plugins page is deleted a day after it was read; one nobody opened,');
+  console.log('after two hours.');
   return 0;
 }
 
