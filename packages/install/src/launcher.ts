@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reloadLaunchAgent, nativeEnvironment, reloadSystemdUnit, systemdUnitPath, atomicJson, browsersDir, SERVICE_UNIT_VAR } from './environment.js';
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
+import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
 import type { SupervisorStatus } from './supervisor.js';
@@ -476,6 +477,9 @@ async function run(): Promise<void> {
     console.log(`Vault: ${vault.selection === 'keychain' ? 'the macOS keychain'
       : vault.selection === 'file' ? `encrypted file at ${vault.file}, opened by the key in ${path.join(ctx.data, 'vault-key')}${vault.locked ? ` — LOCKED: ${vault.advice}` : ' — protects it at rest; anyone with this account\'s files can open it'}`
       : vault.selection === 'memory' ? 'in memory only (nothing persists)' : 'off — secrets come from the environment'}`);
+    // Restored plugin data still waiting, the row the checkout's doctor prints.
+    const kept = await keptPluginDataLine(readKeptPluginData(ctx));
+    if (kept !== null) console.log(kept);
     console.log(JSON.stringify(await control(ctx), null, 2));
     /*
      * The upgrade row, read from disk rather than from the supervisor: the one
