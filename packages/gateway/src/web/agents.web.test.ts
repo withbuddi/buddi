@@ -76,7 +76,7 @@ describe('the engine endpoint', () => {
     });
     server = createWebApp({
       // The engine route touches neither the pool nor the registry.
-      pool: {} as Pool,
+      pool: { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as Pool,
       registry: new ToolRegistry(),
       catalog,
       ctx: { ownerId: 'owner' } as unknown as CoreToolContext,

@@ -8,7 +8,7 @@ const servers: WebServer[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(s => s.close())); });
 it('protects provider reads and credential writes with existing owner session, origin and CSRF checks', async () => {
   const manager = { view: vi.fn(() => ({ providers: [] })), credential: vi.fn(async () => ({ saved: true })), configure: vi.fn(), test: vi.fn() };
-  const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+  const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerSettings: manager as unknown as ProviderSettings });
   servers.push(app);
@@ -32,7 +32,7 @@ it('protects provider reads and credential writes with existing owner session, o
 
 it('protects named account creation and assignments and retires global credential writes', async () => {
   const manager = { ollamaAction: vi.fn(async () => ({ state: 'pending', verificationUrl: 'https://ollama.com/connect?name=x&key=y' })), anthropicAction: vi.fn(async () => ({ completed: true })), models: vi.fn(async () => ({ models: [], truncated: false })), probeModels: vi.fn(async () => ({ models: [], truncated: false })), view: vi.fn(() => ({ accounts: [], bindings: [] })), refresh: vi.fn(), save: vi.fn(async () => ({ id: 'one' })), assign: vi.fn(async () => ({ changed: ['account'], note: 'Saved' })), test: vi.fn(), remove: vi.fn(), codexAction: vi.fn(async () => ({ state: 'pending' })) };
-  const app = await startWebServer({ pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+  const app = await startWebServer({ pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', providerAccounts: manager as unknown as ProviderAccounts });
   servers.push(app);

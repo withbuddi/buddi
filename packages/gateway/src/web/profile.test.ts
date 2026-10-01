@@ -321,7 +321,7 @@ describe('an agent profile', () => {
 
     beforeEach(async () => {
       server = createWebApp({
-        pool: {} as Pool,
+        pool: { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as Pool,
         registry,
         catalog,
         ctx: { ownerId: 'owner' } as unknown as CoreToolContext,

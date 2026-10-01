@@ -38,7 +38,7 @@ async function fakeSupervisor(): Promise<{ socket: string; seen: string[] }> {
 
 async function dashboard(env: NodeJS.ProcessEnv): Promise<WebServer> {
   const app = await startWebServer({
-    pool: {} as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
+    pool: { query: async () => ({ rows: [], rowCount: 0 }) } as never, registry: new ToolRegistry(), catalog: {} as AgentCatalog,
     ctx: { ownerId: 'owner' } as CoreToolContext, timezone: 'UTC', now: () => new Date(),
     config: { enabled: true, host: '127.0.0.1', port: 0 }, token: 'fixture', env,
   });

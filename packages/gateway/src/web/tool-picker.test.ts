@@ -122,7 +122,7 @@ describe('the tool picker read', () => {
 
   it('answers over the wire, and 404s an unknown agent', async () => {
     const server = createWebApp({
-      pool: {} as Pool,
+      pool: { query: async () => ({ rows: [], rowCount: 0 }) } as unknown as Pool,
       registry: reg,
       catalog,
       ctx: { ownerId: 'owner' } as unknown as CoreToolContext,
