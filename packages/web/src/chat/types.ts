@@ -87,6 +87,17 @@ export interface ChatMessage {
    * which is nobody speaking at all.
    */
   speaker?: string;
+  /** The owner's standing reaction on this message, given on Telegram. */
+  feedback?: MessageFeedback;
+}
+
+/** A reaction the owner left on an agent's message elsewhere (docs/telegram.md, "Reactions"). */
+export interface MessageFeedback {
+  value: 'up' | 'down' | 'neutral';
+  emoji: string;
+  source: string;
+  /** Their answer to "What was off?", on a 👎. */
+  note?: string;
 }
 
 /**

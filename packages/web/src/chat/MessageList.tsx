@@ -26,7 +26,7 @@ import { ReplyActions } from './ReplyActions';
 import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
-import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
+import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun, type MessageFeedback } from '../chat/types';
 import { Avatar, Blob, Button, Icon } from '../ui';
 import { useIsBlobStill } from '../ui/Blob';
 
@@ -348,6 +348,7 @@ export function MessageList({
                 ) : null}
               </div>
             ) : null}
+            {message.feedback && !mine && !interjected ? <FeedbackMark feedback={message.feedback} /> : null}
             {said !== '' ? <ReplyActions messageId={message.id} text={said} onReadAloud={onReadAloud} /> : null}
           </div>
         );
@@ -900,4 +901,24 @@ function findResult(
     }
   }
   return null;
+}
+
+/**
+ * The owner's reaction from Telegram, under the message it was left on: the
+ * emoji and where it came from, and the 👎 note when there is one.
+ */
+function FeedbackMark({ feedback }: { feedback: MessageFeedback }): JSX.Element {
+  const where = feedback.source === 'telegram' ? 'on Telegram' : `on ${feedback.source}`;
+  return (
+    <div
+      className="wb-msg-feedback"
+      data-value={feedback.value}
+      data-testid="message-feedback"
+      title={`You reacted ${feedback.emoji} ${where}`}
+    >
+      <span className="wb-msg-feedback-emoji" aria-label={`You reacted ${feedback.emoji} ${where}`}>{feedback.emoji}</span>
+      <span>{where}</span>
+      {feedback.note ? <span className="wb-msg-feedback-note">“{feedback.note}”</span> : null}
+    </div>
+  );
 }

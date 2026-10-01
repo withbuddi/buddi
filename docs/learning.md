@@ -105,7 +105,10 @@ one owner action, each card kept and applied as its own Keep would be.
 
 Once a week, on Telegram and on Home: what buddi learned (memory notes,
 skills kept), what it proposes (open proposals with a link), and what it
-stopped doing (policies applied, runs saved). One message.
+stopped doing (policies applied, runs saved). One message. It also counts
+your reactions on Telegram this week per agent (👍, 👎, other) and quotes up to
+five 👎 notes, your answers to "What was off?"
+([telegram.md](telegram.md), "Reactions"), as material for what to change.
 
 ## 6. What agents are told
 

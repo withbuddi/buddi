@@ -19,12 +19,14 @@
  * way (as a `learning.digest` event) and shows the latest until the next.
  */
 import {
+  feedbackWeek,
   getActiveSchedule,
   getMission,
   nextAfter,
   readLearningWeek,
   setSchedule,
   upsertMission,
+  type FeedbackWeek,
   type KeptTally,
   type PluginManifest,
   type ProposalKind,
@@ -138,11 +140,18 @@ export interface LearningDigest {
    * plugin. Null when no installed plugin records it.
    */
   stopped: { total: number; byPlugin: Record<string, number> } | null;
+  /**
+   * The owner's standing reactions this week (Telegram 👍/👎), per agent, and
+   * up to five 👎 notes ("what was off?"). Absent on digests written before
+   * reactions were read.
+   */
+  feedback?: FeedbackWeek;
 }
 
 /** True when there is nothing to tell: nothing learned and nothing waiting. */
 export function quietDigest(d: LearningDigest): boolean {
-  return d.memory.count + d.skills.count + d.rules.count + d.changes.count === 0 && d.open === 0;
+  return d.memory.count + d.skills.count + d.rules.count + d.changes.count === 0 && d.open === 0
+    && Object.keys(d.feedback?.byAgent ?? {}).length === 0;
 }
 
 /** Memory notes added since, and not deleted: count and the first three, newest first. */
@@ -172,7 +181,11 @@ export async function composeDigest(
   input: { now: Date; manifests: readonly PluginManifest[] },
 ): Promise<LearningDigest> {
   const since = new Date(input.now.getTime() - WEEK_MS);
-  const [week, memory] = await Promise.all([readLearningWeek(pool, { since }), memoryWeek(pool, since)]);
+  const [week, memory, feedback] = await Promise.all([
+    readLearningWeek(pool, { since }),
+    memoryWeek(pool, since),
+    feedbackWeek(pool, { since }),
+  ]);
   let stopped: LearningDigest['stopped'] = null;
   for (const manifest of input.manifests) {
     const counter = manifest.policies?.applied;
@@ -196,6 +209,7 @@ export async function composeDigest(
     changes: kept('change'),
     open: week.open,
     stopped,
+    feedback,
   };
 }
 
@@ -235,7 +249,25 @@ export function digestText(d: LearningDigest, proposalsUrl: string): string {
         : 'Stopped doing: no rule you kept acted this week.',
     );
   }
+  const reactions = feedbackLines(d.feedback);
+  lines.push(...reactions);
   return lines.join('\n');
+}
+
+/** "Your reactions: …" and the 👎 notes, or nothing when there were none. */
+function feedbackLines(f: FeedbackWeek | undefined): string[] {
+  if (!f) return [];
+  const agents = Object.entries(f.byAgent)
+    .map(([agent, t]) => {
+      const parts = [t.up > 0 ? `${t.up} 👍` : null, t.down > 0 ? `${t.down} 👎` : null, t.neutral > 0 ? `${t.neutral} other` : null]
+        .filter((p): p is string => p !== null);
+      return parts.length > 0 ? `${agent} ${parts.join(' ')}` : null;
+    })
+    .filter((p): p is string => p !== null);
+  if (agents.length === 0) return [];
+  const lines = [`Your reactions: ${agents.join(', ')}.`];
+  for (const n of f.notes) lines.push(`What was off (${n.agentId}): ${clip(n.note, 140)}`);
+  return lines;
 }
 
 export interface DigestRunResult {

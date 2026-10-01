@@ -86,8 +86,28 @@ export const TELEGRAM_IDLE_TIMEOUT_MS = 30_000;
  */
 export const POLL_IDLE_TIMEOUT_MS = (POLL_TIMEOUT_SECONDS + 15) * 1000;
 
-/** The only update kinds this surface asks for. */
-export const ALLOWED_UPDATES = ['message', 'callback_query'] as const;
+/**
+ * The only update kinds this surface asks for. `message_reaction` is the
+ * owner's reaction on a message the bot sent, read as feedback
+ * (docs/telegram.md, "Reactions"); Telegram sends it only when asked.
+ */
+export const ALLOWED_UPDATES = ['message', 'callback_query', 'message_reaction'] as const;
+
+/** One reaction: an emoji, a custom emoji, or a paid star. Only emoji are read. */
+export type TelegramReactionType =
+  | { type: 'emoji'; emoji: string }
+  | { type: 'custom_emoji'; custom_emoji_id: string }
+  | { type: 'paid' };
+
+/** A user changed their reactions on a message. Both lists are whole, not a diff. */
+export interface TelegramMessageReaction {
+  chat: TelegramChat;
+  message_id: number;
+  user?: TelegramUser;
+  date?: number;
+  old_reaction: TelegramReactionType[];
+  new_reaction: TelegramReactionType[];
+}
 
 export interface TelegramUser {
   id: number;
@@ -147,6 +167,8 @@ export interface TelegramMessage {
   date?: number;
   forward_origin?: unknown;
   forward_from?: unknown;
+  /** The message this one answers, when the owner used Reply. Only its id is read. */
+  reply_to_message?: { message_id: number };
 }
 
 export interface TelegramUpdate {
@@ -165,6 +187,7 @@ export interface TelegramUpdate {
     data?: string;
     message?: { message_id: number; chat: TelegramChat };
   };
+  message_reaction?: TelegramMessageReaction;
 }
 
 /**
@@ -454,6 +477,8 @@ export class TelegramApi {
       parseMode?: 'HTML';
       /** Where a long text is split. Default `MAX_MESSAGE_CHARS`; never above Telegram's 4,096. */
       splitAt?: number;
+      /** Send as a reply to this message (the first chunk only). */
+      replyTo?: number;
     } = {},
   ): Promise<number | undefined> {
     if (opts.parseMode) {
@@ -479,6 +504,7 @@ export class TelegramApi {
         chat_id: chatId,
         text: chunk,
         disable_web_page_preview: true,
+        ...(index === 0 && opts.replyTo !== undefined ? { reply_parameters: { message_id: opts.replyTo, allow_sending_without_reply: true } } : {}),
         ...(last && opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
       });
       const id = typeof result?.message_id === 'number' ? result.message_id : undefined;
@@ -638,6 +664,15 @@ export class TelegramApi {
       callback_query_id: callbackQueryId,
       ...(text ? { text } : {}),
       ...(opts.showAlert ? { show_alert: true } : {}),
+    });
+  }
+
+  /** Set the bot's own reaction on a message: one emoji, or none to take it back. */
+  async setMessageReaction(chatId: string | number, messageId: number, emoji?: string): Promise<void> {
+    await this.call('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emoji ? [{ type: 'emoji', emoji }] : [],
     });
   }
 

@@ -23,6 +23,7 @@ export * from './scheduler/index.js';
 export * from './reminders/index.js';
 export * from './goals/index.js';
 export * from './learning/index.js';
+export * from './feedback/index.js';
 export * from './sentinels/index.js';
 export * from './sources/index.js';
 export * from './offers/index.js';

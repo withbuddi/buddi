@@ -566,6 +566,11 @@ export interface DigestRow {
   open: number;
   /** Times a kept learned rule acted this week, per plugin; null when nothing records it. */
   stopped: { total: number; byPlugin: Record<string, number> } | null;
+  /** The owner's reactions on Telegram this week, per agent, and the 👎 notes. */
+  feedback?: {
+    byAgent: Record<string, { up: number; down: number; neutral: number }>;
+    notes: Array<{ agentId: string; note: string }>;
+  };
   delivered: boolean;
 }
 

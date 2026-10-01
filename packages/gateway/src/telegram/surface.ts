@@ -54,6 +54,7 @@ import {
   MAX_MESSAGE_CHARS,
   type InlineKeyboardMarkup,
   type TelegramApi,
+  type TelegramMessageReaction,
   type TelegramUpdate,
 } from './api.js';
 import {
@@ -80,6 +81,7 @@ import {
 } from './browser-view.js';
 import { isUnknownAgentError, type AgentCatalog, type CatalogAgent } from './types.js';
 import { whereText } from './commands.js';
+import { handleReaction, recordSentAnswer, takeFeedbackNote, type ReactionDeps } from './reactions.js';
 import { focusSetText, focusStatusText, FOCUS_USAGE_TEXT, parseFocusArg } from './focus.js';
 import {
   BURST_GAP_MS,
@@ -1346,6 +1348,10 @@ export class TelegramSurface {
 
   /** Authenticate and enqueue. Returns once the work is *queued*, not done. */
   async dispatch(update: TelegramUpdate): Promise<void> {
+    if (update.message_reaction) {
+      await this.#dispatchReaction(update, update.message_reaction);
+      return;
+    }
     const message = update.message ?? update.edited_message;
     if (!message) {
       const callback = update.callback_query;
@@ -1501,6 +1507,20 @@ export class TelegramSurface {
      * check against the raw string sees no slash and would push a command
      * into the agent's context as though it were a sentence.
      */
+    // The owner's Reply to "What was off?" is the note on their 👎, not a turn.
+    const repliedTo = message.reply_to_message?.message_id;
+    if (repliedTo !== undefined && update.message) {
+      const noted = await takeFeedbackNote(this.#reactionDeps(), chatId, {
+        replyTo: repliedTo,
+        messageId: message.message_id,
+        text,
+      }).catch((err) => {
+        this.#log(`telegram: chat ${chatId} — feedback note not kept: ${message_(err)}`);
+        return false;
+      });
+      if (noted) return;
+    }
+
     const normalized = stripBotMention(text, this.#opts.botUsername).trim();
     const live = this.#interjections.get(chatId);
     if (
@@ -1515,6 +1535,47 @@ export class TelegramSurface {
     }
 
     this.enqueue(chatId, () => this.handleText(chatId, userId, text));
+  }
+
+  #reactionDeps(): ReactionDeps {
+    return { pool: this.#opts.pool, api: this.#opts.api, log: this.#log, now: () => this.#now() };
+  }
+
+  /** The messages an agent's answer landed in, mapped to the turn, for reactions. */
+  async #recordSent(chatId: string, conversationId: string, ids: number[]): Promise<void> {
+    await recordSentAnswer({ pool: this.#opts.pool }, chatId, conversationId, ids);
+  }
+
+  /**
+   * A reaction. Only the paired owner's, in their private chat, counts; anyone
+   * else's is dropped as silently as their messages are. Never queued behind a
+   * run: it writes a row and, at most, asks one short question.
+   */
+  async #dispatchReaction(update: TelegramUpdate, reaction: TelegramMessageReaction): Promise<void> {
+    const fromId = reaction.user?.id;
+    const chatId = String(reaction.chat?.id ?? '');
+    if (fromId === undefined || chatId === '') return;
+    const userId = String(fromId);
+    if (reaction.chat.type !== 'private') {
+      await this.#reject(update, userId, chatId, 'non-private-chat');
+      return;
+    }
+    if (reaction.user?.is_bot === true) {
+      await this.#reject(update, userId, chatId, 'bot-sender');
+      return;
+    }
+    const resolution = await resolveOwnerForSurface(this.#opts.pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      await this.#reject(update, userId, chatId, resolution.reason);
+      return;
+    }
+    await handleReaction(this.#reactionDeps(), chatId, reaction).catch((err) => {
+      this.#log(`telegram: chat ${chatId} — reaction not recorded: ${message_(err)}`);
+    });
   }
 
   /** Never replies. An unknown sender learns nothing from silence. */
@@ -2137,6 +2198,7 @@ export class TelegramSurface {
         carried ? readingText(label) : undefined,
         { agentId: agent.id, conversationId, prompt },
         spoken,
+        (ids) => this.#recordSent(chatId, conversationId, ids),
         );
     } finally {
       /*
@@ -2833,6 +2895,11 @@ export class TelegramSurface {
     retry?: { agentId: string; conversationId: string; prompt: string },
     /** Send the answer as a voice note, with its text as the caption. */
     speak = false,
+    /**
+     * Told the ids of the messages the answer landed in, once it has. A
+     * failure here is logged, never the owner's problem.
+     */
+    onLanded?: (ids: number[]) => Promise<void>,
   ): Promise<void> {
     const stopTyping = this.#startTyping(chatId);
     const placeholder = placeholderOverride ?? placeholderText(agentName);
@@ -2901,7 +2968,10 @@ export class TelegramSurface {
       // Buttons need a text message to sit under: an answer that carries any
       // stays text, as cards and questions do.
       const voice = speak && keyboard === undefined ? await this.#speakAnswer(chatId, placeholderId, reply, progress) : { sent: false };
-      if (!voice.sent) await stream.finish(reply, keyboard);
+      const landed = voice.sent ? (voice.landed ?? []) : await stream.finish(reply, keyboard);
+      if (onLanded && landed.length > 0) {
+        await onLanded(landed).catch((err) => this.#log(`telegram: chat ${chatId} — the sent answer was not mapped for reactions: ${message(err)}`));
+      }
       if (voice.note) await this.#opts.api.sendMessage(chatId, voice.note).catch(() => {});
       // Then what else the turn made: the view it drew, the files it saved.
       if (drawn.artifacts || drawn.canvas) {
@@ -3083,7 +3153,7 @@ export class TelegramSurface {
    * sent: the caller lands the text as usual, and `note` is the once-a-day
    * line saying why, when there is one to say.
    */
-  async #speakAnswer(chatId: string, placeholderId: number | undefined, reply: string, progress: ProgressBubble): Promise<{ sent: boolean; note?: string }> {
+  async #speakAnswer(chatId: string, placeholderId: number | undefined, reply: string, progress: ProgressBubble): Promise<{ sent: boolean; note?: string; landed?: number[] }> {
     const api = this.#opts.api;
     const speech = this.#opts.speech;
     const store = this.#opts.artifacts;
@@ -3108,8 +3178,9 @@ export class TelegramSurface {
     const withText = form === 'both';
     const long = reply.length > MAX_VOICE_CAPTION_CHARS;
     progress.silence();
+    let voiceId: number | undefined;
     try {
-      await api.sendVoice(chatId, Buffer.from(loaded.data, 'base64'), {
+      voiceId = await api.sendVoice(chatId, Buffer.from(loaded.data, 'base64'), {
         contentType: loaded.mime,
         filename: loaded.mime === 'audio/mpeg' ? 'voice.mp3' : 'voice.ogg',
         ...(withText && !long ? { caption: reply } : {}),
@@ -3117,9 +3188,9 @@ export class TelegramSurface {
     } catch (err) {
       return fallback('failed', message(err));
     }
-    if (withText && long) await api.sendMessage(chatId, reply);
+    const textId = withText && long ? await api.sendMessage(chatId, reply) : undefined;
     if (placeholderId !== undefined) await api.deleteMessage(chatId, placeholderId).catch(() => {});
-    return { sent: true };
+    return { sent: true, landed: [voiceId, textId].filter((id): id is number => typeof id === 'number') };
   }
 
   /** Every agent's handle and name, so a spoken `@ledger` is read as its name. */
@@ -3184,4 +3255,9 @@ function sleep(ms: number): Promise<void> {
     const t = setTimeout(resolve, ms);
     if (typeof t.unref === 'function') t.unref();
   });
+}
+
+/** `message`, under a name a local `message` (the Telegram message) cannot shadow. */
+function message_(err: unknown): string {
+  return message(err);
 }

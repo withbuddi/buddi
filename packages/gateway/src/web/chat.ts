@@ -76,6 +76,8 @@ import {
   type CatalogAgent,
   type CoreToolContext,
   idleRolloverMs,
+  feedbackForMessages,
+  type MessageFeedbackView,
 } from '@buddi/core';
 import {
   BudgetExhausted,
@@ -393,6 +395,8 @@ export interface ChatMessageView {
   blocks: ChatBlock[];
   /** Who spoke, in a group conversation: 'owner', an agent id, or 'room'. */
   speaker?: string;
+  /** The owner's standing reaction on this message, from another surface (Telegram). */
+  feedback?: MessageFeedbackView;
 }
 
 export interface ChatRunView {
@@ -566,6 +570,8 @@ export async function readChatTranscript(
     }
   }
   const artifacts = await artifactsById(pool, [...artifactIds]);
+  // The owner's reactions, from Telegram, on the messages they were given on.
+  const feedback = await feedbackForMessages(pool, parsed.map((m) => m.id)).catch(() => new Map<string, MessageFeedbackView>());
   // Where each delegation in this conversation went, from the event the tool
   // wrote when it opened the colleague's conversation. See `delegationsOf`.
   const delegations = await delegationsOf(pool, conversationId);
@@ -627,6 +633,7 @@ export async function readChatTranscript(
             .map((block) => withDelegationOutcome(block, under))
             .map((block) => m.role === 'user' ? withoutLegacyNote(block) : block),
       ...(m.speaker ? { speaker: m.speaker } : {}),
+      ...(feedback.has(m.id) ? { feedback: feedback.get(m.id)! } : {}),
     })),
     // Said while the agent was working, and still waiting for it. Drawn as
     // the owner's turn, because it is one — with the marker that says it went

@@ -349,8 +349,11 @@ export async function landAnswer(
   messageId: number | undefined,
   reply: string,
   keyboard?: InlineKeyboardMarkup,
-): Promise<void> {
+): Promise<number[]> {
   const text = reply.trim() === '' ? '(no reply)' : reply;
+  // Every message the answer landed in, so a reaction on any part of it can
+  // find the turn behind it.
+  const landed: number[] = [];
   const parts = splitMessage(text, TELEGRAM_MAX_MESSAGE_CHARS);
   for (const [index, part] of parts.entries()) {
     const last = index === parts.length - 1;
@@ -366,10 +369,15 @@ export async function landAnswer(
           deps.log(`telegram: final edit failed, sending instead: ${message(err)}`);
           return false;
         });
-      if (edited) continue;
+      if (edited) {
+        landed.push(messageId);
+        continue;
+      }
     }
-    await retrying(deps, () => deps.api.sendMessage(chatId, part, send));
+    const id = await retrying(deps, () => deps.api.sendMessage(chatId, part, send));
+    if (typeof id === 'number') landed.push(id);
   }
+  return landed;
 }
 
 /** Run a Bot API call, waiting out a 429 as often as `FINAL_RETRIES` allows. */
@@ -528,7 +536,7 @@ export class StreamedAnswer {
    * Write the whole answer, with its keyboard, as the last word. Waits for any
    * edit in flight and out any back-off first, so nothing older lands after it.
    */
-  async finish(reply: string, keyboard?: InlineKeyboardMarkup): Promise<void> {
+  async finish(reply: string, keyboard?: InlineKeyboardMarkup): Promise<number[]> {
     this.#closed = true;
     if (this.#timer !== undefined) clearTimeout(this.#timer);
     this.#timer = undefined;
@@ -536,8 +544,9 @@ export class StreamedAnswer {
     if (!this.#started && this.#opts.takeOver) await this.#opts.takeOver();
     const wait = this.#pausedUntil - this.#now();
     if (wait > 0) await sleep(wait);
-    await landAnswer(this.#deps, this.#chatId, this.#messageId, reply, keyboard);
+    const landed = await landAnswer(this.#deps, this.#chatId, this.#messageId, reply, keyboard);
     await this.#land();
+    return landed;
   }
 
   #landed = false;

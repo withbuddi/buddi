@@ -232,6 +232,28 @@ Agents know you read Telegram on a phone: they lead with the point, keep to a
 few short sentences, and offer detail rather than giving it. Ask for more
 and you get more. No markdown: the chat shows plain text.
 
+## Reactions
+
+React to an agent's answer and buddi takes it as feedback, not a command.
+The bot asks Telegram for `message_reaction` updates; only your own
+reactions, in your paired private chat, count, and anyone else's are dropped
+silently.
+
+- 👍 ❤️ 🔥 👏 🎉 🙏 count as good, 👎 💩 🤮 as not, any other emoji as
+  neutral. Each is recorded against that answer, the run behind it and the
+  agent (`core.message_feedback`, source `telegram`), and shows under the same
+  message on the dashboard. Taking the reaction back clears it.
+- The bot answers a reaction with nothing. The one exception: a 👎 gets a
+  single "What was off?" as a reply to that answer, once per answer, ever.
+  Use Reply on that question within six hours and your words are kept as the
+  note on the 👎 (the bot marks it 👌), not sent to the agent. Anything else
+  you write is an ordinary message.
+- The weekly learning digest counts reactions per agent and lists the 👎
+  notes ([learning.md](learning.md) §5).
+
+Answers sent before this existed, cards, and your own messages carry no
+feedback.
+
 ## What stays on the dashboard
 
 Settings, editing an agent, installing a plugin, the library, charts and the
