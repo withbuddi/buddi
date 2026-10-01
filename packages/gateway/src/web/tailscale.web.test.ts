@@ -274,6 +274,51 @@ it('answers a forwarded request 401 when the daemon disagrees', async () => {
   expect(res.status).toBe(401);
 });
 
+it('tells a page load through Serve that this Tailscale login is not allowed, without naming anyone', async () => {
+  const navigate = { ...SERVE_HEADERS, 'Tailscale-User-Login': 'intruder@example.com', 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' };
+  const app = await dashboard({ enabled: true, login: OWNER }, 'intruder@example.com');
+  const res = await fetch(`http://127.0.0.1:${app.port}/`, { headers: navigate });
+  expect(res.status).toBe(401);
+  const html = await res.text();
+  expect(html).toContain('This Tailscale login isn’t allowed here');
+  expect(html).toContain('the forwarded login is not the login allowed to sign in through Tailscale');
+  expect(html).toContain('buddi dashboard');
+  expect(html).not.toContain('intruder');
+  expect(html).not.toContain(OWNER);
+  expect(html).not.toContain(TAILNET_IP);
+  // The daemon naming someone else for the right header: the same sentence family.
+  const swapped = await fetch(`http://127.0.0.1:${app.port}/`, { headers: { ...SERVE_HEADERS, 'Sec-Fetch-Mode': 'navigate' } });
+  const swappedHtml = await swapped.text();
+  expect(swappedHtml).toContain('names a different login');
+  expect(swappedHtml).not.toContain('intruder');
+  expect(swappedHtml).not.toContain(OWNER);
+  // An API call is still an empty 401.
+  const api = await fetch(`http://127.0.0.1:${app.port}/api/session`, { headers: navigate });
+  expect(api.status).toBe(401);
+  expect(await api.text()).toBe('');
+  // With signing in through Tailscale off, it is the ordinary signed-out page.
+  const off = await dashboard({ enabled: false, login: OWNER }, OWNER);
+  const offHtml = await (await fetch(`http://127.0.0.1:${off.port}/`, { headers: { ...SERVE_HEADERS, 'Sec-Fetch-Mode': 'navigate' } })).text();
+  expect(offHtml).toContain('You’re signed out of this buddi');
+});
+
+it('revokes a Tailscale session whose login stops matching, and the page load after says why', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  const tailnet = await tailnetSession(app);
+  app.knobs.whois = 'intruder@example.com';
+  const res = await fetch(`${tailnet.origin}/`, { headers: { ...tailnet.headers, 'Sec-Fetch-Mode': 'navigate' } });
+  expect(res.status).toBe(401);
+  expect(await res.text()).toContain('names a different login');
+  // Gone, not merely refused: with the daemon agreeing again, the old cookie
+  // is not honoured — the browser is signed in afresh, with a new session.
+  app.knobs.whois = OWNER;
+  const again = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
+  expect(again.status).toBe(200);
+  const fresh = again.headers.getSetCookie().find((c) => c.startsWith(`${SESSION_NAME}=`))?.split(';')[0];
+  expect(fresh).toBeDefined();
+  expect(tailnet.headers.Cookie).not.toContain(fresh!);
+});
+
 it('refuses a request two proxies forwarded, even with the right login on it', async () => {
   const app = await dashboard({ enabled: true, login: OWNER });
   const res = await fetch(`http://127.0.0.1:${app.port}/api/session`, {

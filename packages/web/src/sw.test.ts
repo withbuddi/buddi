@@ -37,6 +37,11 @@ describe('the service worker on a page load', () => {
     expect(await pageLoad(async () => new Response('link expired', { status: 401 }))).toBe('link expired');
   });
 
+  it("passes the gateway's signed-out page through, never the kept shell", async () => {
+    const page = '<!doctype html><title>Signed out · buddi</title><p>run <code>buddi dashboard</code></p>';
+    expect(await pageLoad(async () => new Response(page, { status: 401, headers: { 'Content-Type': 'text/html; charset=utf-8' } }))).toBe(page);
+  });
+
   it('shows the kept shell when nothing answers at all', async () => {
     expect(await pageLoad(async () => { throw new TypeError('network'); })).toBe('the kept shell');
   });

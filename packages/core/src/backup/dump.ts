@@ -144,6 +144,16 @@ async function hasLedger(client: PoolClient | Pool): Promise<boolean> {
   return rows[0]?.present === true;
 }
 
+/**
+ * Tables a backup never carries, as `schema.table`.
+ *
+ * `core.dashboard_sessions` holds the dashboard's sign-ins on this machine.
+ * They are not a fact about the installation: restoring them elsewhere would
+ * revive browsers' sessions on a machine they never signed in to. A restore
+ * starts with none, and the owner signs in with `buddi dashboard`.
+ */
+export const UNDUMPED_TABLES: readonly string[] = ['core.dashboard_sessions'];
+
 async function tablesIn(client: PoolClient, schemas: string[]): Promise<TableRef[]> {
   const { rows } = await client.query<{ schema: string; table: string }>(
     `select n.nspname as schema, c.relname as "table"
@@ -152,7 +162,7 @@ async function tablesIn(client: PoolClient, schemas: string[]): Promise<TableRef
       order by 1, 2`,
     [schemas],
   );
-  return rows;
+  return rows.filter((r) => !UNDUMPED_TABLES.includes(`${r.schema}.${r.table}`));
 }
 
 async function foreignKeysIn(client: PoolClient, schemas: string[]): Promise<ForeignKey[]> {

@@ -175,6 +175,8 @@ suite('a backup can actually be restored', () => {
     const tables = new Map(created.manifest.tables.map((t) => [t.table, t.rows]));
     expect(tables.get('drill.accounts')).toBe(3);
     expect(tables.get('drill.entries')).toBe(5);
+    // Dashboard sign-ins are this machine's, never carried by a backup.
+    expect(created.manifest.tables.some((t) => t.table.includes('dashboard_sessions'))).toBe(false);
     expect(created.manifest.postgresMajor).toBeGreaterThanOrEqual(13);
     expect(created.manifest.buddiVersion).toMatch(/^\d+\.\d+\.\d+$/);
     expect(created.manifest.private.agents?.files).toBe(1);

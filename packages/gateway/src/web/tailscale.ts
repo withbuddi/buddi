@@ -104,6 +104,12 @@ export interface TailscaleIdentityDeps {
   mayAskDaemon?: (() => boolean) | undefined;
   log?: ((line: string) => void) | undefined;
   now?: (() => Date) | undefined;
+  /**
+   * Told why this request earned no identity, every time (the log line is
+   * throttled; this is not). The signed-out page uses it to say "this login
+   * isn't allowed" rather than "you're signed out".
+   */
+  onRefusal?: ((reason: TailscaleRefusal) => void) | undefined;
 }
 
 /* ------------------------------------------------------------------ *
@@ -243,7 +249,21 @@ const REASONS: Readonly<Record<TailscaleRefusal, string>> = {
  */
 const lastLogged = new Map<TailscaleRefusal, number>();
 
+/**
+ * The sentence for a refusal, as the log says it. It never holds a supplied
+ * login or address, which is what makes it safe to show on a page too.
+ */
+export function tailscaleRefusalReason(reason: TailscaleRefusal): string {
+  return REASONS[reason];
+}
+
+/** The refusals that mean "Tailscale sign-in is set up, and this login is not the one it allows". */
+export function isLoginRefusal(reason: TailscaleRefusal | undefined): boolean {
+  return reason === 'login-not-allowed' || reason === 'daemon-names-another-login';
+}
+
 function complain(deps: TailscaleIdentityDeps, reason: TailscaleRefusal, at: number): null {
+  deps.onRefusal?.(reason);
   const last = lastLogged.get(reason) ?? 0;
   if (at - last < LOG_EVERY_MS) return null;
   if (lastLogged.size > Object.keys(REASONS).length) lastLogged.clear();

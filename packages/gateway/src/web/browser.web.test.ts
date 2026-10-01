@@ -62,6 +62,84 @@ describe('the sign-in lockout behind the proxy', () => {
   });
 });
 
+describe('the signed-out page', () => {
+  const NAVIGATE = { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' };
+
+  it('answers a page load with a 401 page that says what to do, and holds nothing secret', async () => {
+    const { origin } = await setup(false);
+    const res = await hostFetch(`${origin}/settings?tab=general`, { headers: NAVIGATE });
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toMatch(/^text\/html/);
+    expect(res.headers.get('content-security-policy')).toContain("default-src 'none'");
+    expect(res.headers.getSetCookie()).toEqual([]);
+    const html = await res.text();
+    expect(html).toContain('You’re signed out of this buddi');
+    expect(html).toContain('buddi restarted or your sign-in ran out');
+    expect(html).toContain('<code>buddi dashboard</code>');
+    expect(html).toContain('href="/settings?tab=general"');
+    // Nothing loadable, nothing secret: no token, no CSRF material, no path on this machine.
+    expect(html).not.toMatch(/<script|src=|@import|url\(/i);
+    expect(html).not.toContain(TOKEN);
+    expect(html.toLowerCase()).not.toContain('csrf');
+    expect(html).not.toContain('Application Support');
+    expect(html).not.toContain(process.env.HOME ?? '/Users/');
+  });
+
+  it('keeps the empty 401 for API calls, scripts and fetches', async () => {
+    const { origin } = await setup(false);
+    for (const [path, headers] of [
+      ['/api/overview', NAVIGATE],
+      ['/api/version', { Accept: 'text/html' }],
+      ['/', { 'Sec-Fetch-Mode': 'cors', Accept: 'text/html' }],
+      ['/assets/app.js', { 'Sec-Fetch-Mode': 'no-cors' }],
+      ['/', {}],
+    ] as const) {
+      const res = await hostFetch(`${origin}${path}`, { headers });
+      expect(res.status).toBe(401);
+      expect(await res.text()).toBe('');
+    }
+    // A browser with no fetch metadata is taken at its Accept.
+    const old = await hostFetch(`${origin}/`, { headers: { Accept: 'text/html' } });
+    expect(old.status).toBe(401);
+    expect(await old.text()).toContain('buddi dashboard');
+    // Not a GET: never the page.
+    const post = await hostFetch(`${origin}/`, { method: 'POST', headers: NAVIGATE });
+    expect(await post.text()).toBe('');
+  });
+
+  it('points "Try again" at this origin only, escaped', async () => {
+    const { origin } = await setup(false);
+    const res = await hostFetch(`${origin}//evil.example/%22%3E%3Cb%3E?q=%22%3Cx%3E`, { headers: NAVIGATE });
+    const html = await res.text();
+    expect(html).not.toContain('href="//');
+    expect(html).not.toContain('<b>');
+    expect(html).not.toContain('<x>');
+  });
+
+  it('does not change the lockout: a page load without a credential never counts, a stale one counts once', async () => {
+    const { origin } = await setup(true, undefined, 'https://host.example:9443');
+    const fetch = hostFetch;
+    const proxy = { Host: 'host.example:9443', 'X-Forwarded-For': '100.64.0.2', ...NAVIGATE };
+    const cookie = (value: string) => ({ ...proxy, Cookie: `${sessionCookieName(9443)}=${value}` });
+    const statuses = async (headers: Record<string, string>, n: number) => {
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) out.push((await fetch(`${origin}/`, { headers })).status);
+      return out;
+    };
+    expect(new Set(await statuses(proxy, 25))).toEqual(new Set([401]));
+    expect(new Set(await statuses(cookie('stale-from-last-week'), 25))).toEqual(new Set([401]));
+    const guesses: number[] = [];
+    for (let i = 0; i < 15; i++) guesses.push((await fetch(`${origin}/`, { headers: cookie(`guess-${i}`) })).status);
+    expect(guesses).toContain(429);
+    // The 429 stays empty; the page is only ever the 401.
+    const locked = await fetch(`${origin}/`, { headers: cookie('guess-again') });
+    expect(locked.status).toBe(429);
+    expect(await locked.text()).toBe('');
+    const ticket = mintTicket(TOKEN, new Date());
+    expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(302);
+  });
+});
+
 describe('browser dashboard endpoints', () => {
   it('requires a remote ticket behind an HTTPS proxy and preserves write protection', async () => {
     const external = 'https://host.example:9443';

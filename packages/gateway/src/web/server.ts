@@ -138,16 +138,20 @@ import { allowedOrigins, isLoopback, webAssetsDir, webUrl, type WebConfig } from
 import {
   TAILSCALE_SETTING_KEY,
   daemonWhois,
+  isLoginRefusal,
   plausibleLogin,
   proxiedThroughTailscale,
   sameLogin,
   tailscaleIdentity,
+  tailscaleRefusalReason,
   tailscaleSelf,
   toTailscaleSetting,
   type TailscaleIdentity,
+  type TailscaleRefusal,
   type TailscaleProfile,
   type TailscaleWhois,
 } from './tailscale.js';
+import { retryHref, sendSignedOut, wantsSignedOutPage } from './signed-out.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
@@ -446,7 +450,6 @@ export const PREVIEW_LINK_LIMIT = 10;
 export const PREVIEW_LINK_WINDOW_MS = 60_000;
 
 export function createWebApp(deps: WebServerDeps): Server {
-  const sessions = new SessionStore(deps.sessionTtlMs ?? {});
   const limiter = new RateLimiter();
   /*
    * Pairing has a budget of its own, and it is spent per session rather than
@@ -459,6 +462,11 @@ export function createWebApp(deps: WebServerDeps): Server {
   const pairLimiter = new RateLimiter(5, 5 * 60_000);
   const assetsDir = deps.assetsDir ?? webAssetsDir();
   const log = deps.log ?? ((line: string) => console.error(line));
+  /*
+   * Sessions are kept in the database (`core.dashboard_sessions`, hashed ids
+   * only), so a restart or an upgrade no longer signs the owner out.
+   */
+  const sessions = new SessionStore(deps.sessionTtlMs ?? {}, undefined, { db: deps.pool, log });
   const extension = deps.extension ?? extensionEndpoint(deps.env ?? process.env, log);
   /*
    * The remote hand, on the same upgrade listener as the extension socket.
@@ -477,11 +485,14 @@ export function createWebApp(deps: WebServerDeps): Server {
       const origin = requestOrigin(req);
       if (origin === undefined || !allowed().has(origin)) return null;
       const scope = requestScope(req);
-      const session = sessions.get(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort(req))], scope, now);
+      const session = await sessions.resolve(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort(req))], scope, now);
       if (!session) return null;
       if (session.via === 'tailscale') {
         const confirmed = await identityOf(req, now);
-        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) { sessions.destroy(session.id); return null; }
+        if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
+          await sessions.destroy(session.id).catch(() => {});
+          return null;
+        }
       }
       return session;
     },
@@ -626,13 +637,14 @@ export function createWebApp(deps: WebServerDeps): Server {
    * the daemon. Used to mint a session and, on every later request, to confirm
    * the one the browser is holding.
    */
-  const identityOf = (req: IncomingMessage, now: Date): Promise<TailscaleIdentity | null> =>
+  const identityOf = (req: IncomingMessage, now: Date, onRefusal?: (reason: TailscaleRefusal) => void): Promise<TailscaleIdentity | null> =>
     tailscaleIdentity(req, {
       setting: readTailscaleSetting,
       whois,
       mayAskDaemon: () => !limiter.blocked(remoteKey(req), now),
       log,
       now: () => now,
+      onRefusal,
     });
 
   /**
@@ -761,7 +773,25 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     const cookies = parseCookies(req.headers.cookie);
     const presentedSession = cookies[sessionCookieName(cookiePort(req))];
-    let session = sessions.get(presentedSession, scope, now);
+    let session = await sessions.resolve(presentedSession, scope, now);
+    /*
+     * Why Tailscale gave this request no identity, when it was asked. Only
+     * "this login is not the one allowed" changes what the signed-out page
+     * says; every other reason is the ordinary "you're signed out".
+     */
+    let refusal: TailscaleRefusal | undefined;
+    const noteRefusal = (reason: TailscaleRefusal): void => { refusal = reason; };
+    /*
+     * The answer to a refused request: the signed-out page for a person
+     * opening a page, the empty 401 for everything else (docs/web.md).
+     */
+    const refuse = (): void => {
+      if (!wantsSignedOutPage(req, method, url.pathname)) return sendEmpty(res, 401);
+      return sendSignedOut(res, {
+        retry: retryHref(url.pathname, url.search),
+        ...(isLoginRefusal(refusal) ? { tailscaleRefusal: tailscaleRefusalReason(refusal as TailscaleRefusal) } : {}),
+      });
+    };
 
     /*
      * A Tailscale session is re-confirmed on every single request.
@@ -776,14 +806,15 @@ export function createWebApp(deps: WebServerDeps): Server {
      * can only do if it is still the person the owner allowed.
      */
     if (session?.via === 'tailscale') {
-      const confirmed = await identityOf(req, now);
+      const confirmed = await identityOf(req, now, noteRefusal);
       if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
-        sessions.destroy(session.id);
+        const revoked = session.id;
         // A hand this session was holding does not outlive the session.
-        hand.revoke((lease) => lease === session!.id);
+        hand.revoke((lease) => lease === revoked);
+        await sessions.destroy(revoked);
         if (limiter.blocked(key, now)) return sendEmpty(res, 429);
         limiter.failCredential(key, presentedSession ?? '', now);
-        return sendEmpty(res, 401);
+        return refuse();
       }
     }
 
@@ -796,7 +827,9 @@ export function createWebApp(deps: WebServerDeps): Server {
      * every request; the cookie is a detail of how CSRF works, not a login.
      */
     if (!session && openAccess && scope === 'local') {
-      session = sessions.create(scope, now);
+      // Not stored: the next request mints another for free, so there is
+      // nothing to keep across a restart and no row per cookie-less poll.
+      session = sessions.create(scope, now, undefined, { persist: false });
       res.setHeader('Set-Cookie', sessionCookies(req, session));
     }
 
@@ -812,7 +845,7 @@ export function createWebApp(deps: WebServerDeps): Server {
      * below, which is what it would have got before this existed.
      */
     if (!session) {
-      const identity = await identityOf(req, now);
+      const identity = await identityOf(req, now, noteRefusal);
       if (identity) {
         limiter.reset(key);
         session = sessions.create('remote', now, {
@@ -835,10 +868,10 @@ export function createWebApp(deps: WebServerDeps): Server {
       // the same stale cookie counts once however often it is sent: all tailnet
       // and tunnel traffic shares 127.0.0.1, so a forgotten tab must not be
       // able to lock the owner out of every way in.
-      if (!presentedSession) return sendEmpty(res, 401);
+      if (!presentedSession) return refuse();
       if (limiter.blocked(key, now)) return sendEmpty(res, 429);
       limiter.failCredential(key, presentedSession, now);
-      return sendEmpty(res, 401);
+      return refuse();
     }
 
     /*
@@ -1874,7 +1907,7 @@ export function createWebApp(deps: WebServerDeps): Server {
          * in a browser on the far side of the tailnet.
          */
         const forgotten = new Set<string>();
-        sessions.forget((s) => { const drop = s.via === 'tailscale'; if (drop) forgotten.add(s.id); return drop; });
+        await sessions.forget((s) => { const drop = s.via === 'tailscale'; if (drop && s.id) forgotten.add(s.id); return drop; });
         // Including whichever of them had a hand on the owner's browser.
         hand.revoke((lease) => forgotten.has(lease), 'Tailscale access changed. Sign in again.');
         const daemon = await tailscaleSelfOf();

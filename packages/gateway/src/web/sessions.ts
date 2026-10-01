@@ -1,12 +1,14 @@
 /**
  * Sessions, CSRF tokens, spent tickets and the auth rate limit.
  *
- * All four are in-process and deliberately so: a dashboard session is not a
- * durable fact about the installation, and a restart logging the owner out is
- * the correct behaviour for a page that can approve an effect. Nothing here
- * reaches the database, and nothing here is ever written to a log.
+ * Sessions are kept in `core.dashboard_sessions` with a small cache in front,
+ * so a restart or an upgrade no longer signs the owner out (docs/web.md,
+ * "Sessions"). What is stored is a hash of the session id, never the id: a
+ * copy of the table cannot be replayed as a cookie. The CSRF value is derived
+ * from the id rather than stored at all. The rate limit stays in memory.
+ * Nothing here is ever written to a log.
  */
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
  * How long a session is honoured **without any activity**, by where it was
@@ -122,14 +124,109 @@ function equal(a: string, b: string): boolean {
   return ab.length > 0 && ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
+/**
+ * What the table stores in place of a session id: sha256, hex.
+ *
+ * A plain hash is enough because the id is 256 random bits — there is nothing
+ * to guess, so nothing a slow hash would slow down.
+ */
+export function sessionIdHash(sessionId: string): string {
+  return createHash('sha256').update(sessionId, 'utf8').digest('hex');
+}
+
+/**
+ * The CSRF value for a session, derived from its id.
+ *
+ * Derived rather than random so it never has to be stored: after a restart the
+ * request presents the session id, and the CSRF value it must also echo is
+ * recomputed from it. HMAC keyed by the id is one-way — the page can read the
+ * CSRF cookie, and that reveals nothing about the HttpOnly id — and another
+ * site still cannot read either cookie, which is all double-submit asks of it.
+ */
+export function csrfFor(sessionId: string): string {
+  return createHmac('sha256', sessionId).update('buddi-csrf-v1').digest('base64url').slice(0, 32);
+}
+
+/** Just enough of `pg.Pool` for the session table. */
+export interface SessionDb {
+  query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
+}
+
+/**
+ * A session as `forget` offers it: the stored fields, and the id only when this
+ * process has seen the cookie (a row read back from the table has no id to give).
+ */
+export type SessionRecord = Omit<Session, 'id' | 'csrf'> & { id?: string };
+
+export interface SessionStoreOptions {
+  /** The database the sessions are kept in. Without one they live in memory only. */
+  db?: SessionDb | undefined;
+  log?: ((line: string) => void) | undefined;
+}
+
+/**
+ * The longest the stored idle edge may lag the live one.
+ *
+ * Sliding the in-memory expiry is free and happens on every request; writing
+ * it back is a database round trip, so it is done at most this often per
+ * session (or a tenth of the idle lifetime, when that is shorter). A restart
+ * can therefore cost a session at most this much of its idle lifetime, never
+ * extend it.
+ */
+export const SESSION_WRITE_EVERY_MS = 5 * 60_000;
+
+/** How often expired rows are swept from the table. */
+export const SESSION_SWEEP_EVERY_MS = 10 * 60_000;
+
+interface Row {
+  id_hash: string;
+  scope: SessionScope;
+  via: SessionVia;
+  tailscale_login: string | null;
+  tailscale_address: string | null;
+  tailscale_name: string | null;
+  ttl_ms: string | number;
+  created_at: Date | string;
+  expires_at: Date | string;
+  absolute_expires_at: Date | string | null;
+}
+
+const COLUMNS = `id_hash, scope, via, tailscale_login, tailscale_address, tailscale_name, ttl_ms,
+  created_at, expires_at, absolute_expires_at`;
+
+/** Is this a row the table could have produced? Anything else is a miss. */
+function isRow(value: unknown): value is Row {
+  const row = value as Partial<Row> | null;
+  return !!row && typeof row.id_hash === 'string'
+    && (row.scope === 'local' || row.scope === 'remote')
+    && (row.via === 'local' || row.via === 'ticket' || row.via === 'tailscale')
+    && row.created_at !== undefined && row.expires_at !== undefined && row.ttl_ms !== undefined;
+}
+
 export class SessionStore {
+  /** Keyed by the id's hash, so the cache and the table speak the same key. */
   readonly #sessions = new Map<string, Session>();
+  /** When each cached session's idle edge was last written back. */
+  readonly #persistedAt = new Map<string, number>();
+  /** Destroyed while a read of the table may still be in flight. */
+  readonly #revoked = new Set<string>();
   readonly #ttl: Record<SessionScope, number>;
   readonly #tailscaleMaxMs: number;
+  readonly #db: SessionDb | undefined;
+  readonly #log: (line: string) => void;
+  /** Every table operation, in order: a revoke can never be overtaken by a read. */
+  #chain: Promise<void> = Promise.resolve();
+  #sweptAt = Number.NEGATIVE_INFINITY;
 
-  constructor(ttlMs: Partial<Record<SessionScope, number>> = {}, tailscaleMaxMs: number = TAILSCALE_SESSION_MAX_MS) {
+  constructor(
+    ttlMs: Partial<Record<SessionScope, number>> = {},
+    tailscaleMaxMs: number = TAILSCALE_SESSION_MAX_MS,
+    options: SessionStoreOptions = {},
+  ) {
     this.#ttl = { ...SESSION_TTL_MS, ...ttlMs };
     this.#tailscaleMaxMs = tailscaleMaxMs;
+    this.#db = options.db;
+    this.#log = options.log ?? ((line: string) => console.error(line));
   }
 
   /** The idle lifetime a session established from `scope` gets. */
@@ -137,16 +234,24 @@ export class SessionStore {
     return this.#ttl[scope];
   }
 
+  /**
+   * A new session. Stored unless `persist` is false — which is how the open
+   * loopback gate mints its silent sessions: one is minted again for free on
+   * the next request, so there is nothing to keep across a restart, and a
+   * cookie-less local poller must not add a row per request.
+   */
   create(
     scope: SessionScope,
     now: Date = new Date(),
     provenance: SessionProvenance = { via: scope === 'local' ? 'local' : 'ticket' },
+    options: { persist?: boolean } = {},
   ): Session {
     this.#prune(now);
     const ttlMs = this.#ttl[scope];
+    const sessionId = id();
     const session: Session = {
-      id: id(),
-      csrf: id(24),
+      id: sessionId,
+      csrf: csrfFor(sessionId),
       scope,
       via: provenance.via,
       ...(provenance.tailscaleLogin !== undefined ? { tailscaleLogin: provenance.tailscaleLogin } : {}),
@@ -158,31 +263,61 @@ export class SessionStore {
       ...(provenance.via === 'tailscale' ? { absoluteExpiresAt: new Date(now.getTime() + this.#tailscaleMaxMs) } : {}),
       cookieIssuedAt: now,
     };
-    this.#sessions.set(session.id, session);
+    const key = sessionIdHash(sessionId);
+    this.#sessions.set(key, session);
+    if (options.persist !== false && this.#db) {
+      this.#persistedAt.set(key, now.getTime());
+      const db = this.#db;
+      void this.#enqueue('storing a session', () => db.query(
+        `insert into core.dashboard_sessions (${COLUMNS}, last_seen_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $8)
+         on conflict (id_hash) do nothing`,
+        [key, session.scope, session.via, session.tailscaleLogin ?? null, session.tailscaleAddress ?? null,
+          session.tailscaleName ?? null, ttlMs, session.createdAt, session.expiresAt, session.absoluteExpiresAt ?? null],
+      ));
+      this.#maybeSweep(now);
+    }
     return session;
   }
 
   /**
-   * Forget every session matching this, and say how many went.
+   * Forget every session matching this — in memory and in the table — and say
+   * how many went.
    *
    * What the setting page uses to revoke the sessions an identity earned the
    * moment that identity stops being allowed one: turning the switch off, or
    * naming a different login, empties the tailnet's access immediately rather
-   * than at the next request that happens to be made.
+   * than at the next request that happens to be made. Rows this process never
+   * saw a cookie for are offered without an `id`.
    */
-  forget(matches: (session: Session) => boolean): number {
-    let gone = 0;
+  async forget(matches: (session: SessionRecord) => boolean): Promise<number> {
+    const gone = new Set<string>();
     for (const [key, session] of this.#sessions) {
       if (matches(session)) {
-        this.#sessions.delete(key);
-        gone += 1;
+        this.#drop(key);
+        gone.add(key);
       }
     }
-    return gone;
+    const db = this.#db;
+    if (db) {
+      await this.#enqueue('revoking sessions', async () => {
+        const { rows } = await db.query(`select ${COLUMNS} from core.dashboard_sessions`);
+        const drop: string[] = [...gone];
+        for (const row of rows) {
+          if (!isRow(row) || gone.has(row.id_hash)) continue;
+          const { id: _id, csrf: _csrf, ...record } = this.#fromRow(row, undefined);
+          if (matches(record)) { drop.push(row.id_hash); gone.add(row.id_hash); }
+        }
+        // A read queued before this one may have cached a row it is dropping.
+        for (const key of drop) this.#drop(key);
+        if (drop.length > 0) await db.query(`delete from core.dashboard_sessions where id_hash = any($1)`, [drop]);
+      }, true);
+    }
+    return gone.size;
   }
 
   /**
-   * The live session for this cookie, sliding its expiry.
+   * The live session for this cookie, from memory only, sliding its expiry.
    *
    * `scope` is where *this request* came from, and it must match where the
    * session was established. A cookie minted on loopback is not honoured when
@@ -190,6 +325,8 @@ export class SessionStore {
    * this machine rather than a credential that got a longer life by accident.
    * (A browser will not send it across hosts in the first place; this is the
    * belt to that suspenders.)
+   *
+   * The server asks `resolve`, which reads through to the table on a miss.
    */
   get(
     sessionId: string | undefined,
@@ -197,15 +334,49 @@ export class SessionStore {
     now: Date = new Date(),
   ): Session | undefined {
     if (!sessionId) return undefined;
-    const session = this.#sessions.get(sessionId);
+    const key = sessionIdHash(sessionId);
+    const session = this.#sessions.get(key);
     if (!session) return undefined;
     if (this.#dead(session, now)) {
-      this.#sessions.delete(sessionId);
+      this.#drop(key);
+      if (this.#db) void this.#deleteRows([key]);
       return undefined;
     }
     if (session.scope !== scope) return undefined;
     session.expiresAt = new Date(now.getTime() + session.ttlMs);
+    this.#writeBack(key, session, now);
     return session;
+  }
+
+  /**
+   * `get`, reading through to the table when this process has not seen the
+   * cookie yet — after a restart, every session starts here.
+   *
+   * A row is honoured on exactly the terms a cached session is: past its idle
+   * edge or its absolute one it is deleted and refused, and its scope must
+   * match. A database that cannot be read is a miss, never an error page.
+   */
+  async resolve(
+    sessionId: string | undefined,
+    scope: SessionScope,
+    now: Date = new Date(),
+  ): Promise<Session | undefined> {
+    if (!sessionId) return undefined;
+    const key = sessionIdHash(sessionId);
+    if (!this.#sessions.has(key) && this.#db && !this.#revoked.has(key)) {
+      const db = this.#db;
+      await this.#enqueue('reading a session', async () => {
+        // Another request with the same cookie may have loaded it meanwhile.
+        if (this.#sessions.has(key) || this.#revoked.has(key)) return;
+        const { rows } = await db.query(`select ${COLUMNS} from core.dashboard_sessions where id_hash = $1`, [key]);
+        const row = rows[0];
+        if (!isRow(row) || row.id_hash !== key || this.#revoked.has(key)) return;
+        this.#sessions.set(key, this.#fromRow(row, sessionId));
+        this.#persistedAt.set(key, now.getTime());
+      });
+      this.#maybeSweep(now);
+    }
+    return this.get(sessionId, scope, now);
   }
 
   /**
@@ -229,17 +400,111 @@ export class SessionStore {
     return presented !== undefined && equal(session.csrf, presented);
   }
 
-  destroy(sessionId: string | undefined): void {
-    if (sessionId) this.#sessions.delete(sessionId);
+  /**
+   * End this session, in memory at once and in the table before the returned
+   * promise settles. Callers that revoke for a reason await it.
+   */
+  async destroy(sessionId: string | undefined): Promise<void> {
+    if (!sessionId) return;
+    const key = sessionIdHash(sessionId);
+    this.#drop(key);
+    if (this.#db) {
+      this.#revoked.add(key);
+      try {
+        await this.#deleteRows([key], true);
+      } finally {
+        this.#revoked.delete(key);
+      }
+    }
+  }
+
+  /** Every table operation queued so far has settled. A test seam. */
+  async flush(): Promise<void> {
+    await this.#chain;
   }
 
   get size(): number {
     return this.#sessions.size;
   }
 
+  #drop(key: string): void {
+    this.#sessions.delete(key);
+    this.#persistedAt.delete(key);
+  }
+
+  #deleteRows(keys: string[], rethrow = false): Promise<void> {
+    const db = this.#db;
+    if (!db) return Promise.resolve();
+    return this.#enqueue('revoking a session', () => db.query(
+      `delete from core.dashboard_sessions where id_hash = any($1)`, [keys],
+    ), rethrow);
+  }
+
+  /**
+   * Write the sliding edge back, sparingly: at most once per
+   * `SESSION_WRITE_EVERY_MS` (or a tenth of the idle lifetime) per session.
+   */
+  #writeBack(key: string, session: Session, now: Date): void {
+    const db = this.#db;
+    const last = this.#persistedAt.get(key);
+    if (!db || last === undefined) return;
+    const every = Math.min(SESSION_WRITE_EVERY_MS, session.ttlMs / 10);
+    if (now.getTime() - last < every) return;
+    this.#persistedAt.set(key, now.getTime());
+    const expiresAt = session.expiresAt;
+    void this.#enqueue('renewing a session', () => db.query(
+      `update core.dashboard_sessions set expires_at = greatest(expires_at, $2), last_seen_at = $3 where id_hash = $1`,
+      [key, expiresAt, now],
+    ));
+  }
+
+  #maybeSweep(now: Date): void {
+    const db = this.#db;
+    if (!db || now.getTime() - this.#sweptAt < SESSION_SWEEP_EVERY_MS) return;
+    this.#sweptAt = now.getTime();
+    void this.#enqueue('sweeping expired sessions', () => db.query(
+      `delete from core.dashboard_sessions where expires_at <= $1 or absolute_expires_at <= $1`, [now],
+    ));
+  }
+
+  /** A stored row as a session. Its cookie is re-issued on the first response. */
+  #fromRow(row: Row, sessionId: string | undefined): Session & { id: string } {
+    const createdAt = new Date(row.created_at);
+    return {
+      id: sessionId ?? '',
+      csrf: sessionId ? csrfFor(sessionId) : '',
+      scope: row.scope,
+      via: row.via,
+      ...(row.tailscale_login !== null ? { tailscaleLogin: row.tailscale_login } : {}),
+      ...(row.tailscale_address !== null ? { tailscaleAddress: row.tailscale_address } : {}),
+      ...(row.tailscale_name !== null ? { tailscaleName: row.tailscale_name } : {}),
+      ttlMs: Number(row.ttl_ms),
+      createdAt,
+      expiresAt: new Date(row.expires_at),
+      ...(row.absolute_expires_at !== null ? { absoluteExpiresAt: new Date(row.absolute_expires_at) } : {}),
+      // Unknown after a restart, so treated as old: the browser's copy is
+      // refreshed on the first response rather than trusted to outlive it.
+      cookieIssuedAt: createdAt,
+    };
+  }
+
+  /**
+   * Run one table operation after every earlier one. A failure is logged by a
+   * fixed sentence (never a value) and, unless `rethrow`, swallowed: the
+   * dashboard keeps working from memory when the database hiccups.
+   */
+  #enqueue(what: string, op: () => Promise<unknown>, rethrow = false): Promise<void> {
+    const run = this.#chain.then(async () => { await op(); });
+    this.#chain = run.catch(() => {});
+    return run.catch((err: unknown) => {
+      this.#log(`web: ${what} failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (rethrow) throw err;
+    });
+  }
+
   #prune(now: Date): void {
     for (const [key, session] of this.#sessions) {
-      if (this.#dead(session, now)) this.#sessions.delete(key);
+      if (this.#dead(session, now)) this.#drop(key);
     }
   }
 

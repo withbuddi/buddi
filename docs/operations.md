@@ -216,7 +216,8 @@ minutes, and the server refuses a second presentation of the same one. The
 browser swaps it, on a clean URL, for an `HttpOnly; SameSite=Strict` session
 cookie. Every write additionally carries a double-submit CSRF header and an
 `Origin` that is the bound address. There is no CORS, `OPTIONS` is refused, and
-anything unauthenticated is `401` with an empty body.
+anything unauthenticated is `401` with an empty body — except a page load (see
+"Signed out" below).
 
 **What changed is how long a session lasts, and only that.**
 
@@ -231,6 +232,30 @@ re-issued once it is halfway through its life — often enough that it can never
 be the half that dies first, rarely enough that responses are not all carrying
 `Set-Cookie`. Stop using it for the whole window and it lapses; the next visit
 needs a fresh ticket.
+
+**Sessions survive a restart.** They are kept in the database
+(`core.dashboard_sessions`), so restarting or upgrading buddi no longer signs
+you out. The table holds a SHA-256 hash of each session id, never the id itself,
+so a copy of it cannot be used as a cookie; the CSRF value is derived from the
+id and not stored at all. The sliding expiry is written back at most every five
+minutes per session, so a restart can shorten a session's idle window by that
+much and never lengthen it; the Tailscale seven-day cap is stored and holds
+across restarts. Expired rows are swept every ten minutes. Turning Tailscale
+access off or changing its login deletes those sessions' rows at once. Sessions
+are not included in a backup: a restored buddi starts signed out. (The open
+loopback dashboard of a source checkout mints a fresh session on every visit, so
+it stores none.)
+
+**Signed out.** When a browser that is not signed in opens a page, it gets a
+small buddi page (still `401`, no script, nothing loaded from anywhere) instead
+of the browser's own error page: "You're signed out of this buddi. buddi
+restarted or your sign-in ran out. On the computer buddi runs on, run
+`buddi dashboard` for a sign-in link.", with a **Try again** link to the same
+address. Through Tailscale Serve, with signing in through Tailscale on but a
+different login in the browser, it says that login isn't allowed (by the same
+reason the log gives, never naming a login). API calls, event streams and
+script fetches still get the empty `401`, and opening the page without a
+cookie never counts toward the sign-in lockout.
 
 **A remote TCP connection always counts as remote.** Forwarded headers never
 elevate access. A loopback connection carrying proxy metadata (`Forwarded`,
@@ -258,7 +283,8 @@ For first sign-in, run `buddi dashboard --token` on the host and privately give 
 owner `https://<machine>.<tailnet>.ts.net:9443/?t=<ticket>`. Tickets expire after
 five minutes and are single-use; the signing token stays in the keychain/file.
 Do not put a ticket in logs or persistent configuration. After sign-in, bookmark
-the clean URL. A service restart or expired session requires a fresh ticket.
+the clean URL. A session lapsed by idleness needs a fresh ticket; a service
+restart does not end it.
 Disable only this mapping with `tailscale serve --https=9443 off`.
 
 **Previews on the move.** A developer agent's preview is served on a second
