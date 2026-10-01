@@ -516,6 +516,7 @@ export interface PluginManifest {
   missions?: SuggestedMission[];
   views?: ViewDescriptor[];   // how the dashboard should draw your results
   home?: HomeContribution[];  // read-only blocks on the dashboard's Home page
+  widgets?: WidgetDefinition[]; // small live panels the owner places on Home — see §2.5d
   metrics?: MetricDefinition[];  // numbers a GOAL can watch — see §2.3a
   pages?: PageDescriptor[];   // screens of your own: a rail place, a settings tab
   queries?: PageQuery[];      // the read-only functions those screens draw from
@@ -1239,7 +1240,8 @@ plugin by name, and a plugin ships no page code.
 | --- | --- | --- |
 | Home, "Needs you" | An urgent finding, until it resolves or is snoozed | a sentinel's `urgent` finding (§2.3) |
 | Home, blocks | A read-only card in your own units (a balance, a count, a date) | `home` (`HomeContribution[]`) |
-| Home, glances | One line beside the date under the greeting ("☁ 18°C Lyon"), at most three, which the owner can hide; optionally a card on the right of the greeting (a figure, a line, a sparkline, a foot) | `home` with `placement: 'glance'` |
+| Home, glances | One line beside the date under the greeting ("☁ 18°C Lyon"), at most three, which the owner can hide. A glance that also sends a `card` (a figure, a line, a sparkline, a foot) is offered as a small widget; while a widget of the glance's id is on Home, the line steps aside | `home` with `placement: 'glance'` |
+| Home, widgets | A small live panel the owner places, orders and sizes in Home's Widgets section: a figure, a few rows, a strip of tiles, a bar or a sentence, refreshed on your schedule | `widgets` (§2.5d) |
 | Home, "On offer" | A suggested mission the owner can run in one tap | `missions` (§2.4) |
 | Chat canvas | A drawing of a tool result (table, series, figures, envelope) | `views` (§2.5), or an explicit `canvas.show` in the run |
 | **The rail** | **A place of your own, with its own URL and a pinned icon** | **`pages` with `place: 'rail'` (§2.5b)** |
@@ -1264,6 +1266,67 @@ Not available to a plugin, on purpose:
 - **A place inside a core page.** You add *beside* Home, Settings and the rail,
   never inside them. Home blocks and view descriptors remain the way into Home
   and the canvas.
+
+### 2.5d Widgets: a live panel on Home
+
+A widget is a small panel the owner can put on Home, move, resize and take
+off. You declare it in the manifest and answer a **body** when asked; the
+dashboard draws the frame (title, menu, stale and error states) and the body,
+from a fixed vocabulary. No HTML, no styling, no plugin code in the page.
+
+```ts
+import type { WidgetDefinition } from '@buddi/core/plugin';
+
+export const todayWidget: WidgetDefinition = {
+  id: 'calendar.today',          // <plugin>.<name>: what the owner's layout remembers
+  title: 'Today',                // the frame's title and the gallery's name, ≤ 40 characters
+  sizes: ['medium', 'small'],    // what it can be drawn at; the first is where it starts
+  refreshSeconds: 300,           // 60–86400; ten minutes when left out
+  link: { page: 'agenda' },      // a page of yours the body opens (optional)
+  // sensitive: true,            // hidden on screen until Show, never on a lock screen
+  async produce(ctx, { size }) {
+    // Read-only: ctx.buddi.db is the read-only pool a page query runs in.
+    return { kind: 'list', rows: [{ title: 'Dinner with Ana', sub: 'Le Kitchen', side: '20:00' }], more: '2 more by tomorrow night' };
+  },
+};
+
+export const manifest: PluginManifest = { /* … */ widgets: [todayWidget] };
+```
+
+The five bodies, every value already formatted in your units:
+
+| `kind` | Fields | Drawn as |
+| --- | --- | --- |
+| `stat` | `value`, `icon?`, `caption?`, `trend?: { label?, points }`, `foot?` | a figure with a glyph, a quiet line, a sparkline (2–48 numbers, no axis), a foot — the weather card |
+| `list` | `rows: { title, sub?, side?, tone? }[]`, `more?` | up to three rows (a small widget leaves out `sub`), the right-hand figure, a foot |
+| `strip` | `items: { label, icon?, value }[]`, `icon?`, `value?`, `caption?` | a headline and a row of tiles: four on small, six on medium (eight kept) |
+| `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
+| `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
+
+Glyphs are the tile icons (`views.ts`); one outside the set is left off.
+Values are cut at 12 characters and lines at 40, with an ellipsis; a body
+with no figure, no rows or an unknown `kind` is refused and the frame says
+the widget could not load. `null` means nothing to show right now. Answer a
+`text` instead when there is something to say ("Link a calendar on Settings →
+Calendar to see your day here").
+
+What buddi does with it: produces each placed widget at most once per
+`refreshSeconds` (a failure is tried again after a minute), gives it five
+seconds, and keeps the last good body, so a widget that fails a refresh is
+drawn with it and marked stale while the rest of Home is untouched. `size` is
+the size the owner chose, so a medium can say more. The owner's layout lives
+in the installation (`core.web_settings` under `widgets`); until they arrange
+anything, Home shows every widget that is not `sensitive`.
+
+A widget with the same id as one of your glances replaces that glance's card:
+while it is on Home, the glance's line leaves the date line. That is how the
+Weather plugin moved its card: `weather.now` is both its glance and its
+widget, and the glance still sends `card` for a buddi from before widgets. A
+glance that sends a `card` and has no widget of its id is offered as a small
+`stat` widget, so an older plugin's card still reaches Home.
+
+Host API 1.17. An older buddi ignores `widgets`, so declaring them need not
+mean asking for `^1.17`. See `packages/core/src/widgets.ts`.
 
 ### 2.5b Pages: a screen of your own
 
@@ -2959,7 +3022,8 @@ version each arrived in — is §9b.
 | `sources` | `Source[]` | no | Pollers that originate runs with no agent in the loop. Most plugins have none. |
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
-| `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. With `placement: 'glance'` a contribution is instead one line beside the date: `produce` answers `{ icon, text, link?: { route: { page } } } \| null` — a tile icon, at most 60 characters (longer is cut), and a page of yours it opens. Home draws the first three the owner has not hidden, in plugin order; one that throws is left out. It may also answer `card: { value, caption?, trend?: { label, points }, foot? }`: the first shown glance with a card is drawn as a card on the right of the greeting, with the Blob in it (value at most 12 characters, caption and foot 40, two to 48 finite numbers drawn as a sparkline), and leaves the date line; an older dashboard ignores it. Produced on each Home read, like a block, so cache anything slow. Needs host API `^1.10`. See `packages/core/src/home.ts`. |
+| `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. With `placement: 'glance'` a contribution is instead one line beside the date: `produce` answers `{ icon, text, link?: { route: { page } } } \| null` — a tile icon, at most 60 characters (longer is cut), and a page of yours it opens. Home draws the first three the owner has not hidden, in plugin order; one that throws is left out. It may also answer `card: { value, caption?, trend?: { label, points }, foot? }` (value at most 12 characters, caption and foot 40, two to 48 finite numbers drawn as a sparkline): since host API 1.17 a glance with a card is offered as a small `stat` widget under the glance's id, unless you declare a widget with that id (§2.5d); while that widget is on Home the line leaves the date line. A buddi from before 1.17 draws the card on the right of the greeting. Produced on each Home read, like a block, so cache anything slow. Needs host API `^1.10`. See `packages/core/src/home.ts`. |
+| `widgets` | `WidgetDefinition[]` | no | Small live panels for Home that the owner picks, orders and sizes: `{ id: '<plugin>.<name>', title, sizes: ('small' \| 'medium')[], refreshSeconds?, link?: { page }, sensitive?, produce(ctx, { size }) }`. `produce` answers a body from a fixed vocabulary — `stat`, `list`, `strip`, `progress`, `text` — or `null`, under a read-only pool; buddi caches it for `refreshSeconds` (60–86400, ten minutes by default) and gives it five seconds. Checked at register. Host API 1.17; an older buddi ignores the field. See §2.5d and `packages/core/src/widgets.ts`. |
 | `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |

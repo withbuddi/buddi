@@ -9,6 +9,7 @@ import type { Sentinel } from './sentinels/types.js';
 import type { SurfaceProfile } from './surfaces.js';
 import type { ViewDescriptor } from './views.js';
 import type { HomeContribution } from './home.js';
+import type { WidgetDefinition } from './widgets.js';
 import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
@@ -744,6 +745,12 @@ export interface PluginManifest {
    * `home.ts`. Read-only, already formatted, and absent for most plugins.
    */
   home?: HomeContribution[];
+  /**
+   * Widgets this plugin exports for Home (optional): small live panels the
+   * owner picks, orders and sizes. See `widgets.ts`. Read-only, already
+   * formatted, a body from a fixed vocabulary; no page code.
+   */
+  widgets?: WidgetDefinition[];
   /**
    * Numbers this plugin can answer (optional). A metric is the same shape as a
    * Home block — a named read-only function — and it is what a *goal* watches.

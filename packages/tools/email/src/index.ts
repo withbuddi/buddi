@@ -17,6 +17,7 @@ import type { PluginManifest, Source } from '@buddi/core/plugin';
 import { imapflowFactory, imapflowIdleFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailMetrics } from './metrics.js';
+import { emailWidgets } from './widgets.js';
 import { emailSentinels } from './sentinels/index.js';
 import { createInboxPollSource } from './sources/inbox-poll.js';
 import { createRetentionSource } from './sources/retention.js';
@@ -152,6 +153,8 @@ export function createEmailManifest(
     // unread in the inbox. Read-only, and measured on core's schedule
     // (`metrics.ts`).
     metrics: emailMetrics,
+    // Home's widget: who is waiting on the owner, from the same count (`widgets.ts`).
+    widgets: emailWidgets,
     // The watchers (docs/email.md §7). All six of them, as of step 6:
     // they read this plugin's own schema, decide nothing, and speak to nobody.
     sentinels: emailSentinels,

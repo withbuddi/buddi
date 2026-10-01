@@ -244,6 +244,17 @@ suite('the email metrics (postgres, read-only)', () => {
     expect(waiting.ok && waiting.reading.asOf.toISOString()).toBe(SYNCED.toISOString());
   });
 
+  it('draws the same count as the Waiting on you widget, read-only, with the unread under it', async () => {
+    const widget = registry.widget('email.waiting')!;
+    expect(widget).toMatchObject({ title: 'Waiting on you', sizes: ['small'], link: { page: 'mail' } });
+    expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'mail', text: 'Add a mailbox on Settings → Email to see who is waiting on you.' });
+    await mailbox();
+    await waitingThread({ uid: 2, from: 'agent@letting.test' });
+    expect(await widget.produce(ctx, { size: 'small' })).toEqual({
+      kind: 'stat', icon: 'mail', value: '1', caption: 'conversation waits on you', foot: '0 unread in your inbox', // these rows carry no folder generation
+    });
+  });
+
   it('counts nothing in a mailbox that is switched off — the watcher does not either', async () => {
     await mailbox();
     const off = await secondMailbox({ enabled: false });

@@ -24,7 +24,8 @@ import { isToolRefusal } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
 import type { HomeContribution } from './home.js';
-import { parseMetrics, type RegisteredMetric } from './metrics.js';
+import { parseMetrics, metricContext, type RegisteredMetric } from './metrics.js';
+import { parseWidgets, type RegisteredWidget } from './widgets.js';
 import { UNTRUSTED_KINDS, type UntrustedKind } from './learning/types.js';
 import { hostBindingOf, networkAreaOf, registerHostOf, releaseHostBinding, withPluginHost, type HostBinding } from './host/build.js';
 import { registerSecretDestination, unregisterSecretDestinations } from './secrets/destinations.js';
@@ -300,6 +301,8 @@ export class ToolRegistry {
   readonly #pageTools = new Map<string, Set<string>>();
   /** Per plugin, the metrics `parseMetrics` checked and made strict. */
   readonly #metrics = new Map<string, RegisteredMetric[]>();
+  /** Per plugin, the widgets `parseWidgets` checked, refresh made concrete. */
+  readonly #widgets = new Map<string, RegisteredWidget[]>();
   /** Per plugin, what its `ctx.buddi` is bound to (docs/plugin-host-api.md §3). */
   readonly #bindings = new Map<string, HostBinding>();
 
@@ -362,6 +365,14 @@ export class ToolRegistry {
         : parseMetrics(manifest.name, manifest.metrics, (id) =>
             [...this.#metrics.values()].some((list) => list.some((m) => m.id === id)),
           );
+    // Widgets the same way: a bad id, size or link names the plugin now.
+    const widgets =
+      manifest.widgets === undefined
+        ? undefined
+        : parseWidgets(manifest.name, manifest.widgets, {
+            pages: (manifest.pages ?? []).map((p) => p.id),
+            taken: (id) => [...this.#widgets.values()].some((list) => list.some((w) => w.id === id)),
+          });
     if (manifest.files !== undefined) {
       const names = new Set((manifest.queries ?? []).map((q) => q.name));
       for (const [role, name] of Object.entries(manifest.files)) {
@@ -390,6 +401,16 @@ export class ToolRegistry {
         metrics.map((metric) => ({
           ...metric,
           measure: (params: unknown, ctx: CoreToolContext) => metric.measure(params, this.#host(manifest.name, ctx)),
+        })),
+      );
+    }
+    if (widgets && widgets.length > 0) {
+      this.#widgets.set(
+        manifest.name,
+        widgets.map((widget) => ({
+          ...widget,
+          // Read-only, like a metric: the plugin's db is the page query's pool.
+          produce: (ctx: CoreToolContext, request) => widget.produce(this.#host(manifest.name, metricContext(ctx)), request),
         })),
       );
     }
@@ -431,6 +452,7 @@ export class ToolRegistry {
     this.#queries.delete(plugin);
     this.#pageTools.delete(plugin);
     this.#metrics.delete(plugin);
+    this.#widgets.delete(plugin);
     const binding = this.#bindings.get(plugin);
     this.#bindings.delete(plugin);
     if (binding !== undefined) releaseHostBinding(binding);
@@ -694,6 +716,20 @@ export class ToolRegistry {
   /** The plugin that contributes a Home block or glance, by the contribution's id. */
   homePlugin(id: string): string | undefined {
     for (const m of this.#manifests.values()) if ((m.home ?? []).some((h) => h.id === id)) return m.name;
+    return undefined;
+  }
+
+  /** Every widget the installed plugins export, each carrying its plugin, in registration order. */
+  widgets(): RegisteredWidget[] {
+    return [...this.#widgets.values()].flat();
+  }
+
+  /** One widget by its id, or undefined. */
+  widget(id: string): RegisteredWidget | undefined {
+    for (const list of this.#widgets.values()) {
+      const found = list.find((w) => w.id === id);
+      if (found) return found;
+    }
     return undefined;
   }
 

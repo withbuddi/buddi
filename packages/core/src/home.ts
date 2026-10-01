@@ -55,11 +55,11 @@ export interface HomeGlance {
   text: string;
   link?: { route: TileLink };
   /**
-   * The same glance as a card, for the right of Home's greeting: a figure, a
-   * quiet line, a short run of numbers drawn as a sparkline, and a foot. The
-   * first shown glance with a card is drawn as one (with the Blob beside it)
-   * instead of on the date line; the others stay lines. An older dashboard
-   * ignores it and draws `text`.
+   * The same glance as a card: a figure, a quiet line, a short run of numbers
+   * drawn as a sparkline, and a foot. Since host API 1.17 Home offers it as a
+   * small widget under the glance's id (`widgets.ts`), unless the plugin
+   * declares a widget with that id; while it is on Home the line steps aside.
+   * A dashboard from before widgets draws it beside the greeting.
    */
   card?: HomeGlanceCard;
 }

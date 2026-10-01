@@ -230,6 +230,7 @@ import {
 import { marketAssetRoute, marketRoute } from './market.js';
 import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
+import { createWidgets, widgetsRoute } from './widgets.js';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
 import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
 import {
@@ -534,6 +535,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       return [own, preview].filter((port): port is number => typeof port === 'number');
     },
   });
+  // Home's widgets: one cache per server (web/widgets.ts).
+  const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -1117,6 +1120,20 @@ export function createWebApp(deps: WebServerDeps): Server {
         },
         { method, path, body, preview: url.searchParams.get('preview') },
       );
+      return sendJson(res, answer.status, answer.body);
+    }
+
+    // Home's widgets: the gallery, the owner's layout, each placed one's body (web/widgets.ts).
+    if (path === '/api/widgets' || path.startsWith('/api/widgets/')) {
+      let body: unknown = {};
+      if (method === 'PUT') {
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+      }
+      const answer = await widgetsRoute(widgets, { method, path, body });
       return sendJson(res, answer.status, answer.body);
     }
 

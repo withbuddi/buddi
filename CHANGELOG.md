@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Plugins can export widgets (plugin host API 1.17): a manifest's `widgets`, each a read-only `produce` answering a body from a fixed vocabulary — stat, list, strip, progress, text — that buddi caches for the widget's refresh interval and gives five seconds. The bundled mail plugin adds "Waiting on you".
+
 ### Changed
 
 - The signed-out page offers the way back in for how you arrived: on this computer the `buddi dashboard` command with a Copy button; over the tailnet with Tailscale sign-in on, "Sign in with Tailscale"; and while a lockout runs, "Too many tries — wait N min", saying that a fresh link works right away.

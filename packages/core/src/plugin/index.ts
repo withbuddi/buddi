@@ -103,6 +103,21 @@ export type { HomeBlock, HomeBlockContribution, HomeContribution, HomeGlance, Ho
 export { HOME_CARD_LINE_MAX, HOME_CARD_TREND_MAX, HOME_CARD_VALUE_MAX, HOME_GLANCE_MAX } from '../home.js';
 export type { MetricDefinition, MetricDirection, MetricReading, MetricUnit } from '../metrics.js';
 export type {
+  WidgetBody,
+  WidgetBodyKind,
+  WidgetDefinition,
+  WidgetList,
+  WidgetListRow,
+  WidgetProgress,
+  WidgetRequest,
+  WidgetSize,
+  WidgetStat,
+  WidgetStrip,
+  WidgetStripItem,
+  WidgetText,
+} from '../widgets.js';
+export { WIDGET_BODY_KINDS, WIDGET_ITEMS_MAX, WIDGET_LINE_MAX, WIDGET_ROWS_MAX, WIDGET_SIZES, WIDGET_TEXT_MAX, WIDGET_TITLE_MAX, WIDGET_TREND_MAX, WIDGET_VALUE_MAX } from '../widgets.js';
+export type {
   PolicyApplyResult,
   PolicyHandler,
   PolicyHandlerContext,
