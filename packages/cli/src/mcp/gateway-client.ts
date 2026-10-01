@@ -237,12 +237,17 @@ export class GatewayClient implements Gateway {
     if (token !== undefined) {
       const challenge = randomBytes(32).toString('hex');
       const ready = await this.#send(`/_buddi/ready?challenge=${challenge}`, 'GET', {});
-      if (ready.ok && (ready.headers.get('content-type') ?? '').includes('json')) {
-        const proof = ((await ready.json().catch(() => null)) as { proof?: unknown } | null)?.proof;
-        const expected = createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
-        if (proof !== expected) {
-          throw new GatewayError(ready.status, `The buddi answering on ${this.#base} is not the one this command belongs to (it holds a different dashboard token), so no sign-in was tried there. ${STALE_HINT}`);
-        }
+      // A ticket only after a positive proof. Anything else — a 404 from an
+      // older buddi or another program, a 503, a page that is not JSON — is
+      // not this installation's gateway as far as this command can tell.
+      const json = ready.ok && (ready.headers.get('content-type') ?? '').includes('json');
+      if (!json) {
+        throw new GatewayError(ready.status, `What answers on ${this.#base} could not prove it is this installation's buddi (HTTP ${ready.status} to the readiness check), so no sign-in was tried there. ${STALE_HINT}`);
+      }
+      const proof = ((await ready.json().catch(() => null)) as { proof?: unknown } | null)?.proof;
+      const expected = createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
+      if (proof !== expected) {
+        throw new GatewayError(ready.status, `The buddi answering on ${this.#base} is not the one this command belongs to (it holds a different dashboard token), so no sign-in was tried there. ${STALE_HINT}`);
       }
       ticket = mintTicket(token);
     } else {

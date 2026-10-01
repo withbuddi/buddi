@@ -55,7 +55,7 @@ minted tokens.
 
 How it signs in, in order: `/_buddi/ready`, where the gateway proves it holds the same
 dashboard token — a port answered by another buddi (a dev checkout, an older
-install) fails the proof and is never shown a ticket, so it never counts a
+install, or another program answering 404 or a page) fails the proof and is never shown a ticket, so it never counts a
 failed sign-in against this computer; then the five-minute ticket exchange the
 dashboard link uses — on the open loopback binding too, since only a session
 from a ticket is one the lock screen does not cover (a cookie-less request is a
