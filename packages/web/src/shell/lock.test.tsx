@@ -7,7 +7,7 @@
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { ApiError, LOCKED, api, type LockScreenData, type LockState } from '../api';
 import { LockGate, isLockShortcut, lockShortcutLabel, useLock } from './lock';
@@ -138,6 +138,10 @@ describe('the lock screen', () => {
   const user = () => userEvent.setup({ delay: null, pointerEventsCheck: 0 });
 
   it('shows the time, counts only, the widgets, and the honest line; the PIN field holds focus', async () => {
+    // The honest line names the day once it isn't today: pin the clock to the lock's day.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T13:00:00Z'));
+    onTestFinished(() => { vi.useRealTimers(); });
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
     render(<LockScreen initial={locked} onUnlocked={() => {}} />);
     expect(await screen.findByLabelText('Waiting for you')).toHaveTextContent('2 approvals waiting');
