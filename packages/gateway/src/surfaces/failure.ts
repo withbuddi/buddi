@@ -51,6 +51,7 @@
 import {
   getOwnerProfile,
   MAX_OFFER_PROMPT,
+  rateLimitOf,
   offerActions,
   renderFailure,
   renderOffers,
@@ -267,9 +268,10 @@ export async function failedTurnReply(
   pool: Queryable,
   turn: FailedTurn,
 ): Promise<FailureOutcome> {
-  // A reset time is said in the owner's zone and Profile formats; a profile
-  // that cannot be read costs only the formats, never the message.
-  const profile = await getOwnerProfile(pool).catch(() => null);
+  // A reset time is said in the owner's zone and Profile formats, read only
+  // when there is one to say; a profile that cannot be read costs only the
+  // formats, never the message.
+  const profile = rateLimitOf(turn.error)?.retryAt ? await getOwnerProfile(pool).catch(() => null) : null;
   const failure = renderFailure(turn.error, {
     agentName: turn.agentName,
     toolsCalled: turn.toolsCalled,
