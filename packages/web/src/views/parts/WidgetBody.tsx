@@ -1,12 +1,13 @@
 /**
- * A widget's body, drawn from the five kinds (stat, list, strip, progress,
- * text) the gateway has already checked and cut to size. Shared by Home's
+ * A widget's body, drawn from the six kinds (stat, list, strip, progress,
+ * text, clocks) the gateway has already checked and cut to size. Shared by Home's
  * frames, the lock screen's compact tiles and the settings sheet's preview.
  */
 import { tileGlyph } from '../../canvas/tileIcons';
 import type { WidgetBody, WidgetSize } from '../../api';
 import { Icon } from '../../ui';
 import { Spark } from './HomeGlances';
+import { ClocksView } from './WidgetClocks';
 
 /** Rows a list draws, and tiles a strip draws, by size. */
 const ROWS = 3;
@@ -85,6 +86,8 @@ export function WidgetBodyView({ body, size }: { body: WidgetBody; size: WidgetS
         </>
       );
     }
+    case 'clocks':
+      return <ClocksView body={body} size={size} />;
     case 'text':
       return (
         <span className="wg-text">

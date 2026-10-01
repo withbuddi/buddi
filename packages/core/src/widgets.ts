@@ -5,7 +5,7 @@
  * named, read-only function that answers a **body** from a small fixed
  * vocabulary — a figure, a few rows, a strip of tiles, a bar, a sentence —
  * with every value already formatted in the plugin's own units. The page owns
- * the frame (title, menu, stale and error states) and five renderers; it
+ * the frame (title, menu, stale and error states) and six renderers; it
  * draws no plugin HTML and knows no plugin by name. The owner picks which
  * widgets sit on Home, in which order and at which size.
  *
@@ -28,7 +28,7 @@ export const WIDGET_SIZES = ['small', 'medium'] as const;
 export type WidgetSize = (typeof WIDGET_SIZES)[number];
 
 /** The vocabulary. A new kind is a host API minor and a renderer in the page. */
-export const WIDGET_BODY_KINDS = ['stat', 'list', 'strip', 'progress', 'text'] as const;
+export const WIDGET_BODY_KINDS = ['stat', 'list', 'strip', 'progress', 'text', 'clocks'] as const;
 export type WidgetBodyKind = (typeof WIDGET_BODY_KINDS)[number];
 
 /** How often a widget is produced again, at most and at least, and by default. */
@@ -44,6 +44,10 @@ export const WIDGET_TEXT_MAX = 160;
 export const WIDGET_TREND_MAX = HOME_CARD_TREND_MAX;
 export const WIDGET_ROWS_MAX = 3;
 export const WIDGET_ITEMS_MAX = 8;
+/** Faces a clocks body keeps: medium draws four, small two. */
+export const WIDGET_CLOCKS_MAX = 4;
+/** A face's label is short: it sits under a face a quarter of a medium widget wide. */
+export const WIDGET_CLOCK_LABEL_MAX = 24;
 
 /** A figure, a quiet line, a short run of numbers drawn as a sparkline, a foot. The weather card. */
 export interface WidgetStat {
@@ -109,7 +113,25 @@ export interface WidgetText {
   sub?: string;
 }
 
-export type WidgetBody = WidgetStat | WidgetList | WidgetStrip | WidgetProgress | WidgetText;
+/**
+ * Analog faces side by side (since 1.21): zones and labels only. The page
+ * reads each zone's time from the device's clock, so the faces tick without a
+ * new answer, and works out the rest itself — the hands, a light face by day
+ * (6:00–18:00 there) and a dark one at night, Today/Tomorrow/Yesterday and the
+ * offset against `home`. Medium draws the first four, small the first two; a
+ * first face in `home` reads as the owner's own ("Here").
+ */
+export interface WidgetClocks {
+  kind: 'clocks';
+  /** The owner's zone, an IANA name: what days and offsets are counted from. */
+  home: string;
+  /** One to `WIDGET_CLOCKS_MAX`; each label at most `WIDGET_CLOCK_LABEL_MAX` characters. */
+  clocks: Array<{ label: string; zone: string }>;
+  /** How a screen reader and the hover say each time; the device's way when left out. */
+  time?: '12h' | '24h';
+}
+
+export type WidgetBody = WidgetStat | WidgetList | WidgetStrip | WidgetProgress | WidgetText | WidgetClocks;
 
 /** Where a placement sits: Home's grid, or the lock screen's compact row. */
 export const WIDGET_SURFACES = ['home', 'lock'] as const;
@@ -243,6 +265,17 @@ function opt<K extends string>(key: K, value: string | undefined): Partial<Recor
   return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
 }
 
+/** An IANA zone this runtime knows ("Europe/Paris"); offsets like "+02:00" are refused, they ignore summer time. */
+function isZone(value: unknown): boolean {
+  if (typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9_+\-]*(\/[A-Za-z0-9_+\-]+)*$/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const TONES_ROW = new Set(['good', 'critical']);
 const TONES_BAR = new Set(['accent', 'good', 'warning', 'critical']);
 
@@ -333,6 +366,20 @@ export function widgetBodyOf(raw: unknown): { ok: true; body: WidgetBody } | { o
       const text = cutLine(b.text, WIDGET_TEXT_MAX);
       if (!text) return { ok: false, reason: 'a text needs text' };
       return { ok: true, body: { kind: 'text', ...iconOf(b.icon), text, ...opt('sub', cutLine(b.sub, WIDGET_LINE_MAX)) } };
+    }
+    case 'clocks': {
+      if (!isZone(b.home)) return { ok: false, reason: 'clocks need home, the owner\'s zone as an IANA name' };
+      const clocks = (Array.isArray(b.clocks) ? b.clocks : [])
+        .map((c): { label: string; zone: string } | null => {
+          if (!c || typeof c !== 'object') return null;
+          const face = c as Record<string, unknown>;
+          const label = cutLine(face.label, WIDGET_CLOCK_LABEL_MAX);
+          return label && isZone(face.zone) ? { label, zone: face.zone as string } : null;
+        })
+        .filter((c): c is { label: string; zone: string } => c !== null)
+        .slice(0, WIDGET_CLOCKS_MAX);
+      if (clocks.length === 0) return { ok: false, reason: 'clocks need at least one face with a label and an IANA zone' };
+      return { ok: true, body: { kind: 'clocks', home: b.home as string, clocks, ...(b.time === '12h' || b.time === '24h' ? { time: b.time } : {}) } };
     }
     default:
       return { ok: false, reason: `the page draws ${WIDGET_BODY_KINDS.join(', ')}, not ${JSON.stringify(b.kind)}` };

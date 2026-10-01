@@ -28,7 +28,9 @@ Rename it, rewrite its personality, or add others. Under the hood every
 teammate is a markdown file, which the docs and the dashboard call an agent
 where that is the accurate word.
 
-<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="The buddi dashboard: a greeting by name, an approval card, the team, what is coming up." width="100%">
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="The buddi dashboard's Home: Good evening, Sam, then three widgets — the weather in Lisbon, what is coming up and a world clock with four analog faces — and the team." width="100%">
+
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/lock-screen.png" alt="The lock screen on the Dawn background: the date and the time large, a world clock, the weather and the next events, and a PIN field." width="100%">
 
 ---
 

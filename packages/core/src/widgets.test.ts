@@ -73,6 +73,28 @@ describe('widgetBodyOf', () => {
   });
 });
 
+describe('a clocks body', () => {
+  it('keeps zones and labels, cuts labels, keeps four faces and a known time format', () => {
+    const faces = ['Europe/Lisbon', 'America/New_York', 'Asia/Kolkata', 'Asia/Kathmandu', 'Pacific/Auckland'].map((zone, i) => ({ label: i === 0 ? 'L'.repeat(40) : zone, zone }));
+    const checked = widgetBodyOf({ kind: 'clocks', home: 'Europe/Lisbon', clocks: faces, time: '12h' });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok || checked.body.kind !== 'clocks') return;
+    expect(checked.body.clocks).toHaveLength(4);
+    expect(checked.body.clocks[0]!.label).toHaveLength(24);
+    expect(checked.body.clocks[0]!.label.endsWith('…')).toBe(true);
+    expect(checked.body.time).toBe('12h');
+    expect(widgetBodyOf({ kind: 'clocks', home: 'UTC', clocks: [{ label: 'UTC', zone: 'UTC' }], time: 'sundial' })).toEqual({ ok: true, body: { kind: 'clocks', home: 'UTC', clocks: [{ label: 'UTC', zone: 'UTC' }] } });
+  });
+
+  it('drops faces with an unknown zone or no label, and refuses a body with none left or no home', () => {
+    const checked = widgetBodyOf({ kind: 'clocks', home: 'Europe/Paris', clocks: [{ label: 'Mars', zone: 'Mars/Olympus' }, { label: 'Offset', zone: '+02:00' }, { zone: 'Asia/Tokyo' }, { label: 'Tokyo', zone: 'Asia/Tokyo' }] });
+    expect(checked).toEqual({ ok: true, body: { kind: 'clocks', home: 'Europe/Paris', clocks: [{ label: 'Tokyo', zone: 'Asia/Tokyo' }] } });
+    expect(widgetBodyOf({ kind: 'clocks', home: 'Europe/Paris', clocks: [{ label: 'Mars', zone: 'Mars/Olympus' }] })).toMatchObject({ ok: false });
+    expect(widgetBodyOf({ kind: 'clocks', home: 'Nowhere/At_all', clocks: [{ label: 'Tokyo', zone: 'Asia/Tokyo' }] })).toMatchObject({ ok: false, reason: expect.stringMatching(/home/) });
+    expect(widgetBodyOf({ kind: 'clocks', clocks: [{ label: 'Tokyo', zone: 'Asia/Tokyo' }] })).toMatchObject({ ok: false });
+  });
+});
+
 describe('the registry', () => {
   it('lists widgets with their plugin, produces them read-only through the host, and forgets them on unregister', async () => {
     let seen: { db: unknown; buddi: unknown; size: string } | null = null;

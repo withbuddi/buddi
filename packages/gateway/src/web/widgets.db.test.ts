@@ -141,7 +141,7 @@ suite('widgets against Postgres', () => {
     expect((await call('PUT', '/home', { placements: [{ widget: 'demo.money', size: 'small' }] }, {})).status).toBe(403);
     expect((await call('POST', `/${saved.body.home[1].key}/refresh`)).status).toBe(200);
     expect((await call('POST', '/preview', { widget: 'demo.now', size: 'small', settings: {} })).body.view).toMatchObject({ state: 'ok' });
-    expect((await call('GET', '/settings/buddi.clock')).body).toMatchObject({ widget: 'buddi.clock', fields: [{ key: 'places' }, { key: 'time' }], places: [] });
+    expect((await call('GET', '/settings/buddi.clock')).body).toMatchObject({ widget: 'buddi.clock', fields: [{ key: 'style' }, { key: 'places' }, { key: 'time' }], places: [] });
 
     // The widgets v1 layout reads as Home's placements.
     await pool.query(`update core.web_settings set value = $1::jsonb where key = $2`, [JSON.stringify({ layout: [{ id: 'demo.now', size: 'medium' }] }), WIDGETS_SETTINGS_KEY]);

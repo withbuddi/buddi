@@ -351,7 +351,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
   }, [load]);
 
   // A World clock on the lock screen is asked again on the minute.
-  useOnTheMinute(data?.widgets.some((w) => w.id === CLOCK_WIDGET) ?? false, load);
+  useOnTheMinute(data?.widgets.some((w) => w.id === CLOCK_WIDGET && w.view.body.kind !== 'clocks') ?? false, load);
 
   // The field holds focus on a desk: typing is unlocking.
   useEffect(() => {

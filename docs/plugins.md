@@ -1317,7 +1317,7 @@ export const todayWidget: WidgetDefinition = {
 export const manifest: PluginManifest = { /* … */ widgets: [todayWidget] };
 ```
 
-The five bodies, every value already formatted in your units:
+The six bodies, every value already formatted in your units:
 
 | `kind` | Fields | Drawn as |
 | --- | --- | --- |
@@ -1326,6 +1326,7 @@ The five bodies, every value already formatted in your units:
 | `strip` | `items: { label, icon?, value }[]`, `icon?`, `value?`, `caption?` | a headline and a row of tiles: four on small, six on medium (eight kept) |
 | `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
 | `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
+| `clocks` | `home` (the owner's IANA zone), `clocks: { label, zone }[]` (1–4, labels ≤ 24), `time?: '12h' \| '24h'` | analog faces side by side, four on medium and two on small, that the page ticks itself from each zone — no new answer every minute; a light face while it is 6:00–18:00 there and a dark one at night; under each the label, Today / Tomorrow / Yesterday against `home` and the offset ("+6 h", "−1 h 30"); a first face in `home` reads "Here". Zones must be IANA names. Host API 1.21 |
 
 Glyphs are the tile icons (`views.ts`); one outside the set is left off.
 Values are cut at 12 characters and lines at 40, with an ellipsis; a body
@@ -1374,7 +1375,9 @@ sentence like "Free for the rest of today." reads as one rather than a hollow
 card.
 
 buddi itself provides one widget, the **World clock** (`buddi.clock`): the
-time at the owner's places in other zones, or at towns they pick.
+time at the owner's places in other zones, or at towns they pick. Its Style
+setting draws it Digital (a figure or rows) or Analog (a `clocks` body: the
+owner's own zone first, then the places).
 
 A widget with the same id as one of your glances replaces that glance's card:
 while it is on Home, the glance's line leaves the date line. That is how the
@@ -1383,9 +1386,11 @@ widget, and the glance still sends `card` for a buddi from before widgets. A
 glance that sends a `card` and has no widget of its id is offered as a small
 `stat` widget, so an older plugin's card still reaches Home.
 
-Host API 1.17; settings 1.19, and the tile icons `check` and `clock`. An
-older buddi ignores `widgets` and `settings`, so declaring them need not mean
-asking for `^1.19`. See `packages/core/src/widgets.ts` and
+Host API 1.17; settings 1.19, and the tile icons `check` and `clock`; the
+`clocks` body 1.21. An older buddi ignores `widgets` and `settings`, so
+declaring them need not mean asking for `^1.19`; one before 1.21 refuses a
+`clocks` body as a kind it cannot draw, so a widget that answers one asks for
+`^1.21`. See `packages/core/src/widgets.ts` and
 `packages/core/src/widget-settings.ts`.
 
 ### 2.5b Pages: a screen of your own
@@ -3179,7 +3184,7 @@ version each arrived in — is §9b.
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. With `placement: 'glance'` a contribution is instead one line beside the date: `produce` answers `{ icon, text, link?: { route: { page } } } \| null` — a tile icon, at most 60 characters (longer is cut), and a page of yours it opens. Home draws the first three the owner has not hidden, in plugin order; one that throws is left out. It may also answer `card: { value, caption?, trend?: { label, points }, foot? }` (value at most 12 characters, caption and foot 40, two to 48 finite numbers drawn as a sparkline): since host API 1.17 a glance with a card is offered as a small `stat` widget under the glance's id, unless you declare a widget with that id (§2.5d); while that widget is on Home the line leaves the date line. A buddi from before 1.17 draws the card on the right of the greeting. Produced on each Home read, like a block, so cache anything slow. Needs host API `^1.10`. See `packages/core/src/home.ts`. |
-| `widgets` | `WidgetDefinition[]` | no | Small live panels for Home and the lock screen that the owner places, orders, sizes and sets up: `{ id: '<plugin>.<name>', title, sizes: ('small' \| 'medium')[], refreshSeconds?, link?: { page }, sensitive?, settings?, produce(ctx, { size, settings }) }`; `settings` (1.19) is up to eight fields from a fixed vocabulary — `select`, `multiselect`, `toggle`, `text`, `place`, `timeFormat` — each placement keeping its own, handed to `produce` resolved. `produce` answers a body from a fixed vocabulary — `stat`, `list`, `strip`, `progress`, `text` — or `null`, under a read-only pool; buddi caches it for `refreshSeconds` (60–86400, ten minutes by default) and gives it five seconds. Checked at register. Host API 1.17; an older buddi ignores the field. See §2.5d and `packages/core/src/widgets.ts`. |
+| `widgets` | `WidgetDefinition[]` | no | Small live panels for Home and the lock screen that the owner places, orders, sizes and sets up: `{ id: '<plugin>.<name>', title, sizes: ('small' \| 'medium')[], refreshSeconds?, link?: { page }, sensitive?, settings?, produce(ctx, { size, settings }) }`; `settings` (1.19) is up to eight fields from a fixed vocabulary — `select`, `multiselect`, `toggle`, `text`, `place`, `timeFormat` — each placement keeping its own, handed to `produce` resolved. `produce` answers a body from a fixed vocabulary — `stat`, `list`, `strip`, `progress`, `text`, `clocks` (1.21) — or `null`, under a read-only pool; buddi caches it for `refreshSeconds` (60–86400, ten minutes by default) and gives it five seconds. Checked at register. Host API 1.17; an older buddi ignores the field. See §2.5d and `packages/core/src/widgets.ts`. |
 | `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |

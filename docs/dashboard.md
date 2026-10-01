@@ -91,6 +91,8 @@ it keeps its conversation until you reload or press **New**.
 
 ## Home
 
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/home.png" alt="Home: Good evening, Sam, the composer, then three widgets — the weather in Lisbon, what is coming up and a world clock with four analog faces — and the team." width="100%">
+
 The page the dashboard opens on. It answers three questions in order: what
 needs me, what is my team up to, what is coming.
 
@@ -113,7 +115,8 @@ needs me, what is my team up to, what is coming.
   discard.
 - **Widgets**: small live panels the plugins export — the weather at home,
   what is coming up, who is waiting on your reply, the World clock buddi
-  itself provides — in your order and size, under Needs you so what needs you
+  itself provides (Digital, or Analog: a face per place, yours first, light by
+  day and dark at night, ticking on the page) — in your order and size, under Needs you so what needs you
   stays first. Each card is one *placement*: a widget, a size and its own
   settings, so the same widget can sit twice ("Weather" and "Weather · Work"). A grid of cards on one row
   height: small takes one column, medium two, as many columns as the page
@@ -374,6 +377,10 @@ A list of sections in four groups.
   pages](plugin-pages.md)).
 
 ## Lock screen
+
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/lock-screen.png" alt="The lock screen on the Dawn background: Thursday, 1 October and 19:56 large, a world clock with analog faces for Lisbon, New York, San Francisco and Tokyo, the weather in Lisbon, the next two events, and the PIN field for Sam." width="100%">
+
+<img src="https://raw.githubusercontent.com/withbuddi/buddi/main/docs/images/lock-screen-phone.png" alt="The same lock screen on a phone, on the Sea background in dark mode: the time, two clock faces, the weather, the next two events and Enter PIN." width="320">
 
 A privacy screen over the dashboard, opened with a PIN, drawn like a phone's
 lock screen: its own clock — the date and the time large, in your timezone,

@@ -332,7 +332,9 @@ export type WidgetBody =
   | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }>; more?: string }
   | { kind: 'strip'; icon?: string; value?: string; caption?: string; items: Array<{ label: string; icon?: string; value: string }> }
   | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
-  | { kind: 'text'; icon?: string; text: string; sub?: string };
+  | { kind: 'text'; icon?: string; text: string; sub?: string }
+  /** Analog faces the page ticks itself: the owner's zone, then up to four faces. */
+  | { kind: 'clocks'; home: string; clocks: Array<{ label: string; zone: string }>; time?: '12h' | '24h' };
 
 export type WidgetSurface = 'home' | 'lock';
 

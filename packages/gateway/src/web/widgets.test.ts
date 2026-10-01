@@ -69,7 +69,7 @@ describe('widgets', () => {
     expect(answer.arranged).toEqual({ home: false, lock: false });
     expect(answer.available.map((w) => w.id)).toEqual(['demo.now', 'demo.money', 'buddi.clock']);
     expect(answer.available[0]).toEqual({ id: 'demo.now', plugin: 'demo', title: 'Now', sizes: ['medium', 'small'], link: { plugin: 'demo', page: 'weather', place: 'rail' } });
-    expect(answer.available[2]).toMatchObject({ id: 'buddi.clock', plugin: 'buddi', title: 'World clock', builtIn: true, settings: [{ key: 'places', kind: 'place' }, { key: 'time', kind: 'timeFormat' }] });
+    expect(answer.available[2]).toMatchObject({ id: 'buddi.clock', plugin: 'buddi', title: 'World clock', builtIn: true, settings: [{ key: 'style', kind: 'select', default: 'digital' }, { key: 'places', kind: 'place' }, { key: 'time', kind: 'timeFormat' }] });
     expect(answer.home).toEqual([{ key: 'd-demo-now', widget: 'demo.now', size: 'medium', settings: {}, label: 'Now' }]);
     expect(answer.views).toEqual({ 'd-demo-now': { state: 'ok', body: text('at medium'), updatedAt: '2026-10-01T08:00:00.000Z' } });
     // Until the lock screen is arranged it shows Home's first four that may show there.
@@ -269,6 +269,15 @@ describe('widgets', () => {
     expect(saved.views[key]!.body).toEqual({ kind: 'stat', icon: 'clock', value: '4:00 AM', caption: 'Ben · Brooklyn', foot: '6 h behind' });
     tick(60_000);
     expect((await service.answer()).views[key]!.body).toMatchObject({ value: '4:01 AM' });
+  });
+
+  it('draws the World clock Analog as a clocks body: the owner’s zone first, the style kept with the placement', async () => {
+    const { service } = setup({ places: true });
+    const saved = ok(await service.saveSurface('home', { placements: [{ widget: 'buddi.clock', size: 'medium', settings: { style: 'analog', places: [{ place: 'ben' }], time: '12h' } }] }));
+    const placement = saved.home[0]!;
+    expect(placement.settings).toMatchObject({ style: 'analog' });
+    expect(saved.views[placement.key]!.body).toMatchObject({ kind: 'clocks', time: '12h', clocks: [{ zone: expect.any(String) }, { label: 'Ben', zone: 'America/New_York' }] });
+    expect((await widgetsRoute(service, { method: 'PUT', path: '/api/widgets/home', body: { placements: [{ widget: 'buddi.clock', size: 'small', settings: { style: 'sundial' } }] } })).status).toBe(400);
   });
 
   it('reads Profile as the asking browser’s clock while the owner left Time on Auto', async () => {

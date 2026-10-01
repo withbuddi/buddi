@@ -9,7 +9,7 @@
  */
 
 /** What this build's `ctx.buddi.version` says. */
-export const HOST_API_VERSION = '1.20';
+export const HOST_API_VERSION = '1.21';
 
 interface HostApiVersion {
   major: number;

@@ -6,6 +6,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- The World clock has a Style: Digital, as before, or Analog — faces side by side like a phone's world clock widget, your own zone first and then your places, four at medium and two at small, with hour and minute hands and a thin accent second hand; a face is light while it is day there and dark at night, and under each sit the place, Today, Tomorrow or Yesterday, and the offset ("+6 h", "−1 h 30", "Here"). The faces tick on the page and stop their second hand under reduced motion; on the lock screen they are glass like the tiles. Each face is read aloud as "Tokyo, 04:05 tomorrow, 8 hours ahead".
+- Plugin host API 1.21: a widget can answer a `clocks` body — the owner's zone and up to four faces, each a label and an IANA zone — and the page draws and ticks the analog faces itself.
+- Screenshots of the lock screen (desk and phone) and of Home with widgets in the README and docs/dashboard.md, from a demo installation.
 - A tip on Home, "Lock buddi with a PIN", while no PIN is set and once there is something to lock — a second device signed in, a mailbox or money connected, or a week of use; it opens Settings → Lock screen, and dismissing it silences it for good.
 - A plugin installed from a folder can be reinstalled from it at the same version: "Reinstall from folder" in its row's menu and its detail, and `buddi plugins update <name>`, read and approved like any update, the card saying it is the same version read again.
 - On a phone, the status dot's menu ends with Lock now while a PIN is set, as the footer's padlock does on a wider screen.

@@ -1,14 +1,15 @@
 /**
  * The World clock: a widget buddi itself provides (no plugin to install) —
  * the time at the owner's places in other zones, or at any town they pick,
- * in the owner's format unless the placement says otherwise.
+ * in the owner's format unless the placement says otherwise. Digital draws
+ * a figure or rows; Analog answers a `clocks` body the page ticks itself.
  *
  * It reads nothing but the clock and the settings it is handed (places come
  * resolved, `widget-settings.ts`), so it is produced on every answer rather
  * than cached: a clock a minute late is a wrong clock.
  */
 import type { OwnerPlace } from './places.js';
-import type { WidgetBody, WidgetSize } from './widgets.js';
+import { WIDGET_CLOCKS_MAX, type WidgetBody, type WidgetClocks, type WidgetSize } from './widgets.js';
 import type { WidgetPlace, WidgetSettingField, WidgetSettings } from './widget-settings.js';
 
 export const CLOCK_WIDGET_ID = 'buddi.clock';
@@ -20,8 +21,13 @@ export const CLOCK_WIDGET = {
   title: 'World clock',
   sizes: ['small', 'medium'] as WidgetSize[],
   settings: [
+    {
+      key: 'style', kind: 'select', label: 'Style', default: 'digital',
+      options: [{ value: 'digital', label: 'Digital' }, { value: 'analog', label: 'Analog' }],
+      hint: 'Analog: a face for each place, yours first — four at medium, two at small.',
+    },
     { key: 'places', kind: 'place', multiple: true, label: 'Places', hint: 'Up to three. None picked: your places in other zones.' },
-    { key: 'time', kind: 'timeFormat', label: 'Times' },
+    { key: 'time', kind: 'timeFormat', label: 'Times', hint: 'Analog faces say it on hover and to a screen reader.' },
   ] as WidgetSettingField[],
 };
 
@@ -69,6 +75,31 @@ export function zoneOffsetText(at: Date, zone: string, home: string): string {
 
 const town = (p: WidgetPlace | OwnerPlace): string => p.name.split(',')[0]?.trim() || p.label;
 
+/** "Lisbon" from "Europe/Lisbon", "New York" from "America/New_York". */
+export function zoneCity(zone: string): string {
+  return (zone.split('/').pop() ?? zone).replace(/_/g, ' ');
+}
+
+/**
+ * The Analog style: the owner's own zone first — named by their place there,
+ * Home before the others, or by the zone's city — then the places, as many as
+ * the size draws. Zones and labels only; the page ticks the faces.
+ */
+function produceFaces(
+  places: Array<WidgetPlace | OwnerPlace>,
+  size: WidgetSize,
+  format: '12h' | '24h' | null,
+  opts: { timezone: string; places: readonly OwnerPlace[] },
+): WidgetClocks {
+  const here = opts.places.filter((p) => p.timezone === opts.timezone).sort((a, b) => Number(b.id === 'home') - Number(a.id === 'home'))[0];
+  const own = { label: here ? town(here) : zoneCity(opts.timezone), zone: opts.timezone };
+  const others = places
+    .map((p) => ({ label: p.label, zone: p.timezone! }))
+    .filter((c) => !(c.zone === own.zone && c.label === own.label))
+    .slice(0, (size === 'medium' ? WIDGET_CLOCKS_MAX : 2) - 1);
+  return { kind: 'clocks', home: opts.timezone, clocks: [own, ...others], ...(format ? { time: format } : {}) };
+}
+
 /**
  * The body for now: one place as a figure, several as rows. With none picked,
  * the owner's places in another zone; with none of those, where to start.
@@ -82,6 +113,7 @@ export function produceClock(
   const format = settings.time === '12h' || settings.time === '24h' ? settings.time : null;
   const away = opts.places.filter((p) => p.timezone && p.timezone !== opts.timezone);
   const places = (picked.length > 0 ? picked : away).filter((p) => p.timezone).slice(0, 3);
+  if (settings.style === 'analog') return produceFaces(places, size, format, opts);
   if (places.length === 0) {
     return {
       kind: 'text',

@@ -94,7 +94,8 @@ export function useWidgets(): {
   useEffect(() => {
     if (answer) writeCount(answer.home.length);
   }, [answer]);
-  useOnTheMinute(answer?.home.some((p) => p.widget === CLOCK_WIDGET) ?? false, polled.reload);
+  // A digital clock is a figure the gateway writes; analog faces tick on the page and need no new answer.
+  useOnTheMinute(answer?.home.some((p) => p.widget === CLOCK_WIDGET && answer.views[p.key]?.body?.kind !== 'clocks') ?? false, polled.reload);
   return { answer, error: polled.error, apply: setAnswer, reload: polled.reload };
 }
 

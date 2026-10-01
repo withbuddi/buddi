@@ -1,6 +1,7 @@
 /** The World clock: the time at places in other zones, in the placement's format, never cached. */
 import { describe, expect, it } from 'vitest';
-import { clockText, produceClock, zoneOffsetText } from './clock-widget.js';
+import { CLOCK_WIDGET, clockText, produceClock, zoneCity, zoneOffsetText } from './clock-widget.js';
+import { parseWidgetSettings } from './widget-settings.js';
 import type { OwnerPlace } from './places.js';
 
 const NOW = new Date('2026-10-01T12:32:00Z');
@@ -44,5 +45,27 @@ describe('the World clock', () => {
 
   it('says where to start when there is no other zone', () => {
     expect(produceClock({ places: [], time: null }, 'small', { now: NOW, timezone: 'Europe/Paris', places: [places[0]!] })).toMatchObject({ kind: 'text', icon: 'clock' });
+  });
+  it('in the Analog style answers zones and labels, the owner’s own zone first, as many as the size draws', () => {
+    const settings = { style: 'analog', places: [{ ...places[1]!, id: 'ben' }, tokyo, { ...tokyo, label: 'Mumbai', timezone: 'Asia/Kolkata' }], time: '12h' as const };
+    expect(produceClock(settings, 'medium', { now: NOW, timezone: 'Europe/Paris', places })).toEqual({
+      kind: 'clocks', home: 'Europe/Paris', time: '12h',
+      clocks: [{ label: 'Lyon', zone: 'Europe/Paris' }, { label: 'Ben', zone: 'America/New_York' }, { label: 'Tokyo', zone: 'Asia/Tokyo' }, { label: 'Mumbai', zone: 'Asia/Kolkata' }],
+    });
+    expect(produceClock(settings, 'small', { now: NOW, timezone: 'Europe/Paris', places })).toMatchObject({
+      clocks: [{ label: 'Lyon' }, { label: 'Ben' }],
+    });
+  });
+
+  it('in the Analog style with no place there or elsewhere, names the owner’s face by the zone’s city', () => {
+    expect(produceClock({ style: 'analog', places: [], time: null }, 'medium', { now: NOW, timezone: 'America/New_York', places: [] })).toEqual({
+      kind: 'clocks', home: 'America/New_York', clocks: [{ label: 'New York', zone: 'America/New_York' }],
+    });
+    expect(zoneCity('America/Argentina/Buenos_Aires')).toBe('Buenos Aires');
+  });
+
+  it('declares a Style that starts Digital and checks', () => {
+    expect(() => parseWidgetSettings('buddi', CLOCK_WIDGET.id, CLOCK_WIDGET.settings)).not.toThrow();
+    expect(CLOCK_WIDGET.settings[0]).toMatchObject({ key: 'style', kind: 'select', default: 'digital' });
   });
 });
