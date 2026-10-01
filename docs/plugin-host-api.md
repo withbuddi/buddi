@@ -386,7 +386,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.19`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.20`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -450,6 +450,12 @@ each placement with its own — and handed to `produce(ctx, { size, settings
 with the Profile applied (docs/plugins.md §2.5d). An older buddi ignores
 `settings` and calls `produce(ctx, { size })`, so a widget reads `settings ??
 {}` and need not ask for `^1.19`.
+
+1.20 adds no method either: it is the first buddi that reads a sentinel's
+optional `coalesce: { windowSeconds, maxWaitSeconds }` and gathers that
+watcher's wakes for the same agent into one run carrying every finding
+(docs/plugins.md §2.3). An older buddi ignores the field and wakes once per
+finding, so a watcher that sets it need not ask for `^1.20`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

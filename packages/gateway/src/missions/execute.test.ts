@@ -27,6 +27,7 @@ class FakeDb {
   offers: { id: string; agent_id: string; label: string; prompt: string }[] = [];
   messages: { conversation_id: string; role: string; content: unknown }[] = [];
   events: { kind: string; conversation_id: string | null; payload: any }[] = [];
+  delivered: string[] = [];
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -76,6 +77,10 @@ class FakeDb {
       return {
         rows: [{ id: `evt-${this.events.length}`, created_at: new Date(), ...row }],
       };
+    }
+    if (text.startsWith('update core.sentinel_findings set delivered_at')) {
+      this.delivered.push(params[0]);
+      return { rows: [] };
     }
     // The memory preamble reads the plugin's own schema; a mission run in this
     // fake world simply remembers nothing.
@@ -613,6 +618,27 @@ describe('a sentinel wake', () => {
     await again(goalOccurrence, wakeMission);
     expect(contexts[0]).toMatchObject({ dedupeKey: 'finding:goal.g-1.off-track' });
     expect(contexts[0]).not.toHaveProperty('notifyUrgency');
+  });
+
+  it('hands a coalesced burst to the agent in one run, and stamps every finding', async () => {
+    const { db, deps: d } = deps();
+    const contexts: unknown[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'urgent', text: 'Two cards are due this week.' }),
+      deliver: async (_text, _offers, context) => { contexts.push(context); return 'chat-42'; },
+    });
+    const first = (wakeOccurrence.payload as { finding: Record<string, unknown> }).finding;
+    const second = { ...first, key: 'finance.due:card-2', title: 'Card 2 is due on Friday' };
+    await execute({ ...wakeOccurrence, id: 'occ-burst', payload: { finding: first, findings: [first, second], coalesce: { group: 'wake:x', firstAt: '2026-09-11T12:00:00Z', count: 2 } } }, wakeMission);
+    expect(db.conversations).toHaveLength(1);
+    const text = (db.messages[0]?.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('2 watcher findings arrived together');
+    expect(text).toContain('Safety floor breaks in 19 days');
+    expect(text).toContain('Card 2 is due on Friday');
+    expect(db.delivered).toEqual(['finance.floor-breach:2026-10-02', 'finance.due:card-2']);
+    expect(contexts[0]).not.toHaveProperty('dedupeKey');
+    expect(db.events.find((e) => e.kind === 'mission.delivered')?.payload).toMatchObject({ findingKeys: ['finance.floor-breach:2026-10-02', 'finance.due:card-2'] });
   });
 
   it('hands the finding to the agent as part of the prompt', async () => {

@@ -62,6 +62,24 @@ export function findingOf(payload: unknown): FindingPayload | null {
 }
 
 /**
+ * Every finding an occurrence carries: the coalesced `findings` when a
+ * watcher's wakes were gathered into one run (`Sentinel.coalesce`), else the
+ * one `finding`. Empty for a run no watcher woke.
+ */
+export function findingsOf(payload: unknown): FindingPayload[] {
+  const list = payload !== null && typeof payload === 'object' ? (payload as { findings?: unknown }).findings : undefined;
+  if (Array.isArray(list)) {
+    const findings = list.flatMap((finding) => {
+      const read = findingOf({ finding });
+      return read ? [read] : [];
+    });
+    if (findings.length > 0) return findings;
+  }
+  const one = findingOf(payload);
+  return one ? [one] : [];
+}
+
+/**
  * The data boundary around a finding.
  *
  * A finding is written by deterministic code, but what that code read may not
@@ -97,6 +115,10 @@ function defang(text: string): string {
 
 /** The finding, rendered as the block appended to the wake prompt. */
 export function renderFinding(finding: FindingPayload): string {
+  return [FINDING_OPEN, defang(findingLines(finding)), FINDING_CLOSE, '', FINDING_NOTICE].join('\n');
+}
+
+function findingLines(finding: FindingPayload): string {
   const lines = [
     `Watcher: ${finding.sentinelId} (severity ${finding.severity})`,
     `Finding: ${finding.title}`,
@@ -105,7 +127,22 @@ export function renderFinding(finding: FindingPayload): string {
   if (finding.data !== null && finding.data !== undefined) {
     lines.push(`Data: ${JSON.stringify(finding.data)}`);
   }
-  return [FINDING_OPEN, defang(lines.join('\n')), FINDING_CLOSE, '', FINDING_NOTICE].join('\n');
+  return lines.join('\n');
+}
+
+/**
+ * Several findings that arrived together, each in its own fence, under one
+ * line saying so: the agent checks each, and still reports once.
+ */
+export function renderFindings(findings: readonly FindingPayload[]): string {
+  if (findings.length === 1) return renderFinding(findings[0] as FindingPayload);
+  const blocks = findings.map((finding) => [FINDING_OPEN, defang(findingLines(finding)), FINDING_CLOSE].join('\n'));
+  return [
+    `${findings.length} watcher findings arrived together. Check each one, then send one report that covers the ones that hold, most urgent first — or stay silent if none does.`,
+    ...blocks,
+    '',
+    FINDING_NOTICE,
+  ].join('\n\n');
 }
 
 export const SENTINEL_WAKE_PROMPT = `A deterministic watcher found something it thinks is urgent. It is evidence, not a verdict.

@@ -20,6 +20,7 @@ import { appendEvent } from '../events.js';
 import { OWNER_ID } from '../owner.js';
 import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
 import type { PluginManifest } from '../tools.js';
+import { coalesceOptions, enqueueOccurrence, type CoalesceOptions } from '../scheduler/enqueue.js';
 import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
 import {
   INFO_COOLDOWN_MS,
@@ -196,7 +197,7 @@ async function runOne(
     }
     if (raised.has(finding.key)) continue; // one fact, one row, whatever the sentinel repeats
     raised.add(finding.key);
-    if (await upsertAndMaybeFire(pool, sentinel.id, finding, now)) fired += 1;
+    if (await upsertAndMaybeFire(pool, sentinel.id, finding, now, sentinel.coalesce)) fired += 1;
   }
 
   const resolved = await resolveMissing(pool, sentinel.id, trueKeys, now);
@@ -238,6 +239,7 @@ async function upsertAndMaybeFire(
   sentinelId: string,
   finding: Finding,
   now: Date,
+  coalesce?: CoalesceOptions,
 ): Promise<boolean> {
   const existing = await getFinding(pool, finding.key);
   const isNew = existing === null;
@@ -312,7 +314,7 @@ async function upsertAndMaybeFire(
   const wakesOnce = finding.severity === 'info' && finding.wake === true && neverSpoke;
   const delivery =
     finding.severity === 'urgent' || wakesOnce
-      ? await enqueueWake(pool, sentinelId, finding, now)
+      ? await enqueueWake(pool, sentinelId, finding, now, coalesce)
       : await noteInDigest(pool, finding);
 
   if (!delivery.ok) {
@@ -360,21 +362,17 @@ type Delivery =
  * An urgent finding becomes a pending occurrence of the wake mission, carrying
  * the finding as the occurrence payload. Two findings in the same second get
  * distinct instants: the unique key is (mission, revision, scheduled_at), and
- * two facts are two runs.
+ * two facts are two runs — unless the watcher asked for its wakes to be
+ * coalesced (`Sentinel.coalesce`), when the findings for the same agent ride
+ * one run: `finding` stays the first, `findings` lists them all.
  */
 async function enqueueWake(
   pool: Pool,
   sentinelId: string,
   finding: Finding,
   now: Date,
+  coalesce?: CoalesceOptions,
 ): Promise<Delivery> {
-  const mission = await pool.query(`select id from core.missions where id = $1`, [
-    SENTINEL_WAKE_MISSION_ID,
-  ]);
-  if (mission.rowCount === 0) {
-    return { ok: false, reason: `mission "${SENTINEL_WAKE_MISSION_ID}" is not registered` };
-  }
-
   const payload = {
     finding: {
       key: finding.key,
@@ -387,20 +385,29 @@ async function enqueueWake(
       ...(finding.notify === undefined ? {} : { notify: finding.notify }),
     },
   };
+  const options = coalesce === undefined ? null : coalesceOptions(coalesce);
+  const result = await enqueueOccurrence(pool, {
+    missionId: SENTINEL_WAKE_MISSION_ID,
+    payload,
+    now,
+    // The wake mission is shared by every plugin's watchers: a watcher that
+    // opted in waits for company with its own agent's wakes; one that did not
+    // takes the mission's own setting, which is none unless someone set it.
+    coalesce: options ?? undefined,
+    group: `wake:${finding.agentId ?? ''}`,
+    merge: mergeWakes,
+  });
+  return result.ok ? { ok: true, occurrenceId: result.occurrenceId } : { ok: false, reason: result.reason };
+}
 
-  for (let offset = 0; offset < 60; offset++) {
-    const at = new Date(now.getTime() + offset);
-    const { rows } = await pool.query<{ id: string }>(
-      `insert into core.occurrences
-         (mission_id, schedule_revision, scheduled_at, state, payload)
-       values ($1, 0, $2, 'pending', $3::jsonb)
-       on conflict (mission_id, schedule_revision, scheduled_at) do nothing
-       returning id`,
-      [SENTINEL_WAKE_MISSION_ID, at.toISOString(), JSON.stringify(payload)],
-    );
-    if (rows[0]) return { ok: true, occurrenceId: String(rows[0].id) };
-  }
-  return { ok: false, reason: 'could not allocate a wake occurrence instant' };
+/** A finding joining a waiting wake: the first stays `finding`, all are in `findings`, a key once. */
+function mergeWakes(waiting: Record<string, unknown>, joining: Record<string, unknown>): Record<string, unknown> {
+  const first = waiting.finding as { key?: string } | undefined;
+  const findings = (Array.isArray(waiting.findings) ? waiting.findings : first ? [first] : []) as Array<{ key?: string }>;
+  const next = joining.finding as { key?: string } | undefined;
+  if (!next) return waiting;
+  const merged = [...findings.filter((f) => f.key !== next.key), next];
+  return { ...waiting, finding: !first || first.key === next.key ? next : first, findings: merged.slice(-50) };
 }
 
 /** Take a key's still-unread digest line out of the queue. */

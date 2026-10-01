@@ -624,6 +624,15 @@ What happens to a finding is core's decision, in `runSentinels`
   finding as payload. Its prompt says the finding is evidence, not a verdict:
   verify it with tools, then report in under 600 characters with one
   recommended action, or go silent with a reason.
+- **A burst can be one run.** A sentinel that sets `coalesce: { windowSeconds,
+  maxWaitSeconds }` (or the wake mission's own `coalesce_*` columns) has its
+  wakes for the same agent gathered by `enqueueOccurrence`
+  (`packages/core/src/scheduler/enqueue.ts`): the first waits the window for
+  company, each one that follows pushes it back by the window, none waits past
+  the max, and the run carries every finding (`findings`, beside the first
+  `finding`). The waiting occurrence is joined under its row lock, which the
+  scheduler's claim skips, so a finding is either in the batch or in the next
+  one. Finance sets two minutes and ten.
 - **`info`** goes into a weekly digest, deduped on the key, folded into
   whichever mission the `recap` holder runs. The digest is consumed after
   delivery, so a failed recap leaves the items pending.

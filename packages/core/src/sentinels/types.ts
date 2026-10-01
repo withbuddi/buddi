@@ -160,6 +160,16 @@ export interface Sentinel {
   description: string;
   /** Period in **seconds**. The tick runs it when that much time has passed. */
   every: number;
+  /**
+   * Gather this watcher's wakes for the same agent into one run (host API
+   * 1.20). A watcher that can raise several urgent facts at once — five cards
+   * all due this week — would otherwise wake its agent five times in a row.
+   * The first wake waits `windowSeconds` for company, each one that follows
+   * pushes the run back by the window again, and none waits longer than
+   * `maxWaitSeconds`: the agent then reads every finding in one run. Unset is
+   * one run per wake, at once. Ignored by an older buddi, which wakes at once.
+   */
+  coalesce?: { windowSeconds: number; maxWaitSeconds: number };
   run(ctx: SentinelContext): Promise<SentinelResult>;
 }
 

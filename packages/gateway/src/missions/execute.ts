@@ -48,7 +48,7 @@ import {
   type DecisionSink,
   type MissionDecision,
 } from './report.js';
-import { findingOf, renderFinding, type FindingPayload } from './sentinel-wake.js';
+import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake.js';
 
 /** Re-exported so callers keep catching the error they always caught. */
 export { UnknownAgentError };
@@ -276,7 +276,10 @@ export function createMissionExecutor(
   return async function execute(occurrence, mission, control): Promise<MissionRunResult> {
     // Fails closed with UnknownAgentError: a mission naming an agent this
     // install does not carry is a configuration problem, not a fallback.
-    const finding = findingOf(occurrence.payload);
+    // A coalesced wake carries several findings for the same agent; the first
+    // is the one a `prepare` and the notification's identity go by.
+    const findings = findingsOf(occurrence.payload);
+    const finding = findings[0] ?? null;
     const agentId = finding?.agentId || mission.agentId;
     const selectedAgent = catalog.resolve(agentId);
     const base = selectedAgent.definition(deps.now(), deps.ctx.timezone);
@@ -290,7 +293,7 @@ export function createMissionExecutor(
     const prepared = deps.prepare ? await deps.prepare(mission, finding) : null;
     const userMessage = [
       mission.prompt,
-      finding ? renderFinding(finding) : '',
+      findings.length > 0 ? renderFindings(findings) : '',
       prepared?.appendix ?? '',
     ]
       .filter((part) => part.trim() !== '')
@@ -389,6 +392,7 @@ export function createMissionExecutor(
           conversationId,
           reason,
           ...(finding ? { findingKey: finding.key } : {}),
+          ...(findings.length > 1 ? { findingKeys: findings.map((f) => f.key) } : {}),
         },
         conversationId,
       );
@@ -410,8 +414,9 @@ export function createMissionExecutor(
         conversationId,
         origin: finding ? 'wake' : 'mission',
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
-        ...(finding ? { dedupeKey: finding.notify?.dedupeKey ?? `finding:${finding.key}` } : {}),
-        ...(finding?.notify?.urgency === 'today' ? { notifyUrgency: 'today' as const } : {}),
+        // One finding is "this thing, again"; a batch is news of its own.
+        ...(finding && findings.length === 1 ? { dedupeKey: finding.notify?.dedupeKey ?? `finding:${finding.key}` } : {}),
+        ...(findings.length > 0 && findings.every((f) => f.notify?.urgency === 'today') ? { notifyUrgency: 'today' as const } : {}),
       });
     } catch (err) {
       if (!requireDelivery && err instanceof OwnerNotPairedError) {
@@ -440,15 +445,16 @@ export function createMissionExecutor(
         decision: kind,
         ...(decision?.kind === 'report' ? { urgency: decision.urgency } : {}),
         ...(finding ? { findingKey: finding.key } : {}),
+        ...(findings.length > 1 ? { findingKeys: findings.map((f) => f.key) } : {}),
       },
       conversationId,
     );
 
-    // The finding actually reached the owner; the watcher's ledger says so.
-    if (finding) {
-      await markFindingDelivered(deps.pool, finding.key, deps.now()).catch((err: unknown) =>
+    // The findings actually reached the owner; the watcher's ledger says so.
+    for (const delivered of findings) {
+      await markFindingDelivered(deps.pool, delivered.key, deps.now()).catch((err: unknown) =>
         log(
-          `mission ${mission.id}: could not stamp finding ${finding.key}: ${
+          `mission ${mission.id}: could not stamp finding ${delivered.key}: ${
             err instanceof Error ? err.message : String(err)
           }`,
         ),

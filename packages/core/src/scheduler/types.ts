@@ -39,6 +39,11 @@ export type Mission = {
    * materializes nothing, like a disabled one.
    */
   pausedReason: string | null;
+  /**
+   * Gather this mission's event-driven occurrences for the same agent into one
+   * run (`enqueueOccurrence`). Null or absent: one run per occurrence.
+   */
+  coalesce?: { windowSeconds: number; maxWaitSeconds: number } | null;
   createdAt: Date;
 };
 
@@ -79,6 +84,8 @@ export type MissionRow = {
   enabled: boolean;
   always_deliver: boolean;
   paused_reason: string | null;
+  coalesce_window_seconds?: number | null;
+  coalesce_max_wait_seconds?: number | null;
   created_at: Date;
 };
 
@@ -116,6 +123,9 @@ export function toMission(row: MissionRow): Mission {
     enabled: row.enabled,
     alwaysDeliver: row.always_deliver ?? false,
     pausedReason: row.paused_reason ?? null,
+    coalesce: row.coalesce_window_seconds && row.coalesce_max_wait_seconds
+      ? { windowSeconds: row.coalesce_window_seconds, maxWaitSeconds: row.coalesce_max_wait_seconds }
+      : null,
     createdAt: row.created_at,
   };
 }

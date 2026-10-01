@@ -874,6 +874,7 @@ export interface Sentinel {
   id: string;        // 'finance.floor-breach' — namespaced, stable; keys the ledger
   description: string;
   every: number;     // period in SECONDS
+  coalesce?: { windowSeconds: number; maxWaitSeconds: number }; // one wake run per agent per window (host API 1.20)
   run(ctx: SentinelContext): Promise<Finding[]>;
 }
 
@@ -914,6 +915,14 @@ Anchor the key to the date or the row the condition rests on.
   `sentinel-wake` mission, then stays quiet for `URGENT_COOLDOWN_MS` (24 h).
   `info` lands in the weekly digest, then stays quiet for `INFO_COOLDOWN_MS`
   (7 days). **Silence is the default, not an optimization.**
+- **A burst can be one run.** A watcher that may raise several urgent facts in
+  one tick (five cards all due this week) sets `coalesce: { windowSeconds: 120,
+  maxWaitSeconds: 600 }`: its first wake waits two minutes for company, each one
+  that follows for the same agent pushes the run back by the window again, and
+  none waits longer than ten minutes. The agent then reads every finding in one
+  run (`findings` beside the first `finding` in the occurrence's payload), and
+  one notification reaches the owner instead of five. Unset, each wake runs at
+  once, as before.
 - **A finding you stop returning is resolved.** `resolveMissing` marks every open
   finding you did not return this run as resolved and clears its cooldown, so if
   it comes back the owner hears about it. Returning a shorter list is how you say
@@ -3303,6 +3312,7 @@ closed when it is absent rather than guess.
 | `id` | `string` | yes | Namespaced and stable, e.g. `finance.floor-breach`. It keys `core.sentinel_runs`. |
 | `description` | `string` | yes | One line: what it watches. |
 | `every` | `number` | yes | Period in **seconds**. |
+| `coalesce` | `{ windowSeconds, maxWaitSeconds }` | no | Gather this watcher's wakes for the same agent into one run (since host API 1.20): the first waits `windowSeconds` for company, each that follows pushes it back by the window, none waits past `maxWaitSeconds`. Window 1–3600, max wait no shorter than it and at most 86400. Unset: one run per wake, at once. |
 | `run` | `(ctx) => Promise<Finding[]>` | yes | Deterministic: SQL and TypeScript, no model. Returning a shorter list is how you say a fact stopped being true. |
 
 #### `SentinelContext`

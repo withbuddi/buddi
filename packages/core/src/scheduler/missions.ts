@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { parseCron } from './cron.js';
+import { coalesceOptions, type CoalesceOptions } from './enqueue.js';
 import {
   MISFIRE_POLICIES,
   toMission,
@@ -19,6 +20,8 @@ export type UpsertMissionInput = {
   enabled?: boolean;
   /** Deliver unconditionally (the weekly recap). Default false. */
   alwaysDeliver?: boolean;
+  /** Coalesce its event-driven occurrences per agent (`enqueueOccurrence`). Default none. */
+  coalesce?: CoalesceOptions | null;
 };
 
 export type SetScheduleInput = {
@@ -28,22 +31,29 @@ export type SetScheduleInput = {
   deadlineMinutes?: number | null;
 };
 
-const MISSION_COLUMNS = 'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, created_at';
+const MISSION_COLUMNS =
+  'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, coalesce_window_seconds, coalesce_max_wait_seconds, created_at';
 const SPEC_COLUMNS =
   'id, mission_id, revision, cron, timezone, misfire_policy, deadline_minutes, active, created_at';
 
 /** Create or update a mission definition. Schedules are set separately. */
 export async function upsertMission(pool: Pool, input: UpsertMissionInput): Promise<Mission> {
   if (!input.id.trim()) throw new Error('upsertMission: id is required');
+  const coalesce = input.coalesce == null ? null : coalesceOptions(input.coalesce);
+  if (input.coalesce != null && coalesce === null) {
+    throw new Error('upsertMission: coalesce needs whole seconds, a window of 1–3600 and a max wait no shorter than it (at most 86400)');
+  }
   const { rows } = await pool.query<MissionRow>(
-    `insert into core.missions (id, name, agent_id, prompt, enabled, always_deliver)
-     values ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false))
+    `insert into core.missions (id, name, agent_id, prompt, enabled, always_deliver, coalesce_window_seconds, coalesce_max_wait_seconds)
+     values ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false), $7, $8)
      on conflict (id) do update
        set name = excluded.name,
            agent_id = excluded.agent_id,
            prompt = excluded.prompt,
            enabled = excluded.enabled,
-           always_deliver = excluded.always_deliver
+           always_deliver = excluded.always_deliver,
+           coalesce_window_seconds = excluded.coalesce_window_seconds,
+           coalesce_max_wait_seconds = excluded.coalesce_max_wait_seconds
      returning ${MISSION_COLUMNS}`,
     [
       input.id,
@@ -52,6 +62,8 @@ export async function upsertMission(pool: Pool, input: UpsertMissionInput): Prom
       input.prompt,
       input.enabled ?? null,
       input.alwaysDeliver ?? null,
+      coalesce?.windowSeconds ?? null,
+      coalesce?.maxWaitSeconds ?? null,
     ],
   );
   return toMission(rows[0] as MissionRow);

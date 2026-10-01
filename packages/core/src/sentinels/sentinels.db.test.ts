@@ -210,6 +210,69 @@ suite('sentinels (postgres)', () => {
     });
   });
 
+  describe('a watcher that coalesces its wakes', () => {
+    const coalescing = (id: string, script: SentinelResult[], agentFor?: (f: Finding) => string): Sentinel => ({
+      ...scripted(id, script.map((r) => (Array.isArray(r) && agentFor ? r.map((f) => ({ ...f, agentId: agentFor(f) })) : r))),
+      coalesce: { windowSeconds: 120, maxWaitSeconds: 600 },
+    });
+    const card = (n: number): Finding => ({ ...urgent, key: `finance.due:card-${n}`, title: `Card ${n} is due` });
+
+    it('gathers a burst into one run carrying every finding, two minutes out', async () => {
+      await wakeMission();
+      await runSentinels(pool, pluginWith(coalescing('w', [[card(1), card(2), card(3)]])), T0, 'UTC');
+      const queued = await pool.query(`select scheduled_at, payload from core.occurrences where mission_id = $1`, [SENTINEL_WAKE_MISSION_ID]);
+      expect(queued.rows).toHaveLength(1);
+      const row = queued.rows[0];
+      expect(new Date(row.scheduled_at).getTime()).toBe(T0.getTime() + 120_000);
+      expect(row.payload.finding.key).toBe('finance.due:card-1');
+      expect(row.payload.findings.map((f: Finding) => f.key)).toEqual(['finance.due:card-1', 'finance.due:card-2', 'finance.due:card-3']);
+      expect(row.payload.coalesce).toMatchObject({ group: 'wake:finance-advisor', count: 3 });
+      // Every finding fired: each has its cooldown, so none speaks again tomorrow morning.
+      for (const n of [1, 2, 3]) expect((await getFinding(pool, `finance.due:card-${n}`))?.cooldownUntil).not.toBeNull();
+    });
+
+    it('pushes the run back with each arrival, never past the max wait', async () => {
+      await wakeMission();
+      const steps: SentinelResult[] = [[card(1)], [card(1), card(2)], [card(1), card(2), card(3)], [card(1), card(2), card(3), card(4)], [card(1), card(2), card(3), card(4), card(5)], [card(1), card(2), card(3), card(4), card(5), card(6)]];
+      const watcher = coalescing('w', steps);
+      for (let i = 0; i < steps.length; i++) await runSentinels(pool, pluginWith(watcher), at(i * 100_000), 'UTC');
+      const queued = await pool.query(`select scheduled_at, payload from core.occurrences where mission_id = $1`, [SENTINEL_WAKE_MISSION_ID]);
+      expect(queued.rows).toHaveLength(1);
+      // The sixth arrives at 500s; 500 + 120 is past the ten-minute cap from the first.
+      expect(new Date(queued.rows[0].scheduled_at).getTime()).toBe(T0.getTime() + 600_000);
+      expect(queued.rows[0].payload.findings).toHaveLength(6);
+    });
+
+    it('keeps one run per agent, and starts afresh once the run was claimed', async () => {
+      await wakeMission();
+      const watcher = coalescing('w', [[card(1), card(2)], [card(1), card(2), card(3)]], (f) => (f.key.endsWith('2') ? 'credit-coach' : 'finance-advisor'));
+      await runSentinels(pool, pluginWith(watcher), T0, 'UTC');
+      expect((await wakes()).map((w) => [w.payload.finding.agentId, w.payload.findings ?? null])).toEqual([['finance-advisor', null], ['credit-coach', null]]);
+      await pool.query(`update core.occurrences set state = 'claimed', claimed_at = now()`);
+      await runSentinels(pool, pluginWith(watcher), at(60_000), 'UTC');
+      const pending = await pool.query(`select payload from core.occurrences where state = 'pending'`);
+      expect(pending.rows.map((r) => r.payload.finding.key)).toEqual(['finance.due:card-3']);
+    });
+
+    it('leaves a watcher that did not opt in waking at once, one run per finding', async () => {
+      await wakeMission();
+      await runSentinels(pool, pluginWith(scripted('w', [[card(1), card(2)]])), T0, 'UTC');
+      const queued = await pool.query(`select scheduled_at, payload from core.occurrences order by scheduled_at`);
+      expect(queued.rows).toHaveLength(2);
+      expect(new Date(queued.rows[0].scheduled_at).getTime()).toBe(T0.getTime());
+      expect(queued.rows[0].payload.coalesce).toBeUndefined();
+    });
+
+    it('takes the mission\'s own coalescing when the watcher sets none', async () => {
+      await upsertMission(pool, { id: SENTINEL_WAKE_MISSION_ID, name: 'Sentinel wake', agentId: 'finance-advisor', prompt: 'Verify.', coalesce: { windowSeconds: 60, maxWaitSeconds: 300 } });
+      await runSentinels(pool, pluginWith(scripted('w', [[card(1), card(2)]])), T0, 'UTC');
+      const queued = await wakes();
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.payload.findings).toHaveLength(2);
+      await expect(upsertMission(pool, { id: 'bad', name: 'b', agentId: 'a', prompt: 'p', coalesce: { windowSeconds: 600, maxWaitSeconds: 60 } })).rejects.toThrow(/coalesce/);
+    });
+  });
+
   describe('an info finding', () => {
     it('goes to the digest, once, and waits there', async () => {
       const manifests = pluginWith(scripted('w', [[info]]));
