@@ -73,6 +73,9 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
   let gmail: FakeImapServer;
   let plain: FakeImapServer;
   let refuseLogin: string | null = null;
+  /** The plain server's connections, counted; those listed here fail like a dropped network. */
+  let plainConnects = 0;
+  let failPlainConnects = new Set<number>();
   let runs: string[] = [];
   let accounts: Record<string, AccountRecord> = {};
 
@@ -82,6 +85,10 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       err.authenticationFailed = true;
       err.responseText = 'Invalid credentials (Failure)';
       throw err;
+    }
+    if (account.address === PLAIN) {
+      plainConnects += 1;
+      if (failPlainConnects.has(plainConnects)) throw new Error('connect ECONNRESET');
     }
     return (account.address === GMAIL ? gmail : plain).client();
   };
@@ -166,6 +173,8 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       'truncate email.mailbox_actions, email.events, email.policies, email.drafts, email.triage, email.messages, email.folders, email.accounts cascade',
     );
     refuseLogin = null;
+    plainConnects = 0;
+    failPlainConnects = new Set();
     runs = [];
     gmail = FakeImapServer.gmail(['Receipts', 'Newsletters']);
     plain = plainServer();
@@ -540,6 +549,39 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       expect((await rowOf(id)).folder).toBe('INBOX');
       const after = (await manifestQueries.find((q) => q.name === 'mailbox_changes')!.produce({}, pageQueryContext(ctx))) as any;
       expect(after.changes.map((c: any) => c.state)).toEqual(['undo', 'undone']);
+    });
+
+    it('an on-arrival action whose connection fails is retried on the next poll, once, and gives up after five tries', async () => {
+      await setPolicy.execute({ account: PLAIN, scope: 'sender', matcher: 'promo@deals.test', action: 'notify', onArrival: 'archive' }, ctx);
+      plain.add('INBOX', fakeMessage({ messageId: '<deal-9@deals.test>', from: 'promo@deals.test', to: [PLAIN], subject: 'Retry me' }));
+      // The poll's reader is the next plain connection; the writer after it fails.
+      failPlainConnects = new Set([plainConnects + 2]);
+      await poll();
+      const id = (await idsOf(PLAIN, 'Retry me'))[0]!;
+      expect((await rowOf(id)).folder).toBe('INBOX');
+      expect(runs).toContain(`triage:${id}`);
+      const pending = await pool.query(`select attempts, last_error from email.arrival_pending where message_id = $1`, [id]);
+      expect(pending.rows).toEqual([{ attempts: 1, last_error: expect.stringMatching(/ECONNRESET/) }]);
+
+      await poll();
+      expect(plain.whereIs('<deal-9@deals.test>')).toEqual([{ mailbox: 'Archive', uid: 1 }]);
+      expect((await pool.query(`select 1 from email.arrival_pending`)).rows).toHaveLength(0);
+      const trail = await pool.query(`select kind, message_ids from email.mailbox_actions where policy_id is not null`);
+      expect(trail.rows).toEqual([{ kind: 'archive', message_ids: [id] }]);
+      await poll();
+      expect((await pool.query(`select 1 from email.mailbox_actions`)).rows).toHaveLength(1);
+
+      // Bounded: a writer that never connects is tried five times, then left.
+      plain.add('INBOX', fakeMessage({ messageId: '<deal-10@deals.test>', from: 'promo@deals.test', to: [PLAIN], subject: 'Never' }));
+      const from = plainConnects;
+      failPlainConnects = new Set(Array.from({ length: 5 }, (_, i) => from + 2 * (i + 1)));
+      for (let i = 0; i < 7; i++) await poll();
+      // Five polls of reader + failing writer, then two with the reader alone.
+      expect(plainConnects - from).toBe(12);
+      const never = (await idsOf(PLAIN, 'Never'))[0]!;
+      const left = await pool.query(`select attempts from email.arrival_pending where message_id = $1`, [never]);
+      expect(left.rows).toEqual([{ attempts: 5 }]);
+      expect((await rowOf(never)).folder).toBe('INBOX');
     });
 
     it('marks read on arrival, and a rule moving to an unknown folder is refused when set', async () => {

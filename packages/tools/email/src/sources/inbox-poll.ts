@@ -51,7 +51,7 @@ import type { DbArea, DbTransaction } from '@buddi/core/plugin';
 import { findAccount, INBOX, listAccounts, markAccountSynced, type EnvLike } from '../config.js';
 import { mailboxAuth } from '../credentials.js';
 import { clearLoginFailure, isAuthFailure, recordLoginFailure } from '../logins.js';
-import { applyArrivalActions, type ArrivalMatch } from '../mailbox/arrival.js';
+import { applyPendingArrivals, oweArrivalAction } from '../mailbox/arrival.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
 import { scanMessageDates, skipDates } from '../dates-store.js';
@@ -716,9 +716,8 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       await client?.close().catch(() => {});
     }
 
-    const arrivals: ArrivalMatch[] = [];
     try {
-      const waiting = await drain(ctx, account, agentId, limit, pending, pass.triageReady, arrivals);
+      const waiting = await drain(ctx, account, agentId, limit, pending, pass.triageReady);
       if (waiting > 0 && !pass.saidWaiting) {
         pass.saidWaiting = true;
         log(`email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard`);
@@ -730,12 +729,13 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
     /*
      * Rules with an on-arrival mailbox action (archive, mark read, move):
      * after the gate and the queue, over a connection of their own, and
-     * on the undo trail (`mailbox/arrival.ts`). A failure there is logged
-     * and costs nobody their triage.
+     * on the undo trail (`mailbox/arrival.ts`). Whatever is owed — this
+     * drain's, and an earlier poll's that failed — is tried; a failure is
+     * logged, counted, and costs nobody their triage.
      */
-    if (arrivals.length > 0) {
+    {
       try {
-        await applyArrivalActions(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) }, arrivals);
+        await applyPendingArrivals(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) });
       } catch (err) {
         log(
           `email.inbox-poll: on-arrival rule actions on ${account.address} failed: ` +
@@ -1061,7 +1061,6 @@ async function drain(
   limit: number,
   pending: PendingTriage[],
   triageReady = true,
-  arrivals: ArrivalMatch[] = [],
 ): Promise<number> {
   const recovered = await unstamped(ctx.buddi!.db, account.id, limit);
   const byId = new Map(recovered.map((p) => [p.id, p]));
@@ -1154,13 +1153,17 @@ async function drain(
           },
           ctx.buddi!.clock.now(),
         );
+        // The rule's mailbox action is owed before the stamp lands: a
+        // failed writer connection later must not lose it.
+        if (decision.policy?.params.onArrival) {
+          await oweArrivalAction(tx, account.id, { messageId: message.id, policy: decision.policy as PolicyRecord });
+        }
         await stampOn(tx, message.id, ctx.buddi!.clock.now());
       });
       (ctx.buddi?.log ?? (() => {}))(
         `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
           `${decision.policy.matcher} (ignore); no run started`,
       );
-      if (decision.policy.params.onArrival) arrivals.push({ messageId: message.id, policy: decision.policy });
       continue;
     }
 
@@ -1197,10 +1200,12 @@ async function drain(
       throw err;
     }
     await settleEvent(ctx.buddi!.db, message.id, 'done');
-    await stamp(ctx, message.id);
+    // Owed before the stamp: once stamped the message is never drained
+    // again, so the action has to be on record by then (`arrival.ts`).
     if (!decision.refused && decision.policy?.params.onArrival) {
-      arrivals.push({ messageId: message.id, policy: decision.policy });
+      await oweArrivalAction(ctx.buddi!.db, account.id, { messageId: message.id, policy: decision.policy });
     }
+    await stamp(ctx, message.id);
   }
   return waiting;
 }

@@ -150,6 +150,9 @@ export function toAction(row: Record<string, any>): ActionRecord {
 /** A refusal whose message is the sentence the owner and the agent read. */
 export class MailboxRefusal extends ToolRefusal {}
 
+/** The mailbox could not be opened at all: no password, or the provider refused it. Nothing was tried. */
+export class MailboxLoginRefusal extends MailboxRefusal {}
+
 /* ------------------------------------------------------------------ *
  * Words
  * ------------------------------------------------------------------ */
@@ -269,14 +272,14 @@ export async function withWriter<T>(
 ): Promise<T> {
   const db = ctx.buddi!.db;
   const auth = await mailboxAuth(ctx, account, opts.env);
-  if (!auth.ok) throw new MailboxRefusal(`${account.address} cannot be opened: ${auth.problem.message}`);
+  if (!auth.ok) throw new MailboxLoginRefusal(`${account.address} cannot be opened: ${auth.problem.message}`);
   let client;
   try {
     client = await opts.connect(account, auth.value);
   } catch (err) {
     if (isAuthFailure(err)) {
       await recordLoginFailure(db, account.id, err, ctx.buddi!.clock.now()).catch(() => {});
-      throw new MailboxRefusal(`${account.address} refused its stored password. Set a new one under Settings → Email.`);
+      throw new MailboxLoginRefusal(`${account.address} refused its stored password. Set a new one under Settings → Email.`);
     }
     throw err;
   }

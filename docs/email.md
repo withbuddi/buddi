@@ -968,7 +968,11 @@ hands every new message whose deciding rule carries one to
 `mailbox/arrival.ts`. That is the one path for an owner's rule and a kept
 learned rule alike. It makes one change per rule over a connection of its
 own, recorded with `origin = policy`, and never acts twice on a message for
-the same rule. A failure is logged and costs nobody their triage. Setting
+the same rule. Each action is owed in `email.arrival_pending` (migration
+`019_arrival_pending.sql`) before the message's triage stamp, so one whose
+connection failed is retried by the next poll, up to five tries (a mailbox
+waiting for its password spends none). A failure is logged and costs nobody
+their triage. Setting
 such a rule stays `email.set_policy` (gated). Its card says "When one
 arrives, buddi will also archive it in your mailbox", a move to a folder the
 poll never listed is refused when set, and the rule's line on Settings →
