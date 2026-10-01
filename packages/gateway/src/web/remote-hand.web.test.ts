@@ -264,7 +264,7 @@ afterEach(async () => {
 function lease(): Session {
   const now = new Date();
   return { id: 'dashboard-session', csrf: 'csrf-token', scope: 'local', via: 'local', ttlMs: 60_000,
-    createdAt: now, expiresAt: new Date(now.getTime() + 60_000), cookieIssuedAt: now };
+    createdAt: now, expiresAt: new Date(now.getTime() + 60_000), cookieIssuedAt: now, client: 'browser', activeAt: now };
 }
 
 /** A hand that records what it is given and can be made slow or angry. */
