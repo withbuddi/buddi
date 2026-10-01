@@ -19,7 +19,9 @@ never become part of an agent. So:
 - Everything learned is a **proposal** with **provenance**: which agent,
   which conversation, which turn, and whether untrusted content (a page, a
   mail, a chat) was in the context when it was made.
-- The owner **keeps or discards** it. Nothing learned applies itself.
+- The owner **keeps or discards** it. Nothing learned applies itself,
+  except the narrow class of plugin rules in §4 ("Rules that keep
+  themselves"), which are recorded, listed and undoable all the same.
 - Everything kept is a **file or a row the owner can read and revoke**.
 - Nothing learned **runs code** except through the plugin install gate.
 
@@ -79,6 +81,26 @@ approved envelope. Discarding records the reason if given, and the agent
 is told once, in its next run, so it does not propose the same thing again
 (a discarded proposal's fingerprint is kept for 90 days).
 
+**Rules that keep themselves.** A plugin may keep a policy proposal itself
+when its own rule allows it without asking; email does it for rules that only
+quiet a bulk sender the owner never wrote to ([email.md](email.md) §5). It
+proposes the card without announcing it, writes the rule, and calls
+`proposals.keepItself` in one transaction; the row is `state = 'kept'`,
+`decided_by = 'auto'`. Every other decision records `decided_by = 'owner'`
+(an expiry leaves it null).
+
+**Track record.** For one plugin and one `payload.kind`, once the owner has
+kept five (`TRUST_AFTER_KEPT`) since their last discard of that kind, new ones
+of that kind may keep themselves (`policyTrackRecord`). Only the owner's
+decisions count; an auto keep never does. A discard, or taking back a kept one
+(`revokeKeptProposal`, an Undo on the plugin's page), turns it off until five
+more keeps. Whether a kind may use it at all is the plugin's rule: email never
+lets anything but a quiet rule keep itself.
+
+**Keep all.** Open policy cards of one plugin and one kind, two or more, are
+one group on the inbox with "Keep all (N)" (`POST /api/proposals/keep-all`):
+one owner action, each card kept and applied as its own Keep would be.
+
 ## 5. The digest
 
 Once a week, on Telegram and on Home: what buddi learned (memory notes,
@@ -98,7 +120,9 @@ every agent; `propose_change` only for the agent's own file.
 
 `core.proposals`: id, kind, agent, payload jsonb (the skill text, the
 policy, the diff), provenance jsonb, untrusted boolean, state in {open,
-kept, discarded, expired}, decided_at, reason, fingerprint. Skills kept
+kept, discarded, expired}, decided_at, decided_by in {owner, auto} (null
+while open or expired), reason, fingerprint. A policy payload may carry
+`kind` and `kindLabel`, which are not identifying. Skills kept
 are files, not rows; policies kept live in the plugin; changes kept live in
 the agent file. A proposal's payload is scrubbed of stored secrets when it is
 created ([owner-secrets.md](owner-secrets.md) §5), so a kept skill never

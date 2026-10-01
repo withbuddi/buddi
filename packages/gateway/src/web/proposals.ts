@@ -54,6 +54,11 @@ export interface ProposalView {
   state: Proposal['state'];
   createdAt: string;
   decidedAt: string | null;
+  /** Who decided it: the owner, or (a policy) the plugin keeping it itself. */
+  decidedBy: Proposal['decidedBy'];
+  /** A policy's kind in its plugin's terms, and how the owner reads it: the page groups open cards by it. */
+  ruleKind: string | null;
+  ruleKindLabel: string | null;
   reason: string | null;
   /** For a kept proposal: what keeping did, or when it will. */
   note: string | null;
@@ -156,8 +161,16 @@ export function toProposalView(p: Proposal, skills?: ProposalSkillLookup, change
     state: p.state,
     createdAt: p.createdAt,
     decidedAt: p.decidedAt,
+    decidedBy: p.decidedBy,
+    ruleKind: p.kind === 'policy' && typeof p.payload.kind === 'string' ? p.payload.kind : null,
+    ruleKindLabel: p.kind === 'policy' && typeof p.payload.kindLabel === 'string' ? p.payload.kindLabel : null,
     reason: p.reason,
-    note: p.state === 'kept' ? keptNote(p.kind) : null,
+    note:
+      p.state === 'kept'
+        ? p.decidedBy === 'auto'
+          ? 'Kept by itself: its plugin keeps rules like this one without asking. Its own page lists it, with Undo.'
+          : keptNote(p.kind)
+        : null,
     echoes: Array.isArray(p.provenance.echoes) ? p.provenance.echoes.filter((e) => typeof e === 'string') : [],
     skill: current ? { ...current, live: current.proposal === p.id } : null,
     change:
@@ -265,6 +278,49 @@ export async function keepProposalFromWeb(
   ).catch(() => undefined);
   const lookup = skills ? catalogSkillLookup(skills.catalog) : undefined;
   return { ok: true, status: 200, body: { proposal: toProposalView(kept, lookup), applied: outcome.applied, note: outcome.note } };
+}
+
+/** How many cards one Keep all may carry. */
+export const KEEP_ALL_LIMIT = 500;
+
+/**
+ * Keep several open policy cards in one owner action: Settings → Proposals'
+ * "Keep all (N)" on a group of one plugin's rules of one kind. One decision,
+ * N rules: each card is kept and applied exactly as its own Keep would be
+ * (so each counts as the owner's keep), and the answer counts what held.
+ * Only open policy cards are touched; anything else named is counted as
+ * skipped. A card whose apply fails stays open with its reason.
+ */
+export async function keepAllProposalsFromWeb(
+  deps: WriteDeps,
+  ids: readonly string[],
+): Promise<WriteResult<{ kept: number; failed: number; skipped: number; note: string }>> {
+  const unique = [...new Set(ids.map((id) => String(id ?? '').trim()).filter((id) => id !== ''))];
+  if (unique.length === 0) return { ok: false, status: 400, body: { error: 'Name the proposals to keep.' } };
+  if (unique.length > KEEP_ALL_LIMIT) {
+    return { ok: false, status: 400, body: { error: `At most ${KEEP_ALL_LIMIT} at once.` } };
+  }
+  let kept = 0;
+  let failed = 0;
+  let skipped = 0;
+  let firstFailure: string | null = null;
+  for (const id of unique) {
+    const current = await getProposal(deps.pool, id);
+    if (!current || current.state !== 'open' || current.kind !== 'policy') {
+      skipped += 1;
+      continue;
+    }
+    const result = await keepProposalFromWeb(deps, id, undefined);
+    if (result.ok) kept += 1;
+    else {
+      failed += 1;
+      firstFailure ??= String((result.body as { error?: string }).error ?? 'refused');
+    }
+  }
+  const parts = [`Kept ${kept} rule${kept === 1 ? '' : 's'}.`];
+  if (failed > 0) parts.push(`${failed} could not be applied and stay open${firstFailure ? `: ${firstFailure}` : '.'}`);
+  if (skipped > 0) parts.push(`${skipped} were already decided.`);
+  return { ok: true, status: 200, body: { kept, failed, skipped, note: parts.join(' ') } };
 }
 
 /**

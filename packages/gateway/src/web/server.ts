@@ -42,7 +42,7 @@
  * page on another origin gets no preflight and no permission.
  */
 import { agentMuteRoute, focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute, testChannelRoute } from './notifications.js';
-import { catalogSkillLookup, discardProposalFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
+import { catalogSkillLookup, discardProposalFromWeb, keepAllProposalsFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
 import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
@@ -2981,6 +2981,12 @@ export function createWebApp(deps: WebServerDeps): Server {
         throw err;
       }
       return sendJson(res, 200, { schedule: await readDigestSchedule(deps.pool, deps.now(), deps.timezone) });
+    }
+
+    /* Keep all: one owner action over a group of open rule cards (see proposals.ts). */
+    if (path === '/api/proposals/keep-all') {
+      const ids = Array.isArray(body.ids) ? body.ids.map((id: unknown) => String(id)) : [];
+      return finish(res, await keepAllProposalsFromWeb(writeDeps, ids));
     }
 
     /*

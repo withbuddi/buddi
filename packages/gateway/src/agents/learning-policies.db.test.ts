@@ -10,8 +10,10 @@
  */
 import {
   createPool,
+  createProposal,
   getProposal,
   listOpenProposals,
+  policyTrackRecord,
   proposePolicy,
   runMigrations,
   ToolRegistry,
@@ -24,7 +26,7 @@ import { loadPolicies, secretNameFor, writeGmailAccount, manifest as emailManife
 import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { adoptPluginPolicies, createLearningManifest } from './learning.js';
-import { discardProposalFromWeb, keepProposalFromWeb, readProposals } from '../web/proposals.js';
+import { discardProposalFromWeb, keepAllProposalsFromWeb, keepProposalFromWeb, readProposals } from '../web/proposals.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -116,6 +118,39 @@ suite('learned policies through core (postgres)', () => {
     const dropped = await propose('rules', 'notify');
     expect((await discardProposalFromWeb(deps(), dropped.id, 'no')).ok).toBe(true);
     expect(calls).toEqual([`apply ${kept.id}`, `revoke ${dropped.id}`]);
+  });
+
+  it('keeps a whole group in one owner action: each applied, each the owner\'s keep, the refused one left open', async () => {
+    const make = async (sender: string, action = 'ignore') => {
+      const made = await proposePolicy(
+        pool,
+        null,
+        { plugin: 'rules', matcher: { sender }, action, verdicts: [1, 2, 3], why: 'w', sources: [], kind: 'quiet', kindLabel: 'Quiet one' },
+        NOW,
+      );
+      if (!made.ok) throw new Error(made.message);
+      return made.proposal;
+    };
+    const cards = [await make('a@x.test'), await make('b@x.test'), await make('c@x.test'), await make('d@x.test', 'refuse')];
+    const skill = await createProposal(pool, {
+      kind: 'skill', agent: 'advisor', payload: { name: 'S', when: 'w', body: 'b', why: 'w' },
+      provenance: { agent: 'advisor', conversation: null, runId: null, turn: null, sources: [] }, now: NOW,
+    });
+    if (!skill.ok) throw new Error('no skill');
+    const result = await keepAllProposalsFromWeb(deps(), [...cards.map((c) => c.id), skill.proposal.id, cards[0]!.id]);
+    expect(result).toMatchObject({ ok: true, body: { kept: 3, failed: 1, skipped: 1 } });
+    expect(result.ok && result.body.note).toMatch(/^Kept 3 rules\. 1 could not be applied and stay open: Not applied: that rule cannot be written\./);
+    expect(calls.filter((c) => c.startsWith('apply'))).toHaveLength(4);
+    for (const card of cards.slice(0, 3)) {
+      expect(await getProposal(pool, card.id)).toMatchObject({ state: 'kept', decidedBy: 'owner' });
+    }
+    expect((await getProposal(pool, cards[3]!.id))?.state).toBe('open');
+    expect((await getProposal(pool, skill.proposal.id))?.state).toBe('open');
+    expect(await policyTrackRecord(pool, { plugin: 'rules', kind: 'quiet' })).toMatchObject({ kept: 3, trusted: false });
+    // The view carries the kind, so the page can group by it.
+    const view = await readProposals(pool, NOW);
+    expect(view.open.find((p) => p.id === cards[3]!.id)).toMatchObject({ ruleKind: 'quiet', ruleKindLabel: 'Quiet one', decidedBy: null });
+    expect((await keepAllProposalsFromWeb(deps(), [])).ok).toBe(false);
   });
 
   it('refuses a keep the plugin refuses, and a plugin with no apply, leaving the card open', async () => {

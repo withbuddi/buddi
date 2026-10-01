@@ -525,6 +525,11 @@ export interface ProposalRow {
   state: 'open' | 'kept' | 'discarded' | 'expired';
   createdAt: string;
   decidedAt: string | null;
+  /** Who decided it: the owner, or (a rule) its plugin keeping it itself. Absent on an older gateway. */
+  decidedBy?: 'owner' | 'auto' | null;
+  /** A rule's kind in its plugin's terms, and how the owner reads it: open cards of one kind are grouped. */
+  ruleKind?: string | null;
+  ruleKindLabel?: string | null;
   reason: string | null;
   /** For a kept one: what keeping did, or when it will. */
   note: string | null;
@@ -1870,6 +1875,9 @@ export const api = {
       `/proposals/${encodeURIComponent(id)}/keep`,
       text === undefined ? {} : { text },
     ),
+  /** Keep several open rule cards in one action ("Keep all"). */
+  keepAllProposals: (ids: string[]) =>
+    post<{ kept: number; failed: number; skipped: number; note: string }>('/proposals/keep-all', { ids }),
   /** Discard one, with the owner's reason when they gave one. */
   discardProposal: (id: string, reason?: string) =>
     post<{ proposal: ProposalRow }>(

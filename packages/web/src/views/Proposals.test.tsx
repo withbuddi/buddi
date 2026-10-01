@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type ProposalRow } from '../api';
-import { addedTools, inFilter, matcherLine, Proposals, toolNames } from './Proposals';
+import { addedTools, groupOpen, inFilter, isGroup, matcherLine, Proposals, toolNames } from './Proposals';
 import { Home } from './Home';
 
 vi.mock('../api', async (importOriginal) => {
@@ -16,6 +16,7 @@ vi.mock('../api', async (importOriginal) => {
       ...original.api,
       proposals: vi.fn(),
       keepProposal: vi.fn(),
+      keepAllProposals: vi.fn(),
       discardProposal: vi.fn(),
       removeSkill: vi.fn(),
       setDigestSchedule: vi.fn(),
@@ -134,6 +135,47 @@ describe('the Proposals inbox', () => {
     expect(screen.getByText('advisor: Kept; written as a skill file when learning step 2 ships.')).toBeInTheDocument();
     expect(screen.getByText('advisor: Discarded: no')).toBeInTheDocument();
     expect(screen.getByText(/Nothing proposed/)).toBeInTheDocument();
+  });
+
+  it('groups open rules of one plugin and kind, and keeps them all in one action', async () => {
+    const rule = (id: string, sender: string): ProposalRow =>
+      proposal({
+        id,
+        kind: 'policy',
+        title: 'Rule for mailer: ignore',
+        editable: null,
+        ruleKind: 'quiet-promo-sender',
+        ruleKindLabel: 'Quiet a marketing sender',
+        payload: { plugin: 'mailer', kind: 'quiet-promo-sender', matcher: { sender }, action: 'ignore', verdicts: [1, 2, 3] },
+      });
+    const open = [rule('r1', 'a@x.test'), proposal({ id: 's1' }), rule('r2', 'b@x.test'), rule('r3', 'c@x.test')];
+    const grouped = groupOpen(open);
+    expect(grouped).toHaveLength(2);
+    expect(isGroup(grouped[0]!) && grouped[0].cards.map((c) => c.id)).toEqual(['r1', 'r2', 'r3']);
+    expect(isGroup(grouped[1]!)).toBe(false);
+    // One of a kind is a card of its own, not a group of one.
+    expect(groupOpen([rule('r1', 'a@x.test')]).every((item) => !isGroup(item))).toBe(true);
+
+    vi.mocked(api.proposals).mockResolvedValue({ open, closed: [] });
+    vi.mocked(api.keepAllProposals).mockResolvedValue({ kept: 3, failed: 0, skipped: 0, note: 'Kept 3 rules.' });
+    await renderPage();
+    expect(screen.getByText('Quiet a marketing sender (3)')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep all (3)' }));
+    await waitFor(() => expect(api.keepAllProposals).toHaveBeenCalledTimes(1));
+    expect(api.keepAllProposals).toHaveBeenCalledWith(['r1', 'r2', 'r3']);
+    expect(api.keepProposal).not.toHaveBeenCalled();
+    expect(await screen.findByText('Quiet a marketing sender: Kept 3 rules.')).toBeInTheDocument();
+  });
+
+  it('says a rule kept itself in the fold', async () => {
+    vi.mocked(api.proposals).mockResolvedValue({
+      open: [],
+      closed: [
+        proposal({ id: 'a', kind: 'policy', title: 'Rule for mailer: ignore', editable: null, state: 'kept', decidedBy: 'auto', decidedAt: '2026-09-23T11:00:00Z', note: 'Kept by itself: its plugin keeps rules like this one without asking.', payload: { plugin: 'mailer', matcher: {}, action: 'ignore', verdicts: [] } }),
+      ],
+    });
+    await renderPage();
+    expect(screen.getByText('advisor: Kept by itself: its plugin keeps rules like this one without asking.')).toBeInTheDocument();
   });
 
   it('shows a policy as its parts, with no editor', async () => {

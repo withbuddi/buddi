@@ -1,7 +1,9 @@
 /**
  * Settings → Proposals: what the agents learned, waiting for the owner.
  *
- * Nothing an agent learns applies itself (docs/learning.md). A skill, a
+ * Nothing an agent learns applies itself (docs/learning.md), except the few
+ * rules a plugin keeps itself under its own rule (§4); those are listed in the
+ * fold as kept by themselves, and on the plugin's own page with Undo. A skill, a
  * rule, a change to its own file — each arrives here as a card saying what it
  * is, why the agent thinks so, and where it came from, including the mark
  * that untrusted text (a page, a mail, a file) was in view when it was made.
@@ -28,6 +30,10 @@
  * grant says what it adds before the owner keeps it. A keep the server refuses
  * (an unknown tool, a hand-only one) leaves the card open with the sentence
  * beside the button. The weekly digest's day and hour are set at the foot.
+ *
+ * Open rule cards of one plugin and one kind (the payload's `kind`), two or
+ * more of them, are one group with "Keep all (N)": one owner action that
+ * keeps each as its own Keep would.
  */
 import { useState } from 'react';
 import { api, type DigestSchedule, type ProposalRow } from '../api';
@@ -71,6 +77,51 @@ export function addedTools(proposal: ProposalRow, text: string): string[] {
   return toolNames(text).filter((name) => !before.has(name));
 }
 
+/** Open rule cards of one plugin and one kind: drawn as one group with one Keep all. */
+export interface ProposalGroup {
+  key: string;
+  label: string;
+  plugin: string;
+  cards: ProposalRow[];
+}
+
+/**
+ * The open list, with rule cards of the same plugin and kind folded into one
+ * group when there are two or more of them. The kind and its label are the
+ * plugin's own words on the payload; this page names no plugin. Order is
+ * kept: a group sits where its first card was.
+ */
+export function groupOpen(open: readonly ProposalRow[]): Array<ProposalRow | ProposalGroup> {
+  const keyOf = (p: ProposalRow): string | null =>
+    p.kind === 'policy' && p.ruleKind ? `${String(p.payload.plugin ?? '')}\u0000${p.ruleKind}` : null;
+  const counts = new Map<string, number>();
+  for (const p of open) {
+    const key = keyOf(p);
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const groups = new Map<string, ProposalGroup>();
+  const out: Array<ProposalRow | ProposalGroup> = [];
+  for (const p of open) {
+    const key = keyOf(p);
+    if (!key || (counts.get(key) ?? 0) < 2) {
+      out.push(p);
+      continue;
+    }
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label: p.ruleKindLabel || p.ruleKind || 'Rules', plugin: String(p.payload.plugin ?? ''), cards: [] };
+      groups.set(key, group);
+      out.push(group);
+    }
+    group.cards.push(p);
+  }
+  return out;
+}
+
+export function isGroup(item: ProposalRow | ProposalGroup): item is ProposalGroup {
+  return 'cards' in item;
+}
+
 /** True when the proposal belongs under a plugin filter (none: everything does). */
 export function inFilter(proposal: ProposalRow, plugin: string | null | undefined): boolean {
   return !plugin || (proposal.kind === 'policy' && proposal.payload.plugin === plugin);
@@ -105,11 +156,36 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
   const open = (data?.open ?? []).filter((p) => inFilter(p, plugin));
   const closed = (data?.closed ?? []).filter((p) => inFilter(p, plugin));
 
+  const card = (proposal: ProposalRow): JSX.Element => (
+    <ProposalCard
+      key={proposal.id}
+      proposal={proposal}
+      busy={busy === proposal.id}
+      refusal={refused[proposal.id] ?? null}
+      onKeep={(text) =>
+        void act(
+          proposal.id,
+          async () => {
+            const result = await api.keepProposal(proposal.id, text);
+            return `${proposal.title}: ${result.note}`;
+          },
+          true,
+        )
+      }
+      onDiscard={(reason) =>
+        void act(proposal.id, async () => {
+          await api.discardProposal(proposal.id, reason);
+          return `Discarded: ${proposal.title}. ${proposal.agent} will be told once and will not propose it again for 90 days.`;
+        })
+      }
+    />
+  );
+
   return (
     <PageFrame
       embedded={embedded}
       title="Proposals"
-      lede="What your agents learned and would like to keep: a procedure, a rule, a change to their own instructions. Nothing here applies itself. Keep what is right, correct what is nearly right, discard the rest."
+      lede="What your agents learned and would like to keep: a procedure, a rule, a change to their own instructions. Keep what is right, correct what is nearly right, discard the rest. A few rules apply themselves, where their plugin allows it (one you always keep, one that only quiets mail sent to many); its own page lists them, with Undo."
     >
       <ErrorBanner message={error ?? failure} />
       {plugin ? (
@@ -138,30 +214,25 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
         // Each proposal is a record with its own card, so the cards are the
         // section's rows; a panel around them would be a card in a card.
         <Section title="Waiting" aside={`${open.length} to decide`}>
-          {open.map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              busy={busy === proposal.id}
-              refusal={refused[proposal.id] ?? null}
-              onKeep={(text) =>
-                void act(
-                  proposal.id,
-                  async () => {
-                    const result = await api.keepProposal(proposal.id, text);
-                    return `${proposal.title}: ${result.note}`;
-                  },
-                  true,
-                )
-              }
-              onDiscard={(reason) =>
-                void act(proposal.id, async () => {
-                  await api.discardProposal(proposal.id, reason);
-                  return `Discarded: ${proposal.title}. ${proposal.agent} will be told once and will not propose it again for 90 days.`;
-                })
-              }
-            />
-          ))}
+          {groupOpen(open).map((item) => {
+            if (isGroup(item)) {
+              return (
+                <ProposalGroupCard
+                  key={item.key}
+                  group={item}
+                  busy={busy === item.key}
+                  onKeepAll={() =>
+                    void act(item.key, async () => {
+                      const result = await api.keepAllProposals(item.cards.map((c) => c.id));
+                      return `${item.label}: ${result.note}`;
+                    })
+                  }
+                  card={(proposal) => card(proposal)}
+                />
+              );
+            }
+            return card(item);
+          })}
         </Section>
       )}
       {closed.length > 0 ? (
@@ -205,10 +276,60 @@ export function Proposals({ embedded, plugin }: { embedded?: boolean; plugin?: s
   );
 }
 
+/**
+ * A group of open rules of one kind: what they are, how many, and one
+ * Keep all — the owner's one decision over the lot. Each card is still there
+ * under the fold, to keep or discard on its own.
+ */
+function ProposalGroupCard({
+  group,
+  busy,
+  onKeepAll,
+  card,
+}: {
+  group: ProposalGroup;
+  busy: boolean;
+  onKeepAll: () => void;
+  card: (proposal: ProposalRow) => JSX.Element;
+}): JSX.Element {
+  const n = group.cards.length;
+  const untrusted = group.cards.some((c) => c.untrusted);
+  return (
+    <Card
+      tone={untrusted ? 'warning' : 'accent'}
+      title={`${group.label} (${n})`}
+      meta={
+        <>
+          <Pill>{KIND_LABEL.policy}</Pill>
+          <Pill mono>{group.plugin}</Pill>
+        </>
+      }
+      foot={
+        <Toolbar align="end">
+          <Button variant="accent" size="sm" disabled={busy} onClick={onKeepAll}>
+            Keep all ({n})
+          </Button>
+        </Toolbar>
+      }
+    >
+      <Stack gap="sm">
+        <p>
+          {n} rules of the same kind from {group.plugin}, each learned from your own decisions. Keep all keeps every one
+          of them as if you had kept each, in one go.
+        </p>
+        <Details summary={`Show each of the ${n}`}>
+          <Stack gap="sm">{group.cards.map((proposal) => card(proposal))}</Stack>
+        </Details>
+      </Stack>
+    </Card>
+  );
+}
+
 /** What happened to a decided proposal, in a sentence. */
 export function closedSentence(proposal: ProposalRow): string {
   switch (proposal.state) {
     case 'kept':
+      if (proposal.decidedBy === 'auto') return proposal.note ?? 'Kept by itself.';
       return proposal.kind === 'skill' && proposal.skill
         ? proposal.skill.live
           ? `Kept as ${proposal.skill.name}, version ${proposal.skill.version}; it loads on the agent's next run.`
