@@ -3732,6 +3732,8 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .pg-tabs { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
 .pg-tabs-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
 .pg-tabs-bar > :only-child { margin-left: auto; }
+.pg-tabs-bar[data-only='pick'] > :only-child { margin-left: 0; }
+.pg-tabs-bar[data-only='pick']:empty { display: none; }
 /* A day in one panel (kit: WxSeries): tabs, the chart with its values written on it, the strip below; one highlight. */
 .pg-series { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
 .pg-series-tabs { display: flex; gap: var(--space-1); margin-top: calc(var(--space-2) * -1); }

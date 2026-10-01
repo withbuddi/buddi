@@ -1494,6 +1494,26 @@ describe('a forecast page: tabs with a pick, a hero, tiles and a two-kind chart'
     expect(asked).toContainEqual(['hours', { date: '2026-09-29' }]);
     expect(screen.getByText('2026-09-29 12:00, 12°, Rain 20%').closest('ul')).toHaveAttribute('data-layout', 'strip');
   });
+
+  it('draws one tab with a pick as the pick alone: a filter over one view (Mail: All · Needs a reply · Notifications)', async () => {
+    const filtered: PluginPageDescriptor = {
+      ...page,
+      body: [
+        {
+          kind: 'tabs',
+          pick: { param: 'place', label: 'Show', options: [{ value: 'home', label: 'All' }, { value: 'work', label: 'Needs a reply' }] },
+          tabs: [{ id: 'one', label: 'One', body: [(page.body[0] as any).tabs[0].body[0]] }],
+        },
+      ],
+    };
+    const { container } = render(<PluginPage page={filtered} item={null} navigate={navigate} timezone="UTC" />);
+    await screen.findByLabelText(/^18°/);
+    expect(screen.queryByRole('radio', { name: 'One' })).not.toBeInTheDocument();
+    expect(container.querySelector('.pg-tabs-bar')).toHaveAttribute('data-only', 'pick');
+    fireEvent.click(screen.getByRole('radio', { name: 'Needs a reply' }));
+    expect(await screen.findByLabelText(/^24°/)).toBeInTheDocument();
+    expect(asked).toContainEqual(['today', { place: 'work' }]);
+  });
 });
 
 describe('a series panel', () => {

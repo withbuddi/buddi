@@ -35,7 +35,8 @@ import {
 import { lastSyncByAccount, listAccounts } from '../config.js';
 import { ACCOUNT_KIND } from '../credentials.js';
 import type { AccountRecord } from '../ports.js';
-import { THREAD_STATE_LABELS, findThread, listThreadRows, threadMessages, type ThreadState } from '../threads.js';
+import { attentionReasons, findThread, listThreadRows, threadMessages } from '../threads.js';
+import { attentionLine, reasonOf, viewOf, type AttentionView } from '../needs-you.js';
 import { listDraftsForThread } from '../drafts.js';
 import {
   toDraft,
@@ -75,6 +76,8 @@ const searchParams = z
      * to do would have to be silence.
      */
     searching: z.enum(['true']).optional(),
+    /** Which conversations the list shows: every one, the ones that need a reply, or the notifications. */
+    show: z.enum(['all', 'needs-reply', 'notifications']).optional(),
     q: z.string().optional(),
     from: z.string().optional(),
     since: z.string().optional(),
@@ -228,7 +231,14 @@ export function threadsQuery(): PageQuery {
       const hits = await searchHits(ctx, input, ids);
       if (ids.length === 0) return { threads: [], ...hits };
 
-      const threads = await listThreadRows(ctx.buddi!.db, { accountIds: ids, limit: THREAD_LIST_LIMIT });
+      const attention =
+        input.show === 'needs-reply' ? 'needs-you' : input.show === 'notifications' ? 'notification' : undefined;
+      const threads = await listThreadRows(ctx.buddi!.db, {
+        accountIds: ids,
+        limit: THREAD_LIST_LIMIT,
+        ...(attention ? { attention, now } : {}),
+      });
+      const reasons = await attentionReasons(ctx.buddi!.db, threads, now);
       const { rows } = await ctx.buddi!.db.query(
         `select distinct thread_id from email.drafts
           where thread_id = any($1::uuid[]) and status = any($2::text[])`,
@@ -254,6 +264,14 @@ export function threadsQuery(): PageQuery {
             '(nobody)',
           participants: thread.participants.join(', '),
           state: thread.state,
+          /*
+           * The state as the owner reads it (`needs-you.ts`): "Waiting on you"
+           * only when the one rule says so. A notification and a message
+           * nobody expects an answer to carry no pill at all — a word on every
+           * row is how forty "Waiting on you" pills came to mean nothing.
+           */
+          attention: viewOf(reasons.get(thread.id) ?? reasonOf(null, thread.state)),
+          pill: listPillOf(viewOf(reasons.get(thread.id) ?? reasonOf(null, thread.state))),
           // The "draft" pill sits *beside* the state, never in place of it: a
           // conversation that is waiting on the owner and has a reply written
           // for it is two facts, and the old page showed both.
@@ -265,6 +283,15 @@ export function threadsQuery(): PageQuery {
       };
     },
   };
+}
+
+/**
+ * The list's pill for a conversation: the views that are worth a word.
+ * A notification and "they wrote" are the inbox's ordinary weather and say
+ * nothing; the detail's State row still names them.
+ */
+export function listPillOf(view: AttentionView): string {
+  return view === 'notification' || view === 'they-wrote' ? '' : view;
 }
 
 /** The search half of `threads`, or nothing at all when nothing narrows it. */
@@ -346,6 +373,7 @@ export function threadQuery(): PageQuery {
       const now = ctx.buddi!.clock.now();
       const thread = await findThread(ctx.buddi!.db, id);
       if (!thread) throw new QueryRefusal('No conversation here has that id.');
+      const reason = (await attentionReasons(ctx.buddi!.db, [thread], now)).get(thread.id) ?? reasonOf(null, thread.state);
       // Headers and snippets only: twenty bodies is a page weight nobody
       // reads, and one arrives from `message` when the owner opens it.
       const messages = await threadMessages(ctx.buddi!.db, thread.id, THREAD_MESSAGE_LIMIT);
@@ -361,7 +389,9 @@ export function threadQuery(): PageQuery {
         id: thread.id,
         subject: thread.subject === '' ? '(no subject)' : thread.subject,
         state: thread.state,
-        stateLabel: THREAD_STATE_LABELS[thread.state as ThreadState] ?? thread.state,
+        attention: viewOf(reason),
+        // The state in words, with why: "They wrote — no reply expected: a no-reply sender."
+        stateLabel: attentionLine(reason),
         participants: thread.participants.join(', '),
         lastAt: thread.lastAt,
         messageCount: thread.messageCount,

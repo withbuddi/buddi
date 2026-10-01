@@ -740,7 +740,9 @@ export type Component =
   /**
    * Views of one thing behind a switch at the right of a bar — Today, Week,
    * 10 days — each tab its own components, drawn only while it is chosen.
-   * `pick`, when given, is a second switch at the left of the same bar.
+   * `pick`, when given, is a second switch at the left of the same bar. With
+   * a pick, one tab is allowed (host API 1.22): the bar is then the pick
+   * alone, a filter over one view.
    */
   | (ComponentCommon & {
       kind: 'tabs';
@@ -1259,7 +1261,7 @@ export const componentSchema: z.ZodType<Component> = z.lazy(() =>
               })
               .strict(),
           )
-          .min(2)
+          .min(1)
           .max(6)
           .refine((tabs) => new Set(tabs.map((tab) => tab.id)).size === tabs.length, 'each tab has its own id'),
         default: z.string().regex(PAGE_ID).optional(),
@@ -1767,6 +1769,11 @@ export function parsePageContributions(opts: {
       }
     }
     for (const { component, at } of componentsIn(page.body, 'body', 'tabs')) {
+      // One tab is a bar with only its pick (since host API 1.22): a filter
+      // over the one view. Without a pick, one tab is no choice at all.
+      if (component.tabs.length < 2 && component.pick === undefined) {
+        throw new Error(`plugin ${plugin}: page ${page.id}, ${at}: a tab bar has two tabs or more, or one tab and a pick`);
+      }
       if (component.default !== undefined && !component.tabs.some((tab) => tab.id === component.default)) {
         throw new Error(
           `plugin ${plugin}: page ${page.id}, ${at}: opens on ${component.default}, which is not one of its tabs (${component.tabs

@@ -20,7 +20,7 @@
       "owner:channel",
       "owner:notify"
     ],
-    "hostApi": "^1.14"
+    "hostApi": "^1.22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

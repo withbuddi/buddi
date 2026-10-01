@@ -2490,11 +2490,14 @@ function TabsPiece({ component, data }: { component: Of<'tabs'>; data: unknown }
   const shown = component.tabs.find((t) => t.id === tab) ?? component.tabs[0]!;
   return (
     <div className="pg-tabs">
-      <div className="pg-tabs-bar">
+      {/* One tab and a pick (host API 1.22): the bar is the pick alone, a filter over one view, on the left where a pick sits. */}
+      <div className="pg-tabs-bar" data-only={component.tabs.length === 1 ? 'pick' : undefined}>
         {pick && options.length > 1 ? (
           <Segment label={pick.label} options={options} value={current} onChange={(value) => scope.setParams({ [pick.param]: value })} />
         ) : null}
-        <Segment label={component.title ?? 'View'} options={component.tabs.map((t) => ({ value: t.id, label: t.label }))} value={shown.id} onChange={setTab} />
+        {component.tabs.length > 1 ? (
+          <Segment label={component.title ?? 'View'} options={component.tabs.map((t) => ({ value: t.id, label: t.label }))} value={shown.id} onChange={setTab} />
+        ) : null}
       </div>
       {shown.body.map((child, index) => (
         <Piece key={`${shown.id}-${index}`} component={child} data={data} />

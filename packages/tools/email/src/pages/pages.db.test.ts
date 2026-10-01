@@ -420,6 +420,13 @@ suite('the mail pages, over postgres', () => {
         return;
       }
       if (kind === 'button') return;
+      if (kind === 'tabs') {
+        // A tab's components are handed the data the bar is.
+        for (const tab of component.tabs ?? []) {
+          for (const [i, child] of (tab.body ?? []).entries()) await walk(child, root, `${where}.${tab.id}.${i}`);
+        }
+        return;
+      }
       if (kind === 'list-detail') {
         // The detail is handed the page's data, not the list's row.
         for (const [i, child] of (component.detail ?? []).entries()) {
@@ -458,15 +465,15 @@ suite('the mail pages, over postgres', () => {
     expect(checked).toEqual([
       // An attachment's Fetch and its link, each asked of its own row: the
       // button gives way to the link the moment there is a file.
-      'mail.body.2.0.detail.1.0.1.1.when(artifactId)',
-      'mail.body.2.0.detail.1.0.1.2.when(artifactId)',
+      'mail.body.2.0.conversations.0.detail.1.0.1.1.when(artifactId)',
+      'mail.body.2.0.conversations.0.detail.1.0.1.2.when(artifactId)',
       // The two draft notices, each asked of the draft the editor is about.
-      'mail.body.2.0.detail.2.0.when(unresolved)',
-      'mail.body.2.0.detail.2.1.when(notLive)',
+      'mail.body.2.0.conversations.0.detail.2.0.when(unresolved)',
+      'mail.body.2.0.conversations.0.detail.2.1.when(notLive)',
       // The offer of @mail, asked of the settings page's own accounts read.
       'settings.body.2.0.when(triage)',
     ]);
-    expect(roots).toContain('mail.body.2.0.detail.3 → thread');
+    expect(roots).toContain('mail.body.2.0.conversations.0.detail.3 → thread');
   });
 
   /**
@@ -482,7 +489,8 @@ suite('the mail pages, over postgres', () => {
 
     const mail = emailPageDescriptors.find((page) => page.id === 'mail')!;
     const section: any = mail.body.find((c: any) => c.kind === 'section');
-    const split: any = section.body.find((c: any) => c.kind === 'list-detail');
+    const bar: any = section.body.find((c: any) => c.kind === 'tabs');
+    const split: any = bar.tabs[0].body.find((c: any) => c.kind === 'list-detail');
     const fold: any = split.detail.find((c: any) => c.kind === 'expand' && c.label === 'Older drafts');
     expect(fold, 'the Mail detail has an Older drafts fold').toBeDefined();
     expect(fold.when, 'the fold may not ask a question of data it is not handed').toBeUndefined();

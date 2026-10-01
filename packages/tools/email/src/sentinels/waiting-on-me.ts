@@ -1,37 +1,29 @@
 /**
  * `email.waiting-on-me` — a conversation has been waiting on the owner.
  *
- * docs/email.md §7: *«a thread in `waiting-on-me` for more than N days
- * (default 2), from a sender the owner has replied to before»*. Four conditions,
- * and every one of them exists to keep this from being a nag:
- *
- *  - **the thread's state**, which is a fact about the mailbox (who wrote last,
- *    Sent folder included), not a judgement anybody made;
- *  - **the last inbound message is older than the setting**. Age is measured
- *    from INTERNALDATE, never the sender's `Date` header — a forged one would
- *    otherwise make anything look a fortnight old;
- *  - **the owner has written to this sender before**, from this account. A
- *    stranger who has not been answered in two days has not been kept waiting;
- *    that is what an inbox is. It is read from the Sent folder, which is also
- *    why this watcher says nothing at all on an installation whose mailbox has
- *    no Sent folder — honest silence rather than a finding per newsletter;
- *  - **no ignore policy, and not muted.** Both are the owner's decision, and a
- *    watcher that talked past them would be arguing with him.
+ * docs/email.md §7: a conversation that **needs the owner** (`needs-you.ts`,
+ * the one rule the Mail page, the widget and the tools share) and has done for
+ * more than N days (default 2). The rule is: inbound last, not muted, not
+ * under an ignore rule, not a no-reply or bulk sender, under thirty days old,
+ * and either somebody the owner has written to before from this mailbox or a
+ * message triage judged to need a reply. Age is measured from INTERNALDATE,
+ * never the sender's `Date` header — a forged one would otherwise make
+ * anything look a fortnight old.
  *
  * One finding per thread per cycle, keyed to the thread *and* the message that
  * is waiting: a reply arriving means a new key, and core resolves the old one.
  *
  * Two bounds, and they are the difference between a watcher and a nag. The
- * query only looks at the last `STALE_WAITING_DAYS` — a conversation nobody
- * has touched in a month is history, not an alarm — and reports the *newest*
+ * rule only counts the last thirty days — a conversation nobody has touched
+ * in a month is history, not an alarm — and the watcher reports the *newest*
  * waiting threads first, so the raise cap truncates the least urgent rows
  * rather than the most recent ones. Every qualifying thread is still returned
  * as a key, capped by nothing, so core does not mistake one it did not hear
  * about for one that was answered.
  */
-import type { Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
+import type { DbArea, Finding, Sentinel, SentinelContext, SentinelReport } from '@buddi/core/plugin';
+import { attentionJoin, needsYouPrefilter } from '../needs-you.js';
 import {
-  STALE_WAITING_DAYS,
   firstLineOf,
   loadWatcherSettings,
   waitingFinding,
@@ -51,12 +43,11 @@ export function mailAgent(ctx: SentinelContext): string | undefined {
 }
 
 /**
- * The query: threads waiting on the owner, with the last inbound message, its
- * age, and whether the owner has ever written to that sender from that account.
+ * The query: threads that need the owner, with the last inbound message and
+ * its age.
  *
- * Every condition is a fact about the same row, so it is one statement, and
- * nothing in it *judges*: the severity and the words are `watchers.ts`'s, over
- * the rows it returns.
+ * One statement over the rule's function; the severity and the words are
+ * `watchers.ts`'s, over the rows it returns.
  *
  * Two statements read this one source, because there are two questions.
  * *What is still true* has no cap — core resolves every open finding a run did
@@ -66,69 +57,35 @@ export function mailAgent(ctx: SentinelContext): string | undefined {
  * first.
  */
 const WAITING_SOURCE = `
-  with last_inbound as (
-    select distinct on (m.thread_id)
-           m.thread_id, m.id, m.from_addr, m.subject, m.body_text, m.snippet, m.account_id,
-           coalesce(m.internal_date, m.fetched_at) as at
-      from email.messages m
-      join email.threads t on t.id = m.thread_id
+  with waiting as (
+    select t.id as thread_id, t.subject as thread_subject,
+           m.id as message_id, m.from_addr, m.subject, m.body_text, m.snippet, att.inbound_at as at, t.account_id,
+           floor(extract(epoch from ($1::timestamptz - att.inbound_at)) / 86400.0)::int as age_days
+      from email.threads t
       -- Enabled mailboxes only, which is the scope every read tool has
       -- (listAccounts defaults to it). A mailbox the owner switched off keeps
       -- its mail and its cursor and is not walked; a watcher that nagged about
       -- its threads -- or a goal that counted them -- would be speaking about
       -- mail nothing else here will show him.
-      join email.accounts a on a.id = m.account_id and a.enabled
-     where m.direction = 'in'
-       and t.state = 'waiting-on-me'
-     order by m.thread_id, coalesce(m.internal_date, m.fetched_at) desc, m.id desc
-  ),
-  waiting as (
-    select t.id as thread_id, t.subject as thread_subject,
-           li.id as message_id, li.from_addr, li.subject, li.body_text, li.snippet, li.at, li.account_id,
-           floor(extract(epoch from ($1::timestamptz - li.at)) / 86400.0)::int as age_days
-      from last_inbound li
-      join email.threads t on t.id = li.thread_id
-     where t.state = 'waiting-on-me'
-     and li.at <= $1::timestamptz - make_interval(days => $2::int)
-     -- ...and not so old that it is history rather than news. See
-     -- STALE_WAITING_DAYS above: a mailbox arrives with years of inbound-last
-     -- threads, and a watcher that reported all of them would wake the owner
-     -- twenty times a day about mail from 2019 forever.
-     and li.at >= $1::timestamptz - make_interval(days => $3::int)
-     -- The owner has written to them before, from this mailbox: his own mail,
-     -- whatever client he typed it in (docs/email.md §5).
-     and exists (
-       select 1 from email.messages o
-        where o.account_id = li.account_id
-          and o.direction = 'out'
-          and (
-            exists (select 1 from jsonb_array_elements_text(o.to_addrs) as a(addr)
-                     where email.address_of(a.addr) = email.address_of(li.from_addr))
-            or exists (select 1 from jsonb_array_elements_text(o.cc) as a(addr)
-                        where email.address_of(a.addr) = email.address_of(li.from_addr))
-          )
-     )
-     -- Silenced senders stay silenced. A live ignore policy of the owner's on
-     -- the sender or their domain, in this mailbox or in every one.
-     and not exists (
-       select 1 from email.policies p
-        where p.revoked_at is null
-          and p.proposed = false
-          and p.action = 'ignore'
-          and (p.account_id is null or p.account_id = li.account_id)
-          and (
-            (p.scope = 'sender' and p.matcher = email.address_of(li.from_addr))
-            or (p.scope = 'domain'
-                and p.matcher = split_part(email.address_of(li.from_addr), '@', 2))
-          )
-     )
+      join email.accounts a on a.id = t.account_id and a.enabled
+      ${attentionJoin('t', '$1')}
+      join email.messages m on m.id = att.inbound_id
+     where ${needsYouPrefilter('t', '$1')}
+       -- The one rule (needs-you.ts): inbound last, not muted, not ignored,
+       -- not a no-reply or bulk sender, under thirty days old, and either
+       -- somebody the owner has written to from this mailbox or a message
+       -- triage judged to need a reply.
+       and att.needs_you
+       -- ...and waiting longer than the owner's setting. Zero for the count
+       -- the widget shows: what needs him now, not what he is nagged about.
+       and att.inbound_at <= $1::timestamptz - make_interval(days => $2::int)
   )`;
 
 /** Every key that is still true. No cap: see `WAITING_SOURCE`. */
 const WAITING_KEYS_SQL = `${WAITING_SOURCE} select thread_id, message_id from waiting`;
 
 /**
- * How many conversations are waiting, by the same four conditions.
+ * How many conversations are waiting, by the same rule and age.
  *
  * `email.waiting_on_me` is this number and nothing else, which is the point:
  * a goal to get the pile down must count what the watcher nags about, or the
@@ -137,25 +94,25 @@ const WAITING_KEYS_SQL = `${WAITING_SOURCE} select thread_id, message_id from wa
 export const WAITING_COUNT_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting`;
 
 /** The same count in some mailboxes only: Home's widget set to one. */
-const WAITING_COUNT_IN_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting where account_id::text = any($4::text[])`;
+const WAITING_COUNT_IN_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting where account_id::text = any($3::text[])`;
 
 /** The rows worth raising this tick: newest first, capped. */
 const WAITING_ROWS_SQL = `${WAITING_SOURCE}
   select thread_id, thread_subject, message_id, from_addr, subject, body_text, snippet, age_days
     from waiting
    order by at desc, thread_id asc
-   limit $4`;
+   limit $3`;
 
 export function createWaitingOnMeSentinel(): Sentinel {
   return {
     id: 'email.waiting-on-me',
     description:
       'Reports conversations waiting on you for longer than your setting (2 days by default), ' +
-      'from people you have written to before.',
+      'from people you have written to before or who asked you something — never alerts, newsletters or muted threads.',
     every: EVERY_12H,
     async run(ctx: SentinelContext): Promise<SentinelReport> {
       const settings = await loadWatcherSettings(ctx.buddi!.db);
-      const bounds = [ctx.buddi!.clock.now(), settings.waitingDays, STALE_WAITING_DAYS];
+      const bounds = [ctx.buddi!.clock.now(), settings.waitingDays];
       // Everything that is still true, and then the few worth saying out loud.
       const all = await ctx.buddi!.db.query(WAITING_KEYS_SQL, bounds);
       const keys = all.rows.map((row: Record<string, any>) =>
@@ -195,7 +152,28 @@ export async function countWaitingOnMe(
   accountIds?: readonly string[],
 ): Promise<number> {
   const settings = await loadWatcherSettings(db);
-  const bounds = [now, settings.waitingDays, STALE_WAITING_DAYS];
+  return countWaiting(db, now, settings.waitingDays, accountIds);
+}
+
+/**
+ * How many conversations need the owner now: the one rule with no waiting
+ * age. The widget's number, and exactly the Mail page's "Needs a reply".
+ */
+export async function countNeedsYou(
+  db: Pick<DbArea, 'query'>,
+  now: Date,
+  accountIds?: readonly string[],
+): Promise<number> {
+  return countWaiting(db, now, 0, accountIds);
+}
+
+async function countWaiting(
+  db: Pick<DbArea, 'query'>,
+  now: Date,
+  minDays: number,
+  accountIds?: readonly string[],
+): Promise<number> {
+  const bounds = [now, minDays];
   const { rows } = accountIds
     ? await db.query(WAITING_COUNT_IN_SQL, [...bounds, [...accountIds]])
     : await db.query(WAITING_COUNT_SQL, bounds);

@@ -37,7 +37,7 @@ import {
   DEFAULT_RECEIPT_CONFIDENCE,
   DEFAULT_WAITING_DAYS,
 } from '../watchers.js';
-import { THREAD_STATE_LABELS } from '../threads.js';
+import { ATTENTION_LABELS } from '../needs-you.js';
 
 /** The conversation this page is showing, as a page parameter. */
 const THREAD = 'thread';
@@ -250,6 +250,99 @@ const drafts: Component = {
   ],
 };
 
+/**
+ * The conversations and the one that is open. The list reads the page
+ * parameter `show` the bar above it writes (`needs-you.ts` says what each
+ * view holds); the detail follows the route, so changing the view keeps the
+ * open conversation open.
+ */
+const conversations: Component = {
+  kind: 'list-detail',
+  param: THREAD,
+  list: {
+    kind: 'list',
+    query: { query: 'threads', params: { show: { param: 'show' } } },
+    rows: 'threads',
+    key: 'id',
+    item: {
+      // Who it is with, then what it is about: the way a mailbox reads.
+      title: { path: 'sender' },
+      sub: { path: 'subject' },
+      meta: [{ path: 'when' }],
+      // Both facts: where the conversation stands, and whether a reply is
+      // waiting on the owner. One in place of the other hid the state of
+      // every conversation an agent had drafted for.
+      pills: [
+        // Where it stands, by the one rule (needs-you.ts): "Waiting on you"
+        // only when someone is, in the warning ink because it is now rare
+        // and true. A notification or a message nobody expects an answer to
+        // has no pill (`pill` is empty); the detail says which it is.
+        {
+          value: { path: 'pill' },
+          labels: { ...ATTENTION_LABELS },
+          tones: { 'needs-you': 'warning', 'waiting-on-them': 'neutral', muted: 'neutral', closed: 'neutral' },
+        },
+        // The reply waiting on the owner is the one to catch an eye.
+        { value: { path: 'draftPill' }, labels: { draft: 'Draft' }, tone: 'accent' },
+      ],
+      to: { page: 'mail', item: { path: 'id' } },
+    },
+    empty: 'No conversations here.',
+  },
+  detail: [
+    /*
+     * The parts of a conversation are siblings rather than one nested
+     * tree: a descriptor may be twelve levels deep, and a message's
+     * attachments are already six of them below this line.
+     */
+    {
+      kind: 'detail',
+      title: 'Conversation',
+      query: thread(),
+      fields: [
+        { label: 'Subject', value: { path: 'subject' } },
+        { label: 'State', value: { path: 'stateLabel' } },
+        { label: 'With', value: { path: 'participants' } },
+        { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
+        { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
+      ],
+      body: [],
+    },
+    messages,
+    drafts,
+    /*
+     * The ended drafts. The fold is always here rather than shown only
+     * when there are some: `when` would be asked against the page's own
+     * data — which, inside a detail the route owns, is nothing — and a
+     * question that can only be answered "no" is how a whole section
+     * quietly stops existing. The list inside says when there is nothing.
+     */
+    {
+      kind: 'expand',
+      label: 'Older drafts',
+      query: thread(),
+      body: [
+        {
+          kind: 'list',
+          query: { query: 'thread', params: { id: { path: 'id' } } },
+          rows: 'older',
+          key: 'id',
+          item: {
+            title: { path: 'subject' },
+            sub: { path: 'statusLine' },
+            pill: {
+              value: { path: 'status' },
+              labels: { draft: 'Draft', edited: 'Edited', sent: 'Sent', discarded: 'Discarded', lapsed: 'Lapsed' },
+            },
+          },
+          empty: 'Nothing has ended on this conversation yet.',
+        },
+      ],
+    },
+  ],
+  empty: 'Choose a conversation to read it here.',
+};
+
 const mail: PageDescriptor = {
   id: 'mail',
   title: 'Mail',
@@ -329,84 +422,24 @@ const mail: PageDescriptor = {
       actions: [{ kind: 'link', label: 'Mailboxes and rules', to: { page: 'settings' } }],
       body: [
         {
-          kind: 'list-detail',
-          param: THREAD,
-          list: {
-            kind: 'list',
-            query: { query: 'threads' },
-            rows: 'threads',
-            key: 'id',
-            item: {
-              // Who it is with, then what it is about: the way a mailbox reads.
-              title: { path: 'sender' },
-              sub: { path: 'subject' },
-              meta: [{ path: 'when' }],
-              // Both facts: where the conversation stands, and whether a reply is
-              // waiting on the owner. One in place of the other hid the state of
-              // every conversation an agent had drafted for.
-              pills: [
-                // A state is a quiet word: nearly every row is waiting on the owner,
-                // and forty amber pills say nothing the Draft pill does not.
-                { value: { path: 'state' }, labels: { ...THREAD_STATE_LABELS }, tones: { 'waiting-on-me': 'neutral' } },
-                // The reply waiting on the owner is the one to catch an eye.
-                { value: { path: 'draftPill' }, labels: { draft: 'Draft' }, tone: 'accent' },
-              ],
-              to: { page: 'mail', item: { path: 'id' } },
-            },
-            empty: 'No conversations yet. buddi builds them as mail arrives.',
+          /*
+           * Three views of the one list, a switch at the left of the bar
+           * (docs/email.md §3, Needs you). "Needs a reply" is what the "Waiting
+           * on you" widget counts; "Notifications" is the no-reply and bulk
+           * mail, so the owner can see what was set aside and why.
+           */
+          kind: 'tabs',
+          // One tab and a pick: the bar is a filter over the one list.
+          pick: {
+            param: 'show',
+            label: 'Show',
+            options: [
+              { value: 'all', label: 'All' },
+              { value: 'needs-reply', label: 'Needs a reply' },
+              { value: 'notifications', label: 'Notifications' },
+            ],
           },
-          detail: [
-            /*
-             * The parts of a conversation are siblings rather than one nested
-             * tree: a descriptor may be twelve levels deep, and a message's
-             * attachments are already six of them below this line.
-             */
-            {
-              kind: 'detail',
-              title: 'Conversation',
-              query: thread(),
-              fields: [
-                { label: 'Subject', value: { path: 'subject' } },
-                { label: 'State', value: { path: 'stateLabel' } },
-                { label: 'With', value: { path: 'participants' } },
-                { label: 'Messages', value: { path: 'messageCount' }, unit: 'number' },
-                { label: 'Last message', value: { path: 'lastAt' }, unit: 'date' },
-              ],
-              body: [],
-            },
-            messages,
-            drafts,
-            /*
-             * The ended drafts. The fold is always here rather than shown only
-             * when there are some: `when` would be asked against the page's own
-             * data — which, inside a detail the route owns, is nothing — and a
-             * question that can only be answered "no" is how a whole section
-             * quietly stops existing. The list inside says when there is nothing.
-             */
-            {
-              kind: 'expand',
-              label: 'Older drafts',
-              query: thread(),
-              body: [
-                {
-                  kind: 'list',
-                  query: { query: 'thread', params: { id: { path: 'id' } } },
-                  rows: 'older',
-                  key: 'id',
-                  item: {
-                    title: { path: 'subject' },
-                    sub: { path: 'statusLine' },
-                    pill: {
-                      value: { path: 'status' },
-                      labels: { draft: 'Draft', edited: 'Edited', sent: 'Sent', discarded: 'Discarded', lapsed: 'Lapsed' },
-                    },
-                  },
-                  empty: 'Nothing has ended on this conversation yet.',
-                },
-              ],
-            },
-          ],
-          empty: 'Choose a conversation to read it here.',
+          tabs: [{ id: 'conversations', label: 'Conversations', body: [conversations] }],
         },
       ],
     },

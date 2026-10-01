@@ -472,7 +472,10 @@ draw, so a widget that answers one asks for `^1.21`.
 1.22 adds no method either: it is the first buddi that draws the tile icon
 `moon-cloud`, a partly cloudy night. An older buddi leaves an icon it does not
 know off, so a plugin that wants one there checks `ctx.buddi.version` and
-answers `cloud` before 1.22 (the weather plugin does).
+answers `cloud` before 1.22 (the weather plugin does). It is also the first that takes a page's
+`tabs` with one tab and a `pick` — the bar drawn as the pick alone, a filter
+over one view (docs/plugin-pages.md); an older buddi refuses the descriptor,
+so a plugin that draws one asks for `^1.22`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

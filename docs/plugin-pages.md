@@ -243,7 +243,7 @@ What each one is for, in email's terms:
 | `chart` | (Goals) A goal's values over its window as a line with the target dashed; a frequency goal's weeks as bars |
 | select field with `action`, and `play` | (Speech) The play button beside the Voice: a sample said with the unsaved choices, heard in the browser |
 | `calendar` | (Calendar) The rail page: the week's hours, the month's days, or the days as a list, from the linked calendars |
-| `tabs` with `pick` | (Weather) The rail page: Home · Work at the left, Today · Week · 10 days at the right |
+| `tabs` with `pick` | (Weather) The rail page: Home · Work at the left, Today · Week · 10 days at the right. (Mail) One tab and a pick: All · Needs a reply · Notifications over the conversations |
 | `hero` | (Weather) Now: the sky's glyph, the temperature and its word; feels like, high and low, wind, rain, sunrise and sunset beside |
 | `tiles` | (Weather) The next 24 hours as a strip; the week as a row whose picked day shows its hours below; ten days as a row |
 | `series-panel` | (Weather) Today's next 24 hours, and the picked day's hours in Week: temperature, rain chance and wind as tabs over the hourly strip |
@@ -281,7 +281,10 @@ a tab not shown asks nothing. The pick writes its value into the page
 parameter `param`, which a query below reads as `{ param }`; until the owner
 picks, the parameter is unset and the query's own default answers, so the
 first option should be what that default is. The chosen tab is not kept
-across visits. **`hero`**: a raised panel, the glyph and the big value side
+across visits. A bar has two tabs or more, or — since host API 1.22 — one
+tab and a pick: the bar is then the pick alone, at the left, a filter over the
+one view (Mail's All · Needs a reply · Notifications); an older buddi refuses
+a one-tab bar, so a plugin that draws one asks for `^1.22`. **`hero`**: a raised panel, the glyph and the big value side
 by side with the `title` under them, and the facts in a row past a hairline;
 a fact whose path answers nothing is left out. **`tiles`**: the canvas card
 (`views.ts`), one per item, whose accessible name is the card read as one

@@ -276,6 +276,12 @@ const selectInput = z.object({
   newerThanDays: z.number().int().min(0).max(36_500).optional().describe('Only messages that arrived within this many days.'),
   policy: UUID.optional().describe("The senders a rule from email.list_policies is about (its sender, domain, list or conversation)."),
   unread: z.boolean().optional().describe('true: only unread messages; false: only read ones.'),
+  needsReply: z
+    .boolean()
+    .optional()
+    .describe(
+      'true: only messages in conversations waiting on the owner (the "Waiting on you" rule); false: only messages in conversations that are not — notifications, newsletters, mail nobody expects an answer to. Use false to keep a cleanup off anything he still has to answer.',
+    ),
   folder: z.string().min(1).optional().describe("A folder or Gmail label by name, or 'any'. Default: the inbox."),
   text: z.string().min(2).optional().describe('Words in the subject, the sender or the body.'),
   limit: z.number().int().positive().max(MAX_PER_CALL).optional().describe(`How many ids to return (default and most ${MAX_PER_CALL}). The count is always the whole match.`),
@@ -299,6 +305,7 @@ export const selectTool: ToolDefinition<z.infer<typeof selectInput>, unknown> = 
         ...(input.newerThanDays !== undefined ? { newerThanDays: input.newerThanDays } : {}),
         ...(input.policy ? { policyId: input.policy } : {}),
         ...(input.unread !== undefined ? { unread: input.unread } : {}),
+        ...(input.needsReply !== undefined ? { needsReply: input.needsReply } : {}),
         ...(input.folder ? { folder: input.folder } : {}),
         ...(input.text ? { text: input.text } : {}),
         ...(input.limit ? { limit: input.limit } : {}),

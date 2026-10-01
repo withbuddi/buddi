@@ -52,6 +52,38 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   `email.mute_thread` are how the conversation is read and silenced, and the
   gate's `thread` scope matches the thread's **id**, not the `thread_key` a
   sender writes.
+- **Needs you** — the state is a fact (who wrote last), and almost every
+  inbound thread is `waiting-on-me`, security alerts and newsletters included.
+  Whether a conversation actually needs the owner is one rule, in one SQL
+  function, `email.thread_attention(thread, now)` (migration
+  `023_attention.sql`; `needs-you.ts` holds the words). For a `waiting-on-me`
+  thread it reads the newest inbound message and gives the first reason that
+  holds:
+
+  | Reason | When | Shown as |
+  |---|---|---|
+  | `no-reply` | the sender is an address nobody reads: a `no-reply` / `noreply` / `donotreply` token in the local part (`chromewebstore-noreply@`), `notifications@`, `mailer-daemon@`, `postmaster@`, `bounce@`, `automated@`, or a `noreply.` host (`@noreply.github.com`) | Notification |
+  | `bulk` | the message was sent to many: `List-Unsubscribe` or `Precedence: bulk/list/junk` (`messages.bulk`), or a `List-Id` | Notification |
+  | `ignored` | a live ignore rule the owner kept covers its sender, domain, list or thread | They wrote |
+  | `stale` | it arrived more than 30 days ago, or its messages aged out | They wrote |
+  | `known` | the owner has written to this sender before, from this mailbox (To or Cc of his own mail, Sent folder included) | **Waiting on you** |
+  | `asked` | the latest triage verdict on that message (newest `decided_at`) is `reply-needed` | **Waiting on you** |
+  | `stranger` | none of the above | They wrote |
+
+  **Needs you = `known` or `asked`.** `waiting-on-them` (Waiting on them),
+  `muted` and `closed` answer their own name. The sender's headers only ever
+  count *against* needing the owner: a known correspondent writing through a
+  list or from a no-reply address is a notification. Every surface reads this
+  one function: the Mail page's pills, its detail's State row ("Waiting on you
+  — you've written to them before", "Notification — no reply expected: a
+  no-reply sender") and its **Show** filter (All · Needs a reply ·
+  Notifications); the "Waiting on you" widget on Home, which counts exactly
+  Needs a reply (enabled mailboxes); the `email.waiting-on-me` watcher and the
+  `email.waiting_on_me` metric, which count the same rule past `waitingDays`;
+  `email.list_threads` (`needsReply`, and per thread `needsYou`, `shownAs`,
+  `why`); `email.read_thread`; and `email.select_messages` (`needsReply`). In
+  the list, Notification and They wrote carry no pill at all — they are the
+  inbox's ordinary weather — and Waiting on you is the one in the warning ink.
 - `policies`: `scope` in {sender, domain, thread, list-id}, the matcher,
   `action` in {ignore, archive, label, notify, draft, hand-to-agent,
   wake}, parameters (label name, agent id, Telegram yes or no, and — on a
@@ -424,12 +456,11 @@ thread, from the Sent folder rather than from buddi's drafts.
 Each is a sentinel with a finding the agent verifies before speaking, all
 visible and switchable on the Watchers page:
 
-- `email.waiting-on-me` : a thread in `waiting-on-me` for more than
-  N days (`waitingDays`, default 2, on the Email settings page), from a sender
-  the owner has replied to before — read from the Sent folder, so an
-  installation with no Sent folder says nothing rather than reporting every
-  stranger. A live `ignore` policy on the sender or their domain, and a muted
-  thread, are the owner's decisions and silence it. One finding per thread per
+- `email.waiting-on-me` : a thread that **needs the owner** (§3, Needs
+  you) and has for more than N days (`waitingDays`, default 2, on the Email
+  settings page): from somebody he has written to before — read from the Sent
+  folder — or a message triage judged `reply-needed`; never a no-reply or bulk
+  sender, a muted thread, or one under an ignore rule. One finding per thread per
   cycle, keyed to the thread **and** the last inbound message, so a reply is a
   new fact and the old one resolves; `info` at the setting, `urgent` at a week
   — and a thread raised as `info` still wakes somebody the day it turns
@@ -638,9 +669,10 @@ The first needs migration `013_last_synced.sql`:
 - **`email.waiting_on_me`** (count, down, no narrowing) — how many
   conversations are waiting on the owner. It is the `email.waiting-on-me`
   watcher's own query with `count(*)` where its findings would be, so the pile
-  a goal counts and the pile the watcher nags about are the same pile: the same
-  waiting window, the same "you have written to them before", the same ignore
-  policies, the same thirty-day ceiling and the same **enabled** mailboxes.
+  a goal counts and the pile the watcher nags about are the same pile: the
+  same Needs you rule (§3), the same waiting window and the same **enabled**
+  mailboxes. The Home widget counts the same rule with no waiting window — what
+  needs the owner now, which is exactly the Mail page's Needs a reply.
   Both read that scope from one place — the shared CTE joins `accounts` and
   requires `enabled`, so a mailbox the owner switched off counts for neither.
 - **`asOf` is the stalest completed poll** among the enabled accounts, read

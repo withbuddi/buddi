@@ -18,6 +18,10 @@
  *    and new mail moves the thread out of it, because a conversation somebody
  *    answered is not closed however sure we were.
  *
+ * What the owner is *shown* — whether a conversation needs him — is a
+ * judgement over this fact, and lives in `needs-you.ts`: a security alert from
+ * `no-reply@` is `waiting-on-me` here and a Notification on the page.
+ *
  * Nothing in this file looks at a message's *body*. A thread's state is who
  * wrote last, and deriving it from anything a sender wrote would put the
  * sender in charge of whether the owner is waiting.
@@ -25,6 +29,7 @@
 import type { DbArea } from '@buddi/core/plugin';
 import { placeWords } from './folders.js';
 import { normalizeAddresses } from './mail.js';
+import { attentionJoin, needsYouPrefilter, reasonOf, type AttentionReason } from './needs-you.js';
 import type { MessageDirection } from './rows.js';
 
 /** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
@@ -33,13 +38,6 @@ type Db = Pick<DbArea, 'query'>;
 export const THREAD_STATES = ['waiting-on-me', 'waiting-on-them', 'closed', 'muted'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];
 
-/** Each state as the owner reads it: the page's pills and its detail say these words. */
-export const THREAD_STATE_LABELS: Record<ThreadState, string> = {
-  'waiting-on-me': 'Waiting on you',
-  'waiting-on-them': 'Waiting on them',
-  closed: 'Closed',
-  muted: 'Muted',
-};
 
 export interface ThreadRecord {
   id: string;
@@ -434,6 +432,13 @@ export interface ListThreadsFilter {
    * Los Angeles and thirteen hours early in Auckland.
    */
   timezone?: string | undefined;
+  /**
+   * Only the conversations that need the owner (`needs-you`), or only the
+   * notifications — inbound last from a no-reply or bulk sender — by the one
+   * rule in `needs-you.ts`, as of `now`.
+   */
+  attention?: 'needs-you' | 'notification' | undefined;
+  now?: Date | undefined;
   limit: number;
 }
 
@@ -443,35 +448,67 @@ export async function listThreadRows(
   filter: ListThreadsFilter,
 ): Promise<ThreadRecord[]> {
   const params: unknown[] = [filter.accountIds];
-  const where = ['account_id = any($1::uuid[])'];
+  const where = ['t.account_id = any($1::uuid[])'];
   if (filter.state) {
     params.push(filter.state);
-    where.push(`state = $${params.length}`);
+    where.push(`t.state = $${params.length}`);
   }
   if (filter.participant) {
     params.push(JSON.stringify([filter.participant]));
-    where.push(`participants @> $${params.length}::jsonb`);
+    where.push(`t.participants @> $${params.length}::jsonb`);
   }
   if (filter.since || filter.until) {
     params.push(filter.timezone ?? 'UTC');
     const tz = params.length;
     if (filter.since) {
       params.push(filter.since);
-      where.push(`last_at >= ($${params.length}::date::timestamp at time zone $${tz})`);
+      where.push(`t.last_at >= ($${params.length}::date::timestamp at time zone $${tz})`);
     }
     if (filter.until) {
       params.push(filter.until);
       // The whole of the day named, not the instant it began.
-      where.push(`last_at < (($${params.length}::date + interval '1 day') at time zone $${tz})`);
+      where.push(`t.last_at < (($${params.length}::date + interval '1 day') at time zone $${tz})`);
+    }
+  }
+  let join = '';
+  if (filter.attention) {
+    params.push(filter.now ?? new Date());
+    const now = `$${params.length}`;
+    join = attentionJoin('t', now);
+    if (filter.attention === 'needs-you') {
+      where.push(needsYouPrefilter('t', now), 'att.needs_you');
+    } else {
+      where.push(`t.state = 'waiting-on-me'`, `att.reason in ('no-reply', 'bulk')`);
     }
   }
   params.push(filter.limit);
   const { rows } = await db.query(
-    `select ${THREAD_COLUMNS} from email.threads
+    `select ${THREAD_COLUMNS.split(', ').map((c) => `t.${c}`).join(', ')} from email.threads t ${join}
       where ${where.join(' and ')}
-      order by last_at desc nulls last, id desc
+      order by t.last_at desc nulls last, t.id desc
       limit $${params.length}`,
     params,
   );
   return rows.map(toThread);
+}
+
+/**
+ * Each thread's attention reason as of `now` — why it needs the owner, or
+ * why it does not (`needs-you.ts`). One statement for a page of threads.
+ */
+export async function attentionReasons(
+  db: Db,
+  threads: readonly ThreadRecord[],
+  now: Date,
+): Promise<Map<string, AttentionReason>> {
+  const reasons = new Map<string, AttentionReason>();
+  if (threads.length === 0) return reasons;
+  const { rows } = await db.query(
+    `select t.id, att.reason from email.threads t ${attentionJoin('t', '$2')}
+      where t.id = any($1::uuid[])`,
+    [threads.map((t) => t.id), now],
+  );
+  const byId = new Map(rows.map((row: Record<string, any>) => [String(row.id), row.reason]));
+  for (const thread of threads) reasons.set(thread.id, reasonOf(byId.get(thread.id), thread.state));
+  return reasons;
 }

@@ -3,8 +3,8 @@
  *
  * One, for now: how many conversations are waiting on the owner. It is the
  * `email.waiting-on-me` watcher's own query with `count(*)` where its findings
- * would be — the same waiting age, the same "you have written to them before",
- * the same silenced senders, the same thirty-day ceiling, the same enabled
+ * would be — the same waiting age, the same needs-you rule (`needs-you.ts`:
+ * no notifications, no silenced senders, thirty days at most), the same enabled
  * mailboxes — because an owner working the pile down must be counting what the
  * watcher wakes him about. Two definitions would be two different weeks.
  *
@@ -54,16 +54,15 @@ export async function stalestSync(
  * How many conversations are waiting on the owner.
  *
  * Exactly what the `email.waiting-on-me` watcher counts, from the watcher's
- * own query and the owner's own `waitingDays`: threads whose last message came
- * in, older than the setting and newer than a month, from somebody the owner
- * has written to before, in a mailbox that is switched on, with no live ignore
- * policy on the sender.
+ * own query and the owner's own `waitingDays`: threads that need the owner by
+ * the one rule (`needs-you.ts`), waiting longer than the setting, in a mailbox
+ * that is switched on.
  */
 export const waitingOnMe: MetricDefinition = {
   id: 'email.waiting_on_me',
   description:
     'How many conversations have been waiting on you longer than your setting — the same ones the ' +
-    'email.waiting-on-me watcher reports, from people you have written to before. As of the last time ' +
+    'email.waiting-on-me watcher reports: from people you have written to before, or asking you something. As of the last time ' +
     'your mail was synced, which may not be now.',
   unit: 'count',
   direction: 'down',

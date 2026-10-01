@@ -464,10 +464,12 @@ describe('page descriptors', () => {
     const [parsed] = parse([tabs()], { queries: q });
     expect(parsed!.icon).toBe('cloud');
     expect(parsed!.body[0]).toMatchObject({ kind: 'tabs', tabs: [{ id: 'today' }, { id: 'week' }] });
-    // A tab bar opens on a tab it has; ids are its own; at least two tabs.
+    // A tab bar opens on a tab it has; ids are its own; two tabs, or one and a pick.
     expect(() => parse([tabs({ default: 'month' })], { queries: q })).toThrow(/opens on month, which is not one of its tabs \(today, week\)/);
     expect(() => parse([tabs({ tabs: [{ id: 'a', label: 'A', body: [] }, { id: 'a', label: 'B', body: [] }] })], { queries: q })).toThrow(/each tab has its own id/);
-    expect(() => parse([tabs({ tabs: [{ id: 'a', label: 'A', body: [] }] })], { queries: q })).toThrow(/body\.0\.tabs/);
+    // One tab only with a pick: the bar is then a filter over one view (host API 1.22).
+    expect(() => parse([tabs({ default: undefined, pick: undefined, tabs: [{ id: 'a', label: 'A', body: [] }] })], { queries: q })).toThrow(/two tabs or more, or one tab and a pick/);
+    expect(() => parse([tabs({ default: undefined, tabs: [{ id: 'a', label: 'A', body: [] }] })], { queries: q })).not.toThrow();
     // A pick's choices come from one place, and its query is checked like any other.
     expect(() => parse([tabs({ pick: { param: 'place', label: 'Place' } })], { queries: q })).toThrow(/`options` or from `optionsFrom`/);
     expect(() => parse([tabs()], { queries: ['today', 'days', 'hours'] })).toThrow(/no query called places/);

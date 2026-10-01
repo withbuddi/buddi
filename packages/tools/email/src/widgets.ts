@@ -1,7 +1,8 @@
 /**
  * The mail's widget on Home (host API 1.17; settings since 1.19): how many
- * conversations are waiting on the owner — the `email.waiting_on_me` metric's
- * own count, so the widget, the goal and the watcher agree — with the inbox's
+ * conversations need the owner now — the one rule (`needs-you.ts`) with no
+ * waiting age, so the number is exactly the Mail page's "Needs a reply" (the
+ * watcher and the goal count the same rule past the owner's setting) — with the inbox's
  * unread count under it, opening the Mail place. Each placement picks a
  * mailbox, or all of them. At zero it says so in a sentence rather than a
  * bare 0. Read-only, like the metrics it shares its reads with; with no
@@ -10,7 +11,7 @@
 import type { WidgetBody, WidgetDefinition } from '@buddi/core/plugin';
 import { listAccounts } from './config.js';
 import { countInboxUnread, stalestSync } from './metrics.js';
-import { countWaitingOnMe } from './sentinels/waiting-on-me.js';
+import { countNeedsYou } from './sentinels/waiting-on-me.js';
 
 export const waitingWidget: WidgetDefinition = {
   id: 'email.waiting',
@@ -40,7 +41,7 @@ export const waitingWidget: WidgetDefinition = {
     const scope = accounts.length > 0 ? accounts : all;
     const ids = scope.map((a) => a.id);
     if ((await stalestSync(ctx, ids)) === null) return { kind: 'text', icon: 'mail', text: 'Your mail has not finished its first sync yet.' };
-    const waiting = await countWaitingOnMe(buddi.db, buddi.clock.now(), accounts.length > 0 ? ids.map(String) : undefined);
+    const waiting = await countNeedsYou(buddi.db, buddi.clock.now(), accounts.length > 0 ? ids.map(String) : undefined);
     const unread = await countInboxUnread(ctx, ids);
     const inbox = `${unread.toLocaleString('en-US')} unread in ${accounts.length > 0 ? accounts[0]!.address : 'your inbox'}`;
     // A calm zero: a sentence, not a bare 0.

@@ -11,6 +11,7 @@ import { normalizeAddress, normalizeListId, UNREAD_SQL } from '../mail.js';
 import { domainOf } from '../policies/gate.js';
 import { findPolicy } from '../policies/store.js';
 import { likeNeedle } from '../search.js';
+import { attentionJoin, needsYouPrefilter } from '../needs-you.js';
 import { MAX_PER_CALL, MailboxRefusal, plural, SAMPLE_SIZE } from './actions.js';
 
 type Db = Pick<DbArea, 'query'>;
@@ -26,6 +27,12 @@ export interface SelectCriteria {
   policyId?: string;
   /** true: unread only; false: read only. */
   unread?: boolean;
+  /**
+   * true: only messages in conversations that need the owner, by the one rule
+   * (`needs-you.ts`); false: only messages in conversations that do not —
+   * notifications, newsletters, mail nobody expects an answer to.
+   */
+  needsReply?: boolean;
   /** A folder or Gmail label by its server name; 'any' for every folder. Default: the inbox. */
   folder?: string;
   /** Words in the subject, the sender or the body. */
@@ -59,6 +66,8 @@ export function criteriaWords(c: SelectCriteria, policyWords?: string): string {
   if (c.unread === true) parts.push('unread');
   if (c.unread === false) parts.push('read');
   parts.push('messages');
+  if (c.needsReply === true) parts.push('in conversations waiting on you');
+  if (c.needsReply === false) parts.push('in conversations not waiting on you');
   if (c.from) parts.push(`from ${c.from.trim()}`);
   if (policyWords) parts.push(`covered by the rule on ${policyWords}`);
   if (c.text) parts.push(`mentioning "${c.text.trim()}"`);
@@ -130,6 +139,14 @@ export async function selectMessages(
 
   if (c.unread === true) where.push(UNREAD_SQL.replace('flags', 'm.flags'));
   if (c.unread === false) where.push(`not (${UNREAD_SQL.replace('flags', 'm.flags')})`);
+
+  if (c.needsReply !== undefined) {
+    const when = add(now);
+    const needing =
+      `exists (select 1 from email.threads t ${attentionJoin('t', when)}` +
+      ` where t.id = m.thread_id and ${needsYouPrefilter('t', when)} and att.needs_you)`;
+    where.push(c.needsReply ? needing : `not ${needing}`);
+  }
 
   const at = `coalesce(m.internal_date, m.date, m.fetched_at)`;
   if (c.olderThanDays !== undefined) {

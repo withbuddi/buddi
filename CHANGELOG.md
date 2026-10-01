@@ -6,7 +6,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
-- Plugin host API 1.22: the tile icon `moon-cloud`, a partly cloudy night.
+- Plugin host API 1.22: the tile icon `moon-cloud`, a partly cloudy night; and a page's tab bar may hold one tab with a pick, drawn as the pick alone — a filter over one view.
+- Mail: a Show filter over the conversations — All, Needs a reply, Notifications. Needs a reply is exactly what the Waiting on you widget on Home counts. `email.list_threads` and `email.select_messages` take `needsReply`, and each conversation an agent reads says whether it needs you and why.
 
 ### Changed
 
@@ -15,6 +16,8 @@ What changes in buddi from one release to the next, newest first.
 - `/_buddi/ready` also answers a random `boot` id for the running process, so a page can tell the process that went from the one that came back.
 
 ### Fixed
+
+- Mail no longer says "Waiting on you" on every conversation. A conversation waits on you only when someone you've written to before wrote last, or triage judged the message to need a reply — never a no-reply address, a newsletter or mailing list, a muted thread or a sender you ignore, and nothing older than 30 days. Notifications and messages nobody expects an answer to carry no pill; the conversation's State says which it is and why ("Notification — no reply expected: a no-reply sender"). The Mail page, the Waiting on you widget, the waiting watcher and the agents' tools now count the same conversations.
 - The lock screen reads every time one way: the line under the PIN ("Locked by you at …"), the second clock, the focus and the widgets left on Profile now follow the big clock — 12-hour or 24-hour as picked in Settings → Lock screen, else your Profile, else your browser — instead of the line using another format than the clock (a page that opened locked showed "18:59" over "Locked by you at 6:59 PM").
 - Time format choices say what Profile means now — "Profile (12-hour)" in Settings → Lock screen and in a widget's settings — instead of a sample time.
 - The weather widget's hourly strip shows the moon at night (a crescent on a clear night, the crescent over a cloud when partly cloudy) instead of the sun, and writes its hours your way ("6 PM", "12 AM" on a 12-hour clock); it has a Times setting of its own. The Weather page's hours, sunrise and sunset follow your Profile too.
