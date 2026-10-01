@@ -19,7 +19,7 @@ import { executeApproved } from './actions/execute.js';
 import { findToolPermission } from './actions/permissions.js';
 import { createAction } from './actions/store.js';
 import type { ExecutableTool } from './actions/execute.js';
-import type { EffectDescription, PluginManifest, PreviewProvider, Tier, CoreToolContext, ToolDefinition } from './tools.js';
+import type { CarryOverRequest, EffectDescription, PluginManifest, PreviewProvider, Tier, CoreToolContext, ToolDefinition } from './tools.js';
 import { isToolRefusal } from './tools.js';
 import { parseViewDescriptors, type ViewDescriptor } from './views.js';
 import { OWNER_AGENT_ID, parsePageContributions, type PageDescriptor, type PageQuery, type WorkspaceFiles } from './pages.js';
@@ -665,6 +665,19 @@ export class ToolRegistry {
     const previews = this.#manifests.get(plugin)?.previews;
     if (previews === undefined) return undefined;
     return { resolve: (name, ctx: CoreToolContext) => previews.resolve(name, this.#host(plugin, ctx)) };
+  }
+
+  /**
+   * Every plugin's carry-over contributor, in registration order, each bound
+   * to that plugin's own host (docs/plugins.md §2.8). The caller bounds time
+   * and size; this only routes.
+   */
+  carryOvers(): Array<{ plugin: string; lines: (request: CarryOverRequest, ctx: CoreToolContext) => Promise<string[]> }> {
+    return [...this.#manifests.values()].flatMap((m) => {
+      const contributor = m.carryOver;
+      if (contributor === undefined) return [];
+      return [{ plugin: m.name, lines: (request: CarryOverRequest, ctx: CoreToolContext) => contributor.lines(request, this.#host(m.name, ctx)) }];
+    });
   }
 
   /** Every Home block the installed plugins contribute, in registration order. */

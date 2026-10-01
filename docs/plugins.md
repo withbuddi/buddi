@@ -524,6 +524,7 @@ export interface PluginManifest {
   skills?: SuggestedSkill[];  // shared procedures you propose
   previews?: PreviewProvider; // a loopback process of yours the owner can open
   policies?: PolicyHandler;   // how a rule the owner kept becomes yours
+  carryOver?: CarryOverContributor; // lines in the note a rolled-over chat opens with — §2.7
   description?: string;       // one line, shown before anyone installs you
   network?: NetworkUse[];     // the hosts you intend to reach, and why
   uses?: PluginUse[];         // the areas of ctx.buddi you declare — §1.3
@@ -1559,6 +1560,7 @@ export interface SuggestedAgent {
   provider?: 'anthropic' | 'openai';
   maxTurns?: number;
   language?: 'mirror' | 'en' | 'fr';
+  idleRollover?: '3h' | '1d' | '1w' | 'never'; // idle time before a fresh chat (1.16)
   skills?: SuggestedSkill[];   // written into this agent's own skills/
   missions?: SuggestedAgentMission[]; // created with it, run as it
   offer?: { text: string; query?: string };
@@ -1639,6 +1641,39 @@ accept it again, see the new grant, and approve it — or they do not.
   the answer depends on something it cannot see.
 
 `examples/plugins/weather/src/agents.ts` is the worked example.
+
+An agent whose work outlives an afternoon may say how long its chats sit idle
+before a fresh one starts: `idleRollover: '1d'` (or `'1w'`, `'never'`; absent is
+three hours). It is written into the accepted file, the approval card says it in
+a sentence, and the owner changes it on the agent's Brain tab. A transcript that
+grows too long still rolls over whatever it says. The developer plugin's agent
+asks for a day. Host API 1.16; an older buddi ignores the field and the agent
+gets three hours, so setting it need not mean asking for `^1.16`.
+
+### 2.7 Lines in the carry-over note
+
+When a conversation rolls over — idle past the agent's setting, or grown too
+long — the fresh one opens with a short note written from the old one by the
+agent's own model: what we were doing, decisions, open threads, what is next
+(docs/conversations.md). A plugin can add a few lines of state the transcript
+cannot be trusted to hold:
+
+```ts
+carryOver: {
+  async lines({ agentId, conversationId, reason }, ctx) {
+    // ctx.agentId is the agent whose chat rolled over; ctx.buddi is yours.
+    return ['Branch: buddi/dev/dark-mode', 'Last commit: abc1234 Add the toggle'];
+  },
+},
+```
+
+Core prints them under `From <plugin>:`, keeps at most eight, clips each to 200
+characters, takes anything that looks like a credential out, and gives you five
+seconds. A throw, a timeout or an empty list is simply no lines; the note and
+the rollover go ahead. Facts only — names, not contents: the note is replayed
+into every turn of the new conversation. The developer plugin adds the
+workspace, branch, last commit and uncommitted files. Host API 1.16; an older
+buddi never asks, so a plugin with `carryOver` need not ask for `^1.16`.
 
 ---
 
@@ -2931,6 +2966,7 @@ version each arrived in — is §9b.
 | `files` | `WorkspaceFiles` | no | For a plugin that keeps a directory per agent: the five `queries` (`workspace`, `list`, `stat`, `read`, `archive`) the chat canvas's **Files** tab reads it with, for any conversation whose agent has one. `read` and `archive` answer with `pageFile(...)` — bytes the gateway streams on the query route, deciding itself what may be shown inline. Each name must be one of your `queries`, checked at `register()`. |
 | `agents` | `SuggestedAgent[]` | no | Agents you *propose*. A plugin can never write an agent file; the owner accepts one through gated `platform.accept_plugin_agent`. |
 | `skills` | `SuggestedSkill[]` | no | Shared procedures you propose, accepted through gated `platform.accept_plugin_skill`. A skill grants nothing. |
+| `carryOver` | `CarryOverContributor` | no | Lines you add to the note a rolled-over conversation opens with: `lines({ agentId, conversationId, reason }, ctx) => Promise<string[]>`, asked with the agent's context. At most eight, 200 characters each, five seconds, secrets taken out; a throw is no lines. Host API 1.16. See §2.7. |
 | `previews` | `PreviewProvider` | no | A loopback process of yours, served on the gateway's **preview origin** — a second loopback listener with a credential of its own, never the dashboard's. Almost no plugin has one. See §2.5c. |
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `author` | `PluginAuthor` | no | Who made you: `{ name, url? }`, the name at most 80 characters, the URL `https:`. The install card and the Plugins page show "by <name>", linked to the URL. Checked at `register()`. Without it the card reads `author` from your `package.json` (a string or `{ name, url }`); with both, the names must match or approval is refused. |
@@ -3118,6 +3154,7 @@ closed when it is absent rather than guess.
 | `provider` | `'anthropic' \| 'openai'` | no | Which provider. |
 | `maxTurns` | `number` | no | Turn budget per run. Omitted, the default of 40 applies; a run that reaches the budget stops and says so. |
 | `language` | `'mirror' \| 'en' \| 'fr'` | no | What it answers in. |
+| `idleRollover` | `'3h' \| '1d' \| '1w' \| 'never'` | no | How long its chats may sit idle before the next message starts a fresh conversation. Omitted, three hours. Written into the accepted file; the owner changes it on the Brain tab. Size still rolls a chat over. Host API 1.16. See §2.6. |
 | `skills` | `SuggestedSkill[]` | no | Skills written into this agent's own `skills/` when it is accepted. |
 | `missions` | `SuggestedAgentMission[]` | no | Missions it arrives with: `{ id, name, cron, prompt, misfirePolicy?, alwaysDeliver? }`, a `SuggestedMission` without the addressing. The same approval creates each as `agent:<agent id>:<id>`, run as the new agent in the owner's timezone, and the preview names every one. `skip-after-deadline` is refused. The finance plugin's Ledger arrives with its daily check and Friday recap. |
 | `offer` | `{ text, query? }` | no | Offer it on Home while no agent has its id: `text` is the card's one line; `query` names one of your page queries whose answer carries `wanted: true` while the offer is worth making. Accepting is the same gated `platform.accept_plugin_agent`; the owner may dismiss it. A page can offer it in place with the `agent-offer` component. |

@@ -12,6 +12,7 @@ import type { HomeContribution } from './home.js';
 import type { MetricDefinition } from './metrics.js';
 import type { PageDescriptor, PageQuery, WorkspaceFiles } from './pages.js';
 import type { SystemContext } from './system-context.js';
+import type { IdleRollover } from './agents/idle-rollover.js';
 import type { PolicyHandler, RunProvenance, UntrustedKind } from './learning/types.js';
 import type { ProviderAccountsAccess } from './provider-accounts.js';
 import type { BuddiHost, RegisterHost, SecretDestination } from './host/types.js';
@@ -579,6 +580,12 @@ export interface SuggestedAgent {
   provider?: 'anthropic' | 'openai';
   maxTurns?: number;
   language?: 'mirror' | 'en' | 'fr';
+  /**
+   * How long its chats may sit idle before a fresh conversation (optional,
+   * host API 1.16): `3h` when absent, `1d`, `1w` or `never`. Written into the
+   * new agent's file; the owner changes it on the Brain tab.
+   */
+  idleRollover?: IdleRollover;
   /** Skills written into this agent's own `skills/` when it is accepted. */
   skills?: SuggestedSkill[];
   /**
@@ -673,6 +680,27 @@ export interface PreviewProvider {
    * it) holds right now, checked as afresh as the plain name is.
    */
   resolve(name: string, ctx: ToolContext): Promise<{ port: number; host?: '127.0.0.1' } | null>;
+}
+
+/** What a plugin is asked when a conversation rolls over. */
+export interface CarryOverRequest {
+  /** The agent whose conversation ended. `ctx.agentId` says the same. */
+  agentId: string;
+  /** The conversation that just ended. */
+  conversationId: string;
+  /** Why it ended: idle time or transcript size. */
+  reason: 'idle' | 'size';
+}
+
+/**
+ * A plugin's part of the carry-over note: a few short, plain lines of state
+ * the next conversation should start from — for the developer plugin, the
+ * workspace, branch, last commit and changed files. Facts, not instructions:
+ * core prints them under the plugin's name, clips each to 200 characters,
+ * keeps at most eight, and takes secrets out of them.
+ */
+export interface CarryOverContributor {
+  lines(request: CarryOverRequest, ctx: ToolContext): Promise<string[]>;
 }
 
 export interface PluginManifest {
@@ -800,6 +828,13 @@ export interface PluginManifest {
    * `ctx.buddi.secrets.registerDestination` for each, before any context exists.
    */
   destinations?: SecretDestination[];
+  /**
+   * Lines this plugin adds to the note a conversation leaves for the next one
+   * when it rolls over (optional, host API 1.16; docs/plugins.md §2.7). Asked
+   * with the agent's context, bounded in time and size by core, and skipped
+   * on failure: the note is written without them.
+   */
+  carryOver?: CarryOverContributor;
   /**
    * Called once by `register()`, after every check has passed, with the parts
    * of the host that need no call (`RegisterHost`): the place for a plugin to

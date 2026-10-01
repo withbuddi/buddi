@@ -6,3 +6,4 @@ export * from './catalog.js';
 export * from './delegates.js';
 export * from './skills.js';
 export * from './search-path.js';
+export * from './idle-rollover.js';

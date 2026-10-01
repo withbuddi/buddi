@@ -45,6 +45,8 @@ export type { PluginUse } from './uses.js';
 export type { PluginAuthor } from './author.js';
 export type { NativeSearchEvent, NativeSearchRecord, SearchBackendChoice } from './search.js';
 export type {
+  CarryOverContributor,
+  CarryOverRequest,
   EffectDescription,
   GroupContext,
   NetworkUse,
@@ -65,6 +67,7 @@ export type {
   JsonSchemaToolDefinition,
 } from '../tools.js';
 export type { JSONSchema7 } from '../json-schema.js';
+export type { IdleRollover } from '../agents/idle-rollover.js';
 export type {
   Finding,
   Sentinel,
