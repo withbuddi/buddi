@@ -13,7 +13,7 @@
  * folded to one safe segment (`@scope/name` → `@scope+name`), and a
  * containment check on the result before anything renames or removes.
  */
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { resolveDataDir, type InstalledPlugin } from '@buddi/core';
 import { InstallRefusal } from './refusals.js';
@@ -115,6 +115,29 @@ export function assertInsidePluginsRoot(dir: string, env: NodeJS.ProcessEnv = pr
 export function packageDirOf(record: InstalledPlugin, env: NodeJS.ProcessEnv = process.env): string {
   if (record.source.kind === 'directory') return record.source.path;
   return installedPackageDir(record.name, env);
+}
+
+/**
+ * The version an installed plugin is now, and the one it was installed as.
+ *
+ * A directory install runs from the developer's folder in place, so a rebuild
+ * with a bumped package.json changes what runs without touching the record:
+ * the record's version is only what the folder said on the day it was
+ * installed. Its current version is the folder's package.json, read when
+ * asked; `installedAs` is set only when the two differ. Every other source
+ * was copied under the data directory and is exactly what the record says.
+ */
+export function versionOf(record: InstalledPlugin): { version: string; installedAs?: string } {
+  if (record.source.kind !== 'directory') return { version: record.version };
+  let current: string | undefined;
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(record.source.path, 'package.json'), 'utf8')) as { version?: unknown };
+    if (typeof pkg.version === 'string' && pkg.version.trim() !== '') current = pkg.version.trim();
+  } catch {
+    // A folder that is gone or unreadable: the record is the last word.
+  }
+  if (current === undefined || current === record.version) return { version: record.version };
+  return { version: current, installedAs: record.version };
 }
 
 /**

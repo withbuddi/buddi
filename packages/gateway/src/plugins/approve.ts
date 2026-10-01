@@ -317,7 +317,10 @@ async function place(
 
   const base: InstalledPlugin = {
     name: plan.manifest.name,
-    version: plan.manifest.version,
+    // A folder's version is its package.json, as the card showed it: a
+    // manifest that spells its own version can lag the folder it is built
+    // from, and a reinstall from the folder is how the record catches up.
+    version: moving ? plan.manifest.version : staged.version,
     // The entry is under the directory it is about to live in, which is where
     // `entryPointOf` below re-derives it from once the files are there.
     entry: path.join(finalDir, path.relative(staged.packageDir, plan.entry)),

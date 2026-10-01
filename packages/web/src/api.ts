@@ -1445,7 +1445,10 @@ export interface PluginAuthorView {
 
 export interface InstalledPluginView {
   name: string;
+  /** For a folder install, the folder's package.json version now. */
   version: string;
+  /** A folder install whose version moved on since: the version it was installed as. */
+  installedAs?: string;
   source: PluginSource;
   publisher?: string;
   author?: PluginAuthorView;

@@ -49,7 +49,7 @@ import * as engine from '../plugins/index.js';
 import { acceptAgentSteps } from '../plugins/install.js';
 import { driftFor, type Drift } from '../plugins/provenance.js';
 import { RECORD_ITSELF } from '../plugins/load.js';
-import { incomingRoot, installedPackageDir } from '../plugins/paths.js';
+import { incomingRoot, installedPackageDir, versionOf } from '../plugins/paths.js';
 import type { StagedPlugin, StagePhase } from '../plugins/index.js';
 import type { LiveRegistry } from '../plugins/live.js';
 import type { PagesDeps } from './pages.js';
@@ -455,9 +455,12 @@ export async function listPlugins(deps: PluginsDeps): Promise<RouteReply> {
     const manifest = manifests.get(entry.name);
     const error = failures.get(entry.name);
     const author = manifest?.author ?? installedPackageAuthor(entry, env);
+    // A folder install shows its folder's version now; the record's is "installed as".
+    const { version, installedAs } = versionOf(entry);
     return {
       name: entry.name,
-      version: entry.version,
+      version,
+      ...(installedAs === undefined ? {} : { installedAs }),
       source: entry.source,
       ...(entry.provenance?.publisher === undefined ? {} : { publisher: entry.provenance.publisher }),
       ...(entry.provenance?.integrity === undefined ? {} : { integrity: entry.provenance.integrity }),

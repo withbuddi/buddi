@@ -73,6 +73,7 @@ import {
 import { updatePlugin } from './plugins/update.js';
 import { setPluginEnabled, toggleNotes } from './plugins/toggle.js';
 import { verifyInstalledHash } from './plugins/hash.js';
+import { versionOf } from './plugins/paths.js';
 import { assertScaffoldName, DEFAULT_LICENSE, schemaFor, writeScaffold } from './plugins/scaffold.js';
 import { assertBuilt, defaultDevDeps, watchDist } from './plugins/dev.js';
 
@@ -225,6 +226,8 @@ export type Health = 'ok' | 'warn' | 'fail' | 'off';
 export interface PluginRow {
   name: string;
   version: string;
+  /** A folder install whose package.json moved on: the version the record holds. */
+  installedAs?: string;
   origin: 'built-in' | 'installed';
   health: Health;
   detail: string;
@@ -276,9 +279,19 @@ export function renderRows(rows: readonly PluginRow[]): string {
   return rows
     .map(
       (r) =>
-        `  ${r.health.padEnd(4)} ${r.name.padEnd(width)}  ${r.version.padEnd(8)} ${r.origin.padEnd(9)} ${r.detail}`,
+        `  ${r.health.padEnd(4)} ${r.name.padEnd(width)}  ${r.version.padEnd(8)} ${r.origin.padEnd(9)} ${r.detail}` +
+        (r.installedAs === undefined ? '' : ` (installed as ${r.installedAs})`),
     )
     .join('\n');
+}
+
+/**
+ * The version a row shows: a folder install's package.json as it is now (the
+ * record keeps what it said at install, shown as "installed as"), and the
+ * loaded manifest's for everything copied into the data directory.
+ */
+function installedVersion(record: InstalledPlugin, fallback: string): { version: string; installedAs?: string } {
+  return record.source.kind === 'directory' ? versionOf(record) : { version: fallback };
 }
 
 async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json = false): Promise<number> {
@@ -317,7 +330,7 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json 
     const hash = verifyInstalledHash(loaded.record, { env });
     rows.push({
       name: loaded.record.name,
-      version: loaded.manifest.version,
+      ...installedVersion(loaded.record, loaded.manifest.version),
       origin: 'installed',
       health: hash.matches ? health.health : 'warn',
       detail: hash.matches
@@ -337,7 +350,7 @@ async function commandList(pool: Pool | undefined, env: NodeJS.ProcessEnv, json 
   for (const record of plugins.disabled ?? []) {
     rows.push({
       name: record.name,
-      version: record.version,
+      ...installedVersion(record, record.version),
       origin: 'installed',
       health: 'off',
       detail: 'disabled — not loaded; its data is kept (buddi plugins enable ' + record.name + ')',

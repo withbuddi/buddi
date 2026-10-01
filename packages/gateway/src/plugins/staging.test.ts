@@ -32,12 +32,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { adoptPlugins, loadInstalledPlugins, pluginLoadReport, resetAdoptedPlugins } from './load.js';
-import { isPluginSchemaName } from '@buddi/core';
+import { isPluginSchemaName, type InstalledPlugin } from '@buddi/core';
 import { approveStaged } from './approve.js';
 import { InstallRefusal } from './install.js';
 import { driftBetween, parseBuddiMd } from './claims.js';
 import { installedHashOf, verifyInstalledHash } from './hash.js';
-import { installedPackageDir, pluginDirKey, pluginsRoot, sweepPluginDirs } from './paths.js';
+import { installedPackageDir, pluginDirKey, pluginsRoot, sweepPluginDirs, versionOf } from './paths.js';
 import { assertRegularTree, treeHash } from './tree.js';
 import { entryPointOf } from './install.js';
 import { manifestProblem } from './load.js';
@@ -58,7 +58,7 @@ import {
   TRUST_SENTENCE,
 } from './stage.js';
 import type { NpmRunner } from './npm.js';
-import { renderStaged, stagedListing } from '../plugins-cli.js';
+import { renderRows, renderStaged, stagedListing } from '../plugins-cli.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MARKER_FIXTURE = path.join(HERE, 'fixtures', 'marker-plugin');
@@ -526,6 +526,41 @@ describe('uninstall', () => {
 
     await uninstallPlugin('fixture-marker', { env });
     expect(existsSync(path.join(dev, 'index.js'))).toBe(true);
+  });
+});
+
+describe("a folder install's version", () => {
+  it("is the folder's package.json now, and a reinstall from the folder brings the record up to it", async () => {
+    const dev = path.join(root, 'dev-plugin');
+    cpSync(MARKER_FIXTURE, dev, { recursive: true });
+    const first = await stagePlugin(dev, { env, npm: fakeNpm() });
+    await approveStaged(first.id, { integrity: '', env });
+    const record = (): InstalledPlugin =>
+      (JSON.parse(readFileSync(path.join(root, 'plugins.json'), 'utf8')) as { plugins: InstalledPlugin[] }).plugins[0] as InstalledPlugin;
+    expect(versionOf(record())).toEqual({ version: '1.0.0' });
+
+    // Rebuilt in place with a bumped package.json; the manifest still spells 1.0.0.
+    const pkgFile = path.join(dev, 'package.json');
+    writeFileSync(pkgFile, readFileSync(pkgFile, 'utf8').replace('"version": "1.0.0"', '"version": "1.2.0"'));
+    expect(record().version).toBe('1.0.0');
+    expect(versionOf(record())).toEqual({ version: '1.2.0', installedAs: '1.0.0' });
+
+    const again = await stagePlugin(dev, { env, npm: fakeNpm() });
+    await approveStaged(again.id, { integrity: '', env });
+    expect(record().version).toBe('1.2.0');
+    expect(versionOf(record())).toEqual({ version: '1.2.0' });
+  });
+
+  it('says "installed as" in the plugins list only when the folder moved on', () => {
+    const row = { name: 'speech', version: '0.1.2', origin: 'installed' as const, health: 'ok' as const, detail: '3 tools' };
+    expect(renderRows([{ ...row, installedAs: '0.1.0' }])).toMatch(/speech\s+0\.1\.2 .*3 tools \(installed as 0\.1\.0\)$/);
+    expect(renderRows([row])).not.toContain('installed as');
+  });
+
+  it('is the record for every source buddi copied, and for a folder that is gone', () => {
+    const base = { name: 'x', version: '1.0.0', entry: '/x/index.js', installedAt: '2026-01-01T00:00:00.000Z', schema: 'plugin_x' };
+    expect(versionOf({ ...base, source: { kind: 'registry', name: 'x', version: '1.0.0' } })).toEqual({ version: '1.0.0' });
+    expect(versionOf({ ...base, source: { kind: 'directory', path: path.join(root, 'nowhere') } })).toEqual({ version: '1.0.0' });
   });
 });
 

@@ -1571,6 +1571,7 @@ function InstalledSheet({
               : [{ label: 'Published by', value: publisherWords(plugin.source, plugin.publisher) }]),
             { label: 'Integrity', value: <Hash value={plugin.integrity} /> },
             { label: 'Installed', value: fmtRelative(plugin.installedAt) },
+            ...(plugin.installedAs ? [{ label: 'Installed as', value: plugin.installedAs }] : []),
             { label: 'Contributes', value: contributionWords(plugin.contribution) },
             ...(plugin.network || listing ? [{ label: 'Talks to hosts', value: hostsValue(hosts) }] : []),
             ...(uses ? [{ label: 'Reaches in buddi', value: reachesValue(uses) }] : []),

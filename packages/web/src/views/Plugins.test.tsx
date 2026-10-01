@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, type InstalledPluginView, type MarketEntryView, type PluginsView, type StagedPluginView } from '../api';
 import { PAGES_CHANGED_EVENT } from '../pages/usePages';
@@ -436,6 +436,29 @@ describe('the plugins section', () => {
     await detail('packed', 'a file on this machine');
     await detail('from-npm', 'someone');
     expect(screen.queryByText('nobody npm will name')).not.toBeInTheDocument();
+  });
+
+  it("shows a folder install at its folder's version, and the version it was installed as", async () => {
+    vi.mocked(api.plugins).mockResolvedValue(
+      view({
+        installed: [
+          {
+            ...INSTALLED,
+            name: 'speech',
+            version: '0.1.2',
+            installedAs: '0.1.0',
+            publisher: undefined,
+            source: { kind: 'directory', path: '/home/o/code/speech' },
+          },
+        ],
+      }),
+    );
+    render(<Plugins />);
+    fireEvent.click(await screen.findByLabelText('speech: details'));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('0.1.2')).toBeInTheDocument();
+    expect(within(dialog).getByText('Installed as')).toBeInTheDocument();
+    expect(within(dialog).getByText('0.1.0')).toBeInTheDocument();
   });
 
   it('tells a checkout the command instead of offering a restart button', async () => {

@@ -10,7 +10,7 @@
  * back never reaches the engine at all.
  */
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ToolRegistry, type AgentCatalog, type CoreToolContext } from '@buddi/core';
@@ -314,6 +314,34 @@ it('does not ask for a restart for a plugin that will not load', async () => {
   expect(body.restartNeeded).toBe(false);
   expect(body.installed[0].loaded).toBe(false);
   expect(body.installed[0].error).toMatch(/importing it threw/);
+});
+
+it("shows a folder install at its folder's version now, and what it was installed as", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'buddi-plugins-'));
+  const folder = path.join(dir, 'speech');
+  await mkdir(folder);
+  await writeFile(path.join(folder, 'package.json'), JSON.stringify({ name: 'speech', version: '0.1.2' }), 'utf8');
+  const file = path.join(dir, 'plugins.json');
+  const entry = (name: string, source: unknown) => ({
+    name, version: '0.1.0', entry: `/p/${name}/index.js`, schema: name, installedAt: '2026-01-01T00:00:00.000Z', source,
+  });
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 2,
+      plugins: [
+        entry('speech', { kind: 'directory', path: folder }),
+        entry('weather', { kind: 'registry', name: 'weather', version: '0.1.0' }),
+      ],
+    }),
+    'utf8',
+  );
+  const { origin, headers } = await dashboard(fakeEngine(), { BUDDI_PLUGINS_FILE: file });
+  const body = (await (await fetch(`${origin}/api/plugins`, { headers })).json()) as any;
+  const byName = new Map<string, any>(body.installed.map((p: any) => [p.name, p]));
+  expect(byName.get('speech')).toMatchObject({ version: '0.1.2', installedAs: '0.1.0' });
+  expect(byName.get('weather').version).toBe('0.1.0');
+  expect(byName.get('weather').installedAs).toBeUndefined();
 });
 
 /**
