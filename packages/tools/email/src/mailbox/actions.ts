@@ -612,58 +612,95 @@ export async function performAction(
     if (n > 0) reasons.set(why, (reasons.get(why) ?? 0) + n);
   };
 
-  for (const [folder, group] of byFolder(targets)) {
-    const here = await locate(client, folder, group);
-    skip(`no longer in ${folder}`, group.length - here.size);
-    const present = group.filter((t) => here.has(t.id));
-    if (present.length === 0) continue;
+  // Whatever the server already did stays on the trail even if a later
+  // folder fails (a dropped connection, a lookup): the change is recorded as
+  // partial, with the error, and the error is thrown on.
+  try {
+    for (const [folder, group] of byFolder(targets)) {
+      const here = await locate(client, folder, group);
+      skip(`no longer in ${folder}`, group.length - here.size);
+      const present = group.filter((t) => here.has(t.id));
+      if (present.length === 0) continue;
 
-    if (kind === 'mark-read' || kind === 'mark-unread') {
-      const seen = kind === 'mark-read';
-      const change = present.filter((t) => here.get(t.id)!.flags.includes(SEEN) !== seen);
-      skip(seen ? 'already read' : 'already unread', present.length - change.length);
-      if (change.length === 0) continue;
-      await client.storeFlags(folder, change.map((t) => here.get(t.id)!.uid), [SEEN], seen ? 'add' : 'remove');
-      await setSeenLocally(db, change.map((t) => t.id), seen);
-      for (const t of change) {
-        const at = here.get(t.id)!;
-        items.push({
-          id: t.id, subject: t.subject, from: t.from, messageId: t.messageId,
-          fromFolder: folder, fromUidValidity: t.uidValidity > 0 ? t.uidValidity : 0, fromUid: at.uid,
-          prevFlags: at.flags,
-        });
+      if (kind === 'mark-read' || kind === 'mark-unread') {
+        const seen = kind === 'mark-read';
+        const change = present.filter((t) => here.get(t.id)!.flags.includes(SEEN) !== seen);
+        skip(seen ? 'already read' : 'already unread', present.length - change.length);
+        if (change.length === 0) continue;
+        await client.storeFlags(folder, change.map((t) => here.get(t.id)!.uid), [SEEN], seen ? 'add' : 'remove');
+        for (const t of change) {
+          const at = here.get(t.id)!;
+          items.push({
+            id: t.id, subject: t.subject, from: t.from, messageId: t.messageId,
+            fromFolder: folder, fromUidValidity: t.uidValidity > 0 ? t.uidValidity : 0, fromUid: at.uid,
+            prevFlags: at.flags,
+          });
+        }
+        await setSeenLocally(db, change.map((t) => t.id), seen);
+        continue;
       }
-      continue;
-    }
 
-    // A move of some kind. Already there is not a change.
-    let movable = present.filter((t) => folder !== destination);
-    skip(kind === 'trash' ? 'already in Trash' : `already in ${destination}`, present.length - movable.length);
-    if (kind === 'archive' && facts.gmail && folder !== INBOX) {
-      skip('not in the inbox', movable.length);
-      movable = [];
-    }
-    if (movable.length === 0) continue;
+      // A move of some kind. Already there is not a change.
+      let movable = present.filter((t) => folder !== destination);
+      skip(kind === 'trash' ? 'already in Trash' : `already in ${destination}`, present.length - movable.length);
+      if (kind === 'archive' && facts.gmail && folder !== INBOX) {
+        skip('not in the inbox', movable.length);
+        movable = [];
+      }
+      if (movable.length === 0) continue;
 
-    const source = await client.open(folder);
-    const labels = facts.gmail && kind === 'trash'
-      ? await client.fetchLabels(folder, movable.map((t) => here.get(t.id)!.uid))
-      : new Map<number, string[]>();
-    const moved = movable.map((t) => ({ target: t, uid: here.get(t.id)!.uid }));
-    const result = await client.move(folder, moved.map((m) => m.uid), destination!);
-    const where = await landed(client, destination!, moved, result);
-    const destId = await folderRow(db, account.id, destination!);
-    for (const m of moved) {
-      const newUid = where.uids.get(m.target.id) ?? null;
-      await relocateRow(db, m.target, destId, newUid === null ? null : where.uidValidity, newUid);
-      items.push({
-        id: m.target.id, subject: m.target.subject, from: m.target.from, messageId: m.target.messageId,
-        fromFolder: folder, fromUidValidity: source.uidValidity, fromUid: m.uid,
-        toFolder: destination!, toUidValidity: where.uidValidity ?? 0, toUid: newUid,
-        prevFlags: here.get(m.target.id)!.flags,
-        ...(labels.has(m.uid) ? { prevLabels: labels.get(m.uid) } : {}),
+      const source = await client.open(folder);
+      const labels = facts.gmail && kind === 'trash'
+        ? await client.fetchLabels(folder, movable.map((t) => here.get(t.id)!.uid))
+        : new Map<number, string[]>();
+      const moved = movable.map((t) => ({ target: t, uid: here.get(t.id)!.uid }));
+      const result = await client.move(folder, moved.map((m) => m.uid), destination!);
+      // The server has moved them: on the trail now, refined below. Should the
+      // landing lookup fail, each row still follows to the destination with its
+      // uid unknown (found by Message-ID next time), so undo can find it.
+      const pushed = moved.map((m) => {
+        const item: TrailItem = {
+          id: m.target.id, subject: m.target.subject, from: m.target.from, messageId: m.target.messageId,
+          fromFolder: folder, fromUidValidity: source.uidValidity, fromUid: m.uid,
+          toFolder: destination!, toUidValidity: 0, toUid: null,
+          prevFlags: here.get(m.target.id)!.flags,
+          ...(labels.has(m.uid) ? { prevLabels: labels.get(m.uid) } : {}),
+        };
+        items.push(item);
+        return item;
       });
+      const destId = await folderRow(db, account.id, destination!);
+      let where: Awaited<ReturnType<typeof landed>>;
+      try {
+        where = await landed(client, destination!, moved, result);
+      } catch (err) {
+        for (const m of moved) await relocateRow(db, m.target, destId, null, null);
+        throw err;
+      }
+      for (const [i, m] of moved.entries()) {
+        const newUid = where.uids.get(m.target.id) ?? null;
+        await relocateRow(db, m.target, destId, newUid === null ? null : where.uidValidity, newUid);
+        pushed[i]!.toUidValidity = where.uidValidity ?? 0;
+        pushed[i]!.toUid = newUid;
+      }
     }
+  } catch (err) {
+    if (items.length > 0) {
+      const why = err instanceof Error ? err.message : String(err);
+      const skippedNote = [...reasons.entries()].map(([r, n]) => `${n} ${r}`).join(', ');
+      await recordAction(db, {
+        accountId: account.id,
+        kind,
+        destination,
+        provenance: input.provenance,
+        messageIds: items.map((i) => i.id),
+        items,
+        changed: items.length,
+        note: `Partial: stopped by an error after ${plural(items.length, 'message')}: ${why}.${skippedNote ? ` Skipped ${skippedNote}.` : ''}`,
+        now: input.now,
+      }).catch(() => {});
+    }
+    throw err;
   }
 
   const skipped = [...reasons.values()].reduce((a, b) => a + b, 0);

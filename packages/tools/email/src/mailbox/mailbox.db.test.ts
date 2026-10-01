@@ -30,6 +30,7 @@ import { secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest, manifest as emailManifestForHost } from '../index.js';
 import { countInboxUnread } from '../metrics.js';
+import { loadTargets, performAction } from './actions.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { setPolicy } from '../tools/policies.js';
@@ -416,6 +417,90 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       const undo = await approve('email.undo', { change: out.change.id });
       expect(undo.out.changed).toBe(1);
       expect(undo.out.note).toMatch(/1 message could not be put back/);
+    });
+    it('a change that fails part-way keeps what it did on the trail, marked partial, and undo puts it back', async () => {
+      const ids = (await idsOf(PLAIN)).slice(0, 2);
+      await approve('email.archive', { ids: [ids[0]!] });
+      await pool.query('truncate email.mailbox_actions');
+      // ids[1] is in INBOX, ids[0] in Archive: two folders, and the second one's connection drops.
+      const real = plain.client();
+      const dropping = new Proxy(real, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (prop === 'open') {
+            return async (folder: string) => {
+              if (folder === 'Archive') throw new Error('Connection not available');
+              return (value as (f: string) => unknown).call(target, folder);
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const targets = await loadTargets(pool, [ids[1]!, ids[0]!]);
+      await expect(
+        performAction(pool, dropping as never, {
+          account: { id: accounts[PLAIN]!.id, address: PLAIN } as AccountRecord,
+          kind: 'trash',
+          targets,
+          provenance: { origin: 'owner', actor: 'owner' },
+          now: NOW,
+        }),
+      ).rejects.toThrow(/Connection not available/);
+      expect(plain.whereIs(`<news-2@${PLAIN}>`)).toEqual([{ mailbox: 'Trash', uid: 1 }]);
+      const { rows } = await pool.query(`select id, kind, message_ids, changed, note from email.mailbox_actions`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ kind: 'trash', changed: 1 });
+      expect(rows[0].message_ids).toEqual([ids[1]]);
+      expect(rows[0].note).toMatch(/Partial: stopped by an error after 1 message: Connection not available/);
+      expect((await rowOf(ids[1]!)).folder).toBe('Trash');
+
+      const undo = await approve('email.undo', { change: String(rows[0].id) });
+      expect(undo.out.changed).toBe(1);
+      expect(plain.whereIs(`<news-2@${PLAIN}>`)[0]?.mailbox).toBe('INBOX');
+    });
+
+    it('a move whose landing lookup fails still records the move and points the row at the destination', async () => {
+      const ids = (await idsOf(PLAIN)).slice(0, 1);
+      const real = plain.client();
+      let moved = false;
+      const dropping = new Proxy(real, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (prop === 'move') {
+            return async (...args: unknown[]) => {
+              await (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
+              moved = true;
+              return { uidValidity: null, uidMap: new Map() };
+            };
+          }
+          if (prop === 'open' || prop === 'findByMessageId') {
+            return async (...args: unknown[]) => {
+              if (moved) throw new Error('Socket closed');
+              return (value as (...a: unknown[]) => unknown).apply(target, args);
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      await expect(
+        performAction(pool, dropping as never, {
+          account: { id: accounts[PLAIN]!.id, address: PLAIN } as AccountRecord,
+          kind: 'trash',
+          targets: await loadTargets(pool, ids),
+          provenance: { origin: 'owner', actor: 'owner' },
+          now: NOW,
+        }),
+      ).rejects.toThrow(/Socket closed/);
+      const { rows } = await pool.query(`select id, message_ids, items, note from email.mailbox_actions`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].message_ids).toEqual(ids);
+      expect(rows[0].items[0]).toMatchObject({ toFolder: 'Trash' });
+      expect(rows[0].note).toMatch(/Partial/);
+      expect(await rowOf(ids[0]!)).toMatchObject({ folder: 'Trash', uidvalidity: 0 });
+      // Undo finds it by Message-ID.
+      const undo = await approve('email.undo', { change: String(rows[0].id) });
+      expect(undo.out.changed).toBe(1);
+      expect(plain.whereIs(`<news-1@${PLAIN}>`)[0]?.mailbox).toBe('INBOX');
     });
   });
 
