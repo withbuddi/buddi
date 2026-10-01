@@ -318,11 +318,11 @@ three modes and what each refuses.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;   // '1.5' — see §1.7
+  readonly version: string;   // '1.18' — see §1.7
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
-  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths, language; notify with `owner:notify`
+  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths, language; notify with `owner:notify`, places with `owner:places`
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
   dir: DirArea;               // <data>/plugins-data/<plugin>
@@ -336,6 +336,7 @@ interface BuddiHost {
   schedule?: ScheduleArea;    // declared as `schedule`
   secrets?: SecretsArea;      // declared as `secrets`
   channels?: ChannelsArea;    // declared as `owner:channel`
+  plugins?: PluginsArea;      // when your manifest `requires` another plugin (§2.10)
 }
 ```
 
@@ -428,6 +429,7 @@ the timers and the hosts:
 | `secrets` | fills secrets you bind to it |
 | `owner:notify` | can send you messages when you are away |
 | `owner:channel` | adds a way for buddi to reach you |
+| `owner:places` | reads your places (Home, Work…) and their addresses |
 
 `files` sees what you saved and what was handed into your conversation;
 `files:library` is the whole library, and the card says so in those words —
@@ -488,7 +490,7 @@ prints the line telling you to restart buddi yourself.
 
 ### 1.7 Versioning
 
-`ctx.buddi.version` is `major.minor`, `1.0` today. Say what you were built
+`ctx.buddi.version` is `major.minor`, `1.18` today. Say what you were built
 against as `buddi.hostApi` in `package.json` — the scaffold writes `"^1.0"`. A
 plugin asking for more than this buddi has is refused at staging, before
 anything is imported, with both numbers: `^1.2` on a `1.0` host is "built for
@@ -497,8 +499,7 @@ host API ^1.2, and this buddi has 1.0".
 A minor adds a method, an optional argument or an optional field on a return,
 and never changes what an existing call does. A major removes or changes
 something, and ships only after one release in which both shapes exist and the
-old one logs its caller. §9b gives every member the minor it arrived in; all of
-them are 1.0 today.
+old one logs its caller. §9b gives every member the minor it arrived in.
 
 ---
 
@@ -1737,6 +1738,102 @@ the rollover go ahead. Facts only — names, not contents: the note is replayed
 into every turn of the new conversation. The developer plugin adds the
 workspace, branch, last commit and uncommitted files. Host API 1.16; an older
 buddi never asks, so a plugin with `carryOver` need not ask for `^1.16`.
+
+### 2.8 The owner's places
+
+Home, Work and any other place the owner names live in core, on Settings →
+Profile, beside the timezone: a label, the address as typed, the town it was
+matched to, coordinates and the place's own zone. Declare `owner:places` and
+read them:
+
+```ts
+uses: ['owner:places'],
+// ...
+const places = await ctx.buddi!.owner.places!();
+// [{ id: 'home', label: 'Home', address: '12 Elm St, Portland, Maine',
+//    name: 'Portland, Maine, United States', latitude: 43.66, longitude: -70.26,
+//    timezone: 'America/New_York' }, ...]
+```
+
+Read-only, in the owner's order (Home, then Work, then the rest), on every
+context including a page query's and a widget's. The card says "reads your
+places (Home, Work…) and their addresses". A plugin may still keep places of
+its own — the weather plugin keeps the extra cities you ask it about — but
+the owner's are the first it offers. Host API 1.18.
+
+### 2.9 Setup: whether you can do anything yet
+
+A plugin that is installed but cannot do anything until the owner does one
+thing — pick a place, link a calendar, pick a model account — says so:
+
+```ts
+setup: {
+  async produce(ctx) {
+    const places = await ctx.buddi!.owner.places!();
+    return places.length > 0
+      ? { ready: true }
+      : { ready: false, note: 'Pick a place for the forecast.', page: 'settings' };
+  },
+},
+```
+
+`produce` runs on the read-only pool, like a page query, with five seconds;
+`note` is one short sentence (120 characters at most) and `page` one of your
+own pages' ids. Not ready, the Plugins row says **needs setup** with the note
+in place of what you contribute and a **Set it up** button that opens the page;
+the notice after the restart that loads you says what to do first; and Home's
+tips may name you a day later. A setup that throws or times out is logged and
+counts as no answer: you are shown as loaded and never held back by your own
+check. The answer is kept half a minute. A plugin without `setup` is simply
+loaded. Host API 1.18.
+
+### 2.10 Requiring another plugin, and its exports
+
+A plugin built on another says so, with a semver range, in the manifest and in
+`package.json` (the install card is drawn from the second; the two must match):
+
+```ts
+requires: { weather: '^0.2.0' },
+```
+```json
+"buddi": { "name": "commute", "requires": { "weather": "^0.2.0" } }
+```
+
+The card lists each requirement with where it stands ("0.2.0 is here", "not
+installed") and offers **Install weather first** for a missing one, through the
+same read-then-approve as any install. Installing is never blocked. Until every
+requirement is installed, enabled, in range and set up (§2.9), your tools,
+pages, widgets and watchers do not load; the row says **needs weather** with
+what is missing ("Needs setup in weather: Pick a place for the forecast.") and
+the one fix (Install, Enable, Update or Set up weather). Your data stays. buddi
+checks again every minute and whenever the owner changes something on the
+Plugins page, so you come in the moment the requirement is ready, with no
+restart. A plugin this build ships satisfies any range.
+
+Plugins never reach into each other. The one road is a named, read-only
+**export**:
+
+```ts
+// weather
+exports: {
+  forecast: {
+    description: 'The forecast for one of the owner places, or coordinates.',
+    params: z.object({ place: z.string().optional(), days: z.number().int().min(1).max(10).optional() }).strict(),
+    async produce(params, ctx) { /* reads, with weather's own ctx.buddi */ },
+  },
+},
+
+// commute, which requires weather
+const forecast = await ctx.buddi!.plugins!.call('weather', 'forecast', { place: 'work', days: 1 });
+```
+
+Core refuses, with a `PluginCallRefusal` naming why: a plugin not in your
+`requires`, one not loaded, one outside the range, a name it does not export,
+arguments its `params` refuse, and anything taking more than five seconds. The
+export runs as the plugin that owns it — its schema, its host — on the
+read-only pool, so a write inside it fails as a page query's does. Never a
+tool, never another schema. `ctx.buddi.plugins` exists only when you declare
+`requires`. Host API 1.18.
 
 ---
 
@@ -3035,8 +3132,11 @@ version each arrived in — is §9b.
 | `description` | `string` | no | One line, shown before anybody installs you. A plugin meant to be distributed should write one. |
 | `author` | `PluginAuthor` | no | Who made you: `{ name, url? }`, the name at most 80 characters, the URL `https:`. The install card and the Plugins page show "by <name>", linked to the URL. Checked at `register()`. Without it the card reads `author` from your `package.json` (a string or `{ name, url }`); with both, the names must match or approval is refused. |
 | `network` | `NetworkUse[]` | no | The hosts you intend to reach. Documentation, not a sandbox — and compared with your `buddi.md`. |
-| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
+| `uses` | `PluginUse[]` | no | The areas of `ctx.buddi` you reach beyond yourself: `http`, `accounts`, `files`, `files:library`, `memory`, `proposals`, `schedule`, `secrets`, `owner:notify`, `owner:channel`, `owner:places`. Repeated as `buddi.uses` in `package.json`, because the install card is drawn before anything is imported; the two must match or the plugin does not register. See §1.3. |
 | `destinations` | `SecretDestination[]` | no | Where the owner's secrets can be delivered into your plugin (`{ kind, checkTarget, describe, deliver, maxRule }`), each kind `<plugin>.<what>`; registered at `register()` and only with `secrets` in `uses`. `deliver` is the only code that ever receives a value. See docs/owner-secrets.md §3. |
+| `setup` | `PluginSetup` | no | Whether you can do anything yet: `{ produce(ctx) }` answering `{ ready, note?, page? }`, read-only, five seconds. Not ready, the Plugins row says "needs setup" and opens `page`. Host API 1.18. See §2.9. |
+| `requires` | `Record<string, string>` | no | Plugins you need, by name, with a semver range. Repeated as `buddi.requires` in `package.json`; the two must match. Until each is installed, enabled, in range and set up, nothing of yours loads; declaring any gives `ctx.buddi.plugins`. Host API 1.18. See §2.10. |
+| `exports` | `Record<string, PluginExport>` | no | Named read-only queries (`{ description?, params, produce(params, ctx) }`) a plugin that requires you may call through `ctx.buddi.plugins.call`. Nothing else of yours is reachable from another plugin. Host API 1.18. See §2.10. |
 | `register` | `(host: RegisterHost) => void` | no | Called once by `register()`, after every check has passed, with `{ version, plugin, dir }` — the host's parts that need no call. The place to learn your directory before any context exists (the browser's profile is fixed here). Nothing is awaited. See §1.4. |
 | `policies` | `PolicyHandler` | no | How you apply a rule the owner kept on Settings → Proposals: `apply(proposal, { db, now })` writes the rule your gate reads, `revoke` drops it, `adopt` moves proposals you held in your own tables before (idempotent, run on start), and `applied(ctx, since)` counts how many times your gate acted on a kept learned rule since then, which the weekly digest reports as what buddi stopped doing (leave it out and the digest says "not measured yet"). You propose from inside a tool call with `ctx.buddi.proposals.proposePolicy(ctx, { matcher, action, params, verdicts, why, sources })`, your name and the clock filled in (declare `proposals`); `adopt` is handed your host as `buddi`. Keeping one for a plugin with no `apply` is refused and the card stays open. |
 
@@ -3331,7 +3431,7 @@ you did not declare is absent: `ctx.buddi.http` is `undefined`, not a refusal.
 The types are exported from `@buddi/core/plugin`.
 
 "Since" is the host version that introduced each member (§1.7). The host is
-`1.9`; most members are from `1.0`, and the later minors' additions are the rows
+`1.18`; most members are from `1.0`, and the later minors' additions are the rows
 that say otherwise.
 
 #### `BuddiHost`
@@ -3358,6 +3458,7 @@ that say otherwise.
 | `schedule` | `ScheduleArea` | no | 1.0 | Declared as `schedule`. |
 | `secrets` | `SecretsArea` | no | 1.0 | Declared as `secrets`. The owner's secrets, used and never read (§6). |
 | `channels` | `ChannelsArea` | no | 1.3 | Declared as `owner:channel`. A way to reach the owner that you carry, listed in Settings → Notifications. Also on the `register` hook's host. |
+| `plugins` | `PluginsArea` | no | 1.18 | Present when your manifest declares `requires`: the named read-only exports of the plugins you require (§2.10). |
 
 #### `OwnerArea`
 
@@ -3369,6 +3470,7 @@ that say otherwise.
 | `hasAgent` | `(id) => boolean` | yes | 1.1 | Whether an agent with this id is installed — for a plugin that proposes one and must not start runs for it before the owner accepts it. `true` where there is no roster to ask. |
 | `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
 | `language` | `() => Promise<string \| undefined>` | yes | 1.5 | The language the owner asked to be answered in (their profile's "Answer me in"), as a tag: `fr`, `pt-BR`. A language name, in English or its own words, becomes its ISO 639-1 code; `undefined` when blank or not a language. |
+| `places` | `() => Promise<OwnerPlace[]>` | no | 1.18 | The owner's places from Settings → Profile, in their order: `{ id, label, address, name, latitude, longitude, timezone }`. Read-only. Declared as `owner:places` (§2.8). |
 | `notify` | `(message: PluginOwnerMessage) => Promise<{ id }>` | no | 1.2 | Tell the owner something: `urgency` (`now`, `today`, `digest`), a one-line `title`, optional `text`, `link: { route }`, `dedupeKey` and `agentId`. Declared as `owner:notify`. The kind is always `plugin`, your name is on the message, and the owner's settings pick the channel, never you. See [notifications.md](notifications.md). |
 
 #### `ClockArea`
@@ -3497,3 +3599,9 @@ checks a request against, exactly like a manifest host.
 | Field | Type | Required | Since | What it is |
 | --- | --- | --- | --- | --- |
 | `register` | `(channel: PluginChannel) => () => void` | yes | 1.3 | Add a channel of yours, kind `<plugin>.<what>`: `{ kind, describe(buddi), can, deliver(message, buddi) }`. `describe` answers `{ label, where? }`, or null when there is nothing to carry a message now, and the channel is then not listed. `deliver` gets the stored message (title, text, `link: { route, url? }` with `url` on the public origin, offers as labels only, never an approval's id) and answers `{ id }` or `{ refused: sentence }`. Both are handed your host, built over core's pool, since core calls them outside any context. Never the default over Telegram or the system notification. Registering the kind again replaces it; the function removes it. See [notifications.md](notifications.md). |
+
+#### `PluginsArea`
+
+| Field | Type | Required | Since | What it is |
+| --- | --- | --- | --- | --- |
+| `call` | `(plugin, name, args?) => Promise<T>` | yes | 1.18 | Call a named read-only export of a plugin you require, with arguments its `params` check. It runs as that plugin, on the read-only pool, within five seconds. Refused — a `PluginCallRefusal` — for a plugin not in your `requires`, one not loaded or out of range, or a name it does not export. See §2.10. |

@@ -192,6 +192,17 @@ suite('onboarding (postgres)', () => {
       // has nothing to say in it either.
       about: null,
       displayName: null,
+      timeFormat: null,
+      dateFormat: null,
     });
+  });
+
+  it('keeps how the owner reads times and dates, Auto being null', async () => {
+    await setOwnerProfile(pool, { timeFormat: '12h', dateFormat: 'short' });
+    expect(await getOwnerProfile(pool)).toMatchObject({ timeFormat: '12h', dateFormat: 'short' });
+    await setOwnerProfile(pool, { preferredName: 'Amen' });
+    expect(await getOwnerProfile(pool)).toMatchObject({ timeFormat: '12h', dateFormat: 'short' });
+    await setOwnerProfile(pool, { timeFormat: null, dateFormat: 'nonsense' as never });
+    expect(await getOwnerProfile(pool)).toMatchObject({ timeFormat: null, dateFormat: null });
   });
 });

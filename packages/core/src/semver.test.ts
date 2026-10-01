@@ -4,7 +4,7 @@
  * "older", because the callers turn the second into an upgrade offer.
  */
 import { describe, expect, test } from 'vitest';
-import { compareSemver, compareVersions, isNewerRelease, parseSemver } from './semver.js';
+import { compareSemver, compareVersions, isNewerRelease, isSemverRange, parseSemver, satisfiesRange } from './semver.js';
 
 describe('versions', () => {
   test('are parsed into the four fields semver 2.0.0 names, or not at all', () => {
@@ -30,5 +30,36 @@ describe('versions', () => {
     expect(isNewerRelease('latest', '1.0.0')).toBe(false);
     expect(isNewerRelease(undefined, '1.0.0')).toBe(false);
     expect(isNewerRelease('1.0.1', '1.0.0')).toBe(true);
+  });
+});
+
+describe('ranges', () => {
+  const cases: Array<[string, string, boolean]> = [
+    ['1.2.3', '^1.2.0', true],
+    ['2.0.0', '^1.2.0', false],
+    ['1.1.9', '^1.2.0', false],
+    ['0.1.5', '^0.1.2', true],
+    ['0.2.0', '^0.1.2', false],
+    ['0.0.4', '^0.0.3', false],
+    ['1.2.9', '~1.2.0', true],
+    ['1.3.0', '~1.2', false],
+    ['1.4.0', '>=1.0.0 <2', true],
+    ['2.0.0', '>=1.0.0 <2', false],
+    ['1.9.0', '1.x', true],
+    ['3.0.0', '*', true],
+    ['0.1.2', '', true],
+    ['1.2.3', '1.2.3', true],
+    ['1.2.4', '1.2.3', false],
+    ['3.1.0', '^1.0.0 || ^3.0.0', true],
+    ['1.2.3', '>= 1.2', true],
+  ];
+  test.each(cases)('%s in %s is %s', (version, range, expected) => {
+    expect(satisfiesRange(version, range)).toBe(expected);
+  });
+  test('say nothing about what they cannot read', () => {
+    expect(satisfiesRange('1.0.0', 'latest')).toBeUndefined();
+    expect(satisfiesRange('one', '^1.0.0')).toBeUndefined();
+    expect(isSemverRange('^0.1')).toBe(true);
+    expect(isSemverRange('next')).toBe(false);
   });
 });

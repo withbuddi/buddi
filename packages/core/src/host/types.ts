@@ -13,6 +13,7 @@
  * without a plugin noticing (§6). Types only: this file is part of
  * `@buddi/core/plugin`.
  */
+import type { OwnerPlace } from '../places.js';
 import type { ToolPermission } from '../actions/permissions.js';
 import type { ArtifactKind, ArtifactRow, ArtifactSource } from '../artifacts/store.js';
 import type { ProposePolicyInput } from '../learning/policies.js';
@@ -64,6 +65,8 @@ export interface BuddiHost {
   secrets?: SecretsArea;
   /** Declared as `owner:channel`. Since 1.3. */
   channels?: ChannelsArea;
+  /** Present when the manifest declares `requires`. Since 1.18. */
+  plugins?: PluginsArea;
 }
 
 /* ------------------------------------------------------------------ *
@@ -97,6 +100,28 @@ export interface OwnerArea {
    * plugin; the row carries the plugin's name. Since 1.2.
    */
   notify?(message: PluginOwnerMessage): Promise<{ id: string }>;
+  /**
+   * The owner's places — Home, Work and any other they named on Settings →
+   * Profile — each with its label, address, coordinates and zone, in their
+   * order. Read-only. Declared as `owner:places`; absent otherwise. Since 1.18.
+   */
+  places?(): Promise<OwnerPlace[]>;
+}
+
+/**
+ * `ctx.buddi.plugins` (since 1.18): the narrow road between plugins. Present
+ * when the manifest declares `requires`. A plugin may call only the named
+ * read-only exports of a plugin it requires, on the read-only pool, within a
+ * few seconds; never a tool, never another schema.
+ */
+export interface PluginsArea {
+  /**
+   * Call `plugin`'s export `name` with `args`, validated by the export's own
+   * parameters. Refused — a `PluginCallRefusal` naming why — when `plugin` is
+   * not in this manifest's `requires`, is not loaded, is outside the range,
+   * or exports no such name. A write inside it fails as a page query's does.
+   */
+  call<T = unknown>(plugin: string, name: string, args?: unknown): Promise<T>;
 }
 
 /**

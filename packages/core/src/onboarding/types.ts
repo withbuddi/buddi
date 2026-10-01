@@ -143,7 +143,16 @@ export interface OwnerProfile {
   about: string | null;
   /** The display name pairing recorded, kept separate and never overwritten. */
   displayName: string | null;
+  /** `12h` or `24h`; null is Auto (the browser's locale). */
+  timeFormat: OwnerTimeFormat | null;
+  /** `short` (Thu, Oct 1), `long` (Thursday, 1 October) or `iso` (2026-10-01); null is Auto. */
+  dateFormat: OwnerDateFormat | null;
 }
+
+export const OWNER_TIME_FORMATS = ['12h', '24h'] as const;
+export type OwnerTimeFormat = (typeof OWNER_TIME_FORMATS)[number];
+export const OWNER_DATE_FORMATS = ['short', 'long', 'iso'] as const;
+export type OwnerDateFormat = (typeof OWNER_DATE_FORMATS)[number];
 
 /** The profile fields a caller may write. Absent means "leave it alone". */
 export interface OwnerProfilePatch {
@@ -151,4 +160,6 @@ export interface OwnerProfilePatch {
   timezone?: string | null;
   language?: string | null;
   about?: string | null;
+  timeFormat?: OwnerTimeFormat | null;
+  dateFormat?: OwnerDateFormat | null;
 }

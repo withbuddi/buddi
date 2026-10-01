@@ -32,6 +32,9 @@ import { registerSecretDestination, unregisterSecretDestinations } from './secre
 import { primeSecretScrubber, scrubDeep, scrubText } from './secrets/scrub.js';
 import { compileJsonSchema, type JsonSchemaValidator } from './json-schema.js';
 import { parsePluginAuthor } from './plugin/author.js';
+import { PluginCallRefusal, exportsProblem, readinessOf, type PluginReadiness } from './plugin/requires.js';
+import { satisfiesRange } from './semver.js';
+import type { HostFacts } from './host/build.js';
 
 /** Tiers this build executes directly, with no human in the loop. */
 export const EXECUTABLE_TIERS: readonly Tier[] = ['auto'];
@@ -292,6 +295,17 @@ export function toolInputSchema(tool: ToolDefinition<any, any>, plugin: string):
   );
 }
 
+/** How long a plugin's setup answer or an export call may take. */
+export const PLUGIN_CALL_TIMEOUT_MS = 5_000;
+
+function withinMs<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new PluginCallRefusal(`${what} did not answer within ${Math.round(ms / 1000)} seconds.`)), ms);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
 export class ToolRegistry {
   readonly #tools = new Map<string, Entry>();
   readonly #manifests = new Map<string, PluginManifest>();
@@ -373,6 +387,11 @@ export class ToolRegistry {
             pages: (manifest.pages ?? []).map((p) => p.id),
             taken: (id) => [...this.#widgets.values()].some((list) => list.some((w) => w.id === id)),
           });
+    const exported = exportsProblem(manifest.name, manifest.exports);
+    if (exported !== undefined) throw new Error(exported);
+    if (manifest.setup !== undefined && typeof manifest.setup?.produce !== 'function') {
+      throw new Error(`plugin ${manifest.name}: setup needs a \`produce(ctx)\` answering { ready, note?, page? }`);
+    }
     if (manifest.files !== undefined) {
       const names = new Set((manifest.queries ?? []).map((q) => q.name));
       for (const [role, name] of Object.entries(manifest.files)) {
@@ -394,6 +413,7 @@ export class ToolRegistry {
       registered: () =>
         [...this.#tools.values()].filter((e) => e.plugin === manifest.name && e.runtime).map((e) => e.tool.name),
     };
+    binding.callExport = (target, name, args, facts) => this.#callExport(manifest.name, target, name, args, facts);
     this.#bindings.set(manifest.name, binding);
     if (metrics) {
       this.#metrics.set(
@@ -717,6 +737,67 @@ export class ToolRegistry {
   homePlugin(id: string): string | undefined {
     for (const m of this.#manifests.values()) if ((m.home ?? []).some((h) => h.id === id)) return m.name;
     return undefined;
+  }
+
+  /**
+   * Whether `plugin` can do anything yet (host API 1.18): its `setup` answer,
+   * on the read-only pool, within `timeoutMs`. Undefined when the plugin is
+   * not registered or declares no setup — it is simply loaded. A setup that
+   * throws, times out or answers nonsense rejects; the caller decides what
+   * that means (the Plugins page shows the plugin as loaded and logs it).
+   */
+  async readiness(plugin: string, ctx: CoreToolContext, timeoutMs = PLUGIN_CALL_TIMEOUT_MS): Promise<PluginReadiness | undefined> {
+    const manifest = this.#manifests.get(plugin);
+    if (manifest?.setup === undefined) return undefined;
+    const raw = await withinMs(
+      Promise.resolve().then(() => manifest.setup!.produce(this.#host(plugin, metricContext(ctx)))),
+      timeoutMs,
+      `${plugin}'s setup`,
+    );
+    const answer = readinessOf(raw, (manifest.pages ?? []).map((p) => p.id));
+    if (answer === undefined) throw new Error(`${plugin}'s setup answered something that is not { ready, note?, page? }`);
+    return answer;
+  }
+
+  /** The plugins `plugin` requires, with their ranges; empty when none or not registered. */
+  requiresOf(plugin: string): Readonly<Record<string, string>> {
+    return this.#bindings.get(plugin)?.requires ?? {};
+  }
+
+  /**
+   * One plugin calling another's export (`ctx.buddi.plugins.call`). Every
+   * refusal is core's: the target must be in the caller's `requires`,
+   * registered here at a version in range, and export that name; the
+   * arguments pass the export's own parameters; it runs with the target's
+   * own host over the read-only pool, within the timeout. Never a tool.
+   */
+  async #callExport(caller: string, target: string, name: string, args: unknown, facts: HostFacts): Promise<unknown> {
+    const range = this.#bindings.get(caller)?.requires[target];
+    if (range === undefined) {
+      throw new PluginCallRefusal(`${caller} may call only the plugins it requires, and ${target} is not one of them.`);
+    }
+    const manifest = this.#manifests.get(target);
+    if (manifest === undefined) throw new PluginCallRefusal(`${target} is not loaded, so ${caller} cannot call it.`);
+    if (satisfiesRange(manifest.version, range) !== true) {
+      throw new PluginCallRefusal(`${caller} needs ${target} ${range}, and ${manifest.version} is installed.`);
+    }
+    const exported = Object.prototype.hasOwnProperty.call(manifest.exports ?? {}, name) ? manifest.exports![name] : undefined;
+    if (exported === undefined) {
+      const names = Object.keys(manifest.exports ?? {});
+      throw new PluginCallRefusal(
+        `${target} exports no ${JSON.stringify(name)}${names.length === 0 ? '; it exports nothing' : `; it exports ${names.join(', ')}`}.`,
+      );
+    }
+    const parsed = exported.params.safeParse(args);
+    if (!parsed.success) {
+      throw new PluginCallRefusal(`${target}.${name}: ${parsed.error.issues.map((i: { path: unknown[]; message: string }) => `${i.path.join('.') || 'arguments'}: ${i.message}`).join('; ')}`);
+    }
+    const ctx = { ...(facts as CoreToolContext), agentId: OWNER_AGENT_ID };
+    return withinMs(
+      Promise.resolve().then(() => exported.produce(parsed.data, this.#host(target, metricContext(ctx)))),
+      PLUGIN_CALL_TIMEOUT_MS,
+      `${target}.${name}`,
+    );
   }
 
   /** Every widget the installed plugins export, each carrying its plugin, in registration order. */

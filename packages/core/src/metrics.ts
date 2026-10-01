@@ -22,7 +22,7 @@
  */
 import { z, type ZodObject, type ZodTypeAny } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { readOnlyPool } from './pages.js';
+import { isReadOnlyPool, readOnlyPool } from './pages.js';
 import type { CoreToolContext, ToolContext } from './tools.js';
 
 /** What a metric can be. Decides how a goal's numbers are rendered. */
@@ -288,5 +288,7 @@ export async function measureMetricResult(
  * agent is not the owner — it is whoever holds the goal.
  */
 export function metricContext(ctx: CoreToolContext): CoreToolContext {
-  return { ...ctx, db: readOnlyPool(ctx.db) };
+  // Already read-only (an export called from inside a widget): a second
+  // wrapper would refuse the first's `connect`, so it is used as it is.
+  return isReadOnlyPool(ctx.db) ? ctx : { ...ctx, db: readOnlyPool(ctx.db) };
 }

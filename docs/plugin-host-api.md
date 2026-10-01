@@ -1,7 +1,7 @@
 ---
 title: The plugin host API
 status: reference
-updated: 2026-09-28
+updated: 2026-10-01
 ---
 
 # The plugin host API
@@ -40,7 +40,7 @@ Every plugin in both repositories is on the host. The areas each one declares
 | artifacts | buddi | `files:library` |
 | web | buddi | `http` |
 | weather (example) | buddi | `http` |
-| weather | buddi-plugins | `http`, `owner:notify` |
+| weather | buddi-plugins | `http`, `owner:notify`, `owner:places` |
 | calendar | buddi-plugins | `http`, `secrets` |
 | browser | buddi | `secrets` |
 | host | buddi | `files:library` |
@@ -88,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.17'; see §7
+  readonly version: string;            // '1.18'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -97,6 +97,7 @@ interface BuddiHost {
   http?: HttpArea; accounts?: AccountsArea; files?: FilesArea;
   memory?: MemoryArea; proposals?: ProposalsArea; schedule?: ScheduleArea;
   secrets?: SecretsArea; channels?: ChannelsArea;
+  plugins?: PluginsArea;               // 1.18, with `requires`
 }
 ```
 
@@ -104,8 +105,11 @@ interface BuddiHost {
 undefined`, `hasAgent(id): boolean` (1.1), `protectedPaths: readonly
 string[]`, `language(): Promise<string | undefined>` (1.5: the profile's
 "Answer me in" as a tag like `fr` or `pt-BR`, `undefined` when blank or not
-a language), and `notify(message)` (1.2) when the plugin declares
-`owner:notify`. Never returns an agent's file, grant or provider.
+a language), `notify(message)` (1.2) when the plugin declares
+`owner:notify`, and `places()` (1.18) when it declares `owner:places`: the
+owner's Home, Work and named places from Settings → Profile, each `{ id,
+label, address, name, latitude, longitude, timezone }`, read-only, in the
+owner's order. Never returns an agent's file, grant or provider.
 
 **clock.** `now(): Date`, `today(): string` (the owner's local date).
 
@@ -160,6 +164,24 @@ it back on disconnect. A host is a name or `*.name`, with a one-line `why`;
 host.
 
 ### 4.2 Declared
+
+**owner:places.** `ctx.buddi.owner.places(): Promise<OwnerPlace[]>` (1.18).
+The owner's places live in core (`core.owner_places`), written only from
+Settings → Profile; a plugin reads them and never writes them. The card says
+"reads your places (Home, Work…) and their addresses". The weather plugin is
+the first reader: it offers them as its locations, and its own Home and Work
+were moved into core once, at the first start of 1.18 (the one time core
+reads a plugin's table, recorded in `core.owner_place_imports` so it never
+runs again).
+
+**plugins** (with `requires`, not a `uses` area). `ctx.buddi.plugins.call(name,
+exportName, args)` (1.18) calls a named read-only export of a plugin this one
+requires. Core enforces every edge of it: the target must be in the
+manifest's `requires`, loaded, at a version in the range, and export that
+name; `args` pass the export's own zod `params`; the export runs with the
+target's own host over the read-only pool (a write fails as a page query's
+does), within five seconds. A refusal is a `PluginCallRefusal` naming why. No
+tool is ever reachable this way, and no schema but the target's own.
 
 **owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,
 dedupeKey?, agentId? }): Promise<{ id }>` tells the owner something
@@ -294,7 +316,8 @@ password), the one stated exception to "never held". The product is
 ## 5. Permissions
 
 The manifest carries `uses: ('http' | 'accounts' | 'files' | 'files:library'
-| 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify' | 'owner:channel')[]`. Because the staged
+| 'memory' | 'proposals' | 'schedule' | 'secrets' | 'owner:notify' | 'owner:channel'
+| 'owner:places')[]`. Because the staged
 install screen may not import anything, the same list goes in
 `package.json` as `buddi.uses`; at load the two must match or the plugin
 does not register, as `network` is compared with `buddi.md`.
@@ -304,7 +327,8 @@ timers and the hosts, one plain line each: "sends web requests", "uses a
 model account you pick", "reads every file in your Files library",
 "reads and writes memory as the agent that calls it", "proposes rules",
 "starts agent runs by itself", "fills secrets you bind to it", "can send
-you messages when you are away", "adds a way for buddi to reach you". An area
+you messages when you are away", "adds a way for buddi to reach you", "reads
+your places (Home, Work…) and their addresses". An area
 not declared is absent from `ctx.buddi`, so a call to it is a type error
 and, at runtime, `undefined`. Adding an area in an upgrade is shown as a
 change on the upgrade card.
@@ -360,7 +384,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.17`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.18`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -403,6 +427,16 @@ optional `widgets` — small live panels the owner places on Home, each a
 read-only `produce(ctx, { size })` answering a body from a fixed vocabulary
 (`stat`, `list`, `strip`, `progress`, `text`; docs/plugins.md §2.5d). An older
 buddi ignores the field, so declaring widgets need not mean asking for `^1.17`.
+
+1.18 adds `owner.places()` behind `owner:places`, and three optional manifest
+fields with the area that goes with them: `setup` (one read-only answer, `{
+ready, note?, page? }`, that turns the Plugins row into "needs setup"),
+`requires` (`{ "<plugin>": "<range>" }`, repeated as `buddi.requires`; until
+each is installed, enabled, in range and set up, the plugin's tools and
+widgets do not load), and `exports` (named read-only queries), reached through
+`ctx.buddi.plugins.call` (docs/plugins.md §2.8–§2.10). An older buddi ignores
+`setup`, `requires` and `exports`, but refuses `owner:places`, so a plugin that
+declares it asks for `^1.18`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

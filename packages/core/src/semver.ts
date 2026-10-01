@@ -95,3 +95,111 @@ export function isNewerRelease(candidate: string | undefined, current: string): 
   const order = compareVersions(candidate, current);
   return order !== undefined && order > 0;
 }
+
+/*
+ * Ranges, for a plugin's `requires` (docs/plugins.md §2.9): the forms npm
+ * authors write — `^1.2.0`, `~1.2`, `>=1.0.0 <2`, `1.x`, `*`, `1.2.3`, and
+ * alternatives joined with `||`. A prerelease is compared by plain semver
+ * order; npm's extra rule that only a comparator naming the same numbers may
+ * match one is not applied, because plugin versions are releases.
+ */
+
+type Comparator = { op: '>=' | '>' | '<' | '<=' | '='; version: Semver };
+
+const PARTIAL = /^v?(\d+|[xX*])(?:\.(\d+|[xX*]))?(?:\.(\d+|[xX*]))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+interface Partial3 {
+  major?: number;
+  minor?: number;
+  patch?: number;
+  prerelease: Array<string | number>;
+}
+
+function parsePartial(text: string): Partial3 | undefined {
+  const match = PARTIAL.exec(text);
+  if (!match) return undefined;
+  const num = (part: string | undefined): number | undefined =>
+    part === undefined || /^[xX*]$/.test(part) ? undefined : Number.parseInt(part, 10);
+  const major = num(match[1]);
+  const minor = major === undefined ? undefined : num(match[2]);
+  const patch = minor === undefined ? undefined : num(match[3]);
+  const prerelease = patch === undefined ? [] : (match[4] ?? '').split('.').filter((id) => id !== '').map((id) => (/^\d+$/.test(id) ? Number(id) : id));
+  return { ...(major === undefined ? {} : { major }), ...(minor === undefined ? {} : { minor }), ...(patch === undefined ? {} : { patch }), prerelease };
+}
+
+const at = (major: number, minor = 0, patch = 0, prerelease: Array<string | number> = []): Semver => ({ major, minor, patch, prerelease });
+
+/** One space-separated part of a range, as comparators; undefined when it cannot be read. */
+function comparatorsOf(part: string): Comparator[] | undefined {
+  const match = /^(\^|~>?|>=|<=|>|<|=)?\s*(.+)$/.exec(part);
+  if (!match) return undefined;
+  const op = match[1] ?? '';
+  const p = parsePartial(match[2] as string);
+  if (p === undefined) return undefined;
+  if (p.major === undefined) return op === '' || op === '=' || op === '>=' ? [] : op === '<' ? [{ op: '<', version: at(0, 0, 0, [0]) }] : [];
+  const M = p.major;
+  const exact = p.minor !== undefined && p.patch !== undefined;
+  const low = at(M, p.minor ?? 0, p.patch ?? 0, p.prerelease);
+  switch (op) {
+    case '':
+    case '=':
+      if (exact) return [{ op: '=', version: low }];
+      return p.minor === undefined ? [{ op: '>=', version: at(M) }, { op: '<', version: at(M + 1) }] : [{ op: '>=', version: at(M, p.minor) }, { op: '<', version: at(M, p.minor + 1) }];
+    case '^': {
+      const upper = M > 0 || p.minor === undefined ? at(M + 1) : p.minor > 0 || p.patch === undefined ? at(0, p.minor + 1) : at(0, 0, p.patch + 1);
+      return [{ op: '>=', version: low }, { op: '<', version: upper }];
+    }
+    case '~':
+    case '~>':
+      return [{ op: '>=', version: low }, { op: '<', version: p.minor === undefined ? at(M + 1) : at(M, p.minor + 1) }];
+    case '>=':
+      return [{ op: '>=', version: low }];
+    case '<':
+      return [{ op: '<', version: low }];
+    case '>':
+      return exact ? [{ op: '>', version: low }] : [{ op: '>=', version: p.minor === undefined ? at(M + 1) : at(M, p.minor + 1) }];
+    case '<=':
+      return exact ? [{ op: '<=', version: low }] : [{ op: '<', version: p.minor === undefined ? at(M + 1) : at(M, p.minor + 1) }];
+    default:
+      return undefined;
+  }
+}
+
+function parseRange(range: string): Comparator[][] | undefined {
+  const alternatives = range.trim() === '' ? ['*'] : range.split('||');
+  const out: Comparator[][] = [];
+  for (const alternative of alternatives) {
+    // `>= 1.2` is one part: the operator sticks to what follows it.
+    const parts = alternative.trim().replace(/(\^|~>?|>=|<=|>|<|=)\s+/g, '$1').split(/\s+/).filter((s) => s !== '');
+    if (parts.length === 0) return undefined;
+    const set: Comparator[] = [];
+    for (const part of parts) {
+      const comparators = comparatorsOf(part);
+      if (comparators === undefined) return undefined;
+      set.push(...comparators);
+    }
+    out.push(set);
+  }
+  return out;
+}
+
+/** Whether a range is one this module can read. */
+export function isSemverRange(range: string): boolean {
+  return typeof range === 'string' && range.length <= 200 && parseRange(range) !== undefined;
+}
+
+/**
+ * Does `version` fall in `range`? Undefined when either cannot be read, which
+ * every caller treats as "no": a requirement nobody can check is not met.
+ */
+export function satisfiesRange(version: string, range: string): boolean | undefined {
+  const v = parseSemver(version);
+  const sets = parseRange(range);
+  if (v === undefined || sets === undefined) return undefined;
+  return sets.some((set) =>
+    set.every(({ op, version: bound }) => {
+      const order = compareSemver(v, bound);
+      return op === '=' ? order === 0 : op === '>=' ? order >= 0 : op === '>' ? order > 0 : op === '<' ? order < 0 : order <= 0;
+    }),
+  );
+}

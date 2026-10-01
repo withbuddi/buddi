@@ -39,6 +39,8 @@ import { languageTag } from '../onboarding/language-tag.js';
 import { OWNER_AGENT_ID } from '../pages.js';
 import { HOST_API_VERSION } from '../plugin/version.js';
 import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
+import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
+import { listOwnerPlaces } from '../places.js';
 import { localDateString, timezoneFromEnv } from '../time.js';
 import { createHttpArea, isOwnUrlBinding, registerHttpHeaderDestination, registerHttpUrlDestination, type HttpTransportFactory } from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
@@ -97,6 +99,13 @@ export interface HostBinding {
   manifestNetwork: ReadonlyArray<{ host: string; why: string }>;
   /** The hosts `ctx.buddi.network.declare` added, and why. */
   runtimeNetwork: Map<string, string>;
+  /** The plugins it requires, by name, with their ranges (1.18). */
+  requires: Readonly<Record<string, string>>;
+  /**
+   * `ctx.buddi.plugins.call`, wired by the registry that bound this plugin:
+   * it alone knows the other plugins and their exports.
+   */
+  callExport?: (target: string, name: string, args: unknown, facts: HostFacts) => Promise<unknown>;
   /**
    * What undoes this binding's registrations outside the registry (a channel
    * it registered), run when the plugin is unregistered while buddi runs.
@@ -123,7 +132,10 @@ export function releaseHostBinding(binding: HostBinding): void {
 export function hostBindingOf(manifest: PluginManifest): HostBinding {
   const parsed = parsePluginUses(manifest.uses, `plugin ${manifest.name}'s manifest uses`);
   if (!parsed.ok) throw new Error(parsed.message);
+  const requires = parsePluginRequires(manifest.requires, `plugin ${manifest.name}'s manifest requires`, manifest.name);
+  if (!requires.ok) throw new Error(requires.message);
   return {
+    requires: requires.requires,
     plugin: manifest.name,
     version: manifest.version,
     schema: manifest.schema,
@@ -476,6 +488,27 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
   if (declared.has('schedule')) host.schedule = scheduleArea(facts);
   if (declared.has('secrets')) host.secrets = secretsArea(binding, facts, host);
   if (declared.has('owner:channel')) host.channels = channelsArea(binding);
+  // The owner's places (1.18): read-only, every column the owner set, in
+  // their order. A database without the table (an older one mid-upgrade)
+  // answers none rather than failing the plugin.
+  if (declared.has('owner:places')) {
+    host.owner.places = async () => {
+      try {
+        return await listOwnerPlaces(facts.db);
+      } catch (err) {
+        if ((err as { code?: string } | null)?.code === '42P01') return [];
+        throw err;
+      }
+    };
+  }
+  if (Object.keys(binding.requires).length > 0) {
+    host.plugins = {
+      async call<T>(target: string, name: string, args?: unknown): Promise<T> {
+        if (binding.callExport === undefined) throw new PluginCallRefusal('This process cannot call another plugin.');
+        return (await binding.callExport(target, name, args ?? {}, facts)) as T;
+      },
+    };
+  }
   if (declared.has('owner:notify')) {
     // The kind is always `plugin` and the plugin's name is on the row: a
     // plugin picks an urgency, never a channel (docs/notifications.md,

@@ -42,6 +42,8 @@ export {
 export type { AddressPolicy, BlockReason, CheckedUrl } from './url.js';
 export type { PageFile } from './page-file.js';
 export type { PluginUse } from './uses.js';
+export type { PluginExport, PluginReadiness, PluginSetup } from './requires.js';
+export { PluginCallRefusal } from './requires.js';
 export type { PluginAuthor } from './author.js';
 export type { NativeSearchEvent, NativeSearchRecord, SearchBackendChoice } from './search.js';
 export type {
@@ -159,6 +161,7 @@ export type {
   PluginChannelMessage,
   PluginOwnerMessage,
   PagesArea,
+  PluginsArea,
   ProposalsArea,
   RegisterHost,
   ScheduleArea,
@@ -173,3 +176,4 @@ export type {
   ToolsArea,
   NetworkArea,
 } from '../host/types.js';
+export type { OwnerPlace } from '../places.js';

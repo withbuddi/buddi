@@ -3,6 +3,7 @@
  * imports a tool package (enforced by scripts/check-boundaries.mjs).
  */
 import type { Pool } from 'pg';
+import type { PluginExport, PluginSetup } from './plugin/requires.js';
 import type { ZodType } from 'zod';
 import type { MisfirePolicy } from './scheduler/types.js';
 import type { Sentinel } from './sentinels/types.js';
@@ -842,6 +843,27 @@ export interface PluginManifest {
    * on failure: the note is written without them.
    */
   carryOver?: CarryOverContributor;
+  /**
+   * Whether the plugin can do anything yet (optional, host API 1.18;
+   * docs/plugins.md §2.9): one read-only answer `{ ready, note?, page? }`.
+   * Not ready, the Plugins row says "Needs setup" with the note and opens
+   * the page; a plugin without it is simply loaded.
+   */
+  setup?: PluginSetup;
+  /**
+   * Plugins this one needs, by name, with a semver range (host API 1.18;
+   * docs/plugins.md §2.10). Repeated in `package.json` as `buddi.requires`
+   * for the install card; the two must match. Until every requirement is
+   * installed, enabled, in range and set up, this plugin's tools and widgets
+   * do not load. Declaring any gives `ctx.buddi.plugins`.
+   */
+  requires?: Record<string, string>;
+  /**
+   * Named read-only queries a plugin that requires this one may call through
+   * `ctx.buddi.plugins.call` (host API 1.18). Nothing else of this plugin is
+   * reachable from another.
+   */
+  exports?: Record<string, PluginExport>;
   /**
    * Called once by `register()`, after every check has passed, with the parts
    * of the host that need no call (`RegisterHost`): the place for a plugin to

@@ -26,9 +26,12 @@ import type {
   OnboardingDetails,
   OnboardingReach,
   OnboardingStart,
+  OwnerDateFormat,
   OwnerProfile,
   OwnerProfilePatch,
+  OwnerTimeFormat,
 } from './types.js';
+import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS } from './types.js';
 
 /** Every column, in one place, so the row mapper and the SQL cannot drift. */
 const COLUMNS = `owner_id, state, started_at, completed_at, surface, steps_done, details,
@@ -311,20 +314,22 @@ function toProfile(row: any): OwnerProfile {
     language: text(row.language),
     about: text(row.about),
     displayName: text(row.display_name),
+    timeFormat: (OWNER_TIME_FORMATS as readonly string[]).includes(row.time_format) ? (row.time_format as OwnerTimeFormat) : null,
+    dateFormat: (OWNER_DATE_FORMATS as readonly string[]).includes(row.date_format) ? (row.date_format as OwnerDateFormat) : null,
   };
 }
 
 /** What the agents know about how to address the owner. All of it may be null. */
 export async function getOwnerProfile(pool: Queryable): Promise<OwnerProfile> {
   const { rows } = await pool.query(
-    `select preferred_name, timezone, language, about, display_name
+    `select preferred_name, timezone, language, about, display_name, time_format, date_format
        from core.owner where id = $1`,
     [OWNER_ID],
   );
   return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;
 }
 
-const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null };
+const EMPTY_PROFILE: OwnerProfile = { preferredName: null, timezone: null, language: null, about: null, displayName: null, timeFormat: null, dateFormat: null };
 
 /**
  * Write the profile. Absent keys are left alone; an explicit `null` clears one.
@@ -348,15 +353,22 @@ export async function setOwnerProfile(
   const timezone = value(patch.timezone);
   const language = value(patch.language);
   const about = value(patch.about);
+  // A format that is not one of the known words is Auto: null, never an error.
+  const format = <T extends string>(given: T | null | undefined, known: readonly string[]): T | null | undefined =>
+    given === undefined ? undefined : given !== null && known.includes(given) ? given : null;
+  const timeFormat = format(patch.timeFormat, OWNER_TIME_FORMATS);
+  const dateFormat = format(patch.dateFormat, OWNER_DATE_FORMATS);
 
   const { rows } = await pool.query(
     `update core.owner
         set preferred_name = case when $2::boolean then $3 else preferred_name end,
             timezone       = case when $4::boolean then $5 else timezone end,
             language       = case when $6::boolean then $7 else language end,
-            about          = case when $8::boolean then $9 else about end
+            about          = case when $8::boolean then $9 else about end,
+            time_format    = case when $10::boolean then $11 else time_format end,
+            date_format    = case when $12::boolean then $13 else date_format end
       where id = $1
-      returning preferred_name, timezone, language, about, display_name`,
+      returning preferred_name, timezone, language, about, display_name, time_format, date_format`,
     [
       OWNER_ID,
       preferredName !== undefined,
@@ -367,6 +379,10 @@ export async function setOwnerProfile(
       language ?? null,
       about !== undefined,
       about ?? null,
+      timeFormat !== undefined,
+      timeFormat ?? null,
+      dateFormat !== undefined,
+      dateFormat ?? null,
     ],
   );
   return rows[0] ? toProfile(rows[0]) : EMPTY_PROFILE;

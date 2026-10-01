@@ -2016,6 +2016,13 @@ async function connectWithin(pool: Pool, ms: number): Promise<PoolClient> {
  * back; `connect()` throws, so a query never sees one and cannot open a
  * transaction of its own.
  */
+const readOnlyPools = new WeakSet<object>();
+
+/** Is this pool already `readOnlyPool`'s wrapper? */
+export function isReadOnlyPool(pool: unknown): boolean {
+  return typeof pool === 'object' && pool !== null && readOnlyPools.has(pool);
+}
+
 export function readOnlyPool(pool: Pool, opts: { acquireMs?: number } = {}): Pool {
   const acquireMs = opts.acquireMs ?? PAGE_POOL_ACQUIRE_MS;
   const run = async (config: unknown, values?: unknown): Promise<unknown> => {
@@ -2085,6 +2092,7 @@ export function readOnlyPool(pool: Pool, opts: { acquireMs?: number } = {}): Poo
       return guarded;
     },
   };
+  readOnlyPools.add(guarded);
   return guarded as unknown as Pool;
 }
 
