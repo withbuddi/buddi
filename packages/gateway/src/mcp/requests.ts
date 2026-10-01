@@ -119,6 +119,7 @@ const agentUpdateInput = z
     description: z.string().min(1).max(300).optional(),
     tools: z.array(z.string().min(1)).optional(),
     roles: z.array(z.string().min(1)).optional(),
+    idleRollover: z.enum(['3h', '1d', '1w', 'never']).optional(),
   })
   .strict();
 

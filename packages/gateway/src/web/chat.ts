@@ -75,6 +75,7 @@ import {
   type ArtifactRow,
   type CatalogAgent,
   type CoreToolContext,
+  idleRolloverMs,
 } from '@buddi/core';
 import {
   BudgetExhausted,
@@ -444,7 +445,8 @@ export interface ChatLifetimeView {
   lastActivityAt: string | null;
   /** Characters of stored transcript, against `maxChars`. */
   chars: number;
-  idleTimeoutMs: number;
+  /** The agent's idle limit; null when it never rolls over for idleness. */
+  idleTimeoutMs: number | null;
   maxChars: number;
 }
 
@@ -508,6 +510,8 @@ export async function readChatTranscript(
   pool: Pool,
   conversationId: string,
   now: Date = new Date(),
+  /** The idle limit of the conversation's agent, by id; `Infinity` is never. */
+  idleFor: (agentId: string) => number = () => IDLE_TIMEOUT_MS,
 ): Promise<ChatTranscript | null> {
   const { rows: head } = await pool.query(
     `select id, agent_id, group_id, created_at from core.conversations where id = $1::uuid`,
@@ -596,7 +600,8 @@ export async function readChatTranscript(
       messages: vitals.messages,
       lastActivityAt: vitals.lastActivityAt?.toISOString() ?? null,
       chars: vitals.chars,
-      idleTimeoutMs: IDLE_TIMEOUT_MS,
+      // `null` is "never": JSON has no Infinity.
+      idleTimeoutMs: Number.isFinite(idleFor(String(conversation.agent_id))) ? idleFor(String(conversation.agent_id)) : null,
       maxChars: budget?.maxChars ?? MAX_TRANSCRIPT_CHARS,
     },
     offers: open.map((offer) => ({
@@ -1437,6 +1442,9 @@ export class WebChat {
           return next;
         },
         now: this.#deps.now(),
+        // The agent's own idle setting (Brain tab): three hours, a day, a
+        // week, or never. Size still rolls it over whatever this says.
+        idleMs: idleRolloverMs(agent.idleRollover),
         log: this.#log,
       });
       conversationId = decided.conversationId;

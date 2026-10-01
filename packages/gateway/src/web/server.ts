@@ -93,7 +93,7 @@ import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, inRecovery, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
+import { getAction, idleRolloverMs, inRecovery, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
 import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
@@ -1709,6 +1709,8 @@ export function createWebApp(deps: WebServerDeps): Server {
         const found = await readChatTranscript(
           deps.pool,
           decodeURIComponent(transcript[1] as string),
+          deps.now(),
+          (agentId) => idleRolloverMs(deps.catalog.get(agentId)?.idleRollover),
         );
         if (!found) return sendJson(res, 404, { error: 'no such conversation' });
         return sendJson(res, 200, found);

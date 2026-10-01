@@ -479,7 +479,7 @@ export const TOOLS: McpTool[] = [
   {
     name: 'buddi.agent_update',
     description:
-      "Change an agent's name, handle, description, tool grant or roles — the Setup tab's save. It becomes an approval card on the dashboard and Telegram; the call waits for the owner (up to 10 minutes, then returns { pending }). `tools` replaces the whole grant. Tools that create, change or remove agents are refused here as in the tool picker.",
+      "Change an agent's name, handle, description, tool grant, roles or idle rollover — the Setup tab's save. It becomes an approval card on the dashboard and Telegram; the call waits for the owner (up to 10 minutes, then returns { pending }). `tools` replaces the whole grant. Tools that create, change or remove agents are refused here as in the tool picker.",
     write: true,
     inputSchema: object(
       {
@@ -489,12 +489,13 @@ export const TOOLS: McpTool[] = [
         description: str('A new one-line description.'),
         tools: strings('The new grant, replacing the current one entirely.'),
         roles: strings('The new roles, replacing the current ones.'),
+        idleRollover: { type: 'string', enum: ['3h', '1d', '1w', 'never'], description: 'Idle time before a chat starts a fresh conversation (the Brain tab). A long transcript rolls over either way.' },
       },
       ['agent'],
     ),
     async run(args, rt) {
       const input: Record<string, unknown> = { agent: agentRef(need(args, 'agent')) };
-      for (const key of ['name', 'handle', 'description'] as const) {
+      for (const key of ['name', 'handle', 'description', 'idleRollover'] as const) {
         const value = opt(args, key);
         if (value !== undefined) input[key] = value;
       }

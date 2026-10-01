@@ -8,7 +8,7 @@
  * messages, 95k characters, and a 64,177-token turn to answer one question.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Queryable } from '@buddi/core';
+import { idleRolloverMs, type Queryable } from '@buddi/core';
 import { forgetProjectedSizes } from './context-budget.js';
 import {
   conversationExpiry,
@@ -347,5 +347,52 @@ describe('the size limit a conversation is held to', () => {
     expect(line).toContain('binding');
     expect(line).toContain('claude-opus-5');
     expect(line.split('\n')).toHaveLength(1);
+  });
+});
+
+/**
+ * Each agent says how long its chats may sit idle (the Brain tab): three
+ * hours by default, a day, a week, or never. Size rolls a conversation over
+ * whichever it says.
+ */
+describe('the per-agent idle setting', () => {
+  it('defaults to three hours', () => {
+    expect(idleRolloverMs(undefined)).toBe(3 * HOUR);
+    expect(idleRolloverMs(undefined)).toBe(IDLE_TIMEOUT_MS);
+  });
+
+  it('a day: fourteen hours later is the same conversation, twenty-five is not', () => {
+    const idleMs = idleRolloverMs('1d');
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(14 * HOUR) }), NOW, { idleMs })).toBeNull();
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(25 * HOUR) }), NOW, { idleMs })).toBe('idle');
+  });
+
+  it('a week: six days later carries on, eight days later starts fresh', () => {
+    const idleMs = idleRolloverMs('1w');
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(6 * 24 * HOUR) }), NOW, { idleMs })).toBeNull();
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(8 * 24 * HOUR) }), NOW, { idleMs })).toBe('idle');
+  });
+
+  it('never: a year of silence carries on', () => {
+    const idleMs = idleRolloverMs('never');
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(365 * 24 * HOUR) }), NOW, { idleMs })).toBeNull();
+  });
+
+  it('never still rolls over by size', () => {
+    const idleMs = idleRolloverMs('never');
+    expect(conversationExpiry(vitals({ lastActivityAt: ago(365 * 24 * HOUR), chars: MAX_TRANSCRIPT_CHARS + 1 }), NOW, { idleMs })).toBe('size');
+  });
+
+  it('is what conversationForTurn applies', async () => {
+    const pool = {
+      query: vi.fn(async (sql: string) => (/count\(m\.id\)/.test(sql)
+        ? { rows: [{ messages: 4, last_at: ago(25 * HOUR), chars: 400 }] }
+        : { rows: [] })),
+    } as unknown as Queryable;
+    const start = vi.fn(async () => 'fresh');
+    const week = await conversationForTurn(pool, { current: 'old', start, now: NOW, idleMs: idleRolloverMs('1w'), maxChars: MAX_TRANSCRIPT_CHARS });
+    expect(week.conversationId).toBe('old');
+    const three = await conversationForTurn(pool, { current: 'old', start, now: NOW, idleMs: idleRolloverMs('3h'), maxChars: MAX_TRANSCRIPT_CHARS });
+    expect(three.boundary?.reason).toBe('idle');
   });
 });

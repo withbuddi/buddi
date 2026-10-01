@@ -32,6 +32,7 @@ import {
   type CatalogAgent,
   type Queryable,
   type CoreToolContext,
+  idleRolloverMs,
 } from '@buddi/core';
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -1003,6 +1004,7 @@ export class ChatSession {
         return id;
       },
       now: this.#deps.now(),
+      idleMs: idleRolloverMs(agent.idleRollover),
       ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
       log: (line: string) => this.#deps.log?.(line),
     });

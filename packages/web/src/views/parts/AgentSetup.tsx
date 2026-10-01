@@ -2,8 +2,8 @@
  * How one agent is wired, in three parts chosen from a row at the top:
  *
  *  - Identity: its name, handle, face, description and persona;
- *  - Brain: the account and model it runs on, its turn budget, language and
- *    thinking;
+ *  - Brain: the account and model it runs on, its turn budget, language,
+ *    thinking, and how long a chat may sit idle before a fresh one;
  *  - Access: its roles, the tools it may call, and who it may ask.
  *
  * The part is carried in the address (`#/agents/<id>/setup/brain`), so a
@@ -21,7 +21,7 @@
  */
 import { THINKING_UP_TO_MODEL, effectiveProviderKind, thinkingIsHonoured } from '../../shell/thinking';
 import { useEffect, useRef, useState } from 'react';
-import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type ProviderModels, type ProviderAccountsView, type RememberedApproval } from '../../api';
+import { AGENTS_CHANGED, api, type AgentEngine, type AgentRow, type IdleRollover, type ProviderModels, type ProviderAccountsView, type RememberedApproval } from '../../api';
 import { Button, Details, Empty, ErrorBanner, Field, FormGrid, Notice, Pill, Row, Section, Stack, Tab, Tabs, Toolbar, useAsync } from '../../ui';
 import { ModelPicker } from '../../ModelPicker';
 import { agentRoute } from '../../routes';
@@ -32,6 +32,14 @@ import { FacePicker, mascotFile, type FaceChoice } from './FacePicker';
 import { KNOWN_ROLES, holderOf, isKnownRole, orderRoles } from '../../shell/roles';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
+
+/** What the Brain tab offers for the idle rollover, in the order it lists them. */
+const IDLE_ROLLOVERS: Array<{ value: IdleRollover; label: string }> = [
+  { value: '3h', label: '3 hours' },
+  { value: '1d', label: 'A day' },
+  { value: '1w', label: 'A week' },
+  { value: 'never', label: 'Never' },
+];
 /** The range the Brain tab offers for steps per reply; the CLI accepts any positive number. */
 const MIN_STEPS = 10;
 const MAX_STEPS = 500;
@@ -269,6 +277,24 @@ function Agent({
                       ))}
                     </select>
                   </Field>
+                  {engine ? (
+                    <Field
+                      label="New chat after"
+                      hint="Idle time before your next message starts a fresh conversation, with a carried-over note. A transcript that grows too long starts one either way."
+                    >
+                      <select
+                        aria-label="New chat after"
+                        value={engine.idleRollover ?? '3h'}
+                        onChange={(e) => set({ idleRollover: e.target.value === '3h' ? null : e.target.value })}
+                      >
+                        {IDLE_ROLLOVERS.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  ) : null}
                   {thinkingIsHonoured(effectiveProviderKind(engine ?? { id: agent.id, provider }, accounts)) ? (
                     <Field label="Thinking" hint="Reasoning before the answer. Off is faster and cheaper.">
                       <select

@@ -35,6 +35,9 @@ import {
   type EnginePatch,
   type ProviderKind,
   type ProviderModels,
+  DEFAULT_IDLE_ROLLOVER,
+  IDLE_ROLLOVERS,
+  isIdleRollover,
 } from '@buddi/core';
 import { createProvider, providerCapabilities } from '@buddi/runtime';
 import { gatewayCatalog, AGENTS_DIR, agentSearchPath, REPO_ROOT } from './agents/catalog.js';
@@ -53,6 +56,7 @@ export const USAGE = `buddi agents — which engine each agent runs on
       --model <id>                   validated against that provider's catalogue
       --max-turns <n>                turn budget for one run
       --language mirror|en|fr        which language it answers in
+      --idle-rollover 3h|1d|1w|never idle time before a chat starts fresh
   buddi agents models [--provider p] what this build knows, and what you can reach
   buddi agents test <handle> [--prompt "..."]   one cheap live turn
   buddi agents migrate [--dry-run]   move agents/ and skills/ out of the repository
@@ -200,11 +204,19 @@ export function parseAgentsArgs(argv: string[]): AgentsCommand {
         i += 1;
         continue;
       }
+      if (arg === '--idle-rollover') {
+        if (!isIdleRollover(value)) {
+          throw new Error(`--idle-rollover needs one of: ${IDLE_ROLLOVERS.join(', ')}`);
+        }
+        change.idleRollover = value;
+        i += 1;
+        continue;
+      }
       throw new Error(`unknown option for buddi agents set: ${arg}`);
     }
     if (Object.keys(change).length === 0) {
       throw new Error(
-        'buddi agents set needs something to change (--provider, --model, --max-turns, --language)',
+        'buddi agents set needs something to change (--provider, --model, --max-turns, --language, --idle-rollover)',
       );
     }
     return { action: 'set', handle, change };
@@ -505,6 +517,7 @@ async function showCommand(
   );
   out('max turns', String(agent.maxTurns));
   out('language', agent.language);
+  out('idle rollover', agent.idleRollover ?? DEFAULT_IDLE_ROLLOVER);
   out('roles', roles.length > 0 ? roles.join(', ') : '(none)');
   out('tools', agent.tools.length > 0 ? agent.tools.join(', ') : '(none)');
   out(

@@ -36,6 +36,10 @@ import {
   type EnginePatch,
   type ProviderKind,
   type ProviderModels,
+  DEFAULT_IDLE_ROLLOVER,
+  IDLE_ROLLOVERS,
+  isIdleRollover,
+  type IdleRollover,
 } from '@buddi/core';
 
 export type EngineWriteResult<T> =
@@ -60,6 +64,8 @@ export interface AgentEngineView {
   language: string;
   /** Reasoning before the answer: on, off, or null for the model's default. */
   thinking: 'on' | 'off' | null;
+  /** Idle time before a fresh conversation, as the file says it; `3h` when absent. */
+  idleRollover: IdleRollover;
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -107,6 +113,15 @@ function thinkingOnDisk(agent: CatalogAgent): 'on' | 'off' | null {
   }
 }
 
+/** The idle setting on disk, the file winning over the loaded catalog. */
+function idleRolloverOnDisk(agent: CatalogAgent): IdleRollover {
+  try {
+    return parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file }).frontmatter.idleRollover ?? DEFAULT_IDLE_ROLLOVER;
+  } catch {
+    return agent.idleRollover ?? DEFAULT_IDLE_ROLLOVER;
+  }
+}
+
 /** Whether the file leaves `maxTurns` to the built-in default. */
 function maxTurnsUnsetOnDisk(agent: CatalogAgent): boolean {
   try {
@@ -122,6 +137,7 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     provider: agent.provider.kind, model: agent.model, maxTurns: agent.maxTurns, language: agent.language,
     maxTurnsIsDefault: maxTurnsUnsetOnDisk(agent), defaultMaxTurns: DEFAULT_MAX_TURNS,
     thinking: thinkingOnDisk(agent),
+    idleRollover: idleRolloverOnDisk(agent),
     credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
     available: agent.available, unavailableReason: agent.unavailableReason,
     ...(agent.heldBack === undefined ? {} : { heldBack: agent.heldBack }),
@@ -173,6 +189,7 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     defaultMaxTurns: DEFAULT_MAX_TURNS,
     language,
     thinking: thinkingOnDisk(agent),
+    idleRollover: idleRolloverOnDisk(agent),
     credentialKind,
     credentialEnv,
     /*
@@ -227,8 +244,16 @@ export function engineChangeFromBody(body: Record<string, unknown>): EnginePatch
     change.thinking = body.thinking;
   }
 
+  // `null` removes the key too: back to three hours.
+  if (body.idleRollover !== undefined) {
+    if (body.idleRollover !== null && !isIdleRollover(body.idleRollover)) {
+      return `\`idleRollover\` must be one of: ${IDLE_ROLLOVERS.join(', ')}, or null`;
+    }
+    change.idleRollover = body.idleRollover;
+  }
+
   if (Object.keys(change).length === 0) {
-    return 'nothing to change (send provider, model, maxTurns, language or thinking)';
+    return 'nothing to change (send provider, model, maxTurns, language, thinking or idleRollover)';
   }
   return change;
 }

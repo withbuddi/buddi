@@ -29,11 +29,14 @@ export function hasRolledOver(lifetime: ChatLifetime, now: number): boolean {
   if (lifetime.messages <= 0) return false;
   if (lifetime.chars > lifetime.maxChars) return true;
   if (lifetime.lastActivityAt === null) return false;
+  if (lifetime.idleTimeoutMs === null) return false;
   return now - Date.parse(lifetime.lastActivityAt) > lifetime.idleTimeoutMs;
 }
 
-/** "3 hours", "90 minutes" — the limit in the coarsest honest unit. */
+/** "3 hours", "1 day", "90 minutes" — the limit in the coarsest honest unit. */
 export function spanText(ms: number): string {
+  const days = ms / 86_400_000;
+  if (days >= 1 && Number.isInteger(days)) return days === 7 ? '1 week' : `${days} day${days === 1 ? '' : 's'}`;
   const hours = ms / 3_600_000;
   if (hours >= 1 && Number.isInteger(hours)) return `${hours} hour${hours === 1 ? '' : 's'}`;
   const minutes = Math.round(ms / 60_000);
@@ -56,9 +59,11 @@ export function conversationLine(opts: {
     };
   }
 
+  const size = `${Math.round(lifetime.maxChars / 1000)}k characters`;
   const rule =
-    `A conversation ends after ${spanText(lifetime.idleTimeoutMs)} idle, or once its transcript ` +
-    `grows past ${Math.round(lifetime.maxChars / 1000)}k characters. ` +
+    (lifetime.idleTimeoutMs === null
+      ? `A conversation ends once its transcript grows past ${size}. `
+      : `A conversation ends after ${spanText(lifetime.idleTimeoutMs)} idle, or once its transcript grows past ${size}. `) +
     'What the agent remembers about you carries over.';
 
   const count = `${lifetime.messages} message${lifetime.messages === 1 ? '' : 's'}`;

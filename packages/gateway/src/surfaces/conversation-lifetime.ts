@@ -24,8 +24,11 @@
  * Two axes, OR-ed, both about the *previous* conversation and both evaluated
  * at the moment the owner says something — never in the middle of a turn:
  *
- *  1. **Idle.** More than `IDLE_TIMEOUT_MS` (three hours) since the last thing
- *     written in it. Three hours is the honest middle of the brief: finishing
+ *  1. **Idle.** More than the agent's idle setting since the last thing
+ *     written in it — `IDLE_TIMEOUT_MS` (three hours) unless its file says
+ *     `idleRollover: 1d`, `1w` or `never` (the Brain tab; surfaces pass it as
+ *     `idleMs`, `Infinity` for never, which turns this axis off and leaves
+ *     size alone). Three hours is the honest middle of the brief: finishing
  *     a thought ten minutes later must carry, and a message the next morning
  *     must not drag yesterday along. A gap that long is a different sitting —
  *     after lunch, after the school run, after sleep — and the few times it is

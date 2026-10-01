@@ -384,3 +384,21 @@ describe('steps per reply on Brain', () => {
     expect(api.setAgentEngine).not.toHaveBeenCalled();
   });
 });
+
+it('offers the idle rollover on Brain: three hours by default, saved as it changes, three hours sent as null', async () => {
+  vi.mocked(api.setAgentEngine).mockResolvedValue({ changed: ['idleRollover'], note: 'Saved' } as never);
+  render(<AgentSetup agentId="demo" section="brain" />);
+  const select = await screen.findByRole('combobox', { name: 'New chat after' });
+  expect(select).toHaveValue('3h');
+  expect([...(select as HTMLSelectElement).options].map((o) => o.textContent)).toEqual(['3 hours', 'A day', 'A week', 'Never']);
+  fireEvent.change(select, { target: { value: '1d' } });
+  await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('demo', { idleRollover: '1d' }));
+  fireEvent.change(select, { target: { value: '3h' } });
+  await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('demo', { idleRollover: null }));
+});
+
+it('shows the idle rollover the agent file declares', async () => {
+  vi.mocked(api.agents).mockResolvedValue({ ...view, engines: [{ ...(view.engines[0] as object), idleRollover: '1d' }] } as unknown as AgentsView);
+  render(<AgentSetup agentId="demo" section="brain" />);
+  expect(await screen.findByRole('combobox', { name: 'New chat after' })).toHaveValue('1d');
+});

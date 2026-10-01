@@ -928,6 +928,8 @@ export interface AgentEngine {
   language: string;
   /** Reasoning before the answer: on, off, or null for the model's default. */
   thinking: 'on' | 'off' | null;
+  /** Idle time before a fresh conversation. Optional: an older server does not send it. */
+  idleRollover?: IdleRollover;
   credentialKind: string;
   credentialEnv: string;
   available: boolean;
@@ -1647,7 +1649,12 @@ export interface EngineChange {
   language?: string;
   /** `null` removes the setting: back to the model's default. */
   thinking?: 'on' | 'off' | null;
+  /** `null` removes the setting: back to three hours. */
+  idleRollover?: IdleRollover | null;
 }
+
+/** How long a chat may sit idle before the next message starts a fresh one. */
+export type IdleRollover = '3h' | '1d' | '1w' | 'never';
 
 /* ------------------------------------------------------------------ *
  * Secrets: the owner vault (docs/owner-secrets.md §6), from

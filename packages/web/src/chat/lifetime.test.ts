@@ -90,3 +90,21 @@ describe('the conversation line', () => {
     expect(spanText(90 * 60_000)).toBe('90 minutes');
   });
 });
+
+describe('an agent with its own idle setting', () => {
+  it('a day: says so, and a fourteen-hour gap has not rolled over', () => {
+    const day = live({ idleTimeoutMs: 24 * 3_600_000, lastActivityAt: '2026-09-14T22:00:00Z' });
+    expect(hasRolledOver(day, NOW)).toBe(false);
+    expect(conversationLine({ lifetime: day, startedAt: null, now: NOW, timezone: 'UTC' }).title).toContain('after 1 day idle');
+    expect(spanText(7 * 24 * 3_600_000)).toBe('1 week');
+  });
+
+  it('never: only size ends it, and the rule says so', () => {
+    const never = live({ idleTimeoutMs: null, lastActivityAt: '2025-01-01T00:00:00Z' });
+    expect(hasRolledOver(never, NOW)).toBe(false);
+    expect(hasRolledOver({ ...never, chars: 90_000 }, NOW)).toBe(true);
+    const title = conversationLine({ lifetime: never, startedAt: null, now: NOW, timezone: 'UTC' }).title;
+    expect(title).toContain('once its transcript grows past 80k characters');
+    expect(title).not.toContain('idle');
+  });
+});

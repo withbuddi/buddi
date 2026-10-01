@@ -480,3 +480,29 @@ describe('an accepted agent speaks through an account', () => {
     expect(preview).not.toContain('Speaks through');
   });
 });
+
+describe('a proposed agent may say how long its chats sit idle', () => {
+  it('writes the template\'s idle rollover into the file, says so on the card, and the catalog reads it', async () => {
+    const hh = harness([{ ...GARDENER, idleRollover: '1d' }]);
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(hh, 'platform.accept_plugin_agent', { plugin: 'garden', agent: 'gardener' });
+    expect(envelope.content).toContain('idleRollover: 1d');
+    expect(preview).toContain('A chat starts fresh after a day idle.');
+    await hh.tool('platform.accept_plugin_agent').execute({ plugin: 'garden', agent: 'gardener' }, hh.ctx);
+    expect(hh.catalog.get('gardener')?.idleRollover).toBe('1d');
+  });
+
+  it('leaves the key out when the template says nothing: three hours', () => {
+    const { envelope, preview } = described<AcceptPluginAgentEnvelope>(h, 'platform.accept_plugin_agent', { plugin: 'garden', agent: 'gardener' });
+    expect(envelope.content).not.toContain('idleRollover');
+    expect(preview).not.toContain('starts fresh');
+    expect('idleRollover' in envelope).toBe(false);
+  });
+
+  it('can be changed through platform.update_agent, the path buddi.agent_update takes', async () => {
+    const { preview } = described(h, 'platform.update_agent', { id: 'scout', idleRollover: 'never' });
+    expect(preview).toContain('idleRollover');
+    await h.tool('platform.update_agent').execute({ id: 'scout', idleRollover: 'never' }, h.ctx);
+    expect(h.catalog.get('scout')?.idleRollover).toBe('never');
+    expect(refusalOf(h, 'platform.update_agent', { id: 'scout', idleRollover: '2d' })).toMatch(/idleRollover|Invalid/);
+  });
+});

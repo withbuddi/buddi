@@ -41,6 +41,7 @@ export const FRONTMATTER_ORDER: readonly string[] = [
   'maxTurns',
   'language',
   'thinking',
+  'idleRollover',
   'intro',
   'starters',
   'avatar',
@@ -68,6 +69,8 @@ export interface AgentFileSpec {
   language?: string;
   /** Reasoning before the answer: `on`, `off`, or absent for the model's default. */
   thinking?: 'on' | 'off';
+  /** Idle time before a fresh conversation: `3h` (absent), `1d`, `1w`, `never`. */
+  idleRollover?: string;
   /** The agent's own opening: one sentence, and up to three example requests. */
   intro?: string;
   starters?: string[];
@@ -102,6 +105,7 @@ export function composeAgentFile(spec: AgentFileSpec): string {
     maxTurns: spec.maxTurns,
     language: spec.language,
     thinking: spec.thinking,
+    idleRollover: spec.idleRollover,
     intro: spec.intro,
     starters: spec.starters === undefined || spec.starters.length === 0 ? undefined : spec.starters,
     avatar: spec.avatar,

@@ -40,6 +40,7 @@ import { AgentFileError, parseAgentFile, type AgentFrontmatter } from './frontma
 import { resolveDelegates } from './delegates.js';
 import { providerFromEnv } from './provider-from-env.js';
 import type { AgentSource } from './search-path.js';
+import type { IdleRollover } from './idle-rollover.js';
 import {
   loadSkillsDir,
   skillAdmits,
@@ -193,6 +194,8 @@ export interface CatalogAgent extends AgentSummary {
   tools: string[];
   maxTurns: number;
   thinking?: ThinkingSetting;
+  /** Idle time before a fresh conversation, when the file says; absent is `3h`. */
+  idleRollover?: IdleRollover;
   language: AgentLanguage;
   provider: ProviderRef;
   /**
@@ -909,6 +912,7 @@ function buildAgent(
     tools,
     maxTurns,
     ...(frontmatter.thinking === undefined ? {} : { thinking: frontmatter.thinking }),
+    ...(frontmatter.idleRollover === undefined ? {} : { idleRollover: frontmatter.idleRollover }),
     language,
     provider,
     availability,

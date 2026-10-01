@@ -32,6 +32,7 @@ import {
   type YamlValue,
 } from './frontmatter.js';
 import { modelProblem, type ProviderKind } from '../provider.js';
+import type { IdleRollover } from './idle-rollover.js';
 
 export class AgentEditError extends Error {
   override readonly name = 'AgentEditError';
@@ -67,10 +68,12 @@ export interface EnginePatch {
   language?: 'mirror' | 'en' | 'fr' | undefined;
   /** `null` removes the key: back to the model's own default. */
   thinking?: 'on' | 'off' | null | undefined;
+  /** Idle time before a fresh conversation. `null` removes the key: back to `3h`. */
+  idleRollover?: IdleRollover | null | undefined;
 }
 
 /** Keys `buddi agents set` and the dashboard may write. Nothing else. */
-export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language', 'thinking'];
+export const ENGINE_KEYS: readonly string[] = ['provider', 'model', 'maxTurns', 'language', 'thinking', 'idleRollover'];
 
 /* ------------------------------------------------------------------ *
  * Serialization
@@ -287,6 +290,7 @@ export function enginePatch(change: EnginePatch): FrontmatterPatch {
   if (change.maxTurns !== undefined) patch.maxTurns = change.maxTurns;
   if (change.language !== undefined) patch.language = change.language;
   if (change.thinking !== undefined) patch.thinking = change.thinking;
+  if (change.idleRollover !== undefined) patch.idleRollover = change.idleRollover;
   return patch;
 }
 

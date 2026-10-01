@@ -13,6 +13,7 @@
  */
 import { z } from 'zod';
 import { modelProblem, PROVIDER_KINDS, type ProviderKind } from '../provider.js';
+import { IDLE_ROLLOVERS } from './idle-rollover.js';
 
 export class AgentFileError extends Error {
   override readonly name = 'AgentFileError';
@@ -222,6 +223,12 @@ export const agentFrontmatterSchema = z
     maxTurns: z.number().int().positive().optional(),
     /** Reasoning before answering: `on`, `off`, or absent for the model's default. */
     thinking: z.enum(['on', 'off']).optional(),
+    /**
+     * Idle time before the next message starts a fresh conversation: `3h`
+     * (the default when absent), `1d`, `1w` or `never`. Size still rolls a
+     * conversation over whatever this says. See `idle-rollover.ts`.
+     */
+    idleRollover: z.enum(IDLE_ROLLOVERS).optional(),
     default: z.boolean().optional(),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
     /**

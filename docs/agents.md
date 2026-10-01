@@ -1,7 +1,7 @@
 ---
 title: "Agents"
 status: reference
-updated: 2026-09-30
+updated: 2026-10-01
 ---
 
 # Agents
@@ -30,6 +30,19 @@ The dashboard marks it "Turn budget reached" and, under the conversation's
 latest reply while nothing is running, offers **Continue**, which sends
 "continue" as you so the next run picks up with the whole history. On Telegram
 the answer carries a Continue button that does the same once, then goes away.
+
+## New chat after
+
+A chat with an agent rolls over to a fresh conversation when it has sat idle
+too long or its transcript has grown too long. The idle time is the agent's
+own: `idleRollover` in the frontmatter, `3h` (the default when absent), `1d`,
+`1w` or `never`. Set it on Setup → Brain ("New chat after"), with
+`buddi agents set <handle> --idle-rollover 1d`, or over MCP with
+`buddi.agent_update`'s `idleRollover`. `never` turns off only the idle rule:
+a transcript past its budget still rolls over. A plugin's proposed agent may
+declare its own default; the Developer agent asks for a day. The fresh
+conversation opens with a carried-over note written from the old one
+([conversations.md](conversations.md#the-context-budget-follows-the-model)).
 
 ## Telling the owner now
 

@@ -207,6 +207,26 @@ describe('the engine endpoint', () => {
     expect((await post({ model: 'claude-opus-5' }, headers, 'nobody')).status).toBe(404);
   });
 
+  it('shows the idle rollover (three hours by default) and edits it, null going back to the default', async () => {
+    const { cookie, csrf } = await signIn();
+    const headers = { cookie, 'x-buddi-csrf': csrf, origin: base };
+    const listed = (await (await fetch(`${base}/api/agents`, { headers: { cookie } })).json()) as { engines: Array<{ idleRollover: string }> };
+    expect(listed.engines[0]!.idleRollover).toBe('3h');
+
+    const res = await post({ idleRollover: '1d' }, headers);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { agent: { idleRollover: string }; changed: string[] };
+    expect(body.changed).toEqual(['idleRollover']);
+    expect(body.agent.idleRollover).toBe('1d');
+    expect(readFileSync(file, 'utf8')).toContain('idleRollover: 1d');
+
+    expect((await post({ idleRollover: '2d' }, headers)).status).toBe(400);
+
+    const back = (await (await post({ idleRollover: null }, headers)).json()) as { agent: { idleRollover: string } };
+    expect(back.agent.idleRollover).toBe('3h');
+    expect(readFileSync(file, 'utf8')).not.toContain('idleRollover');
+  });
+
   it('lists engines and the model catalogue alongside the agents', async () => {
     const { cookie } = await signIn();
     const res = await fetch(`${base}/api/agents`, { headers: { cookie } });

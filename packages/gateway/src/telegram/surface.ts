@@ -46,6 +46,7 @@ import {
   type Queryable,
   type RenderedOffers,
   type Reminder,
+  idleRolloverMs,
 } from '@buddi/core';
 import { InterjectionQueue, createConversation, type InterjectionSource } from '@buddi/runtime';
 import {
@@ -905,7 +906,7 @@ export async function conversationForChatTurn(
   pool: Queryable,
   chatId: string,
   agentId: string,
-  opts: { now: Date; continuation?: boolean | undefined; log?: ((line: string) => void) | undefined; onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook | undefined },
+  opts: { now: Date; continuation?: boolean | undefined; log?: ((line: string) => void) | undefined; onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook | undefined; idleMs?: number | undefined },
 ): Promise<TurnConversation> {
   const current = await getConversationForChat(pool, chatId, agentId);
   return conversationForTurn(pool, {
@@ -916,6 +917,7 @@ export async function conversationForChatTurn(
     now: opts.now,
     ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
     ...(opts.log === undefined ? {} : { log: opts.log }),
+    ...(opts.idleMs === undefined ? {} : { idleMs: opts.idleMs }),
   });
 }
 
@@ -2060,6 +2062,7 @@ export class TelegramSurface {
         ...(opts.continuation === undefined ? {} : { continuation: opts.continuation }),
         log: (line) => this.#log(`telegram: chat ${chatId} — ${line}`),
         onConversationRollover: this.#opts.onConversationRollover,
+        idleMs: idleRolloverMs(agent.idleRollover),
       },
     );
     // The thread that question was asked in is over; nothing may still claim

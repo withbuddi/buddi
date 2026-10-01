@@ -82,6 +82,7 @@ import {
   upsertMission,
   type MisfirePolicy,
   DELEGATE_EVERYONE,
+  IDLE_ROLLOVERS,
 } from '@buddi/core';
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
@@ -504,6 +505,8 @@ export interface CreateAgentEnvelope {
   account: AccountChoice | null;
   maxTurns: number | null;
   language: string | null;
+  /** Idle time before a fresh conversation, when the agent sets one. */
+  idleRollover?: string;
   avatar: string | null;
   accent: string | null;
   roles: string[];
@@ -585,6 +588,16 @@ function personaBlock(content: string): string[] {
   return ['Its persona, in full:', ...body.split('\n').map((line) => `  ${line}`)];
 }
 
+/** The idle setting as the sentence the owner approves. */
+function idleRolloverSentence(value: string): string {
+  switch (value) {
+    case '1d': return 'A chat starts fresh after a day idle.';
+    case '1w': return 'A chat starts fresh after a week idle.';
+    case 'never': return 'A chat never starts fresh for idleness alone, only when its transcript grows too long.';
+    default: return 'A chat starts fresh after 3 hours idle.';
+  }
+}
+
 export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readonly ToolSpec[]): string {
   return [
     `Create a new agent: ${envelope.name} (@${envelope.handle})`,
@@ -610,6 +623,7 @@ export function renderCreatePreview(envelope: CreateAgentEnvelope, specs: readon
       // "the default turns per run" tells them nothing they can decide on.
       `, ${envelope.maxTurns ?? DEFAULT_MAX_TURNS} turns per run.`,
     ...(envelope.roles.length === 0 ? [] : [`Roles it answers for: ${envelope.roles.join(', ')}.`]),
+    ...(envelope.idleRollover === undefined ? [] : [idleRolloverSentence(envelope.idleRollover)]),
     ...(envelope.avatar || envelope.accent
       ? [`Face: ${[envelope.avatar, envelope.accent].filter(Boolean).join(', ')}.`]
       : []),
@@ -763,6 +777,13 @@ const createInput = z
       .regex(/^#[0-9a-fA-F]{6}$/)
       .optional()
       .describe('Its own colour, as #rrggbb. Leave it out for a tint chosen from its id.'),
+    idleRollover: z
+      .enum(IDLE_ROLLOVERS)
+      .optional()
+      .describe(
+        'How long a chat with it may sit idle before the next message starts a fresh conversation: 3h (the ' +
+          'default), 1d, 1w or never. A long transcript still rolls over whatever this says.',
+      ),
     roles: z.array(z.string().min(1)).optional().describe('Capabilities it answers for, e.g. ["recap"].'),
     delegates: z
       .array(z.string().min(1))
@@ -860,6 +881,7 @@ function buildCreateEnvelope(
     ...(roles === undefined ? {} : { roles }),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
+    ...(input.idleRollover === undefined ? {} : { idleRollover: input.idleRollover }),
     ...(input.avatar === undefined ? {} : { avatar: checkAvatar(input.avatar) }),
     ...(input.accent === undefined ? {} : { accent: input.accent.toLowerCase() }),
     // Replacing the example that declares `default: true` must not leave the
@@ -892,6 +914,8 @@ function buildCreateEnvelope(
     account,
     maxTurns: input.maxTurns ?? null,
     language: input.language ?? null,
+    // Only when set, so an envelope approved before this field existed hashes the same.
+    ...(input.idleRollover === undefined ? {} : { idleRollover: input.idleRollover }),
     avatar: spec.avatar ?? null,
     accent: spec.accent ?? null,
     roles: roles ?? [],
@@ -958,6 +982,13 @@ const updateInput = z
       .regex(/^#[0-9a-fA-F]{6}$/)
       .optional()
       .describe('Its own colour, as #rrggbb. Leave it out for a tint chosen from its id.'),
+    idleRollover: z
+      .enum(IDLE_ROLLOVERS)
+      .optional()
+      .describe(
+        'How long a chat with it may sit idle before the next message starts a fresh conversation: 3h (the ' +
+          'default), 1d, 1w or never. A long transcript still rolls over whatever this says.',
+      ),
     roles: z.array(z.string().min(1)).optional(),
     delegates: z.array(z.string().min(1)).optional().describe('A new delegate allowlist, replacing the current one.'),
   })
@@ -1044,6 +1075,7 @@ function buildUpdateEnvelope(
     ...(!onAccounts && input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
+    ...(input.idleRollover === undefined ? {} : { idleRollover: input.idleRollover }),
     ...(input.avatar === undefined ? {} : { avatar: checkAvatar(input.avatar) }),
     ...(input.accent === undefined ? {} : { accent: input.accent.toLowerCase() }),
     ...(roles === undefined ? {} : { roles }),
@@ -1490,6 +1522,7 @@ function buildAcceptAgentEnvelope(
       ...(suggestion.provider === undefined ? {} : { provider: suggestion.provider }),
       ...(suggestion.maxTurns === undefined ? {} : { maxTurns: suggestion.maxTurns }),
       ...(suggestion.language === undefined ? {} : { language: suggestion.language }),
+      ...(suggestion.idleRollover === undefined ? {} : { idleRollover: suggestion.idleRollover }),
       ...(suggestion.roles === undefined ? {} : { roles: suggestion.roles }),
     },
     deps,

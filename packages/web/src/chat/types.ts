@@ -162,7 +162,8 @@ export interface ChatLifetime {
   messages: number;
   lastActivityAt: string | null;
   chars: number;
-  idleTimeoutMs: number;
+  /** Null when this agent's chats never roll over for idleness. */
+  idleTimeoutMs: number | null;
   maxChars: number;
 }
 
