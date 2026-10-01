@@ -141,6 +141,7 @@ import {
   TAILSCALE_SETTING_KEY,
   daemonWhois,
   isLoginRefusal,
+  isUnansweredRefusal,
   plausibleLogin,
   proxiedThroughTailscale,
   sameLogin,
@@ -153,7 +154,7 @@ import {
   type TailscaleProfile,
   type TailscaleWhois,
 } from './tailscale.js';
-import { retryHref, sendSignedOut, wantsSignedOutPage } from './signed-out.js';
+import { retryHref, sendSignedOut, wantsSignedOutPage, type SignedOutOptions } from './signed-out.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
 import {
@@ -490,8 +491,11 @@ export function createWebApp(deps: WebServerDeps): Server {
       const session = await sessions.resolve(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort(req))], scope, now);
       if (!session) return null;
       if (session.via === 'tailscale') {
-        const confirmed = await identityOf(req, now);
+        let refusal: TailscaleRefusal | undefined;
+        const confirmed = await identityOf(req, now, (reason) => { refusal = reason; });
         if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
+          // "Could not ask" is not an answer: no socket now, but the session stays.
+          if (!confirmed && isUnansweredRefusal(refusal)) return null;
           await sessions.destroy(session.id).catch(() => {});
           return null;
         }
@@ -651,7 +655,6 @@ export function createWebApp(deps: WebServerDeps): Server {
     tailscaleIdentity(req, {
       setting: readTailscaleSetting,
       whois,
-      mayAskDaemon: () => !limiter.blocked(remoteKey(req), now),
       log,
       now: () => now,
       onRefusal,
@@ -668,6 +671,50 @@ export function createWebApp(deps: WebServerDeps): Server {
       cookieHeader(sessionCookieName(cookiePort(req)), session.id, { httpOnly: true, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
       cookieHeader(csrfCookieName(cookiePort(req)), session.csrf, { httpOnly: false, maxAgeSeconds, secure: session.scope === 'remote' && !!deps.config.publicOrigin }),
     ];
+  };
+
+  /**
+   * The same pair, expired: what a response carries when the browser presented
+   * a session that is gone, so it stops presenting it. A forgotten tab or a
+   * polling page then sends no credential at all, which counts as nothing.
+   */
+  const expiredCookies = (req: IncomingMessage): string[] => {
+    const secure = requestScope(req) === 'remote' && !!deps.config.publicOrigin;
+    return [
+      cookieHeader(sessionCookieName(cookiePort(req)), '', { httpOnly: true, maxAgeSeconds: 0, secure }),
+      cookieHeader(csrfCookieName(cookiePort(req)), '', { httpOnly: false, maxAgeSeconds: 0, secure }),
+    ];
+  };
+
+  /**
+   * What the signed-out page should offer this request: how it arrived,
+   * whether Tailscale can sign it in, and whether a lockout is running.
+   */
+  const signedOutFor = async (
+    req: IncomingMessage,
+    pathname: string,
+    search: string,
+    now: Date,
+    refusal: TailscaleRefusal | undefined,
+  ): Promise<SignedOutOptions> => {
+    const proxied = proxiedThroughTailscale(req);
+    let publicHost: string | undefined;
+    try { publicHost = deps.config.publicOrigin ? new URL(deps.config.publicOrigin).hostname : undefined; } catch { publicHost = undefined; }
+    let host: string | undefined;
+    try { host = req.headers.host ? new URL(`http://${req.headers.host}`).hostname : undefined; } catch { host = undefined; }
+    const scope = requestScope(req);
+    const arrived: SignedOutOptions['arrived'] =
+      proxied || (publicHost !== undefined && host === publicHost) ? 'tailnet' : scope === 'local' ? 'local' : 'remote';
+    const setting = arrived === 'tailnet' ? await readTailscaleSetting() : null;
+    const lockedForMs = limiter.retryAfterMs(remoteKey(req), now);
+    return {
+      retry: retryHref(pathname, search),
+      arrived,
+      tailscaleSignIn: !!setting?.enabled && !isLoginRefusal(refusal),
+      ...(isLoginRefusal(refusal) ? { tailscaleRefusal: tailscaleRefusalReason(refusal as TailscaleRefusal) } : {}),
+      ...(isUnansweredRefusal(refusal) ? { tailscaleUnanswered: true } : {}),
+      ...(lockedForMs > 0 ? { lockedForMs } : {}),
+    };
   };
 
   /**
@@ -729,7 +776,9 @@ export function createWebApp(deps: WebServerDeps): Server {
 
     // A port answering 401 is not evidence that this installation is ready.
     // Domain-separated challenge proof never sends the install secret to that port.
-    if (method === 'GET' && url.pathname === '/_buddi/ready' && deps.env?.BUDDI_WEB_REQUIRE_AUTH === '1') {
+    // Answered on every binding: `buddi mcp` asks it before it presents a
+    // ticket, so a port held by some other buddi never sees one.
+    if (method === 'GET' && url.pathname === '/_buddi/ready') {
       const challenge = url.searchParams.get('challenge') ?? '';
       if (!/^[a-f0-9]{64}$/.test(challenge)) return sendEmpty(res, 400);
       return sendJson(res, 200, { proof: createHmac('sha256', deps.token).update(`buddi-ready-v1:${challenge}`).digest('hex') });
@@ -792,16 +841,25 @@ export function createWebApp(deps: WebServerDeps): Server {
     let refusal: TailscaleRefusal | undefined;
     const noteRefusal = (reason: TailscaleRefusal): void => { refusal = reason; };
     /*
-     * The answer to a refused request: the signed-out page for a person
-     * opening a page, the empty 401 for everything else (docs/web.md).
+     * Set when the browser presented a session that is gone: the refusal then
+     * expires its cookies, so it stops presenting them (and stops counting).
      */
-    const refuse = (): void => {
-      if (!wantsSignedOutPage(req, method, url.pathname)) return sendEmpty(res, 401);
-      return sendSignedOut(res, {
-        retry: retryHref(url.pathname, url.search),
-        ...(isLoginRefusal(refusal) ? { tailscaleRefusal: tailscaleRefusalReason(refusal as TailscaleRefusal) } : {}),
-      });
+    let forgetCookies = false;
+    /*
+     * The answer to a refused request: the signed-out page for a person
+     * opening a page, the empty status for everything else (docs/web.md).
+     * 401 is "signed out", 429 "too many tries from here", 503 "Tailscale
+     * could not be asked; the session is still good, try again".
+     */
+    const refuse = async (status: 401 | 429 | 503 = 401): Promise<void> => {
+      const headers: Record<string, string | string[]> = forgetCookies ? { 'Set-Cookie': expiredCookies(req) } : {};
+      if (status === 429) headers['Retry-After'] = String(Math.max(1, Math.ceil(limiter.retryAfterMs(key, now) / 1000)));
+      if (status === 503) headers['Retry-After'] = '5';
+      if (!wantsSignedOutPage(req, method, url.pathname)) return sendEmpty(res, status, headers);
+      return sendSignedOut(res, await signedOutFor(req, url.pathname, url.search, now, refusal), headers, status);
     };
+    /* A Tailscale session this request ended: not a guess, so never a failed sign-in. */
+    let revoked = false;
 
     /*
      * A Tailscale session is re-confirmed on every single request.
@@ -818,13 +876,22 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (session?.via === 'tailscale') {
       const confirmed = await identityOf(req, now, noteRefusal);
       if (!confirmed || !sameLogin(confirmed.login, session.tailscaleLogin)) {
-        const revoked = session.id;
+        /*
+         * The daemon could not be asked (busy, starting, timed out). That is
+         * not an answer about anyone, so the session is not ended for it —
+         * a restart's first burst of requests used to end every tailnet
+         * session this way — and nothing is counted. This request waits.
+         */
+        if (!confirmed && isUnansweredRefusal(refusal)) return refuse(503);
+        const ended = session.id;
         // A hand this session was holding does not outlive the session.
-        hand.revoke((lease) => lease === revoked);
-        await sessions.destroy(revoked);
-        if (limiter.blocked(key, now)) return sendEmpty(res, 429);
-        limiter.failCredential(key, presentedSession ?? '', now);
-        return refuse();
+        hand.revoke((lease) => lease === ended);
+        await sessions.destroy(ended);
+        session = undefined;
+        revoked = true;
+        forgetCookies = true;
+        // The identity on this very request may still earn a new session below.
+        refusal = undefined;
       }
     }
 
@@ -879,7 +946,9 @@ export function createWebApp(deps: WebServerDeps): Server {
       // and tunnel traffic shares 127.0.0.1, so a forgotten tab must not be
       // able to lock the owner out of every way in.
       if (!presentedSession) return refuse();
-      if (limiter.blocked(key, now)) return sendEmpty(res, 429);
+      forgetCookies = true;
+      if (revoked) return refuse();
+      if (limiter.blocked(key, now)) return refuse(429);
       limiter.failCredential(key, presentedSession, now);
       return refuse();
     }

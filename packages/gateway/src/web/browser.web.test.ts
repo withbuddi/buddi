@@ -74,11 +74,17 @@ describe('the signed-out page', () => {
     expect(res.headers.getSetCookie()).toEqual([]);
     const html = await res.text();
     expect(html).toContain('You’re signed out of this buddi');
-    expect(html).toContain('buddi restarted or your sign-in ran out');
-    expect(html).toContain('<code>buddi dashboard</code>');
-    expect(html).toContain('href="/settings?tab=general"');
-    // Nothing loadable, nothing secret: no token, no CSRF material, no path on this machine.
-    expect(html).not.toMatch(/<script|src=|@import|url\(/i);
+    // On this computer: the command, with a Copy button, and Try again on the right.
+    expect(html).toContain('Run this in Terminal on this computer');
+    expect(html).toContain('<code class="cmd-text">buddi dashboard</code>');
+    expect(html).toContain('data-copy="buddi dashboard"');
+    expect(html).toContain('href="/settings?tab=general">Try again</a>');
+    expect(html).not.toContain('Sign in with Tailscale');
+    // Nothing loadable, nothing secret: one inline script, allowed by its hash
+    // and nothing else; no token, no CSRF material, no path on this machine.
+    expect(html).not.toMatch(/src=|@import|url\(/i);
+    expect(html.match(/<script/g)).toHaveLength(1);
+    expect(res.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/=]+';/);
     expect(html).not.toContain(TOKEN);
     expect(html.toLowerCase()).not.toContain('csrf');
     expect(html).not.toContain('Application Support');
@@ -107,6 +113,18 @@ describe('the signed-out page', () => {
     expect(await post.text()).toBe('');
   });
 
+  it('expires a stale session cookie on the refusal, so a forgotten tab stops presenting it', async () => {
+    const { origin, app } = await setup(false);
+    const stale = { ...NAVIGATE, Cookie: `${sessionCookieName(app.port)}=gone-after-an-upgrade` };
+    for (const path of ['/', '/api/overview']) {
+      const res = await hostFetch(`${origin}${path}`, { headers: stale });
+      expect(res.status).toBe(401);
+      const expired = res.headers.getSetCookie();
+      expect(expired).toHaveLength(2);
+      expect(expired.every((c) => c.includes('Max-Age=0'))).toBe(true);
+    }
+  });
+
   it('points "Try again" at this origin only, escaped', async () => {
     const { origin } = await setup(false);
     const res = await hostFetch(`${origin}//evil.example/%22%3E%3Cb%3E?q=%22%3Cx%3E`, { headers: NAVIGATE });
@@ -131,10 +149,15 @@ describe('the signed-out page', () => {
     const guesses: number[] = [];
     for (let i = 0; i < 15; i++) guesses.push((await fetch(`${origin}/`, { headers: cookie(`guess-${i}`) })).status);
     expect(guesses).toContain(429);
-    // The 429 stays empty; the page is only ever the 401.
+    // A person opening a page while locked out is told so, and for how long.
     const locked = await fetch(`${origin}/`, { headers: cookie('guess-again') });
     expect(locked.status).toBe(429);
-    expect(await locked.text()).toBe('');
+    expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await locked.text()).toContain('Too many tries — wait 1 min');
+    // A script still learns one bit.
+    const api = await fetch(`${origin}/api/overview`, { headers: cookie('guess-api') });
+    expect(api.status).toBe(429);
+    expect(await api.text()).toBe('');
     const ticket = mintTicket(TOKEN, new Date());
     expect((await fetch(`${origin}/?t=${ticket}`, { headers: proxy, redirect: 'manual' })).status).toBe(302);
   });

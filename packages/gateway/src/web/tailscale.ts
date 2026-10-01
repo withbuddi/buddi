@@ -98,8 +98,11 @@ export interface TailscaleIdentityDeps {
   setting: () => Promise<TailscaleSetting | null>;
   whois: TailscaleWhois;
   /**
-   * The caller's sign-in budget, asked immediately before the daemon is. False
-   * means "over budget": no whois is made and the request earns no identity.
+   * An extra gate asked immediately before the daemon is. False means "not
+   * now": no whois is made and the request earns no identity. The gateway
+   * does not pass the sign-in limiter here any more — failed cookies and
+   * tickets are not questions to the daemon, and every tailnet request shares
+   * one address — the daemon's own budget lives in `daemonWhois`.
    */
   mayAskDaemon?: (() => boolean) | undefined;
   log?: ((line: string) => void) | undefined;
@@ -236,7 +239,7 @@ const REASONS: Readonly<Record<TailscaleRefusal, string>> = {
   'not-a-tailnet-address': 'the forwarded address is not a tailnet address',
   'not-forwarded-over-https': 'the request was not forwarded over HTTPS',
   'login-not-allowed': 'the forwarded login is not the login allowed to sign in through Tailscale',
-  'too-many-attempts': 'too many failed sign-ins from here to ask the local tailscaled again yet',
+  'too-many-attempts': 'the local tailscaled was asked too often in the last minute; asking it again shortly',
   'daemon-unreachable': 'the local tailscaled could not be asked about the forwarded address',
   'daemon-does-not-know': 'the local tailscaled does not know the forwarded address',
   'daemon-names-another-login': 'the local tailscaled names a different login for the forwarded address',
@@ -255,6 +258,15 @@ const lastLogged = new Map<TailscaleRefusal, number>();
  */
 export function tailscaleRefusalReason(reason: TailscaleRefusal): string {
   return REASONS[reason];
+}
+
+/**
+ * The refusals that say nothing about who is asking: the daemon could not be
+ * asked, or not yet. A session is never ended for one of these — it is not an
+ * answer — and nothing counts it as a failed sign-in.
+ */
+export function isUnansweredRefusal(reason: TailscaleRefusal | undefined): boolean {
+  return reason === 'too-many-attempts' || reason === 'daemon-unreachable';
 }
 
 /** The refusals that mean "Tailscale sign-in is set up, and this login is not the one it allows". */
@@ -316,18 +328,17 @@ export async function tailscaleIdentity(
    * Only now is the daemon asked.
    *
    * Everything above is a string comparison this process makes to itself. The
-   * whois is a round trip to `tailscaled` over its socket, so it sits behind
-   * the same per-caller sign-in budget the 401 below consumes: a caller
-   * varying a header to miss the one-minute whois cache cannot turn the
-   * gateway into a load generator pointed at the daemon.
+   * whois is a round trip to `tailscaled`, so it has a budget of its own
+   * (`daemonWhois`): a caller varying a header to miss the one-minute whois
+   * cache cannot turn the gateway into a load generator pointed at the daemon.
    */
   if (deps.mayAskDaemon && !deps.mayAskDaemon()) return complain(deps, 'too-many-attempts', at);
 
   let profile: TailscaleProfile | null;
   try {
     profile = await deps.whois(address as string);
-  } catch {
-    return complain(deps, 'daemon-unreachable', at);
+  } catch (err) {
+    return complain(deps, err instanceof TailscaleBusyError ? 'too-many-attempts' : 'daemon-unreachable', at);
   }
   if (!profile) return complain(deps, 'daemon-does-not-know', at);
   // The daemon's answer is the credential; the header only said what to check.
@@ -405,14 +416,14 @@ function defaultCanExec(path: string): boolean {
 }
 
 /** Running the CLI, injected so tests never spawn anything. */
-export type TailscaleExec = (binary: string, args: string[]) => Promise<{ code: number; stdout: string }>;
+export type TailscaleExec = (binary: string, args: string[]) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
 /**
  * One `tailscale` invocation.
  *
  * `execFile`, so there is no shell and no word of the argv is ever parsed by
  * one; a five second timeout, so a wedged daemon cannot hold a request open.
- * A non-zero exit is an answer ("does not know"), not a crash.
+ * A non-zero exit is reported, not thrown; `whoisOnce` decides what it means.
  */
 export const execTailscale: TailscaleExec = (binary, args) =>
   new Promise((resolve) => {
@@ -420,9 +431,13 @@ export const execTailscale: TailscaleExec = (binary, args) =>
       binary,
       args,
       { timeout: TAILSCALE_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, shell: false, windowsHide: true },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         const code = error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1;
-        resolve({ code, stdout: typeof stdout === 'string' ? stdout : String(stdout ?? '') });
+        resolve({
+          code,
+          stdout: typeof stdout === 'string' ? stdout : String(stdout ?? ''),
+          stderr: typeof stderr === 'string' ? stderr : String(stderr ?? ''),
+        });
       },
     );
   });
@@ -566,7 +581,16 @@ export async function whoisOnce(address: string, deps: TailscaleDaemonDeps = {})
   const binary = binaryOf(deps);
   if (binary !== null) {
     const res = await (deps.exec ?? execTailscale)(binary, ['whois', '--json', address]);
-    if (res.code !== 0) return null;
+    if (res.code !== 0) {
+      /*
+       * Only the daemon saying it has no such peer is an answer. Any other
+       * failure — a timeout, a daemon still starting, the app's CLI failing to
+       * reach it — is "could not ask", which must never end a session or be
+       * remembered as "does not know".
+       */
+      if (WHOIS_NO_MATCH.test(`${res.stderr ?? ''}\n${res.stdout}`)) return null;
+      throw new Error(`tailscale whois exited ${res.code}`);
+    }
     return parseWhois(res.stdout);
   }
   const socket = socketOf(deps);
@@ -582,18 +606,58 @@ export async function whoisOnce(address: string, deps: TailscaleDaemonDeps = {})
  * enough that removing a device from the tailnet takes effect while the owner
  * is still looking at the screen, and long enough that a page of a dozen
  * requests asks the daemon once.
+ *
+ * Questions about one address that arrive while it is being asked share the
+ * answer: a restarted gateway gets a page's dozen requests at once, and a
+ * dozen `tailscale` processes racing a five-second timeout is how a slow
+ * daemon turned into "does not know". A failure is never remembered (the next
+ * request asks again), "does not know" only briefly, and the daemon is asked
+ * at most `asksPerMinute` times a minute in all. That budget counts questions
+ * actually put to the daemon, never failed sign-ins, so a stale tab cannot
+ * spend the owner's way in.
  */
-export function daemonWhois(deps: TailscaleDaemonDeps = {}): TailscaleWhois {
+export function daemonWhois(deps: TailscaleDaemonDeps & { asksPerMinute?: number } = {}): TailscaleWhois {
   const now = deps.now ?? (() => new Date());
+  const limit = deps.asksPerMinute ?? DAEMON_ASKS_PER_MINUTE;
   const cache = new Map<string, { at: number; profile: TailscaleProfile | null }>();
+  const inFlight = new Map<string, Promise<TailscaleProfile | null>>();
+  let window = { start: Number.NEGATIVE_INFINITY, asks: 0 };
   return async (address: string) => {
     const at = now().getTime();
     const hit = cache.get(address);
-    if (hit && at - hit.at < WHOIS_CACHE_MS) return hit.profile;
-    const profile = await whoisOnce(address, deps);
-    cache.set(address, { at, profile });
-    return profile;
+    if (hit && at - hit.at < (hit.profile ? WHOIS_CACHE_MS : WHOIS_UNKNOWN_CACHE_MS)) return hit.profile;
+    const pending = inFlight.get(address);
+    if (pending) return pending;
+    if (at - window.start >= 60_000) window = { start: at, asks: 0 };
+    if (window.asks >= limit) throw new TailscaleBusyError();
+    window.asks += 1;
+    const asking = whoisOnce(address, deps)
+      .then((profile) => {
+        if (cache.size > 1024) cache.clear();
+        cache.set(address, { at: now().getTime(), profile });
+        return profile;
+      })
+      .finally(() => inFlight.delete(address));
+    inFlight.set(address, asking);
+    return asking;
   };
+}
+
+/** What `tailscale whois` says when the address is no peer it knows. */
+const WHOIS_NO_MATCH = /no match|not found|404/i;
+
+/** How long "the daemon does not know this address" is remembered. */
+export const WHOIS_UNKNOWN_CACHE_MS = 15_000;
+
+/** The most questions put to the daemon in a minute, whatever the traffic. */
+export const DAEMON_ASKS_PER_MINUTE = 30;
+
+/** The daemon was asked its limit this minute and is not asked again until it is over. */
+export class TailscaleBusyError extends Error {
+  constructor() {
+    super('the local tailscaled was asked too often in the last minute');
+    this.name = 'TailscaleBusyError';
+  }
 }
 
 /** Is Tailscale running here, and who is this machine signed in as? */

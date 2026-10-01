@@ -262,6 +262,50 @@ suite('dashboard sessions in the database', () => {
       });
       expect(write.status).not.toBe(403);
       expect(write.status).not.toBe(401);
+      // Opening a page is the dashboard, not the signed-out page.
+      const page = await hostFetch(`http://127.0.0.1:${port}/agents`, { headers: { ...headers, 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' } });
+      expect(page.status).not.toBe(401);
+      expect(await page.text()).not.toContain('signed out');
+    });
+
+    it('keeps a Tailscale session across a restart, even when the daemon is slow to answer the first requests', async () => {
+      let daemonUp = true;
+      const tailscale = {
+        whois: async () => { if (!daemonUp) throw new Error('tailscale whois exited 1'); return { login: 'owner@example.com', name: 'The Owner' }; },
+        self: async () => ({ available: true, self: { login: 'owner@example.com', name: 'The Owner' } }),
+      };
+      await pool.query(`insert into core.web_settings (key, value) values ('tailscale', $1::jsonb)
+        on conflict (key) do update set value = excluded.value`, [JSON.stringify({ enabled: true, login: 'owner@example.com' })]);
+      const boot = (port: number) => startWebServer({
+        pool,
+        registry: new ToolRegistry(),
+        catalog: { list: () => [], get: () => undefined } as unknown as AgentCatalog,
+        ctx: { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' } as unknown as CoreToolContext,
+        timezone: 'UTC',
+        now: () => new Date(),
+        config: { enabled: true, host: '127.0.0.1', port, publicOrigin: 'https://buddi.tail1234.ts.net:9443' },
+        token: TOKEN,
+        openAccess: false,
+        log: () => {},
+        tailscale,
+      });
+      const serve = { 'Tailscale-User-Login': 'owner@example.com', 'X-Forwarded-For': '100.101.102.103', 'X-Forwarded-Proto': 'https', Host: 'buddi.tail1234.ts.net:9443', Connection: 'close' };
+      const first = await boot(0);
+      servers.push(first);
+      const port = first.port;
+      const signedIn = await hostFetch(`http://127.0.0.1:${port}/api/session`, { headers: serve });
+      expect(signedIn.status).toBe(200);
+      const pairs = signedIn.headers.getSetCookie().map((c) => c.split(';')[0]!);
+      await first.close();
+      const second = await boot(port);
+      servers.push(second);
+      const headers = { ...serve, Cookie: pairs.join('; ') };
+      daemonUp = false;
+      expect((await hostFetch(`http://127.0.0.1:${port}/api/session`, { headers })).status).toBe(503);
+      daemonUp = true;
+      const after = await hostFetch(`http://127.0.0.1:${port}/api/session`, { headers });
+      expect(after.status).toBe(200);
+      expect(((await after.json()) as { signedInThrough: string }).signedInThrough).toBe('tailscale');
     });
 
     it('keeps the open loopback gate as it was: a session for free, nothing stored', async () => {

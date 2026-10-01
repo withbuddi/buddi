@@ -247,15 +247,32 @@ loopback dashboard of a source checkout mints a fresh session on every visit, so
 it stores none.)
 
 **Signed out.** When a browser that is not signed in opens a page, it gets a
-small buddi page (still `401`, no script, nothing loaded from anywhere) instead
-of the browser's own error page: "You're signed out of this buddi. buddi
-restarted or your sign-in ran out. On the computer buddi runs on, run
-`buddi dashboard` for a sign-in link.", with a **Try again** link to the same
-address. Through Tailscale Serve, with signing in through Tailscale on but a
-different login in the browser, it says that login isn't allowed (by the same
-reason the log gives, never naming a login). API calls, event streams and
-script fetches still get the empty `401`, and opening the page without a
-cookie never counts toward the sign-in lockout.
+small buddi page instead of the browser's own error page, with the way back in
+for how it arrived: on this computer, the `buddi dashboard` command with a Copy
+button; over the tailnet with signing in through Tailscale on, **Sign in with
+Tailscale** as the primary action (the command as the fallback); elsewhere the
+command and "open the link here within five minutes". With a different
+Tailscale login in the browser it says that login isn't allowed (by the same
+reason the log gives, never naming a login). While a lockout runs it says "Too
+many tries — wait N min" (status `429`), and that a fresh link works right
+away. API calls, event streams and script fetches still get an empty status.
+
+**What counts toward the lockout** (10 failed sign-ins a minute per address; all
+tailnet and tunnel traffic shares 127.0.0.1): only a presented credential that
+is wrong — a ticket that does not verify, or a session cookie the gateway does
+not know, each distinct value once a minute. A refusal of a cookie also expires
+it in the browser, so a forgotten tab stops presenting it. A request with no
+cookie, the signed-out page and its Try again, a Tailscale session that ends,
+and a Tailscale question the daemon could not answer never count. A valid
+ticket and a Tailscale identity always sign in, lockout or not.
+
+**Tailscale that cannot answer is not a sign-out.** A Tailscale session is
+re-confirmed with the daemon on every request. When the daemon cannot be asked
+(a timeout, a daemon still starting, more than 30 questions in a minute), the
+session is kept and the request answers `503` — the page says "Tailscale didn't
+answer" — rather than ending it; only an answer naming another login (or the
+setting going off) ends it. Questions about one address asked at once share one
+`tailscale whois`, and a failed one is never cached.
 
 **A remote TCP connection always counts as remote.** Forwarded headers never
 elevate access. A loopback connection carrying proxy metadata (`Forwarded`,
@@ -319,7 +336,8 @@ address is a tailnet address (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`),
 `X-Forwarded-Proto` is `https`, and the local `tailscaled` — asked over its own
 unix socket — says that address belongs to that login and names the very login
 the header claimed. A mismatch, a missing daemon
-or a failed whois is no identity at all: the request is unauthenticated and gets
+or a failed whois is no identity at all (and never ends an existing session; see
+"Tailscale that cannot answer" above): the request is unauthenticated and gets
 the same 401 it would have got before, with one line in the log saying why (at
 most once a minute). Answers are cached for a minute, so removing a device from
 the tailnet takes effect while you are still looking at the screen.

@@ -6,12 +6,15 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- The signed-out page offers the way back in for how you arrived: on this computer the `buddi dashboard` command with a Copy button; over the tailnet with Tailscale sign-in on, "Sign in with Tailscale"; and while a lockout runs, "Too many tries — wait N min", saying that a fresh link works right away.
 - While a mailbox has instant mail (IDLE), buddi also checks its Sent folder every minute over the same connection, so a reply you send from your phone moves the conversation to "waiting on them" within a minute instead of up to 15.
 - Mail you archive, move or delete in another mail app now leaves buddi's inbox too: it stops counting as unread, `email.select_messages` no longer picks it, and the Mail page says where each message is now (archived, in Trash, in a label, or no longer in the inbox). On Gmail buddi finds where it went and keeps its labels; a message moved back into the inbox is the same one again, not a new arrival.
 - On Gmail, moving mail to a label adds that label and takes it out of the inbox, keeping its other labels; Undo puts the inbox and the labels back exactly as they were.
 
 ### Fixed
 
+- A Tailscale dashboard session is no longer ended when the local Tailscale daemon is slow or cannot be asked (as on the first requests after a restart): the request answers "Tailscale didn't answer, try again" and the session stays. Questions about one address asked at once share one `tailscale whois`, a failed one is never remembered, and only an answer naming another login ends the session.
+- The sign-in lockout counts only a wrong credential that was presented. A Tailscale session that ends, Tailscale being busy, the signed-out page and its Try again no longer count, a refused cookie is expired in the browser so a forgotten tab stops presenting it, and Tailscale sign-in works during a lockout. The "too many failed sign-ins from here to ask the local tailscaled" log line is gone with the cause.
 - A mailbox without a stored password no longer writes "no IDLE … checking on the poll" to the log on every poll; it is said once, and again only when that changes.
 - A mailbox change or undo interrupted part-way (a dropped connection, or buddi stopping) no longer loses track of what it did: the change is recorded before the server is touched, the next poll checks with the server and finishes the record, and an undo that stopped part-way can be run again to put back the rest. Recent changes shows "Partly done", "Partly undone", "Checking" or "Unconfirmed" when that happens, and Undo says beforehand when some messages were moved in another app since and will stay where they are.
 

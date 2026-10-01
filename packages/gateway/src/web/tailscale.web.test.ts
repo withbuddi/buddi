@@ -137,7 +137,7 @@ it('does not ask the daemon at all while the caller is over its sign-in budget',
   });
   expect(identity).toBeNull();
   expect(asked).toBe(0);
-  expect(lines.join('\n')).toMatch(/too many failed sign-ins/);
+  expect(lines.join('\n')).toMatch(/asked too often/);
 });
 
 it('logs by reason, so a caller varying its headers can neither grow the map nor choose what it says', async () => {
@@ -189,6 +189,7 @@ function pool(initial: { enabled: boolean; login: string } | null): { query: (sq
 
 /** The clock and the daemon's opinion, both movable from inside a test. */
 interface Knobs {
+  fail?: boolean;
   whois: string | null;
   now: Date;
 }
@@ -226,7 +227,10 @@ async function dashboard(
     env: {},
     log: () => {},
     tailscale: {
-      whois: async () => (knobs.whois === null ? null : { login: knobs.whois, name: 'The Owner' }),
+      whois: async () => {
+        if (knobs.fail) throw new Error('tailscale whois exited 1');
+        return knobs.whois === null ? null : { login: knobs.whois, name: 'The Owner' };
+      },
       self: async () => ({ available: true, self: { login: OWNER, name: 'The Owner' } }),
     },
   });
@@ -470,6 +474,52 @@ it('ends a tailnet session when the daemon starts naming a different login for t
   expect(again.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_NAME}=`))).toBe(true);
 });
 
+it('keeps a tailnet session the daemon cannot vouch for right now: 503 and try again, never signed out, never counted', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  const tailnet = await tailnetSession(app);
+  app.knobs.fail = true;
+  for (let i = 0; i < 15; i += 1) {
+    const res = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
+    expect(res.status).toBe(503);
+    expect(res.headers.getSetCookie()).toEqual([]);
+  }
+  const page = await fetch(`${tailnet.origin}/`, { headers: { ...tailnet.headers, 'Sec-Fetch-Mode': 'navigate' } });
+  expect(page.status).toBe(503);
+  expect(await page.text()).toContain('Tailscale didn’t answer');
+  // The daemon answers again: the same session, not a new one.
+  app.knobs.fail = false;
+  const back = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
+  expect(back.status).toBe(200);
+  expect(back.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_NAME}=`))).toBe(false);
+});
+
+it('offers "Sign in with Tailscale" on a tailnet page load when signing in that way is on, and the command when it is off', async () => {
+  const navigate = { ...SERVE_HEADERS, 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' };
+  const on = await dashboard({ enabled: true, login: OWNER }, null);
+  const res = await fetch(`http://127.0.0.1:${on.port}/agents`, { headers: navigate });
+  expect(res.status).toBe(401);
+  const html = await res.text();
+  expect(html).toContain('href="/agents">Sign in with Tailscale</a>');
+  expect(html).toContain('buddi dashboard');
+  const off = await dashboard({ enabled: false, login: OWNER });
+  const offHtml = await (await fetch(`http://127.0.0.1:${off.port}/agents`, { headers: navigate })).text();
+  expect(offHtml).not.toContain('Sign in with Tailscale');
+  expect(offHtml).toContain('can be turned on under Settings');
+  expect(offHtml).toContain('>Try again</a>');
+});
+
+it('a Tailscale session that ends is not a failed sign-in, and its cookies are expired', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  for (let i = 0; i < 15; i += 1) {
+    app.knobs.whois = OWNER;
+    const tailnet = await tailnetSession(app);
+    app.knobs.whois = 'intruder@example.com';
+    const res = await fetch(`${tailnet.origin}/api/session`, { headers: tailnet.headers });
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie().filter((c) => c.includes('Max-Age=0'))).toHaveLength(2);
+  }
+});
+
 it('ends a tailnet session after seven days, however much it is used', async () => {
   const app = await dashboard({ enabled: true, login: OWNER });
   const tailnet = await tailnetSession(app);
@@ -601,9 +651,44 @@ it('asks the CLI, and uses its answer as the whois', async () => {
   expect(calls).toHaveLength(1);
 });
 
-it('reads a non-zero exit as "the daemon does not know", not as a failure', async () => {
-  const { exec } = execSaying({ whois: { code: 1, stdout: '' } });
-  expect(await whoisOnce(TAILNET_IP, { binary: () => '/usr/local/bin/tailscale', exec })).toBeNull();
+it('reads "no match" as the daemon not knowing the address, and any other failure as not being able to ask', async () => {
+  const noMatch = async () => ({ code: 1, stdout: '', stderr: 'no match for IP:port 100.101.102.103' });
+  expect(await whoisOnce(TAILNET_IP, { binary: () => '/usr/local/bin/tailscale', exec: noMatch })).toBeNull();
+  // A timeout, a daemon still starting: not an answer, so not "does not know".
+  const timedOut = async () => ({ code: 1, stdout: '', stderr: '' });
+  await expect(whoisOnce(TAILNET_IP, { binary: () => '/usr/local/bin/tailscale', exec: timedOut })).rejects.toThrow();
+  const unreachable = async () => ({ code: 1, stdout: '', stderr: 'failed to connect to local Tailscale service' });
+  await expect(whoisOnce(TAILNET_IP, { binary: () => '/usr/local/bin/tailscale', exec: unreachable })).rejects.toThrow();
+});
+
+it('asks the daemon once for a burst of questions, never remembers a failure, and keeps to a budget of its own', async () => {
+  let asked = 0;
+  let fail = true;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const exec = async () => {
+    asked += 1;
+    await gate;
+    return fail ? { code: 1, stdout: '', stderr: '' } : { code: 0, stdout: WHOIS_JSON };
+  };
+  const whois = daemonWhois({ binary: () => '/usr/local/bin/tailscale', exec, asksPerMinute: 3 });
+  // A restarted gateway's first page: a dozen requests at once, one question.
+  const burst = Array.from({ length: 12 }, () => whois(TAILNET_IP).then(() => 'ok', () => 'failed'));
+  release();
+  expect(new Set(await Promise.all(burst))).toEqual(new Set(['failed']));
+  expect(asked).toBe(1);
+  // The failure is not remembered: the next request asks again, and is answered.
+  fail = false;
+  expect(await whois(TAILNET_IP)).toEqual({ login: OWNER, name: 'The Owner' });
+  expect(asked).toBe(2);
+  // Over its budget the daemon is not asked at all, and the identity says why.
+  await whois('100.64.0.9').catch(() => {});
+  await expect(whois('100.64.0.10')).rejects.toThrow(/asked too often/);
+  expect(asked).toBe(3);
+  const lines: string[] = [];
+  const identity = await tailscaleIdentity(req({ headers: { 'x-forwarded-for': '100.64.0.11' } }), { setting: setting(), whois, log: (l) => lines.push(l) });
+  expect(identity).toBeNull();
+  expect(lines.join('\n')).toMatch(/asked too often/);
 });
 
 it('reports the machine itself through the CLI', async () => {

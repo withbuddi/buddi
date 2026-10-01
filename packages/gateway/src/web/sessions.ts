@@ -537,6 +537,12 @@ export class RateLimiter {
     return entry.count >= this.#max;
   }
 
+  /** How long until this address may try again, in ms; 0 when it is not blocked. */
+  retryAfterMs(key: string, now: Date = new Date()): number {
+    if (!this.blocked(key, now)) return 0;
+    return Math.max(0, (this.#hits.get(key)?.resetAt ?? now.getTime()) - now.getTime());
+  }
+
   /** Record one failed attempt. Successes never count against the budget. */
   fail(key: string, now: Date = new Date()): void {
     const entry = this.#hits.get(key);
