@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import '@testing-library/jest-dom/vitest';
 import { ApiError, LOCKED, api, type LockScreenData, type LockState } from '../api';
 import { LockGate, isLockShortcut, lockShortcutLabel, useLock } from './lock';
-import { LockScreen, lockedLine } from './LockScreen';
+import { LockScreen, lockColumns, lockedLine } from './LockScreen';
 
 const open: LockState = { pin: true, locked: false, lockedAt: null, reason: null, delayMinutes: 5, background: 'field', image: null, waitUntil: null, triesLeft: null };
 const locked: LockState = { ...open, locked: true, lockedAt: '2026-10-01T12:02:00Z', reason: 'owner' };
@@ -241,5 +241,18 @@ describe('the lock screen', () => {
     expect(lockedLine({ lockedAt: '2026-10-01T12:02:00Z', reason: 'idle', delayMinutes: 60 }, 'Europe/Paris', now)).toBe('Locked after an hour away, at 14:02');
     expect(lockedLine({ lockedAt: '2026-10-01T12:02:00Z', reason: 'start', delayMinutes: 5 }, 'Europe/Paris', now)).toBe('Locked since this session began, at 14:02');
     expect(lockedLine({ lockedAt: '2026-09-30T16:02:00Z', reason: 'owner', delayMinutes: 5 }, 'Europe/Paris', now)).toMatch(/^Locked by you at Wed 30 Sept?, 18:02$/);
+  });
+});
+
+describe('the lock grid', () => {
+  it('is as wide as its widest row, so the block stays centred', () => {
+    // Medium, small, medium, small fills rows of three, not a grid of four.
+    expect(lockColumns(['medium', 'small', 'medium', 'small'], false)).toBe(3);
+    expect(lockColumns(['small', 'small', 'small', 'small'], false)).toBe(4);
+    expect(lockColumns(['medium', 'medium'], false)).toBe(4);
+    expect(lockColumns(['medium', 'small', 'small', 'small'], false)).toBe(4);
+    expect(lockColumns(['small'], false)).toBe(1);
+    expect(lockColumns(['medium', 'small'], true)).toBe(2);
+    expect(lockColumns(['small'], true)).toBe(1);
   });
 });

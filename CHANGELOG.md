@@ -11,6 +11,7 @@ What changes in buddi from one release to the next, newest first.
 - `/_buddi/ready` also answers a random `boot` id for the running process, so a page can tell the process that went from the one that came back.
 
 ### Fixed
+- The lock screen centres its widgets when medium and small ones share rows (it used to size the grid for four columns and leave the fourth empty).
 
 - After plugin updates, the "is installed — Restart to load it" notice comes from what buddi is actually running: it lists every plugin waiting for the restart and is gone once they are loaded, instead of staying after the restart. A plugin waiting for the restart says "loads at restart" on its row rather than "did not load".
 

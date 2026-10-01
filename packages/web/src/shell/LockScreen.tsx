@@ -158,12 +158,30 @@ function Badges({ approvals, unread, after, onPick }: { approvals: number; unrea
   );
 }
 
+/**
+ * How many columns the lock grid needs: the widest row once the widgets flow
+ * into rows of at most four (two on a phone), a medium taking two. The sum is
+ * not it: medium, small, medium, small fills rows of three, and a grid of four
+ * would leave an empty column on the right and pull the block off centre.
+ */
+export function lockColumns(sizes: ReadonlyArray<'small' | 'medium'>, phone: boolean): number {
+  const max = phone ? 2 : 4;
+  let widest = 0;
+  let row = 0;
+  for (const size of sizes) {
+    const span = Math.min(size === 'medium' ? 2 : 1, max);
+    if (row + span > max) row = 0;
+    row += span;
+    widest = Math.max(widest, row);
+  }
+  return widest;
+}
+
 function Widgets({ widgets, phone }: { widgets: LockScreenData['widgets']; phone: boolean }): JSX.Element | null {
   if (widgets.length === 0) return null;
   // A sentence (nothing today, nobody waiting) takes one column, so it never stretches into a hollow card.
   const sized = widgets.map((w) => ({ w, size: phone || w.view.body.kind === 'text' ? ('small' as const) : w.size }));
-  // How many columns the widgets fill: a medium one takes two on a desk.
-  const cols = Math.min(phone ? 2 : 4, sized.reduce((n, { size }) => n + (size === 'medium' ? 2 : 1), 0));
+  const cols = lockColumns(sized.map(({ size }) => size), phone);
   return (
     <div className="lk-widgets">
       <div className="lk-grid" data-phone={phone ? 'true' : undefined} data-cols={cols}>
