@@ -551,6 +551,43 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       expect(after.changes.map((c: any) => c.state)).toEqual(['undo', 'undone']);
     });
 
+    it("a learned rule's Undo and put back revokes it and puts back what it moved on arrival, through the trail", async () => {
+      // A rule that kept itself, archiving on arrival.
+      await setPolicy.execute({ account: PLAIN, scope: 'sender', matcher: 'news@list.test', action: 'ignore', onArrival: 'archive' }, ctx);
+      await pool.query(`update email.policies set kept_by = 'auto', auto_reason = 'bulk', kept_at = $1 where matcher = 'news@list.test'`, [NOW]);
+      plain.add('INBOX', fakeMessage({ messageId: '<n-1@list.test>', from: 'news@list.test', to: [PLAIN], subject: 'Weekly 1' }));
+      plain.add('INBOX', fakeMessage({ messageId: '<n-2@list.test>', from: 'news@list.test', to: [PLAIN], subject: 'Weekly 2' }));
+      await poll();
+      expect(plain.whereIs('<n-1@list.test>')[0]!.mailbox).toBe('Archive');
+      expect(plain.whereIs('<n-2@list.test>')[0]!.mailbox).toBe('Archive');
+      const trail = await pool.query(`select id from email.mailbox_actions where policy_id is not null and kind = 'archive'`);
+      expect(trail.rows.length).toBeGreaterThan(0);
+
+      // Learned offers the put back.
+      const learnedQuery = (manifest.queries ?? []).find((q) => q.name === 'learned_rules')!;
+      const learned = (await learnedQuery.produce({}, pageQueryContext(ctx))) as { rules: Array<Record<string, any>> };
+      const rule = learned.rules.find((r) => r.title === 'Quieted news@list.test')!;
+      expect(rule).toMatchObject({ undoable: true, canPutBack: true });
+
+      const out = await call('email.undo_learned', { id: rule.id, putBack: true }, { agentId: 'owner' });
+      expect(out).toMatchObject({ revoked: true, putBack: 2 });
+      expect(out.note).toContain('Stopped quieting news@list.test');
+      expect(out.note).toContain('Put back 2 messages.');
+      expect(plain.whereIs('<n-1@list.test>')).toEqual([expect.objectContaining({ mailbox: 'INBOX' })]);
+      expect(plain.whereIs('<n-2@list.test>')).toEqual([expect.objectContaining({ mailbox: 'INBOX' })]);
+      for (const id of await idsOf(PLAIN)) expect((await rowOf(id)).folder).toBe('INBOX');
+      const { rows: [policy] } = await pool.query(`select revoked_at from email.policies where matcher = 'news@list.test'`);
+      expect(policy.revoked_at).not.toBeNull();
+
+      // Learned shows it undone, with nothing left to put back; the next poll moves nothing again.
+      const after = (await learnedQuery.produce({}, pageQueryContext(ctx))) as { rules: Array<Record<string, any>> };
+      expect(after.rules.find((r) => r.id === rule.id)).toMatchObject({ state: 'undone', undoable: false, canPutBack: false });
+      const count = await messageCount();
+      await poll();
+      expect(await messageCount()).toBe(count);
+      expect(plain.whereIs('<n-1@list.test>')[0]!.mailbox).toBe('INBOX');
+    });
+
     it('an on-arrival action whose connection fails is retried on the next poll, once, and gives up after five tries', async () => {
       await setPolicy.execute({ account: PLAIN, scope: 'sender', matcher: 'promo@deals.test', action: 'notify', onArrival: 'archive' }, ctx);
       plain.add('INBOX', fakeMessage({ messageId: '<deal-9@deals.test>', from: 'promo@deals.test', to: [PLAIN], subject: 'Retry me' }));
