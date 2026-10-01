@@ -1,14 +1,14 @@
 /** Home's glances: three at most, hidden ones left out, each a quiet link with a × that hides it. */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api', () => ({ api: { setGlanceHidden: vi.fn() } }));
 
 import { api, type HomeGlance } from '../../api';
-import { HomeGlanceCard, HomeGlances, cardGlance, shownGlances, sparkPoints } from './HomeGlances';
+import { GLANCE_UNDO_MS, HomeGlanceCard, HomeGlances, cardGlance, shownGlances, sparkPoints } from './HomeGlances';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const glance = (id: string, extra: Partial<HomeGlance> = {}): HomeGlance => ({
   id, title: id, plugin: id.split('.')[0]!, icon: 'cloud', text: `text ${id}`, hidden: false, ...extra,
@@ -98,5 +98,63 @@ describe('HomeGlanceCard', () => {
     expect(first).toEqual([0, 22]);
     expect(last).toEqual([100, 2]);
     expect(sparkPoints([5, 5])[0]![1]).toBe(22);
+  });
+});
+
+describe('Undo after hiding a glance', () => {
+  const weather = glance('weather.now', { text: '18°C Lyon', title: 'Weather at home' });
+
+  it('says "<Title> hidden · Undo" in place, politely, and Undo puts it back through the server', async () => {
+    vi.mocked(api.setGlanceHidden).mockImplementation(async (id, hidden) => ({ id, hidden }));
+    const onChanged = vi.fn();
+    render(<HomeGlances glances={[weather, glance('calendar.next')]} navigate={() => {}} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Weather at home from Home' }));
+    const line = screen.getByRole('status');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    expect(line).toHaveTextContent('Weather at home hidden');
+    expect(screen.queryByText('18°C Lyon')).toBeNull();
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(api.setGlanceHidden).toHaveBeenLastCalledWith('weather.now', false);
+    expect(screen.getByText('18°C Lyon')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps a put-back glance shown while the overview still says hidden', () => {
+    vi.mocked(api.setGlanceHidden).mockImplementation(async (id, hidden) => ({ id, hidden }));
+    const { rerender } = render(<HomeGlances glances={[weather]} navigate={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Weather at home from Home' }));
+    // The page re-read the overview: the server now says hidden.
+    rerender(<HomeGlances glances={[{ ...weather, hidden: true }]} navigate={() => {}} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Weather at home hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.getByText('18°C Lyon')).toBeInTheDocument();
+  });
+
+  it('goes away after the timeout, leaving the glance hidden', () => {
+    vi.useFakeTimers();
+    vi.mocked(api.setGlanceHidden).mockImplementation(async (id, hidden) => ({ id, hidden }));
+    render(<HomeGlances glances={[weather]} navigate={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Weather at home from Home' }));
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(GLANCE_UNDO_MS - 100); });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText('18°C Lyon')).toBeNull();
+    expect(api.setGlanceHidden).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Undo where the card was, and brings the card back', async () => {
+    vi.mocked(api.setGlanceHidden).mockImplementation(async (id, hidden) => ({ id, hidden }));
+    render(<HomeGlanceCard glance={{ ...weather, card: CARD }} navigate={() => {}} blob={<span data-testid="blob" />} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Weather at home from Home' }));
+    expect(screen.queryByRole('group')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Weather at home hidden');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(api.setGlanceHidden).toHaveBeenLastCalledWith('weather.now', false);
+    expect(screen.getByRole('group', { name: 'Weather at home' })).toBeInTheDocument();
   });
 });

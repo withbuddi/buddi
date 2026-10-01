@@ -3710,6 +3710,10 @@ a.home-glance-text:hover { color: var(--text); text-decoration: underline; text-
 .home-glance:hover .home-glance-hide, .home-glance-hide:focus-visible { opacity: 1; }
 .home-glance-hide:hover { color: var(--text); background: var(--surface-sunken); }
 @media (hover: none) { .home-glance-hide { opacity: 1; } }
+/* Right after a hide: "<Title> hidden · Undo" where it was, for a few seconds. */
+.home-glance-undo { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; color: var(--text-muted); }
+.home-glance-undo .ui-btn { margin-block: calc(-1 * var(--space-1)); color: var(--accent); }
+.home-side .home-glance-undo { margin-right: var(--space-4); font-size: var(--text-sm); }
 
 /* ---- calendar: week, month and list views of dated events ----
    One tone per calendar from a pinned set of four agent accents (fill, soft,

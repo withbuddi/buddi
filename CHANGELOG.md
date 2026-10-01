@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - The Continue on the "Turn budget reached" line is now an outlined button you can see and tap (taller on a touch screen), not a word that read as plain text.
 - Agent Father can now give an agent up to 500 steps per reply when it creates or updates one (it was capped at 64), the same range as Setup → Brain; the approval card names the number.
+- Hiding a glance on Home with its × now leaves "<Title> hidden · Undo" in its place for about eight seconds; Undo brings it back (the same setting as Settings → Appearance).
 
 ## 0.1.0-pre.27 — 2026-10-01
 

@@ -47,7 +47,7 @@ import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
-import { HomeGlanceCard, HomeGlances, cardGlance } from './parts/HomeGlances';
+import { GlanceUndo, HomeGlanceCard, HomeGlances, cardGlance, useGlanceHiding } from './parts/HomeGlances';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -125,7 +125,10 @@ export function Home({
   const onOffer = allOffers.slice(0, HOME_OFFERS);
   const tips = useTips();
   const moreOffers = allOffers.length - onOffer.length;
-  const card = cardGlance(data?.glances);
+  // One hiding state for the date line and the card, so a hidden card's Undo
+  // outlives the card and a glance put back comes back wherever it belongs.
+  const hiding = useGlanceHiding(() => overview.reload());
+  const card = cardGlance(data?.glances, hiding);
   const counts = glanceCounts({
     approvals: pending.length, failed: failedJobs, urgent, paused: data?.paused ?? false, proposals: proposed, agentsToSetUp: toSetUp.length, messages: told.length,
   });
@@ -139,15 +142,16 @@ export function Home({
           <div className="home-top-text">
             <p className="home-date">
               <span>{fmtDay(data?.now, timezone)}</span>
-              <HomeGlances glances={data?.glances} navigate={navigate} onChanged={() => overview.reload()} except={card?.id} />
+              <HomeGlances glances={data?.glances} navigate={navigate} except={card?.id} hiding={hiding} />
               <TipsButton tips={tips} />
             </p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <GlanceCounts items={counts} navigate={navigate} />
           </div>
           <div className="home-side">
+            <GlanceUndo hiding={hiding} spot="card" />
             {card ? (
-              <HomeGlanceCard glance={card} navigate={navigate} onChanged={() => overview.reload()} blob={<Mascot size="lg" anim="idle" />} />
+              <HomeGlanceCard glance={card} navigate={navigate} hiding={hiding} blob={<Mascot size="lg" anim="idle" />} />
             ) : (
               <Mascot size="lg" anim="idle" />
             )}
