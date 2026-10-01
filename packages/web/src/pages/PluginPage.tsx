@@ -2817,6 +2817,9 @@ function itemParams(page: PluginPageDescriptor, item?: string | null): Record<st
         walk(component.detail);
       } else if (component.kind === 'section' || component.kind === 'detail' || component.kind === 'expand') {
         walk(component.body);
+      } else if (component.kind === 'tabs') {
+        // A list-detail inside a tab (the Mail page's Show bar) names the item too.
+        for (const tab of component.tabs) walk(tab.body);
       }
     }
   };

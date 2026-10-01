@@ -1514,6 +1514,36 @@ describe('a forecast page: tabs with a pick, a hero, tiles and a two-kind chart'
     expect(await screen.findByLabelText(/^24°/)).toBeInTheDocument();
     expect(asked).toContainEqual(['today', { place: 'work' }]);
   });
+
+  it('gives a list-detail inside a tab the route item, so the open item reaches its detail (the Mail page)', async () => {
+    const mail: PluginPageDescriptor = {
+      ...page,
+      body: [
+        {
+          kind: 'tabs',
+          pick: { param: 'place', label: 'Show', options: [{ value: 'home', label: 'All' }, { value: 'work', label: 'Needs a reply' }] },
+          tabs: [
+            {
+              id: 'one',
+              label: 'One',
+              body: [
+                {
+                  kind: 'list-detail',
+                  param: 'thread',
+                  list: { kind: 'list', query: { query: 'places' }, rows: 'places', key: 'id', item: { title: { path: 'label' }, to: { page: 'sky', item: { path: 'id' } } } },
+                  detail: [{ kind: 'detail', title: 'One place', query: { query: 'today', params: { thread: { param: 'thread' } } }, fields: [{ label: 'Sky', value: { path: 'sky' } }], body: [] }],
+                  empty: 'Choose one.',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    render(<PluginPage page={mail} item="work" navigate={navigate} timezone="UTC" />);
+    expect(await screen.findByText('Clear')).toBeInTheDocument();
+    expect(asked).toContainEqual(['today', { thread: 'work' }]);
+  });
 });
 
 describe('a series panel', () => {
