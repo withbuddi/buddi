@@ -64,18 +64,27 @@ function service(ctx: ReadyContext, opts: Partial<Parameters<typeof createUpgrad
   const restart = vi.fn(() => {});
   const checkPostgres = vi.fn(async () => ({ ok: true as const }));
   ctx.env.BUDDI_NPM_REGISTRY = ctx.env.BUDDI_NPM_REGISTRY ?? 'https://registry.example';
+  const handOver = opts.restart ?? restart;
   const upgrade = createUpgradeService({
-    ctx, current: '0.1.0', backup: backupControl(), stopGateway, startGateway, restart,
+    ctx, current: '0.1.0', backup: backupControl(), stopGateway, startGateway,
     install, checkPostgres, http: registry('0.1.1') as never, log: () => {}, ...opts,
+    restart: () => { handedOver.add(upgrade); handOver(); },
   });
   return { upgrade, install, stopGateway, startGateway, restart, checkPostgres };
 }
+
+/**
+ * The services whose restart has been called. The job says `restarting`
+ * before installation.json is written and the restart is called, so a test
+ * that stops polling at the phase alone races that write on a loaded machine.
+ */
+const handedOver = new WeakSet<object>();
 
 /** The job is asynchronous by construction; this is the only way to read it. */
 async function settled(upgrade: ReturnType<typeof service>['upgrade'], id: string): Promise<BackupJob> {
   for (let i = 0; i < 3000; i++) { // up to 30 s: a loaded CI runner spawns slowly
     const job = upgrade.job(id);
-    if (job?.finishedAt !== undefined || job?.phase === 'restarting') return job;
+    if (job?.finishedAt !== undefined || (job?.phase === 'restarting' && handedOver.has(upgrade))) return job;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error('the upgrade job never settled');
