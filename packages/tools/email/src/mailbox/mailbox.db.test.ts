@@ -773,6 +773,51 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       expect(await rowOf(id)).toMatchObject({ folder: 'INBOX', uid: back!.uid });
     });
 
+    it('after a crash between the two label commands, the next poll finishes the move, and an undo the same', async () => {
+      const id = (await idsOf(GMAIL, 'Newsletter 5'))[0]!;
+      const [target] = await loadTargets(pool, [id]);
+      const prevLabels = ['Newsletters', '\\Important'].sort();
+      // The label went on, then buddi stopped before Inbox came off: still in INBOX, now labelled.
+      gmail.storeLabels('INBOX', [target!.uid], ['Receipts'], 'add');
+      const planned = (extra: Record<string, unknown>) => ({
+        id: target!.id, subject: target!.subject, from: target!.from, messageId: target!.messageId,
+        fromUidValidity: 1, fromUid: target!.uid, prevFlags: [], via: 'labels', status: 'planned', ...extra,
+      });
+      const inserted = await pool.query(
+        `insert into email.mailbox_actions (account_id, kind, destination, origin, actor, message_ids, items, state)
+         values ($1, 'move', 'Receipts', 'owner', 'owner', $2::uuid[], $3::jsonb, 'pending') returning id`,
+        [accounts[GMAIL]!.id, [id], JSON.stringify([planned({ fromFolder: 'INBOX', toFolder: 'Receipts', toUidValidity: 0, toUid: null, prevLabels })])],
+      );
+      await poll();
+      const [where] = gmail.whereIs(target!.messageId!);
+      expect(where?.mailbox).toBe('Receipts');
+      expect(gmail.find('Receipts', where!.uid)?.labels?.sort()).toEqual(['Newsletters', 'Receipts', '\\Important'].sort());
+      const moved = (await pool.query(`select state, items from email.mailbox_actions where id = $1`, [inserted.rows[0].id])).rows[0];
+      expect(moved.state).toBe('done');
+      expect(moved.items[0]).toMatchObject({ status: 'done', via: 'labels' });
+      expect(await rowOf(id)).toMatchObject({ folder: 'Receipts', uid: where!.uid });
+
+      // Its undo stopped after Inbox went back on, before the label came off: in INBOX, still labelled.
+      gmail.storeLabels('Receipts', [where!.uid], ['\\Inbox'], 'add');
+      const [half] = gmail.whereIs(target!.messageId!);
+      expect(half?.mailbox).toBe('INBOX');
+      const undo = await pool.query(
+        `insert into email.mailbox_actions (account_id, kind, destination, origin, actor, message_ids, items, state, reverts)
+         values ($1, 'undo', 'INBOX', 'owner', 'owner', $2::uuid[], $3::jsonb, 'pending', $4) returning id`,
+        [accounts[GMAIL]!.id, [id], JSON.stringify([planned({ fromFolder: 'Receipts', fromUid: where!.uid, toFolder: 'INBOX', toUidValidity: 0, toUid: null, prevLabels: ['Newsletters', 'Receipts', '\\Important'].sort() })]), inserted.rows[0].id],
+      );
+      await poll();
+      const [back] = gmail.whereIs(target!.messageId!);
+      expect(back?.mailbox).toBe('INBOX');
+      expect(gmail.find('INBOX', back!.uid)?.labels?.sort()).toEqual(prevLabels);
+      const undone = (await pool.query(`select state, items from email.mailbox_actions where id = $1`, [undo.rows[0].id])).rows[0];
+      expect(undone.state).toBe('done');
+      expect(undone.items[0]).toMatchObject({ status: 'done' });
+      expect(await rowOf(id)).toMatchObject({ folder: 'INBOX', uid: back!.uid });
+      const original = (await pool.query(`select reverted_ids from email.mailbox_actions where id = $1`, [inserted.rows[0].id])).rows[0];
+      expect(original.reverted_ids.map(String)).toEqual([id]);
+    });
+
     it('plain IMAP is unchanged: a MOVE', async () => {
       const id = (await idsOf(PLAIN, 'Newsletter 5'))[0]!;
       await approve('email.move', { ids: [id], folder: 'Receipts' });

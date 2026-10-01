@@ -486,7 +486,8 @@ export async function relocateRow(
               labels = case when $6::jsonb is null then labels else $6::jsonb end
         where id = $1
           and not exists (select 1 from email.messages o
-                           where o.account_id = $5 and o.folder_id = $2 and o.uidvalidity = $3 and o.uid = $4)`,
+                           where o.account_id = $5 and o.folder_id = $2 and o.uidvalidity = $3 and o.uid = $4
+                             and o.id <> $1)`,
       [target.id, folderId, uidValidity, uid, target.accountId, labelJson],
     );
     if ((result.rowCount ?? 0) > 0) where = { uidValidity, uid };
@@ -1274,6 +1275,16 @@ export async function reconcileTrail(
       if (statusOf(item) !== 'planned') continue;
       const target = (await loadTargets(db, [item.id]))[0];
       if (item.toFolder) {
+        /*
+         * Gmail's label move is two commands — the label on, then Inbox off
+         * (an undo: the labels back, Inbox on, then the label off) — and a
+         * crash between them leaves the message where it was *and* changed.
+         * The Inbox step is the move itself, so a half-done one is finished
+         * here: its second command is sent, and the item goes on as done.
+         */
+        if (facts.gmail && item.via === 'labels' && item.messageId) {
+          await finishLabelMove(db, client, action, item);
+        }
         // Where it was first: on Gmail, All Mail also holds what is still
         // in the inbox, so "found in the destination" alone proves nothing.
         const stayed = item.messageId ? await client.findByMessageId(item.fromFolder, item.messageId) : null;
@@ -1338,6 +1349,39 @@ export async function reconcileTrail(
     settled += 1;
   }
   return { settled };
+}
+
+/**
+ * A Gmail label move (or its undo) a stopped process left between its two
+ * commands, finished from what the server says (X-GM-LABELS):
+ *
+ *  - a move (Inbox → label): still in the inbox but already carrying the
+ *    label it did not have before — Inbox comes off;
+ *  - an undo (label → Inbox): already back in the inbox but still carrying
+ *    the label it was moved to — the label comes off, unless the message
+ *    had it before the original move.
+ *
+ * Anything else is left for the ordinary check (never happened, happened,
+ * or unknown). A message the owner touched since cannot be told apart, so
+ * only the exact half-done shape is finished.
+ */
+async function finishLabelMove(db: Db, client: ImapWriter, action: ActionRecord, item: TrailItem): Promise<void> {
+  const toInbox = item.toFolder!.toUpperCase() === INBOX;
+  const uid = await client.findByMessageId(INBOX, item.messageId!);
+  if (uid === null) return;
+  const labels = plainLabels((await client.fetchLabels(INBOX, [uid])).get(uid));
+  if (!toInbox) {
+    const before = plainLabels(item.prevLabels);
+    if (labels.includes(item.toFolder!) && !before.includes(item.toFolder!)) {
+      await client.storeLabels(INBOX, [uid], [GMAIL_INBOX_LABEL], 'remove');
+    }
+    return;
+  }
+  if (!labels.includes(item.fromFolder)) return;
+  const original = action.reverts ? await findAction(db, action.reverts) : null;
+  const before = original?.items.find((i) => i.id === item.id)?.prevLabels;
+  if (before === undefined || plainLabels(before).includes(item.fromFolder)) return;
+  await client.storeLabels(INBOX, [uid], [item.fromFolder], 'remove');
 }
 
 /**
