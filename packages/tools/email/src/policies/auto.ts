@@ -195,19 +195,6 @@ export function kindOfCard(card: Pick<Proposal, 'payload'>): string {
 /** The Mail page, where Learned lists them. */
 export const LEARNED_ROUTE = '#/p/email/mail';
 
-/** How many rules kept themselves on the owner's local day, by reason. Undone ones are not counted. */
-export async function learnedOn(db: Db, day: string, timezone: string): Promise<{ bulk: number; trackRecord: number }> {
-  const { rows } = await db.query(
-    `select count(*) filter (where auto_reason = 'bulk')::int as bulk,
-            count(*) filter (where auto_reason is distinct from 'bulk')::int as track
-       from email.policies
-      where kept_by = 'auto' and revoked_at is null
-        and (kept_at at time zone $2)::date = $1::date`,
-    [day, timezone],
-  );
-  return { bulk: Number(rows[0]?.bulk ?? 0), trackRecord: Number(rows[0]?.track ?? 0) };
-}
-
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -223,28 +210,107 @@ export function learnedLine(counts: { bulk: number; trackRecord: number }): stri
   return `buddi learned ${plural(total, 'rule')}: quieted ${parts.join(' and ')} — review`;
 }
 
+/** Where the open "buddi learned" line is kept (`email.settings`): see `tellOwnerLearned`. */
+export const LEARNED_LINE_KEY = 'learned_line';
+
+/** The line being written: its notification, its dedupe key, and the local day it was opened. */
+interface LearnedLineState {
+  lineId: string;
+  key: string;
+  opened: string;
+}
+
+async function readLineState(db: Db): Promise<LearnedLineState | null> {
+  const { rows } = await db.query<{ value: unknown }>(`select value from email.settings where key = $1`, [LEARNED_LINE_KEY]);
+  const v = rows[0]?.value as Partial<LearnedLineState> | undefined;
+  if (!v || typeof v.lineId !== 'string' || typeof v.key !== 'string' || typeof v.opened !== 'string') return null;
+  return v as LearnedLineState;
+}
+
+async function writeLineState(db: Db, state: LearnedLineState, now: Date): Promise<void> {
+  await db.query(
+    `insert into email.settings (key, value, updated_at) values ($1, $2::jsonb, $3)
+     on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+    [LEARNED_LINE_KEY, JSON.stringify(state), now],
+  );
+}
+
+/** Rules that kept themselves on a line (`line`), or not told yet (null), by reason; undone ones left out. */
+async function keptOn(db: Db, line: string | null): Promise<{ bulk: number; trackRecord: number; ids: string[] }> {
+  const { rows } = await db.query<{ id: string; auto_reason: string | null; revoked: boolean }>(
+    `select id, auto_reason, revoked_at is not null as revoked
+       from email.policies
+      where kept_by = 'auto' and learned_line is not distinct from $1`,
+    [line],
+  );
+  const live = rows.filter((r) => !r.revoked);
+  return {
+    bulk: live.filter((r) => r.auto_reason === 'bulk').length,
+    trackRecord: live.filter((r) => r.auto_reason !== 'bulk').length,
+    ids: rows.map((r) => String(r.id)),
+  };
+}
+
+async function markTold(db: Db, ids: readonly string[], line: string): Promise<void> {
+  if (ids.length === 0) return;
+  await db.query(`update email.policies set learned_line = $2 where id = any($1::uuid[])`, [ids, line]);
+}
+
 /**
- * Tell the owner what kept itself today, in one line. Keyed per local day,
- * so every call on the same day updates the one waiting line rather than
- * adding another, at the `today` urgency (the end-of-day message). Nothing is
- * sent when nothing kept itself. Never throws: the rules stand either way.
+ * Tell the owner what kept itself, in one line waiting for the end-of-day
+ * message (`today`). The line is updated while it waits, never repeated: a
+ * rule kept after that day's message went out opens the next line, which the
+ * next day's rules fold into, so a date never gets a second line. Each rule
+ * is told on exactly one line (`policies.learned_line`). A line still waiting
+ * after two days is left as it is and a fresh one opened. Nothing is sent
+ * when nothing new kept itself. Never throws: the rules stand either way.
  */
 export async function tellOwnerLearned(host: Pick<BuddiHost, 'db' | 'owner'>, now: Date): Promise<string | null> {
   const notify = host.owner.notify;
   if (!notify) return null;
   try {
     const timezone = host.owner.timezone || 'UTC';
-    const day = localDateString(now, timezone);
-    const title = learnedLine(await learnedOn(host.db, day, timezone));
-    if (!title) return null;
-    await notify({
-      urgency: 'today',
-      title,
-      text: 'Each is under Learned on the Mail page, with Undo.',
-      link: { route: LEARNED_ROUTE },
-      dedupeKey: `learned:${day}`,
-    });
-    return title;
+    const today = localDateString(now, timezone);
+    const yesterday = localDateString(new Date(now.getTime() - 86_400_000), timezone);
+    const fresh = await keptOn(host.db, null);
+    if (fresh.bulk + fresh.trackRecord === 0) return null;
+    const say = async (key: string, counts: { bulk: number; trackRecord: number }): Promise<{ id: string; title: string } | null> => {
+      const title = learnedLine(counts);
+      if (!title) return null;
+      const { id } = await notify({
+        urgency: 'today',
+        title,
+        text: 'Each is under Learned on the Mail page, with Undo.',
+        link: { route: LEARNED_ROUTE },
+        dedupeKey: key,
+      });
+      return { id, title };
+    };
+
+    const state = await readLineState(host.db);
+    if (state && state.opened >= yesterday) {
+      // The open line, with what is new. The same id back means it was still
+      // waiting, and now says more.
+      const told = await keptOn(host.db, state.lineId);
+      const said = await say(state.key, { bulk: told.bulk + fresh.bulk, trackRecord: told.trackRecord + fresh.trackRecord });
+      if (said && said.id === state.lineId) {
+        await markTold(host.db, fresh.ids, state.lineId);
+        return said.title;
+      }
+      // It had gone out: this is the next line, and it says only what is new.
+      const next = await say(state.key, fresh);
+      if (!next) return null;
+      await markTold(host.db, fresh.ids, next.id);
+      await writeLineState(host.db, { lineId: next.id, key: state.key, opened: today }, now);
+      return next.title;
+    }
+
+    const key = `learned:${today}`;
+    const said = await say(key, fresh);
+    if (!said) return null;
+    await markTold(host.db, fresh.ids, said.id);
+    await writeLineState(host.db, { lineId: said.id, key, opened: today }, now);
+    return said.title;
   } catch (err) {
     console.error(`email: could not tell the owner what it learned: ${err instanceof Error ? err.message : String(err)}`);
     return null;

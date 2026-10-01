@@ -76,6 +76,7 @@ suite('email policies (postgres + fake imap)', () => {
     );
     await pool.query('truncate core.proposals');
     await pool.query('truncate core.owner_notifications cascade');
+    await pool.query(`delete from email.settings where key = 'learned_line'`);
     const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = account!.id;
     const { rows } = await pool.query(
@@ -860,6 +861,32 @@ suite('email policies (postgres + fake imap)', () => {
       expect(sent[0]!.dedupe_key).toContain('learned:2026-09-21');
       // A card the owner never sees is never announced.
       expect(sent.some((n) => /Proposes a rule/.test(n.title))).toBe(false);
+    });
+
+    it("folds a rule kept after the day's message went out into the next day's line, never a second line for the date", async () => {
+      const ctx = toolContext();
+      await threePromos('one@list.test', { bulk: true }, ctx);
+      expect((await notifications()).map((n) => n.title)).toEqual(['buddi learned 1 rule: quieted 1 newsletter — review']);
+      // The end-of-day message goes out.
+      await pool.query(`update core.owner_notifications set sent_at = $1`, [NOW]);
+
+      // Later that evening another keeps itself: the next line, saying only it.
+      await threePromos('two@list.test', { bulk: true }, ctx);
+      let lines = await notifications();
+      expect(lines).toHaveLength(2);
+      expect(lines[1]!.title).toBe('buddi learned 1 rule: quieted 1 newsletter — review');
+
+      // The next day's rule folds into that line: no third line, and the date has one line waiting.
+      const nextDay = new Date(NOW.getTime() + 86_400_000);
+      await threePromos('three@list.test', { bulk: true }, ctx);
+      // As if it kept itself the next day, not yet told.
+      await pool.query(`update email.policies set kept_at = $1, learned_line = null where matcher = 'three@list.test'`, [nextDay]);
+      expect(await tellOwnerLearned(ctx.buddi!, nextDay)).toBe('buddi learned 2 rules: quieted 2 newsletters — review');
+      lines = await notifications();
+      expect(lines).toHaveLength(2);
+      expect(lines[1]!.title).toBe('buddi learned 2 rules: quieted 2 newsletters — review');
+      const { rows } = await pool.query(`select count(*)::int as n from core.owner_notifications where sent_at is null`);
+      expect(rows[0].n).toBe(1);
     });
 
     it('keeps the waiting pile of bulk cards on the first start, once', async () => {
