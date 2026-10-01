@@ -42,6 +42,8 @@ import { AskDock, showsAskDock } from './shell/AskDock';
 import { NotificationToasts, ToastStack, toastPlacement, useToastQueue } from './shell/NotificationToasts';
 import { usePresence } from './shell/presence';
 import { GroupSheet } from './shell/GroupSheet';
+import { ClearGroupModal, DeleteGroupModal, MembersSheet, RenameGroupModal, type GroupAction } from './shell/GroupRoom';
+import { GROUP_UNDO_SHOWN_MS, UndoToast } from './shell/UndoToast';
 import { PluginPage } from './pages/PluginPage';
 import { usePluginPages, type PluginPages } from './pages/usePages';
 import { Files } from './views/Files';
@@ -135,8 +137,14 @@ export function App(): JSX.Element {
   /** The owner's groups: a team of agents in one conversation (docs/groups.md). */
   const [groups, setGroups] = useState<GroupView[]>([]);
   const [newGroup, setNewGroup] = useState(false);
-  /** The group whose sheet is open for editing, if any. */
-  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  /** One of a group's own things, open from its room's ⋯ menu: Members, Rename, Clear, Delete. */
+  const [groupAction, setGroupAction] = useState<{ kind: GroupAction; groupId: string } | null>(null);
+  /** A group just deleted: ten seconds to take it back, where it stood in the rail. */
+  const [deletedGroup, setDeletedGroup] = useState<{ group: GroupView; index: number; until: string } | null>(null);
+  /** Bumped when a room's history is cleared, so its page starts again on a clean thread. */
+  const [roomEpoch, setRoomEpoch] = useState(0);
+  /** Undo came too late: the group is gone for good, and the page says so once. */
+  const [restoreFailed, setRestoreFailed] = useState<string | null>(null);
   const attention = useAttention();
   /*
    * The corner buddi: a small chat with the front desk over any page but Home
@@ -305,6 +313,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (chatLocation) setAgentId(chatLocation.agentId);
   }, [chatLocation?.agentId]);
+  /*
+   * The last chat that was not a group's room: where deleting the open
+   * group goes back to. An agent's chat is always somewhere to stand.
+   */
+  const lastAgentChat = useRef<string | null>(null);
+  if (chatLocation) lastAgentChat.current = hash;
   const selectAgent = (id: string): void => { setAgentId(id); navigate(chatRoute(id)); };
   const selectGroup = (id: string): void => navigate(groupChatRoute(id));
   const conversationOpened = useCallback(
@@ -402,12 +416,15 @@ export function App(): JSX.Element {
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);
   const onChat = place === CHAT_ROUTE;
-  const editingGroup = editingGroupId ? (groups.find((g) => g.id === editingGroupId) ?? null) : null;
+  const actedGroup = groupAction ? (groups.find((g) => g.id === groupAction.groupId) ?? null) : null;
+  const savedGroup = (group: GroupView): void => setGroups((current) => current.map((g) => (g.id === group.id ? group : g)));
+  const closeGroupAction = (): void => setGroupAction(null);
   /*
-   * One sheet, two jobs: making a group and changing one. Whatever it answers
-   * goes straight into the roster this component holds, so the rail and the
-   * room's header are right without a reload — an archived group leaves the
-   * rail and the page goes back to the agents.
+   * Making a group is the sheet; everything after is the room's menu. What
+   * either answers goes straight into the roster this component holds, so
+   * the rail and the room's header are right without a reload. A deleted
+   * group leaves the rail at once and the page goes back to the chat the
+   * owner was in before, with Undo while the server still keeps it.
    */
   const groupSheet = newGroup ? (
     <GroupSheet
@@ -415,22 +432,44 @@ export function App(): JSX.Element {
       onClose={() => setNewGroup(false)}
       onCreated={(group) => { setGroups((current) => [...current, group]); setNewGroup(false); navigate(groupChatRoute(group.id)); }}
     />
-  ) : editingGroup ? (
-    <GroupSheet
+  ) : actedGroup && groupAction?.kind === 'members' ? (
+    <MembersSheet group={actedGroup} agents={agents} onClose={closeGroupAction} onSaved={savedGroup} />
+  ) : actedGroup && groupAction?.kind === 'rename' ? (
+    <RenameGroupModal group={actedGroup} onClose={closeGroupAction} onSaved={(group) => { savedGroup(group); closeGroupAction(); }} />
+  ) : actedGroup && groupAction?.kind === 'clear' ? (
+    <ClearGroupModal
+      group={actedGroup}
+      onClose={closeGroupAction}
+      onCleared={() => { closeGroupAction(); setRoomEpoch((n) => n + 1); navigate(groupChatRoute(actedGroup.id), true); }}
+    />
+  ) : actedGroup && groupAction?.kind === 'delete' ? (
+    <DeleteGroupModal
+      group={actedGroup}
       agents={agents}
-      group={editingGroup}
-      onClose={() => setEditingGroupId(null)}
-      onSaved={(group) => {
-        setGroups((current) => current.map((g) => (g.id === group.id ? group : g)));
-        setEditingGroupId(null);
-      }}
-      onArchived={(id) => {
-        setGroups((current) => current.filter((g) => g.id !== id));
-        setEditingGroupId(null);
-        navigate(CHAT_ROUTE);
+      onClose={closeGroupAction}
+      onDeleted={(until) => {
+        const index = groups.findIndex((g) => g.id === actedGroup.id);
+        closeGroupAction();
+        setGroups((current) => current.filter((g) => g.id !== actedGroup.id));
+        setDeletedGroup({ group: actedGroup, index, until });
+        navigate(lastAgentChat.current ?? CHAT_ROUTE);
       }}
     />
   ) : null;
+  const undoDelete = (): void => {
+    const gone = deletedGroup;
+    if (!gone) return;
+    setDeletedGroup(null);
+    chatApi.restoreGroup(gone.group.id).then((group) => {
+      setGroups((current) => {
+        if (current.some((g) => g.id === group.id)) return current;
+        const next = [...current];
+        next.splice(Math.min(Math.max(gone.index, 0), next.length), 0, group);
+        return next;
+      });
+      navigate(groupChatRoute(group.id));
+    }).catch(() => setRestoreFailed(gone.group.name));
+  };
 
   // First run takes the whole window: no rail, no place, nothing to navigate
   // away to until the owner has met their assistant or set it aside.
@@ -490,7 +529,8 @@ export function App(): JSX.Element {
               agentId={selectedGroup ? selectedGroup.coordinator : selectedAgentId}
               defaultAgentId={defaultAgentId}
               group={selectedGroup}
-              onEditGroup={selectedGroup ? () => setEditingGroupId(selectedGroup.id) : undefined}
+              key={`room-${roomEpoch}`}
+              {...(selectedGroup ? { onGroupAction: (kind: GroupAction) => setGroupAction({ kind, groupId: selectedGroup.id }) } : {})}
               requestedConversationId={groupLocation?.conversationId ?? chatLocation?.conversationId}
               requestedTab={chatLocation?.tab}
               onConversationOpened={conversationOpened}
@@ -530,6 +570,19 @@ export function App(): JSX.Element {
         ) : null}
         <ToastStack placement={toastPlacement(askShown, askOpen)}>
           <NotificationToasts queue={toasts.queue} agents={agents} navigate={navigate} onDismiss={toasts.dismiss} />
+          {deletedGroup ? (
+            <UndoToast
+              key={deletedGroup.group.id}
+              title={`Deleted ${deletedGroup.group.name}`}
+              body="Its history goes for good in a few seconds."
+              duration={GROUP_UNDO_SHOWN_MS}
+              onUndo={undoDelete}
+              onGone={() => setDeletedGroup(null)}
+            />
+          ) : null}
+          {restoreFailed ? (
+            <UndoToast key={`late-${restoreFailed}`} title={`${restoreFailed} is gone for good`} body="Undo came too late to bring it back." duration={6_000} onGone={() => setRestoreFailed(null)} />
+          ) : null}
           <Toast.Viewport className="ui-toasts" />
         </ToastStack>
       </Toast.Provider>

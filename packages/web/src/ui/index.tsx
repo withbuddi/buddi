@@ -15,7 +15,7 @@ export { Blob, type BlobSize } from './Blob';
 export { Chart, chartGeometry, chartSummary, type ChartSeries } from './Chart';
 export { Icon, ICON_NAMES, type IconName } from './Icon';
 import { Icon, type IconName } from './Icon';
-export { Avatar, AgentAvatar, Mascot, MascotProvider } from '../views/parts/Avatar';
+export { Avatar, AgentAvatar, FaceMark, Mascot, MascotProvider } from '../views/parts/Avatar';
 import { Mascot } from '../views/parts/Avatar';
 
 export type Tone = 'good' | 'warning' | 'critical' | 'accent' | 'muted';

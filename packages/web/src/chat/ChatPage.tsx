@@ -32,7 +32,7 @@ import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
-import { AgentAvatar, GradientField, Icon } from '../ui';
+import { AgentAvatar, FaceMark, GradientField, Icon } from '../ui';
 import { cannotRunFix, cannotRunSentence, introOf, startersOf, type AgentAttention, type AgentGroups } from '../shell/roster';
 import { Composer, type ComposerDraft, type ComposerHandle } from './Composer';
 import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attachments';
@@ -45,6 +45,7 @@ import { openChatStream } from './stream';
 import { claimPlayback, playAudio, playbackCurrent, readAloudPreference, saveReadAloud, stopPlayback } from './voice';
 import { OWNER_INTERJECTION_SPEAKER } from './types';
 import type { ChatAgent, ChatConversation, ChatEvent, ChatMessage, GroupView, UploadedAttachment } from './types';
+import { groupProblem, namesSentence, type GroupAction } from '../shell/GroupRoom';
 import { accentAttrs, accentOf } from '../shell/accent';
 import { useThisMachine } from '../useThisMachine';
 
@@ -73,8 +74,8 @@ export interface ChatPageProps {
   defaultAgentId?: string | null;
   /** Set when the page is a group's room rather than one agent's thread. */
   group?: GroupView | null;
-  /** Open the group's sheet, where its members are changed. Shell-owned. */
-  onEditGroup?: () => void;
+  /** One of the group's own things from its ⋯ menu: Members, Rename, Clear, Delete. Shell-owned. */
+  onGroupAction?: (action: GroupAction) => void;
   onSelectAgent: (agentId: string) => void;
   /** Who is working in the open conversation right now, or null: the roster's accent dot. */
   onWorking?: (agentId: string | null) => void;
@@ -101,7 +102,7 @@ export function ChatPage({
   agentId,
   defaultAgentId = null,
   group = null,
-  onEditGroup,
+  onGroupAction,
   onSelectAgent,
   onWorking,
   attention,
@@ -727,6 +728,26 @@ export function ChatPage({
    * coordinator, and one member without an account is not the room being shut.
    */
   const blocked = !group && agent && !agent.available ? cannotRunSentence(agent) : null;
+  /*
+   * A room that lost an agent to an uninstall. Its coordinator gone, the
+   * server refuses the room's turns, so the sentence takes the composer's
+   * place like `blocked` does; one member left only says so above it.
+   */
+  /*
+   * A room's face: its first two members crossed on the diagonal, the same
+   * mark the rail draws for it. One that left buddi is a "?".
+   */
+  const groupFaces = group ? (
+    <span className="wb-group-stack" aria-hidden="true">
+      {group.members.slice(0, 2).map((id) => {
+        const member = everyone.find((a) => a.id === id);
+        return <FaceMark key={id} className="wb-group-chip" id={id} name={member?.name ?? '?'} face={member} initials={1} />;
+      })}
+    </span>
+  ) : null;
+  // Not before the roster has loaded: an empty list would read as everyone gone.
+  const roomProblem = group && everyone.length > 0 ? groupProblem(group, everyone) : null;
+  const roomBlocked = roomProblem?.kind === 'coordinator';
   // Which door that sentence opens: Plugins when a plugin is what is missing,
   // Model accounts otherwise.
   const blockedFix = cannotRunFix(group ? null : agent);
@@ -1142,9 +1163,7 @@ export function ChatPage({
             {/* Whose column this is: the same face as in the roster, then the
                 name, then the one fact the transcript hides — how old it is. */}
             {group ? (
-              <span className="wb-head-face wb-head-group" aria-hidden="true">
-                {members.slice(0, 3).map((m) => <AgentAvatar key={m.id} agents={everyone} id={m.id} size="sm" />)}
-              </span>
+              <span className="wb-head-face" aria-hidden="true">{groupFaces}</span>
             ) : agent ? <a className="wb-head-face" href={agentRoute(agent.id)} aria-label={`${agent.name}'s page`}><AgentAvatar agents={everyone} id={agent.id} /></a> : null}
             <div className="wb-head-text">
               {group ? (
@@ -1197,21 +1216,43 @@ export function ChatPage({
               and its page itself. One place, with words, instead of two icons
               that each open something different.
             */}
-            <HeadMenu
-              disabled={!agentId}
-              items={group ? [
-                ...members.map((m) => ({ label: m.name, hint: m.id === group.coordinator ? 'Coordinator · open page' : 'Member · open page', href: agentRoute(m.id) })),
-                // The room is not fixed at creation: this is where it is
-                // changed, under the members it is about.
-                ...(onEditGroup ? [{ label: 'Members…', hint: 'Name, coordinator, who is in the room', testId: 'group-members', onSelect: onEditGroup }] : []),
-              ] : [
-                { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
-                ...(agent ? [
-                  { label: 'Set up', hint: 'Identity, model and access', href: agentRoute(agent.id, 'setup') },
-                  { label: 'Open agent page', hint: 'Profile, activity and setup', href: agentRoute(agent.id) },
-                ] : []),
-              ]}
-            />
+            {group ? (
+              /*
+               * The group's menu is about the group: who is in it, its name,
+               * its history, and deleting it. A member's page is a row inside
+               * Members, never what this menu is for. Same order as an
+               * agent's: what it is, how it is set up, then — under a
+               * hairline — what takes something away.
+               */
+              <HeadMenu
+                disabled={false}
+                label="More about this group"
+                title={group.name}
+                sub={namesSentence(members.map((m) => m.name))}
+                face={groupFaces}
+                items={[
+                  { label: 'Members', hint: `${group.members.length} agents · ${agent ? `${agent.name} coordinates` : 'no coordinator'}`, testId: 'group-members', onSelect: () => onGroupAction?.('members') },
+                  { label: 'Rename…', hint: 'What this team is for', testId: 'group-rename', onSelect: () => onGroupAction?.('rename') },
+                  'separator',
+                  { label: 'Clear history…', hint: 'Keeps the group and its members', testId: 'group-clear', onSelect: () => onGroupAction?.('clear') },
+                  { label: 'Delete group…', hint: 'With its history; the agents stay', tone: 'critical', testId: 'group-delete', onSelect: () => onGroupAction?.('delete') },
+                ]}
+              />
+            ) : (
+              <HeadMenu
+                disabled={!agentId}
+                label="More about this agent"
+                title={agent?.name ?? 'Agent'}
+                {...(agent ? { sub: `@${agent.handle}`, face: <AgentAvatar agents={everyone} id={agent.id} size="sm" /> } : {})}
+                items={[
+                  { label: profile ? 'Close properties' : 'Properties', hint: 'What this agent can do, on the Canvas', testId: 'agent-properties', disabled: loadingProfile, onSelect: toggleProfile },
+                  ...(agent ? [
+                    { label: 'Set up', hint: 'Identity, model and access', href: agentRoute(agent.id, 'setup') },
+                    { label: 'Open agent page', hint: 'Profile, activity and setup', href: agentRoute(agent.id) },
+                  ] : []),
+                ]}
+              />
+            )}
           </div>
           {/*
             Two rails plus a conversation plus a canvas do not fit a phone. Below
@@ -1308,7 +1349,9 @@ export function ChatPage({
           }}
           {...(agent ? { agentName: agent.name, agentId: agent.id } : {})}
           {...(opening ? { empty: opening } : {})}
-          emptyHint={agent ? `Nothing here yet. Ask ${agent.name} for something.` : 'Loading agents…'}
+          emptyHint={group
+            ? `Give the team a task once; ${agent ? agent.name : 'the coordinator'} brings members in. @ addresses one of them.`
+            : agent ? `Nothing here yet. Ask ${agent.name} for something.` : 'Loading agents…'}
         >
 
         </MessageList>
@@ -1329,6 +1372,16 @@ export function ChatPage({
           </div>
         ) : null}
 
+        {roomProblem ? (
+          <div className="wb-composer-blocked" data-testid="group-problem" data-kind={roomProblem.kind}>
+            <Notice tone={roomBlocked ? 'warning' : undefined} role="status">
+              <span>
+                {roomProblem.text}{' '}
+                <button type="button" className="wb-link-btn" onClick={() => onGroupAction?.('members')}>{roomProblem.action}</button>
+              </span>
+            </Notice>
+          </div>
+        ) : null}
         {blocked ? (
           /*
            * No brain, no composer. An agent whose account is missing, disabled
@@ -1363,7 +1416,7 @@ export function ChatPage({
             onSkip={skipQuestion}
           />
         ) : null}
-        {blocked ? null : (
+        {blocked || roomBlocked ? null : (
           /*
            * Hidden, not unmounted, while a question or an approval stands in
            * its place: the half-written line and its files are exactly where
@@ -1538,13 +1591,26 @@ interface HeadMenuItem {
   onSelect?: () => void;
   disabled?: boolean;
   testId?: string;
+  /** What takes something away: drawn in the critical ink, last, under a hairline. */
+  tone?: 'critical';
 }
 
 /**
- * The header's one menu. Plain markup rather than a menu library: three rows,
- * a click outside or Escape closes it, and a test can open it with a click.
+ * The header's one menu, an agent's or a group's. Plain markup rather than a
+ * menu library: a click outside or Escape closes it, and a test can open it
+ * with a click. `'separator'` draws the hairline before what takes something
+ * away. On a phone the stylesheet lays the same list out as a sheet from the
+ * bottom, with whose menu it is on top and Cancel under the rows.
  */
-function HeadMenu({ items, disabled }: { items: HeadMenuItem[]; disabled: boolean }): JSX.Element {
+function HeadMenu({ items, disabled, label, title, sub, face }: {
+  items: Array<HeadMenuItem | 'separator'>;
+  disabled: boolean;
+  label: string;
+  /** The sheet's head on a phone: the name, one quiet line, the face. */
+  title: string;
+  sub?: string;
+  face?: JSX.Element | null;
+}): JSX.Element {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -1555,12 +1621,35 @@ function HeadMenu({ items, disabled }: { items: HeadMenuItem[]; disabled: boolea
     window.addEventListener('keydown', key);
     return () => { window.removeEventListener('mousedown', away); window.removeEventListener('keydown', key); };
   }, [open]);
+  const row = (item: HeadMenuItem): JSX.Element => {
+    const body = (
+      <>
+        <span className="ui-menu-item-text">{item.label}</span>
+        {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
+      </>
+    );
+    return item.href ? (
+      <a key={item.label} className="ui-menu-item" role="menuitem" href={item.href} data-tone={item.tone} onClick={() => setOpen(false)}>{body}</a>
+    ) : (
+      <button
+        key={item.label}
+        className="ui-menu-item"
+        role="menuitem"
+        data-testid={item.testId}
+        data-tone={item.tone}
+        disabled={item.disabled}
+        onClick={() => { setOpen(false); item.onSelect?.(); }}
+      >
+        {body}
+      </button>
+    );
+  };
   return (
     <div className="wb-head-menu" ref={root}>
       <button
         className="ui-icon-btn wb-head-more"
         data-testid="chat-menu"
-        aria-label="More about this agent"
+        aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         data-open={open ? 'true' : undefined}
@@ -1570,26 +1659,20 @@ function HeadMenu({ items, disabled }: { items: HeadMenuItem[]; disabled: boolea
         <MoreIcon />
       </button>
       {open ? (
-        <div className="ui-menu wb-head-menu-list" role="menu">
-          {items.map((item) => item.href ? (
-            <a key={item.label} className="ui-menu-item" role="menuitem" href={item.href} onClick={() => setOpen(false)}>
-              <span className="ui-menu-item-text">{item.label}</span>
-              {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
-            </a>
-          ) : (
-            <button
-              key={item.label}
-              className="ui-menu-item"
-              role="menuitem"
-              data-testid={item.testId}
-              disabled={item.disabled}
-              onClick={() => { setOpen(false); item.onSelect?.(); }}
-            >
-              <span className="ui-menu-item-text">{item.label}</span>
-              {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
-            </button>
-          ))}
-        </div>
+        <>
+          <div className="wb-head-menu-scrim" aria-hidden="true" onClick={() => setOpen(false)} />
+          <div className="ui-menu wb-head-menu-list" role="menu" aria-label={title}>
+            <div className="wb-head-menu-head" aria-hidden="true">
+              {face}
+              <span className="wb-head-menu-heading">
+                <span className="wb-head-menu-title">{title}</span>
+                {sub ? <span className="wb-head-menu-sub">{sub}</span> : null}
+              </span>
+            </div>
+            {items.map((item, index) => item === 'separator' ? <div key={`sep-${index}`} className="ui-menu-sep" role="separator" /> : row(item))}
+            <button type="button" className="ui-btn wb-head-menu-cancel" onClick={() => setOpen(false)}>Cancel</button>
+          </div>
+        </>
       ) : null}
     </div>
   );

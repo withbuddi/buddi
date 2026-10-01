@@ -1,12 +1,10 @@
 /**
- * A group: making one, and changing the one you have.
+ * Making a group: a name, a coordinator, who is in the room, and the one
+ * sentence about memory (docs/groups.md).
  *
- * The same sheet does both, because they are the same three decisions — a
- * name, a coordinator, who is in the room — and an owner who learned the form
- * once should not have to learn a second one to add a member. What changes is
- * the title, the word on the button, and that an existing group can be
- * archived from here. The one sentence about memory (docs/groups.md) is shown
- * either way: it is as true on the day a member is added as on the first day.
+ * Changing the group afterwards is its room's ⋯ menu (GroupRoom.tsx):
+ * Members, Rename, Clear history, Delete. Each of those is one decision with
+ * its own surface, rather than this whole form again.
  */
 import { useState } from 'react';
 import { ApiError, chatApi } from '../api';
@@ -16,14 +14,10 @@ import { Button, Field, Notice, Sheet, Stack, Toolbar } from '../ui';
 import { AgentAvatar } from '../ui';
 import { FRONT_DESK_ROLE } from './roles';
 
-export function GroupSheet({ agents, group, onClose, onCreated, onSaved, onArchived }: {
+export function GroupSheet({ agents, onClose, onCreated }: {
   agents: ChatAgent[];
-  /** The group being changed. Absent: a new one is being made. */
-  group?: GroupView | null;
   onClose: () => void;
   onCreated?: (group: GroupView) => void;
-  onSaved?: (group: GroupView) => void;
-  onArchived?: (id: string) => void;
 }): JSX.Element {
   /*
    * Reached by a link, with nobody to group.
@@ -32,61 +26,28 @@ export function GroupSheet({ agents, group, onClose, onCreated, onSaved, onArchi
    * room together, but a bookmarked route does not go through the rail. One
    * sentence saying what is missing and where it is fixed — and no form,
    * because a form that can only be filled in wrongly is worse than no form.
-   *
-   * A group that already exists is past that question: its members are in it,
-   * and an installation that lost an account must still be able to edit or
-   * archive the room rather than meet a sentence about making another agent.
    */
-  if (!group && !canGroup(agents)) {
+  if (!canGroup(agents)) {
     return (
       <Sheet title="A new group" onClose={onClose}>
         <Notice>A group needs two agents. Make another one with {makerName(agents)} first.</Notice>
       </Sheet>
     );
   }
-  return (
-    <GroupForm
-      agents={choices(agents, group)}
-      group={group ?? null}
-      onClose={onClose}
-      {...(onCreated ? { onCreated } : {})}
-      {...(onSaved ? { onSaved } : {})}
-      {...(onArchived ? { onArchived } : {})}
-    />
-  );
+  return <GroupForm agents={groupableAgents(agents)} onClose={onClose} {...(onCreated ? { onCreated } : {})} />;
 }
 
-/**
- * Who the form may offer. The ones that could be grouped today, plus whoever
- * is already in this room: a member whose account broke is still a member, and
- * a checkbox list it silently vanished from would take it out on the next save
- * without anyone deciding to.
- */
-function choices(agents: ChatAgent[], group?: GroupView | null): ChatAgent[] {
-  const offered = groupableAgents(agents);
-  const extra = (group?.members ?? [])
-    .filter((id) => !offered.some((a) => a.id === id))
-    .map((id) => agents.find((a) => a.id === id))
-    .filter((a): a is ChatAgent => a !== undefined);
-  return [...offered, ...extra];
-}
-
-function GroupForm({ agents, group, onClose, onCreated, onSaved, onArchived }: {
+function GroupForm({ agents, onClose, onCreated }: {
   agents: ChatAgent[];
-  group: GroupView | null;
   onClose: () => void;
   onCreated?: (group: GroupView) => void;
-  onSaved?: (group: GroupView) => void;
-  onArchived?: (id: string) => void;
 }): JSX.Element {
-  const editing = group !== null;
-  const [name, setName] = useState(group?.name ?? '');
-  const [members, setMembers] = useState<string[]>(group?.members ?? []);
+  const [name, setName] = useState('');
+  const [members, setMembers] = useState<string[]>([]);
   const [coordinator, setCoordinator] = useState<string>(
-    group?.coordinator ?? agents.find((a) => a.roles.includes(FRONT_DESK_ROLE))?.id ?? agents[0]?.id ?? '',
+    agents.find((a) => a.roles.includes(FRONT_DESK_ROLE))?.id ?? agents[0]?.id ?? '',
   );
   const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const chosen = [...new Set([coordinator, ...members])].filter(Boolean);
   const ok = name.trim() !== '' && coordinator !== '' && chosen.length >= 2;
@@ -94,13 +55,11 @@ function GroupForm({ agents, group, onClose, onCreated, onSaved, onArchived }: {
   const toggle = (id: string): void =>
     setMembers((current) => (current.includes(id) ? current.filter((m) => m !== id) : [...current, id]));
 
-  /** One handler: the form is the same, and so is what it sends. */
   const save = async (): Promise<void> => {
     setBusy(true);
     setProblem(null);
     try {
-      if (group) onSaved?.(await chatApi.updateGroup(group.id, { name: name.trim(), coordinator, members: chosen }));
-      else onCreated?.(await chatApi.createGroup({ name: name.trim(), coordinator, members: chosen.filter((id) => id !== coordinator) }));
+      onCreated?.(await chatApi.createGroup({ name: name.trim(), coordinator, members: chosen.filter((id) => id !== coordinator) }));
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -108,21 +67,8 @@ function GroupForm({ agents, group, onClose, onCreated, onSaved, onArchived }: {
     }
   };
 
-  const archive = async (): Promise<void> => {
-    if (!group) return;
-    setBusy(true);
-    setProblem(null);
-    try {
-      await chatApi.archiveGroup(group.id);
-      onArchived?.(group.id);
-    } catch (err) {
-      setProblem(err instanceof ApiError ? err.message : String(err));
-      setBusy(false);
-    }
-  };
-
   return (
-    <Sheet title={editing ? `${group.name}: members` : 'A new group'} onClose={onClose}>
+    <Sheet title="A new group" onClose={onClose}>
       <Stack>
         <Field label="Name" hint="What this team is for: Household finances, The move, Tax season.">
           <input value={name} autoFocus maxLength={80} onChange={(e) => setName(e.target.value)} placeholder="Household finances" />
@@ -149,45 +95,13 @@ function GroupForm({ agents, group, onClose, onCreated, onSaved, onArchived }: {
         <Notice>
           Members read what is said in this group and what they recall from shared and group memory. Nothing an agent knows privately is brought in on its own: what enters the room is seen by the room.
         </Notice>
-        {editing ? (
-          <Notice>
-            Taking a member out leaves everything it already said in the transcript. It simply takes no new turns.
-          </Notice>
-        ) : null}
         {problem ? <Notice tone="critical">{problem}</Notice> : null}
         <Toolbar align="end">
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="accent" disabled={!ok || busy} onClick={() => void save()}>
-            {busy ? (editing ? 'Saving…' : 'Creating…') : editing ? 'Save' : 'Create group'}
+            {busy ? 'Creating…' : 'Create group'}
           </Button>
         </Toolbar>
-        {/*
-          Archiving is not part of the form, so it sits below it, quiet, and
-          asks once. The sentence is what is actually about to happen — the
-          room leaves the rail and stops taking requests; nothing said in it is
-          deleted — because "are you sure?" teaches nobody anything.
-        */}
-        {editing ? (
-          <div className="group-archive">
-            {confirming ? (
-              <Stack>
-                <Notice tone="warning">
-                  Archive {group.name}? It leaves the rail and takes no new requests. Everything said in it stays readable.
-                </Notice>
-                <Toolbar align="end">
-                  <Button onClick={() => setConfirming(false)}>Keep it</Button>
-                  <Button variant="danger" disabled={busy} data-testid="group-archive-confirm" onClick={() => void archive()}>
-                    Archive group
-                  </Button>
-                </Toolbar>
-              </Stack>
-            ) : (
-              <Button variant="ghost" disabled={busy} data-testid="group-archive" onClick={() => setConfirming(true)}>
-                Archive group
-              </Button>
-            )}
-          </div>
-        ) : null}
       </Stack>
     </Sheet>
   );

@@ -1988,12 +1988,15 @@ export const chatApi = {
   discardAttachment: (artifactId: string) => del<null>(`/artifacts/${encodeURIComponent(artifactId)}`),
   /* ---- groups ---- */
   groups: () => get<{ groups: GroupView[] }>('/groups'),
-  group: (id: string) => get<GroupView & { latestConversationId: string | null; openRequest: { id: string; state: string; awaitingAgentId: string | null; budgetReserved: number; budgetTotal: number } | null }>(`/groups/${encodeURIComponent(id)}`),
+  group: (id: string) => get<GroupView & { latestConversationId: string | null; openRequest: { id: string; state: string; awaitingAgentId: string | null; budgetReserved: number; budgetTotal: number } | null; history?: { conversations: number; messages: number } }>(`/groups/${encodeURIComponent(id)}`),
   createGroup: (body: { name: string; coordinator: string; members: string[] }) => post<GroupView>('/groups', body),
   updateGroup: (id: string, body: { name?: string; coordinator?: string; members?: string[] }) =>
     patch<GroupView>(`/groups/${encodeURIComponent(id)}`, body),
-  // Archived, never deleted: the room leaves the rail and keeps its transcript.
-  archiveGroup: (id: string) => del<null>(`/groups/${encodeURIComponent(id)}`),
+  /** Deleted softly: gone from every list now, back with `restoreGroup` until `undoUntil`, then for good. */
+  deleteGroup: (id: string) => del<{ undoUntil: string }>(`/groups/${encodeURIComponent(id)}`),
+  restoreGroup: (id: string) => post<GroupView>(`/groups/${encodeURIComponent(id)}/restore`),
+  /** Its conversations go; the group, its members and its memory stay. */
+  clearGroup: (id: string) => post<{ conversations: number }>(`/groups/${encodeURIComponent(id)}/clear`),
   groupConversations: (id: string) => get<{ conversations: ConversationListItem[] }>(`/groups/${encodeURIComponent(id)}/conversations`),
   startGroupConversation: (id: string) => post<{ conversationId: string }>(`/groups/${encodeURIComponent(id)}/conversations`),
   sendToGroup: (id: string, body: { conversationId?: string; text: string; attachmentIds?: string[] }) =>

@@ -267,7 +267,7 @@ export function MessageList({
             ) : null}
             {opensTurn && !mine && !interjected ? (
               <TurnHead
-                name={who ? who.name : (agentName ?? 'Assistant')}
+                name={who ? who.name : speakers && speaker && speaker !== 'owner' && speaker !== 'room' ? speaker : (agentName ?? 'Assistant')}
                 face={who ?? thisAgent ?? faceOf(agentName)}
                 moving={moving && carriedHead === message.id}
               >

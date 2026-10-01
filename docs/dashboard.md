@@ -203,6 +203,32 @@ speaks that one reply (stop while it plays); they show on hover, and always on
 a touch screen. An audio file in a conversation or in Files shows as a small
 player with its length and a download link.
 
+**The ⋯ menu** in the header is the one menu about whose chat this is. For
+an agent: **Properties** (what it can do, on the canvas), **Set up**, and
+**Open agent page**. For a group, it is about the group, never a list of its
+agents: **Members** (who is in it and who coordinates), **Rename…**, then
+under a hairline **Clear history…** and **Delete group…**. On a phone the
+menu rises from the bottom as a sheet, with Cancel under it.
+
+**A group** ([Groups](groups.md)) has its own room in the same page:
+
+- **Members** opens a sheet: the coordinator first, then the rest. A row's ⋯
+  makes that member the coordinator, opens its page, or takes it out of the
+  group (what it said stays). **Add a member** lists who can join, each with
+  **Add**. Every change is kept as you make it; a group needs two members.
+- **Rename…** asks for the new name in a small dialog.
+- **Clear history…** deletes every conversation the group had, after one
+  sentence saying how many. The group, its members and what it remembers
+  stay, and files it made stay in Files.
+- **Delete group…** asks once, naming what goes (the group, its conversations,
+  what it remembers) and what does not (its agents, its files). The page goes
+  back to the chat you were in before, the group leaves the rail at once, and
+  a toast offers **Undo** for ten seconds. After a minute it is gone for good.
+- A group whose coordinator was removed from buddi cannot take requests: the
+  composer gives way to a sentence and **Choose a coordinator**, which opens
+  Members with **Make coordinator** on each row. A group with one member left
+  says so above the composer, with **Add a member**.
+
 **The canvas** holds the last few things the conversation produced, as tabs:
 tables, charts, diffs, terminal output, pictures, documents and previews, the
 agent's workspace files, and a **Browser** tab while an agent drives a browser

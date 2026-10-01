@@ -626,6 +626,40 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-head-menu-list .ui-menu-item:hover,
 .wb-head-menu-list .ui-menu-item:focus-visible { background: var(--accent-soft); outline: none; }
 .wb-head-menu-list .ui-menu-item:disabled { color: var(--text-faint); cursor: default; }
+.wb-head-menu-list .ui-menu-item[data-tone='critical'] { color: var(--critical); }
+.wb-head-menu-list .ui-menu-item[data-tone='critical'] .ui-menu-item-hint { color: color-mix(in oklab, var(--critical) 70%, var(--text-muted)); }
+.wb-head-menu-list .ui-menu-item[data-tone='critical']:hover,
+.wb-head-menu-list .ui-menu-item[data-tone='critical']:focus-visible { background: var(--critical-soft); }
+/* The sheet's head, its Cancel and its scrim belong to a phone only. */
+.wb-head-menu-head, .wb-head-menu-cancel, .wb-head-menu-scrim { display: none; }
+@media (max-width: 720px) {
+  .wb-head-menu-scrim { display: block; position: fixed; inset: 0; z-index: 40; background: var(--overlay); backdrop-filter: blur(2px); }
+  .wb-head-menu-list {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 41;
+    min-width: 0;
+    gap: var(--space-0);
+    padding: var(--space-3) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+    border: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    background: var(--surface);
+    box-shadow: var(--shadow-pop);
+    animation: wb-sheet-up var(--dur-slow) var(--ease);
+  }
+  .wb-head-menu-list::before { content: ''; align-self: center; width: var(--space-10); height: var(--space-1); margin-bottom: var(--space-3); border-radius: var(--radius-pill); background: var(--line-strong); }
+  .wb-head-menu-head { display: flex; align-items: center; gap: var(--space-3); padding: 0 var(--space-1) var(--space-3); }
+  .wb-head-menu-heading { display: flex; flex-direction: column; min-width: 0; }
+  .wb-head-menu-title { font-weight: var(--weight-semibold); font-size: var(--text-md); }
+  .wb-head-menu-sub { font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wb-head-menu-list .ui-menu-item { min-height: var(--space-12); justify-content: center; padding: var(--space-2) var(--space-3); }
+  .wb-head-menu-cancel { display: inline-flex; justify-content: center; width: 100%; min-height: var(--control-h-lg); margin-top: var(--space-3); }
+}
+@keyframes wb-sheet-up { from { transform: translateY(var(--space-6)); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .wb-head-menu-list { animation: none; } }
 .ui-menu-item-hint { font-size: var(--text-xs); color: var(--text-muted); }
 .wb-head-title {
   font-size: var(--text-md);
@@ -800,9 +834,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .wb-group-chip img { width: 100%; height: 100%; object-fit: cover; }
 .wb-group-chip[data-kind='emoji'] { background: var(--surface-sunken); font-size: var(--text-xs); }
 .wb-face[data-active='true'] .wb-group-chip { box-shadow: 0 0 0 var(--space-0) var(--accent-soft); }
-.wb-head-group { display: inline-flex; }
-.wb-head-group .ui-avatar { margin-left: -8px; border: 2px solid var(--surface); }
-.wb-head-group .ui-avatar:first-child { margin-left: 0; }
+.wb-head-face .wb-group-stack, .wb-head-menu-head .wb-group-stack { --face-size: var(--control-h); }
 
 /* ---- @ completion in the composer ---- */
 .wb-mentions {
@@ -829,8 +861,19 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 .group-pick-text { display: flex; flex-direction: column; min-width: 0; }
 .group-pick-name { font-weight: var(--weight-medium); }
 .group-pick-desc { color: var(--text-muted); font-size: var(--text-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Ending a group is not part of the form: a hairline, then the quiet door. */
-.group-archive { border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* ---- a group's own things: Members, and the dialogs that ask first ---- */
+.group-lede, .group-quiet { margin: 0; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+.group-add { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-4); border-top: 1px solid var(--line); }
+.group-add-title { margin: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.group-dialog-text { margin: 0; font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); }
+/* An agent the room remembers and buddi no longer has: a dashed face, its id, one warning line. */
+.group-gone-face { background: var(--surface-sunken); color: var(--text-faint); border: 1px dashed var(--line-strong); }
+.group-gone-id { font-family: var(--font-mono); font-size: var(--text-sm); }
+.group-gone-line { color: var(--warning); }
+/* A link's look for a button inside a sentence: "Choose a coordinator". */
+.wb-link-btn { padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.wb-link-btn:hover { text-decoration-thickness: 2px; }
 
 .wb-msg-who {
   font-size: var(--text-xs);
@@ -3552,6 +3595,11 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
     justify-content: flex-start;
   }
 }
+/* The page's own toast: what was just taken away, and Undo while it can come back. */
+.wb-undo-toast { display: flex; align-items: flex-start; gap: var(--space-3); }
+.wb-undo-toast .ui-toast-main { flex: 1 1 auto; min-width: 0; }
+.wb-undo-toast .ui-toast-mark { flex: none; width: var(--space-2); height: var(--space-2); margin-top: var(--space-2); border-radius: 50%; background: var(--accent); }
+.wb-undo-toast .wb-undo-toast-action { align-self: center; color: var(--accent); font-weight: var(--weight-semibold); }
 .nt-toasts {
   display: flex;
   flex-direction: column;
