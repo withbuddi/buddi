@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Settings → Model accounts: an account its provider rate-limited reads "Rate-limited" with when it is back, and its detail says "Rate-limited until 14:20" with why in plain words and the fix (another account for its agent, or billing); a short burst says what buddi does about it. Each account shows its id, small, with Copy — what `buddi agents set <handle> --account <id>` takes.
 - A spent daily quota is told apart from a short burst: when a provider says the day's allowance is used up (Gemini's free tier allows 20 requests a day), buddi stops calling that account until the quota resets instead of retrying, the run says so in plain words ("Gemini's free tier allows 20 requests a day; it resets at 09:00 …") with the fix, and the account is marked rate-limited until then — `buddi.accounts_list` on the MCP admin shows the state and the reset.
 - Delete a group from its chat: ⋯ → Delete group… asks once, naming what goes (the group, its conversations, what it remembers) and that its agents and files stay; the page returns to the chat you were in and offers Undo for ten seconds, and after a minute the group is gone for good. `DELETE /api/groups/:id` now deletes (with `POST /api/groups/:id/restore`); archiving moved to `POST /api/groups/:id/archive`.
 - Clear a group's history and keep the group: ⋯ → Clear history… (`POST /api/groups/:id/clear`) deletes its conversations; its members and memory stay.

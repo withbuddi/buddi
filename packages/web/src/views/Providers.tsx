@@ -8,14 +8,14 @@
  * can be read once.
  */
 import { useEffect, useRef, useState } from 'react';
-import { OLLAMA_CLOUD_MODEL, api, keyRefused, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
+import { OLLAMA_CLOUD_MODEL, api, keyRefused, type AccountRateLimit, type MlxhProbe, type ProviderAccount, type SaveProviderAccount } from '../api';
 import { Button, ButtonLink, Section, Details, Empty, ErrorBanner, Field, KV, Notice, PageFrame, Pill, Sheet, Stack, Toolbar, useAsync, EmptyState } from '../ui';
 import { ModelPicker } from '../ModelPicker';
-import { GEMINI_FALLBACK_MODEL, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
+import { GEMINI_FALLBACK_MODEL, isGeminiAccount, isGeminiPro, limited, pickGeminiFlash, pickGeminiModel } from '../gemini';
 import { MLXH_IMAGE_MODEL, firstMlxhModel, isMlxhAccount, mlxhNotAnswering, mlxhWindowNote } from '../mlxh';
 import { SignInCode } from './parts/SignInCode';
 import { AGENTS_ROUTE, agentRoute } from '../routes';
-import { fmtClock, fmtTime } from '../format';
+import { fmtClock, fmtMoment, fmtTime } from '../format';
 
 type Run = (work: () => Promise<unknown>, message: string) => Promise<boolean>;
 
@@ -49,6 +49,8 @@ export function Providers({ embedded, account }: { embedded?: boolean; account?:
   };
   const accounts = data?.accounts ?? [];
   const selected = accounts.find((a) => a.id === selectedId) ?? accounts[0];
+  // Google's compatible address is named for what it is; the address itself comes from the gateway.
+  const nameOf = (a: ProviderAccount): string => (isGeminiAccount(a, data?.gemini?.baseUrl) ? 'Gemini' : providerName(a));
   return (
     <PageFrame
       embedded={embedded}
@@ -115,14 +117,18 @@ export function Providers({ embedded, account }: { embedded?: boolean; account?:
                   <ProviderMark kind={a.kind} auth={a.auth} />
                   <span className="accounts-row-text">
                     <span className="accounts-row-name">{a.label}</span>
-                    <span className="accounts-row-sub">{providerName(a)} · {a.assignedAgents.length === 0 ? 'no agents' : `${a.assignedAgents.length} agent${a.assignedAgents.length === 1 ? '' : 's'}`}</span>
+                    {standingLimit(a) ? (
+                      <span className="accounts-row-sub" data-tone="warning">{nameOf(a)} · back at {untilText(standingLimit(a)!.until)}</span>
+                    ) : (
+                      <span className="accounts-row-sub">{nameOf(a)} · {a.assignedAgents.length === 0 ? 'no agents' : `${a.assignedAgents.length} agent${a.assignedAgents.length === 1 ? '' : 's'}`}</span>
+                    )}
                   </span>
                   <StatusDot account={a} />
                 </button>
               ))}
             </nav>
             {selected ? (
-              <AccountDetail key={`${selected.id}:${selected.revision}`} account={selected} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} />
+              <AccountDetail key={`${selected.id}:${selected.revision}`} account={selected} provider={nameOf(selected)} anthropicOAuthEnabled={data.anthropicOAuthEnabled} busy={busy} run={run} />
             ) : null}
           </div>
         )}
@@ -166,10 +172,83 @@ function testTone(state: string): 'good' | 'warning' | 'critical' {
   return 'critical';
 }
 
-function StatusDot({ account: a }: { account: ProviderAccount }): JSX.Element {
+/** The limit its provider set, while it still stands; null once it has lapsed, even on a page left open. */
+export function standingLimit(a: Pick<ProviderAccount, 'enabled' | 'configured' | 'rateLimit'>, now: number = Date.now()): AccountRateLimit | null {
+  const limit = a.rateLimit;
+  return a.enabled && a.configured && limit && Date.parse(limit.until) > now ? limit : null;
+}
+
+const browserZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** When a limit lifts, the owner's way: "14:20" today, "tomorrow at 09:00", else the day and the time. */
+export function untilText(iso: string, now: Date = new Date(), zone: string = browserZone()): string {
+  const at = new Date(iso);
+  const day = (d: Date): string => d.toLocaleDateString('en-CA', { timeZone: zone });
+  if (day(at) === day(now)) return fmtClock(at, zone);
+  if (day(at) === day(new Date(now.getTime() + 86_400_000))) return `tomorrow at ${fmtClock(at, zone)}`;
+  return fmtMoment(at, zone);
+}
+
+function StatusDot({ account: a, long }: { account: ProviderAccount; long?: boolean }): JSX.Element {
+  const limit = standingLimit(a);
+  if (limit) {
+    const said = `Rate-limited until ${untilText(limit.until)}`;
+    return <span title={said}><Pill tone="warning">{long ? said : 'Rate-limited'}</Pill></span>;
+  }
   const tone = !a.enabled ? undefined : a.configured ? 'good' : 'warning';
   const text = !a.enabled ? 'Disabled' : a.configured ? 'Configured' : 'Needs credential';
   return <Pill tone={tone}>{text}</Pill>;
+}
+
+/** The account's id, small and mono, with Copy: `buddi agents set <handle> --account <id>` takes it. */
+function CopyId({ id }: { id: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const copy = (): void => {
+    void navigator.clipboard?.writeText(id).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    }).catch(() => {});
+  };
+  return (
+    <span className="accounts-id">
+      <code className="accounts-id-text">{id}</code>
+      <Button variant="ghost" size="sm" onClick={copy} aria-label={`Copy the id of this account`}>{copied ? 'Copied' : 'Copy'}</Button>
+    </span>
+  );
+}
+
+/**
+ * What a provider's limit means, in plain words, with the one fix as the
+ * action: a daily quota says its size and when it resets; a short burst says
+ * what buddi does about it and offers nothing.
+ */
+function LimitNotice({ account: a, provider }: { account: ProviderAccount; provider: string }): JSX.Element | null {
+  const limit = standingLimit(a);
+  if (!limit) return null;
+  const who = limit.provider ?? provider;
+  const when = untilText(limit.until);
+  if (limit.scope === 'day') {
+    const agents = a.assignedAgents;
+    const them = agents.length === 1 ? agents[0]! : 'its agents';
+    const allowance = limit.limit !== null
+      ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString()} ${limit.unit ?? 'requests'} a day`
+      : `${who} says this account has used today's allowance`;
+    const billing = limit.freeTier && limit.provider === 'Gemini' ? ', or turn on billing for the key at aistudio.google.com' : '';
+    return (
+      <Notice
+        tone="warning"
+        title={allowance}
+        action={agents.length > 0 ? <ButtonLink size="sm" href={agents.length === 1 ? agentRoute(agents[0]!, 'setup', 'brain') : AGENTS_ROUTE}>{agents.length === 1 ? `Change ${agents[0]}'s account` : 'Change their accounts'}</ButtonLink> : undefined}
+      >
+        <p>It resets {/^tomorrow/.test(when) ? when : `at ${when}`}. Until then buddi doesn't send this account's requests to {who}, so {agents.length ? `${them}'s runs stop with this note` : 'a run on it stops with this note'} instead of failing again and again. To keep going today, {agents.length ? `give ${them} another account` : 'use another account'}{billing}.</p>
+      </Notice>
+    );
+  }
+  return (
+    <Notice tone="warning" title={`${who} asked buddi to slow down`}>
+      <p>It said to wait until {when}. A run that meets this waits and tries again — up to a minute during a conversation, longer for work in the background.</p>
+    </Notice>
+  );
 }
 
 function accountSettings(a: ProviderAccount): SaveProviderAccount {
@@ -177,18 +256,18 @@ function accountSettings(a: ProviderAccount): SaveProviderAccount {
     contextWindowTokens: a.contextWindowTokens ?? null };
 }
 
-function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { account: ProviderAccount; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean }): JSX.Element {
+function AccountDetail({ account: a, provider, busy, run, anthropicOAuthEnabled }: { account: ProviderAccount; provider: string; busy: boolean; run: Run; anthropicOAuthEnabled?: boolean }): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [removing, setRemoving] = useState(false);
   return (
     <section className="accounts-detail" aria-label={a.label}>
       <div className="ui-card-head">
         <h3 className="ui-card-title">{a.label}</h3>
-        <StatusDot account={a} />
+        <StatusDot account={a} long />
       </div>
       <KV
         items={[
-          { label: 'Provider', value: providerName(a) },
+          { label: 'Provider', value: provider },
           { label: 'Default model', value: <span className="mono">{a.defaultModel || '—'}</span> },
           { label: 'Context window', value: <span className="mono">{`${(a.contextWindowTokens ?? a.detectedContextWindowTokens ?? 0).toLocaleString()} tokens${a.contextWindowTokens ? '' : ` (${detectedWindowSource(a)})`}`}</span> },
           ...(a.baseUrl ? [{ label: 'Endpoint', value: <span className="mono">{a.baseUrl}</span> }] : []),
@@ -206,8 +285,10 @@ function AccountDetail({ account: a, busy, run, anthropicOAuthEnabled }: { accou
             ),
           },
           ...(a.tokenExpiresAt ? [{ label: 'Access token', value: `expires ${fmtTime(a.tokenExpiresAt, Intl.DateTimeFormat().resolvedOptions().timeZone)} (not your subscription renewal date)` }] : []),
+          { label: 'ID', value: <CopyId id={a.id} /> },
         ]}
       />
+      <LimitNotice account={a} provider={provider} />
       {a.removalPending && <Notice tone="warning">Removal is pending. Unlock the vault, then retry Remove account.</Notice>}
       {a.reconnectRequired && <Notice tone="warning">Token refresh did not finish. Reconnect this {a.kind === 'codex' ? 'ChatGPT' : 'Claude'} account.</Notice>}
       {a.auth === 'anthropic-oauth' && <ClaudeLogin account={a} enabled={!!anthropicOAuthEnabled} busy={busy} run={run} />}

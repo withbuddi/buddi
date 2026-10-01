@@ -1210,6 +1210,20 @@ export interface ProviderAccount {
   login?: { state: 'pending' | 'connected' | 'failed' | 'cancelled'; verificationUrl?: string; userCode?: string; expiresAt?: string; message?: string; attemptId?: string; deviceName?: string } | null;
   /** Ollama Cloud with a device key: which device, and which ollama.com account it is connected to. */
   device?: OllamaDevice | null;
+  /** A limit its provider set, while it stands: a daily quota used up, or a burst window it named. */
+  rateLimit?: AccountRateLimit | null;
+}
+export interface AccountRateLimit {
+  scope: 'day' | 'burst';
+  /** When it lifts. */
+  until: string;
+  /** The quota's size, when the provider said it ("limit: 20"). */
+  limit: number | null;
+  unit: 'requests' | 'tokens' | null;
+  freeTier: boolean;
+  /** Who set it, in the owner's words: "Gemini". */
+  provider: string | null;
+  model: string | null;
 }
 export interface OllamaDevice { deviceName: string; username: string | null; connectedAt: string | null }
 /** One poll of an Ollama connect attempt. */

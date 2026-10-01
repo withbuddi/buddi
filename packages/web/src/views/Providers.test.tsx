@@ -347,3 +347,38 @@ it('opens the account a link names, not the first one', async () => {
   expect(await screen.findByRole('button', { name: /Gemini/, pressed: true })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: /Personal OpenAI/, pressed: false })).toBeInTheDocument();
 });
+it('shows the account id, small and copyable, for --account', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  render(<Providers />);
+  const id = await screen.findByText('one', { selector: 'code' });
+  expect(id).toHaveClass('accounts-id-text');
+  fireEvent.click(screen.getByRole('button', { name: 'Copy the id of this account' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith('one'));
+  expect(await screen.findByRole('button', { name: 'Copy the id of this account' })).toHaveTextContent('Copied');
+});
+it('says a spent daily quota on the row and the detail, with when it resets and the one fix', async () => {
+  const until = new Date(Date.now() + 2 * 3600_000).toISOString();
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [{ ...view.accounts[0]!, label: 'Gemini', kind: 'openai-compatible', assignedAgents: ['ledger'],
+    rateLimit: { scope: 'day', until, limit: 20, unit: 'requests', freeTier: true, provider: 'Gemini', model: 'gemini-2.5-flash' } }] });
+  render(<Providers />);
+  expect(await screen.findByText('Rate-limited')).toBeInTheDocument();
+  expect(screen.getByText(/· back at /)).toHaveAttribute('data-tone', 'warning');
+  expect(screen.getByText(/^Rate-limited until /)).toBeInTheDocument();
+  const notice = screen.getByText("Gemini's free tier allows 20 requests a day").closest('.ui-notice');
+  expect(notice).toHaveAttribute('data-tone', 'warning');
+  expect(notice).toHaveTextContent(/It resets (at|tomorrow at) /);
+  expect(notice).toHaveTextContent('aistudio.google.com');
+  expect(screen.getByRole('link', { name: "Change ledger's account" })).toHaveAttribute('href', expect.stringContaining('ledger'));
+});
+it('says a burst limit with its window and no fix, and forgets a limit that has lapsed', async () => {
+  vi.mocked(api.providerAccounts).mockResolvedValue({ ...view, accounts: [
+    { ...view.accounts[0]!, rateLimit: { scope: 'burst', until: new Date(Date.now() + 60_000).toISOString(), limit: null, unit: null, freeTier: false, provider: 'OpenAI', model: null } },
+    { ...view.accounts[0]!, id: 'two', label: 'Old limit', rateLimit: { scope: 'day', until: new Date(Date.now() - 60_000).toISOString(), limit: 20, unit: 'requests', freeTier: true, provider: 'Gemini', model: null } },
+  ] });
+  render(<Providers />);
+  const notice = (await screen.findByText('OpenAI asked buddi to slow down')).closest('.ui-notice');
+  expect(notice).toHaveTextContent(/It said to wait until /);
+  expect(notice?.querySelector('a, button')).toBeNull();
+  expect(screen.getAllByText('Rate-limited')).toHaveLength(1);
+});

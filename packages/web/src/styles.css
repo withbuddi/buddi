@@ -2925,6 +2925,11 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .accounts-row-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .accounts-row-name { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .accounts-row-sub { font-size: var(--text-xs); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A provider rate-limited the account: the line says until when, in the warning ink. */
+.accounts-row-sub[data-tone='warning'] { color: var(--warning); }
+/* The id `--account` takes: small and mono, wrapping on a phone rather than hiding Copy. */
+.accounts-id { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; }
+.accounts-id-text { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); overflow-wrap: anywhere; min-width: 0; }
 
 @media (max-width: 860px) {
   .accounts { grid-template-columns: 1fr; }
