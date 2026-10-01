@@ -391,7 +391,10 @@ while one is on; up to four widgets of its own, compact and never a sensitive
 one (a sentence such as "Free for the rest of today." takes one column, and a
 widget with nothing to show stays off); and the PIN field, with one line saying why it locked ("Locked by you at 14:02",
 "Locked after 5 minutes away, at 14:02", "Locked since this session began, at
-14:02") and **Forgot PIN?**. On a phone the glance comes first and **Enter
+14:02") and **Forgot PIN?**. Every time on it — the big clock, the second
+clock, the focus, that line and its widgets left on Profile — reads one way:
+12-hour or 24-hour as picked for the lock screen, else your Profile's, else (Profile on Auto) your
+browser's. On a phone the glance comes first and **Enter
 PIN** opens a pad. While it shows, nothing of the dashboard is in the page:
 the app is not drawn underneath, so there is nothing to blur or read.
 
@@ -405,8 +408,9 @@ one), picks the background — Buddi, Dawn, Sea, Moss, Dusk, each with a light
 and a dark, or your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at
 most 2560 pixels, turned upright, without its location or any other details).
 Under it, **What it shows** is the lock screen editor: a live preview of the
-lock screen (on a desk or a phone) beside its clock — Time (Profile, 12-hour,
-24-hour), Date (Profile, three spellings, or none), A second clock (one of your
+lock screen (on a desk or a phone) beside its clock — Time (Profile, saying
+what it reads as now, such as "Profile (12-hour)"; 12-hour; 24-hour — nothing is
+kept until you pick one), Date (Profile, three spellings, or none), A second clock (one of your
 places in another zone, or any town) — and its widgets: up to four, each with
 its size, its own settings, its order and ×; "Add a widget" offers Home's (a
 copy with the same settings) or any widget. Every change is kept at once. It

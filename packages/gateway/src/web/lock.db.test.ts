@@ -295,6 +295,38 @@ suite('the lock screen', () => {
     await pool.query(`delete from core.owner_places where id = 'ben'`);
   });
 
+  it('reads every time on the lock screen one way: the lock clock’s pick, else the Profile, else the browser’s', async () => {
+    const b = await browser();
+    await pool.query(`insert into core.owner_places (id, label, place_name, latitude, longitude, timezone, position) values ('ben', 'Ben', 'Brooklyn, New York', 40.65, -73.95, 'America/New_York', 0) on conflict do nothing`);
+    // The World clock on the lock screen, on Profile: it reads the way the big clock does.
+    expect((await b.put('/api/widgets/lock', { placements: [{ widget: 'buddi.clock', size: 'small', settings: {} }] })).status).toBe(200);
+    const twelve = /^\d{1,2}:\d{2}\s?[AP]M$/;
+    const twentyFour = /^\d{2}:\d{2}$/;
+    const read = async (query = '') => {
+      const body = (await b.get(`/api/lock/screen${query}`)).body!;
+      return { time: body.clockView.time as string | null, widget: body.widgets[0]?.view.body.value as string };
+    };
+    // Profile on Auto: the browser's clock (hour=12) for the big clock and the widget alike.
+    const auto = await read('?hour=12');
+    expect(auto.time).toBe('12h');
+    expect(auto.widget).toMatch(twelve);
+    expect((await read('?hour=24')).time).toBe('24h');
+    // Profile on 12-hour: the browser's taste no longer matters.
+    await pool.query(`update core.owner set time_format = '12h' where id = 'owner'`);
+    const profile = await read('?hour=24');
+    expect(profile.time).toBe('12h');
+    expect(profile.widget).toMatch(twelve);
+    // 24-hour picked for the lock screen: the big clock and its widgets on Profile follow it, never a mix.
+    await b.put('/api/lock/settings', { clock: { time: '24h', date: 'profile', zone: null } });
+    const picked = await read();
+    expect(picked.time).toBe('24h');
+    expect(picked.widget).toMatch(twentyFour);
+    await b.put('/api/lock/settings', { clock: { time: 'profile', date: 'profile', zone: null } });
+    await b.put('/api/widgets/lock', { placements: [] });
+    await pool.query(`update core.owner set time_format = null where id = 'owner'`);
+    await pool.query(`delete from core.owner_places where id = 'ben'`);
+  });
+
   it('opens every session when the PIN is removed from the command line', async () => {
     const b = await browser();
     await b.put('/api/lock/pin', { pin: '2468' });

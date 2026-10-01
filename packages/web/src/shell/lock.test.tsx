@@ -11,7 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import '@testing-library/jest-dom/vitest';
 import { ApiError, LOCKED, api, type LockScreenData, type LockState } from '../api';
 import { LockGate, isLockShortcut, lockShortcutLabel, useLock } from './lock';
-import { LockScreen, lockColumns, lockedLine } from './LockScreen';
+import { LockScreen, lockClockText, lockColumns, lockedLine } from './LockScreen';
+import { setDisplayFormats } from '../format';
 
 const open: LockState = { pin: true, locked: false, lockedAt: null, reason: null, delayMinutes: 5, background: 'field', image: null, waitUntil: null, triesLeft: null };
 const locked: LockState = { ...open, locked: true, lockedAt: '2026-10-01T12:02:00Z', reason: 'owner' };
@@ -241,6 +242,35 @@ describe('the lock screen', () => {
     expect(lockedLine({ lockedAt: '2026-10-01T12:02:00Z', reason: 'idle', delayMinutes: 60 }, 'Europe/Paris', now)).toBe('Locked after an hour away, at 14:02');
     expect(lockedLine({ lockedAt: '2026-10-01T12:02:00Z', reason: 'start', delayMinutes: 5 }, 'Europe/Paris', now)).toBe('Locked since this session began, at 14:02');
     expect(lockedLine({ lockedAt: '2026-09-30T16:02:00Z', reason: 'owner', delayMinutes: 5 }, 'Europe/Paris', now)).toMatch(/^Locked by you at Wed 30 Sept?, 18:02$/);
+  });
+});
+
+describe('one format on the lock screen', { timeout: 180_000 }, () => {
+  const now = new Date('2026-10-01T16:59:30Z');
+  const at = { lockedAt: '2026-10-01T16:59:00Z', reason: 'owner' as const, delayMinutes: 5 as const };
+  afterEach(() => setDisplayFormats({ timeFormat: null, dateFormat: null }));
+
+  it('writes the honesty line in the big clock’s format, whatever the shell’s formats say', () => {
+    // The shell on 12-hour (or never set: a page that opens locked), the lock clock on 24-hour.
+    setDisplayFormats({ timeFormat: '12h' });
+    const view = { time: '24h' as const, date: null, zone: null };
+    expect(lockClockText(now, 'Europe/Paris', view).time).toBe('18:59');
+    expect(lockedLine(at, 'Europe/Paris', now, view)).toBe('Locked by you at 18:59');
+    // And the other way round: a 12-hour lock clock over a 24-hour shell.
+    setDisplayFormats({ timeFormat: '24h' });
+    const twelve = { time: '12h' as const, date: null, zone: { label: 'Ben', timezone: 'America/New_York' } };
+    const text = lockClockText(now, 'Europe/Paris', twelve);
+    expect(text.time).toMatch(/^6:59\s?PM$/);
+    expect(text.zone?.time).toMatch(/^12:59\s?PM$/);
+    expect(lockedLine(at, 'Europe/Paris', now, twelve)).toMatch(/^Locked by you at 6:59\s?PM$/);
+  });
+
+  it('never mixes on the screen: the clock and the line under the PIN agree', async () => {
+    setDisplayFormats({ timeFormat: '24h' });
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ ...at, now: now.toISOString(), clockView: { time: '12h', date: null, zone: null } }));
+    render(<LockScreen initial={{ ...locked, ...at }} onUnlocked={() => {}} />);
+    await waitFor(() => expect(screen.getByText(/^Locked by you at .*6:59\s?PM$/)).toBeInTheDocument());
+    expect(document.querySelector('.lk-time')?.getAttribute('aria-label')).toMatch(/[AP]M$/);
   });
 });
 

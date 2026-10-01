@@ -44,8 +44,25 @@ function clock(date: Date, timezone: string): { time: string; day: string } {
   };
 }
 
-/** The honesty line: who locked it, and when. */
-export function lockedLine(state: Pick<LockState, 'lockedAt' | 'reason' | 'delayMinutes'>, timezone: string, now: Date = new Date()): string {
+/**
+ * What `fn` draws in the lock screen's formats: the big clock's time format
+ * (its own pick, else the Profile, else the browser's, as the gateway resolved
+ * it) and its date style. Every time on the screen goes through here, so the
+ * honesty line, the focus chip and the second clock never read another way —
+ * the shell's formats are not even set on a page that opens locked. With no
+ * view yet, the shell's formats as they are.
+ */
+export function inLockFormats<T>(view: LockClockView | undefined, fn: () => T): T {
+  if (!view) return fn();
+  return underFormats({ timeFormat: view.time, ...(view.date === 'off' ? {} : { dateFormat: view.date }) }, fn);
+}
+
+/** The honesty line: who locked it, and when — in the big clock's format. */
+export function lockedLine(state: Pick<LockState, 'lockedAt' | 'reason' | 'delayMinutes'>, timezone: string, now: Date = new Date(), view?: LockClockView): string {
+  return inLockFormats(view, () => lockedWords(state, timezone, now));
+}
+
+function lockedWords(state: Pick<LockState, 'lockedAt' | 'reason' | 'delayMinutes'>, timezone: string, now: Date): string {
   if (!state.lockedAt) return 'Locked';
   const at = new Date(state.lockedAt);
   const sameDay = clock(at, timezone).day === clock(now, timezone).day;
@@ -234,7 +251,7 @@ export function zoneOffsetText(at: Date, zone: string, home: string): string {
 /** The clock's words: the time and the date the lock screen's way, and the second zone. */
 export function lockClockText(now: Date, timezone: string, view: LockClockView | undefined): { time: string; day: string | null; zone: { label: string; time: string; offset: string } | null } {
   const v: LockClockView = view ?? { time: null, date: null, zone: null };
-  return underFormats({ timeFormat: v.time, dateFormat: v.date === 'off' ? null : v.date }, () => ({
+  return inLockFormats(view, () => ({
     time: fmtClock(now, timezone),
     // "Thursday, 1 October", whatever this ICU's taste in commas.
     day: v.date === 'off' ? null : fmtDate(now, timezone, { weekday: true }),
@@ -264,6 +281,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
   const clock = lockClockText(now, timezone, data?.clockView);
   const background = data?.background === 'image' && !data.image ? 'field' : (data?.background ?? 'field');
   const focus = data?.focus ?? null;
+  const focusText = focus ? inLockFormats(data?.clockView, () => (phone ? capital(focusUntilLabel(focus, timezone, now)) : `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone, now)}`)) : '';
   return (
     <>
       {background === 'image' && data?.image ? (
@@ -280,7 +298,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
         {focus ? (
           <span className="lk-chip" data-kind="focus">
             <Icon name="moon" size={13} />
-            <span>{phone ? capital(focusUntilLabel(focus, timezone, now)) : `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone, now)}`}</span>
+            <span>{focusText}</span>
           </span>
         ) : null}
       </header>
@@ -418,7 +436,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
         ? { tone: 'critical' as const, text: wrong }
         : after
           ? { tone: undefined, text: after === 'unread' ? 'Unlock to open your notifications.' : 'Unlock to open your approvals.' }
-          : { tone: undefined, text: state ? lockedLine(state, timezone, now) : 'Locked' };
+          : { tone: undefined, text: state ? lockedLine(state, timezone, now, data?.clockView) : 'Locked' };
   const digits = (v: string): string => v.replace(/\D/g, '').slice(0, 8);
   const who = (
     <div className="lk-who">

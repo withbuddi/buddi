@@ -29,7 +29,7 @@ import {
   type WidgetSize,
   type WidgetsAnswer,
 } from '../api';
-import { fmtDate, fmtMinutes, underFormats } from '../format';
+import { fmtDate, profileTimeLabel, underFormats } from '../format';
 import { LockFace } from '../shell/LockScreen';
 import { useMinute } from '../shell/useMinute';
 import { ActionMenu, Button, ErrorBanner, Field, Icon, Section, Segment, useAsync } from '../ui';
@@ -206,7 +206,6 @@ export function LockFaceEditor({ clock: saved, onClock, version }: {
 
   // What Profile reads as, so each choice says what it means.
   const now = new Date();
-  const profileTime = fmtMinutes(14 * 60 + 32);
   const dateIn = (format: 'short' | 'long' | 'iso' | null): string => underFormats({ dateFormat: format }, () => fmtDate(now, timezone, { weekday: true }));
   const places = (owner.data?.places ?? []).filter((p) => p.timezone && p.timezone !== timezone);
   const custom = clock.zone && !('place' in clock.zone) ? clock.zone : town;
@@ -239,7 +238,7 @@ export function LockFaceEditor({ clock: saved, onClock, version }: {
               <span className="wg-field-label">Time</span>
               <Segment<LockClock['time']>
                 label="Time"
-                options={[{ value: 'profile', label: `Profile · ${profileTime}` }, { value: '12h', label: '12-hour' }, { value: '24h', label: '24-hour' }]}
+                options={[{ value: 'profile', label: profileTimeLabel() }, { value: '12h', label: '12-hour' }, { value: '24h', label: '24-hour' }]}
                 value={clock.time}
                 onChange={(time) => onClock({ ...clock, time })}
               />

@@ -101,6 +101,11 @@ export function usesTwelveHours(): boolean {
   return intl(browserLocale(), { hour: 'numeric' }).resolvedOptions().hourCycle?.startsWith('h1') === true;
 }
 
+/** The Profile choice of a time format, saying what it means now: "Profile (12-hour)". */
+export function profileTimeLabel(): string {
+  return `Profile (${usesTwelveHours() ? '12-hour' : '24-hour'})`;
+}
+
 /** Whether the owner's dates put the month before the day ("Oct 1"), for ranges built by hand. */
 export function monthFirst(): boolean {
   if (formats.date !== 'auto') return formats.date === 'short';

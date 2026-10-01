@@ -1212,7 +1212,7 @@ means, the page knows how to draw a line, and this says which is which.
   pinned set — the page icons (`mail`, `money`, `calendar`, `people`, `file`,
   `chart`, `bell`, `plug`, `key`, `globe`) and the sky (`sun`,
   `partly-cloudy`, `cloud`, `rain`, `drizzle`, `snow`, `storm`, `fog`, `wind`,
-  `moon-clear`); a constant outside it is refused at load, and a path that
+  `moon-clear`, and since 1.22 `moon-cloud`, a partly cloudy night); a constant outside it is refused at load, and a path that
   finds anything else draws a neutral dot. The values are already formatted:
   the tool writes "64°", in the owner's units, and the page draws it.
   `notice: { text, icon?, link?: { page } }` is the one card drawn *instead*
@@ -1347,7 +1347,7 @@ of your plugin:
 | `toggle` | `default?` | a checkbox | `true` or `false` |
 | `text` | `placeholder?`, `max?` (≤ 120, 60 by default), `default?` | a line | the line |
 | `place` | `multiple?` (up to three), `inTitle?` | the owner's places (Settings → Profile) as rows, or any town found by name | `{ id, label, name, latitude, longitude, timezone }` (`id` null for a town), or a list; one left unset is the owner's Home, or null with no place |
-| `timeFormat` | — | Profile · 14:32, 12-hour, 24-hour | `'12h'`, `'24h'`, or null for Auto, with the owner's Profile applied |
+| `timeFormat` | — | Profile (12-hour or 24-hour, what it reads as now), 12-hour, 24-hour | `'12h'`, `'24h'`, or null for Auto, with the owner's Profile applied |
 
 Every field has a `key` (a lowercase letter, then letters, digits or `_`), a
 `label` (≤ 40) and an optional `hint` (≤ 160). `options` is a list of

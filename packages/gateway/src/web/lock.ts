@@ -295,15 +295,16 @@ export function createLock(deps: LockDeps) {
   async function screen(session: Session, hour?: HourCycle): Promise<LockScreenView> {
     const state = await current();
     const now = deps.now();
-    const [profile, pending, unread, focus, widgets] = await Promise.all([
-      getOwnerProfile(deps.pool as never).catch(() => null),
+    const profile = await getOwnerProfile(deps.pool as never).catch(() => null);
+    // One format for every time on the screen: the big clock's, which its widgets read as their Profile.
+    const clockView = await lockClockView(deps.pool, state.settings.clock, profile, hour);
+    const [pending, unread, focus, widgets] = await Promise.all([
       listPendingActions(deps.pool, { now }).catch(() => []),
       unreadCount(deps.pool),
       readFocusState(deps.pool, { now: deps.now, timezone: deps.timezone }).catch(() => null),
-      lockWidgets(deps.widgets, hour),
+      lockWidgets(deps.widgets, hour, clockView.time),
     ]);
     const owner = profile?.preferredName?.trim() || profile?.displayName?.trim() || null;
-    const clockView = await lockClockView(deps.pool, state.settings.clock, profile);
     return {
       ...stateOf(session, state),
       now: now.toISOString(),
@@ -508,10 +509,10 @@ async function unreadCount(pool: Queryable): Promise<number> {
  * that is sensitive (the service never places one there), only those with
  * something to draw, at most four.
  */
-async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle): Promise<LockScreenView['widgets']> {
+async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle, timeFormat?: '12h' | '24h' | null): Promise<LockScreenView['widgets']> {
   if (!service) return [];
   try {
-    const answer = await service.answer({ surface: 'lock', ...(hour ? { hour } : {}) });
+    const answer = await service.answer({ surface: 'lock', ...(hour ? { hour } : {}), ...(timeFormat ? { timeFormat } : {}) });
     const out: LockScreenView['widgets'] = [];
     for (const placement of answer.lock) {
       if (out.length >= LOCK_WIDGETS_MAX) break;
@@ -528,11 +529,21 @@ async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle
 
 /**
  * The clock as the lock screen draws it: the time and date formats with the
- * owner's Profile applied (null: Auto, the browser's), and the second zone
- * with its label and zone — a place of theirs read now, so a move follows.
+ * owner's Profile applied, and the second zone with its label and zone — a
+ * place of theirs read now, so a move follows. The time is the lock's own
+ * pick (12-hour or 24-hour, Settings → Lock screen), else the Profile's, else
+ * — Profile on Auto — how the asking browser reads a clock (`hour`); null only
+ * when none of these says. Every time on the lock screen reads this way.
  */
-export async function lockClockView(pool: Queryable, clock: LockClock, profile: { timeFormat?: string | null; dateFormat?: string | null } | null): Promise<LockClockView> {
-  const time = clock.time === 'profile' ? (profile?.timeFormat === '12h' || profile?.timeFormat === '24h' ? profile.timeFormat : null) : clock.time;
+export async function lockClockView(
+  pool: Queryable,
+  clock: LockClock,
+  profile: { timeFormat?: string | null; dateFormat?: string | null } | null,
+  hour?: HourCycle,
+): Promise<LockClockView> {
+  const profileTime = profile?.timeFormat === '12h' || profile?.timeFormat === '24h' ? profile.timeFormat : null;
+  const browserTime = hour === '12' ? '12h' : hour === '24' ? '24h' : null;
+  const time = clock.time === 'profile' ? (profileTime ?? browserTime) : clock.time;
   const profileDate = profile?.dateFormat === 'short' || profile?.dateFormat === 'long' || profile?.dateFormat === 'iso' ? profile.dateFormat : null;
   const date = clock.date === 'profile' ? profileDate : clock.date;
   let zone: LockClockView['zone'] = null;

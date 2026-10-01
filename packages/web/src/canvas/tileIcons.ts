@@ -26,6 +26,7 @@ const TILE_GLYPHS: Record<TileIcon, IconName> = {
   fog: 'fog',
   wind: 'wind',
   'moon-clear': 'moon-clear',
+  'moon-cloud': 'moon-cloud',
   check: 'check',
   clock: 'clock',
 };

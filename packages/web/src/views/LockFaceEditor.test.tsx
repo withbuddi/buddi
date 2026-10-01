@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { api, type LockScreenData, type WidgetInfo, type WidgetPlacement, type WidgetsAnswer } from '../api';
+import { setDisplayFormats } from '../format';
 import { LockFaceEditor } from './LockFaceEditor';
 
 const INFO: WidgetInfo[] = [
@@ -76,6 +77,26 @@ describe('the lock screen editor', { timeout: 180_000 }, () => {
     await u.selectOptions(second, 'find');
     await u.type(screen.getByLabelText('Find a town for the second clock'), 'Tokyo{Enter}');
     await waitFor(() => expect(onClock).toHaveBeenLastCalledWith({ time: 'profile', date: 'profile', zone: { label: 'Tokyo', timezone: 'Asia/Tokyo' } }));
+  });
+
+  it('says what Profile means now, and stores no explicit time unless one is picked', async () => {
+    vi.spyOn(api, 'widgets').mockResolvedValue(answer([]));
+    const onClock = vi.fn();
+    setDisplayFormats({ timeFormat: '12h' });
+    try {
+      render(<LockFaceEditor clock={undefined} onClock={onClock} version="v" />);
+      expect(await screen.findByRole('radio', { name: 'Profile (12-hour)' })).toHaveAttribute('aria-checked', 'true');
+      // Opening the editor writes nothing; a change elsewhere keeps the time on Profile.
+      expect(onClock).not.toHaveBeenCalled();
+      await user().selectOptions(screen.getByLabelText('Date'), 'iso');
+      expect(onClock).toHaveBeenLastCalledWith({ time: 'profile', date: 'iso', zone: null });
+      cleanup();
+      setDisplayFormats({ timeFormat: '24h' });
+      render(<LockFaceEditor clock={undefined} onClock={onClock} version="v" />);
+      expect(await screen.findByRole('radio', { name: 'Profile (24-hour)' })).toBeInTheDocument();
+    } finally {
+      setDisplayFormats({ timeFormat: null });
+    }
   });
 
   it('keeps its own widgets: a copy of Home’s with its settings, any widget, never a sensitive one, in order', async () => {

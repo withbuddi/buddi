@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- Plugin host API 1.22: the tile icon `moon-cloud`, a partly cloudy night.
+
 ### Changed
 
 - Restarting buddi from the dashboard — Restart to load it on Plugins, Restart gateway, an upgrade, a restore, leaving recovery mode — now covers the window with a calm "Restarting buddi" screen (the Blob, what the restart is for, such as "Loading weather 0.1.3 and 4 more…", and the time it has taken), waits until the old process is gone and the new one answers, then reloads the page. After ninety seconds (five minutes for an upgrade) it says buddi may need a hand, names `buddi status` and offers Reload. Stop gateway shows the same screen, still, with `buddi service start`.
@@ -11,6 +15,10 @@ What changes in buddi from one release to the next, newest first.
 - `/_buddi/ready` also answers a random `boot` id for the running process, so a page can tell the process that went from the one that came back.
 
 ### Fixed
+- The lock screen reads every time one way: the line under the PIN ("Locked by you at …"), the second clock, the focus and the widgets left on Profile now follow the big clock — 12-hour or 24-hour as picked in Settings → Lock screen, else your Profile, else your browser — instead of the line using another format than the clock (a page that opened locked showed "18:59" over "Locked by you at 6:59 PM").
+- Time format choices say what Profile means now — "Profile (12-hour)" in Settings → Lock screen and in a widget's settings — instead of a sample time.
+- The weather widget's hourly strip shows the moon at night (a crescent on a clear night, the crescent over a cloud when partly cloudy) instead of the sun, and writes its hours your way ("6 PM", "12 AM" on a 12-hour clock); it has a Times setting of its own. The Weather page's hours, sunrise and sunset follow your Profile too.
+- The calendar's "Next meeting" line on Home writes the time your way ("at 9:30 AM" on a 12-hour clock).
 - The lock screen centres its widgets when medium and small ones share rows (it used to size the grid for four columns and leave the fourth empty).
 
 - After plugin updates, the "is installed — Restart to load it" notice comes from what buddi is actually running: it lists every plugin waiting for the restart and is gone once they are loaded, instead of staying after the restart. A plugin waiting for the restart says "loads at restart" on its row rather than "did not load".

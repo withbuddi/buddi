@@ -73,6 +73,8 @@ const GLYPHS = {
   wind: [20, 1.6, <path d="M3 8h9.4a2.2 2.2 0 1 0-2.2-2.2M3 12h11.6a2.2 2.2 0 1 1-2.2 2.2M3 10h5.4" />],
   // A crescent: a clear night.
   'moon-clear': [20, 1.6, <path d="M15.8 12.2A6.2 6.2 0 0 1 7.8 4.2a6.2 6.2 0 1 0 8 8Z" />],
+  // The crescent over the partly-cloudy cloud: a partly cloudy night.
+  'moon-cloud': [20, 1.6, <><path d="M9.4 6.8A3.6 3.6 0 0 1 4.6 2a3.6 3.6 0 1 0 4.8 4.8Z" /><path d="M7.8 16.8h6.4a2.9 2.9 0 0 0 .3-5.8 4 4 0 0 0-7.6 1.1 2.4 2.4 0 0 0 .9 4.7Z" /></>],
   clock: [20, 1.6, <><circle cx="10" cy="10" r="7.1" /><path d="M10 5.8V10l2.8 1.8" /></>],
   // A plain ring: a glyph the set does not have, drawn as nothing in particular.
   dot: [20, 1.6, <circle cx="10" cy="10" r="2.2" />],

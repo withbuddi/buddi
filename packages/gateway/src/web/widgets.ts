@@ -454,8 +454,13 @@ export function createWidgets(deps: WidgetsDeps) {
     return { stored, home, lock };
   }
 
-  async function answer(opts: { surface?: WidgetSurface; force?: string; hour?: HourCycle } = {}): Promise<WidgetsAnswer> {
-    const owner = await ownerFacts(opts.hour);
+  /**
+   * `timeFormat` stands in for the owner's Profile: the lock screen passes its
+   * clock's, so a widget left on Profile reads the way the big clock does.
+   */
+  async function answer(opts: { surface?: WidgetSurface; force?: string; hour?: HourCycle; timeFormat?: '12h' | '24h' } = {}): Promise<WidgetsAnswer> {
+    const facts = await ownerFacts(opts.hour);
+    const owner = opts.timeFormat ? { ...facts, timeFormat: opts.timeFormat } : facts;
     const available = await availableOf(producers(), owner);
     const byId = new Map(available.map((p) => [p.info.id, p]));
     const { stored, home, lock } = await surfaces(available);

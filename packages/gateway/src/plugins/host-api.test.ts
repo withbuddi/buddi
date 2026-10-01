@@ -76,10 +76,10 @@ describe('staging', () => {
   });
 
   it('refuses a plugin built for a newer host, with both numbers', async () => {
-    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.22' } }), { env });
+    const staging = stagePlugin(pluginDir({ buddi: { hostApi: '^1.23' } }), { env });
     await expect(staging).rejects.toBeInstanceOf(StageRefusal);
-    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.22' } }), { env })).rejects.toThrow(
-      /it was built for host API \^1\.22, and this buddi has 1\.21/,
+    await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.23' } }), { env })).rejects.toThrow(
+      /it was built for host API \^1\.23, and this buddi has 1\.22/,
     );
     await expect(stagePlugin(pluginDir({ buddi: { hostApi: '^1.0' } }), { env })).resolves.toMatchObject({
       buddi: { hostApi: '^1.0' },

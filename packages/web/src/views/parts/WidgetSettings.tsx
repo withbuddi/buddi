@@ -25,7 +25,7 @@ import {
   type WidgetSurface,
   type WidgetView,
 } from '../../api';
-import { fmtMinutes } from '../../format';
+import { profileTimeLabel } from '../../format';
 import { Button, ErrorBanner, Icon, Segment, Sheet, Spacer, Toolbar, useAsync } from '../../ui';
 import { WidgetBodyView } from './WidgetBody';
 
@@ -210,7 +210,7 @@ function SettingField({
           label={field.label}
           options={[
             // What Profile reads as now, so the choice says what it means.
-            { value: 'profile', label: `Profile · ${fmtMinutes(14 * 60 + 32)}` },
+            { value: 'profile', label: profileTimeLabel() },
             { value: '12h', label: '12-hour' },
             { value: '24h', label: '24-hour' },
           ]}

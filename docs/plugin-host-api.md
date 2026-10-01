@@ -393,7 +393,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.21`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.22`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -468,6 +468,11 @@ finding, so a watcher that sets it need not ask for `^1.20`.
 widget body — analog faces from zones and labels, ticked by the page
 (docs/plugins.md §2.5d). An older buddi refuses the body as a kind it cannot
 draw, so a widget that answers one asks for `^1.21`.
+
+1.22 adds no method either: it is the first buddi that draws the tile icon
+`moon-cloud`, a partly cloudy night. An older buddi leaves an icon it does not
+know off, so a plugin that wants one there checks `ctx.buddi.version` and
+answers `cloud` before 1.22 (the weather plugin does).
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or
