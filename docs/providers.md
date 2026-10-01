@@ -216,6 +216,49 @@ only a fixed short prompt, no history, files or tools. It has a 15-second timeou
 no HTTP-status retries. Responses report safe connection/auth/rate-limit status, never
 raw provider errors or credentials. A result for an edited account is discarded.
 
+## Rate limits
+
+A provider's "not now" (429, and a 503 or 529 that names a window) is read for
+when to come back (`packages/runtime/src/rate-limit.ts`): the standard
+`Retry-After` and OpenAI's `retry-after-ms`, OpenAI's `x-ratelimit-reset-*` and
+Anthropic's `anthropic-ratelimit-*-reset` for the budget that is spent, and
+Google's body — its `RetryInfo` (`"retryDelay": "20s"`), its `QuotaFailure`
+(the quota's id and size) and the same facts in prose ("limit: 20 … Please
+retry in 20.6s").
+
+- **A short burst is waited out, within a budget.** A hinted window is waited
+  at most twice, and all waits together never pass sixty seconds
+  (`HINTED_RETRIES`, `STATUS_WAIT_BUDGET_MS` in `retry.ts`); a refusal with no
+  hint keeps the usual 0.5s, 1.5s, 4s curve. A window longer than what is left
+  is not slept through: the error goes back with its `retryAt`. A turn then
+  says when to try again ("OpenAI is limiting how fast this account can send
+  requests, and asked to wait until 14:21 …"); a background job — a mission, a
+  watcher's wake, an agent run with nobody at the keyboard — is requeued with
+  `run_after` at that instant instead of holding a worker asleep, within its
+  usual horizon (`decideRetry` in core).
+- **A spent daily quota is not retried at all.** Google answers the
+  twenty-first free-tier request of the day with "retry in 20s", and the
+  twenty-second is refused again: the quota that ran out is the day's
+  (`…PerDay…` in its id). It is reported as a daily limit with its reset —
+  midnight Pacific for Google — and the account is marked rate-limited until
+  then (`core.provider_account_limits`). Calls on it are refused by buddi until
+  the reset instead of reaching the provider, so a mission does not hammer a
+  key that cannot answer. The run's failure says it in plain words: "Gemini's
+  free tier allows 20 requests a day; it resets at 09:00. Until then, give this
+  agent another account in Settings → Model accounts, or turn on billing for the
+  key at aistudio.google.com." No "Try again" is offered.
+- **Where it shows.** Settings → Model accounts marks the row "Rate-limited"
+  with "back at 14:20", and the account's detail says "Rate-limited until
+  14:20" with the same sentence and the fix. `buddi accounts list` prints
+  `rate-limited until 14:20 · free tier, 20 requests a day`, and the MCP
+  admin's `buddi.accounts_list` gives `state: "rate-limited"` and the limit.
+- **It lifts by itself.** A limit goes when its time passes, when a call on the
+  account succeeds, when a connection test succeeds, or when the account is
+  edited (a new key, a paid plan).
+
+OpenAI's `insufficient_quota` (out of credit) is not a limit with a window and
+keeps its own sentence.
+
 ## API and CLI
 
 Owner-only routes inherit session, Origin, CSRF, body-size and no-store protections:
@@ -236,6 +279,12 @@ Owner-only routes inherit session, Origin, CSRF, body-size and no-store protecti
 Edits also require the displayed account revision to prevent stale overwrites. Global
 provider/credential mutation endpoints return 410 when account management is active.
 These operations are not exposed as agent tools.
+
+`buddi accounts` lists every account with its id, provider, default model, state
+(ready, rate-limited until a time, needs a credential or a new sign-in, disabled)
+and the agents on it; `buddi accounts show <id>` adds its address, context window
+and last test. Neither prints a key, a token or a vault name. The account's id is
+also on its detail in Settings → Model accounts, with Copy.
 
 `buddi agents` and `buddi agents show <handle>` read the account-aware catalog.
 `buddi agents set <handle> --account <id> --model <model>` changes a binding;

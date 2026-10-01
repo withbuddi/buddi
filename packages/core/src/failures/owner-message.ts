@@ -38,6 +38,7 @@
  * Telegram (where a backtick is a backtick), in a terminal, and on a page.
  */
 import { classifyFailure, type FailureClass } from '../queue/retry-policy.js';
+import { timezoneFromEnv } from '../time.js';
 import { describeCause } from './cause.js';
 
 /** What the owner reads, what the log gets, and whether a retry is honest. */
@@ -69,6 +70,10 @@ export interface DescribeFailureOptions {
    * `retryWithheldText`.
    */
   toolsCalled?: number | undefined;
+  /** The zone a reset time is said in. The installation's (`BUDDI_TZ`) by default. */
+  timeZone?: string | undefined;
+  /** The clock a reset time is measured against. */
+  now?: Date | undefined;
 }
 
 /** The label on the button, and the words for a surface that has no buttons. */
@@ -178,6 +183,92 @@ function permanentReason(err: unknown): string {
   return 'the request was refused';
 }
 
+/** What a provider's limit said, read structurally (core does not import the runtime). */
+export interface FailureRateLimit {
+  scope: 'day' | 'burst';
+  retryAt: string | null;
+  limit?: number;
+  unit?: 'requests' | 'tokens';
+  freeTier?: boolean;
+  provider?: string;
+}
+
+/** The limit a failure carries, or undefined when it is not a rate limit. */
+export function rateLimitOf(err: unknown): FailureRateLimit | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const e = err as Record<string, unknown>;
+  // Out of credit is not a pace: OpenAI says it with a 429 too.
+  if (e.type === 'insufficient_quota') return undefined;
+  const raw = e.limit;
+  if (raw && typeof raw === 'object') {
+    const l = raw as Record<string, unknown>;
+    const scope = l.scope === 'day' ? 'day' : 'burst';
+    const retryAt = typeof l.retryAt === 'string' && Number.isFinite(Date.parse(l.retryAt)) ? l.retryAt : null;
+    return {
+      scope, retryAt,
+      ...(typeof l.limit === 'number' && Number.isFinite(l.limit) ? { limit: l.limit } : {}),
+      ...(l.unit === 'requests' || l.unit === 'tokens' ? { unit: l.unit } : {}),
+      ...(l.freeTier === true ? { freeTier: true } : {}),
+      ...(typeof l.provider === 'string' && l.provider.length <= 60 ? { provider: l.provider } : {}),
+    };
+  }
+  // A 429 that said nothing about itself is still a limit, not a lost connection.
+  if (e.status === 429 && usageRefusal(err) === undefined) {
+    const retryAt = typeof e.retryAt === 'string' && Number.isFinite(Date.parse(e.retryAt)) ? e.retryAt : null;
+    return { scope: 'burst', retryAt };
+  }
+  return undefined;
+}
+
+/**
+ * When a reset happens, in the owner's words: "14:20" today, "tomorrow at
+ * 09:00", "on Fri 2 Oct at 09:00" further out.
+ */
+export function resetPhrase(iso: string, timeZone: string, now: Date = new Date()): string {
+  const at = new Date(iso);
+  let zone = timeZone;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); } catch { zone = 'UTC'; }
+  const day = (d: Date): string => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at);
+  if (day(at) === day(now)) return time;
+  if (day(at) === day(new Date(now.getTime() + 86_400_000))) return `tomorrow at ${time}`;
+  const date = new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'short', day: 'numeric', month: 'short' }).format(at);
+  return `on ${date} at ${time}`;
+}
+
+/**
+ * The sentence for a provider's rate limit, or undefined when the failure is
+ * not one. A spent daily quota is not offered a retry: the same call fails
+ * the same way until the reset. A short burst is — after its window.
+ */
+function rateLimitText(err: unknown, options: DescribeFailureOptions): Omit<OwnerFailure, 'detail'> | undefined {
+  const limit = rateLimitOf(err);
+  if (limit === undefined) return undefined;
+  const who = limit.provider ?? 'The provider';
+  const zone = options.timeZone ?? timezoneFromEnv();
+  const now = options.now ?? new Date();
+  const when = limit.retryAt ? resetPhrase(limit.retryAt, zone, now) : undefined;
+  if (limit.scope === 'day') {
+    const what = limit.unit === 'tokens' ? 'tokens' : 'requests';
+    const allowance = limit.limit !== undefined
+      ? `${limit.freeTier ? `${who}'s free tier allows` : `${who} allows this account`} ${limit.limit.toLocaleString('en-US')} ${what} a day`
+      : `${who} says this account has used up today's allowance`;
+    const reset = when ? `; it resets ${/^(tomorrow|on )/.test(when) ? when : `at ${when}`}.` : '.';
+    const billing = limit.freeTier && limit.provider === 'Gemini' ? ', or turn on billing for the key at aistudio.google.com' : '';
+    return {
+      class: 'transient', retryable: false,
+      text: `${allowance}${reset} Until then, give this agent another account in Settings → Model accounts${billing}.`,
+    };
+  }
+  const pace = `${who} is limiting how fast this account can send requests`;
+  return {
+    class: 'transient', retryable: true,
+    text: when
+      ? `${pace}, and asked to wait until ${when.replace(/^on /, '')} — longer than I hold a conversation for. Try again after that.`
+      : `${pace} right now. Wait a minute, then try again.`,
+  };
+}
+
 /**
  * Turn any thrown thing into what the owner reads and what the log records.
  *
@@ -201,6 +292,9 @@ export function describeFailure(
       text: `This conversation has grown past what the group's agents can be sent, and one piece of it is too large to shorten.${sizes} Sending the same message again will not help: start a new conversation for the group, or raise its context cap.`,
     };
   }
+
+  const limited = rateLimitText(err, options);
+  if (limited !== undefined) return { ...limited, detail };
 
   const verdict = classifyFailure(err);
 

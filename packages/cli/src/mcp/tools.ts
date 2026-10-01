@@ -8,6 +8,20 @@
  */
 import { GatewayError, type Gateway } from './gateway-client.js';
 
+/**
+ * One word for where an account stands, in the order that decides it: off,
+ * missing its credential, held back by its provider until a time, or ready.
+ * The same words `buddi accounts list` prints.
+ */
+export function accountState(a: Record<string, unknown>): 'disabled' | 'needs-sign-in' | 'needs-credential' | 'rate-limited' | 'ready' {
+  if (a.enabled === false) return 'disabled';
+  if (a.reconnectRequired === true) return 'needs-sign-in';
+  if (a.configured === false) return 'needs-credential';
+  const limit = a.rateLimit as { until?: unknown } | null | undefined;
+  if (limit && typeof limit.until === 'string' && Date.parse(limit.until) > Date.now()) return 'rate-limited';
+  return 'ready';
+}
+
 /** How long a write or an ask waits for the owner before handing back an id. */
 export const DECISION_WAIT_MS = 10 * 60 * 1000;
 /** How often the gateway is asked again while waiting. */
@@ -361,7 +375,7 @@ export const TOOLS: McpTool[] = [
   },
   {
     name: 'buddi.accounts_list',
-    description: 'The named model accounts by label, kind, auth, default model, state and the agents on each. Never a key or a token.',
+    description: 'The named model accounts by label, kind, auth, default model, state (ready, rate-limited until a time, needs a credential or a new sign-in, disabled) and the agents on each. Never a key or a token.',
     inputSchema: object({}),
     async run(_args, rt) {
       const view = await rt.gateway.get<{
@@ -377,6 +391,8 @@ export const TOOLS: McpTool[] = [
           defaultModel: a.defaultModel,
           enabled: a.enabled,
           configured: a.configured,
+          state: accountState(a),
+          rateLimit: a.rateLimit ?? null,
           assignedAgents: a.assignedAgents,
           models: [...new Set([a.defaultModel, ...view.bindings.filter((b) => b.accountId === a.id).map((b) => b.model)].filter(Boolean))],
           test: a.test ?? null,

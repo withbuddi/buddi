@@ -44,6 +44,7 @@ import { knownSecrets, REDACTED } from './secrets.js';
 import { createMcpServer } from './server.js';
 import { TOOLS } from './tools.js';
 
+const LIMITED_UNTIL = new Date(Date.now() + 3_600_000).toISOString();
 type ProviderAccounts = NonNullable<Parameters<typeof createWebApp>[0]['providerAccounts']>;
 
 const databaseUrl = await testDatabaseUrl();
@@ -231,7 +232,8 @@ suite('buddi mcp', () => {
       view: () => ({
         vault: { kind: 'memory', locked: false, advice: '' },
         accounts: [
-          { id: 'acc-1', label: 'Work Claude', kind: 'anthropic', auth: 'anthropic-oauth', baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, assignedAgents: ['developer'], test: null, token: SEED.oauth, refreshToken: SEED.oauth },
+          { id: 'acc-1', label: 'Work Claude', kind: 'anthropic', auth: 'anthropic-oauth', baseUrl: '', defaultModel: 'claude-sonnet-5', enabled: true, revision: 1, configured: true, assignedAgents: ['developer'], test: null, token: SEED.oauth, refreshToken: SEED.oauth,
+            rateLimit: { scope: 'day', until: LIMITED_UNTIL, limit: 20, unit: 'requests', freeTier: true, provider: 'Gemini', model: null } },
         ],
         bindings: [{ agentId: 'developer', accountId: 'acc-1', model: 'claude-sonnet-5' }],
       }),
@@ -391,6 +393,12 @@ suite('buddi mcp', () => {
     const asked = await tool('buddi.overview', { includeSensitive: true });
     expect(asked.text).toContain(BALANCE);
     expect(asked.json.overview.home.find((b: any) => b.id === 'demo.money')).toMatchObject({ sensitive: true, stats: [{ label: 'Cash', value: BALANCE }] });
+  });
+
+  it('accounts_list says an account is rate-limited, and until when', async () => {
+    const { json, isError } = await tool('buddi.accounts_list', {});
+    expect(isError).toBe(false);
+    expect(json.accounts[0]).toMatchObject({ id: 'acc-1', state: 'rate-limited', rateLimit: { scope: 'day', until: LIMITED_UNTIL, limit: 20 } });
   });
 
   it('pages_list names each page and what it reads, not its layout', async () => {

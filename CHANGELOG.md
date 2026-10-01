@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- A spent daily quota is told apart from a short burst: when a provider says the day's allowance is used up (Gemini's free tier allows 20 requests a day), buddi stops calling that account until the quota resets instead of retrying, the run says so in plain words ("Gemini's free tier allows 20 requests a day; it resets at 09:00 …") with the fix, and the account is marked rate-limited until then — `buddi.accounts_list` on the MCP admin shows the state and the reset.
 - Delete a group from its chat: ⋯ → Delete group… asks once, naming what goes (the group, its conversations, what it remembers) and that its agents and files stay; the page returns to the chat you were in and offers Undo for ten seconds, and after a minute the group is gone for good. `DELETE /api/groups/:id` now deletes (with `POST /api/groups/:id/restore`); archiving moved to `POST /api/groups/:id/archive`.
 - Clear a group's history and keep the group: ⋯ → Clear history… (`POST /api/groups/:id/clear`) deletes its conversations; its members and memory stay.
 
@@ -36,6 +37,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A provider's "retry in 20s" is honoured: buddi waits the window a 429 names (Retry-After, OpenAI's and Anthropic's reset headers, Google's RetryInfo and "Please retry in …"), at most twice and never more than a minute in all; a longer window ends the turn saying when to try again, and a background run is requeued for that time instead of failing.
 - A Tailscale dashboard session is no longer ended when the local Tailscale daemon is slow or cannot be asked (as on the first requests after a restart): the request answers "Tailscale didn't answer, try again" and the session stays. Questions about one address asked at once share one `tailscale whois`, a failed one is never remembered, and only an answer naming another login ends the session.
 - The sign-in lockout counts only a wrong credential that was presented. A Tailscale session that ends, Tailscale being busy, the signed-out page and its Try again no longer count, a refused cookie is expired in the browser so a forgotten tab stops presenting it, and Tailscale sign-in works during a lockout. The "too many failed sign-ins from here to ask the local tailscaled" log line is gone with the cause.
 - `buddi mcp` (Claude Code's `buddi` tools) signs in to a packaged install again: it first checks that the gateway on its port holds the same dashboard token before presenting a sign-in link, so a different buddi on that port is named in the error instead of collecting failed sign-ins; a failed sign-in is not retried for 30 seconds, and the error says what to do.

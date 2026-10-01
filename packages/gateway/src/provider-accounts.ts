@@ -10,6 +10,7 @@ import { contextWindowTokens, createProvider, providerCapabilities, listProvider
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { providerDiagnostic, type DiagnosticContext, type ProviderDiagnostic } from './provider-diagnostics.js';
+import { clearLimit, dailyLimitError, limitFromError, limitOn, loadLimits, recordLimit, type AccountRateLimit } from './account-limits.js';
 import { CodexAccounts, type CodexAccountAccess } from './codex-accounts.js';
 import { AnthropicAccounts } from './anthropic-accounts.js';
 import { OllamaAccounts, deviceView, readOllamaDevice, type OllamaDeviceView } from './ollama-accounts.js';
@@ -101,6 +102,8 @@ export class ProviderAccounts {
   #configured = new Map<string, boolean>();
   #tests = new Map<string, TestResult>();
   #testing = new Set<string>();
+  /** Limits a provider set on an account, as of the last load or call. */
+  #limits = new Map<string, AccountRateLimit>();
   #codexReleased = new Map<string, Promise<void>>();
   #tail: Promise<unknown> = Promise.resolve();
   #modelLists = new Map<string, { revision: number; until: number; value: AccountModels }>();
@@ -221,6 +224,8 @@ export class ProviderAccounts {
     }
     this.#rows = new Map(result.rows.map((r: Row) => [r.id, r]));
     this.#bindings = new Map(bindings.rows.map((b: Binding) => [b.agentId, b]));
+    // A database from before the limits table answers nothing, not an error.
+    this.#limits = await loadLimits(this.deps.pool).catch(() => new Map<string, AccountRateLimit>());
     this.#configured = configured;
     this.deps.reload();
   }
@@ -278,6 +283,7 @@ export class ProviderAccounts {
         ...(row.auth === 'device-key' ? { device: this.#devices.get(row.id) ?? null, login: this.ollama?.view(row.id, row.revision, ownerSession) ?? null } : {}),
         assignedAgents: [...this.#bindings.values()].filter(b => b.accountId === row.id && this.#agentExists(b.agentId)).map(b => b.agentId),
         test: this.#tests.get(row.id) ?? null,
+        rateLimit: this.rateLimit(row.id),
         };
       }),
       bindings: [...this.#bindings.values()],
@@ -468,6 +474,8 @@ export class ProviderAccounts {
     }
     this.#tests.delete(id);
     this.#modelLists.delete(id);
+    // An edited account (a new key, a paid plan) starts with a clean slate.
+    if (old) await clearLimit(this.deps.pool, id).catch(() => {});
     await this.load();
     return { id, warning };
     } finally { await lease?.release(); await oauthLease?.release(); }
@@ -524,6 +532,31 @@ export class ProviderAccounts {
     } finally { await lease?.release(); await oauthLease?.release(); }
   }); }
 
+  /** The limit standing on an account now, or null once it has lapsed. */
+  rateLimit(id: string): AccountRateLimit | null {
+    const limit = this.#limits.get(id);
+    return limit && Date.parse(limit.until) > Date.now() ? limit : null;
+  }
+
+  /**
+   * Keep what a call taught about the account's limit: a refusal that named a
+   * time sets it, a success lifts it. Never fails the call it follows.
+   */
+  async #noteLimit(id: string, error: unknown | null): Promise<void> {
+    try {
+      if (error === null) {
+        if (!this.#limits.has(id)) return;
+        this.#limits.delete(id);
+        await clearLimit(this.deps.pool, id);
+        return;
+      }
+      const limit = limitFromError(error);
+      if (!limit) return;
+      this.#limits.set(id, limit);
+      await recordLimit(this.deps.pool, id, limit);
+    } catch { /* the limit is advice; the call's own outcome stands */ }
+  }
+
   /** Pins account identity/model for a run; disabling stops its next model call. */
   provider(ref: ProviderRef): RuntimeProvider {
     const id = ref.accountId;
@@ -537,14 +570,27 @@ export class ProviderAccounts {
       complete: async request => {
         const row = await this.#row(id);
         if (row.revision !== snapshot.revision) throw new ProviderAccountError(409, 'Provider account settings changed during this run. Send a new message to continue with the updated account.');
-        if (row.kind === 'codex') {
-          if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
-          const lease = await this.#codexCompletionAccess(row, request.signal);
-          try { return await this.codex.complete(lease.access, ref.model, request); }
-          finally { await lease.release(); }
+        // A spent daily quota does not come back for asking: refuse here,
+        // with the same error the provider gave, until it resets.
+        const standing = await limitOn(this.deps.pool, id).catch(() => null);
+        if (standing?.scope === 'day') throw dailyLimitError(standing);
+        try {
+          let response;
+          if (row.kind === 'codex') {
+            if (!this.codex) throw new ProviderAccountError(409, SIGNIN_HIDDEN.codex);
+            const lease = await this.#codexCompletionAccess(row, request.signal);
+            try { response = await this.codex.complete(lease.access, ref.model, request); }
+            finally { await lease.release(); }
+          } else {
+            const resolved = resolveProviderAccount(row, ref.model, await this.#usableSecret(row, request.signal));
+            response = await createProvider(resolved, { onRetry: logRetry }).complete(request);
+          }
+          await this.#noteLimit(id, null);
+          return response;
+        } catch (error) {
+          await this.#noteLimit(id, error);
+          throw error;
         }
-        const resolved = resolveProviderAccount(row, ref.model, await this.#usableSecret(row, request.signal));
-        return createProvider(resolved).complete(request);
       },
     };
   }
@@ -567,7 +613,9 @@ export class ProviderAccounts {
         });
       } catch (error) {
         diagnostic = providerDiagnostic(error, { ...diagnosticContext(row), model: row.defaultModel });
+        await this.#noteLimit(id, error);
       }
+      if (diagnostic.state === 'connected') await this.#noteLimit(id, null);
       if ((await this.#row(id)).revision !== row.revision) throw new ProviderAccountError(409, 'Account changed during the test. Test it again.');
       const result = { ...diagnostic, checkedAt: new Date().toISOString() };
       this.#tests.set(id, result); return result;
@@ -848,6 +896,11 @@ export class ProviderAccounts {
 }
 
 /** An account on this computer: a loopback address, where the first request may be a model load. */
+/** Every attempt that failed and is about to be retried, on the process log, as the bootstrap's own adapters do. */
+function logRetry(notice: { attempt: number; delayMs: number; kind: string; detail: string }): void {
+  console.error(`provider: ${notice.kind} attempt ${notice.attempt} failed, retrying in ${notice.delayMs}ms — ${notice.detail}`);
+}
+
 function isLocalAccount(row: { kind: string; baseUrl?: string | null }): boolean {
   if (row.kind !== 'openai-compatible' || !row.baseUrl) return false;
   try {

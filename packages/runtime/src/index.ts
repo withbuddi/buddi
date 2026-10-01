@@ -4,6 +4,7 @@ export * from './capabilities.js';
 export * from './search.js';
 export * from './create.js';
 export * from './retry.js';
+export * from './rate-limit.js';
 export * from './transport.js';
 export * from './attachments.js';
 export * from './loop.js';

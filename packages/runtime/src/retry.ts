@@ -6,6 +6,7 @@
  * remove. So the budget, the retryable statuses and the `Retry-After` handling
  * live here and both adapters import them.
  */
+import type { RateLimitInfo } from './rate-limit.js';
 
 /** Backoff before attempts 2, 3 and 4. Three retries, then give up. */
 export const RETRY_DELAYS_MS: readonly number[] = [500, 1500, 4000];
@@ -47,6 +48,59 @@ export const TRANSPORT_RETRY_WINDOW_MS = 20_000;
  * is telling us to fail, not to wait: an owner is usually at a prompt.
  */
 export const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * How many times a hinted window is waited out in-process. A provider that
+ * names its window twice and is still busy the third time is busier than a
+ * conversation should sit through.
+ */
+export const HINTED_RETRIES = 2;
+
+/**
+ * The most a status failure may be waited out in-process, all waits together.
+ *
+ * Sixty seconds is the point where a spinner stops reading as "working". A
+ * window longer than what is left of it is not slept through at all: the
+ * error goes back with its `retryAt`, so a turn says when to come back and
+ * a background job is requeued for that instant (`decideRetry` in core)
+ * instead of holding a worker asleep.
+ */
+export const STATUS_WAIT_BUDGET_MS = 60_000;
+
+/**
+ * Wait before the next attempt after a retryable status, or undefined to stop.
+ *
+ * A provider's own window wins over the curve, but is honoured at most
+ * `HINTED_RETRIES` times; a daily quota is never retried; and no wait may
+ * take the total past the budget. The curve still applies to a refusal that
+ * named no window, bounded by `maxRetries`.
+ */
+export function statusRetryDelayMs(args: {
+  /** Status failures so far, this one included. */
+  failures: number;
+  /** Hinted waits already taken. */
+  hintedRetries: number;
+  /** Everything already slept for status failures. */
+  waitedMs: number;
+  /** What the refusal said about its window. */
+  limit: RateLimitInfo | null;
+  maxRetries?: number | undefined;
+  budgetMs?: number | undefined;
+}): { delayMs: number; hinted: boolean } | undefined {
+  const maxRetries = args.maxRetries ?? RETRY_DELAYS_MS.length;
+  const budget = args.budgetMs ?? STATUS_WAIT_BUDGET_MS;
+  if (args.failures > maxRetries) return undefined;
+  if (args.limit?.scope === 'day') return undefined;
+  const hint = args.limit?.waitMs ?? null;
+  if (hint !== null) {
+    if (args.hintedRetries >= HINTED_RETRIES) return undefined;
+    // Never sooner than the curve: a window shorter than our own backoff does not make us hammer.
+    const delayMs = Math.max(hint, RETRY_DELAYS_MS[args.failures - 1] ?? 0);
+    return args.waitedMs + delayMs > budget ? undefined : { delayMs, hinted: true };
+  }
+  const delayMs = RETRY_DELAYS_MS[args.failures - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1] ?? 0;
+  return args.waitedMs + delayMs > budget ? undefined : { delayMs, hinted: false };
+}
 
 /** 429 (rate limit), 529 (Anthropic overloaded) and anything 5xx. */
 export function isRetryableStatus(status: number): boolean {

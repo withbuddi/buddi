@@ -39,9 +39,17 @@ export function providerDiagnostic(error: unknown, context: DiagnosticContext = 
     state = 'quota-exhausted'; message = `${Who} says this account is out of credit. Add credit or raise its spending limit, then try again.`;
   } else if (status === 429 && context.gemini && model && PRO.test(model) && (body === '' || /quota|limit/i.test(body))) {
     state = 'rate-limited'; message = `Google says this key has no allowance for ${model}. A free Google AI key does not include Pro models: start with a Flash model, or turn on billing at aistudio.google.com.`;
+  } else if (status === 429 && dailyLimit(value.limit)) {
+    const limit = value.limit as { limit?: unknown; freeTier?: unknown; unit?: unknown };
+    const size = typeof limit.limit === 'number' ? ` (${limit.limit} ${limit.unit === 'tokens' ? 'tokens' : 'requests'} a day${limit.freeTier === true ? ' on the free tier' : ''})` : '';
+    state = 'rate-limited'; message = `${Who} says this key has used up today’s allowance${size}. It works again after the reset${context.gemini && limit.freeTier === true ? ', or turn on billing at aistudio.google.com' : ''}.`;
   } else if (status === 429) {
     state = 'rate-limited'; message = `${Who} says this key has reached its limit${model ? ` for ${model}` : ''}. Wait a little, or pick another model.`;
   } else if (status === 404) { state = 'not-found'; message = model ? `${Who} does not know ${model} at this address. Pick another model, or check the address.` : `${Who} found nothing at this address. Check the address.`; }
   else if (status !== null && status >= 500) { state = 'provider-unavailable'; message = `${Who} is having trouble right now. Try again in a few minutes.`; }
   return { state, message, httpStatus: status, retryAt };
+}
+
+function dailyLimit(limit: unknown): boolean {
+  return typeof limit === 'object' && limit !== null && (limit as { scope?: unknown }).scope === 'day';
 }

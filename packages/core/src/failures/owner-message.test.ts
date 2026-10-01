@@ -212,3 +212,37 @@ describe('a room that cannot fit', () => {
     expect(told.text).not.toMatch(/try again/i);
   });
 });
+
+describe('a provider rate limit', () => {
+  const now = new Date('2026-10-01T12:00:00Z');
+  const daily = Object.assign(new Error('You exceeded your current quota, gm-SECRET'), {
+    status: 429, type: 'http_error', retryAt: '2026-10-02T07:00:00.000Z',
+    limit: { scope: 'day', retryAt: '2026-10-02T07:00:00.000Z', waitMs: 68_400_000, limit: 20, unit: 'requests', freeTier: true, provider: 'Gemini' },
+  });
+
+  it("says a spent daily quota in plain words, with the reset, and offers no retry", () => {
+    const failure = describeFailure(daily, { timeZone: 'Europe/Paris', now });
+    expect(failure.text).toMatch(/^Gemini's free tier allows 20 requests a day; it resets tomorrow at 09:00\./);
+    expect(failure.text).toContain('Settings → Model accounts');
+    expect(failure.text).toContain('aistudio.google.com');
+    expect(failure.text).not.toContain('SECRET');
+    expect(failure.retryable).toBe(false);
+  });
+
+  it('says a short burst with its window, and offers the retry', () => {
+    const burst = Object.assign(new Error('slow'), { status: 429, limit: { scope: 'burst', retryAt: '2026-10-01T12:02:00.000Z', waitMs: 120_000, provider: 'OpenAI' } });
+    const failure = describeFailure(burst, { timeZone: 'UTC', now });
+    expect(failure.text).toMatch(/^OpenAI is limiting how fast this account can send requests, and asked to wait until /);
+    expect(failure.retryable).toBe(true);
+  });
+
+  it('says a bare 429 is a limit, not a lost connection', () => {
+    const failure = describeFailure(Object.assign(new Error('429'), { status: 429 }));
+    expect(failure.text).toMatch(/limiting how fast/);
+  });
+
+  it('leaves out-of-credit alone', () => {
+    const failure = describeFailure(Object.assign(new Error('quota'), { status: 429, type: 'insufficient_quota', limit: { scope: 'burst', retryAt: null } }));
+    expect(failure.text).not.toMatch(/limiting how fast/);
+  });
+});

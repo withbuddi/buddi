@@ -15,7 +15,7 @@ suite('named provider accounts', () => {
     pool = createPool(target.toString()); await runMigrations(pool, []);
   }, 60_000);
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`drop database if exists ${name}`); await admin.end(); } });
-  beforeEach(async () => { await pool.query('truncate core.agent_provider_accounts, core.provider_accounts, core.provider_account_migrations, core.provider_credential_state, core.provider_settings'); });
+  beforeEach(async () => { await pool.query('truncate core.agent_provider_accounts, core.provider_account_limits, core.provider_accounts, core.provider_account_migrations, core.provider_credential_state, core.provider_settings'); });
   function fixture(env: NodeJS.ProcessEnv = { OPENAI_API_KEY: 'legacy-fixture-api' }) {
     const agents = [
       { id: 'ledger', model: 'claude-sonnet-5', provider: providerFromEnv(env) },
@@ -371,6 +371,49 @@ suite('named provider accounts', () => {
       const response = await f.service.provider(ref).complete({ system: 'fixture', messages: [], tools: [{ name: 'fixture.read', description: 'Read', input_schema: { type: 'object', properties: { value: { type: 'number' } } } }] });
       expect(authorization).toBeUndefined(); expect(requestBody.model).toBe('local-model');
       expect(response.content).toContainEqual({ type: 'tool_use', id: 'call-1', name: 'fixture.read', input: { value: 1 } });
+    } finally { await new Promise<void>((r, reject) => server.close(e => e ? reject(e) : r())); }
+  });
+  it('keeps a spent daily quota on the account, refuses calls until the reset, and lifts it on success', async () => {
+    const f = fixture(); await f.service.initialize();
+    let calls = 0; let limited = true;
+    const server = createServer(async (req, res) => {
+      calls += 1;
+      for await (const _ of req) { /* drain */ }
+      res.setHeader('content-type', 'application/json');
+      if (limited) {
+        res.statusCode = 429;
+        res.end(JSON.stringify([{ error: { code: 429, message: 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 20. Please retry in 20s.', details: [
+          { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '20s' }] } }]));
+        return;
+      }
+      res.end(JSON.stringify({ model: 'm', choices: [{ finish_reason: 'stop', message: { content: 'ok' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const a = await f.service.save({ label: 'Free tier', kind: 'openai-compatible', auth: 'none', baseUrl: `http://127.0.0.1:${port}/v1`, defaultModel: 'm', enabled: true });
+      await f.service.assign('ledger', { accountId: a.id, model: 'm' });
+      const runtime = f.service.provider(f.service.selection({ id: 'ledger' } as AgentFrontmatter).provider);
+      const request = { system: '', messages: [], tools: [] };
+      const first = await runtime.complete(request).catch((e: unknown) => e) as { limit?: { scope: string; limit?: number } };
+      expect(first.limit).toMatchObject({ scope: 'day', limit: 20 });
+      expect(calls).toBe(1);
+      expect(f.service.view().accounts.find(x => x.id === a.id)?.rateLimit).toMatchObject({ scope: 'day', limit: 20, freeTier: true });
+      // A second service — another process — sees it too, and the provider is not asked again.
+      const other = fixture(); await other.service.load();
+      expect(other.service.rateLimit(a.id)?.scope).toBe('day');
+      const second = await runtime.complete(request).catch((e: unknown) => e) as { status?: number; retryAt?: string };
+      expect(second.status).toBe(429);
+      expect(second.retryAt).toBeTruthy();
+      expect(calls).toBe(1);
+      // Past the reset, a call that works lifts the limit.
+      await pool.query(`update core.provider_account_limits set until = now() - interval '1 second'`);
+      limited = false;
+      await runtime.complete(request);
+      expect(calls).toBe(2);
+      expect(f.service.rateLimit(a.id)).toBeNull();
+      expect((await pool.query('select count(*)::int as n from core.provider_account_limits')).rows[0].n).toBe(0);
     } finally { await new Promise<void>((r, reject) => server.close(e => e ? reject(e) : r())); }
   });
 });

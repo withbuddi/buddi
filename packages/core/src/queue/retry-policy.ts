@@ -309,6 +309,17 @@ export interface RetryDecision {
 }
 
 /**
+ * How long the provider asked to wait, from the error's `retryAt` (a 429's
+ * window, or a spent daily quota's reset). Undefined when it named none.
+ */
+export function hintedWaitMs(err: unknown, now: Date): number | undefined {
+  const at = readString(err, 'retryAt');
+  if (at === undefined) return undefined;
+  const ms = Date.parse(at) - now.getTime();
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
  * Should this failed attempt be tried again, and when?
  *
  * Four ways to stop, in order: the failure is permanent, the attempts are
@@ -337,12 +348,18 @@ export function decideRetry(input: RetryDecisionInput): RetryDecision {
   }
 
   const age = input.now.getTime() - input.createdAt.getTime();
-  const backoffMs = retryDelayMs(profile, input.attempts);
+  // The provider said when to come back: the job sleeps in the queue until
+  // then rather than waking early to be refused again (the adapter does not
+  // hold a worker through a long window; see the runtime's retry.ts).
+  const hinted = hintedWaitMs(input.error, input.now);
+  const backoffMs = Math.max(retryDelayMs(profile, input.attempts), hinted ?? 0);
   if (age >= profile.maxLifetimeMs || age + backoffMs >= profile.maxLifetimeMs) {
     return {
       retry: false,
       failureClass: verdict.class,
-      reason: `gave up after ${Math.round(profile.maxLifetimeMs / 60_000)} minutes of retrying — ${verdict.reason}`,
+      reason: hinted !== undefined && age + hinted >= profile.maxLifetimeMs
+        ? `the provider asked to wait until ${new Date(input.now.getTime() + hinted).toISOString()}, past this job's ${Math.round(profile.maxLifetimeMs / 60_000)}-minute horizon — ${verdict.reason}`
+        : `gave up after ${Math.round(profile.maxLifetimeMs / 60_000)} minutes of retrying — ${verdict.reason}`,
     };
   }
 

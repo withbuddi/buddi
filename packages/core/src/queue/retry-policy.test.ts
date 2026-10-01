@@ -199,3 +199,26 @@ describe('decideRetry', () => {
     expect(at).toBeGreaterThan(3 * 3_600_000);
   });
 });
+
+describe('a provider that said when to come back', () => {
+  const createdAt = new Date('2026-10-01T12:00:00Z');
+  const now = new Date('2026-10-01T12:00:05Z');
+  const limited = (retryAt: string) => Object.assign(new Error('slow down'), { status: 429, type: 'rate_limit_error', retryAt });
+
+  it('requeues a background job at the hinted time rather than the curve', () => {
+    const decision = decideRetry({ kind: 'mission-run', attempts: 1, maxAttempts: 8, createdAt, now, error: limited('2026-10-01T12:20:05Z') });
+    expect(decision.retry).toBe(true);
+    expect(decision.backoffMs).toBe(20 * 60_000);
+  });
+
+  it('keeps the curve when the hint is shorter', () => {
+    const decision = decideRetry({ kind: 'mission-run', attempts: 1, maxAttempts: 8, createdAt, now, error: limited('2026-10-01T12:00:15Z') });
+    expect(decision.backoffMs).toBe(60_000);
+  });
+
+  it('gives up, saying why, when the reset is past the horizon', () => {
+    const decision = decideRetry({ kind: 'mission-run', attempts: 1, maxAttempts: 8, createdAt, now, error: limited('2026-10-02T07:00:00Z') });
+    expect(decision.retry).toBe(false);
+    expect(decision.reason).toMatch(/asked to wait until 2026-10-02T07:00:00\.000Z/);
+  });
+});

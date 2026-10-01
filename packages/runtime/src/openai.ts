@@ -52,11 +52,11 @@ import { providerCapabilities } from './capabilities.js';
 import {
   defaultSleep,
   isRetryableStatus,
-  nextDelayMs,
   providerRetryAt,
   nextTransportDelayMs,
-  RETRY_DELAYS_MS,
+  statusRetryDelayMs,
 } from './retry.js';
+import { readRateLimit } from './rate-limit.js';
 import {
   defaultHttpTransport,
   type HttpTransport,
@@ -516,11 +516,15 @@ export function createOpenAiProvider(
       res.headers?.get?.('x-request-id') ?? res.headers?.get?.('request-id') ?? null;
     let type = 'http_error';
     let message = `${res.status} ${res.statusText ?? ''}`.trim();
+    let body = '';
     try {
       const text = await res.text();
+      body = text ?? '';
       if (text) {
         try {
-          const parsed = JSON.parse(text) as { error?: { type?: string; message?: string } };
+          // Google's compatible address wraps its error in an array.
+          const raw = JSON.parse(text) as unknown;
+          const parsed = (Array.isArray(raw) ? raw[0] : raw) as { error?: { type?: string; message?: string } };
           if (parsed?.error?.type) type = parsed.error.type;
           if (parsed?.error?.message) message = parsed.error.message;
           else message = text.slice(0, 500);
@@ -531,7 +535,8 @@ export function createOpenAiProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers), ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
+    const limit = readRateLimit({ status: res.status, headers: res.headers, body, baseUrl: resolved.baseUrl, now: now() });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: limit?.retryAt ?? providerRetryAt(res.headers), limit, ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
   }
 
   return {
@@ -544,6 +549,8 @@ export function createOpenAiProvider(
       const startedAt = now();
       // Two budgets, counted apart: see the Anthropic adapter's `complete`.
       let statusFailures = 0;
+      let hintedRetries = 0;
+      let statusWaitedMs = 0;
       let transportFailures = 0;
       let lastError: ProviderError | undefined;
 
@@ -596,18 +603,21 @@ export function createOpenAiProvider(
         }
 
         statusFailures += 1;
-        const wait = nextDelayMs(statusFailures, res.headers);
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        if (statusFailures > (options.maxStatusRetries ?? RETRY_DELAYS_MS.length)) break;
+        // The same plan as the Anthropic adapter: see `statusRetryDelayMs`.
+        const next = statusRetryDelayMs({ failures: statusFailures, hintedRetries, waitedMs: statusWaitedMs, limit: error.limit, maxRetries: options.maxStatusRetries });
+        if (next === undefined) break;
+        if (next.hinted) hintedRetries += 1;
+        statusWaitedMs += next.delayMs;
         options.onRetry?.({
           attempt: statusFailures,
-          delayMs: wait,
+          delayMs: next.delayMs,
           kind: 'status',
           detail: error.detail,
         });
-        await sleep(wait, req.signal);
+        await sleep(next.delayMs, req.signal);
       }
 
       throw (

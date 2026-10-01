@@ -705,7 +705,11 @@ classified first (transient, permanent or `unknown`) over the whole cause
 chain. An interactive run gets three attempts inside fifteen minutes. An
 unattended one gets eight attempts over rising delays inside six hours,
 whichever bound comes first. `unknown` is retried only on the short horizon.
-The long wait lives in the queue, not in a process holding a lease.
+The long wait lives in the queue, not in a process holding a lease. A provider
+that said when to come back (a 429's window, a daily quota's reset: the error's
+`retryAt`) sets the next attempt's time when it is later than the curve's, and
+a reset past the horizon ends the job saying so ([providers.md](providers.md),
+"Rate limits").
 
 **Failures have two audiences.** The whole cause chain (every wrapped `cause`,
 every `AggregateError` member, bounded in depth) goes to the log. The owner

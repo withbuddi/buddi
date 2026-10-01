@@ -16,7 +16,7 @@ suite('Ollama Cloud with a device key', () => {
     pool = createPool(target.toString()); await runMigrations(pool, []);
   }, 60_000);
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`drop database if exists ${name}`); await admin.end(); } });
-  beforeEach(async () => { await pool.query('truncate core.agent_provider_accounts, core.provider_accounts, core.provider_account_migrations, core.provider_credential_state, core.provider_settings'); });
+  beforeEach(async () => { await pool.query('truncate core.agent_provider_accounts, core.provider_account_limits, core.provider_accounts, core.provider_account_migrations, core.provider_credential_state, core.provider_settings'); });
   function fixture() {
     const catalog = { list: () => [], get: () => undefined } as unknown as AgentCatalog;
     const vault = createMemoryVault();

@@ -30,11 +30,11 @@ import { providerCapabilities, type ProviderCapabilities } from './capabilities.
 import {
   defaultSleep,
   isRetryableStatus,
-  nextDelayMs,
   providerRetryAt,
   nextTransportDelayMs,
-  RETRY_DELAYS_MS,
+  statusRetryDelayMs,
 } from './retry.js';
+import { readRateLimit, type RateLimitInfo } from './rate-limit.js';
 import {
   defaultHttpTransport,
   type HttpTransport,
@@ -277,6 +277,13 @@ export class ProviderError extends Error {
    * sends the turn again without them.
    */
   readonly reason: ProviderErrorReason | null;
+  /**
+   * What a 429 (or a 503/529 with a window) said about when to come back:
+   * a short burst or a spent daily quota, the wait, the quota's size. Null
+   * for any other failure. Read by core's queue (requeue at `retryAt`), by
+   * the account (rate-limited until) and by the sentence the owner reads.
+   */
+  readonly limit: RateLimitInfo | null;
 
   constructor(args: {
     status: number;
@@ -286,13 +293,15 @@ export class ProviderError extends Error {
     retryAt?: string | null;
     cause?: unknown;
     reason?: ProviderErrorReason;
+    limit?: RateLimitInfo | null;
   }) {
     super(args.message, args.cause === undefined ? undefined : { cause: args.cause });
     this.name = 'ProviderError';
     this.status = args.status;
     this.type = args.type;
     this.requestId = args.requestId ?? null;
-    this.retryAt = args.retryAt ?? null;
+    this.limit = args.limit ?? null;
+    this.retryAt = args.retryAt ?? this.limit?.retryAt ?? null;
     this.code = args.cause === undefined ? null : (errorCodes(args.cause)[0] ?? null);
     this.reason = args.reason ?? null;
     this.detail =
@@ -840,8 +849,10 @@ export function createAnthropicProvider(
       res.headers?.get?.('request-id') ?? res.headers?.get?.('x-request-id') ?? null;
     let type = 'http_error';
     let message = `${res.status} ${res.statusText ?? ''}`.trim();
+    let body = '';
     try {
       const text = await res.text();
+      body = text ?? '';
       if (text) {
         try {
           const parsed = JSON.parse(text) as {
@@ -857,7 +868,8 @@ export function createAnthropicProvider(
     } catch {
       /* body already consumed or unreadable — status is enough */
     }
-    return new ProviderError({ status: res.status, type, message, requestId, retryAt: providerRetryAt(res.headers), ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
+    const limit = readRateLimit({ status: res.status, headers: res.headers, body, baseUrl: resolved.baseUrl, now: now() });
+    return new ProviderError({ status: res.status, type, message, requestId, retryAt: limit?.retryAt ?? providerRetryAt(res.headers), limit, ...(refusesImages(message) ? { reason: 'images-unsupported' as const } : {}) });
   }
 
   const capabilities = providerCapabilities('anthropic');
@@ -880,6 +892,8 @@ export function createAnthropicProvider(
        * curve, bounded by its own window.
        */
       let statusFailures = 0;
+      let hintedRetries = 0;
+      let statusWaitedMs = 0;
       let transportFailures = 0;
       let lastError: ProviderError | undefined;
 
@@ -936,21 +950,23 @@ export function createAnthropicProvider(
           };
         }
 
-        // Read `Retry-After` before the body is consumed: a 429 that names its
-        // own window is the one case where our curve is the wrong answer.
+        // A 429 that names its own window is the one case where our curve is
+        // the wrong answer; one that names a spent daily quota is not retried.
         statusFailures += 1;
-        const wait = nextDelayMs(statusFailures, res.headers);
         const error = await errorFrom(res);
         if (!isRetryableStatus(res.status)) throw error; // never retry other 4xx
         lastError = error;
-        if (statusFailures > (options.maxStatusRetries ?? RETRY_DELAYS_MS.length)) break;
+        const next = statusRetryDelayMs({ failures: statusFailures, hintedRetries, waitedMs: statusWaitedMs, limit: error.limit, maxRetries: options.maxStatusRetries });
+        if (next === undefined) break;
+        if (next.hinted) hintedRetries += 1;
+        statusWaitedMs += next.delayMs;
         options.onRetry?.({
           attempt: statusFailures,
-          delayMs: wait,
+          delayMs: next.delayMs,
           kind: 'status',
           detail: error.detail,
         });
-        await sleep(wait, req.signal);
+        await sleep(next.delayMs, req.signal);
       }
 
       throw (
