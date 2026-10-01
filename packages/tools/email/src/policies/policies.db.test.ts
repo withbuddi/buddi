@@ -23,6 +23,9 @@ import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { CoreSourceContext, CoreToolContext } from '@buddi/core/testing';
 import { bulkPolicies, createPolicy, loadPolicies, seedLearnedIgnorePolicies } from './store.js';
 import { adoptProposedPolicies, applyLearnedPolicy, revokeLearnedPolicy } from './learned.js';
+import { tellOwnerLearned } from './auto.js';
+import { createUndoLearnedTool } from '../tools/mailbox.js';
+import { learnedRulesQuery } from '../pages/queries.js';
 import { getProposal, keepProposal, listOpenProposals, type Proposal as CoreProposal } from '@buddi/core/testing';
 import { createPluginHost, hostBindingOf } from '@buddi/core/testing';
 
@@ -72,6 +75,7 @@ suite('email policies (postgres + fake imap)', () => {
       'truncate email.events, email.policies, email.drafts, email.triage, email.messages, email.folders, email.accounts cascade',
     );
     await pool.query('truncate core.proposals');
+    await pool.query('truncate core.owner_notifications cascade');
     const account = await writeGmailAccount(pool, OWNER_ADDRESS);
     accountId = account!.id;
     const { rows } = await pool.query(
@@ -118,13 +122,14 @@ suite('email policies (postgres + fake imap)', () => {
     subject?: string;
     at?: string;
     listId?: string | null;
+    bulk?: boolean;
   }): Promise<string> {
     uid += 1;
     const { rows } = await pool.query(
       `insert into email.messages
          (account_id, folder_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
-          to_addrs, subject, date, snippet, body_text, triage_enqueued_at)
-       values ($1, $2, 1, $3, $4, $4, $5, $6, '["owner@example.test"]'::jsonb, $7, $8, '', '', now())
+          to_addrs, subject, date, snippet, body_text, triage_enqueued_at, bulk)
+       values ($1, $2, 1, $3, $4, $4, $5, $6, '["owner@example.test"]'::jsonb, $7, $8, '', '', now(), $9)
        returning id`,
       [
         accountId,
@@ -135,6 +140,7 @@ suite('email policies (postgres + fake imap)', () => {
         over.from,
         over.subject ?? 'Subject',
         over.at ?? `2026-09-${String((uid % 20) + 1).padStart(2, '0')}T09:00:00Z`,
+        over.bulk === true,
       ],
     );
     return String(rows[0].id);
@@ -680,6 +686,219 @@ suite('email policies (postgres + fake imap)', () => {
       const poll = sourceContext();
       await src.poll(poll);
       expect(poll.runs).toHaveLength(1);
+    });
+  });
+
+  /* ------------------------------------------------------ what keeps itself */
+
+  describe('what keeps itself', () => {
+    /** Three promo verdicts from one sender, through the triage tool. Returns the third answer. */
+    async function threePromos(
+      from: string,
+      over: { listId?: string | null; bulk?: boolean } = {},
+      ctx: CoreToolContext = toolContext(),
+    ): Promise<{ learnedPolicy?: { proposal: string; proposed: boolean; keptItself?: string; note: string } }> {
+      let last: unknown;
+      for (let i = 0; i < 3; i += 1) {
+        const id = await storeMessage({ from, at: `2026-09-0${i + 1}T09:00:00Z`, ...over });
+        last = await triageRecord.execute({ messageId: id, category: 'promo', urgency: 'low', summary: 'ad' }, ctx);
+      }
+      return last as never;
+    }
+
+    async function writeTo(address: string, account = accountId, folder = mailboxId): Promise<void> {
+      uid += 1;
+      await pool.query(
+        `insert into email.messages
+           (account_id, folder_id, uidvalidity, uid, message_id, thread_key, from_addr, to_addrs,
+            subject, date, snippet, body_text, direction)
+         values ($1, $2, 1, $3, $4, $4, 'owner@example.test', $5::jsonb, 'hi', '2026-08-01T09:00:00Z', '', '', 'out')`,
+        [account, folder, uid, `<out${uid}@x>`, JSON.stringify([address])],
+      );
+    }
+
+    async function notifications(): Promise<Array<{ title: string; dedupe_key: string }>> {
+      const { rows } = await pool.query(`select title, dedupe_key from core.owner_notifications order by created_at`);
+      return rows;
+    }
+
+    it('keeps a bulk sender\u2019s quiet rule itself: a kept card, a kept rule, no card waiting', async () => {
+      const third = await threePromos('news@list.test', { bulk: true });
+      expect(third.learnedPolicy).toMatchObject({ proposed: false, keptItself: 'bulk' });
+      expect(third.learnedPolicy!.note).toMatch(/Learned on the Mail page/);
+      expect(await listOpenProposals(pool)).toHaveLength(0);
+      const card = await getProposal(pool, third.learnedPolicy!.proposal);
+      expect(card).toMatchObject({ state: 'kept', decidedBy: 'auto' });
+      expect(card!.payload).toMatchObject({ plugin: 'email', action: 'ignore', kind: 'quiet-promo-sender', kindLabel: 'Quiet a marketing sender' });
+      const rules = await loadPolicies(pool, accountId);
+      expect(rules).toHaveLength(1);
+      expect(rules[0]).toMatchObject({ matcher: 'news@list.test', action: 'ignore', origin: 'learned', proposed: false, keptBy: 'auto', autoReason: 'bulk', proposalId: card!.id });
+      expect(rules[0]!.params.onArrival).toBeUndefined();
+
+      // It decides: the next message from them starts no run.
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'news@list.test', messageId: '<b4@x>' }));
+      const poll = sourceContext();
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(poll);
+      expect(poll.runs).toHaveLength(0);
+    });
+
+    it('counts a List-Id or a no-reply address as bulk, and stores List-Unsubscribe at ingest', async () => {
+      expect((await threePromos('digest@lists.test', { listId: 'digest.lists.test' })).learnedPolicy).toMatchObject({ keptItself: 'bulk' });
+      expect((await threePromos('no-reply@shop.test')).learnedPolicy).toMatchObject({ keptItself: 'bulk' });
+
+      const server = new FakeImapServer();
+      server.add('INBOX', fakeMessage({ from: 'promo@fresh.test', messageId: '<u1@x>', bulk: true }));
+      server.add('INBOX', fakeMessage({ from: 'friend@fresh.test', messageId: '<u2@x>' }));
+      await createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC }).poll(sourceContext());
+      const { rows } = await pool.query(`select from_addr, bulk from email.messages where message_id in ('<u1@x>', '<u2@x>') order by from_addr`);
+      expect(rows.map((r: any) => [r.from_addr, r.bulk])).toEqual([['friend@fresh.test', false], ['promo@fresh.test', true]]);
+    });
+
+    it('still proposes a card for a sender that is not bulk', async () => {
+      const third = await threePromos('news@shop.test');
+      expect(third.learnedPolicy).toMatchObject({ proposed: true });
+      expect(third.learnedPolicy!.keptItself).toBeUndefined();
+      const open = await listOpenProposals(pool);
+      expect(open).toHaveLength(1);
+      expect(open[0]!.payload).toMatchObject({ kind: 'quiet-promo-sender' });
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+    });
+
+    it('never silences by itself a sender the owner has written to, even from another mailbox', async () => {
+      const { rows } = await pool.query(
+        `insert into email.accounts
+           (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+         values ('work@example.test', 'imap.example.test', 993, 'smtp.example.test', 465,
+                 'app-password', 'EMAIL_WORK_EXAMPLE_TEST_00000000', 'page')
+         returning id`,
+      );
+      const work = String(rows[0].id);
+      const { rows: mb } = await pool.query(`insert into email.folders (account_id, name) values ($1, 'INBOX') returning id`, [work]);
+      await writeTo('news@list.test', work, String(mb[0].id));
+      const third = await threePromos('news@list.test', { bulk: true });
+      // Written to from the work mailbox: here it is still only a card.
+      expect(third.learnedPolicy).toMatchObject({ proposed: true });
+      expect(await loadPolicies(pool, accountId)).toHaveLength(0);
+
+      // Written to from this mailbox: not even a card.
+      await writeTo('promo@list.test');
+      expect((await threePromos('promo@list.test', { bulk: true })).learnedPolicy).toBeUndefined();
+      expect(await listOpenProposals(pool)).toHaveLength(1);
+    });
+
+    it('keeps a kind itself after five owner keeps; a discard turns it off; its own keeps never count', async () => {
+      const ctx = toolContext();
+      // Bulk rules of the same kind kept themselves: none of them is the owner's say.
+      for (const sender of ['b1@list.test', 'b2@list.test', 'b3@list.test', 'b4@list.test', 'b5@list.test']) {
+        expect((await threePromos(sender, { bulk: true }, ctx)).learnedPolicy).toMatchObject({ keptItself: 'bulk' });
+      }
+      const ownerKeeps = async (senders: string[]): Promise<void> => {
+        for (const sender of senders) {
+          const third = await threePromos(sender, {}, ctx);
+          expect(third.learnedPolicy).toMatchObject({ proposed: true });
+          const kept = (await keepProposal(pool, { id: third.learnedPolicy!.proposal, now: NOW })) as CoreProposal;
+          expect(await applyLearnedPolicy(kept, { db: pool, now: NOW })).toMatchObject({ ok: true });
+        }
+      };
+      await ownerKeeps(['p1@shop.test', 'p2@shop.test', 'p3@shop.test', 'p4@shop.test']);
+      expect(await ctx.buddi!.proposals!.trackRecord('quiet-promo-sender')).toEqual({ kept: 4, discarded: 0, trusted: false });
+      await ownerKeeps(['p5@shop.test']);
+      expect(await ctx.buddi!.proposals!.trackRecord('quiet-promo-sender')).toMatchObject({ kept: 5, trusted: true });
+
+      // The sixth keeps itself, on the owner's record.
+      const sixth = await threePromos('p6@shop.test', {}, ctx);
+      expect(sixth.learnedPolicy).toMatchObject({ proposed: false, keptItself: 'track-record' });
+      // Another kind has no record of its own yet.
+      expect(await ctx.buddi!.proposals!.trackRecord('quiet-low-sender')).toMatchObject({ trusted: false });
+
+      // The owner undoes it from Learned: that is a discard, and the kind is off again.
+      const rule = (await loadPolicies(pool, accountId)).find((r) => r.matcher === 'p6@shop.test')!;
+      await createUndoLearnedTool({ connect: new FakeImapServer().factory(), env: ENV }).execute({ id: rule.id }, ctx);
+      expect(await ctx.buddi!.proposals!.trackRecord('quiet-promo-sender')).toMatchObject({ kept: 0, discarded: 1, trusted: false });
+      expect((await threePromos('p7@shop.test', {}, ctx)).learnedPolicy).toMatchObject({ proposed: true });
+    });
+
+    it('lists what kept itself under Learned, newest first, and Undo revokes it and remembers the no', async () => {
+      const ctx = toolContext();
+      await threePromos('first@list.test', { bulk: true }, ctx);
+      await pool.query(`update email.policies set kept_at = kept_at - interval '1 hour' where matcher = 'first@list.test'`);
+      await threePromos('second@list.test', { bulk: true }, ctx);
+      await threePromos('owner-card@shop.test', {}, ctx);
+
+      const learned = (await learnedRulesQuery().produce({}, ctx)) as { rules: Array<Record<string, any>> };
+      expect(learned.rules.map((r) => r.title)).toEqual(['Quieted second@list.test', 'Quieted first@list.test']);
+      expect(learned.rules[0]).toMatchObject({ state: null, undoable: true, canPutBack: false });
+      expect(learned.rules[0]!.line).toContain('mail sent to many, and you never wrote to them');
+
+      const id = learned.rules[0]!.id as string;
+      const undone = (await createUndoLearnedTool({ connect: new FakeImapServer().factory(), env: ENV }).execute({ id }, ctx)) as { note: string };
+      expect(undone.note).toMatch(/Stopped quieting second@list.test/);
+      expect((await loadPolicies(pool, accountId)).map((r) => r.matcher).sort()).toEqual(['first@list.test']);
+      const after = (await learnedRulesQuery().produce({}, ctx)) as { rules: Array<Record<string, any>> };
+      expect(after.rules[0]).toMatchObject({ title: 'Quieted second@list.test', state: 'undone', undoable: false });
+      const { rows } = await pool.query(`select state, decided_by from core.proposals where payload->'matcher'->>'sender' = 'second@list.test'`);
+      expect(rows).toEqual([{ state: 'discarded', decided_by: 'owner' }]);
+
+      // The no is remembered: a fourth promo from them learns nothing.
+      const fourth = await storeMessage({ from: 'second@list.test', at: '2026-09-05T09:00:00Z', bulk: true });
+      const again = (await triageRecord.execute({ messageId: fourth, category: 'promo', urgency: 'low', summary: 'ad' }, ctx)) as { learnedPolicy?: unknown };
+      expect(again.learnedPolicy).toBeUndefined();
+      expect((await loadPolicies(pool, accountId)).map((r) => r.matcher)).toEqual(['first@list.test']);
+    });
+
+    it('tells the owner once a day what kept itself, and nothing when nothing did', async () => {
+      const ctx = toolContext();
+      expect(await tellOwnerLearned(ctx.buddi!, NOW)).toBeNull();
+      expect(await notifications()).toHaveLength(0);
+
+      await threePromos('one@list.test', { bulk: true }, ctx);
+      await threePromos('two@list.test', { bulk: true }, ctx);
+      const sent = await notifications();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.title).toBe('buddi learned 2 rules: quieted 2 newsletters — review');
+      expect(sent[0]!.dedupe_key).toContain('learned:2026-09-21');
+      // A card the owner never sees is never announced.
+      expect(sent.some((n) => /Proposes a rule/.test(n.title))).toBe(false);
+    });
+
+    it('keeps the waiting pile of bulk cards on the first start, once', async () => {
+      const host = createPluginHost(hostBindingOf(manifest), { db: pool, now: () => NOW, timezone: 'UTC' });
+      const propose = async (sender: string, bulk: boolean): Promise<void> => {
+        const ids = [await storeMessage({ from: sender, bulk }), await storeMessage({ from: sender, bulk })];
+        await host.proposals!.proposePolicy(null, {
+          matcher: { sender, account: OWNER_ADDRESS, accountId },
+          action: 'ignore',
+          params: { category: 'promo', urgency: 'low' },
+          verdicts: ids.map((messageId) => ({ messageId, processingVersion: PROCESSING_VERSION })),
+          why: 'old card',
+          sources: [],
+        });
+      };
+      await propose('a@list.test', true);
+      await propose('b@list.test', true);
+      await propose('c@list.test', true);
+      await propose('person@shop.test', false);
+      await writeTo('d@list.test');
+      await propose('d@list.test', true);
+      expect(await listOpenProposals(pool)).toHaveLength(5);
+
+      await adoptProposedPolicies({ db: pool, now: NOW, buddi: host });
+      const open = await listOpenProposals(pool);
+      expect(open.map((p) => (p.payload.matcher as any).sender).sort()).toEqual(['d@list.test', 'person@shop.test']);
+      const rules = await loadPolicies(pool, accountId);
+      expect(rules.map((r) => [r.matcher, r.keptBy, r.autoReason]).sort()).toEqual([
+        ['a@list.test', 'auto', 'bulk'],
+        ['b@list.test', 'auto', 'bulk'],
+        ['c@list.test', 'auto', 'bulk'],
+      ]);
+      expect((await notifications()).map((n) => n.title)).toContain('buddi learned 3 rules: quieted 3 newsletters — review');
+
+      // Idempotent: a second start keeps nothing more and writes no second line.
+      await adoptProposedPolicies({ db: pool, now: NOW, buddi: host });
+      expect(await listOpenProposals(pool)).toHaveLength(2);
+      expect(await loadPolicies(pool, accountId)).toHaveLength(3);
+      expect((await notifications()).filter((n) => /buddi learned/.test(n.title))).toHaveLength(1);
     });
   });
 

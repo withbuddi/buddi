@@ -47,6 +47,7 @@ import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
 import { describeUndo, plural, recentActions, undoRefusal, verbOf } from '../mailbox/actions.js';
+import { learnedRules } from '../policies/auto.js';
 
 /** How many conversations the list shows before the owner narrows it. */
 export const THREAD_LIST_LIMIT = 30;
@@ -788,6 +789,53 @@ export function mailboxChangesQuery(): PageQuery {
   };
 }
 
+/** How many rules that kept themselves the Mail page lists. */
+export const LEARNED_SHOWN = 50;
+
+/** Why a rule kept itself, in the owner's words. */
+export function autoReasonLine(reason: string | null): string {
+  return reason === 'bulk'
+    ? 'mail sent to many, and you never wrote to them'
+    : 'you kept every rule like it so far';
+}
+
+/**
+ * The rules that kept themselves (docs/email.md §5), newest first, for the
+ * Mail page's Learned list: whom, why, when, and Undo while it still decides.
+ */
+export function learnedRulesQuery(): PageQuery {
+  return {
+    name: 'learned_rules',
+    params: noParams,
+    async produce(_params, ctx: ToolContext) {
+      const now = ctx.buddi!.clock.now();
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
+      const address = new Map(accounts.map((a) => [a.id, a.address]));
+      const rules = await learnedRules(ctx.buddi!.db, LEARNED_SHOWN);
+      return {
+        rules: rules.map((r) => {
+          const live = r.revokedAt === null;
+          const changes = r.arrivalChanges.length;
+          return {
+            id: r.id,
+            title: `Quieted ${r.matcher}`,
+            line: [
+              r.accountId ? address.get(r.accountId) ?? '' : 'every mailbox',
+              autoReasonLine(r.autoReason),
+              changes > 0 ? `changed your mailbox ${plural(changes, 'time')} on arrival` : '',
+            ].filter((part) => part !== '').join(' · '),
+            when: r.keptAt ? relative(r.keptAt, now) : '',
+            state: live ? null : 'undone',
+            undoable: live,
+            canPutBack: live && changes > 0,
+            undoLine: `Stop quieting ${r.matcher}? Their next message is triaged as usual, and buddi will not learn this rule again for 90 days.`,
+          };
+        }),
+      };
+    },
+  };
+}
+
 export function emailPageQueries(): PageQuery[] {
   return [
     triageOfferQuery(),
@@ -800,5 +848,6 @@ export function emailPageQueries(): PageQuery[] {
     ruleThreadsQuery(),
     watcherSettingsQuery(),
     mailboxChangesQuery(),
+    learnedRulesQuery(),
   ];
 }

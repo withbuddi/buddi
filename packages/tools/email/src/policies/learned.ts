@@ -12,7 +12,9 @@
  *    proposal became. A card that was never kept has none, and says so.
  *  - **adopt** — once, on start: the rows this plugin used to hold with
  *    `proposed = true` move to core as open cards, and the rows go. Kept rows
- *    are untouched. Idempotent: a moved row is no longer there to move.
+ *    are untouched. Idempotent: a moved row is no longer there to move. Then
+ *    the open cards that qualify as a bulk sender's quiet rule keep
+ *    themselves (`auto.ts`, `sweepOpenBulkCards`).
  *
  * The payload is the plugin's own terms, readable without knowing email:
  * `matcher` is `{ <scope>: <value>, account, accountId }` (the card hides the
@@ -31,6 +33,7 @@ import type {
 } from '@buddi/core/plugin';
 import { POLICY_ACTIONS, POLICY_SCOPES, type PolicyAction, type PolicyParams, type PolicyScope } from './gate.js';
 import { createPolicy, normalizeMatcher, refusalFor, PolicyRefusal } from './store.js';
+import { sweepOpenBulkCards, tellOwnerLearned } from './auto.js';
 
 /** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
 type Db = Pick<DbArea, 'query'>;
@@ -86,6 +89,8 @@ export async function learnedPolicyInput(
     verdicts: LearnedVerdict[];
     why: string;
     sources: UntrustedSource[];
+    /** The rule's kind (`learn.ts`, `LEARNED_KINDS`): the track record and the inbox's groups. */
+    kind?: string;
   },
 ): Promise<ProposePolicyInput> {
   const scope = input.scope ?? 'sender';
@@ -102,7 +107,25 @@ export async function learnedPolicyInput(
     verdicts: input.verdicts,
     why: input.why,
     sources: input.sources,
+    ...(input.kind ? { kind: input.kind, kindLabel: LEARNED_KIND_LABELS[input.kind] ?? input.kind } : {}),
   };
+}
+
+/**
+ * The kinds of rule this plugin learns, and how the owner reads each. The
+ * owner's track record is counted per kind (docs/learning.md §4), and Settings
+ * → Proposals groups open cards by it.
+ */
+export const LEARNED_KIND_LABELS: Record<string, string> = {
+  'quiet-promo-sender': 'Quiet a marketing sender',
+  'quiet-low-sender': 'Quiet a sender whose mail is always low',
+  'notify-sender': 'A line when a sender writes',
+};
+
+/** The kind of a learned rule, from its action and the verdicts behind it. */
+export function learnedKind(action: string, category: string | undefined): string {
+  if (action === 'ignore') return category === 'promo' ? 'quiet-promo-sender' : 'quiet-low-sender';
+  return 'notify-sender';
 }
 
 /** The rule a policy payload describes, or why it describes none. */
@@ -123,15 +146,30 @@ export function ruleOf(
   return { ok: true, scope, matcher: String(matcher[scope]), accountId, action, params, verdicts };
 }
 
-/** Keep: write the rule the gate reads. */
+/** Who kept a rule, and why when it kept itself. */
+export interface KeptHow {
+  keptBy: 'owner' | 'auto';
+  autoReason?: string | null;
+}
+
+/** Keep: write the rule the gate reads. The owner's keep, through core's apply. */
 export async function applyLearnedPolicy(proposal: Proposal, ctx: PolicyHandlerContext): Promise<PolicyApplyResult> {
+  return writeLearnedRule(ctx.db, proposal, ctx.now, { keptBy: 'owner' });
+}
+
+/**
+ * Write the kept rule a proposal describes, as the owner's keep or as one
+ * that kept itself (`auto.ts`). The one apply path for both: the same
+ * refusals, the same slot replaced.
+ */
+export async function writeLearnedRule(db: Db, proposal: Proposal, now: Date, how: KeptHow): Promise<PolicyApplyResult> {
   const rule = ruleOf(proposal.payload);
   if (!rule.ok) return rule;
   const refusal = refusalFor(rule);
   if (refusal) return { ok: false, note: refusal };
   try {
     const policy = await createPolicy(
-      ctx.db,
+      db,
       {
         accountId: rule.accountId,
         scope: rule.scope,
@@ -141,14 +179,20 @@ export async function applyLearnedPolicy(proposal: Proposal, ctx: PolicyHandlerC
         origin: 'learned',
         proposed: false,
         kept: true,
+        keptBy: how.keptBy,
+        proposalId: proposal.id,
+        autoReason: how.autoReason ?? null,
         createdFrom: rule.verdicts.map((v) => ({ messageId: v.messageId, processingVersion: v.processingVersion })),
       },
-      ctx.now,
+      now,
     );
     return {
       ok: true,
       ref: policy.id,
-      note: `Kept; email now ${policy.action === 'ignore' ? 'ignores' : `applies "${policy.action}" to`} mail from ${policy.matcher} with no model run. Revoke it under Settings → Email → Policies.`,
+      note:
+        how.keptBy === 'auto'
+          ? `Kept by itself; email now ignores mail from ${policy.matcher} with no model run. Undo it under Learned on the Mail page.`
+          : `Kept; email now ${policy.action === 'ignore' ? 'ignores' : `applies "${policy.action}" to`} mail from ${policy.matcher} with no model run. Revoke it under Settings → Email → Policies.`,
     };
   } catch (err) {
     if (err instanceof PolicyRefusal) return { ok: false, note: err.message };
@@ -197,7 +241,7 @@ export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<
   if (ctx.buddi === undefined || proposals === undefined) {
     throw new Error('email cannot move its proposed rules without its host (buddi.proposals).');
   }
-  return ctx.buddi.db.transaction(async (tx) => {
+  const moved = await ctx.buddi.db.transaction(async (tx) => {
     let moved = 0;
     const { rows } = await tx.query(
       `select id, account_id, scope, matcher, action, params, created_from
@@ -227,6 +271,16 @@ export async function adoptProposedPolicies(ctx: PolicyHandlerContext): Promise<
     }
     return moved;
   });
+  /*
+   * Then the open pile (docs/email.md §5, "What keeps itself"): every open
+   * card that now qualifies as a bulk sender's quiet rule is kept the way a
+   * new one would be, so the dozens waiting from before this build land in
+   * Learned. Idempotent: a kept card is no longer open.
+   */
+  const host = { db: ctx.buddi.db, owner: ctx.buddi.owner, proposals };
+  const swept = await sweepOpenBulkCards(host, ctx.now);
+  if (swept > 0) await tellOwnerLearned(host, ctx.now);
+  return moved;
 }
 
 /** What the email plugin registers with core for kind `policy`. */

@@ -9,16 +9,18 @@
  *    sender judged promo, promo, reply-needed, promo is a sender the owner may
  *    well hear from, and the run is counted from the newest verdict back, so
  *    one dissenting judgement resets it.
- *  - **Nothing applies itself.** A proposal is a card on the owner's
- *    Settings → Proposals inbox (`core.proposals`, docs/learning.md §2
- *    item 3), beside what the agents propose; this plugin writes no rule until
- *    the owner keeps it there, and then writes it through its own apply
- *    (`learned.ts`). The gate reads only kept rows. Promo is no exception. Since step 3 the
- *    Sent folder is synced, so "the owner never wrote back" is read off his own
- *    mail rather than inferred from drafts buddi sent — but a mailbox is synced
- *    from *now*, not from its beginning, and a sender answered before buddi
- *    arrived still looks unanswered. Silencing somebody on a history this
- *    installation has only part of stays the owner's tap to make.
+ *  - **A card, unless the rule only quiets a bulk sender.** A proposal is a
+ *    card on the owner's Settings → Proposals inbox (`core.proposals`,
+ *    docs/learning.md §2 item 3), beside what the agents propose; this plugin
+ *    writes no rule until the owner keeps it there, and then writes it through
+ *    its own apply (`learned.ts`). The gate reads only kept rows. The
+ *    exception is `auto.ts`: a rule that only quiets a sender the owner never
+ *    wrote to keeps itself when the sender's mail is bulk (List-Unsubscribe,
+ *    List-Id, Precedence, a no-reply address) or the owner has kept five of
+ *    its kind running. It is still recorded as a kept card, listed under
+ *    Learned on the Mail page with Undo, and the owner hears about it once a
+ *    day. Anyone else stays a card: a mailbox is synced from *now*, and a
+ *    person answered before buddi arrived still looks unanswered.
  *  - **The owner writing back vetoes silence.** Any proposal that would stop a
  *    run is refused for a sender the owner has actually sent mail to. A person
  *    who gets answers is not a newsletter, whatever the categories say.
@@ -29,11 +31,12 @@
  * The rule is a pure function; the query around it is the only database part.
  */
 import type { DbArea } from '@buddi/core/plugin';
-import type { ProposalsArea, Proposal as CoreProposal, ToolContext } from '@buddi/core/plugin';
+import type { Proposal as CoreProposal, ToolContext } from '@buddi/core/plugin';
 import { normalizeAddress } from '../mail.js';
 import { policyForSender } from './store.js';
 import type { PolicyAction } from './gate.js';
 import { learnedPolicyInput, mailSources } from './learned.js';
+import { isBulkSender, keepLearnedItself, mayKeepItself, ownerHasWrittenAnywhere, tellOwnerLearned, type AutoHost, type AutoReason } from './auto.js';
 
 /** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
 type Db = Pick<DbArea, 'query'>;
@@ -51,7 +54,9 @@ export interface Verdict {
 
 export interface Proposal {
   action: PolicyAction;
-  /** Always true today: nothing learned applies itself. See the module note. */
+  /** The rule's kind (`learned.ts`, `LEARNED_KIND_LABELS`). */
+  kind: 'quiet-promo-sender' | 'quiet-low-sender' | 'notify-sender';
+  /** True: the pure rule proposes. Whether it keeps itself is `auto.ts`'s, on facts read around it. */
   proposed: boolean;
   /** The verdicts it was learned from, newest first. */
   createdFrom: Array<{ messageId: string; processingVersion: number }>;
@@ -87,6 +92,7 @@ export function learnedProposal(
   if (sameCategory && category === 'promo' && !ownerHasReplied) {
     return {
       action: 'ignore',
+      kind: 'quiet-promo-sender',
       proposed: true,
       createdFrom,
       why: `The last ${CONSISTENT_VERDICTS} messages from this sender were all marketing, and nothing here says you ever wrote back.`,
@@ -96,6 +102,7 @@ export function learnedProposal(
   if (allLow && !ownerHasReplied) {
     return {
       action: 'ignore',
+      kind: 'quiet-low-sender',
       proposed: true,
       createdFrom,
       why: `The last ${CONSISTENT_VERDICTS} messages from this sender were all judged low — nothing is lost if you never read them.`,
@@ -105,6 +112,7 @@ export function learnedProposal(
   if (sameCategory && (category === 'reply-needed' || category === 'relationship')) {
     return {
       action: 'notify',
+      kind: 'notify-sender',
       proposed: true,
       createdFrom,
       why: `The last ${CONSISTENT_VERDICTS} messages from this sender were all ${category}; a line when they write may be enough.`,
@@ -270,18 +278,21 @@ export async function ownerReplies(
   };
 }
 
-/** What `learnFromVerdict` proposed: a new card on the owner's inbox. */
+/** What `learnFromVerdict` learned: a new card on the owner's inbox, or a rule that kept itself. */
 export interface LearnedPolicy {
   proposal: CoreProposal;
   action: PolicyAction;
   matcher: string;
+  /** Set when the rule kept itself rather than waiting on a card, and why. */
+  keptItself: AutoReason | null;
 }
 
 /**
- * Called after a verdict is recorded. Proposes at most one rule on the
- * owner's Proposals inbox and returns it, or null when nothing was learned —
- * which is the usual answer. The rule itself is written only when the owner
- * keeps the card (`learned.ts`, `applyLearnedPolicy`).
+ * Called after a verdict is recorded. Learns at most one rule and returns it,
+ * or null when nothing was learned — which is the usual answer. The rule is a
+ * card the owner keeps (`learned.ts`, `applyLearnedPolicy`), unless it only
+ * quiets a sender `auto.ts` allows it to keep itself for; then it is written
+ * at once, recorded as kept by `auto`, and the owner's daily line is updated.
  *
  * A sender that already has a live policy learns nothing: whatever is there is
  * the owner's decision, and overwriting it would be this plugin arguing with
@@ -294,12 +305,12 @@ export interface LearnedPolicy {
  * sender, never by body.
  */
 export async function learnFromVerdict(
-  db: Db,
-  proposals: ProposalsArea,
+  host: AutoHost,
   input: { from: string; accountId: string },
   now: Date,
   run: Pick<ToolContext, 'agentId' | 'conversationId' | 'toolUseId' | 'provenance'> | null = null,
 ): Promise<LearnedPolicy | null> {
+  const db = host.db;
   const address = normalizeAddress(input.from);
   // No account is no learning. A policy learned from "every mailbox" would be a
   // rule about mail it was never shown.
@@ -312,14 +323,15 @@ export async function learnFromVerdict(
   const proposal = learnedProposal(verdicts, replied);
   if (!proposal) return null;
 
+  const params =
+    proposal.action === 'ignore'
+      ? { category: verdicts[0]?.category ?? 'promo', urgency: 'low' as const }
+      : { note: proposal.why };
   const ask = await learnedPolicyInput(db, {
     accountId: input.accountId,
     sender: address,
     action: proposal.action,
-    params:
-      proposal.action === 'ignore'
-        ? { category: verdicts[0]?.category ?? 'promo', urgency: 'low' }
-        : { note: proposal.why },
+    params,
     verdicts: verdicts.slice(0, CONSISTENT_VERDICTS).map((v) => ({
       messageId: v.messageId,
       processingVersion: v.processingVersion,
@@ -328,8 +340,29 @@ export async function learnFromVerdict(
     })),
     why: proposal.why,
     sources: await mailSources(db, proposal.createdFrom.map((v) => v.messageId)),
+    kind: proposal.kind,
   });
-  const result = await proposals.proposePolicy(run, ask);
+
+  // Only a quiet rule is even asked about; the facts are read only then.
+  if (proposal.action === 'ignore') {
+    const reason = mayKeepItself({
+      scope: 'sender',
+      action: proposal.action,
+      params,
+      ownerHasWritten: replied || (await ownerHasWrittenAnywhere(db, address)),
+      bulk: await isBulkSender(db, input.accountId, address),
+      trusted: (await host.proposals.trackRecord(proposal.kind)).trusted,
+    });
+    if (reason) {
+      const kept = await keepLearnedItself(host, ask, reason, now, run);
+      if (kept) {
+        await tellOwnerLearned(host, now);
+        return { proposal: kept, action: proposal.action, matcher: address, keptItself: reason };
+      }
+    }
+  }
+
+  const result = await host.proposals.proposePolicy(run, ask);
   if (!result.ok) return null;
-  return { proposal: result.proposal, action: proposal.action, matcher: address };
+  return { proposal: result.proposal, action: proposal.action, matcher: address, keptItself: null };
 }

@@ -451,6 +451,53 @@ const mail: PageDescriptor = {
         },
       ],
     },
+    /*
+     * Rules that kept themselves (docs/email.md §5, "What keeps itself"):
+     * a sender quieted without a card, because its mail is sent to many or
+     * the owner has kept every rule like it. Newest first, Undo on each one
+     * that still decides. The owner's own button: `email.undo_learned` is
+     * never listed to a model.
+     */
+    {
+      kind: 'section',
+      title: 'Learned',
+      note: 'Senders buddi quieted by itself, without asking: newsletters you never wrote to, and rules like ones you always kept. Undo stops one.',
+      body: [
+        {
+          kind: 'list',
+          query: { query: 'learned_rules' },
+          rows: 'rules',
+          key: 'id',
+          item: {
+            title: { path: 'title' },
+            sub: { path: 'line' },
+            meta: [{ path: 'when' }],
+            pill: { value: { path: 'state' }, labels: { undone: 'Undone' }, tones: { undone: 'neutral' } },
+          },
+          actions: [
+            {
+              tool: 'email.undo_learned',
+              label: 'Undo',
+              busy: 'Undoing…',
+              when: { path: 'undoable', equals: true },
+              confirm: '{undoLine}',
+              done: { path: 'note' },
+              args: { id: { row: 'id' } },
+            },
+            {
+              tool: 'email.undo_learned',
+              label: 'Undo and put back',
+              busy: 'Putting it back…',
+              when: { path: 'canPutBack', equals: true },
+              confirm: '{undoLine} What it changed in your mailbox is put back too.',
+              done: { path: 'note' },
+              args: { id: { row: 'id' }, putBack: { const: true } },
+            },
+          ],
+          empty: 'Nothing learned by itself yet. When buddi quiets a newsletter without asking, it is listed here.',
+        },
+      ],
+    },
   ],
 };
 

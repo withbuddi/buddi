@@ -3,6 +3,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CONSISTENT_VERDICTS, learnedProposal, type Verdict } from './learn.js';
+import { learnedLine, mayKeepItself } from './auto.js';
+import { isBulkHeaders, isNoReplyAddress } from '../mail.js';
 
 function verdicts(...pairs: Array<[string, string]>): Verdict[] {
   return pairs.map(([category, urgency], i) => ({
@@ -64,5 +66,43 @@ describe('learnedProposal', () => {
   it('concludes nothing from three consistent verdicts that mean work', () => {
     const bills = verdicts(['bill', 'normal'], ['bill', 'urgent'], ['bill', 'normal']);
     expect(learnedProposal(bills, false)).toBeNull();
+  });
+});
+
+describe('what may keep itself', () => {
+  const base = { scope: 'sender', action: 'ignore', ownerHasWritten: false, bulk: true, trusted: false };
+
+  it('keeps only a quiet rule, for a sender the owner never wrote to, that is bulk or of a trusted kind', () => {
+    expect(mayKeepItself(base)).toBe('bulk');
+    expect(mayKeepItself({ ...base, bulk: false, trusted: true })).toBe('track-record');
+    expect(mayKeepItself({ ...base, bulk: false })).toBeNull();
+    expect(mayKeepItself({ ...base, ownerHasWritten: true, trusted: true })).toBeNull();
+  });
+
+  it('never keeps anything but quiet, and never a move or anything past mark-read and archive on arrival', () => {
+    for (const action of ['notify', 'draft', 'hand-to-agent', 'wake', 'archive', 'label']) {
+      expect(mayKeepItself({ ...base, action, trusted: true })).toBeNull();
+    }
+    expect(mayKeepItself({ ...base, params: { onArrival: { kind: 'move', folder: 'Trash' } } })).toBeNull();
+    expect(mayKeepItself({ ...base, params: { onArrival: { kind: 'archive' } } })).toBe('bulk');
+    expect(mayKeepItself({ ...base, params: { onArrival: { kind: 'mark-read' } } })).toBe('bulk');
+    expect(mayKeepItself({ ...base, scope: 'domain' })).toBeNull();
+  });
+
+  it('reads bulk off the headers and no-reply off the address', () => {
+    expect(isBulkHeaders({ 'list-unsubscribe': '<mailto:u@x.test>' })).toBe(true);
+    expect(isBulkHeaders({ precedence: 'Bulk' })).toBe(true);
+    expect(isBulkHeaders({ precedence: 'first-class' })).toBe(false);
+    expect(isBulkHeaders({})).toBe(false);
+    for (const a of ['noreply@x.test', 'No-Reply <no-reply@x.test>', 'donotreply@x.test', 'do-not-reply+12@x.test', 'noreply-billing@x.test']) {
+      expect(isNoReplyAddress(a)).toBe(true);
+    }
+    for (const a of ['news@x.test', 'replyall@x.test', 'nora@x.test']) expect(isNoReplyAddress(a)).toBe(false);
+  });
+
+  it('says what kept itself in one line, and nothing at zero', () => {
+    expect(learnedLine({ bulk: 0, trackRecord: 0 })).toBeNull();
+    expect(learnedLine({ bulk: 7, trackRecord: 0 })).toBe('buddi learned 7 rules: quieted 7 newsletters — review');
+    expect(learnedLine({ bulk: 1, trackRecord: 2 })).toBe('buddi learned 3 rules: quieted 1 newsletter and 2 senders — review');
   });
 });

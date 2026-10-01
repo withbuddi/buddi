@@ -16,9 +16,9 @@
  * What the gate never does:
  *
  *  - It never reads a *proposed* policy. Everything learned is a proposal on
- *    the settings page until the owner keeps it — promo included. Nothing
- *    learned applies itself while the Sent folder is unsynced (docs/email.md
- *    §3): "never replied" cannot be known from mail buddi has not read.
+ *    the settings page until it is kept — by the owner, or by itself for the
+ *    narrow class `auto.ts` allows (a quiet rule for a bulk sender the owner
+ *    never wrote to). A kept row is a kept row either way.
  *  - It never reads a revoked one. Revocation keeps the row as a record; it
  *    does not keep its effect.
  *  - It never trusts the message. A From header is forged as easily as it is
@@ -140,8 +140,14 @@ export interface PolicyRecord {
   createdFrom: Array<{ messageId: string; processingVersion: number }>;
   createdAt: string | null;
   revokedAt: string | null;
-  /** When the owner kept it from Settings → Proposals; null for any other rule. */
+  /** When it was kept from Settings → Proposals, or kept itself; null for any other rule. */
   keptAt?: string | null;
+  /** Who kept a learned rule: the owner, or the plugin itself under its own rule (`auto.ts`). */
+  keptBy?: 'owner' | 'auto' | null;
+  /** The `core.proposals` card it came from, when it came from one. */
+  proposalId?: string | null;
+  /** Why a rule kept itself: `bulk` or `track-record`. */
+  autoReason?: string | null;
 }
 
 /** Everything the gate is allowed to look at. Deliberately not the body. */

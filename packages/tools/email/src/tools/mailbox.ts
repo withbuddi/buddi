@@ -38,6 +38,7 @@ import {
   type WriterOptions,
 } from '../mailbox/actions.js';
 import { selectMessages } from '../mailbox/select.js';
+import { undoLearnedRule } from '../policies/auto.js';
 import type { GatedToolDefinition } from '../types.js';
 import { ACCOUNT_ARG, accountScope, UUID } from './shared.js';
 
@@ -408,6 +409,49 @@ export function createUndoChangeTool(opts: WriterOptions): ToolDefinition<{ id: 
       if (!change) throw new MailboxRefusal('That change is no longer on the list.');
       const outcome = await runUndo(ctx, opts, change, { origin: 'owner', actor: 'owner', criteria: null });
       return resultOf(outcome);
+    },
+  };
+}
+
+/**
+ * Undo on the Mail page's Learned list: stop a rule that kept itself, and
+ * with `putBack`, also put back what it changed in the mailbox on arrival
+ * (each change through the trail, as Recent changes' Undo would). The rule's
+ * card becomes the owner's discard, so its kind's track record starts over.
+ * The owner's own button, never listed to a model.
+ */
+export function createUndoLearnedTool(opts: WriterOptions): ToolDefinition<{ id: string; putBack?: boolean | string }, unknown> {
+  const input = z.object({ id: UUID, putBack: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional() });
+  return {
+    name: 'email.undo_learned',
+    description: 'Undo a rule that kept itself, from the Mail page.',
+    tier: 'auto',
+    ownerOnly: true,
+    input,
+    async execute(args, ctx) {
+      const buddi = ctx.buddi!;
+      if (!buddi.proposals) throw new MailboxRefusal('This buddi cannot reach its proposals.');
+      const now = buddi.clock.now();
+      const rule = await undoLearnedRule({ db: buddi.db, proposals: buddi.proposals }, args.id, now);
+      if (!rule) throw new MailboxRefusal('That rule is no longer on the list.');
+      let putBack = 0;
+      const problems: string[] = [];
+      if (args.putBack === true || args.putBack === 'true') {
+        for (const id of rule.arrivalChanges) {
+          const change = await findAction(buddi.db, id);
+          if (!change || undoRefusal(change) !== null) continue;
+          try {
+            const outcome = await runUndo(ctx, opts, change, { origin: 'owner', actor: 'owner', criteria: null });
+            putBack += outcome.changed;
+          } catch (err) {
+            problems.push(err instanceof Error ? err.message : String(err));
+          }
+        }
+      }
+      const parts = [`Stopped quieting ${rule.matcher}; their next message is triaged as usual, and the same rule is not learned again for 90 days.`];
+      if (putBack > 0) parts.push(`Put back ${plural(putBack, 'message')}.`);
+      if (problems.length > 0) parts.push(`Not everything was put back: ${problems[0]}`);
+      return { id: rule.id, revoked: true, putBack, note: parts.join(' ') };
     },
   };
 }

@@ -89,7 +89,8 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
      * the sender may now have three consecutive consistent ones — which is what
      * a policy is learned from. `learnFromVerdict` proposes at most one rule
      * and usually none; a proposal is a card on Settings → Proposals, and the
-     * rule is written only when the owner keeps it (docs/learning.md).
+     * rule is written only when the owner keeps it (docs/learning.md) — or,
+     * for a rule that only quiets a bulk sender, kept at once (`auto.ts`).
      *
      * It must never break the recording. A verdict is the thing the agent was
      * asked for; a proposal is a convenience on top of it, and a failure to
@@ -98,8 +99,7 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
     let learned: LearnedPolicy | null = null;
     try {
       learned = await learnFromVerdict(
-        ctx.buddi!.db,
-        ctx.buddi!.proposals!,
+        { db: ctx.buddi!.db, owner: ctx.buddi!.owner, proposals: ctx.buddi!.proposals! },
         { from: message.from, accountId: message.accountId },
         ctx.buddi!.clock.now(),
         ctx,
@@ -121,8 +121,14 @@ export const triageRecord: ToolDefinition<z.infer<typeof triageRecordInput>, unk
               proposal: learned.proposal.id,
               action: learned.action,
               matcher: learned.matcher,
-              proposed: true,
-              note: 'Proposed from this sender\'s last three verdicts. It decides nothing until the owner keeps it, under Settings → Proposals.',
+              proposed: learned.keptItself === null,
+              ...(learned.keptItself ? { keptItself: learned.keptItself } : {}),
+              note:
+                learned.keptItself === null
+                  ? 'Proposed from this sender\'s last three verdicts. It decides nothing until the owner keeps it, under Settings → Proposals.'
+                  : learned.keptItself === 'bulk'
+                    ? 'Kept by itself: this sender\'s mail is sent to many and the owner never wrote to them. It is listed under Learned on the Mail page, where the owner can undo it.'
+                    : 'Kept by itself: the owner has kept every rule like it so far. It is listed under Learned on the Mail page, where the owner can undo it.',
             },
           }
         : {}),

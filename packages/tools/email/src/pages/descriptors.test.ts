@@ -41,6 +41,7 @@ describe('the mail pages, as contributions', () => {
       'rule_threads',
       'watcher_settings',
       'mailbox_changes',
+      'learned_rules',
     ]);
   });
 

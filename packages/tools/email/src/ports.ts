@@ -54,6 +54,13 @@ export interface FetchedMessage {
    * From address far more readily than its list.
    */
   listId: string | null;
+  /**
+   * The message carried `List-Unsubscribe`, or `Precedence: bulk | list |
+   * junk`: mail sent to many. Stored as `messages.bulk`; the learning reads it
+   * when deciding whether a rule that only quiets a sender may keep itself
+   * (docs/email.md §5). Absent is false.
+   */
+  bulk?: boolean;
   from: Address;
   to: Address[];
   cc: Address[];

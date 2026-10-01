@@ -27,7 +27,7 @@ import type {
   MoveResult,
   AccountRecord,
 } from '../ports.js';
-import { normalizeMessageId, parseReferences } from '../mail.js';
+import { isBulkHeaders, normalizeMessageId, parseReferences } from '../mail.js';
 import { isPartId, safeFilename } from '../attachments/safety.js';
 
 /** Only what this adapter uses. Keeps the port independent of imapflow's d.ts. */
@@ -252,7 +252,7 @@ class ImapFlowClient implements ImapWriter {
         flags: true,
         bodyStructure: true,
         internalDate: true,
-        headers: ['message-id', 'in-reply-to', 'references', 'list-id'],
+        headers: ['message-id', 'in-reply-to', 'references', 'list-id', 'list-unsubscribe', 'precedence'],
       },
       { uid: true },
     )) {
@@ -289,6 +289,7 @@ class ImapFlowClient implements ImapWriter {
         ),
         references: parseReferences(headers['references']),
         listId: headers['list-id'] ?? null,
+        bulk: isBulkHeaders(headers),
         from: addressList(envelope.from)[0] ?? '(unknown)',
         to: addressList(envelope.to),
         cc: addressList(envelope.cc),

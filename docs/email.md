@@ -57,18 +57,22 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   wake}, parameters (label name, agent id, Telegram yes or no, and — on a
   thread or list-id rule — the sender it was created about),
   `origin` in {owner, learned, plugin}, `created_from` (the verdicts it
-  was learned from), `revoked_at`. **A policy with `origin: learned` is
-  proposed, not applied, until the owner keeps it. There is no
-  exception**, promo included. "And no reply" is read from the **Sent
-  folder**, not from drafts buddi itself sent, so a sender answered from a
-  phone or from the web client counts as answered — but a mailbox is synced
-  from the day buddi arrived, not from the day it was made, so the history is
-  only partly known and silencing somebody on it is not a decision buddi gets
-  to make on its own.
-  The Learned list on the settings page is where the owner applies them, one
-  tap each, and the same page revokes them. Verdicts, and the reply history,
-  are counted per account: three promos in the personal mailbox say nothing
-  about the work one.
+  was learned from), `revoked_at`, and for a learned rule that was kept
+  `kept_at`, `kept_by` (`owner` or `auto`), the card it came from
+  (`proposal_id`) and, when it kept itself, `auto_reason`. **A policy with
+  `origin: learned` is proposed, not applied, until it is kept.** The owner
+  keeps it on Settings → Proposals; the one exception is a rule that only
+  quiets a bulk sender the owner never wrote to, or one of a kind the owner
+  has kept five times running, which keeps itself and is listed under Learned
+  on the Mail page with Undo (§5, "What keeps itself"). "No reply" is read
+  from the **Sent folder**, not from drafts buddi itself sent, so a sender
+  answered from a phone or from the web client counts as answered — but a
+  mailbox is synced from the day buddi arrived, so silencing a *person* on
+  that history stays the owner's call. Verdicts, and the reply history, are
+  counted per account: three promos in the personal mailbox say nothing about
+  the work one.
+- `messages.bulk`: the message carried `List-Unsubscribe` or `Precedence:
+  bulk|list|junk`, read at ingest (`018_learned_auto.sql`).
 - `folders`: discovered per account, once, from the server's own LIST.
   Completion is recorded on the account (`accounts.folders_discovered_at`),
   not inferred from how many folder rows there are: a pass that lost the Sent
@@ -225,7 +229,8 @@ Before a new message wakes anyone, the source runs the gate:
    is carried out on the server — §11.
 3. No policy: the triage run happens, and its verdict becomes a candidate
    for a *proposed* policy after three consistent verdicts in that same
-   account. A proposal decides nothing until the owner keeps it.
+   account. A proposal decides nothing until the owner keeps it, unless it
+   is one of the few quiet rules that keep themselves (below).
 
 The gate is a pure function over the policy table and the message header,
 tested without a model. What it did is written to `events` and shown on
@@ -238,12 +243,8 @@ adding a second one.
 
 Three rules worth stating:
 
-- **Nothing learned applies itself.** Not even `ignore` after three promo
-  verdicts with no reply. "No reply" is read from the owner's own Sent folder
-  rather than from buddi's drafts, but it is synced from the day buddi
-  arrived, and a rule learned from a history that starts last month may not
-  silence a correspondent of ten years. It is proposed, and the Learned list
-  is one tap from applying it.
+- **Only quiet rules for bulk senders keep themselves.** Anything else
+  learned is a card on Settings → Proposals. See "What keeps itself" below.
 
 - **`archive` and `label` are refused as actions.** A rule that should
   archive (or mark read, or move) matching mail picks one of the other
@@ -256,6 +257,55 @@ Three rules worth stating:
   queues a run whose instruction is to send exactly that one line and
   nothing else. It saves the owner's attention, not a model call; only
   `ignore` saves the call.
+
+**What keeps itself.** The owner asked for it ("it's supposed to help me
+navigate, not create me more work"): dozens of cards, each one a newsletter,
+was buddi making work. So a learned rule skips the card and is kept at once
+(`policies/auto.ts`) when all of these hold:
+
+1. **It only quiets.** The action is `ignore`; an on-arrival action, if any,
+   is `archive` or `mark-read`. Never `move` or trash, never `notify`,
+   `draft`, `hand-to-agent` or `wake`. A rule that keeps itself writes no
+   on-arrival action today.
+2. **The owner never wrote to the sender, from any mailbox** — stricter than
+   the per-account veto on proposals.
+3. **And one of two reasons:**
+   - `bulk`: a message from the sender in that account carried
+     `List-Unsubscribe` or `Precedence: bulk|list|junk` (stored at ingest as
+     `messages.bulk`, migration `018_learned_auto.sql`) or a `List-Id`, or
+     the address is a no-reply one (`noreply@`, `do-not-reply@`, …).
+   - `track-record`: the owner has kept five rules of the same kind
+     (`quiet-promo-sender`, `quiet-low-sender`) and discarded none since.
+     Core counts it from the owner's own decisions only
+     (`proposals.trackRecord`, [learning.md](learning.md) §4), so a rule that
+     kept itself never counts, and one discard (or an Undo on Learned) turns
+     the kind off until five more keeps.
+
+These headers are the sender's own words. That is acceptable here because
+they only ever push towards silence for a sender the owner never wrote to and
+whose last three messages were already judged promo or low; a forged
+`List-Unsubscribe` makes a newsletter look like a newsletter.
+
+Such a rule is written through the same apply as a kept card
+(`writeLearnedRule`), with `kept_by = 'auto'`, the card id and the reason on
+the policy row, and the card is recorded in `core.proposals` as kept by
+`auto` — never announced, because nobody has to decide it. The **Mail page
+lists them under Learned**, newest first: "Quieted news@shop.test", the
+mailbox, why, when, and **Undo** (`email.undo_learned`, owner only). Undo
+revokes the rule and turns its card into the owner's discard, so the same
+rule is not learned again for 90 days; a rule that changed the mailbox on
+arrival also offers "Undo and put back", which reverts those changes through
+the undo trail (§11). Once a day at most, the owner gets one line at the
+`today` urgency, keyed per local day so a second rule updates the same line:
+"buddi learned 7 rules: quieted 7 newsletters — review", linking to the Mail
+page. Nothing is sent on a day nothing kept itself.
+
+**The waiting pile.** On every start, after moving old proposed rows into
+core, the plugin's `adopt` keeps every open email card that qualifies as
+`bulk` today, the same way (only the bulk reason; a sender with a live rule
+is left alone). It is idempotent: a kept card is no longer open. On
+Settings → Proposals, open rule cards of one kind (two or more) are one group
+with **Keep all (N)**: one owner action that keeps each as its own Keep would.
 
 **Writing one, from the page.** "Add a rule" is a drawer on Settings → Email
 that writes through `email.add_rule` — the owner's own path to the same table,

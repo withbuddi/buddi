@@ -114,6 +114,30 @@ export function normalizeListId(raw: string | null | undefined): string | null {
   return inner === '' ? null : inner;
 }
 
+/**
+ * Mail sent to many, by its own headers: `List-Unsubscribe` present, or
+ * `Precedence: bulk`, `list` or `junk`. Header names lowercased. These are the
+ * sender's own words, so they only ever count *towards* quieting a sender the
+ * owner never wrote to — a forged one can at worst make a newsletter look like
+ * a newsletter (docs/email.md §5).
+ */
+export function isBulkHeaders(headers: Record<string, string | undefined>): boolean {
+  if ((headers['list-unsubscribe'] ?? '').trim() !== '') return true;
+  const precedence = (headers['precedence'] ?? '').trim().toLowerCase();
+  return precedence === 'bulk' || precedence === 'list' || precedence === 'junk';
+}
+
+/**
+ * An address nobody reads replies at: `noreply@`, `no-reply@`,
+ * `donotreply@`, `do-not-reply@` (and `+tag` or `-suffix` forms of them).
+ * Mail from one is sent to many by construction.
+ */
+export function isNoReplyAddress(raw: string): boolean {
+  const address = normalizeAddress(raw);
+  const local = address.slice(0, Math.max(0, address.lastIndexOf('@')));
+  return /^(no[-_.]?reply|do[-_.]?not[-_.]?reply)([-+_.].*)?$/.test(local);
+}
+
 /** Every `<...>` in a References header, in order. */
 export function parseReferences(raw: string | null | undefined): string[] {
   if (!raw) return [];

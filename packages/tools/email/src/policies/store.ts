@@ -24,7 +24,7 @@ import {
 type Db = Pick<DbArea, 'query'>;
 
 export const POLICY_COLUMNS =
-  'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at, kept_at';
+  'id, account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, revoked_at, kept_at, kept_by, proposal_id, auto_reason';
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -45,6 +45,9 @@ export function toPolicy(row: Record<string, any>): PolicyRecord {
     createdAt: iso(row.created_at),
     revokedAt: iso(row.revoked_at),
     keptAt: iso(row.kept_at),
+    keptBy: row.kept_by === 'owner' || row.kept_by === 'auto' ? row.kept_by : null,
+    proposalId: row.proposal_id ? String(row.proposal_id) : null,
+    autoReason: row.auto_reason ?? null,
   };
 }
 
@@ -120,8 +123,14 @@ export interface CreatePolicyInput {
   origin: PolicyOrigin;
   proposed?: boolean;
   createdFrom?: Array<{ messageId: string; processingVersion: number }>;
-  /** The owner kept this from Settings → Proposals: it is stamped kept at `now`. */
+  /** Kept from Settings → Proposals (or kept itself): it is stamped kept at `now`. */
   kept?: boolean;
+  /** Who kept it, with `kept`: the owner (the default) or the plugin itself. */
+  keptBy?: 'owner' | 'auto';
+  /** The proposal card it came from. */
+  proposalId?: string | null;
+  /** Why it kept itself, when `keptBy` is `auto`. */
+  autoReason?: string | null;
 }
 
 /**
@@ -152,8 +161,9 @@ export async function createPolicy(
 
   const { rows } = await db.query(
     `insert into email.policies
-       (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, kept_at)
-     values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10)
+       (account_id, scope, matcher, action, params, origin, proposed, created_from, created_at, kept_at,
+        kept_by, proposal_id, auto_reason)
+     values ($1, $2, $3, $4, $5::jsonb, $6, $7, $8::jsonb, $9, $10, $11, $12::uuid, $13)
      returning ${POLICY_COLUMNS}`,
     [
       accountId,
@@ -166,6 +176,9 @@ export async function createPolicy(
       JSON.stringify(input.createdFrom ?? []),
       now,
       input.kept === true ? now : null,
+      input.kept === true ? (input.keptBy ?? 'owner') : null,
+      input.proposalId ?? null,
+      input.keptBy === 'auto' ? (input.autoReason ?? null) : null,
     ],
   );
   const row = rows[0];

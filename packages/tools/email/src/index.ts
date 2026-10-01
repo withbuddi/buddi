@@ -159,7 +159,9 @@ export function createEmailManifest(
     // one destination this plugin registers (`credentials.ts`).
     // And one way to reach the owner: mail from their own account to that
     // same address, never anywhere else (`channel.ts`).
-    uses: ['files', 'proposals', 'schedule', 'secrets', 'owner:channel'],
+    // And a line to the owner, at most once a day, when rules kept themselves
+    // (`policies/auto.ts`).
+    uses: ['files', 'proposals', 'schedule', 'secrets', 'owner:channel', 'owner:notify'],
     destinations: [accountDestination],
     register(host) {
       host.channels?.register(

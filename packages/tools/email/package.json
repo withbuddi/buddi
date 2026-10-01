@@ -17,9 +17,10 @@
       "proposals",
       "schedule",
       "secrets",
-      "owner:channel"
+      "owner:channel",
+      "owner:notify"
     ],
-    "hostApi": "^1.0"
+    "hostApi": "^1.14"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
