@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.28 — 2026-10-01
+
 ### Added
 
 - Reactions on Telegram count as feedback: 👍 (and ❤️ 🔥 👏 🎉 🙏) or 👎 (💩 🤮) on an agent's answer is recorded against that answer and the run behind it, shows under the same message on the dashboard, and taking it back clears it. The bot replies to nothing, except that a 👎 gets one "What was off?", and your Reply to it is kept as the note instead of starting a new turn. The weekly learning digest counts reactions per agent and quotes the 👎 notes.
