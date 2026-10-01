@@ -205,7 +205,16 @@ suite('the lock screen', () => {
     expect((await fresh.get('/api/lock')).body).toMatchObject({ locked: true, reason: 'start' });
     expect((await fresh.get('/api/overview')).status).toBe(423);
 
-    const mcp = await browser({ 'X-Buddi-Client': 'mcp' });
+    // The header alone is no credential: a cookie-less request naming itself
+    // `mcp` gets a browser's session, locked like any other.
+    const claimed = await browser({ 'X-Buddi-Client': 'mcp' });
+    expect((await claimed.get('/api/overview')).status).toBe(423);
+    expect((await claimed.get('/api/lock')).body).toMatchObject({ locked: true, reason: 'start' });
+
+    // `buddi mcp` signs in with a ticket from the installation token: its client is not covered.
+    const mcpTicket = await hostFetch(`${base()}/?t=${encodeURIComponent(mintTicket(TOKEN, clock))}`, { headers: { Connection: 'close', 'X-Buddi-Client': 'mcp' } });
+    expect(mcpTicket.status).toBe(302);
+    const mcp = jar(mcpTicket.headers.getSetCookie().map((c) => c.split(';')[0]!), { 'X-Buddi-Client': 'mcp' });
     expect((await mcp.get('/api/overview')).status).toBe(200);
     expect((await mcp.post('/api/lock')).status).toBe(409);
 

@@ -63,7 +63,8 @@ export type SessionVia = 'local' | 'ticket' | 'tailscale' | 'token';
 /**
  * Who holds the session: a person's browser, or one of buddi's own
  * command-line clients (`buddi mcp`, `buddi connections`), which say so with
- * the `x-buddi-client: mcp` header when the session is minted, or a program
+ * the `x-buddi-client: mcp` header on the ticket exchange that mints the
+ * session (the header alone, on the open binding, earns nothing), or a program
  * holding an API token (`api`). The lock screen covers browsers only (docs/dashboard.md, "Lock screen").
  */
 export type SessionClient = 'browser' | 'mcp' | 'api';

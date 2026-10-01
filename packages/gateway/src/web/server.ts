@@ -1017,9 +1017,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       // nothing to keep across a restart and no row per cookie-less poll.
       // While a PIN is set a browser's new session starts locked: clearing the
       // cookie or opening a private window is not a way past the lock screen.
-      const client = clientOf(req.headers['x-buddi-client']);
-      const locked = await lock.startLocked(client);
-      session = sessions.create(scope, now, { via: 'local', client }, { persist: false, ...(locked ? { locked } : {}) });
+      //
+      // Always a browser's session: `x-buddi-client` is a header anybody can
+      // send, so here it earns nothing. Only a ticket from the installation
+      // token (the exchange above) names a client the lock does not cover.
+      const locked = await lock.startLocked('browser');
+      session = sessions.create(scope, now, { via: 'local', client: 'browser' }, { persist: false, ...(locked ? { locked } : {}) });
       res.setHeader('Set-Cookie', sessionCookies(req, session));
     }
 

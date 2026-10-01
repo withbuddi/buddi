@@ -469,6 +469,27 @@ suite('buddi mcp', () => {
     expect(conversations.conversations.map((c) => c.id)).toContain(json.conversationId);
   });
 
+  it('on the open binding with a PIN set, signs in with its ticket and is not covered; a header alone is', async () => {
+    // The owner's browser, on the open binding: a session, then a write with its CSRF pair.
+    const browser = await fetch(`${base}/api/session`);
+    const cookie = browser.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+    const { csrf } = (await browser.json()) as { csrf: string };
+    const ownerWrite = async (method: string, path: string, body: unknown): Promise<number> =>
+      (await fetch(`${base}${path}`, { method, body: JSON.stringify(body), headers: { cookie, origin: base, 'x-buddi-csrf': csrf, 'content-type': 'application/json' } })).status;
+    const pinned = await ownerWrite('PUT', '/api/lock/pin', { pin: '2468' });
+    expect(pinned).toBe(200);
+    try {
+      const signed = new GatewayClient({ baseUrl: base, token: async () => TOKEN });
+      expect((await signed.get<{ locked: boolean }>('/api/lock')).locked).toBe(false);
+      await expect(signed.get('/api/overview')).resolves.toBeTruthy();
+      // No token: the open binding's session is a browser's, and a new one starts locked.
+      const bare = new GatewayClient({ baseUrl: base });
+      await expect(bare.get('/api/overview')).rejects.toMatchObject({ status: 423 });
+    } finally {
+      expect(await ownerWrite('POST', '/api/lock/pin/remove', { current: '2468' })).toBe(200);
+    }
+  });
+
   it('ask waits through an approval the turn hits, like any write', async () => {
     script.push(call('t1', 'demo.pay', { to: 'landlord' }), say('Paid the landlord.'));
     const progress: string[] = [];
@@ -542,12 +563,12 @@ suite('buddi mcp against a dashboard that requires sign-in (the packaged install
     let now = 0;
     const client = new GatewayClient({ baseUrl: base, token: async () => 'some-other-installations-token', transport, now: () => now });
     await expect(client.get('/api/overview')).rejects.toThrow(/not the one this command belongs to/);
-    expect(paths).toEqual(['/api/session', '/_buddi/ready?challenge=']);
+    expect(paths).toEqual(['/_buddi/ready?challenge=']);
     // Asked again straight away: answered from memory, nothing sent.
     await expect(client.get('/api/overview')).rejects.toThrow(/not the one this command belongs to/);
-    expect(paths).toHaveLength(2);
+    expect(paths).toHaveLength(1);
     now += 31_000;
     await expect(client.get('/api/overview')).rejects.toThrow(/not the one/);
-    expect(paths).toHaveLength(4);
+    expect(paths).toHaveLength(2);
   });
 });

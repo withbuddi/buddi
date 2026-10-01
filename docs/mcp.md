@@ -53,13 +53,15 @@ dashboard's own credential from the data directory, the way
 `buddi dashboard --token` does. There is no HTTP transport and there are no
 minted tokens.
 
-How it signs in, in order: a request with no credential (on the open loopback
-binding that is the whole sign-in, and elsewhere an empty 401 that counts as
-nothing); then `/_buddi/ready`, where the gateway proves it holds the same
+How it signs in, in order: `/_buddi/ready`, where the gateway proves it holds the same
 dashboard token — a port answered by another buddi (a dev checkout, an older
 install) fails the proof and is never shown a ticket, so it never counts a
 failed sign-in against this computer; then the five-minute ticket exchange the
-dashboard link uses. Sessions are stored, so a gateway restart keeps this one. A
+dashboard link uses — on the open loopback binding too, since only a session
+from a ticket is one the lock screen does not cover (a cookie-less request is a
+browser's, whatever `x-buddi-client` it sends). Only when the token cannot be
+read on the open binding does it take the open binding's session, which a PIN
+locks. Sessions are stored, so a gateway restart keeps this one. A
 failed sign-in is answered from memory for 30 seconds rather than asked again,
 and its sentence says what to do (most often: restart the MCP server after an
 upgrade, in Claude Code `/mcp`).
