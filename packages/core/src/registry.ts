@@ -106,7 +106,7 @@ export type InvokeResult<O = unknown> =
     }
   | {
       ok: false;
-      reason: 'unknown-tool' | 'invalid-args' | 'tier-not-executable' | 'tool-error' | 'session-not-authorized';
+      reason: 'unknown-tool' | 'invalid-args' | 'tier-not-executable' | 'tool-error' | 'session-not-authorized' | 'ask-only';
       message: string;
     };
 
@@ -913,6 +913,14 @@ export class ToolRegistry {
     name: string,
     rawArgs: unknown,
     caller: CoreToolContext,
+    /**
+     * `askOnly`: this caller may record an approval and nothing more — a call
+     * whose tier would run it here (`auto`, `session`) is refused unrun. An
+     * owner API token acting through a plugin page is such a caller: it acts
+     * as the owner, so an `auto` or `ownerOnly` tool would otherwise store a
+     * secret or a standing rule with no person at the dashboard.
+     */
+    opts: { askOnly?: boolean } = {},
   ): Promise<InvokeResult> {
     caller.signal?.throwIfAborted();
     const entry = this.#tools.get(name);
@@ -1034,6 +1042,10 @@ export class ToolRegistry {
     if ((declared === 'session' || tier === 'session') && !sessionAuthorized(name, ctx)) {
       return { ok: false, reason: 'session-not-authorized',
         message: 'This tool requires a current owner request and an explicit agent grant; ask the owner directly.' };
+    }
+
+    if (opts.askOnly === true && !GATED_TIERS.includes(tier)) {
+      return { ok: false, reason: 'ask-only', message: `${name} would run without an approval, and this caller may only ask.` };
     }
 
     if (GATED_TIERS.includes(tier)) {

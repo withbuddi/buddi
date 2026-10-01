@@ -605,8 +605,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
     query: 'the query’s own parameters', answer: '{ data }', errors: '400 the plugin’s sentence; 404 no such query',
   },
   {
-    method: 'POST', path: '/api/pages/:plugin/act', area: 'plugins', summary: "A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide.",
-    body: '{ tool: string, args?: object }', answer: '{ result } or { approvalId }', errors: '400; 404 not a tool of this page; 429',
+    method: 'POST', path: '/api/pages/:plugin/act', area: 'plugins', summary: "A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide. An API token may only ask: it gets the approval of a gated tool, and 403 for one that would run at once.",
+    body: '{ tool: string, args?: object }', answer: '{ result } or { approvalId }', errors: '400; 403 a token, and a tool that runs without an approval; 404 not a tool of this page; 429',
   },
   {
     method: 'GET', path: '/api/preview/:plugin/:name/link', area: 'plugins', summary: 'A one-use link into a plugin preview, on the preview origin.',
@@ -698,7 +698,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/onboarding/ollama', area: 'onboarding', summary: 'Is Ollama running on this computer.' },
   { method: 'GET', path: '/api/onboarding/mlxh', area: 'onboarding', summary: 'Is mlxh running on this computer.' },
   { method: 'GET', path: '/api/onboarding/take-on', area: 'onboarding', summary: "Chapter 3's progress, per plugin." },
-  { method: 'POST', path: '/api/onboarding/take-on', area: 'onboarding', summary: 'Record what buddi takes on and start those installs.', body: '{ tiles: string[] }', answer: '202', errors: '400' },
+  { method: 'POST', path: '/api/onboarding/take-on', area: 'onboarding', token: 'code', summary: 'Record what buddi takes on and start those installs.', body: '{ tiles: string[] }', answer: '202', errors: '400' },
   {
     method: 'POST', path: '/api/onboarding/restore', area: 'onboarding', token: 'access', summary: 'Restore instead of starting, while nothing is set up yet.',
     body: 'as /api/backups/restore, without confirm', errors: '409 already set up',

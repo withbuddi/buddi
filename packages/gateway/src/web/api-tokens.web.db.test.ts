@@ -188,6 +188,8 @@ suite('owner API tokens', () => {
       ['POST', '/api/agents/scout/file', { tools: ['*'] }],
       ['POST', '/api/connections/remembered', { agent: 'scout', tool: 'x', remember: true }],
       ['POST', '/api/plugins/stage', { spec: 'evil' }],
+      // First run's take-on installs plugins with the owner's approval recorded for them.
+      ['POST', '/api/onboarding/take-on', { tiles: ['days'] }],
       ['PUT', '/api/lock/pin', { pin: '1234' }],
       ['POST', '/api/api-tokens', { name: 'another' }],
       ['GET', '/api/api-tokens'],

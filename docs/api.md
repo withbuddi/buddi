@@ -2683,7 +2683,7 @@ curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "
 | GET | `/api/market/asset` | A listing’s screenshot, fetched through the gateway. | yes |
 | GET | `/api/pages` | The screens installed plugins contribute, as descriptors. | yes |
 | GET | `/api/pages/:plugin/:query` | One plugin page query, its parameters checked by the query's schema. | yes |
-| POST | `/api/pages/:plugin/act` | A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide. | yes |
+| POST | `/api/pages/:plugin/act` | A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide. An API token may only ask: it gets the approval of a gated tool, and 403 for one that would run at once. | yes |
 | GET | `/api/preview/:plugin/:name/link` | A one-use link into a plugin preview, on the preview origin. | yes |
 | GET | `/api/preview/:plugin/:name/check` | Is the preview served, and does it assume it owns a host. | yes |
 
@@ -2913,12 +2913,12 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/pages/<plugin>/<que
 
 #### `POST /api/pages/:plugin/act`
 
-A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide.
+A write from a plugin's page, as the owner: an auto tool runs; a gated one answers an approval to decide. An API token may only ask: it gets the approval of a gated tool, and 403 for one that would run at once.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ tool: string, args?: object }`
 - **Answer:** `{ result } or { approvalId }`
-- **Errors:** 400; 404 not a tool of this page; 429
+- **Errors:** 400; 403 a token, and a tool that runs without an approval; 404 not a tool of this page; 429
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -3663,7 +3663,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 | GET | `/api/onboarding/ollama` | Is Ollama running on this computer. | yes |
 | GET | `/api/onboarding/mlxh` | Is mlxh running on this computer. | yes |
 | GET | `/api/onboarding/take-on` | Chapter 3's progress, per plugin. | yes |
-| POST | `/api/onboarding/take-on` | Record what buddi takes on and start those installs. | yes |
+| POST | `/api/onboarding/take-on` | Record what buddi takes on and start those installs. | no |
 | POST | `/api/onboarding/restore` | Restore instead of starting, while nothing is set up yet. | no |
 
 #### `GET /api/onboarding`
@@ -3812,14 +3812,14 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/onboarding/take-on"
 
 Record what buddi takes on and start those installs.
 
-- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It installs or runs code buddi has not run before.
 - **Body:** `{ tiles: string[] }`
 - **Answer:** `202`
 - **Errors:** 400
 - **Since:** 0.1.0-pre.25
 
 ```sh
-curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"tiles":[]}' "$BUDDI_URL/api/onboarding/take-on"
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"tiles":[]}' "$BUDDI_URL/api/onboarding/take-on"
 ```
 
 #### `POST /api/onboarding/restore`

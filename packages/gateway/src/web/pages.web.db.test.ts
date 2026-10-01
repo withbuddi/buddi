@@ -34,6 +34,7 @@ import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PAGE_ACT_RATE } from './pages.js';
+import { createApiToken } from './api-tokens.js';
 import { startWebServer, type WebServer } from './server.js';
 import { csrfCookieName, portOf } from './http.js';
 
@@ -402,6 +403,31 @@ suite('the plugin page routes', () => {
     );
     expect(action.rows[0]).toEqual({ tool: 'demo.send', agent_id: 'owner' });
     // Nothing ran: a gated tool waits for the owner's decision, from here too.
+    expect(demoWrites).toEqual([]);
+  });
+
+  it('lets an API token only ask: a gated tool becomes an approval, an auto or ownerOnly one is refused unrun', async () => {
+    await pool.query('delete from core.api_tokens');
+    const { token } = await createApiToken(pool, { name: 'script', via: 'cli' });
+    const act = (tool: string, args: unknown): Promise<Response> =>
+      fetch(`${closedBase}/api/pages/demo/act`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ tool, args }),
+      });
+    for (const [tool, args] of [
+      ['demo.keep', { id: 'a1' }],
+      ['demo.add_account', { address: 'owner@example.com', password: 'hunter2' }],
+      ['demo.add_rule', { account: 'a', thing: 'b' }],
+    ] as const) {
+      const res = await act(tool, args);
+      expect(res.status, tool).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toMatch(/API token/);
+    }
+    expect(demoWrites).toEqual([]);
+    const asked = await act('demo.send', { id: 'd2' });
+    expect(asked.status).toBe(200);
+    expect(((await asked.json()) as { approvalId?: string }).approvalId).toEqual(expect.any(String));
     expect(demoWrites).toEqual([]);
   });
 

@@ -357,7 +357,7 @@ export async function actOnPage(
   deps: PagesDeps,
   plugin: string,
   body: unknown,
-  session: { id: string },
+  session: { id: string; via?: string },
 ): Promise<PagesReply> {
   /*
    * Counted before anything is looked up, let alone invoked: a page that has
@@ -387,12 +387,23 @@ export async function actOnPage(
     return { status: 404, body: { error: `${plugin} has no page that writes through ${tool}.` } };
   }
 
+  /*
+   * An owner API token may only ask (docs/api.md, "Authentication"): a gated
+   * tool records its approval card as from the dashboard, but a call that
+   * would run at once — an `auto` tool, an `ownerOnly` one storing a password
+   * or a standing rule — is the owner acting with nobody at the dashboard,
+   * and is refused before anything runs.
+   */
+  const askOnly = session.via === 'token';
   const result = await deps.registry.invoke(tool, args ?? {}, {
     ...deps.ctx,
     agentId: OWNER_AGENT_ID,
     now: deps.now,
-  });
+  }, { askOnly });
   if (result.ok) return { status: 200, body: { result: result.output } };
+  if (result.reason === 'ask-only') {
+    return { status: 403, body: { error: `An API token cannot run ${tool}: it runs without an approval. Only a write that asks the owner is open to a token. Do it on the dashboard.` } };
+  }
   if (result.reason === 'approval-required') {
     return { status: 200, body: { approvalId: result.actionId, preview: result.preview } };
   }
