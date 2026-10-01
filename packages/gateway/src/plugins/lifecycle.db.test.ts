@@ -27,7 +27,9 @@ import path from 'node:path';
 import {
   createPool,
   listMissions,
+  listPendingPluginData,
   migrate,
+  recordPendingPluginData,
   runMigrations,
   readPluginsFile,
   upsertMission,
@@ -41,7 +43,7 @@ import { REPO_ROOT } from '../agents/catalog.js';
 import { applyInstall, entryPointOf, InstallRefusal, planInstall } from './install.js';
 import { adoptPlugins, loadInstalledPlugins, loadManifest, loadPluginsOnce, pluginLoadReport, resetAdoptedPlugins } from './load.js';
 import { setPluginEnabled, toggleNotes } from './toggle.js';
-import { migrateInstalled } from './migrate.js';
+import { migrateAtStart, migrateInstalled } from './migrate.js';
 import { createToolRegistry, installedManifests, loadGatewayCatalog } from '../agents/catalog.js';
 import { applyUninstall, declaredTools, namesPlugin, planUninstall, UninstallRefusal } from './uninstall.js';
 
@@ -65,6 +67,7 @@ beforeAll(() => {
 async function wipeFixtureSchema(): Promise<void> {
   await pool.query(`drop schema if exists ${SCHEMA} cascade`);
   await pool.query('delete from core.migrations where schema = $1', [SCHEMA]);
+  await pool.query('delete from core.pending_plugin_data where schema = $1', [SCHEMA]).catch(() => {});
 }
 
 afterAll(async () => {
@@ -190,6 +193,40 @@ suite('installing a plugin from a directory', () => {
       [SCHEMA],
     );
     expect(rows.map((r: { table_name: string }) => r.table_name)).toEqual(['thing']);
+  });
+
+  it('loads data a restore kept for it at the next start, then forgets it', async () => {
+    await install();
+    // What a restore leaves for a plugin that was not installed yet.
+    const staged = path.join(root, 'restore', 'pending', SCHEMA);
+    mkdirSync(path.join(staged, 'db'), { recursive: true });
+    writeFileSync(
+      path.join(staged, 'db', 'tables.json'),
+      JSON.stringify([{ schema: SCHEMA, table: 'thing', columns: ['id', 'label'], rows: 1 }]),
+    );
+    writeFileSync(path.join(staged, 'db', 'sequences.json'), '[]');
+    writeFileSync(path.join(staged, 'db', `${SCHEMA}.thing.copy`), '1\tfrom the backup\n');
+    await recordPendingPluginData(pool, {
+      schema: SCHEMA,
+      archive: 'buddi-backup-20260930-033000.tar.gz',
+      stagedPath: staged,
+      tables: [{ table: `${SCHEMA}.thing`, rows: 1, kept: null }],
+      rows: 1,
+      migrations: ['001_test.sql'],
+    });
+
+    const lines: string[] = [];
+    await migrateAtStart(pool, env, { log: (line) => lines.push(line) });
+    const { rows } = await pool.query(`select label from ${SCHEMA}.thing`);
+    expect(rows).toEqual([{ label: 'from the backup' }]);
+    expect(lines.some((l) => l.includes(`loaded ${SCHEMA} data`))).toBe(true);
+    expect(existsSync(staged)).toBe(false);
+    expect((await listPendingPluginData(pool)).some((p) => p.schema === SCHEMA)).toBe(false);
+
+    // Another start: nothing to do, nothing loaded twice.
+    await migrateAtStart(pool, env, { log: () => {} });
+    const again = await pool.query(`select count(*)::int as n from ${SCHEMA}.thing`);
+    expect(again.rows[0]?.n).toBe(1);
   });
 
   it('refuses a plugin claiming a schema that is already somebody\'s', async () => {

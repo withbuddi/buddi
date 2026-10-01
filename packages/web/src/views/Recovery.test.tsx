@@ -92,6 +92,28 @@ describe('the checklist', () => {
     expect(screen.getByRole('link', { name: 'Install ledger again' })).toHaveAttribute('href', '#/settings/plugins?tab=browse');
   });
 
+  it('says a missing plugin\'s data is kept and loads when it is installed, and names a table left staged', () => {
+    render(
+      <RecoveryChecklist
+        view={view({
+          plugins: [
+            {
+              name: 'finance', version: '0.2.0', source: 'npm @withbuddi/plugin-finance@0.2.0', installed: false,
+              install: '@withbuddi/plugin-finance@0.2.0',
+              waiting: { rows: 1544, note: '1,544 rows waiting, loaded when you install it' },
+            },
+            { name: 'weather', version: '0.1.0', source: 'npm', installed: true },
+          ],
+          keptTables: [{ schema: 'developer', table: 'developer.workspaces', rows: 3, sentence: 'developer.workspaces already had rows here.' }],
+        })}
+      />,
+    );
+    expect(screen.getByText('finance — 1,544 rows waiting, loaded when you install it')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Install finance again' })).toBeInTheDocument();
+    expect(screen.queryByText('weather')).not.toBeInTheDocument();
+    expect(screen.getByText('developer.workspaces already had rows here.')).toBeInTheDocument();
+  });
+
   it('asks nothing when the backup left nothing behind', async () => {
     render(
       <RecoveryChecklist

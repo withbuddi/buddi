@@ -116,12 +116,14 @@ export function RecoveryChecklist({
   onLeft?: () => void;
 }): JSX.Element {
   const { secrets, plugins, pending, grants } = view.checklist;
+  const keptTables = view.checklist.keptTables ?? [];
   const [dropPending, setDropPending] = useState(true);
   const [keep, setKeep] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [left, setLeft] = useState(false);
-  const missingPlugins = plugins.filter((plugin) => !plugin.installed);
+  // An installed plugin still shows while the data kept for it has not loaded.
+  const missingPlugins = plugins.filter((plugin) => !plugin.installed || plugin.waiting !== undefined);
   const pendingTotal = pending.jobs + pending.missions + pending.approvals + pending.telegramChats;
 
   const toggle = (id: string): void => {
@@ -179,7 +181,7 @@ export function RecoveryChecklist({
         </Section>
 
         <Section title="Add-ons to install again">
-          {missingPlugins.length === 0 ? (
+          {missingPlugins.length === 0 && keptTables.length === 0 ? (
             <Empty>Everything the backup named is installed.</Empty>
           ) : (
             <List>
@@ -187,12 +189,21 @@ export function RecoveryChecklist({
                 <ListRow
                   key={plugin.name}
                   title={<><span className="mono">{plugin.name}</span> {plugin.version}</>}
-                  sub={plugin.source}
+                  sub={plugin.waiting ? `${plugin.name} — ${plugin.waiting.note}` : plugin.source}
                   side={
-                    <ButtonLink size="sm" href={pluginFixRoute(plugin)} aria-label={`Install ${plugin.name} again`}>
-                      {plugin.install ? 'Install' : 'Find it'}
-                    </ButtonLink>
+                    plugin.installed ? undefined : (
+                      <ButtonLink size="sm" href={pluginFixRoute(plugin)} aria-label={`Install ${plugin.name} again`}>
+                        {plugin.install ? 'Install' : 'Find it'}
+                      </ButtonLink>
+                    )
                   }
+                />
+              ))}
+              {keptTables.map((kept) => (
+                <ListRow
+                  key={`kept:${kept.table}`}
+                  title={<span className="mono">{kept.table}</span>}
+                  sub={kept.sentence}
                 />
               ))}
             </List>

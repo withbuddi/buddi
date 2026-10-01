@@ -5,6 +5,7 @@ import {
   checkDatabaseExposure,
   checkEmail,
   checkNodeVersion,
+  checkPendingPluginData,
   checkPlugins,
   checkRecovery,
   checkTailscale,
@@ -664,6 +665,26 @@ describe('the recovery row', () => {
 
   it('says so plainly when the database could not be asked', () => {
     expect(checkRecovery({ active: false, unknown: true }).status).toBe('warn');
+  });
+});
+
+describe('the kept plugin data row', () => {
+  it('is not printed when nothing waits', async () => {
+    expect(checkPendingPluginData([])).toBeNull();
+    const checks = await collectChecks(fakeProbes({ pendingPluginData: async () => null }));
+    expect(checks.some((c) => c.name === 'kept plugin data')).toBe(false);
+  });
+
+  it('lists what waits in one row', async () => {
+    const result = checkPendingPluginData([
+      { schema: 'finance', rows: 1544, reason: null },
+      { schema: 'developer', rows: 3, reason: '1 table(s) already had rows and were left staged' },
+    ]);
+    expect(result?.status).toBe('warn');
+    expect(result?.detail).toContain('finance (1544 row(s))');
+    expect(result?.detail).toContain('developer (3 row(s): 1 table(s) already had rows');
+    const checks = await collectChecks(fakeProbes({ pendingPluginData: async () => result }));
+    expect(checks.filter((c) => c.name === 'kept plugin data')).toHaveLength(1);
   });
 });
 

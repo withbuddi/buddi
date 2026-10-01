@@ -601,6 +601,29 @@ What it does, in this order:
 - **Not the plugins.** `plugins.json` is *recorded*, not acted on — installing a
   plugin runs migrations and fetches packages. It is written to
   `<data>/restored-plugins.json`, and the recovery checklist reads it.
+- **The data of a plugin that is not installed yet is kept, not dropped.** Restore
+  first and install the plugins after is the normal order on a new machine, and
+  a plugin's schema comes from its own migrations, so it cannot be rebuilt before
+  the plugin is there. That schema's part of the archive — its `db/<schema>.<table>.copy`
+  files and its slices of `tables.json`, `sequences.json` and `migrations.json` —
+  is copied to `<data>/restore/pending/<schema>/` and recorded in
+  `core.pending_plugin_data` (schema, archive, staged path, tables and row
+  counts). When the plugin is installed and its migrations have run — or at the
+  next start, for a plugin already there — the rows are loaded: only into tables
+  that exist and are empty, with foreign keys held off and added back (which
+  re-checks every row), sequences moved forward to the archive's, in one
+  transaction per schema; then the staged files and the record are deleted. It
+  loads only once the plugin's migrations reach the level the archive was taken
+  at; an older plugin version leaves it waiting, with the reason. A table that
+  already has rows is never overwritten: it stays staged, the log says so once,
+  and the recovery checklist shows it as its own item so you can decide (empty
+  the table and restart to load it, or delete its staged directory to drop it).
+  `buddi doctor` shows a *kept plugin data* row while anything waits. **The staged
+  files are plaintext table data, even when the archive was encrypted**: they
+  are written owner-only (directories `0700`, files `0600`) inside the data dir,
+  which already holds the database itself on a packaged install. A backup taken
+  while data is waiting does not carry the staged files, only the record; a
+  restore of it elsewhere says so and forgets the record.
 - **Not `.env`.** The archive's `env.txt` is left in the archive; your `.env` is
   never written over. Compare them by hand.
 - **Not the vault.** See step 4.

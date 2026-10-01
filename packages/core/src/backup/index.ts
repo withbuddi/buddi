@@ -27,6 +27,7 @@ export * from './archive.js';
 export * from './prune.js';
 export * from './dump.js';
 export * from './load.js';
+export * from './pending.js';
 export * from './create.js';
 export * from './verify.js';
 export * from './restore.js';

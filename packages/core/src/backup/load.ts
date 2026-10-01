@@ -22,7 +22,8 @@
  * A plugin whose package is not installed here cannot have its schema rebuilt.
  * That is reported as "not loaded", never thrown: an owner restoring on a new
  * machine should get their core installation back even if one plugin is still
- * to be reinstalled.
+ * to be reinstalled. `restoreBackup` then keeps that schema's data for later
+ * (`pending.ts`), and it loads when the plugin is installed.
  */
 import { createReadStream, existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
@@ -458,7 +459,7 @@ export async function loadDatabase(
  * exactly. Only keys *on* the loaded tables: keys on other tables that point
  * into them are left alone, and a truncate cascade already emptied those.
  */
-async function foreignKeysOf(
+export async function foreignKeysOf(
   client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> },
   tables: ReadonlyArray<{ schema: string; table: string }>,
 ): Promise<Array<{ table: string; name: string; definition: string }>> {

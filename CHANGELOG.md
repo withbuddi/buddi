@@ -12,6 +12,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Restoring a backup before reinstalling its plugins (the normal order on a new machine) skipped those plugins' data, and installing them afterwards gave empty tables. The restore now keeps each missing plugin's data under the data dir and loads it when the plugin is installed (or at the next start), into empty tables only; the recovery checklist says "finance — 1,544 rows waiting, loaded when you install it", a table that already had rows stays aside and is listed on its own, and `buddi doctor` shows what is still waiting.
 - An upgrade could leave Postgres unable to start ("Library not loaded: …libicuuc.77.dylib"), because npm did not run the Postgres package's script that makes its library links and buddi's own copy pointed back into npm's folder. buddi now makes the missing links itself before every Postgres start and keeps its copy self-contained, and an upgrade first checks that the new version's Postgres starts; if it does not, buddi puts the previous version back, keeps running, and the upgrade result says why.
 - A message an agent sent you repeated its "@handle:" at the start of the title on the dashboard, right under the agent's name. Home's Needs you, Settings → Notifications and the toasts now leave the signature off; Telegram keeps it.
 

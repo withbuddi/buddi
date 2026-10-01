@@ -33,6 +33,8 @@ interface PoolState {
   accounts: Array<{ id: string; kind: string; secret_ref: string | null; legacy_env: string | null; auth: string; label: string }>;
   /** Owner secrets by name → id, as `core.secrets` holds them. */
   secrets?: Record<string, string>;
+  /** Rows of `core.pending_plugin_data`. */
+  pendingData?: Array<Record<string, unknown>>;
 }
 
 /** Enough of a pool for the recovery row, the grants and the two counts. */
@@ -80,6 +82,7 @@ function fakePool(state: PoolState) {
         return { rows: id ? [{ id, name: params[0], totp: false }] : [] };
       }
       if (/from core\.surface_identities/.test(sql)) return { rows: [{ n: String(state.telegram) }] };
+      if (/from core\.pending_plugin_data/.test(sql)) return { rows: state.pendingData ?? [] };
       return { rows: [] };
     }),
   };
@@ -370,5 +373,40 @@ it('a plugin from npm carries what Settings → Plugins needs to stage it again'
   expect(view.checklist.plugins).toEqual([{
     name: 'weather', version: '0.1.0', source: 'npm @withbuddi/plugin-weather@0.1.0', installed: false,
     install: '@withbuddi/plugin-weather@0.1.0',
+  }]);
+});
+
+it('a missing plugin says its kept data loads when it is installed; a table left staged is its own item', async () => {
+  const data = await mkdtemp(path.join(tmpdir(), 'buddi-recovery-data-'));
+  await writeFile(path.join(data, 'restored-plugins.json'), JSON.stringify({
+    version: 1,
+    plugins: [{
+      name: 'finance', version: '0.2.0', entry: 'index.js', installedAt: RESTORED_AT.toISOString(), schema: 'finance',
+      source: { kind: 'registry', name: '@withbuddi/plugin-finance', version: '0.2.0' },
+    }],
+  }));
+  const pool = fakePool(state({
+    pendingData: [
+      {
+        schema: 'finance', archive: 'buddi-backup-20260930.tar.gz', staged_path: '/data/restore/pending/finance',
+        tables: [{ table: 'finance.accounts', rows: 14, kept: null }, { table: 'finance.transactions', rows: 1530, kept: null }],
+        rows: '1544', migrations: ['001_init.sql'], reason: null, created_at: RESTORED_AT,
+      },
+      {
+        schema: 'developer', archive: 'buddi-backup-20260930.tar.gz', staged_path: '/data/restore/pending/developer',
+        tables: [{ table: 'developer.workspaces', rows: 3, kept: 'developer.workspaces already has 1 row(s)' }],
+        rows: '3', migrations: ['001_init.sql'], reason: '1 table(s) already had rows and were left staged', created_at: RESTORED_AT,
+      },
+    ],
+  }));
+  const view = await readRecoveryView({ pool: pool as never, env: { BUDDI_DATA_DIR: data }, vault: createMemoryVault() }, 'owner');
+  expect(view.checklist.plugins).toEqual([{
+    name: 'finance', version: '0.2.0', source: 'npm @withbuddi/plugin-finance@0.2.0', installed: false,
+    install: '@withbuddi/plugin-finance@0.2.0',
+    waiting: { rows: 1544, note: '1,544 rows waiting, loaded when you install it' },
+  }]);
+  expect(view.checklist.keptTables).toEqual([{
+    schema: 'developer', table: 'developer.workspaces', rows: 3,
+    sentence: "developer.workspaces already had rows here, so the backup's 3 were kept aside at /data/restore/pending/developer instead of loaded over them.",
   }]);
 });

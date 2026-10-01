@@ -31,11 +31,13 @@ import {
   describeSource,
   envValue,
   leaveRecovery,
+  listPendingPluginData,
   listToolPermissions,
   pluginsFilePath,
   readPluginsFile,
   readRecovery,
   revokeToolPermission,
+  type PendingPluginData,
   type ToolPermission,
   type Vault,
 } from '@buddi/core';
@@ -62,6 +64,21 @@ export interface RecoveryPlugin {
   installed: boolean;
   /** `<npm name>@<version>` when it came from a registry: what Settings → Plugins can stage again. */
   install?: string;
+  /**
+   * Data the restore kept for this plugin, loaded when it is installed. `note`
+   * is the sentence the page shows: "1,544 rows waiting, loaded when you
+   * install it", or why an installed plugin's data is still waiting.
+   */
+  waiting?: { rows: number; note: string };
+}
+
+/** A table whose kept data was not loaded because the table already had rows. */
+export interface RecoveryKeptTable {
+  schema: string;
+  table: string;
+  rows: number;
+  /** In plain words, for the page. */
+  sentence: string;
 }
 
 export interface RecoveryGrant {
@@ -79,6 +96,8 @@ export interface RecoveryView {
   checklist: {
     secrets: RecoverySecret[];
     plugins: RecoveryPlugin[];
+    /** Kept tables left staged because the installed table already had rows. */
+    keptTables: RecoveryKeptTable[];
     pending: { jobs: number; missions: number; approvals: number; telegramChats: number };
     grants: RecoveryGrant[];
   };
@@ -264,24 +283,79 @@ async function missingSecrets(deps: RecoveryDeps): Promise<RecoverySecret[]> {
  * older engine there is no such file, and the record beside the agents is the
  * closest thing to what came back.
  */
-function pluginsFromArchive(env: NodeJS.ProcessEnv): RecoveryPlugin[] {
+function pluginsFromArchive(env: NodeJS.ProcessEnv, pending: readonly PendingPluginData[] = []): RecoveryPlugin[] {
   const search = agentSearchPath(env);
   const installed = new Set(installedManifests(env).map((m) => m.name));
   const data = env.BUDDI_DATA_DIR?.trim();
   const restored = data ? path.join(data, 'restored-plugins.json') : undefined;
   const from = restored && existsSync(restored) ? restored : pluginsFilePath({ ownerRoot: search.ownerRoot, env });
+  let listed: RecoveryPlugin[] = [];
+  const schemaOf = new Map<string, string>();
   try {
     const file = readPluginsFile(from);
-    return file.plugins.map((p) => ({
-      name: p.name,
-      version: p.version,
-      source: describeSource(p.source),
-      installed: installed.has(p.name),
-      ...(p.source.kind === 'registry' ? { install: `${p.source.name}@${p.source.version}` } : {}),
-    }));
+    listed = file.plugins.map((p) => {
+      schemaOf.set(p.name, p.schema ?? p.name);
+      return {
+        name: p.name,
+        version: p.version,
+        source: describeSource(p.source),
+        installed: installed.has(p.name),
+        ...(p.source.kind === 'registry' ? { install: `${p.source.name}@${p.source.version}` } : {}),
+      };
+    });
   } catch {
-    return [];
+    listed = [];
   }
+  // Only what is still waiting to load; tables kept because they had rows are
+  // their own items.
+  const waitingRows = (entry: PendingPluginData): number =>
+    entry.tables.filter((t) => t.kept === null).reduce((sum, t) => sum + t.rows, 0);
+  const claimed = new Set<string>();
+  for (const plugin of listed) {
+    const entry = pending.find((p) => p.schema === schemaOf.get(plugin.name));
+    if (entry === undefined) continue;
+    claimed.add(entry.schema);
+    const rows = waitingRows(entry);
+    if (!entry.tables.some((t) => t.kept === null)) continue;
+    plugin.waiting = { rows, note: waitingNote(rows, plugin.installed, entry.reason) };
+  }
+  // Data for a schema the archive's plugin list does not name still deserves
+  // a line: it is the owner's, and it is waiting.
+  for (const entry of pending) {
+    if (claimed.has(entry.schema)) continue;
+    const rows = waitingRows(entry);
+    if (!entry.tables.some((t) => t.kept === null)) continue;
+    listed.push({
+      name: entry.schema,
+      version: '',
+      source: `kept from ${entry.archive}`,
+      installed: false,
+      waiting: { rows, note: waitingNote(rows, false, entry.reason) },
+    });
+  }
+  return listed;
+}
+
+/** "1,544 rows waiting, loaded when you install it" — or why it is still waiting. */
+export function waitingNote(rows: number, installed: boolean, reason: string | null): string {
+  const count = `${rows.toLocaleString('en-US')} row${rows === 1 ? '' : 's'} waiting`;
+  if (!installed || reason === null) return `${count}, loaded when you install it`;
+  return `${count}: ${reason}`;
+}
+
+function keptTablesOf(pending: readonly PendingPluginData[]): RecoveryKeptTable[] {
+  return pending.flatMap((entry) =>
+    entry.tables
+      .filter((t) => t.kept !== null)
+      .map((t) => ({
+        schema: entry.schema,
+        table: t.table,
+        rows: t.rows,
+        sentence:
+          `${t.table} already had rows here, so the backup's ${t.rows.toLocaleString('en-US')} ` +
+          `were kept aside at ${entry.stagedPath} instead of loaded over them.`,
+      })),
+  );
 }
 
 function grantView(permission: ToolPermission): RecoveryGrant {
@@ -303,17 +377,19 @@ export async function readRecoveryView(deps: RecoveryDeps, ownerId: string): Pro
       active: false,
       restoredAt: state ? state.restoredAt.toISOString() : null,
       archive: state ? state.archive : null,
-      checklist: { secrets: [], plugins: [], pending: { jobs: 0, missions: 0, approvals: 0, telegramChats: 0 }, grants: [] },
+      checklist: { secrets: [], plugins: [], keptTables: [], pending: { jobs: 0, missions: 0, approvals: 0, telegramChats: 0 }, grants: [] },
     };
   }
   const grants = await listToolPermissions(deps.pool, ownerId).catch(() => [] as ToolPermission[]);
+  const pendingData = await listPendingPluginData(deps.pool);
   return {
     active: true,
     restoredAt: state.restoredAt.toISOString(),
     archive: state.archive,
     checklist: {
       secrets: await missingSecrets(deps),
-      plugins: pluginsFromArchive(deps.env),
+      plugins: pluginsFromArchive(deps.env, pendingData),
+      keptTables: keptTablesOf(pendingData),
       pending: {
         jobs: state.pending.jobs,
         missions: state.pending.missions,

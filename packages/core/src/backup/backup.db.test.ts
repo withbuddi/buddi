@@ -29,6 +29,7 @@ import { createArchive, extractAll } from './archive.js';
 import { createBackup } from './create.js';
 import { encryptFile } from './crypt.js';
 import { loadDatabase } from './load.js';
+import { listPendingPluginData, loadPendingForSchemas, loadPendingPluginData } from './pending.js';
 import { generatePassphrase } from './passphrase.js';
 import { urlForDatabase } from './restore.js';
 import { restoreBackup } from './restore.js';
@@ -612,6 +613,144 @@ suite('a backup can actually be restored', () => {
       await pool.end().catch(() => {});
     }
   }, 900_000);
+
+  describe('a plugin that is not installed yet keeps its data for later', () => {
+    const stagedDir = (): string => path.join(dataDir, 'restore', 'pending', DRILL_SCHEMA);
+
+    /** Seed at `dir`'s level, back it up, restore into a fresh database with no drill plugin. */
+    const restoreWithoutDrill = async (dir: string, extra: { passphrase?: string } = {}): Promise<void> => {
+      await seed(dir);
+      const created = await createBackup({
+        ...base(),
+        migrationDirs: [
+          { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR },
+          { schema: DRILL_SCHEMA, dir },
+        ],
+      });
+      let archive = created.archive;
+      if (extra.passphrase !== undefined) {
+        archive = `${created.archive}.age`;
+        await encryptFile(created.archive, archive, extra.passphrase);
+        await rm(created.archive);
+      }
+      await rm(stagedDir(), { recursive: true, force: true });
+      await admin.query(`drop database if exists ${DB}`);
+      await admin.query(`create database ${DB}`);
+      const report = await restoreBackup({
+        ...base(),
+        archive,
+        ...(extra.passphrase === undefined ? {} : { passphrase: extra.passphrase }),
+        pluginMigrations: [],
+        force: true,
+      });
+      expect(report.ok).toBe(true);
+      expect(report.didNot.join('\n')).toMatch(/kept at .*loads when you install/);
+    };
+
+    it('stages and records the schema, restores core, and loads it once the plugin is installed', async () => {
+      await restoreWithoutDrill(oldDir);
+      const pool = createPool(url);
+      try {
+        // Core is back; the drill schema is not, and its data is on disk.
+        const { rows: core } = await pool.query<{ n: string }>(`select count(*)::text as n from core.migrations where schema = 'core'`);
+        expect(Number(core[0]?.n)).toBeGreaterThan(0);
+        await expect(pool.query(`select 1 from drill.accounts`)).rejects.toThrow();
+        expect(existsSync(path.join(stagedDir(), 'db', 'drill.accounts.copy'))).toBe(true);
+        const tables = JSON.parse(await readFile(path.join(stagedDir(), 'db', 'tables.json'), 'utf8')) as Array<{ schema: string }>;
+        expect(new Set(tables.map((t) => t.schema))).toEqual(new Set([DRILL_SCHEMA]));
+        const pending = await listPendingPluginData(pool);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]).toMatchObject({ schema: DRILL_SCHEMA, stagedPath: stagedDir(), rows: 10, migrations: ['001_tables.sql'] });
+
+        // Installing the plugin: its migrations run, then the kept data goes in.
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
+        const outcome = await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} });
+        expect(outcome.kind).toBe('loaded');
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+        const { rows: cycle } = await pool.query<{ last_entry: number }>(`select last_entry from drill.accounts order by id`);
+        expect(cycle.map((r) => r.last_entry)).toEqual([2, 4, 5]);
+        // Sequences continue, including the identity column's.
+        const { rows: next } = await pool.query<{ id: number }>(`insert into drill.accounts (name, cents) values ('new', 1) returning id`);
+        expect(next[0]?.id).toBe(4);
+        const { rows: ledger } = await pool.query<{ id: number }>(`insert into drill.ledgers (label) values ('later') returning id`);
+        expect(ledger[0]?.id).toBe(3);
+        // The foreign keys are back and enforced.
+        await expect(pool.query(`insert into drill.entries (account, note) values (999, 'nowhere')`)).rejects.toThrow(/foreign key/i);
+        // Staging and record are gone, and a second pass (a restart) does nothing.
+        expect(existsSync(stagedDir())).toBe(false);
+        expect(await listPendingPluginData(pool)).toEqual([]);
+        expect(await loadPendingForSchemas(pool, [DRILL_SCHEMA], { log: () => {} })).toEqual([]);
+        expect(await counts(pool)).toEqual({ accounts: 4, entries: 5 });
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('leaves a table that already has rows staged and says so, loading the rest', async () => {
+      await restoreWithoutDrill(oldDir);
+      const pool = createPool(url);
+      try {
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
+        await pool.query(`insert into drill.ledgers (label) values ('made after the restore')`);
+        const lines: string[] = [];
+        const outcome = await loadPendingPluginData(pool, DRILL_SCHEMA, { log: (l) => lines.push(l) });
+        expect(outcome.kind).toBe('partial');
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/drill\.ledgers/);
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+        const { rows: ledgers } = await pool.query<{ label: string }>(`select label from drill.ledgers`);
+        expect(ledgers.map((r) => r.label)).toEqual(['made after the restore']);
+
+        const pending = await listPendingPluginData(pool);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.tables).toEqual([
+          { table: 'drill.ledgers', rows: 2, kept: expect.stringMatching(/already has 1 row/) },
+        ]);
+        expect(existsSync(path.join(stagedDir(), 'db', 'drill.ledgers.copy'))).toBe(true);
+        expect(existsSync(path.join(stagedDir(), 'db', 'drill.accounts.copy'))).toBe(false);
+
+        // A restart tries again: still kept, nothing loaded twice.
+        const again = await loadPendingForSchemas(pool, [DRILL_SCHEMA], { log: () => {} });
+        expect(again.map((o) => o.kind)).toEqual(['partial']);
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+        expect((await listPendingPluginData(pool))[0]?.tables.map((t) => t.table)).toEqual(['drill.ledgers']);
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('waits while the installed plugin is at an older migration level than the backup', async () => {
+      await restoreWithoutDrill(newDir);
+      const pool = createPool(url);
+      try {
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: oldDir });
+        const outcome = await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} });
+        expect(outcome).toMatchObject({ kind: 'waiting', reason: expect.stringMatching(/002_note\.sql/) });
+        expect(await counts(pool)).toEqual({ accounts: 0, entries: 0 });
+        expect((await listPendingPluginData(pool))[0]?.reason).toMatch(/older schema/);
+        expect(existsSync(stagedDir())).toBe(true);
+
+        // The plugin updated: now it loads.
+        await migrate(pool, { schema: DRILL_SCHEMA, dir: newDir });
+        expect((await loadPendingPluginData(pool, DRILL_SCHEMA, { log: () => {} })).kind).toBe('loaded');
+        expect(await counts(pool)).toEqual({ accounts: 3, entries: 5 });
+      } finally {
+        await pool.end().catch(() => {});
+      }
+    }, 600_000);
+
+    it('keeps the staged copy of an encrypted archive owner-only', async () => {
+      await restoreWithoutDrill(oldDir, { passphrase: PASSPHRASE });
+      expect((await stat(path.join(dataDir, 'restore'))).mode & 0o777).toBe(0o700);
+      expect((await stat(path.join(dataDir, 'restore', 'pending'))).mode & 0o777).toBe(0o700);
+      expect((await stat(stagedDir())).mode & 0o777).toBe(0o700);
+      expect((await stat(path.join(stagedDir(), 'db'))).mode & 0o777).toBe(0o700);
+      for (const name of await readdir(path.join(stagedDir(), 'db'))) {
+        expect((await stat(path.join(stagedDir(), 'db', name))).mode & 0o777).toBe(0o600);
+      }
+      await rm(stagedDir(), { recursive: true, force: true });
+    }, 900_000);
+  });
 
   describe('what the loader refuses before it drops anything', () => {
     /** A stage directory holding only the three index files a load reads. */

@@ -89,6 +89,11 @@ export interface DoctorProbes {
    */
   recovery?(): Promise<ProbeResult>;
   /**
+   * Plugin data a restore kept for a plugin that is not installed yet. `null`
+   * when there is none: the row is printed only while something waits.
+   */
+  pendingPluginData?(): Promise<ProbeResult | null>;
+  /**
    * Signing in through Tailscale: the daemon, the setting, and whether the
    * proxy is actually published. Optional for the same reason `config` is.
    */
@@ -137,6 +142,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   { name: 'service', critical: false, probe: 'service' },
   { name: 'backups', critical: false, probe: 'backups' },
   { name: 'recovery', critical: false, probe: 'recovery' },
+  { name: 'kept plugin data', critical: false, probe: 'pendingPluginData' },
   // Never critical: with this off, or its proxy down, buddi is a dashboard on
   // loopback, which is what it is by default.
   { name: 'tailscale', critical: false, probe: 'tailscale' },
@@ -149,14 +155,16 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
 export async function collectChecks(probes: DoctorProbes): Promise<Check[]> {
   const checks: Check[] = [];
   for (const row of ROWS) {
-    const probe = probes[row.probe] as undefined | (() => ProbeResult | Promise<ProbeResult>);
+    const probe = probes[row.probe] as undefined | (() => ProbeResult | null | Promise<ProbeResult | null>);
     if (probe === undefined) continue;
-    let result: ProbeResult;
+    let result: ProbeResult | null;
     try {
       result = await probe.call(probes);
     } catch (err) {
       result = { status: 'fail', detail: err instanceof Error ? err.message : String(err) };
     }
+    // A row with nothing to say is not printed (kept plugin data, when none is).
+    if (result === null) continue;
     checks.push({ name: row.name, critical: row.critical, ...result });
   }
   return checks;
@@ -498,6 +506,24 @@ export function checkRecovery(facts: RecoveryFacts): ProbeResult {
     detail:
       `in recovery since ${since} (restored from ${facts.archive ?? 'an archive'}) — ` +
       `the queue, the missions and Telegram are asleep until you finish the checklist. ${waiting}`,
+  };
+}
+
+/**
+ * Plugin data a restore kept, waiting for its plugin. A warning: the owner's
+ * rows are safe on disk but not in buddi until the plugin is installed. `null`
+ * when nothing waits, so the row is not printed.
+ */
+export function checkPendingPluginData(
+  entries: ReadonlyArray<{ schema: string; rows: number; reason: string | null }>,
+): ProbeResult | null {
+  if (entries.length === 0) return null;
+  const parts = entries.map(
+    (e) => `${e.schema} (${e.rows} row(s)${e.reason === null ? '' : `: ${e.reason}`})`,
+  );
+  return {
+    status: 'warn',
+    detail: `restored data waiting for its plugin: ${parts.join(', ')} — it loads when the plugin is installed`,
   };
 }
 

@@ -33,6 +33,7 @@
 import { existsSync, readFileSync, realpathSync, renameSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
+  loadPendingPluginData,
   migrate,
   pluginsFilePath,
   readPluginsFile,
@@ -396,6 +397,16 @@ async function place(
       migrations = applied.map((m) => m.filename);
     } catch (err) {
       migrationProblem = `its migrations failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    // Data a restore kept for this plugin goes in now that its tables exist.
+    // Never a reason to fail the install: what could not load stays staged
+    // with its reason, and the next start tries again.
+    if (migrationProblem === undefined) {
+      await loadPendingPluginData(opts.pool, record.schema).catch((err: unknown) => {
+        console.error(
+          `restore: ${record.schema} data could not be loaded: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     }
   }
   return {

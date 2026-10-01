@@ -25,6 +25,12 @@ import { archiveSafetyProblems, extractAll, walkFiles } from './archive.js';
 import { createBackup, type CreateOptions, type OnProgress } from './create.js';
 import { loadDatabase, type LoadReport, type MigrationSource } from './load.js';
 import {
+  forgetUnstagedPluginData,
+  pendingDataRoot,
+  recordPendingPluginData,
+  writePendingSlice,
+} from './pending.js';
+import {
   ARTIFACTS_DIR_NAME,
   DIR_MODE,
   ENV_NAME,
@@ -389,6 +395,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
     const effects: FileEffects = { swaps: [], files: [] };
     const stamp = stampFor(new Date());
     let loaded: LoadReport;
+    const stagedSchemas = new Map<string, string>();
     try {
       progress({ phase: PHASE.database, detail: `loading into "${database}"` });
       loaded = await loadDatabase(pool, from, {
@@ -396,6 +403,21 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
         ...(opts.pluginMigrations ? { pluginMigrations: opts.pluginMigrations } : {}),
         ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
       });
+
+      // A plugin this installation does not have yet keeps its data for later:
+      // staged under the data dir and recorded, loaded when it is installed.
+      // Not with `into`: that database is not this installation's, and the
+      // data dir is.
+      if (opts.into === undefined) {
+        const kept = await stagePendingPlugins(pool, from, loaded, opts.dataDir, path.basename(opts.archive), stage, stamp, effects);
+        for (const forgot of kept.forgotten) {
+          didNot.push(
+            `schema "${forgot.schema}" — the archive recorded ${forgot.rows} row(s) waiting for it on the machine ` +
+              `that made it, staged at ${forgot.stagedPath}; those files are not in the archive or on this machine`,
+          );
+        }
+        for (const entry of kept.staged) stagedSchemas.set(entry.schema, entry.dest);
+      }
 
       // The caller's own step, inside the rollback: see `afterDatabase`.
       if (opts.afterDatabase) await opts.afterDatabase(pool);
@@ -485,10 +507,19 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
       );
     }
     for (const missing of loaded.notLoaded) {
+      const keptAt = missing.table === undefined ? stagedSchemas.get(missing.schema) : undefined;
+      if (keptAt !== undefined) {
+        didNot.push(
+          `schema "${missing.schema}" (${missing.rows} row(s)) — no plugin installed here owns it yet; ` +
+            `its data is kept at ${keptAt} and loads when you install that plugin`,
+        );
+        next.push(`buddi plugins install <the plugin that owns "${missing.schema}"> — its data loads then`);
+        continue;
+      }
       didNot.push(
         `${missing.table ?? `schema "${missing.schema}"`} (${missing.rows} row(s)) — ${missing.reason}`,
       );
-      if (missing.table === undefined) {
+      if (missing.table === undefined && missing.rows > 0) {
         next.push(`buddi plugins install <the plugin that owns "${missing.schema}">, then restore again`);
       }
     }
@@ -511,6 +542,48 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
     await pool.end().catch(() => {});
     await rm(stage, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * Keep the data of every plugin schema the archive holds and this installation
+ * cannot rebuild, under `<data>/restore/pending/<schema>/`, and record it.
+ *
+ * Each schema's directory is swapped into place like the private directories
+ * are, so a restore that fails later puts back whatever was staged before it;
+ * the record is in the database the snapshot covers.
+ */
+async function stagePendingPlugins(
+  pool: Pool,
+  from: string,
+  loaded: LoadReport,
+  dataDir: string,
+  archive: string,
+  scratch: string,
+  stamp: string,
+  effects: FileEffects,
+): Promise<{
+  staged: Array<{ schema: string; dest: string }>;
+  forgotten: Awaited<ReturnType<typeof forgetUnstagedPluginData>>;
+}> {
+  const forgotten = await forgetUnstagedPluginData(pool);
+  const staged: Array<{ schema: string; dest: string }> = [];
+  const wanted = loaded.notLoaded.filter((n) => n.table === undefined && n.rows > 0);
+  if (wanted.length === 0 || dataDir.trim() === '') return { staged, forgotten };
+  const root = pendingDataRoot(path.resolve(dataDir));
+  await mkdir(root, { recursive: true, mode: DIR_MODE });
+  await chmod(path.dirname(root), DIR_MODE).catch(() => {});
+  await chmod(root, DIR_MODE).catch(() => {});
+  for (const missing of wanted) {
+    const slice = path.join(scratch, 'pending', missing.schema);
+    const written = await writePendingSlice(from, missing.schema, slice);
+    const dest = path.join(root, missing.schema);
+    const swap = await putBack(slice, dest, stamp);
+    if (swap === null) continue;
+    effects.swaps.push(swap);
+    await recordPendingPluginData(pool, { schema: missing.schema, archive, stagedPath: dest, ...written });
+    staged.push({ schema: missing.schema, dest });
+  }
+  return { staged, forgotten };
 }
 
 /** The private directories, the artifacts, and the two things never written. */

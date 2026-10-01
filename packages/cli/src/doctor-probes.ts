@@ -64,7 +64,7 @@ import {
 } from '@buddi/tool-web';
 import { lastSyncByAccount, listAccounts } from '@buddi/tool-email';
 import type { Pool } from 'pg';
-import { STALE_AFTER_MS, findSecret, listArchives, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
+import { STALE_AFTER_MS, findSecret, listArchives, listPendingPluginData, ownerSecretVaultName, readRecovery, readWebSetting } from '@buddi/core';
 import { createBackupScheduler } from './backup/schedule.js';
 import { BACKUP_DIR } from './paths.js';
 import {
@@ -74,6 +74,7 @@ import {
   checkDatabaseExposure,
   checkEmail,
   checkRecovery,
+  checkPendingPluginData,
   checkTailscale,
   checkSubscriptionSignIns,
   checkNodeVersion,
@@ -844,6 +845,12 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         // restored, which is not in recovery.
         return checkRecovery({ active: false });
       }
+    },
+
+    async pendingPluginData(): Promise<ProbeResult | null> {
+      const pool = await connected();
+      if (pool === null) return null;
+      return checkPendingPluginData(await listPendingPluginData(pool));
     },
 
     subscriptionSignIns(): ProbeResult {

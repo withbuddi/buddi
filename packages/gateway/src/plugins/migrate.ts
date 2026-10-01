@@ -17,7 +17,7 @@
  * `buddi migrate`, for the owner who wants to migrate without starting.
  */
 import { readdir } from 'node:fs/promises';
-import { CORE_MIGRATIONS_DIR, runMigrations, type AppliedMigration } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, loadPendingForSchemas, runMigrations, type AppliedMigration } from '@buddi/core';
 import type { Pool } from 'pg';
 import { installedManifests } from '../agents/catalog.js';
 import { demoteToLoadFailure, externalManifests } from './load.js';
@@ -147,5 +147,15 @@ export async function migrateAtStart(
   for (const problem of result.problems) {
     log(`plugin ${problem.name} was not loaded: ${problem.message}`);
   }
+  // Data a restore kept for a plugin that is here now (installed while the
+  // gateway was down, or left waiting by an earlier attempt). A plugin whose
+  // migrations just failed is not here.
+  const failed = new Set(result.problems.map((p) => p.name));
+  const schemas = installedManifests(env)
+    .filter((m) => !failed.has(m.name) && (m.migrationsDir ?? '').trim() !== '')
+    .map((m) => m.schema);
+  await loadPendingForSchemas(pool, schemas, { log }).catch((err: unknown) => {
+    log(`restore: kept plugin data could not be checked: ${err instanceof Error ? err.message : String(err)}`);
+  });
   return result;
 }
