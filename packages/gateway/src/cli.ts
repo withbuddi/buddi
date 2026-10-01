@@ -53,6 +53,9 @@ import { Spinner, silentSpinner } from './chat/spinner.js';
 import { bold, dim, styleFor, type TerminalStyle } from './chat/terminal.js';
 import { describeDatabaseError } from './db-ready.js';
 import { attachFile } from './chat/attach.js';
+import { browserHost } from './browser-host.js';
+import { continueBrowserTask } from './surfaces/browser-continuation.js';
+import { carryOverDeps } from './surfaces/carry-over.js';
 import { createInlineMissionRunner } from './missions/inline.js';
 import { createEngagementHooks } from './missions/engagement.js';
 import { recapMissionId } from './missions/recap.js';
@@ -781,6 +784,14 @@ async function chat(
       }
     },
     readFile: (candidate) => readFile(candidate),
+    // The note a rolled-over conversation opens with, written by the agent's
+    // own model with any plugin's lines — as on the dashboard and Telegram.
+    onConversationRollover: (agentId, previousConversationId, next, reason) => continueBrowserTask(pool, browserHost(process.env), { ownerId: ctx.ownerId, agentId, previousConversationId, conversationId: next }, reason, carryOverDeps({
+      catalog,
+      providerFor: (a) => wiring.providerFor(a),
+      registry,
+      ctx,
+    })),
   });
 
   out(bold(`buddi — ${selected.name}`, style.color));

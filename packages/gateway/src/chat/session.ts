@@ -201,6 +201,11 @@ export interface ChatSessionDeps {
   fileExists?(candidate: string): boolean;
   readFile?(candidate: string): Promise<Buffer>;
   log?(line: string): void;
+  /**
+   * A conversation rolled over: write the carry-over note into the new one,
+   * as the dashboard and Telegram do (surfaces/carry-over.ts). Absent: none.
+   */
+  onConversationRollover?: import('../surfaces/browser-continuation.js').ConversationRolloverHook;
 }
 
 export class ChatSession {
@@ -998,9 +1003,18 @@ export class ChatSession {
     const current = this.#conversations.get(agent.id);
     const { conversationId, boundary } = await conversationForTurn(this.#deps.pool, {
       ...(current === undefined ? {} : { current }),
-      start: async () => {
+      start: async (rollover) => {
         const id = await createConversation(this.#deps.pool, agent.id);
         this.#conversations.set(agent.id, id);
+        // The note the new conversation opens with. Never at the cost of the
+        // owner's turn: a note that cannot be written is a missing note.
+        if (rollover && this.#deps.onConversationRollover) {
+          try {
+            await this.#deps.onConversationRollover(agent.id, rollover.previousConversationId, id, rollover.reason);
+          } catch (err) {
+            this.#deps.log?.(`carry-over: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         return id;
       },
       now: this.#deps.now(),

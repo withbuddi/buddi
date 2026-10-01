@@ -11,7 +11,7 @@ import type { AgentCatalog, CatalogAgent } from '../telegram/types.js';
 import type { ArtifactStore } from '../telegram/attachments.js';
 import type { ApprovalPort } from './approvals.js';
 import { NO_MAKER_TEXT } from '../telegram/surface.js';
-import { ChatSession } from './session.js';
+import { ChatSession, type ChatSessionDeps } from './session.js';
 import { silentSpinner } from './spinner.js';
 import type { TerminalStyle } from './terminal.js';
 
@@ -324,6 +324,7 @@ function harness(
     clearScreen?: () => void;
     /** A provider that does something other than answer — a failing one. */
     provider?: RuntimeProvider;
+    onConversationRollover?: ChatSessionDeps['onConversationRollover'];
   } = {},
 ): Harness {
   const db = new FakeDb();
@@ -363,6 +364,7 @@ function harness(
     ...(opts.clearScreen ? { clearScreen: opts.clearScreen } : {}),
     ...(opts.artifacts ? { artifacts: opts.artifacts } : {}),
     ...(opts.approvals ? { approvals: opts.approvals } : {}),
+    ...(opts.onConversationRollover ? { onConversationRollover: opts.onConversationRollover } : {}),
   });
   return { session, db, lines, provider, answers, asked, text: () => lines.join('\n') };
 }
@@ -1095,6 +1097,34 @@ describe('a conversation has a lifetime here too', () => {
     // after the call is in it too — the owner's message is the only history.)
     const sent = h.provider.requests.at(-1)?.messages ?? [];
     expect(sent.filter((m) => m.role === 'user')).toHaveLength(1);
+  });
+
+  it('writes the carry-over note into the new one, as the dashboard and Telegram do', async () => {
+    const rolled: unknown[][] = [];
+    const h = harness({
+      responses: [textResponse('One.'), textResponse('Two.')],
+      onConversationRollover: async (...args) => { rolled.push(args); },
+    });
+    h.db.clock = () => NOW;
+    await h.session.handle('any new mail?');
+    expect(rolled).toEqual([]);
+    walkAway(h, 14);
+    await h.session.handle('any new mail?');
+    expect(h.db.conversations).toHaveLength(2);
+    const [first, second] = h.db.conversations.map((c) => c.id);
+    expect(rolled).toEqual([[LEDGER.id, first, second, 'idle']]);
+  });
+
+  it('answers the turn when the note cannot be written', async () => {
+    const h = harness({
+      responses: [textResponse('One.'), textResponse('Two.')],
+      onConversationRollover: async () => { throw new Error('model down'); },
+    });
+    h.db.clock = () => NOW;
+    await h.session.handle('any new mail?');
+    walkAway(h, 14);
+    await h.session.handle('any new mail?');
+    expect(h.text()).toContain('Two.');
   });
 
   it('starts a fresh one when the transcript has grown past its budget', async () => {
