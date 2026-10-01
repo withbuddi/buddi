@@ -499,7 +499,8 @@ export function newAgentOpening(arg: string): string {
  * installation simply never registered it, and the owner is told how to.
  */
 export type MissionOutcome =
-  | { ok: true; text: string }
+  /** `conversationId`: where the run wrote its answer, so a reaction on it is filed. */
+  | { ok: true; text: string; conversationId?: string }
   | { ok: false; reason: 'unknown-mission' };
 
 /**
@@ -2004,7 +2005,11 @@ export class TelegramSurface {
           }),
         ),
       );
-      await this.#sendBurst(chatId, reply);
+      const ids = await this.#sendBurst(chatId, reply);
+      // A reaction on the greeting is feedback like any other answer's.
+      await this.#recordSent(chatId, conversationId, ids).catch((err) => {
+        this.#log(`telegram: first run — its messages were not mapped for reactions: ${message(err)}`);
+      });
     } catch (err) {
       // No retry offer here: the first run is the machine speaking first, and
       // a button offering to re-run a greeting the owner never asked for is
@@ -2034,8 +2039,8 @@ export class TelegramSurface {
     }
   }
 
-  async #sendBurst(chatId: string, reply: string): Promise<void> {
-    await sendBurst(this.#opts.api, chatId, reply, this.#opts.burstGapMs ?? BURST_GAP_MS);
+  async #sendBurst(chatId: string, reply: string): Promise<number[]> {
+    return sendBurst(this.#opts.api, chatId, reply, this.#opts.burstGapMs ?? BURST_GAP_MS);
   }
 
   /**
@@ -2864,15 +2869,22 @@ export class TelegramSurface {
       await this.#opts.api.sendMessage(chatId, RECAP_UNAVAILABLE_TEXT);
       return;
     }
+    let ranIn: string | undefined;
     await this.#withBubble(
       chatId,
       async (progress) => {
         const outcome = await runMission(missionId, chatId, (name) =>
           progress.noteToolCall(name),
         );
+        if (outcome.ok) ranIn = outcome.conversationId;
         return outcome.ok ? outcome.text : RECAP_NOT_REGISTERED_TEXT;
       },
       handleLabel(speaker.handle),
+      undefined,
+      undefined,
+      false,
+      // A reaction on the recap is feedback on the run that wrote it.
+      async (ids) => { if (ranIn) await this.#recordSent(chatId, ranIn, ids); },
     );
   }
 

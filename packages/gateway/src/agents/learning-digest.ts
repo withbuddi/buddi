@@ -146,6 +146,13 @@ export interface LearningDigest {
    * reactions were read.
    */
   feedback?: FeedbackWeek;
+  /** The agents the reactions name, by id, as the owner knows them ("Ledger"). */
+  agentNames?: Record<string, string>;
+}
+
+/** An agent as the digest names it: its display name, else its id. */
+function agentName(d: Pick<LearningDigest, 'agentNames'>, id: string): string {
+  return d.agentNames?.[id] ?? id;
 }
 
 /** True when there is nothing to tell: nothing learned and nothing waiting. */
@@ -178,7 +185,7 @@ function clip(text: string, max: number): string {
 
 export async function composeDigest(
   pool: Pool,
-  input: { now: Date; manifests: readonly PluginManifest[] },
+  input: { now: Date; manifests: readonly PluginManifest[]; nameOf?: ((agentId: string) => string | undefined) | undefined },
 ): Promise<LearningDigest> {
   const since = new Date(input.now.getTime() - WEEK_MS);
   const [week, memory, feedback] = await Promise.all([
@@ -200,6 +207,12 @@ export async function composeDigest(
     }
   }
   const kept = (kind: ProposalKind): KeptTally => week.kept[kind];
+  // Names as of this week, kept with the digest so Home reads them too.
+  const agentNames: Record<string, string> = {};
+  for (const id of new Set([...Object.keys(feedback.byAgent), ...feedback.notes.map((n) => n.agentId)])) {
+    const name = input.nameOf?.(id);
+    if (name) agentNames[id] = name;
+  }
   return {
     at: input.now.toISOString(),
     since: since.toISOString(),
@@ -210,6 +223,7 @@ export async function composeDigest(
     open: week.open,
     stopped,
     feedback,
+    ...(Object.keys(agentNames).length > 0 ? { agentNames } : {}),
   };
 }
 
@@ -249,24 +263,25 @@ export function digestText(d: LearningDigest, proposalsUrl: string): string {
         : 'Stopped doing: no rule you kept acted this week.',
     );
   }
-  const reactions = feedbackLines(d.feedback);
+  const reactions = feedbackLines(d);
   lines.push(...reactions);
   return lines.join('\n');
 }
 
 /** "Your reactions: …" and the 👎 notes, or nothing when there were none. */
-function feedbackLines(f: FeedbackWeek | undefined): string[] {
+function feedbackLines(d: Pick<LearningDigest, 'feedback' | 'agentNames'>): string[] {
+  const f = d.feedback;
   if (!f) return [];
   const agents = Object.entries(f.byAgent)
     .map(([agent, t]) => {
       const parts = [t.up > 0 ? `${t.up} 👍` : null, t.down > 0 ? `${t.down} 👎` : null, t.neutral > 0 ? `${t.neutral} other` : null]
         .filter((p): p is string => p !== null);
-      return parts.length > 0 ? `${agent} ${parts.join(' ')}` : null;
+      return parts.length > 0 ? `${agentName(d, agent)} ${parts.join(' ')}` : null;
     })
     .filter((p): p is string => p !== null);
   if (agents.length === 0) return [];
   const lines = [`Your reactions: ${agents.join(', ')}.`];
-  for (const n of f.notes) lines.push(`What was off (${n.agentId}): ${clip(n.note, 140)}`);
+  for (const n of f.notes) lines.push(`What was off (${agentName(d, n.agentId)}): ${clip(n.note, 140)}`);
   return lines;
 }
 
@@ -289,8 +304,9 @@ export async function runLearningDigest(deps: {
   manifests: readonly PluginManifest[];
   proposalsUrl: string;
   deliver: (text: string) => Promise<unknown>;
+  nameOf?: ((agentId: string) => string | undefined) | undefined;
 }): Promise<DigestRunResult> {
-  const digest = await composeDigest(deps.pool, { now: deps.now, manifests: deps.manifests });
+  const digest = await composeDigest(deps.pool, { now: deps.now, manifests: deps.manifests, nameOf: deps.nameOf });
   const text = digestText(digest, deps.proposalsUrl);
   let delivered = false;
   let skipped: string | undefined;

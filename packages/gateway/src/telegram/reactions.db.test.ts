@@ -24,6 +24,7 @@ import { NOTE_ACK_EMOJI, WHAT_WAS_OFF_TEXT } from './reactions.js';
 import type { AgentCatalog, CatalogAgent } from './types.js';
 import { composeDigest, digestText } from '../agents/learning-digest.js';
 import { readChatTranscript } from '../web/chat.js';
+import { toStreamEvent } from '../web/stream.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -42,7 +43,7 @@ function fakeCatalog(): AgentCatalog {
     byHandle: (handle: string) => (handle.replace(/^@/, '') === one.handle ? one : undefined),
     list: () => [one] as any,
     agentsWithRole: () => [],
-    agentForRole: (role: string) => ({
+    agentForRole: (role: string) => (role === 'recap' ? { ok: true as const, agent: one } : {
       ok: false as const,
       problem: { code: 'no-agent-for-role' as const, role, message: roleProblemMessage(role) },
     }),
@@ -253,5 +254,71 @@ suite('reactions on Telegram', () => {
     const transcript = await readChatTranscript(pool, String(fb.conversation_id));
     const message = transcript!.messages.find((m) => m.id === String(fb.message_id));
     expect(message?.feedback).toEqual({ value: 'down', emoji: '👎', source: 'telegram', note: 'Wrong month.' });
+  });
+
+  it('tells an open dashboard tab at once, on the conversation stream', async () => {
+    const answered = await turn();
+    await surface.processUpdates([reaction(answered, '👍')]);
+    const { rows: [assistant] } = await pool.query(`select id, conversation_id from core.messages where role = 'assistant'`);
+    const announced = async () => (await pool.query(
+      `select id, kind, payload, conversation_id, created_at from core.events where kind = 'chat.reaction' order by id`,
+    )).rows;
+    let rows = await announced();
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].conversation_id)).toBe(String(assistant.conversation_id));
+    const event = toStreamEvent({ id: String(rows[0].id), kind: rows[0].kind, payload: rows[0].payload, createdAt: rows[0].created_at });
+    expect(event).toMatchObject({ event: 'reaction', data: { messageId: String(assistant.id), value: 'up', emoji: '👍', cleared: false } });
+    await surface.processUpdates([reaction(answered, null)]);
+    rows = await announced();
+    expect(rows.at(-1).payload).toMatchObject({ messageId: String(assistant.id), cleared: true });
+  });
+
+  it("names agents in the digest by their display name", async () => {
+    const answered = await turn();
+    await surface.processUpdates([reaction(answered, '👎')]);
+    const { rows: [fb] } = await pool.query(`select ask_message_id from core.message_feedback`);
+    await surface.processUpdates([text('Wrong month.', Number(fb.ask_message_id))]);
+    await surface.drain();
+    const digest = await composeDigest(pool, { now: new Date(), manifests: [], nameOf: (id) => (id === AGENT_ID ? 'Ledger' : undefined) });
+    expect(digest.agentNames).toEqual({ [AGENT_ID]: 'Ledger' });
+    const said = digestText(digest, 'http://x/proposals');
+    expect(said).toContain('Your reactions: Ledger 1 👎.');
+    expect(said).toContain('What was off (Ledger): Wrong month.');
+  });
+
+  it('files a reaction on a /recap answer against the run that wrote it', async () => {
+    const { rows: [conv] } = await pool.query(`insert into core.conversations (agent_id) values ($1) returning id`, [AGENT_ID]);
+    const recapIn = String(conv.id);
+    const recap = new TelegramSurface({
+      api: fakeApi(calls), pool, catalog: fakeCatalog(), timezone: 'UTC', typingIntervalMs: 60_000, log: () => {},
+      recapMissionId: 'daily-recap',
+      runMission: async () => {
+        await pool.query(`insert into core.messages (conversation_id, role, content) values ($1, 'assistant', $2::jsonb)`,
+          [recapIn, JSON.stringify([{ type: 'text', text: 'Your day.' }])]);
+        return { ok: true, text: 'Your day.', conversationId: recapIn };
+      },
+      run: async () => 'unused',
+    } as any);
+    await recap.processUpdates([text('/recap')]);
+    await recap.drain();
+    const { rows: sent } = await pool.query(`select external_message_id, conversation_id from core.surface_sent_messages`);
+    expect(sent.length).toBeGreaterThan(0);
+    expect(String(sent[0].conversation_id)).toBe(recapIn);
+    await recap.processUpdates([reaction(Number(sent[0].external_message_id), '👍')]);
+    expect((await feedbackRows())[0]).toMatchObject({ value: 'up', agent_id: AGENT_ID });
+  });
+
+  it("files a reaction on the first run's greeting", async () => {
+    await pool.query(`delete from core.onboarding`);
+    try {
+      await surface.processUpdates([text('/start')]);
+      await surface.drain();
+      const { rows: sent } = await pool.query(`select external_message_id from core.surface_sent_messages`);
+      expect(sent.length).toBeGreaterThan(0);
+      await surface.processUpdates([reaction(Number(sent[0].external_message_id), '❤️')]);
+      expect((await feedbackRows())[0]).toMatchObject({ value: 'up', agent_id: AGENT_ID });
+    } finally {
+      await completeOnboarding(pool, 'fixture');
+    }
   });
 });

@@ -415,6 +415,10 @@ export function ChatPage({
             void refresh(conversationId);
             break;
           }
+          case 'reaction':
+            // A reaction left on Telegram, drawn under its message now.
+            void refresh(conversationId);
+            break;
           case 'message.appended':
             void refresh(conversationId).then(() => {
               setPartial((current) => (current?.settled ? null : current));

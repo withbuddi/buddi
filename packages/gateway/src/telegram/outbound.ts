@@ -72,19 +72,23 @@ export async function sendBurst(
   chatId: string,
   reply: string,
   gapMs: number = BURST_GAP_MS,
-): Promise<void> {
+): Promise<number[]> {
   const parts = splitIntoMessages(reply);
   if (parts.length === 0) {
     await api.sendMessage(chatId, '(no reply)');
-    return;
+    return [];
   }
+  // The ids of the messages sent, for the reactions map.
+  const ids: number[] = [];
   for (const [index, part] of parts.entries()) {
     if (index > 0) {
       await api.sendChatAction(chatId).catch(() => {});
       await sleep(gapMs);
     }
-    await api.sendMessage(chatId, part);
+    const id: unknown = await api.sendMessage(chatId, part);
+    if (typeof id === 'number') ids.push(id);
   }
+  return ids;
 }
 
 /* ------------------------------------------------------------------ *

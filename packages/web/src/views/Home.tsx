@@ -578,7 +578,7 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
   const reactions = Object.entries(digest.feedback?.byAgent ?? {})
     .map(([agent, t]) => [agent, [t.up > 0 ? `${t.up} 👍` : '', t.down > 0 ? `${t.down} 👎` : '', t.neutral > 0 ? `${t.neutral} other` : ''].filter(Boolean).join(' ')] as const)
     .filter(([, counts]) => counts !== '')
-    .map(([agent, counts]) => `${agent}: ${counts}`);
+    .map(([agent, counts]) => `${digest.agentNames?.[agent] ?? agent}: ${counts}`);
   return (
     <Section title="What buddi learned this week" aside={<span className="muted">{fmtRelative(digest.at)}</span>}>
       <Panel>
@@ -608,7 +608,7 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
               <p className="ui-card-meta">Your reactions</p>
               <ul className="home-digest-list">
                 {reactions.map((line) => <li key={line}>{line}</li>)}
-                {(digest.feedback?.notes ?? []).map((n, i) => <li key={`note-${i}`}>What was off ({n.agentId}): {n.note}</li>)}
+                {(digest.feedback?.notes ?? []).map((n, i) => <li key={`note-${i}`}>What was off ({digest.agentNames?.[n.agentId] ?? n.agentId}): {n.note}</li>)}
               </ul>
             </div>
           ) : null}

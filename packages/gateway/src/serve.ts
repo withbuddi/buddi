@@ -340,6 +340,8 @@ export function withLearningDigest(
     proposalsUrl: string;
     deliver: (text: string) => Promise<unknown>;
     log?: (line: string) => void;
+    /** An agent's display name, for the reactions line. */
+    nameOf?: (agentId: string) => string | undefined;
   },
 ): (occurrence: Occurrence, mission: Mission, control?: MissionRunControl) => Promise<MissionRunResult> {
   return async (occurrence, mission, control) => {
@@ -350,6 +352,7 @@ export function withLearningDigest(
       manifests: deps.manifests(),
       proposalsUrl: deps.proposalsUrl,
       deliver: deps.deliver,
+      nameOf: deps.nameOf,
     });
     deps.log?.(`learning digest: ${result.delivered ? 'sent' : result.skipped ?? 'not sent'}`);
     return {
@@ -927,6 +930,7 @@ export async function main(): Promise<void> {
           proposalsUrl: dashboardRouteUrl(webConfig(process.env), '#/settings/proposals'),
           deliver: ownerText(pool, notifyDeps, { kind: 'recap', link: '#/settings/proposals' }),
           log: logOut,
+          nameOf: (agentId) => { try { return wiring.catalog.get(agentId)?.name; } catch { return undefined; } },
         }) }),
         // A source's run. Same lease, same retries, same suspension on an
         // approval — the only difference is that nothing scheduled it.

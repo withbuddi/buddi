@@ -161,19 +161,47 @@ export async function setReaction(
   return toFeedback(rows[0]);
 }
 
-/** The owner took their reaction back. The row stays, so a 👎 is never asked about twice. */
+/**
+ * The owner took their reaction back. The row stays, so a 👎 is never asked
+ * about twice. Null when there was nothing standing to clear; else where it was.
+ */
 export async function clearReaction(
   db: Queryable,
   input: { source: string; chatId: string; externalMessageId: string; now?: Date },
-): Promise<boolean> {
+): Promise<{ conversationId: string; messageId: string | null } | null> {
   const now = input.now ?? new Date();
   const { rows } = await db.query(
     `update core.message_feedback set cleared_at = $4, updated_at = $4
       where source = $1 and external_chat_id = $2 and external_message_id = $3 and cleared_at is null
-      returning id`,
+      returning id, conversation_id, message_id`,
     [input.source, input.chatId, input.externalMessageId, now],
   );
-  return rows.length > 0;
+  const row = rows[0];
+  return row ? { conversationId: String(row.conversation_id), messageId: row.message_id ? String(row.message_id) : null } : null;
+}
+
+/** The event an open dashboard tab hears a reaction by (its conversation stream). */
+export const REACTION_EVENT = 'chat.reaction';
+
+/**
+ * Tell an open page on this conversation that a reaction changed, so it draws
+ * it now instead of on its next reread. Ids and the emoji only: the note, if
+ * any, is read with the transcript.
+ */
+export async function announceReaction(
+  db: Queryable,
+  input: { conversationId: string; messageId: string | null; value?: FeedbackValue; emoji?: string; cleared?: boolean; note?: boolean },
+): Promise<void> {
+  await db.query(
+    `insert into core.events (kind, conversation_id, payload) values ($1, $2::uuid, $3::jsonb)`,
+    [REACTION_EVENT, input.conversationId, JSON.stringify({
+      messageId: input.messageId,
+      ...(input.value ? { value: input.value } : {}),
+      ...(input.emoji ? { emoji: input.emoji } : {}),
+      ...(input.cleared ? { cleared: true } : {}),
+      ...(input.note ? { note: true } : {}),
+    })],
+  );
 }
 
 /**

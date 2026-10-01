@@ -64,6 +64,9 @@ export const STREAM_KINDS: Readonly<Record<string, string>> = {
   // own `run.finished`. It still has to end on the stream, or the page waits
   // forever — so it ends as one, with the honest `stopped`.
   'chat.run.failed': 'run.finished',
+  // The owner reacted on Telegram to a message in this conversation (or took
+  // it back, or left a note on a 👎): the page draws it now.
+  'chat.reaction': 'reaction',
 };
 
 /** The kinds the tail asks for. Derived, so the two can never drift. */
@@ -117,6 +120,17 @@ export function toStreamEvent(row: LogRow): { event: string; data: Record<string
       return { event: name, data: { at, role: p.role ?? 'assistant', runId: p.runId ?? null } };
     case 'awaiting-approval':
       return { event: name, data: { at, actionId: p.actionId ?? null, runId: p.runId ?? null } };
+    case 'reaction':
+      return {
+        event: name,
+        data: {
+          at,
+          messageId: p.messageId ?? null,
+          ...(typeof p.value === 'string' ? { value: p.value } : {}),
+          ...(typeof p.emoji === 'string' ? { emoji: p.emoji } : {}),
+          cleared: p.cleared === true,
+        },
+      };
     case 'run.finished':
       return {
         event: name,

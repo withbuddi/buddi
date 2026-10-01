@@ -270,6 +270,8 @@ export type ChatEventName =
   | 'message.appended'
   | 'awaiting-approval'
   | 'run.finished'
+  // The owner reacted on Telegram to a message here: read the transcript again.
+  | 'reaction'
   // The answer as it is written: a piece, a turn settling into the
   // transcript, or what was written before this page connected.
   | 'live'

@@ -10,6 +10,7 @@
  * message.
  */
 import {
+  announceReaction,
   claimFeedbackAsk,
   clearReaction,
   feedbackAwaitingNote,
@@ -35,6 +36,13 @@ export interface ReactionDeps {
   api: TelegramApi;
   log: (line: string) => void;
   now: () => number;
+}
+
+/** An open dashboard tab hears it at once; a failure costs only that. */
+async function announce(deps: Pick<ReactionDeps, 'pool' | 'log'>, input: Parameters<typeof announceReaction>[1]): Promise<void> {
+  await announceReaction(deps.pool, input).catch((err) => {
+    deps.log(`telegram: the reaction was kept but not announced to open pages: ${err instanceof Error ? err.message : String(err)}`);
+  });
 }
 
 /** Remember which turn the messages an answer landed in stand for. */
@@ -75,8 +83,10 @@ export async function handleReaction(deps: ReactionDeps, chatId: string, reactio
   const emoji = currentEmoji(reaction);
   if (emoji === undefined) {
     // Taken back, or swapped for a custom emoji or a star, which say nothing readable.
-    if (await clearReaction(deps.pool, { source: REACTION_SOURCE, chatId, externalMessageId: messageId, now })) {
+    const cleared = await clearReaction(deps.pool, { source: REACTION_SOURCE, chatId, externalMessageId: messageId, now });
+    if (cleared) {
       deps.log(`telegram: chat ${chatId} — reaction on ${messageId} cleared`);
+      await announce(deps, { ...cleared, cleared: true });
     }
     return;
   }
@@ -88,6 +98,7 @@ export async function handleReaction(deps: ReactionDeps, chatId: string, reactio
   }
   const feedback = await setReaction(deps.pool, { source: REACTION_SOURCE, sent, emoji, now });
   deps.log(`telegram: chat ${chatId} — ${feedback.value} on ${messageId} (${sent.agentId})`);
+  await announce(deps, { conversationId: feedback.conversationId, messageId: feedback.messageId, value: feedback.value, emoji: feedback.emoji });
   if (feedback.value !== 'down') return;
   if (!(await claimFeedbackAsk(deps.pool, feedback.id, now))) return;
   const asked = await deps.api.sendMessage(chatId, WHAT_WAS_OFF_TEXT, { replyTo: reaction.message_id }).catch((err) => {
@@ -117,6 +128,7 @@ export async function takeFeedbackNote(
   if (!feedback) return false;
   await setFeedbackNote(deps.pool, feedback.id, input.text, new Date(deps.now()));
   deps.log(`telegram: chat ${chatId} — note kept on the 👎 for ${feedback.agentId}`);
+  await announce(deps, { conversationId: feedback.conversationId, messageId: feedback.messageId, value: feedback.value, emoji: feedback.emoji, note: true });
   await deps.api.setMessageReaction(chatId, input.messageId, NOTE_ACK_EMOJI).catch(() => {});
   return true;
 }

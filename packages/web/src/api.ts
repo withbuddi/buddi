@@ -686,6 +686,8 @@ export interface DigestRow {
     byAgent: Record<string, { up: number; down: number; neutral: number }>;
     notes: Array<{ agentId: string; note: string }>;
   };
+  /** The agents the reactions name, by id, as the owner knows them. */
+  agentNames?: Record<string, string>;
   delivered: boolean;
 }
 

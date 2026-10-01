@@ -60,7 +60,7 @@ export function createInlineMissionRunner(base: InlineMissionDeps): RunMission {
         state: 'succeeded',
         runConversationId: result.conversationId,
       });
-      return { ok: true, text: result.text };
+      return { ok: true, text: result.text, ...(result.conversationId ? { conversationId: result.conversationId } : {}) };
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err);
       await finishOccurrence(base.pool, occurrence.id, { state: 'failed', error: text }).catch(
