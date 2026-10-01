@@ -48,7 +48,7 @@ describe('a reaction from Telegram', () => {
     await waitFor(() => expect(streams.length).toBeGreaterThan(0));
     const before = reads.mock.calls.length;
     reacted = true;
-    act(() => streams.at(-1)!({ name: 'reaction', data: { messageId: 'm1', value: 'up', emoji: '👍', cleared: false } } as ChatEvent));
+    act(() => streams.at(-1)!({ id: '9', name: 'reaction', data: { messageId: 'm1', value: 'up', emoji: '👍', cleared: false } } as ChatEvent));
     await waitFor(() => expect(reads.mock.calls.length).toBeGreaterThan(before));
     expect(await screen.findByText('👍')).toBeInTheDocument();
   });
