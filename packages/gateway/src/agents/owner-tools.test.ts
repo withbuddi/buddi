@@ -30,6 +30,7 @@ class StubDb implements Queryable {
     display_name: null,
   };
   steps: string[] = [];
+  rezonedFrom: string[] = [];
   state = 'in-progress';
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
@@ -84,6 +85,11 @@ class StubDb implements Queryable {
           },
         ],
       };
+    }
+    // A new zone moves the schedules kept in the old one: none here.
+    if (text.includes('from core.schedule_specs where active and timezone')) {
+      this.rezonedFrom.push(params[0] as string);
+      return { rows: [] };
     }
     throw new Error(`StubDb: unexpected sql: ${text}`);
   }
@@ -193,6 +199,8 @@ describe('owner.set_profile', () => {
     expect(result.ok).toBe(true);
     expect(result.preferredName).toBe('Amen');
     expect(h.db.steps).toEqual(['name', 'timezone']);
+    // The zone changed from the fallback, so the schedules kept in it were looked for.
+    expect(h.db.rezonedFrom).toHaveLength(1);
   });
 
   it('refuses a zone Intl does not know, and writes nothing', async () => {
