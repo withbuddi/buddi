@@ -52,6 +52,7 @@ What changes in buddi from one release to the next, newest first.
 ### Fixed
 
 - Your timezone in Settings → Profile now drives the server's clock: the time agents are told, `{{today}}` in their prompts, reminders, digests, widgets (the World clock's "here"), the dashboard's footer and lock screen, and the zone of missions kept in your old zone, which move with it. A change applies at once, without a restart. `BUDDI_TZ` only fills an empty profile and is the fallback while it names none; `buddi doctor` says which one is in use.
+- The Analog World clock no longer cuts a place to "San Francis…": a place takes two lines (a size smaller with three or four faces) before it is cut, on Home and on the lock screen, and the faces stay aligned.
 - Mail stored before buddi read the List-Unsubscribe and Precedence headers is read for them now, a few hundred messages a poll, so a newsletter that says so only in List-Unsubscribe is recognised and its waiting card keeps itself like a new one's.
 - The daily "buddi learned" line: a rule that keeps itself after that day's end-of-day message went out no longer adds a second line for that date the next day; it folds into the next day's line.
 - Telegram reactions: a reaction (or taking it back, or a note on a 👎) shows under its message in an open dashboard tab at once; reactions on the first-run greeting and on a /recap answer are recorded too; the weekly digest and its Home card name agents by their display name.

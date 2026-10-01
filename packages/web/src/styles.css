@@ -3914,16 +3914,17 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 .wg-text-words { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
 .wg-text-main { font-size: var(--text-md); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 /* Clocks: analog faces side by side (WidgetClocks.tsx). A face is light while it is day there and dark at night, whatever the theme. */
-.wg-clocks { flex: 1 1 auto; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); justify-content: center; gap: var(--space-2); min-height: 0; }
+/* Two shared rows, faces over words: every face is drawn in the same box and every label starts on the same line, however many lines a place takes. */
+.wg-clocks { flex: 1 1 auto; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; justify-content: center; column-gap: var(--space-2); row-gap: var(--space-2); min-height: 0; }
 .wg-clocks[data-count='1'] { grid-auto-columns: minmax(0, 50%); }
 .wg-clock { --clock-dial: #fbfcfe; --clock-rim: rgb(20 32 54 / 14%); --clock-ink: #142036; --clock-tick: rgb(20 32 54 / 42%); --clock-second: var(--accent);
-  display: flex; flex-direction: column; align-items: center; gap: var(--space-2); min-width: 0; min-height: 0; }
+  grid-row: 1 / span 2; display: grid; grid-template-rows: subgrid; justify-items: center; row-gap: var(--space-2); min-width: 0; min-height: 0; }
 .wg-clock[data-night='true'] { --clock-dial: #0e1626; --clock-rim: rgb(255 255 255 / 14%); --clock-ink: #eef2f8; --clock-tick: rgb(238 242 248 / 48%); --clock-second: color-mix(in oklab, var(--accent) 65%, white); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .wg-clock:not([data-night]) { --clock-dial: #e8ecf2; }
 }
 :root[data-theme='dark'] .wg-clock:not([data-night]) { --clock-dial: #e8ecf2; }
-.wg-clock-face { flex: 1 1 0; min-height: 0; max-width: 100%; aspect-ratio: 1; overflow: visible; }
+.wg-clock-face { height: 100%; min-height: 0; max-width: 100%; aspect-ratio: 1; overflow: visible; }
 .wg-clock-dial { fill: var(--clock-dial); stroke: var(--clock-rim); stroke-width: 1.5; }
 .wg-clock-tick { stroke: var(--clock-tick); stroke-width: 1.6; stroke-linecap: round; }
 .wg-clock-tick[data-major='true'] { stroke: var(--clock-ink); stroke-width: 2.4; }
@@ -3931,15 +3932,18 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 .wg-clock-pin { fill: var(--clock-ink); }
 .wg-clock-second line { stroke: var(--clock-second); stroke-width: 1.2; stroke-linecap: round; }
 .wg-clock-pin-second { fill: var(--clock-second); }
-.wg-clock-words { display: flex; flex-direction: column; align-items: center; max-width: 100%; line-height: 1.25; text-align: center; }
-.wg-clock-city { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.wg-clock-words { display: flex; flex-direction: column; align-items: center; align-self: start; max-width: 100%; line-height: 1.25; text-align: center; }
+/* A place takes two lines before it is cut ("San / Francisco"), and with three or four faces it is a size smaller. */
+.wg-clock-city { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: break-word; font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.wg-clocks[data-count='3'] .wg-clock-city, .wg-clocks[data-count='4'] .wg-clock-city { font-size: var(--text-xs); }
 .wg-clock-day { font-size: var(--text-xs); color: var(--text-muted); }
 .wg-clock-off { font-size: var(--text-xs); color: var(--text-faint); font-variant-numeric: tabular-nums; }
 /* On the lock screen the faces are glass like the tiles, Today is left out, and the row grows to a readable face. */
-.wg-frame[data-variant='compact'] .wg-clock { --clock-dial: rgb(255 255 255 / 86%); --clock-rim: rgb(255 255 255 / 40%); gap: var(--space-1); }
+.wg-frame[data-variant='compact'] .wg-clock { --clock-dial: rgb(255 255 255 / 86%); --clock-rim: rgb(255 255 255 / 40%); row-gap: var(--space-1); }
+.wg-frame[data-variant='compact'] .wg-clocks { row-gap: var(--space-1); }
 .wg-frame[data-variant='compact'] .wg-clock[data-night='true'] { --clock-dial: rgb(14 22 38 / 84%); --clock-rim: rgb(255 255 255 / 18%); }
 .wg-frame[data-variant='compact'] .wg-clock-day[data-today='true'] { display: none; }
-.wg-frame[data-variant='compact'] .wg-clock-face { flex: none; width: min(100%, calc(var(--space-12) + var(--space-5))); }
+.wg-frame[data-variant='compact'] .wg-clock-face { height: auto; width: min(100%, calc(var(--space-12) + var(--space-5))); align-self: end; }
 /* States: nothing to show, a failure with no body to keep, a body hidden on screen. */
 .wg-state { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-1); text-align: center; }
 .wg-state-title { font-size: var(--text-md); font-weight: var(--weight-medium); }
