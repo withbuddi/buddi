@@ -161,7 +161,7 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
     await pool.query(`update email.messages set bulk = false, bulk_checked = false`);
     await pool.query(`truncate core.proposals`);
     const { rows: news } = await pool.query(`select id from email.messages where from_addr = 'news@list.test'`);
-    await ctx.buddi.proposals!.proposePolicy(null, {
+    await ctx.buddi!.proposals!.proposePolicy(null, {
       matcher: { sender: 'news@list.test', account: OWNER_ADDRESS, accountId },
       action: 'ignore',
       params: { category: 'promo', urgency: 'low' },
