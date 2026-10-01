@@ -1,8 +1,9 @@
 /**
  * The note a rollover leaves at the top of the fresh conversation.
  *
- * A browser session ends its conversation, and what it learned arrives here as
- * one carried line. It is drawn as a note rather than a bubble: nobody in this
+ * A conversation that ends (idle, or grown too long) leaves a note for the
+ * next one: where it stopped, and for a browser session the pages it saw. It
+ * is drawn as a folded note rather than a bubble: nobody in this
  * thread said it, and a transcript that opens with an instruction the owner
  * never typed is the bug this is supposed to fix, not cause.
  */
@@ -70,6 +71,23 @@ describe('what the previous conversation learned', () => {
     );
     expect(screen.queryByTestId('chat-notice')).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain('New conversation —');
+  });
+
+  it('is folded under "Carried over", and the owner can read it and delete it', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue({
+      conversationId: 'c2', agentId: 'keeper', carriedOver: CARRIED,
+      messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text', text: 'Rent clears.' }] }],
+    });
+    const gone = vi.spyOn(chatApi, 'deleteCarryOver').mockResolvedValue(null);
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const note = await screen.findByTestId('chat-carryover');
+    const fold = note.querySelector('details')!;
+    expect(fold).not.toHaveAttribute('open');
+    expect(fold.querySelector('summary')).toHaveTextContent('Carried over');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note', hidden: true }));
+    await waitFor(() => expect(gone).toHaveBeenCalledWith('c2'));
+    await waitFor(() => expect(screen.queryByTestId('chat-carryover')).not.toBeInTheDocument());
+    expect(screen.getByText('Rent clears.')).toBeInTheDocument();
   });
 
   it('is absent from an ordinary conversation', async () => {

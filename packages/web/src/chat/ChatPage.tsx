@@ -39,6 +39,7 @@ import { artifactRenderable, artifactTabId, type AttachmentBlock } from './attac
 import { QuestionPicker } from './QuestionPicker';
 import { ApprovalDock, type DockedApproval } from './ApprovalDock';
 import { conversationLine } from './lifetime';
+import { CarryOverNote } from './CarryOver';
 import { MessageList, type LiveCall, type LiveTurnView } from './MessageList';
 import { openChatStream } from './stream';
 import { claimPlayback, playAudio, playbackCurrent, readAloudPreference, saveReadAloud, stopPlayback } from './voice';
@@ -1251,7 +1252,19 @@ export function ChatPage({
         ) : null}
 
         {conversation?.carriedOver ? (
-          <div className="wb-carryover" data-testid="chat-carryover">{conversation.carriedOver}</div>
+          <CarryOverNote
+            key={conversation.conversationId}
+            text={conversation.carriedOver}
+            onDelete={async () => {
+              const id = conversation.conversationId;
+              await chatApi.deleteCarryOver(id);
+              setConversation((current) => {
+                if (!current || current.conversationId !== id) return current;
+                const { carriedOver: _gone, ...rest } = current;
+                return rest;
+              });
+            }}
+          />
         ) : null}
 
         <MessageList

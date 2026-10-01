@@ -2,19 +2,23 @@ import type { Queryable } from '@buddi/core';
 import type { BrowserController, BrowserRollover } from '@buddi/tool-browser';
 import type { LifetimeReason } from './conversation-lifetime.js';
 import { carryConversationContext } from './browser-handoff.js';
+import type { CarryOverDeps } from './carry-over.js';
 
 export type ConversationRolloverHook = (agentId: string, previousConversationId: string, conversationId: string, reason: LifetimeReason) => Promise<void>;
 
 /** Called only by a surface's automatic size rollover, before it adopts the
  * new conversation. No model-supplied IDs, cross-agent adoption or new grants. */
-export async function continueBrowserTask(pool: Queryable, browser: BrowserController, input: BrowserRollover, reason: LifetimeReason): Promise<void> {
+export async function continueBrowserTask(pool: Queryable, browser: BrowserController, input: BrowserRollover, reason: LifetimeReason, carry: CarryOverDeps = {}): Promise<void> {
   // What the old conversation was *doing* carries over whichever way it ended,
   // and whether or not a browser session is still live: the fresh conversation
-  // opens with the task, the last exchange, and the pages if there were any. A
-  // size rollover always carries, since it cut the work in half; an idle one
-  // carries only a browser session, as it always did.
+  // opens with the agent's own note on where it stopped (or, without one, the
+  // task, the last exchange and the pages, for a size rollover or a browser
+  // session).
   // Never at the cost of the turn — a note is a convenience, not the answer.
-  await carryConversationContext(pool, { ...input, reason }).catch(() => null);
+  await carryConversationContext(pool, { ...input, reason }, carry).catch((err) => {
+    carry.log?.(`carry-over: the note for ${input.conversationId} was not written: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  });
   if (reason !== 'size' || !browser.rollover) return;
   const before = browser.status({ agentId: input.agentId, conversationId: input.previousConversationId });
   if (!before.session || Date.parse(before.session.expiresAt) <= Date.now()) return;

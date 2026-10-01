@@ -1,7 +1,7 @@
 ---
 title: "Conversations: what the model sees, and what you can say while it works"
 status: reference
-updated: 2026-09-25
+updated: 2026-10-01
 ---
 
 # Conversations: what the model sees, and what you can say while it works
@@ -63,14 +63,40 @@ rollover now counts the **projected** size, cached per version of the
 transcript, so a long browser conversation is measured once rather than on
 every turn.
 
-**A conversation that does end says what it was doing.** Every size rollover
-carries a note — the task, the last thing asked, the agent's last words, the
-pages if any — under the hidden speaker the browser handoff already used
+**When a conversation ends.** Before a turn starts, a conversation that has
+sat idle longer than its agent's setting, or whose transcript has outgrown the
+budget above, is closed and the turn runs in a fresh one. The idle time is per
+agent, on Setup → Brain ("New chat after": 3 hours, a day, a week, or never;
+`idleRollover` in the agent file, `buddi agents set --idle-rollover`). Absent,
+it is three hours; the Developer agent asks for a day. Never turns off only
+the idle rule: size still rolls a conversation over
+(`packages/gateway/src/surfaces/conversation-lifetime.ts`).
+
+**A conversation that does end says what it was doing.** Every rollover, idle
+or size, asks the agent's own model once for a short note written from the old
+transcript: what we were doing, decisions, open threads, what is next
+(`packages/gateway/src/surfaces/carry-over.ts`). The model is sent the
+newest 24k characters of owner and agent text and the names of tools called —
+never a tool result — and may answer in 500 tokens within 20 seconds; the note
+keeps 1,500 characters of it, redacted of anything credential-shaped. A plugin
+may add a few lines of its own state under its name (docs/plugins.md §2.7):
+the developer plugin adds the workspace, branch, last commit and uncommitted
+files. Browser pages visited are listed by address and title. The note is
+stored as the first message of the new conversation under a hidden speaker, so
+the model reads it as the first block of context; the dashboard draws it as a
+folded "Carried over from the previous conversation" item above the
+transcript, with **Delete note**, which takes it out of the page and of every
+later turn (`DELETE /api/chat/conversations/<id>/carry-over`).
+
+If the model fails, times out or answers nothing, there is no summary and the
+rollover happens anyway: a size rollover, or one after a browser session,
+falls back to the copied note — the task, the last thing asked, the agent's
+last words, the pages — and a plain idle rollover carries nothing
 (`packages/gateway/src/surfaces/browser-handoff.ts`). URLs are stripped of
 credentials, query and fragment; titles are labelled as the pages' own
-untrusted words; every copied message is redacted of anything
-credential-shaped and capped at 400 characters. Idle rollovers are unchanged.
-The rollover logs one line with the reason, both sizes and the limit applied.
+untrusted words; every copied message is redacted and capped at 400
+characters. The rollover logs one line with the reason, both sizes and the
+limit applied.
 
 **A reply that hits the output limit.** A turn cut off in the middle of its
 text stops the run with "Stopped: the answer got too long and was cut off."

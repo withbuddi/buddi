@@ -49,6 +49,8 @@ import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
+import { carryOverDeps } from '../surfaces/carry-over.js';
+import { deleteCarryOver } from '../surfaces/browser-handoff.js';
 import { ProviderSettingsError, type ProviderSettings } from '../providers.js';
 import { ProviderAccountError, type ProviderAccounts } from '../provider-accounts.js';
 import { listBrowserProfiles, listInstalledApps } from './apps.js';
@@ -538,7 +540,15 @@ export function createWebApp(deps: WebServerDeps): Server {
   };
   const chat = deps.chat
     ? new WebChat({
-        onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(deps.pool, deps.browser ?? browserHost(deps.env ?? process.env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+        // The fresh conversation opens with a note the agent's own model wrote
+        // from the old one, plus any plugin's lines (surfaces/carry-over.ts).
+        onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(deps.pool, deps.browser ?? browserHost(deps.env ?? process.env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason, carryOverDeps({
+          catalog: deps.catalog,
+          providerFor: (agent) => deps.chat!.providerFor(agent),
+          registry: deps.registry,
+          ctx: deps.ctx,
+          log,
+        })),
         pool: deps.pool,
         catalog: deps.catalog,
         registry: deps.registry,
@@ -1841,6 +1851,16 @@ export function createWebApp(deps: WebServerDeps): Server {
       const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (groupGone) {
         return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+      }
+      /*
+       * The owner read the note a rollover carried into this conversation and
+       * does not want it. It leaves the page and every later turn's context.
+       */
+      const carryGone = /^\/api\/chat\/conversations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/carry-over$/i.exec(path);
+      if (carryGone) {
+        // Idempotent: a note already gone is the state the owner asked for.
+        await deleteCarryOver(deps.pool, carryGone[1]!);
+        return sendEmpty(res, 204);
       }
       // The agent's uploaded picture goes; its icon is drawn again.
       const avatarGone = /^\/api\/agents\/([^/]+)\/avatar$/.exec(path);

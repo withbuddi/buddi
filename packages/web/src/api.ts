@@ -1726,6 +1726,8 @@ export const chatApi = {
   startConversation: (agentId: string) =>
     post<{ conversationId: string }>(`/chat/${encodeURIComponent(agentId)}/conversations`),
   conversation: (id: string) => get<ChatConversation>(`/chat/conversations/${encodeURIComponent(id)}`),
+  /** Take the carried-over note out of a conversation, page and context both. */
+  deleteCarryOver: (id: string) => del<null>(`/chat/conversations/${encodeURIComponent(id)}/carry-over`),
   send: (agentId: string, body: { conversationId?: string; text: string; attachmentIds?: string[]; opening?: boolean }) =>
     post<{
       conversationId: string;

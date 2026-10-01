@@ -41,6 +41,7 @@ import { nativeSearchRecorder } from '@buddi/tool-web';
 import { hostService } from '@buddi/tool-host';
 import { browserHost } from '../browser-host.js';
 import { continueBrowserTask } from '../surfaces/browser-continuation.js';
+import { carryOverDeps } from '../surfaces/carry-over.js';
 import { browserTabUrl, webConfig } from '../web/config.js';
 import { BROWSER_ACT, BrowserPhotos, runBrowserCommand } from './browser-view.js';
 import { approvalResumeContext, ownerRequestContext } from '../surfaces/owner-request.js';
@@ -482,7 +483,15 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         deps.ctx.timezone,
       ),
     goals: async () => goalsText(await goalDigest(pool, deps.registry, now(), deps.ctx.timezone)),
-    onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, browserHost(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason),
+    // The note a rolled-over chat opens with is written by the agent's own
+    // model, with any plugin's lines (surfaces/carry-over.ts).
+    onConversationRollover: (agentId, previousConversationId, conversationId, reason) => continueBrowserTask(pool, browserHost(env), { ownerId: deps.ctx.ownerId, agentId, previousConversationId, conversationId }, reason, carryOverDeps({
+      catalog: deps.catalog,
+      providerFor: (agent) => (deps.providerFor ? deps.providerFor(agent) : deps.provider),
+      registry: deps.registry,
+      ctx: deps.ctx,
+      log,
+    })),
     browserControl: (command) => runBrowserCommand(browserHost(env), command),
     hostControl: async (ownerId, command) => {
       const host = hostService(env);

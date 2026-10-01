@@ -1431,8 +1431,8 @@ export class WebChat {
        * terminal use — three hours idle, or a transcript past the budget — and
        * here it costs the page nothing: `send` already returns the id to use,
        * and the page already follows it. Nothing is said about it: the page
-       * simply lands in the new thread, and the grey "Carried over" note is
-       * there when — and only when — a size rollover carried work across.
+       * simply lands in the new thread, and the folded "Carried over" note is
+       * there when the rollover carried work across (surfaces/carry-over.ts).
        */
       const decided = await conversationForTurn(this.#deps.pool, {
         current: conversationId,
