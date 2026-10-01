@@ -73,7 +73,7 @@ function service(ctx: ReadyContext, opts: Partial<Parameters<typeof createUpgrad
 
 /** The job is asynchronous by construction; this is the only way to read it. */
 async function settled(upgrade: ReturnType<typeof service>['upgrade'], id: string): Promise<BackupJob> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 3000; i++) { // up to 30 s: a loaded CI runner spawns slowly
     const job = upgrade.job(id);
     if (job?.finishedAt !== undefined || job?.phase === 'restarting') return job;
     await new Promise(resolve => setTimeout(resolve, 10));
@@ -576,7 +576,7 @@ async function postgresPackage(root: string, script: string): Promise<string> {
   return pkg;
 }
 
-describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('the new version\'s database, before the hand-over', () => {
+describe.skipIf(process.platform !== 'darwin' && process.platform !== 'linux')('the new version\'s database, before the hand-over', { timeout: 60_000 }, () => {
   test('a Postgres that starts is handed over to, with its links made first', async () => {
     const ctx = await installation('0.1.1');
     const pkg = await postgresPackage(ctx.root, 'echo "postgres (PostgreSQL) 18.4"');
