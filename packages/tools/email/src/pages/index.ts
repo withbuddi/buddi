@@ -11,7 +11,7 @@
  * the pages, and everything the browser draws comes from here.
  */
 import type { PageDescriptor, PageQuery, ToolDefinition } from '@buddi/core/plugin';
-import { createAddAccountTool, createRemoveAccountTool, type AccountToolOptions } from './accounts.js';
+import { createAddAccountTool, createRemoveAccountTool, createSetPasswordTool, type AccountToolOptions } from './accounts.js';
 import {
   createAddRuleTool,
   createRevokePoliciesTool,
@@ -32,6 +32,7 @@ export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, 
   return [
     createAddAccountTool(opts),
     createRemoveAccountTool(opts),
+    createSetPasswordTool(opts),
     createAddRuleTool(),
     createRevokePoliciesTool(),
     createSaveDraftTool(),

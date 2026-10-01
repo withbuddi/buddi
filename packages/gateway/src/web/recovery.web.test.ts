@@ -478,7 +478,8 @@ it('a mailbox password and every kind of connection credential are listed when b
   expect(view.checklist.secrets).toEqual([
     {
       name: 'EMAIL_YOU_GMAIL_COM_1a2b3c4d', kind: 'email', label: 'Gmail — app password for you@gmail.com', mailboxId: 'mb-1',
-      settingsRoute: '#/settings/secrets?secret=EMAIL_YOU_GMAIL_COM_1a2b3c4d',
+      // Set password on the Email page, never Keys and secrets.
+      settingsRoute: '#/settings/p.email.settings?account=mb-1&set=password',
     },
     { name: 'MCP_TOKEN_cgh', kind: 'connection', label: 'GitHub — sign-in', connectionId: 'c-gh', settingsRoute: '#/settings/connections?connection=c-gh' },
     {
@@ -525,6 +526,6 @@ it('the adopted .env mailbox counts GMAIL_APP_PASSWORD, and its <vault> marker i
   const missing = await readRecoveryView({ pool: pool as never, env: { BUDDI_ENV_FILE: envFile }, vault: createMemoryVault() }, 'owner');
   expect(missing.checklist.secrets).toEqual([{
     name: 'GMAIL_APP_PASSWORD', kind: 'email', label: 'Gmail — app password for you@gmail.com', mailboxId: 'mb-1',
-    settingsRoute: '#/settings/p.email.settings',
+    settingsRoute: '#/settings/p.email.settings?account=mb-1&set=password',
   }]);
 });

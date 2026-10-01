@@ -212,6 +212,35 @@ describe('page descriptors', () => {
     expect(() => parse([withColumn({ hint: '' })], { queries: ['rows'] })).toThrow(/hint/);
   });
 
+  it('takes a row action that asks for a field first, and refuses a field it does not ask for', () => {
+    const withAction = (action: Record<string, unknown>): unknown =>
+      page({
+        body: [
+          {
+            kind: 'table',
+            query: { query: 'rows' },
+            rows: 'rows',
+            columns: [{ key: 'address', label: 'Address' }],
+            actions: [{ tool: 'demo.set_secret', label: 'Set password', ...action }],
+          },
+        ],
+      });
+    const form = {
+      title: 'Set the password for {address}',
+      fields: [{ name: 'password', label: 'Password', type: 'secret', required: true }],
+      submit: 'Test and save',
+      openWhen: { account: { row: 'id' }, set: 'password' },
+    };
+    const opts = { queries: ['rows'], tools: ['demo.set_secret'] };
+    const [parsed] = parse([withAction({ form, args: { id: { row: 'id' }, password: { field: 'password' } } })], opts);
+    const action = (parsed!.body[0] as { actions: Array<{ form?: { openWhen?: unknown } }> }).actions[0]!;
+    expect(action.form?.openWhen).toEqual({ account: { row: 'id' }, set: 'password' });
+    // A field argument with no form, or naming a field the form does not have.
+    expect(() => parse([withAction({ args: { password: { field: 'password' } } })], opts)).toThrow(/field/);
+    expect(() => parse([withAction({ form, args: { other: { field: 'other' } } })], opts)).toThrow(/field/);
+    expect(() => parse([withAction({ form: { ...form, openWhen: {} }, args: {} })], opts)).toThrow(/openWhen/);
+  });
+
   it('refuses a link to a page that is not this plugin\'s', () => {
     expect(() => parse([page({ body: [{ kind: 'link', label: 'Away', to: { page: 'elsewhere' } }] })])).toThrow(
       'plugin demo: page board, body[0].to.page: links to elsewhere, which is not a page of this plugin',

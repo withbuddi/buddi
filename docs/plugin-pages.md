@@ -179,7 +179,15 @@ interface SeriesPanelSeries { id: string; label: string; y: string; unit?: 'perc
 /** Which place, which account: the first option until the owner picks; with one option, nothing is drawn. */
 interface TabsPick { param: string; label: string; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom }
 /** `label` and `confirm` may carry `{field}` placeholders read from the row. */
-interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string }>; when?: Visibility }
+interface RowAction extends ToolRef { args: Record<string, ValueRef | { row: string } | { field: string }>; when?: Visibility; form?: RowActionForm }
+/**
+ * Ask first: the button opens a small sheet with these fields, Cancel and `submit`;
+ * `{ field }` args read it. A refusal stays in the sheet; success closes it.
+ * `openWhen` opens it by itself on the row where every named page parameter holds
+ * (a literal, or `{ row }` for that row's field). A page's hash carries page
+ * parameters after `?`: `#/settings/p.email.settings?account=<id>&set=password`.
+ */
+interface RowActionForm { title: string; fields: Field[]; submit: string; openWhen?: Record<string, string | { row: string }> }
 /** `all` offers it over every enabled row when nothing is ticked. */
 interface BulkAction extends ToolRef { args: Record<string, ValueRef | { selected: true }>; all?: true }
 interface Field { name: string; label: string; type: 'text' | 'number' | 'select' | 'textarea' | 'checkbox' | 'secret' | 'email' | 'date'; options?: Array<{ value: string; label: string }>; optionsFrom?: OptionsFrom; multiple?: boolean; required?: boolean; min?: number; max?: number; step?: number; hint?: string; from?: string; when?: Visibility; disabledWhen?: Visibility; action?: FieldAction }

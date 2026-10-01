@@ -235,9 +235,33 @@ export interface ToolRef {
  * than about "this account".
  */
 export interface RowAction extends ToolRef {
-  args: Record<string, ValueRef | { row: string }>;
+  /** `{ field }` names a field of `form`, and only when there is one. */
+  args: Record<string, ValueRef | { row: string } | { field: string }>;
   /** Offered only on the rows where this holds: Fetch, until there is a file. */
   when?: Visibility;
+  /**
+   * Ask for something first: the button opens a small sheet with these fields,
+   * Cancel and `submit`, and the tool runs from there. A failure stays in the
+   * sheet with its sentence; success closes it.
+   */
+  form?: RowActionForm;
+}
+
+/**
+ * The small form a row action opens — Settings → Email's "Set password".
+ *
+ * `title` may carry `{fieldName}` placeholders, filled from the row.
+ * `openWhen` opens it by itself on the row where every named page parameter
+ * holds: a literal, or `{ row }` for that row's own field. With
+ * `{ account: { row: 'id' }, set: 'password' }`, a link ending
+ * `?account=<id>&set=password` lands with that row's form open.
+ */
+export interface RowActionForm {
+  title: string;
+  fields: Field[];
+  /** The submit button's words: "Test and save". */
+  submit: string;
+  openWhen?: Record<string, string | { row: string }>;
 }
 
 /** A tool over a selection: its arguments may read it. */
@@ -832,13 +856,29 @@ const fieldArgSchema = z.union([
   z.object({ field: z.string().regex(PAGE_NAME, 'a field name is a name') }).strict(),
   z.object({ selected: z.literal(true) }).strict(),
 ]);
-const rowArgSchema = z.union([valueRefSchema, z.object({ row: viewPathSchema }).strict()]);
+const rowArgSchema = z.union([
+  valueRefSchema,
+  z.object({ row: viewPathSchema }).strict(),
+  z.object({ field: z.string().regex(PAGE_NAME, 'a field name is a name') }).strict(),
+]);
 const bulkArgSchema = z.union([valueRefSchema, z.object({ selected: z.literal(true) }).strict()]);
 
 const toolRefSchema = z.object({ ...toolRefCommon, args: z.record(fieldArgSchema).optional() }).strict();
 const rowActionSchema = z
-  .object({ ...toolRefCommon, args: z.record(rowArgSchema), when: visibilitySchema.optional() })
-  .strict();
+  .object({
+    ...toolRefCommon,
+    args: z.record(rowArgSchema),
+    when: visibilitySchema.optional(),
+    form: z.lazy(() => rowFormSchema).optional(),
+  })
+  .strict()
+  .refine(
+    (action) =>
+      Object.values(action.args).every(
+        (ref) => !('field' in ref) || (action.form?.fields ?? []).some((f) => f.name === ref.field),
+      ),
+    'a row action\'s `{ field }` argument names a field of its own `form`',
+  );
 const bulkActionSchema = z
   .object({ ...toolRefCommon, args: z.record(bulkArgSchema), all: z.literal(true).optional() })
   .strict();
@@ -912,6 +952,21 @@ const fieldSchema = z
     'a select field needs `options` or `optionsFrom`',
   )
   .refine((field) => field.multiple !== true || field.type === 'select', '`multiple` is for a select field only');
+
+const rowFormSchema = z
+  .object({
+    title: label,
+    fields: z.array(fieldSchema).min(1).max(6),
+    submit: label,
+    openWhen: z
+      .record(
+        z.string().regex(PAGE_NAME, 'a page parameter is a name'),
+        z.union([z.string().min(1).max(200), z.object({ row: viewPathSchema }).strict()]),
+      )
+      .refine((when) => Object.keys(when).length > 0 && Object.keys(when).length <= 4, '`openWhen` names one to four parameters')
+      .optional(),
+  })
+  .strict();
 
 const calendarViewSchema = z.enum(['week', 'month', 'list']);
 

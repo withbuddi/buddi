@@ -80,6 +80,7 @@ import type {
   QueryRef,
   RouteRef,
   PillRef,
+  RowAction,
   Tone,
   ToolRef,
   ValueRef,
@@ -370,6 +371,8 @@ interface ActState {
   /** Decided: apply what the pending action's `then` asked for, or let it go. */
   settle: (outcome?: { decision: 'approve' | 'reject'; state?: string; result?: unknown }) => void;
   run: (ref: ToolRef, args: Record<string, unknown>, onDone?: () => void) => Promise<void>;
+  /** Forget what the last write said: a sheet cancelled after a refusal. */
+  reset: () => void;
 }
 
 /**
@@ -481,7 +484,12 @@ function useAct(): ActState {
     scope.refresh();
   };
 
-  return { running, busy: running !== null, error, done, approvalId, waiting: pending?.ref.pending ?? null, settle, run };
+  const reset = (): void => {
+    setError(null);
+    setDone(null);
+  };
+
+  return { running, busy: running !== null, error, done, approvalId, waiting: pending?.ref.pending ?? null, settle, run, reset };
 }
 
 /**
@@ -1451,6 +1459,7 @@ function ListPiece({
     inSplit && !component.select && (component.actions ?? []).length === 0 && (component.bulk ?? []).length === 0;
   const rows = rowsOf(query.data, component.rows);
   const folded = component.collapsed ? rowsOf(query.data, component.collapsed.rows) : [];
+  const rowForm = useRowForm(component.actions, rows, act);
 
   /*
    * What makes each row itself, decided once for the whole list — the shown
@@ -1540,15 +1549,7 @@ function ListPiece({
             <>
               {drawn.side}
               {actions.map((action, i) => (
-                <ActionButton
-                  key={i}
-                  action={action}
-                  args={resolveArgs(action.args, { data: query.data, row, scope })}
-                  disabled={act.busy}
-                  running={act.running === action.tool}
-                  row={row}
-                  onRun={(ref, args) => void act.run(ref, args)}
-                />
+                <RowActionButton key={i} action={action} row={row} data={query.data} act={act} onForm={rowForm.show} />
               ))}
             </>
           }
@@ -1559,7 +1560,8 @@ function ListPiece({
   return (
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
-      <ActOutcome act={act} />
+      {rowForm.open ? null : <ActOutcome act={act} />}
+      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
       {groups.every((group) => group.rows.length === 0) ? (
         query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
@@ -1627,15 +1629,168 @@ function ListPiece({
   );
 }
 
-function TablePiece({ component, data }: { component: Of<'table'>; data: unknown }): JSX.Element {
+/** Whether a row form's `openWhen` holds of the page's parameters, on this row. */
+function opensOn(openWhen: Record<string, string | { row: string }>, params: Record<string, string>, row: unknown): boolean {
+  return Object.entries(openWhen).every(([key, want]) => {
+    const value = typeof want === 'string' ? want : readPath(row, want.row);
+    return value !== undefined && value !== null && params[key] === String(value);
+  });
+}
+
+/** The row form open now: which action, on which row. */
+interface OpenRowForm {
+  action: RowAction;
+  row: unknown;
+}
+
+/**
+ * Which row form is open, opened by a button or by the page's parameters.
+ *
+ * A link that names a row (`?account=<id>&set=password`) opens that row's form
+ * once the rows have arrived; the parameters are then forgotten, so a refresh
+ * after the write does not open it again.
+ */
+function useRowForm(actions: RowAction[] | undefined, rows: unknown[], act: ActState): {
+  open: OpenRowForm | null;
+  show: (action: RowAction, row: unknown) => void;
+  /** Cancelled: what the last attempt said goes with the sheet. */
+  close: () => void;
+  /** It worked: the sheet goes and the page says so. */
+  finish: () => void;
+} {
   const scope = useScope();
+  const [open, setOpen] = useState<OpenRowForm | null>(null);
+  useEffect(() => {
+    if (open !== null || rows.length === 0) return;
+    for (const action of actions ?? []) {
+      const when = action.form?.openWhen;
+      if (!when) continue;
+      const row = rows.find((candidate) => holds(candidate, action.when) && opensOn(when, scope.params, candidate));
+      if (row === undefined) continue;
+      setOpen({ action, row });
+      scope.setParams(Object.fromEntries(Object.keys(when).map((key) => [key, null])));
+      return;
+    }
+    // Only when the rows or the parameters change: an open form is not re-opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.length, JSON.stringify(scope.params)]);
+  return {
+    open,
+    show: (action, row) => {
+      act.reset();
+      setOpen({ action, row });
+    },
+    close: () => {
+      act.reset();
+      setOpen(null);
+    },
+    finish: () => setOpen(null),
+  };
+}
+
+/** A row action's button: the tool, or the sheet that asks for its fields first. */
+function RowActionButton({
+  action,
+  row,
+  data,
+  act,
+  onForm,
+}: {
+  action: RowAction;
+  row: unknown;
+  data: unknown;
+  act: ActState;
+  onForm: (action: RowAction, row: unknown) => void;
+}): JSX.Element {
+  const scope = useScope();
+  if (action.form) {
+    return (
+      <Button disabled={act.busy} onClick={() => onForm(action, row)}>
+        {fill(action.label, { row })}
+      </Button>
+    );
+  }
+  return (
+    <ActionButton
+      action={action}
+      args={resolveArgs(action.args, { data, row, scope })}
+      disabled={act.busy}
+      running={act.running === action.tool}
+      row={row}
+      onRun={(ref, args) => void act.run(ref, args)}
+    />
+  );
+}
+
+/**
+ * The small sheet a row action opens: its fields, Cancel, and the submit on
+ * the right. A refusal stays here with its sentence and the owner's input;
+ * success closes it and the page says what happened.
+ */
+function RowFormSheet({
+  open,
+  data,
+  act,
+  onClose,
+  onDone,
+}: {
+  open: OpenRowForm;
+  data: unknown;
+  act: ActState;
+  onClose: () => void;
+  onDone: () => void;
+}): JSX.Element {
+  const scope = useScope();
+  const { action, row } = open;
+  const form = action.form!;
+  const [values, setValues] = useState<Values>(() => initialValues(form.fields, row));
+  const missing = form.fields.some((field) => field.required && (values[field.name] === '' || values[field.name] === undefined));
+  // The submit is the action without its row-button words or a second question.
+  const { confirm: _confirm, ...rest } = action;
+  const submit: ToolRef = { ...rest, label: form.submit };
+  return (
+    <Sheet
+      title={fill(form.title, { row })}
+      onClose={onClose}
+      foot={
+        <Toolbar align="end">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <ActionButton
+            action={submit}
+            args={resolveArgs(action.args, { data, row, fields: values, shape: form.fields, scope })}
+            disabled={act.busy || missing}
+            running={act.running === action.tool}
+            row={row}
+            onRun={(ref, args) => void act.run(ref, args, onDone)}
+          />
+        </Toolbar>
+      }
+    >
+      <Stack>
+        <Fields
+          fields={form.fields}
+          values={values}
+          data={row}
+          onChange={(name, value) => setValues((v) => ({ ...v, [name]: value }))}
+        />
+        <ErrorBanner message={act.error} />
+      </Stack>
+    </Sheet>
+  );
+}
+
+function TablePiece({ component, data }: { component: Of<'table'>; data: unknown }): JSX.Element {
   const query = usePageQuery(component.query, data);
   const act = useAct();
   const rows = rowsOf(query.data, component.rows);
+  const rowForm = useRowForm(component.actions, rows, act);
   return (
     <PieceSection title={component.title} note={component.note}>
       <ErrorBanner message={query.error} />
-      <ActOutcome act={act} />
+      {rowForm.open ? null : <ActOutcome act={act} />}
+      {rowForm.open ? <RowFormSheet open={rowForm.open} data={query.data} act={act} onClose={rowForm.close} onDone={rowForm.finish} /> : null}
       {rows.length === 0 ? (
         query.loading ? <Empty>Loading…</Empty> : <EmptyPiece text={component.empty ?? 'Nothing here yet.'} />
       ) : (
@@ -1671,14 +1826,13 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
                       {component.actions
                         .filter((action) => holds(row, action.when))
                         .map((action, i) => (
-                          <ActionButton
+                          <RowActionButton
                             key={i}
                             action={action}
-                            args={resolveArgs(action.args, { data: query.data, row, scope })}
-                            disabled={act.busy}
-                            running={act.running === action.tool}
                             row={row}
-                            onRun={(ref, args) => void act.run(ref, args)}
+                            data={query.data}
+                            act={act}
+                            onForm={rowForm.show}
                           />
                         ))}
                     </Toolbar>
@@ -2528,10 +2682,13 @@ export function PluginPage({
   timezone,
   embedded,
   siblings,
+  params: routeParams,
 }: {
   page: PluginPageDescriptor;
   /** The item segment of the route, when there is one. */
   item?: string | null;
+  /** The parameters after the hash's `?`: what a link asked this page to open. */
+  params?: Record<string, string>;
   navigate: (route: string, replace?: boolean) => void;
   timezone: string;
   /** Inside a settings tab: no page header, no page gap. */
@@ -2543,7 +2700,16 @@ export function PluginPage({
    */
   siblings?: PluginPageDescriptor[];
 }): JSX.Element {
-  const [params, setParamsState] = useState<Record<string, string>>({});
+  const [params, setParamsState] = useState<Record<string, string>>(() => ({ ...routeParams }));
+  /*
+   * A link followed while the page is already showing — the recovery
+   * checklist's Fix, a second time — lands its parameters too.
+   */
+  const routeKey = JSON.stringify(routeParams ?? {});
+  useEffect(() => {
+    if (routeParams && Object.keys(routeParams).length > 0) setParamsState((current) => ({ ...current, ...routeParams }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeKey]);
   const [version, setVersion] = useState(0);
   const scope: PageScope = {
     plugin: page.plugin,
@@ -2658,6 +2824,7 @@ function itemParams(page: PluginPageDescriptor, item?: string | null): Record<st
 /** A plugin page, drawn inside a Settings tab. */
 export function PluginSettingsPage(props: {
   page: PluginPageDescriptor;
+  params?: Record<string, string>;
   navigate: (route: string, replace?: boolean) => void;
   timezone: string;
   siblings?: PluginPageDescriptor[];

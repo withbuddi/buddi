@@ -728,6 +728,34 @@ const settings: PageDescriptor = {
             { key: 'state', label: 'State', pill: {} },
           ],
           actions: [
+            /*
+             * A new password for a mailbox that stays: after a restore, or an
+             * app password changed at the provider. Tested against the
+             * mailbox's own hosts before anything is kept. The recovery
+             * checklist opens it on one row with `?account=<id>&set=password`.
+             */
+            {
+              tool: 'email.set_password',
+              label: 'Set password',
+              form: {
+                title: 'Set the password for {address}',
+                fields: [
+                  {
+                    name: 'password',
+                    label: 'App password',
+                    type: 'secret',
+                    required: true,
+                    hint: 'buddi signs in with it once to test it, then keeps it in your keychain. The old one stays until this one works.',
+                  },
+                ],
+                submit: 'Test and save',
+                openWhen: { account: { row: 'id' }, set: 'password' },
+              },
+              busy: 'Testing…',
+              done: { path: 'note' },
+              then: 'close',
+              args: { id: { row: 'id' }, password: { field: 'password' } },
+            },
             {
               tool: 'email.remove_account',
               label: 'Remove',

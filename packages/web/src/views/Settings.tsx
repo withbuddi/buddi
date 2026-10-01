@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parsePluginSettingsRoute, settingsSectionOf } from '../routes';
+import { SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parsePluginSettingsRoute, pluginRouteParams, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
@@ -88,6 +88,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {pluginPage ? (
             <PluginSettingsPage
               page={pluginPage}
+              params={pluginRouteParams(hash)}
               navigate={navigate}
               timezone={timezone}
               siblings={plugins.all.filter((p) => p.plugin === pluginPage.plugin)}

@@ -43,6 +43,7 @@ import type {
   QueryRef as CoreQueryRef,
   RouteRef as CoreRouteRef,
   RowAction as CoreRowAction,
+  RowActionForm as CoreRowActionForm,
   SectionAction as CoreSectionAction,
   Selection as CoreSelection,
   SeriesPanelSeries as CoreSeriesPanelSeries,
@@ -76,6 +77,7 @@ import type {
   QueryRef,
   RouteRef,
   RowAction,
+  RowActionForm,
   SectionAction,
   Selection,
   SeriesPanelComponent,
@@ -134,6 +136,7 @@ interface Conformance {
   routeRef: Same<CoreRouteRef, RouteRef>;
   toolRef: Exact<CoreToolRef, ToolRef>;
   rowAction: Exact<CoreRowAction, RowAction>;
+  rowActionForm: Exact<CoreRowActionForm, RowActionForm>;
   bulkAction: Exact<CoreBulkAction, BulkAction>;
   pillRef: Exact<CorePillRef, PillRef>;
   listItem: Exact<CoreListItem, ListItem>;
@@ -178,6 +181,7 @@ export const CONTRACTS_AGREE: Conformance = {
   routeRef: true,
   toolRef: true,
   rowAction: true,
+  rowActionForm: true,
   bulkAction: true,
   pillRef: true,
   listItem: true,
@@ -252,6 +256,7 @@ export const CHECKED_TYPES = [
   'RouteRef',
   'ToolRef',
   'RowAction',
+  'RowActionForm',
   'BulkAction',
   'PillRef',
   'ListItem',

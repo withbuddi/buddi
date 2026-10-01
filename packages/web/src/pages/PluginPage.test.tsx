@@ -1788,3 +1788,83 @@ describe('a sound a tool answers with', () => {
     expect(FakeAudio.last).toBeNull();
   });
 });
+
+describe('a row action that asks first', () => {
+  const rowForm: PluginPageDescriptor = {
+    plugin: 'demo',
+    id: 'settings',
+    title: 'Demo',
+    place: 'settings',
+    body: [
+      {
+        kind: 'table',
+        query: { query: 'accounts' },
+        rows: 'accounts',
+        columns: [{ key: 'address', label: 'Address' }],
+        actions: [
+          {
+            tool: 'demo.set_secret',
+            label: 'Set password',
+            form: {
+              title: 'Set the password for {address}',
+              fields: [{ name: 'password', label: 'Password', type: 'secret', required: true }],
+              submit: 'Test and save',
+              openWhen: { account: { row: 'id' }, set: 'password' },
+            },
+            done: { path: 'note' },
+            then: 'close',
+            args: { id: { row: 'id' }, password: { field: 'password' } },
+          },
+        ],
+      },
+    ],
+  };
+  const drawForm = (params?: Record<string, string>): ReturnType<typeof render> =>
+    render(<PluginPage page={rowForm} navigate={navigate} timezone="UTC" embedded {...(params ? { params } : {})} />);
+
+  it('opens a sheet for its row, keeps a refusal there, and closes once it worked', async () => {
+    drawForm();
+    const buttons = await screen.findAllByRole('button', { name: 'Set password' });
+    fireEvent.click(buttons[0]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Set the password for owner@example.com')).toBeInTheDocument();
+    const input = within(dialog).getByLabelText('Password') as HTMLInputElement;
+    expect(input.type).toBe('password');
+    const save = within(dialog).getByRole('button', { name: 'Test and save' });
+    expect(save).toBeDisabled();
+
+    vi.mocked(api.pageAct).mockRejectedValueOnce(new Error('imap.example.com refused that password, so the old one is kept.'));
+    fireEvent.change(input, { target: { value: 'wrong' } });
+    fireEvent.click(save);
+    expect(await within(dialog).findByText('imap.example.com refused that password, so the old one is kept.')).toBeInTheDocument();
+    expect(api.pageAct).toHaveBeenCalledWith('demo', { tool: 'demo.set_secret', args: { id: 'acc-1', password: 'wrong' } });
+
+    vi.mocked(api.pageAct).mockResolvedValueOnce({ result: { note: 'owner@example.com opens with the new password.' } });
+    fireEvent.change(input, { target: { value: 'right' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test and save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(await screen.findByText('owner@example.com opens with the new password.')).toBeInTheDocument();
+  });
+
+  it('cancels without writing anything', async () => {
+    drawForm();
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Set password' }))[1]!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Set the password for old@example.com')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.pageAct).not.toHaveBeenCalled();
+  });
+
+  it('opens itself on the row a link names', async () => {
+    drawForm({ account: 'acc-2', set: 'password' });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Set the password for old@example.com')).toBeInTheDocument();
+  });
+
+  it('opens nothing for a link that names no row here', async () => {
+    drawForm({ account: 'acc-9', set: 'password' });
+    await screen.findAllByRole('button', { name: 'Set password' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});

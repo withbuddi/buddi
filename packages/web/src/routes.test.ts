@@ -6,6 +6,9 @@ import {
   parsePluginsTab,
   parseSecretRoute,
   secretRoute,
+  pluginSettingsRoute,
+  parsePluginSettingsRoute,
+  pluginRouteParams,
   settingsSectionOf,
   tipsPageOf,
 } from './routes';
@@ -55,5 +58,14 @@ describe('the recovery checklist links', () => {
     expect(parseSecretRoute(secretRoute('EMAIL_YOU_1a2b'))).toBe('EMAIL_YOU_1a2b');
     expect(parseSecretRoute('#/settings/connections?secret=x')).toBeNull();
     expect(settingsSectionOf(secretRoute('x'))).toBe('secrets');
+  });
+
+  it('carries a plugin page\'s parameters, so a mailbox lands with Set password open', () => {
+    const route = pluginSettingsRoute('email', 'settings', { account: 'mb-1', set: 'password' });
+    expect(route).toBe('#/settings/p.email.settings?account=mb-1&set=password');
+    expect(parsePluginSettingsRoute(route)).toEqual({ plugin: 'email', page: 'settings' });
+    expect(settingsSectionOf(route)).toBe('p.email.settings');
+    expect(pluginRouteParams(route)).toEqual({ account: 'mb-1', set: 'password' });
+    expect(pluginRouteParams('#/settings/p.email.settings')).toEqual({});
   });
 });

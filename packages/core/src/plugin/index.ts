@@ -87,6 +87,8 @@ export type {
   PageQuery,
   PageTab,
   QueryRef,
+  RowAction,
+  RowActionForm,
   SeriesPanelSeries,
   SeriesPanelTiles,
   TabsPick,

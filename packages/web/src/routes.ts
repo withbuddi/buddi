@@ -158,8 +158,26 @@ export function parsePluginPageRoute(hash: string): { plugin: string; page: stri
  */
 export const PLUGIN_SETTINGS_PREFIX = 'p.';
 
-export function pluginSettingsRoute(plugin: string, page: string): string {
-  return `${SETTINGS_ROUTE}/${encodeURIComponent(pluginSettingsTab(plugin, page))}`;
+export function pluginSettingsRoute(plugin: string, page: string, params?: Record<string, string>): string {
+  const query = params ? new URLSearchParams(params).toString() : '';
+  return `${SETTINGS_ROUTE}/${encodeURIComponent(pluginSettingsTab(plugin, page))}${query ? `?${query}` : ''}`;
+}
+
+/**
+ * The page parameters a plugin page's hash carries after `?`:
+ * `#/settings/p.email.settings?account=<id>&set=password` lands with that
+ * row's form open. Empty when there are none.
+ */
+export function pluginRouteParams(hash: string): Record<string, string> {
+  const at = hash.indexOf('?');
+  if (at === -1) return {};
+  try {
+    const out: Record<string, string> = {};
+    for (const [key, value] of new URLSearchParams(hash.slice(at + 1))) if (value !== '') out[key] = value;
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 export function parsePluginSettingsRoute(hash: string): { plugin: string; page: string } | null {
@@ -225,7 +243,7 @@ export function parseConnectionRoute(hash: string): string | null {
 
 /**
  * Settings → Keys and secrets with one secret's Replace value open:
- * `#/settings/secrets?secret=<name>`. Where a mailbox's password is given
+ * `#/settings/secrets?secret=<name>`. Where a secret's value is given
  * again after a restore.
  */
 export function secretRoute(name: string): string {

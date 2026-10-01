@@ -32,6 +32,7 @@ import {
   parseChatRoute,
   parseGroupChatRoute,
   parsePluginPageRoute,
+  pluginRouteParams,
   parseWelcomeRoute,
   placeOf,
   tipsPageOf,
@@ -530,6 +531,7 @@ function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; p
         <PluginPage
           page={page}
           item={located.item ?? null}
+          params={pluginRouteParams(props.hash)}
           navigate={props.navigate}
           timezone={props.timezone}
           siblings={pluginPages.all.filter((p) => p.plugin === located.plugin)}

@@ -96,8 +96,8 @@ history — as proposals, for the reason above.
 
 - Settings → Email lists accounts: address, the name the owner gave it, the
   addresses it also receives as, host, last sync, the vault secret's name,
-  whether it is on (and, for a mailbox `.env` used to name that could not be
-  adopted, that it needs adding again), and remove. It is a **page descriptor this
+  whether it is on, whether buddi can read its password, Set password and
+  remove. It is a **page descriptor this
   plugin contributes** ([plugin-pages.md](plugin-pages.md)), not a screen compiled
   into the dashboard: a table over the `accounts` query, with
   `email.remove_account` on each row and a drawer that writes through
@@ -124,6 +124,31 @@ history — as proposals, for the reason above.
   ([owner-secrets.md](owner-secrets.md) §4, §7), and it never enters
   `process.env`. Removing an account removes its vault
   entry with it.
+- **Set password** (`email.set_password`, `ownerOnly` like the other two:
+  never listed to a model, unknown to an agent) gives a mailbox a new app
+  password and keeps everything else — the row, its id, its mail, its
+  cursors. It is what a restore on a new machine or an app password changed
+  at the provider needs; removing and adding again would delete the mail.
+  The row's button opens a small form (one hidden field, Test and save,
+  Cancel). The login is tested over IMAP against the mailbox's own hosts
+  first, as adding one is; when the server refuses, nothing is written, the
+  old password stays, and the page says the server's reason in one sentence.
+  On success the password becomes the owner secret `secretNameFor(address)`
+  bound to `email.account` (the row's id), exactly as `email.add_account`
+  keeps it; a row the old `.env` seed left is moved onto that secret in the
+  same step. The tool then uses the secret once, as the poll does, so the
+  "Password needed" state clears at once, and the next poll reads the
+  mailbox. The password is never logged or returned.
+- **Password needed.** A row whose password buddi cannot read here says so
+  in its Password cell, with Set password beside it. The plugin never opens
+  the vault, so this is read from what core records: no owner secret of the
+  row's name bound to this mailbox's login, the last use of it for this
+  mailbox refused or failed (what an unreadable value leaves behind), or a
+  row the old `.env` seed left that start could not adopt.
+- The recovery checklist's mailbox item links straight to that form:
+  `#/settings/p.email.settings?account=<id>&set=password` opens the page
+  with that row's Set password open (the row action's `openWhen`,
+  [plugin-pages.md](plugin-pages.md)), not Settings → Keys and secrets.
 - Settings → Email (and `email.add_account` behind it) is the only way a
   mailbox exists. `.env` used to name one (`GMAIL_USER`, its password
   `GMAIL_APP_PASSWORD`); the gateway adopts that mailbox once, at start:

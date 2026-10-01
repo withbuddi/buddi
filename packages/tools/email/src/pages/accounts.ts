@@ -33,7 +33,7 @@ import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { TRIAGE_OFFER_TEXT } from '../agent.js';
 import { INBOX, secretNameFor } from '../config.js';
-import { ACCOUNT_KIND } from '../credentials.js';
+import { ACCOUNT_KIND, mailboxAuth } from '../credentials.js';
 import { ACCOUNT_COLUMNS, toAccount } from '../rows.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
 import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
@@ -181,6 +181,8 @@ export function readNewAccount(input: AddAccountInput): {
 export async function testLogin(
   connect: ImapClientFactory,
   account: ReturnType<typeof readNewAccount>,
+  /** The sentence for a refusal, given the server's reason. The add flow's own by default. */
+  refused?: (reason: string) => string,
 ): Promise<void> {
   const candidate: AccountRecord = {
     id: '',
@@ -204,6 +206,7 @@ export async function testLogin(
     await client.open(INBOX);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    if (refused) throw new AccountRefusal(refused(reason));
     throw new AccountRefusal(
       `${account.imapHost} would not let us in as ${account.address}. Check the address and the app password — many providers need an app password rather than the one you type into their website. (${reason})`,
     );
@@ -395,6 +398,112 @@ export function createRemoveAccountTool(
         note: secretRemoved
           ? `${account.address} is gone, and its password with it.`
           : `${account.address} is gone. It had no password of its own to remove.`,
+      };
+    },
+  };
+}
+
+const setPasswordInput = z.object({ id: z.string().uuid(), password: z.string().min(1) }).strict();
+
+/** The server's reason, with the password it was given taken out should it ever echo it. */
+function reasonWithout(reason: string, password: string): string {
+  const said = reason.split(password).join('‹password›').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '');
+  return said === '' ? 'no reason given' : said;
+}
+
+/**
+ * Give a mailbox a new password, keeping everything else it has.
+ *
+ * What a restore on a new machine, or an app password the owner changed at
+ * their provider, needs: the row, its mail and its cursors stay; only the
+ * secret behind it changes. The same order as adding one, for the same
+ * reason — **the login is tested first**, against the host settings the
+ * mailbox already has, and nothing is written when it fails: the old
+ * password, readable or not, stays exactly where it was.
+ *
+ * On success the password is the owner secret named by `secretNameFor`, bound
+ * to this mailbox's login, as `email.add_account` keeps it. A mailbox the
+ * old `.env` seed left (named `GMAIL_APP_PASSWORD`, never this plugin's to
+ * change) is moved onto its own secret in the same step. Then the secret is
+ * used once, as the poll would use it: that proves it reads back, and the
+ * record of that use is what the page's "Password needed" was drawn from,
+ * so the state clears now rather than at the next poll.
+ *
+ * `ownerOnly`: it is handed a secret. It never logs or returns it.
+ */
+export function createSetPasswordTool(
+  opts: AccountToolOptions,
+): ToolDefinition<z.infer<typeof setPasswordInput>, unknown> {
+  return {
+    name: 'email.set_password',
+    description:
+      "Give one of the owner's mailboxes a new app password. The login is tested against the mailbox's own hosts first; the old password is kept when it fails.",
+    tier: 'auto',
+    ownerOnly: true,
+    input: setPasswordInput,
+    async execute(input, ctx) {
+      const password = input.password.trim();
+      if (password === '') throw new AccountRefusal('The password for this mailbox is missing.');
+      const { rows } = await ctx.buddi!.db.query(
+        `select ${ACCOUNT_COLUMNS} from email.accounts where id = $1::uuid`,
+        [input.id],
+      );
+      const row = rows[0];
+      if (!row) throw new AccountRefusal('That mailbox is no longer here.');
+      const account = toAccount(row);
+      if (account.authMode !== 'app-password') {
+        throw new AccountRefusal(`${account.address} signs in another way; it has no app password to set.`);
+      }
+
+      await testLogin(
+        opts.connect,
+        {
+          address: account.address,
+          imapHost: account.imapHost,
+          imapPort: account.imapPort,
+          smtpHost: account.smtpHost,
+          smtpPort: account.smtpPort,
+          password,
+          displayName: account.displayName,
+          aliases: account.aliases,
+        },
+        (reason) =>
+          `${account.imapHost} refused that password for ${account.address} (${reasonWithout(reason, password)}), so the old one is kept.`,
+      );
+
+      const secrets = ctx.buddi!.secrets;
+      if (!secrets) throw new AccountRefusal('This installation has nowhere safe to keep the password.');
+      const secretName = secretNameFor(account.address);
+      const { rows: owner } = await ctx.buddi!.db.query<{ address: string }>(
+        `select address from email.accounts where secret_name = $1 and id <> $2::uuid`,
+        [secretName, account.id],
+      );
+      if (owner.length > 0) {
+        throw new AccountRefusal(
+          `The keychain entry ${secretName} already belongs to ${owner[0]!.address}, so nothing was changed.`,
+        );
+      }
+      try {
+        await secrets.put(secretName, password, [{ kind: ACCOUNT_KIND, target: account.id, rule: 'pre-approved' }]);
+      } catch {
+        throw new AccountRefusal('The password could not be kept safely, so the old one is kept. Unlock this machine and try again.');
+      }
+      let current = account;
+      if (account.secretName !== secretName || account.addedVia !== 'page') {
+        const { rows: moved } = await ctx.buddi!.db.query(
+          `update email.accounts set secret_name = $2, added_via = 'page' where id = $1::uuid returning ${ACCOUNT_COLUMNS}`,
+          [account.id, secretName],
+        );
+        if (moved[0]) current = toAccount(moved[0]);
+      }
+      // One use, as the poll makes it: the value is taken and dropped here.
+      const check = await mailboxAuth(ctx, current);
+      return {
+        saved: true,
+        address: current.address,
+        note: check.ok
+          ? `${current.address} opens with the new password. buddi reads it from the next poll.`
+          : `${current.address} opens with the new password, but buddi could not read it back yet: ${check.problem.message}`,
       };
     },
   };

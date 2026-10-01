@@ -72,9 +72,20 @@ export interface ToolRef {
 }
 
 export interface RowAction extends ToolRef {
-  args: Record<string, ValueRef | { row: string }>;
+  /** `{ field }` names a field of `form`. */
+  args: Record<string, ValueRef | { row: string } | { field: string }>;
   /** Offered only on the rows where this holds. */
   when?: Visibility;
+  /** The button opens a small sheet asking for these fields first. */
+  form?: RowActionForm;
+}
+
+/** The small form a row action opens; `openWhen` opens it from the page's parameters. */
+export interface RowActionForm {
+  title: string;
+  fields: Field[];
+  submit: string;
+  openWhen?: Record<string, string | { row: string }>;
 }
 
 export interface BulkAction extends ToolRef {

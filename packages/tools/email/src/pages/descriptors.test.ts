@@ -68,6 +68,7 @@ describe('the mail pages, as contributions', () => {
     const owner = [
       'email.add_account',
       'email.remove_account',
+      'email.set_password',
       'email.add_rule',
       'email.revoke_policies',
       'email.save_draft',

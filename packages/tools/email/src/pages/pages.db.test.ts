@@ -35,6 +35,7 @@ import {
 } from '@buddi/core/testing';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import { listAccounts, secretNameFor, writeGmailAccount } from '../config.js';
+import { mailboxAuth } from '../credentials.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest } from '../index.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
@@ -86,6 +87,7 @@ function readPath(source: unknown, path: string): unknown {
 
 const OWNER = 'owner@example.test';
 const ADDED = 'owner@work.test';
+const WRONG = 'not-the-password';
 
 suite('the mail pages, over postgres', () => {
   let admin: Pool;
@@ -135,7 +137,11 @@ suite('the mail pages, over postgres', () => {
     env = { [secretNameFor(OWNER)]: 'app-password' };
     vault = createVault({ env: { BUDDI_VAULT: 'memory' } as NodeJS.ProcessEnv }) as Vault;
     imap = new FakeImapServer();
-    const connect: ImapClientFactory = async () => imap.client();
+    // The server refuses one password, the way a real one refuses a typo.
+    const connect: ImapClientFactory = async (_account, auth) => {
+      if (auth.mode === 'app-password' && auth.pass === WRONG) throw new Error('[AUTHENTICATIONFAILED] Invalid credentials (Failure)');
+      return imap.client();
+    };
 
     configurePluginHost({ vault });
     const manifest = createEmailManifest({ connect, env });
@@ -272,8 +278,11 @@ suite('the mail pages, over postgres', () => {
     expect(accounts.accounts[0]).toMatchObject({ address: OWNER });
     expect(accounts.accounts[0].state).toEqual([{ value: 'on', tone: 'neutral' }]);
     expect(accounts.accounts[0].secretName).toBe(secretNameFor(OWNER));
-    // The cell says where, in words; the name is the tooltip behind it.
-    expect(accounts.accounts[0].password).toBe('In the vault');
+    // The cell says where, in words; the name is the tooltip behind it. This
+    // mailbox's password is an environment fixture, not an owner secret, so
+    // buddi cannot read it here: the quiet state, with Set password beside it.
+    expect(accounts.accounts[0].password).toBe('Password needed');
+    expect(accounts.accounts[0].passwordNeeded).toBe(true);
 
     /*
      * A body longer than the engine will carry is cut with a sentence rather
@@ -668,7 +677,8 @@ suite('the mail pages, over postgres', () => {
     );
     const id = rows[0].id as string;
     const before = (await ask('accounts')).accounts.find((a: { address: string }) => a.address === ADDED);
-    expect(before.state).toContainEqual({ value: 'add it again', tone: 'warning' });
+    expect(before.state).toContainEqual({ value: 'password needed', tone: 'neutral' });
+    expect(before.passwordNeeded).toBe(true);
 
     expect(await act('email.add_account', { address: ADDED, password: 'letmein' })).toMatchObject({ added: true });
     const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
@@ -709,7 +719,82 @@ suite('the mail pages, over postgres', () => {
     await act('email.remove_account', { id: account.id });
   });
 
+  /*
+   * Set password: the row, its mail and its id stay; only the secret behind
+   * it changes, and only once the server has let the new one in.
+   */
+  it('sets a mailbox password only once the server accepts it, and never says it back', async () => {
+    await act('email.add_account', { address: ADDED, password: 'first-password' });
+    const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
+    const secret = (await findSecret(pool, account.secretName))!;
+
+    // Wrong: refused in one sentence with the server's reason; the old one is kept.
+    const refused = await refusal('email.set_password', { id: account.id, password: WRONG });
+    expect(refused).toBe(
+      `imap.work.test refused that password for ${ADDED} ([AUTHENTICATIONFAILED] Invalid credentials (Failure)), so the old one is kept.`,
+    );
+    expect(refused).not.toContain(WRONG);
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('first-password');
+
+    // A restore: the row and the secret's name came back, its value did not.
+    await vault.delete(ownerSecretVaultName(secret.id));
+    expect((await mailboxAuth(ctx, account)).ok).toBe(false);
+    const broken = (await ask('accounts')).accounts.find((a: { id: string }) => a.id === account.id);
+    expect(broken).toMatchObject({ password: 'Password needed', passwordNeeded: true });
+
+    // Right: kept in the mailbox's own secret, the same row, the state cleared.
+    // A minute on: the use it records is the last one, as it is in real time.
+    clock = new Date(clock.getTime() + 60_000);
+    const saved = await act('email.set_password', { id: account.id, password: 'second-password' });
+    expect(saved).toMatchObject({ saved: true, address: ADDED });
+    expect(saved.note).toBe(`${ADDED} opens with the new password. buddi reads it from the next poll.`);
+    expect(JSON.stringify(saved)).not.toContain('second-password');
+    const after = (await findSecret(pool, secretNameFor(ADDED)))!;
+    expect(after.id).toBe(secret.id);
+    expect(await vault.get(ownerSecretVaultName(after.id))).toBe('second-password');
+    const { rows: bindings } = await pool.query(
+      `select kind, target, rule from core.secret_bindings where secret_id = $1`,
+      [after.id],
+    );
+    expect(bindings).toEqual([{ kind: 'email.account', target: account.id, rule: 'pre-approved' }]);
+    const fixed = (await ask('accounts')).accounts.find((a: { id: string }) => a.id === account.id);
+    expect(fixed).toMatchObject({ password: 'In the vault', passwordNeeded: false });
+    expect(JSON.stringify(fixed)).not.toContain('second-password');
+    await act('email.remove_account', { id: account.id });
+  });
+
+  it('moves a mailbox the old .env seed left onto its own secret, keeping its id', async () => {
+    const { rows } = await pool.query(
+      `insert into email.accounts
+         (address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, added_via)
+       values ($1, 'imap.work.test', 993, 'smtp.work.test', 465, 'app-password', 'GMAIL_APP_PASSWORD', 'env')
+       returning id::text as id`,
+      [ADDED],
+    );
+    const id = rows[0].id as string;
+    await act('email.set_password', { id, password: 'from-the-page' });
+    const account = (await listAccounts(pool, { enabledOnly: false })).find((a) => a.address === ADDED)!;
+    expect(account).toMatchObject({ id, addedVia: 'page', secretName: secretNameFor(ADDED) });
+    const secret = (await findSecret(pool, account.secretName))!;
+    expect(await vault.get(ownerSecretVaultName(secret.id))).toBe('from-the-page');
+    const row = (await ask('accounts')).accounts.find((a: { id: string }) => a.id === id);
+    expect(row.state).toEqual([{ value: 'on', tone: 'neutral' }]);
+    expect(row.passwordNeeded).toBe(false);
+    await act('email.remove_account', { id });
+  });
+
+  it('refuses a password for a mailbox that is not here', async () => {
+    expect(
+      await refusal('email.set_password', { id: '99999999-9999-4999-8999-999999999999', password: 'x' }),
+    ).toBe('That mailbox is no longer here.');
+  });
+
   it('does not exist for an agent: an ownerOnly tool is unknown, not forbidden', async () => {
+    const mailbox = (await listAccounts(pool, { enabledOnly: false }))[0]!;
+    expect(await refusal('email.set_password', { id: mailbox.id, password: 'x' }, 'mail-triage')).toBe(
+      'unknown tool: email.set_password',
+    );
+    expect(registry.list().some((t) => t.name === 'email.set_password')).toBe(false);
     expect(await refusal('email.add_account', { address: ADDED, password: 'x' }, 'mail-triage')).toBe(
       'unknown tool: email.add_account',
     );

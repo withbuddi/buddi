@@ -32,6 +32,8 @@ import {
   type SearchRow,
 } from '../search.js';
 import { lastSyncByAccount, listAccounts } from '../config.js';
+import { ACCOUNT_KIND } from '../credentials.js';
+import type { AccountRecord } from '../ports.js';
 import { THREAD_STATE_LABELS, findThread, listThreadRows, threadMessages, type ThreadState } from '../threads.js';
 import { listDraftsForThread } from '../drafts.js';
 import {
@@ -457,6 +459,41 @@ export function messageQuery(): PageQuery {
   };
 }
 
+/**
+ * The mailboxes whose password buddi cannot read here, by id.
+ *
+ * Read from what core already records, never from the vault (this plugin
+ * never opens it): no owner secret of the row's name bound to this mailbox's
+ * login — a restore brings the row and not the value — or the last use of it
+ * for this mailbox refused or failed, which is what an unreadable value
+ * leaves behind. A row the old `.env` seed left is one by definition. When
+ * the secrets cannot be listed at all, nothing is claimed.
+ */
+async function passwordsNeeded(accounts: AccountRecord[], ctx: ToolContext): Promise<Set<string>> {
+  const out = new Set<string>();
+  const secrets = ctx.buddi?.secrets;
+  let listed: Awaited<ReturnType<NonNullable<typeof secrets>['list']>> | null = null;
+  try {
+    listed = secrets ? await secrets.list() : null;
+  } catch {
+    listed = null;
+  }
+  for (const account of accounts) {
+    if (account.authMode !== 'app-password') continue;
+    if (account.addedVia === 'env') {
+      out.add(account.id);
+      continue;
+    }
+    if (listed === null) continue;
+    const secret = listed.find((s) => s.name === account.secretName);
+    const bound = secret?.bindings.some((b) => b.kind === ACCOUNT_KIND && b.target === account.id) ?? false;
+    const last = secret?.lastUse;
+    const broken = last != null && last.kind === ACCOUNT_KIND && (last.outcome === 'refused' || last.outcome === 'failed');
+    if (!bound || broken) out.add(account.id);
+  }
+  return out;
+}
+
 /** Every mailbox, disabled ones included: a row you cannot see cannot be fixed. */
 export function accountsQuery(): PageQuery {
   return {
@@ -467,6 +504,7 @@ export function accountsQuery(): PageQuery {
       const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
       const synced = await lastSyncByAccount(ctx.buddi!.db);
       const waiting = await triageWaitingByAccount(ctx.buddi!.db);
+      const needed = await passwordsNeeded(accounts, ctx);
       return {
         /*
          * Whether new mail has anybody to triage it. `needs-agent` is what
@@ -486,7 +524,8 @@ export function accountsQuery(): PageQuery {
           // Where the password is, in words; the secret's name is the detail
           // behind it (a tooltip), never the cell. A name, never a value:
           // nothing in the email schema holds a credential.
-          password: 'In the vault',
+          password: needed.has(account.id) ? 'Password needed' : 'In the vault',
+          passwordNeeded: needed.has(account.id),
           secretName: account.secretName,
           lastSync: synced.get(account.id)
             ? relative(synced.get(account.id) ?? null, now)
@@ -503,7 +542,9 @@ export function accountsQuery(): PageQuery {
             account.enabled
               ? { value: 'on', tone: 'neutral' }
               : { value: 'off', tone: 'warning' },
-            ...(account.addedVia === 'env' ? [{ value: 'add it again', tone: 'warning' }] : []),
+            // A mailbox `.env` used to name that could not be adopted is a
+            // password nobody can read here: Set password brings it back.
+            ...(account.addedVia === 'env' ? [{ value: 'password needed', tone: 'neutral' }] : []),
             // The poll's own record: new mail landed with nobody to triage it.
             ...(waiting.get(account.id) ? [{ value: 'triage waiting', tone: 'warning' }] : []),
           ],

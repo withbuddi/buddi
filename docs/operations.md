@@ -749,9 +749,9 @@ own until you finish the checklist* — and `buddi doctor` says the same.
 The checklist is at the top of **Settings → Backup**:
 
 - **Keys to paste again**, in words, each a link to where it goes: model
-  accounts, the Telegram token, plugin keys, mailbox passwords (to the
-  mailbox's secret in Settings → Keys and secrets, or Settings → Email for the
-  old `.env` mailbox) and connection credentials (a pasted token, a program's
+  accounts, the Telegram token, plugin keys, mailbox passwords (Settings →
+  Email with that mailbox's Set password open, which tests the login before
+  it keeps anything and keeps the mailbox's mail) and connection credentials (a pasted token, a program's
   secret variable, or an OAuth sign-in — *Sign in again* — each opening that
   connection in Settings → Connections). Each is checked the way buddi reads
   it, so only what is truly unreadable on this machine is listed;

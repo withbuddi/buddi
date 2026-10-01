@@ -35,7 +35,6 @@ import {
   createVault,
   describeSource,
   envValue,
-  findSecret,
   leaveRecovery,
   listPendingPluginData,
   listToolPermissions,
@@ -141,9 +140,12 @@ const SECRETS_ROUTE = '#/settings/secrets';
 const EMAIL_ROUTE = '#/settings/p.email.settings';
 const CONNECTIONS_ROUTE = '#/settings/connections';
 
-/** Settings → Keys and secrets with one secret's Replace value open. */
-function secretRoute(name: string): string {
-  return `${SECRETS_ROUTE}?secret=${encodeURIComponent(name)}`;
+/**
+ * Settings → Email with one mailbox's Set password open: the page's row form
+ * opens itself on the row whose id is `account` (`openWhen` in its descriptor).
+ */
+function mailboxPasswordRoute(id: string): string {
+  return `${EMAIL_ROUTE}?account=${encodeURIComponent(id)}&set=password`;
 }
 
 /** Settings → Connections with one connection's sheet open. */
@@ -290,19 +292,10 @@ async function missingMailboxes(vault: Vault | undefined, deps: RecoveryDeps): P
     if (account.addedVia === 'env') {
       if ((await readable(vault, deps.pool, LEGACY_PASSWORD_VAR)) !== null) continue;
       if (envValue(deps.env, LEGACY_PASSWORD_VAR) !== undefined) continue;
-      out.push({ name: account.secretName, kind: 'email', label, mailboxId: account.id, settingsRoute: EMAIL_ROUTE });
-      continue;
     }
-    // Replace value on the owner secret is where a known mailbox takes its
-    // password again; the Email page only adds new ones.
-    const held = await findSecret(deps.pool, account.secretName).catch(() => null);
-    out.push({
-      name: account.secretName,
-      kind: 'email',
-      label,
-      mailboxId: account.id,
-      settingsRoute: held ? secretRoute(account.secretName) : EMAIL_ROUTE,
-    });
+    // Set password on the Email page, which tests the login before it keeps
+    // anything and leaves the mailbox's mail where it is.
+    out.push({ name: account.secretName, kind: 'email', label, mailboxId: account.id, settingsRoute: mailboxPasswordRoute(account.id) });
   }
   return out;
 }
