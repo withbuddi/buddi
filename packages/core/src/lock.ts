@@ -43,9 +43,53 @@ export const DEFAULT_LOCK_DELAY: LockDelay = 5;
 export const LOCK_BACKGROUNDS = ['field', 'dawn', 'sea', 'moss', 'dusk', 'image'] as const;
 export type LockBackground = (typeof LOCK_BACKGROUNDS)[number];
 
+/** The lock screen's clock: the time and the date the owner's way unless picked here, and a second zone. */
+export const LOCK_CLOCK_TIMES = ['profile', '12h', '24h'] as const;
+export const LOCK_CLOCK_DATES = ['profile', 'short', 'long', 'iso', 'off'] as const;
+export type LockClockTime = (typeof LOCK_CLOCK_TIMES)[number];
+export type LockClockDate = (typeof LOCK_CLOCK_DATES)[number];
+/** A second clock: one of the owner's places by id (it follows a move), or a town found by name. */
+export type LockClockZone = { place: string } | { label: string; timezone: string };
+
+export interface LockClock {
+  time: LockClockTime;
+  date: LockClockDate;
+  zone: LockClockZone | null;
+}
+
+export const DEFAULT_LOCK_CLOCK: LockClock = { time: 'profile', date: 'profile', zone: null };
+
 export interface LockSettings {
   delayMinutes: LockDelay;
   background: LockBackground;
+  clock: LockClock;
+}
+
+function validZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A clock as stored or sent, made sound; undefined when it is not one. */
+export function lockClockOf(raw: unknown): LockClock | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const c = raw as Record<string, unknown>;
+  const time = c.time === undefined ? 'profile' : c.time;
+  const date = c.date === undefined ? 'profile' : c.date;
+  if (!(LOCK_CLOCK_TIMES as readonly unknown[]).includes(time) || !(LOCK_CLOCK_DATES as readonly unknown[]).includes(date)) return undefined;
+  let zone: LockClockZone | null = null;
+  if (c.zone !== undefined && c.zone !== null) {
+    const z = c.zone as Record<string, unknown>;
+    if (typeof z.place === 'string' && /^[a-z0-9-]{1,64}$/.test(z.place)) zone = { place: z.place };
+    else if (typeof z.label === 'string' && z.label.trim() !== '' && z.label.trim().length <= 40 && typeof z.timezone === 'string' && validZone(z.timezone)) {
+      zone = { label: z.label.trim(), timezone: z.timezone };
+    } else return undefined;
+  }
+  return { time: time as LockClockTime, date: date as LockClockDate, zone };
 }
 
 export interface LockPinRecord {
@@ -150,6 +194,7 @@ export async function readLockSettings(db: Queryable): Promise<LockSettings> {
   return {
     delayMinutes: delay === null ? null : (LOCK_DELAYS as readonly unknown[]).includes(delay) ? (delay as LockDelay) : DEFAULT_LOCK_DELAY,
     background: (LOCK_BACKGROUNDS as readonly unknown[]).includes(background) ? (background as LockBackground) : 'field',
+    clock: lockClockOf(value.clock) ?? { ...DEFAULT_LOCK_CLOCK },
   };
 }
 

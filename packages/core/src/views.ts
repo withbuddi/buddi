@@ -180,6 +180,9 @@ export const TILE_ICONS = [
   'fog',
   'wind',
   'moon-clear',
+  // Since host API 1.19: a tick for "nothing waiting", a clock face.
+  'check',
+  'clock',
 ] as const;
 
 export type TileIcon = (typeof TILE_ICONS)[number];

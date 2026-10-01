@@ -431,6 +431,13 @@ export class ToolRegistry {
           ...widget,
           // Read-only, like a metric: the plugin's db is the page query's pool.
           produce: (ctx: CoreToolContext, request) => widget.produce(this.#host(manifest.name, metricContext(ctx)), request),
+          // A setting's choices read when the sheet opens: the same host, the same read-only pool.
+          options: async (key: string, ctx: CoreToolContext) => {
+            const field = widget.settings?.find((f) => f.key === key);
+            if (!field || (field.kind !== 'select' && field.kind !== 'multiselect')) return [];
+            if (Array.isArray(field.options)) return field.options;
+            return field.options(this.#host(manifest.name, metricContext(ctx)));
+          },
         })),
       );
     }

@@ -117,7 +117,23 @@ export type {
   WidgetStrip,
   WidgetStripItem,
   WidgetText,
+  WidgetSurface,
 } from '../widgets.js';
+export type {
+  WidgetMultiselectField,
+  WidgetPlace,
+  WidgetPlaceField,
+  WidgetSelectField,
+  WidgetSettingField,
+  WidgetSettingKind,
+  WidgetSettingOption,
+  WidgetSettingOptions,
+  WidgetSettings,
+  WidgetTextField,
+  WidgetTimeFormatField,
+  WidgetToggleField,
+} from '../widget-settings.js';
+export { WIDGET_OPTIONS_MAX, WIDGET_PLACES_MAX, WIDGET_SETTING_KINDS, WIDGET_SETTINGS_MAX } from '../widget-settings.js';
 export { WIDGET_BODY_KINDS, WIDGET_ITEMS_MAX, WIDGET_LINE_MAX, WIDGET_ROWS_MAX, WIDGET_SIZES, WIDGET_TEXT_MAX, WIDGET_TITLE_MAX, WIDGET_TREND_MAX, WIDGET_VALUE_MAX } from '../widgets.js';
 export type {
   PolicyApplyResult,

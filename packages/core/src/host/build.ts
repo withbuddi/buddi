@@ -354,6 +354,14 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
           return undefined;
         }
       },
+      formats: async () => {
+        try {
+          const profile = await getOwnerProfile(facts.db);
+          return { time: profile.timeFormat, date: profile.dateFormat };
+        } catch {
+          return { time: null, date: null };
+        }
+      },
     },
     clock: {
       now: () => facts.now(),

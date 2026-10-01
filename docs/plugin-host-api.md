@@ -88,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.18'; see §7
+  readonly version: string;            // '1.19'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -105,7 +105,9 @@ interface BuddiHost {
 undefined`, `hasAgent(id): boolean` (1.1), `protectedPaths: readonly
 string[]`, `language(): Promise<string | undefined>` (1.5: the profile's
 "Answer me in" as a tag like `fr` or `pt-BR`, `undefined` when blank or not
-a language), `notify(message)` (1.2) when the plugin declares
+a language), `formats(): Promise<{ time, date }>` (1.19: the profile's time
+format, `12h`, `24h` or null for Auto, and date format, `short`, `long`,
+`iso` or null), `notify(message)` (1.2) when the plugin declares
 `owner:notify`, and `places()` (1.18) when it declares `owner:places`: the
 owner's Home, Work and named places from Settings → Profile, each `{ id,
 label, address, name, latitude, longitude, timezone }`, read-only, in the
@@ -384,7 +386,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.18`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.19`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -437,6 +439,17 @@ widgets do not load), and `exports` (named read-only queries), reached through
 `ctx.buddi.plugins.call` (docs/plugins.md §2.8–§2.10). An older buddi ignores
 `setup`, `requires` and `exports`, but refuses `owner:places`, so a plugin that
 declares it asks for `^1.18`.
+
+1.19 adds `owner.formats()`, the tile icons `check` and `clock`, and a
+widget's optional `settings`: up to eight fields from a fixed vocabulary
+(`select`, `multiselect`, `toggle`, `text`, `place`, `timeFormat`; a select's
+choices fixed or read by `options(ctx)` when the sheet opens), set per
+placement — the same widget can sit twice on Home and on the lock screen,
+each placement with its own — and handed to `produce(ctx, { size, settings
+})` resolved: defaults filled, places with coordinates and zone, a time format
+with the Profile applied (docs/plugins.md §2.5d). An older buddi ignores
+`settings` and calls `produce(ctx, { size })`, so a widget reads `settings ??
+{}` and need not ask for `^1.19`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

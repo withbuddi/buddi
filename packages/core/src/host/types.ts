@@ -95,6 +95,12 @@ export interface OwnerArea {
    */
   language(): Promise<string | undefined>;
   /**
+   * How the owner reads times and dates (Settings → Profile): `12h` or `24h`,
+   * and `short` (Thu, Oct 1), `long` (Thursday, 1 October) or `iso`; null is
+   * Auto — the reader's own taste. Since 1.19; absent before.
+   */
+  formats?(): Promise<{ time: '12h' | '24h' | null; date: 'short' | 'long' | 'iso' | null }>;
+  /**
    * Tell the owner something (docs/notifications.md). Declared as
    * `owner:notify`; absent otherwise. Core picks the channel, never the
    * plugin; the row carries the plugin's name. Since 1.2.

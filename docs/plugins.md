@@ -322,7 +322,7 @@ interface BuddiHost {
   readonly plugin: string;    // your manifest's name
   log(line: string): void;    // an operational line, prefixed with your name
   scrub(text: string): string; // stored values -> ‹secret:NAME› (owner-secrets §5)
-  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths, language; notify with `owner:notify`, places with `owner:places`
+  owner: OwnerArea;           // id, timezone, agentForRole, hasAgent, protectedPaths, language, formats; notify with `owner:notify`, places with `owner:places`
   clock: ClockArea;           // now(), today()
   db: DbArea;                 // query(), transaction() — never a raw pool
   dir: DirArea;               // <data>/plugins-data/<plugin>
@@ -1270,10 +1270,16 @@ Not available to a plugin, on purpose:
 
 ### 2.5d Widgets: a live panel on Home
 
-A widget is a small panel the owner can put on Home, move, resize and take
-off. You declare it in the manifest and answer a **body** when asked; the
-dashboard draws the frame (title, menu, stale and error states) and the body,
-from a fixed vocabulary. No HTML, no styling, no plugin code in the page.
+A widget is a small panel the owner can put on Home or on the lock screen,
+move, resize, set up and take off. You declare it in the manifest and answer
+a **body** when asked; the dashboard draws the frame (title, menu, stale and
+error states) and the body, from a fixed vocabulary. No HTML, no styling, no
+plugin code in the page.
+
+Each time the owner puts your widget somewhere is a **placement**: the widget,
+a size and its own settings. The same widget can sit twice on Home (the
+weather at Home and at Work) and on the lock screen with different settings;
+every placement keeps its own, and nothing is shared between two of them.
 
 ```ts
 import type { WidgetDefinition } from '@buddi/core/plugin';
@@ -1285,8 +1291,16 @@ export const todayWidget: WidgetDefinition = {
   refreshSeconds: 300,           // 60–86400; ten minutes when left out
   link: { page: 'agenda' },      // a page of yours the body opens (optional)
   // sensitive: true,            // hidden on screen until Show, never on a lock screen
-  async produce(ctx, { size }) {
+  settings: [                    // what each placement can set (host API 1.19), at most eight
+    { key: 'calendars', kind: 'multiselect', label: 'Calendars', hint: 'None ticked: all of them.',
+      options: async (ctx) => (await listCalendars(ctx.buddi!.db)).map((c) => ({ value: c.id, label: c.name })) },
+    { key: 'days', kind: 'select', label: 'How far ahead', default: '2',
+      options: [{ value: '1', label: 'Today' }, { value: '2', label: 'Two days' }, { value: '7', label: 'A week' }] },
+    { key: 'time', kind: 'timeFormat', label: 'Times' },
+  ],
+  async produce(ctx, { size, settings }) {
     // Read-only: ctx.buddi.db is the read-only pool a page query runs in.
+    // settings: this placement's, resolved — { calendars: string[], days: '2', time: '12h' | '24h' | null }.
     return { kind: 'list', rows: [{ title: 'Dinner with Ana', sub: 'Le Kitchen', side: '20:00' }], more: '2 more by tomorrow night' };
   },
 };
@@ -1311,13 +1325,47 @@ the widget could not load. `null` means nothing to show right now. Answer a
 `text` instead when there is something to say ("Link a calendar on Settings →
 Calendar to see your day here").
 
-What buddi does with it: produces each placed widget at most once per
-`refreshSeconds` (a failure is tried again after a minute), gives it five
-seconds, and keeps the last good body, so a widget that fails a refresh is
-drawn with it and marked stale while the rest of Home is untouched. `size` is
-the size the owner chose, so a medium can say more. The owner's layout lives
-in the installation (`core.web_settings` under `widgets`); until they arrange
-anything, Home shows every widget that is not `sensitive`.
+**Settings** (host API 1.19). A widget may declare up to eight fields; the
+owner sets them per placement in a sheet that shows the placement live as
+they change. The page draws them from a fixed vocabulary and knows nothing
+of your plugin:
+
+| `kind` | Extra fields | Drawn as | `settings[key]` in `produce` |
+| --- | --- | --- | --- |
+| `select` | `options`, `default?`, `inTitle?` | three short choices as a segment, more as radio rows | the chosen value, or the default (the first option when none) |
+| `multiselect` | `options`, `default?` | tick rows | the chosen values; empty means "all" — say so in `hint` |
+| `toggle` | `default?` | a checkbox | `true` or `false` |
+| `text` | `placeholder?`, `max?` (≤ 120, 60 by default), `default?` | a line | the line |
+| `place` | `multiple?` (up to three), `inTitle?` | the owner's places (Settings → Profile) as rows, or any town found by name | `{ id, label, name, latitude, longitude, timezone }` (`id` null for a town), or a list; one left unset is the owner's Home, or null with no place |
+| `timeFormat` | — | Profile · 14:32, 12-hour, 24-hour | `'12h'`, `'24h'`, or null for Auto, with the owner's Profile applied |
+
+Every field has a `key` (a lowercase letter, then letters, digits or `_`), a
+`label` (≤ 40) and an optional `hint` (≤ 160). `options` is a list of
+`{ value, label }` (1–24), or a function `options(ctx)` read when the sheet
+opens — your calendars, mailboxes, places — on the same read-only pool as
+`produce`, kept for a minute. `inTitle: true` names the placement by that
+field's choice when it is not the default: "Weather · Work". What is kept is
+only what differs from the defaults, a place by id so a renamed or moved
+place follows; a choice you no longer offer is refused when the owner saves
+and falls back to the default when read. A buddi from before 1.19 calls
+`produce(ctx, { size })`: read `settings` with `?? {}`.
+
+What buddi does with it: produces each placement at most once per
+`refreshSeconds` per size and resolved settings — two placements set alike
+share one — (a failure is tried again after a minute), gives it five seconds,
+and keeps the last good body, so a widget that fails a refresh is drawn with
+it and marked stale while the rest of Home is untouched. `size` is the size
+the owner chose, so a medium can say more. The placements live in the
+installation (`core.web_settings` under `widgets`, Home's and the lock
+screen's apart); until they arrange anything, Home shows every widget that
+is not `sensitive`, and the lock screen the first four of Home's. The lock
+screen holds at most four, compact, never a `sensitive` one, and leaves out
+one with nothing to show; a `text` body there always takes one column, so a
+sentence like "Free for the rest of today." reads as one rather than a hollow
+card.
+
+buddi itself provides one widget, the **World clock** (`buddi.clock`): the
+time at the owner's places in other zones, or at towns they pick.
 
 A widget with the same id as one of your glances replaces that glance's card:
 while it is on Home, the glance's line leaves the date line. That is how the
@@ -1326,8 +1374,10 @@ widget, and the glance still sends `card` for a buddi from before widgets. A
 glance that sends a `card` and has no widget of its id is offered as a small
 `stat` widget, so an older plugin's card still reaches Home.
 
-Host API 1.17. An older buddi ignores `widgets`, so declaring them need not
-mean asking for `^1.17`. See `packages/core/src/widgets.ts`.
+Host API 1.17; settings 1.19, and the tile icons `check` and `clock`. An
+older buddi ignores `widgets` and `settings`, so declaring them need not mean
+asking for `^1.19`. See `packages/core/src/widgets.ts` and
+`packages/core/src/widget-settings.ts`.
 
 ### 2.5b Pages: a screen of your own
 
@@ -3120,7 +3170,7 @@ version each arrived in — is §9b.
 | `missions` | `SuggestedMission[]` | no | Scheduled missions you *suggest*. Installing schedules nothing; `buddi missions add-defaults` is the owner accepting. |
 | `views` | `ViewDescriptor[]` | no | How the dashboard canvas should draw your tool results. Parsed at `register()`; a bad one is a startup error naming the plugin. |
 | `home` | `HomeContribution[]` | no | Read-only blocks for the dashboard's Home page, already formatted in your own units. With `placement: 'glance'` a contribution is instead one line beside the date: `produce` answers `{ icon, text, link?: { route: { page } } } \| null` — a tile icon, at most 60 characters (longer is cut), and a page of yours it opens. Home draws the first three the owner has not hidden, in plugin order; one that throws is left out. It may also answer `card: { value, caption?, trend?: { label, points }, foot? }` (value at most 12 characters, caption and foot 40, two to 48 finite numbers drawn as a sparkline): since host API 1.17 a glance with a card is offered as a small `stat` widget under the glance's id, unless you declare a widget with that id (§2.5d); while that widget is on Home the line leaves the date line. A buddi from before 1.17 draws the card on the right of the greeting. Produced on each Home read, like a block, so cache anything slow. Needs host API `^1.10`. See `packages/core/src/home.ts`. |
-| `widgets` | `WidgetDefinition[]` | no | Small live panels for Home that the owner picks, orders and sizes: `{ id: '<plugin>.<name>', title, sizes: ('small' \| 'medium')[], refreshSeconds?, link?: { page }, sensitive?, produce(ctx, { size }) }`. `produce` answers a body from a fixed vocabulary — `stat`, `list`, `strip`, `progress`, `text` — or `null`, under a read-only pool; buddi caches it for `refreshSeconds` (60–86400, ten minutes by default) and gives it five seconds. Checked at register. Host API 1.17; an older buddi ignores the field. See §2.5d and `packages/core/src/widgets.ts`. |
+| `widgets` | `WidgetDefinition[]` | no | Small live panels for Home and the lock screen that the owner places, orders, sizes and sets up: `{ id: '<plugin>.<name>', title, sizes: ('small' \| 'medium')[], refreshSeconds?, link?: { page }, sensitive?, settings?, produce(ctx, { size, settings }) }`; `settings` (1.19) is up to eight fields from a fixed vocabulary — `select`, `multiselect`, `toggle`, `text`, `place`, `timeFormat` — each placement keeping its own, handed to `produce` resolved. `produce` answers a body from a fixed vocabulary — `stat`, `list`, `strip`, `progress`, `text` — or `null`, under a read-only pool; buddi caches it for `refreshSeconds` (60–86400, ten minutes by default) and gives it five seconds. Checked at register. Host API 1.17; an older buddi ignores the field. See §2.5d and `packages/core/src/widgets.ts`. |
 | `metrics` | `MetricDefinition[]` | no | Numbers you can answer, that a **goal** can watch. Same shape as a Home block — a named read-only function — and core never learns your domain, only that `finance.total_debt` is a currency that should go `down`. See §2.3a. |
 | `pages` | `PageDescriptor[]` | no | Screens of your own: a rail place, a settings tab. Data, like `views`; parsed at `register()`, and a bad one is a startup error naming the page and the field. See §2.5b. |
 | `queries` | `PageQuery[]` | no | The reads those pages are drawn from. Read-only by enforcement: each statement runs in a Postgres read-only transaction, so even a volatile function of your own cannot write through one. |
@@ -3470,6 +3520,7 @@ that say otherwise.
 | `hasAgent` | `(id) => boolean` | yes | 1.1 | Whether an agent with this id is installed — for a plugin that proposes one and must not start runs for it before the owner accepts it. `true` where there is no roster to ask. |
 | `protectedPaths` | `readonly string[]` | yes | 1.0 | Directories no plugin may write into, whatever it was granted. |
 | `language` | `() => Promise<string \| undefined>` | yes | 1.5 | The language the owner asked to be answered in (their profile's "Answer me in"), as a tag: `fr`, `pt-BR`. A language name, in English or its own words, becomes its ISO 639-1 code; `undefined` when blank or not a language. |
+| `formats` | `() => Promise<{ time, date }>` | no | 1.19 | How the owner reads times and dates (Settings → Profile): `time` is `'12h'`, `'24h'` or null (Auto), `date` is `'short'` (Thu, Oct 1), `'long'` (Thursday, 1 October), `'iso'` or null. Always present from 1.19; absent before. |
 | `places` | `() => Promise<OwnerPlace[]>` | no | 1.18 | The owner's places from Settings → Profile, in their order: `{ id, label, address, name, latitude, longitude, timezone }`. Read-only. Declared as `owner:places` (§2.8). |
 | `notify` | `(message: PluginOwnerMessage) => Promise<{ id }>` | no | 1.2 | Tell the owner something: `urgency` (`now`, `today`, `digest`), a one-line `title`, optional `text`, `link: { route }`, `dedupeKey` and `agentId`. Declared as `owner:notify`. The kind is always `plugin`, your name is on the message, and the owner's settings pick the channel, never you. See [notifications.md](notifications.md). |
 

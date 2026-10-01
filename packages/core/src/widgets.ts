@@ -19,6 +19,7 @@
  *     last good body when there is one) and nothing else is touched.
  */
 import type { CoreToolContext, ToolContext } from './tools.js';
+import { parseWidgetSettings, type WidgetSettingField, type WidgetSettingOption, type WidgetSettings } from './widget-settings.js';
 import { TILE_ICONS, type TileIcon } from './views.js';
 import { HOME_CARD_LINE_MAX, HOME_CARD_TREND_MAX, HOME_CARD_VALUE_MAX, type HomeGlanceCard } from './home.js';
 
@@ -110,9 +111,21 @@ export interface WidgetText {
 
 export type WidgetBody = WidgetStat | WidgetList | WidgetStrip | WidgetProgress | WidgetText;
 
-/** What `produce` is told: the size the owner put it at, so a medium can say more. */
+/** Where a placement sits: Home's grid, or the lock screen's compact row. */
+export const WIDGET_SURFACES = ['home', 'lock'] as const;
+export type WidgetSurface = (typeof WIDGET_SURFACES)[number];
+
+/**
+ * What `produce` is told: the size the owner put it at, so a medium can say
+ * more, and (since 1.19) this placement's settings, resolved — every declared
+ * key present, defaults filled, places with their coordinates and zone, a time
+ * format with the owner's Profile applied (`widget-settings.ts`). A widget
+ * placed twice is produced once per placement's settings.
+ */
 export interface WidgetRequest {
   size: WidgetSize;
+  /** Since 1.19 (`{}` for a widget that declares none); absent on an older buddi, so read it with `?? {}`. */
+  settings?: WidgetSettings;
 }
 
 export interface WidgetDefinition {
@@ -128,6 +141,12 @@ export interface WidgetDefinition {
   link?: { page: string };
   /** Hidden on screen until the owner asks, and never on a lock screen: a balance, not the weather. */
   sensitive?: boolean;
+  /**
+   * What the owner can set per placement (since 1.19): at most eight fields
+   * from a fixed vocabulary the page draws (`widget-settings.ts`). Each
+   * placement keeps its own; `produce` reads them resolved in `settings`.
+   */
+  settings?: WidgetSettingField[];
   /** The body for now, or null when there is nothing to show. Read-only. */
   produce(ctx: ToolContext, request: WidgetRequest): Promise<WidgetBody | null>;
 }
@@ -137,6 +156,8 @@ export interface RegisteredWidget extends Omit<WidgetDefinition, 'produce'> {
   plugin: string;
   refreshSeconds: number;
   produce(ctx: CoreToolContext, request: WidgetRequest): Promise<WidgetBody | null>;
+  /** A select's or multiselect's choices, read through the plugin's host when they are not fixed. */
+  options?(key: string, ctx: CoreToolContext): Promise<WidgetSettingOption[]>;
 }
 
 const WIDGET_NAME = /^[a-z][a-z0-9_]*$/;
@@ -185,6 +206,7 @@ export function parseWidgets(
       fail(`widget ${id} links to ${JSON.stringify(link?.page)}, which is not a page of this plugin`);
     }
     if (w.sensitive !== undefined && typeof w.sensitive !== 'boolean') fail(`widget ${id}: sensitive must be true or false`);
+    const settings = parseWidgetSettings(plugin, id, w.settings);
     return {
       id,
       plugin,
@@ -193,6 +215,7 @@ export function parseWidgets(
       refreshSeconds: Math.min(WIDGET_REFRESH_MAX_S, Math.max(WIDGET_REFRESH_MIN_S, Math.round((refresh as number | undefined) ?? WIDGET_REFRESH_DEFAULT_S))),
       ...(link ? { link: { page: link.page as string } } : {}),
       ...(w.sensitive === true ? { sensitive: true } : {}),
+      ...(settings ? { settings } : {}),
       produce: w.produce as WidgetDefinition['produce'],
     };
   });
