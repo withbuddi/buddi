@@ -59,6 +59,7 @@ import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
 import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
+import { sweepOpenBulkCards, tellOwnerLearned } from '../policies/auto.js';
 import type { AccountRecord, ImapClient, ImapClientFactory, ImapIdleFactory, MailboxStatus } from '../ports.js';
 import { IDLE_SLOW_POLL_SECONDS, IdleWatchers, type IdleWatchersOptions } from './idle.js';
 import { checkPresence } from './presence.js';
@@ -93,6 +94,12 @@ export const FLAG_SYNC_WINDOW = 2_000;
 
 /** Uids per `UID FETCH … FLAGS`, so one command line stays a sane length. */
 export const FLAG_SYNC_BATCH = 500;
+
+/**
+ * Older mail whose `bulk` was never read from its headers, re-read per poll:
+ * at most this many messages, newest first, in one header-only fetch.
+ */
+export const BULK_BACKFILL_PER_POLL = 200;
 
 /** Deadline for every single IMAP call. Env: `EMAIL_POLL_TIMEOUT_MS`. */
 export const DEFAULT_POLL_TIMEOUT_MS = 45_000;
@@ -732,6 +739,26 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
               complete = false;
               pass.failures.push(err);
             }
+            // Older mail never read for List-Unsubscribe / Precedence: a
+            // bounded few, header lines only; a newsletter found keeps the
+            // waiting cards for it the way a new one would.
+            try {
+              const found = await backfillBulk(ctx.buddi!.db, client, polled.folder, polled.status, timeoutMs);
+              if (found > 0) {
+                log(`email.inbox-poll: ${found} older message(s) on ${account.address}/${folder.name} read as sent to many`);
+                const proposals = ctx.buddi!.proposals;
+                if (proposals) {
+                  const host = { db: ctx.buddi!.db, owner: ctx.buddi!.owner, proposals };
+                  const now = ctx.buddi!.clock.now();
+                  if ((await sweepOpenBulkCards(host, now)) > 0) await tellOwnerLearned(host, now);
+                }
+              }
+            } catch (err) {
+              log(
+                `email.inbox-poll: could not re-read older mail's list headers on ${account.address}/${folder.name}: ` +
+                  `${err instanceof Error ? err.message : String(err)}; new mail still landed`,
+              );
+            }
           }
         } catch (err) {
           if (folder.kind !== 'sent') throw err;
@@ -1067,6 +1094,42 @@ async function syncFlags(
     `email.inbox-poll: flags on ${account.address}/${folder.name} re-synced via ${mode} in ` +
       `${Date.now() - started}ms — ${uids.length} held, ${reported} reported, ${updated} changed`,
   );
+}
+
+/**
+ * Read `List-Unsubscribe` and `Precedence` for held messages stored before
+ * `messages.bulk` was read at ingest (`bulk_checked = false`), at most
+ * `BULK_BACKFILL_PER_POLL` a poll, newest first, and mark them. A message the
+ * server no longer has is marked too: there is nothing more to read. Returns
+ * how many were found to be bulk. A client without `fetchBulk` reads nothing.
+ */
+export async function backfillBulk(
+  db: Db,
+  client: Pick<ImapClient, 'fetchBulk'>,
+  folder: FolderRecord,
+  status: MailboxStatus,
+  timeoutMs: number,
+  limit: number = BULK_BACKFILL_PER_POLL,
+): Promise<number> {
+  if (!client.fetchBulk) return 0;
+  const { rows } = await db.query(
+    `select uid from email.messages
+      where folder_id = $1 and uidvalidity = $2 and not bulk_checked and gone_at is null
+      order by uid desc
+      limit $3`,
+    [folder.id, status.uidValidity, limit],
+  );
+  const uids = rows.map((r) => Number(r.uid));
+  if (uids.length === 0) return 0;
+  const read = await withDeadline('bulk headers', timeoutMs, client.fetchBulk(folder.name, uids));
+  const bulk = uids.filter((uid) => read.get(uid) === true);
+  await db.query(
+    `update email.messages
+        set bulk_checked = true, bulk = bulk or uid = any($4::bigint[])
+      where folder_id = $1 and uidvalidity = $2 and uid = any($3::bigint[])`,
+    [folder.id, status.uidValidity, uids, bulk],
+  );
+  return bulk.length;
 }
 
 /** Persist the generation and the cursor together, and return the fresh row. */

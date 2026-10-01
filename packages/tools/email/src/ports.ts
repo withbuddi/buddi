@@ -197,6 +197,13 @@ export interface ImapClient {
   findByMessageId?(mailbox: string, messageId: string): Promise<number | null>;
   /** Gmail only: `UID FETCH <uids> (X-GM-LABELS)`. Optional on a reader; a writer has it. */
   fetchLabels?(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>>;
+  /**
+   * `UID FETCH <uids> (BODY.PEEK[HEADER.FIELDS (LIST-UNSUBSCRIBE PRECEDENCE)])`:
+   * whether each message says it is sent to many (`isBulkHeaders`). Two header
+   * lines, peeked, so it cannot set `\Seen`. A uid missing from the answer is
+   * not in the mailbox. Optional: without it, older mail is never re-read.
+   */
+  fetchBulk?(mailbox: string, uids: readonly number[]): Promise<Map<number, boolean>>;
   close(): Promise<void>;
 }
 

@@ -247,6 +247,16 @@ class ImapFlowClient implements ImapWriter {
     return out;
   }
 
+  async fetchBulk(mailbox: string, uids: readonly number[]): Promise<Map<number, boolean>> {
+    const out = new Map<number, boolean>();
+    if (uids.length === 0) return out;
+    if (this.#open !== mailbox) await this.open(mailbox);
+    for await (const msg of this.client.fetch(uidSet(uids), { uid: true, headers: ['list-unsubscribe', 'precedence'] }, { uid: true })) {
+      out.set(Number(msg.uid), isBulkHeaders(parseHeaders(msg.headers)));
+    }
+    return out;
+  }
+
   /**
    * Which held uids left the mailbox. On a session that ENABLEd QRESYNC and
    * given a modseq, `UID FETCH from:to (UID FLAGS) (CHANGEDSINCE m VANISHED)`

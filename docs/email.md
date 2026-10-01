@@ -72,7 +72,15 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   counted per account: three promos in the personal mailbox say nothing about
   the work one.
 - `messages.bulk`: the message carried `List-Unsubscribe` or `Precedence:
-  bulk|list|junk`, read at ingest (`018_learned_auto.sql`).
+  bulk|list|junk`, read at ingest (`018_learned_auto.sql`). Mail stored
+  before that has `messages.bulk_checked = false` (`022_bulk_checked.sql`):
+  the inbox poll reads just those two header lines for it, newest first, at
+  most 200 a poll, and a newsletter found that way keeps its waiting card the
+  way a new one would.
+- `policies.learned_line` (`021_learned_line.sql`): which "buddi learned"
+  line told the owner about a rule that kept itself. The line waits for the
+  end-of-day message and is updated while it waits; a rule kept after it went
+  out opens the next line, which the next day's rules fold into.
 - `messages.gone_at` and `messages.labels` (`020_mailbox_presence.sql`): the
   poll saw the message leave the folder its row names in another mail app
   and could not say where it went (§4a, "Moved in another app"); and on

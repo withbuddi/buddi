@@ -14,7 +14,11 @@ import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { manifest } from '../index.js';
 import type { CoreSourceContext } from '@buddi/core/testing';
 import { inboxUnread } from '../metrics.js';
+import { listOpenProposals } from '@buddi/core/testing';
+import { PROCESSING_VERSION } from '../tools/shared.js';
 import {
+  backfillBulk,
+  BULK_BACKFILL_PER_POLL,
   createInboxPollSource,
   FLAG_SYNC_BATCH,
   FLAG_SYNC_WINDOW,
@@ -139,6 +143,67 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
 
     expect(await messageCount()).toBe(0);
     expect(await lastSynced()).toEqual(new Date('2026-09-13T12:00:00Z'));
+  });
+
+  it("reads older mail's list headers during the poll, bounded, and keeps the waiting card for a newsletter found that way", async () => {
+    const server = new FakeImapServer();
+    // A newsletter that says so only in List-Unsubscribe (no List-Id), twice, and a person.
+    server.add('INBOX', fakeMessage({ from: 'news@list.test', messageId: '<n1@x>', bulk: true }));
+    server.add('INBOX', fakeMessage({ from: 'news@list.test', messageId: '<n2@x>', bulk: true }));
+    server.add('INBOX', fakeMessage({ from: 'friend@example.test', messageId: '<f1@x>' }));
+    const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+    const ctx = contextFor();
+    await source.poll(ctx);
+    // New mail is read at ingest: nothing to re-read.
+    expect(server.bulkFetches).toEqual([]);
+
+    // As if stored before `bulk` was read at ingest.
+    await pool.query(`update email.messages set bulk = false, bulk_checked = false`);
+    await pool.query(`truncate core.proposals`);
+    const { rows: news } = await pool.query(`select id from email.messages where from_addr = 'news@list.test'`);
+    await ctx.buddi.proposals!.proposePolicy(null, {
+      matcher: { sender: 'news@list.test', account: OWNER_ADDRESS, accountId },
+      action: 'ignore',
+      params: { category: 'promo', urgency: 'low' },
+      verdicts: news.map((r: any) => ({ messageId: String(r.id), processingVersion: PROCESSING_VERSION })),
+      why: 'waiting card',
+      sources: [],
+    });
+    expect(await listOpenProposals(pool)).toHaveLength(1);
+
+    await source.poll(ctx);
+    expect(server.bulkFetches).toHaveLength(1);
+    expect(server.bulkFetches[0]!.uids.sort()).toEqual([1, 2, 3]);
+    const { rows } = await pool.query(`select from_addr, bulk, bulk_checked from email.messages order by uid`);
+    expect(rows.map((r: any) => [r.from_addr, r.bulk, r.bulk_checked])).toEqual([
+      ['news@list.test', true, true], ['news@list.test', true, true], ['friend@example.test', false, true],
+    ]);
+    // The card for the newsletter kept itself, and nothing is read twice.
+    expect(await listOpenProposals(pool)).toHaveLength(0);
+    const { rows: rules } = await pool.query(`select matcher, kept_by, auto_reason from email.policies`);
+    expect(rules).toEqual([{ matcher: 'news@list.test', kept_by: 'auto', auto_reason: 'bulk' }]);
+    await source.poll(ctx);
+    expect(server.bulkFetches).toHaveLength(1);
+  });
+
+  it('re-reads at most a bounded few a poll, newest first, and marks a message the server no longer has', async () => {
+    const server = new FakeImapServer();
+    for (let i = 1; i <= 4; i += 1) server.add('INBOX', fakeMessage({ messageId: `<m${i}@x>`, bulk: i === 4 }));
+    const source = createInboxPollSource({ connect: server.factory(), env: ENV, backfill: FULL_SYNC });
+    await source.poll(contextFor());
+    await pool.query(`update email.messages set bulk = false, bulk_checked = false`);
+    const { rows: [folder] } = await pool.query(`select id, name, uidvalidity from email.folders where kind = 'inbox'`);
+    const client = server.client();
+    const status = { uidValidity: Number(folder.uidvalidity), uidNext: 5, exists: 4, highestModseq: null };
+    server.mailbox('INBOX').messages = server.mailbox('INBOX').messages.filter((m) => m.uid !== 3);
+    const record = { id: String(folder.id), name: String(folder.name) } as never;
+    expect(await backfillBulk(pool as never, client, record, status, 5_000, 2)).toBe(1);
+    expect(server.bulkFetches.at(-1)!.uids).toEqual([4, 3]);
+    const checked = async () => (await pool.query(`select uid from email.messages where bulk_checked order by uid`)).rows.map((r: any) => Number(r.uid));
+    expect(await checked()).toEqual([3, 4]);
+    expect(await backfillBulk(pool as never, client, record, status, 5_000, 2)).toBe(0);
+    expect(await checked()).toEqual([1, 2, 3, 4]);
+    expect(BULK_BACKFILL_PER_POLL).toBeLessThanOrEqual(500);
   });
 
   it('ingests new mail, advances the cursor, and starts one triage run per message', async () => {

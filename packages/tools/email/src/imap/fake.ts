@@ -92,6 +92,8 @@ export class FakeImapServer {
     changedSince: string | null;
     returned: number;
   }> = [];
+  /** Every bulk-headers fetch served (`fetchBulk`): which uids were asked for. */
+  readonly bulkFetches: Array<{ mailbox: string; uids: number[] }> = [];
   /** Each message's mod-sequence, keyed `<mailbox>/<uid>`, for a CONDSTORE mailbox. */
   readonly modseqs = new Map<string, number>();
   /**
@@ -486,6 +488,14 @@ class FakeImapClient implements ImapWriter {
       exists: box.messages.length,
       highestModseq: box.condstore ? String(box.highestModseq ?? 1) : null,
     };
+  }
+
+  async fetchBulk(mailbox: string, uids: readonly number[]): Promise<Map<number, boolean>> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    const box = this.server.mailbox(mailbox);
+    const wanted = new Set(uids);
+    this.server.bulkFetches.push({ mailbox, uids: [...uids] });
+    return new Map(box.messages.filter((m) => wanted.has(m.uid)).map((m) => [m.uid, m.bulk === true]));
   }
 
   async fetchFlags(

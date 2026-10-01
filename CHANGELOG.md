@@ -48,6 +48,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Mail stored before buddi read the List-Unsubscribe and Precedence headers is read for them now, a few hundred messages a poll, so a newsletter that says so only in List-Unsubscribe is recognised and its waiting card keeps itself like a new one's.
 - The daily "buddi learned" line: a rule that keeps itself after that day's end-of-day message went out no longer adds a second line for that date the next day; it folds into the next day's line.
 - Telegram reactions: a reaction (or taking it back, or a note on a 👎) shows under its message in an open dashboard tab at once; reactions on the first-run greeting and on a /recap answer are recorded too; the weekly digest and its Home card name agents by their display name.
 - `buddi chat` writes the carry-over note when a conversation rolls over, as the dashboard and Telegram do, so the agent picks up where it stopped.
