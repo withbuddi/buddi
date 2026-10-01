@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.29 — 2026-10-01
+
 ### Added
 
 - Widgets on Home: small live panels from your plugins — the weather at home, today's calendar, who is waiting on your reply — in a Widgets section under Needs you. Pick, order and size them (small or medium) from Edit, by dragging, with the arrow keys or with the move buttons; a widget's ⋯ menu moves, resizes or hides it, with Undo. A widget that fails to refresh keeps its last panel and says how old it is, one that never loaded offers Try again, and a sensitive one is hidden until you show it. The layout is kept by the installation, so your phone shows what your laptop arranged.

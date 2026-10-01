@@ -214,7 +214,7 @@ The lock screen state: whether a PIN is set and this session is locked.
 
 - **Auth:** Session or API token; answered while locked.
 - **Answer:** `{ pin: boolean, locked: boolean, lockedAt: string|null, settings: { delayMinutes, background, clock }, image: string|null, … }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/lock"
@@ -228,7 +228,7 @@ Lock this session now.
 - **Body:** `{ reason?: 'owner'|'idle' }`
 - **Answer:** `the lock state`
 - **Errors:** 409 no PIN is set, or the client is not covered by the lock screen
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/lock"
@@ -241,7 +241,7 @@ What the lock screen draws: the time, counts waiting, the focus line, its widget
 - **Auth:** Session or API token; answered while locked.
 - **Query:** `hour?: number`
 - **Answer:** JSON
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/lock/screen"
@@ -255,7 +255,7 @@ Unlock with the PIN.
 - **Body:** `{ pin: string }  // four to eight digits`
 - **Answer:** `the lock state`
 - **Errors:** 400 not a PIN; 403 wrong PIN; 429 wait before trying again
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"pin":"…"}' "$BUDDI_URL/api/lock/unlock"
@@ -267,7 +267,7 @@ The page saying the owner is using it, which pushes back the idle lock.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `204`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/lock/activity"
@@ -281,7 +281,7 @@ Set or change the PIN.
 - **Body:** `{ pin: string, current?: string }  // current when one is set`
 - **Answer:** `the lock state`
 - **Errors:** 400 not a PIN, or the current PIN missing; 403 wrong current PIN
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"pin":"…"}' "$BUDDI_URL/api/lock/pin"
@@ -295,7 +295,7 @@ Remove the PIN.
 - **Body:** `{ current: string }`
 - **Answer:** `the lock state`
 - **Errors:** 400; 403 wrong PIN
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"current":"…"}' "$BUDDI_URL/api/lock/pin/remove"
@@ -309,7 +309,7 @@ Lock after, background and clock.
 - **Body:** `{ delayMinutes?: 1|5|15|60|null, background?: string, clock?: { time, date, zone } }`
 - **Answer:** `the lock state`
 - **Errors:** 400 a value out of range; 409 the picture background with no picture
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X PUT -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/lock/settings"
@@ -323,7 +323,7 @@ The lock screen's own picture, as JPEG.
 - **Kind:** bytes, not JSON
 - **Answer:** `image/jpeg, with an ETag`
 - **Errors:** 404 there is no picture
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/lock/background" -o out
@@ -338,7 +338,7 @@ Upload the lock screen picture.
 - **Body:** `multipart/form-data with one image file, at most 10 MB`
 - **Answer:** `the lock state`
 - **Errors:** 413 too large; 415 not a picture
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -F "file=@./file" "$BUDDI_URL/api/lock/background"
@@ -350,7 +350,7 @@ Remove the lock screen picture (the background goes back to a built-in one).
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `the lock state`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/lock/background"
@@ -396,7 +396,7 @@ The owner API tokens: name, last four characters, when made and last used. Never
 
 - **Auth:** Dashboard session only. It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `{ tokens: Array<{ id, name, hint: string, scope: 'owner', createdVia: 'dashboard'|'cli', createdAt, lastUsedAt: string|null }> }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -b cookies.txt "$BUDDI_URL/api/api-tokens"
@@ -410,7 +410,7 @@ Make a token. The answer is the only time the token itself is shown.
 - **Body:** `{ name: string }  // 1 to 60 characters`
 - **Answer:** `201 { token: string, apiToken: { id, name, hint, … } }`
 - **Errors:** 400 no name, or too long; 409 the limit of 20 live tokens
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"name":"…"}' "$BUDDI_URL/api/api-tokens"
@@ -423,7 +423,7 @@ Revoke a token. A request carrying it is refused from the next one on.
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.
 - **Answer:** `204`
 - **Errors:** 404 no live token with that id
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/api-tokens/<id>"
@@ -577,7 +577,7 @@ The widget gallery, the layout and each placed widget’s body.
 - **Auth:** Session or API token.
 - **Query:** `surface?: 'home'|'lock', hour?: number`
 - **Answer:** `{ gallery, placed: Array<{ id, widget, size, body, updatedAt, … }>, … }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/widgets"
@@ -591,7 +591,7 @@ Save Home's widget layout.
 - **Body:** `{ placed: Array<{ id, widget, size: 'small'|'medium', settings? }> }`
 - **Answer:** `the widgets view`
 - **Errors:** 400 an unknown widget or a bad setting
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"placed":[]}' "$BUDDI_URL/api/widgets/home"
@@ -605,7 +605,7 @@ Save the lock screen's widgets (up to four).
 - **Body:** `as /api/widgets/home`
 - **Answer:** `the widgets view`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/widgets/lock"
@@ -618,7 +618,7 @@ A widget's settings schema.
 - **Auth:** Session or API token.
 - **Answer:** JSON
 - **Errors:** 404 no such widget
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/widgets/settings/<widget>"
@@ -632,7 +632,7 @@ One widget’s body with settings not yet saved.
 - **Body:** `{ widget: string, settings?: object, size? }`
 - **Answer:** JSON
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"widget":"…"}' "$BUDDI_URL/api/widgets/preview"
@@ -645,7 +645,7 @@ Produce one placed widget again, now.
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Query:** `surface?: 'home'|'lock', hour?: number`
 - **Answer:** `the widgets view`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/widgets/<placement>/refresh"
@@ -1039,7 +1039,7 @@ Undo a delete, within the minute.
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `the group`
 - **Errors:** 410 too late
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/groups/<id>/restore"
@@ -1065,7 +1065,7 @@ Clear the group's history; members and memory stay.
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `{ conversations: number }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/groups/<id>/clear"
@@ -2049,7 +2049,7 @@ Save a place (new, or by id).
 - **Body:** `{ id?, label: string, name: string, address?: string, latitude: number, longitude: number, timezone?: string }`
 - **Answer:** `{ place, places }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"label":"…","name":"…","latitude":0,"longitude":0}' "$BUDDI_URL/api/owner/places"
@@ -2063,7 +2063,7 @@ Find a place by address or town (Open-Meteo).
 - **Body:** `{ address: string }`
 - **Answer:** `{ found: Array<{ name, latitude, longitude, timezone? }> }`
 - **Errors:** 400; 502
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"address":"…"}' "$BUDDI_URL/api/owner/places/find"
@@ -2077,7 +2077,7 @@ Remove a place.
 - **Body:** `{ id: string }`
 - **Answer:** `{ removed, places }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.29
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"id":"…"}' "$BUDDI_URL/api/owner/places/remove"
