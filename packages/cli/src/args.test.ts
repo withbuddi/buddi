@@ -199,6 +199,8 @@ describe('dashboard', () => {
     expect(parseArgs(['dashboard'])).toEqual({ kind: 'dashboard', action: 'open' });
     expect(parseArgs(['dashboard', '--token'])).toEqual({ kind: 'dashboard', action: 'token' });
     expect(parseArgs(['dashboard', '--off'])).toEqual({ kind: 'dashboard', action: 'off' });
+    expect(parseArgs(['dashboard', '--unlock'])).toEqual({ kind: 'dashboard', action: 'unlock' });
+    expect(parseArgs(['dashboard', '--remove-pin'])).toEqual({ kind: 'dashboard', action: 'remove-pin' });
   });
 
   it('refuses anything else', () => {

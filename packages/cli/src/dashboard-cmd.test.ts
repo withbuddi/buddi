@@ -25,6 +25,41 @@ const env = (): NodeJS.ProcessEnv => ({
 });
 
 describe('buddi dashboard', () => {
+  it('--unlock opens a ticket link past the lock screen, even on the open loopback binding, and one for the tailnet', async () => {
+    const e = { ...env(), BUDDI_WEB_PUBLIC_ORIGIN: 'https://mac.tail0.ts.net:9443' };
+    // The gateway creates the token; the command only reads it.
+    const { token } = await ensureWebToken({ env: e });
+    const lines: string[] = [];
+    const opened: string[] = [];
+    expect(await runDashboard('unlock', { env: e, out: (l) => lines.push(l), launch: (u) => opened.push(u) })).toBe(0);
+    const local = new URL(opened[0]!);
+    expect(local.origin).toBe('http://127.0.0.1:4317');
+    expect(verifyTicket(token, local.searchParams.get('t')!).ok).toBe(true);
+    const remote = lines.find((l) => l.includes('on another device'))!;
+    expect(remote).toContain('https://mac.tail0.ts.net:9443/?t=');
+    expect(lines.join('\n')).not.toContain(token);
+  });
+
+  it('--unlock says what to do when there is no token to mint with', async () => {
+    const lines: string[] = [];
+    expect(await runDashboard('unlock', { env: env(), out: (l) => lines.push(l), launch: () => {} })).toBe(1);
+    expect(lines.join('\n')).toContain('--remove-pin');
+  });
+
+  it('--remove-pin forgets the PIN and opens every locked session', async () => {
+    const seen: string[] = [];
+    const db = { query: async (sql: string) => { seen.push(sql); return { rows: sql.startsWith('delete') ? [{ key: 'lock.pin' }] : [] }; } };
+    const lines: string[] = [];
+    expect(await runDashboard('remove-pin', { env: env(), out: (l) => lines.push(l), db: db as never })).toBe(0);
+    expect(seen[0]).toContain('delete from core.web_settings');
+    expect(seen[1]).toContain('update core.dashboard_sessions set locked_at = null');
+    expect(lines[0]).toContain('PIN is removed');
+    const none = { query: async () => ({ rows: [] }) };
+    const quiet: string[] = [];
+    await runDashboard('remove-pin', { env: env(), out: (l) => quiet.push(l), db: none as never });
+    expect(quiet[0]).toContain('no lock screen PIN');
+  });
+
   it('mints an authenticated loopback link for a packaged installation', async () => {
     const e = { ...env(), BUDDI_WEB_REQUIRE_AUTH: '1' };
     const opened: string[] = [];

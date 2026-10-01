@@ -40,9 +40,10 @@ export type VaultAction = (typeof VAULT_ACTIONS)[number];
 
 /**
  * `buddi dashboard` — open it, print just the ticket, explain the off switch,
- * or install/remove the double-clickable app that runs `open` for you.
+ * install/remove the double-clickable app that runs `open` for you, or — for a
+ * forgotten lock-screen PIN — open it unlocked once, or remove the PIN.
  */
-export const DASHBOARD_ACTIONS = ['open', 'token', 'off', 'install-app', 'uninstall-app'] as const;
+export const DASHBOARD_ACTIONS = ['open', 'token', 'off', 'install-app', 'uninstall-app', 'unlock', 'remove-pin'] as const;
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
 
 export const TELEGRAM_ACTIONS = ['pair', 'devices', 'unpair'] as const;
@@ -448,9 +449,11 @@ export function parseArgs(argv: string[]): Command {
     if (flag === '--off') return { kind: 'dashboard', action: 'off' };
     if (flag === '--install-app') return { kind: 'dashboard', action: 'install-app' };
     if (flag === '--uninstall-app') return { kind: 'dashboard', action: 'uninstall-app' };
+    if (flag === '--unlock') return { kind: 'dashboard', action: 'unlock' };
+    if (flag === '--remove-pin') return { kind: 'dashboard', action: 'remove-pin' };
     throw new UsageError(
       `unknown option for buddi dashboard: ${flag} ` +
-        '(expected --token, --off, --install-app or --uninstall-app)',
+        '(expected --token, --off, --install-app, --uninstall-app, --unlock or --remove-pin)',
     );
   }
 

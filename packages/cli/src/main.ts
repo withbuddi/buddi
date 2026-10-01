@@ -265,6 +265,10 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
     }
     case 'dashboard':
       await loadEnvironment();
+      if (command.action === 'remove-pin') {
+        const blocked = await requireDatabase(process.env.DATABASE_URL);
+        if (blocked !== 0) return blocked;
+      }
       return runDashboard(command.action);
     case 'connections': {
       // Only `.env`, like `buddi mcp`: the dashboard's host and port. The

@@ -247,6 +247,8 @@ import { BUILD_MISSING, serveAsset, serveShellAtRoot } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
+import { LOCKED_BODY, allowedWhileLocked, clientOf, createLock } from './lock.js';
+import { LockImageRefusal, MAX_LOCK_IMAGE_BYTES, normaliseLockImage } from './lock-image.js';
 import {
   cancelJobFromWeb,
   cancelReminderFromWeb,
@@ -491,6 +493,8 @@ export function createWebApp(deps: WebServerDeps): Server {
       const scope = requestScope(req);
       const session = await sessions.resolve(parseCookies(req.headers.cookie)[sessionCookieName(cookiePort(req))], scope, now);
       if (!session) return null;
+      // A locked dashboard drives nothing (docs/dashboard.md, "Lock screen").
+      if (await lock.locked(session)) return null;
       if (session.via === 'tailscale') {
         let refusal: TailscaleRefusal | undefined;
         const confirmed = await identityOf(req, now, (reason) => { refusal = reason; });
@@ -537,6 +541,34 @@ export function createWebApp(deps: WebServerDeps): Server {
   });
   // Home's widgets: one cache per server (web/widgets.ts).
   const widgets = createWidgets({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now });
+  /*
+   * The lock screen (web/lock.ts): which sessions are locked, the PIN, the
+   * gate below. A session that locks has its streams closed and its remote
+   * hand let go on the spot, and every half minute the sessions holding a
+   * stream are asked again, so one left idle past the delay is locked and cut
+   * off even if its page never says a word.
+   */
+  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, timezone: deps.timezone, widgets, log });
+  const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
+  const holdStream = (session: Session, res: ServerResponse): (() => void) => {
+    let entry = openStreams.get(session.id);
+    if (!entry) openStreams.set(session.id, (entry = { session, responses: new Set() }));
+    entry.responses.add(res);
+    return () => {
+      const held = openStreams.get(session.id);
+      if (!held) return;
+      held.responses.delete(res);
+      if (held.responses.size === 0) openStreams.delete(session.id);
+    };
+  };
+  lock.onLocked((session) => {
+    hand.revoke((lease) => lease === session.id);
+    for (const res of openStreams.get(session.id)?.responses ?? []) res.end();
+  });
+  const idleSweep = setInterval(() => {
+    for (const { session } of openStreams.values()) void lock.locked(session).catch(() => {});
+  }, 30_000);
+  idleSweep.unref();
   const writeDeps: WriteDeps = {
     pool: deps.pool,
     registry: deps.registry,
@@ -765,7 +797,7 @@ export function createWebApp(deps: WebServerDeps): Server {
   // rather than in `startWebServer` so every caller, tests included, has it.
   extension.attach(server);
   extension.attachPath(REMOTE_HAND_SOCKET_PATH, (req, socket, head) => hand.upgrade(req, socket, head));
-  server.once('close', () => { extension.shutdown(); hand.shutdown(); });
+  server.once('close', () => { extension.shutdown(); hand.shutdown(); clearInterval(idleSweep); });
   return server;
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -824,7 +856,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         return sendText(res, 401, 'This sign-in link is no longer valid: a link lasts five minutes.\nRun `buddi` again for a fresh one.\n');
       }
       limiter.reset(key);
-      const session = sessions.create(scope, now);
+      // A ticket takes the installation's token, so it is the one way in that
+      // opens a session unlocked: what `buddi dashboard --unlock` hands out.
+      const session = sessions.create(scope, now, { via: scope === 'local' ? 'local' : 'ticket', client: clientOf(req.headers['x-buddi-client']) });
       const clean = new URL(url.toString());
       clean.searchParams.delete(TICKET_PARAM);
       return sendEmpty(res, 302, {
@@ -909,7 +943,11 @@ export function createWebApp(deps: WebServerDeps): Server {
     if (!session && openAccess && scope === 'local') {
       // Not stored: the next request mints another for free, so there is
       // nothing to keep across a restart and no row per cookie-less poll.
-      session = sessions.create(scope, now, undefined, { persist: false });
+      // While a PIN is set a browser's new session starts locked: clearing the
+      // cookie or opening a private window is not a way past the lock screen.
+      const client = clientOf(req.headers['x-buddi-client']);
+      const locked = await lock.startLocked(client);
+      session = sessions.create(scope, now, { via: 'local', client }, { persist: false, ...(locked ? { locked } : {}) });
       res.setHeader('Set-Cookie', sessionCookies(req, session));
     }
 
@@ -928,12 +966,13 @@ export function createWebApp(deps: WebServerDeps): Server {
       const identity = await identityOf(req, now, noteRefusal);
       if (identity) {
         limiter.reset(key);
+        const locked = await lock.startLocked('browser');
         session = sessions.create('remote', now, {
           via: 'tailscale',
           tailscaleLogin: identity.login,
           tailscaleAddress: identity.address,
           tailscaleName: identity.name,
-        });
+        }, locked ? { locked } : {});
         res.setHeader('Set-Cookie', sessionCookies(req, session));
       }
     }
@@ -981,6 +1020,13 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+      /*
+       * The lock screen's gate, after the session and its CSRF: a locked
+       * session gets 423 for everything but what the lock screen itself
+       * draws and the two ways off it (web/lock.ts).
+       */
+      const path = url.pathname.replace(/\/+$/, '') || '/api';
+      if (!allowedWhileLocked(method, path) && (await lock.locked(session))) return sendJson(res, 423, LOCKED_BODY);
       return api(req, res, url, method, now, session);
     }
     if (mutating) return sendEmpty(res, 405);
@@ -1120,6 +1166,53 @@ export function createWebApp(deps: WebServerDeps): Server {
         },
         { method, path, body, preview: url.searchParams.get('preview') },
       );
+      return sendJson(res, answer.status, answer.body);
+    }
+
+    // The lock screen: its state and data, Lock now, Unlock, the PIN, its settings and picture (web/lock.ts).
+    if (path === '/api/lock' || path.startsWith('/api/lock/')) {
+      let body: unknown = {};
+      const upload = method === 'POST' && path === '/api/lock/background';
+      if ((method === 'POST' || method === 'PUT') && !upload) {
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: 'request body must be JSON' });
+        }
+      }
+      const answer = await lock.route({
+        method,
+        path,
+        body,
+        session,
+        ...(upload ? {
+          upload: async () => {
+            const file = await readUpload(req, MAX_LOCK_IMAGE_BYTES);
+            if (!file.ok) return { ok: false as const, status: file.status, error: file.status === 413 ? 'A picture can be at most 10 MB.' : file.error };
+            try {
+              return { ok: true as const, image: normaliseLockImage(file.file.bytes, file.file.mime) };
+            } catch (err) {
+              if (err instanceof LockImageRefusal) return { ok: false as const, status: err.status, error: err.message };
+              throw err;
+            }
+          },
+        } : {}),
+      });
+      if (answer === null) return sendJson(res, 404, { error: 'no such endpoint' });
+      if ('image' in answer) {
+        const etag = `"${answer.image.sha256}"`;
+        res.setHeader('ETag', etag);
+        res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        if (req.headers['if-none-match'] === etag) return sendEmpty(res, 304);
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Content-Length', String(answer.image.jpeg.length));
+        res.statusCode = 200;
+        res.end(method === 'HEAD' ? undefined : answer.image.jpeg);
+        return;
+      }
+      if (answer.status === 204) return sendEmpty(res, 204);
       return sendJson(res, answer.status, answer.body);
     }
 
@@ -1824,6 +1917,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (path === '/api/chat/attention/stream') {
         const release = streams.take(session.id);
         if (release === null) return sendEmpty(res, 429);
+        const let_go = holdStream(session, res);
         try {
           await streamAttention(req, res, {
             pool: deps.pool,
@@ -1831,6 +1925,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             now: deps.now,
           });
         } finally {
+          let_go();
           release();
         }
         return;
@@ -1846,6 +1941,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         // socket and a poll, and a leaked EventSource would be both forever.
         const release = streams.take(session.id);
         if (release === null) return sendEmpty(res, 429);
+        const let_go = holdStream(session, res);
         try {
           await streamConversation(req, res, {
             pool: deps.pool,
@@ -1855,6 +1951,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             ...(chat ? { live: chat.live } : {}),
           });
         } finally {
+          let_go();
           release();
         }
         return;

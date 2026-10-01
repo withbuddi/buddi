@@ -16,6 +16,7 @@
  * printed, never logged and never passed as an argument to anything.
  */
 import { spawn } from 'node:child_process';
+import { createPool, removeLockPin, type Queryable } from '@buddi/core';
 import { ensureWebToken, isLoopback, mintTicket, webConfig, webUrl, WEB_ENABLED_VAR } from '@buddi/gateway';
 import type { DashboardAction } from './args.js';
 import { installDashboardApp, uninstallDashboardApp } from './dashboard-app.js';
@@ -52,6 +53,8 @@ export interface DashboardOptions {
    * way a command can say *which screen* of the dashboard it means.
    */
   hash?: string;
+  /** Injected in tests: the database `--remove-pin` writes to. Defaults to `DATABASE_URL`. */
+  db?: Queryable;
 }
 
 function defaultLaunch(platform: NodeJS.Platform, url: string): void {
@@ -96,7 +99,41 @@ export async function runDashboard(
     return 0;
   }
 
+  if (action === 'remove-pin') return removePin(env, out, opts.db);
+
   const config = webConfig(env);
+
+  /*
+   * Forgot the lock screen's PIN (docs/dashboard.md, "Lock screen"). A ticket
+   * is the one way in that opens a session unlocked, because it takes this
+   * installation's token: whoever can run this already holds the computer.
+   * The link works for five minutes, as many times as it is opened, so the
+   * same ticket on the tailnet address is the way in from a phone.
+   */
+  if (action === 'unlock') {
+    let token: string;
+    try {
+      ({ token } = await ensureWebToken({ env, readOnly: true }));
+    } catch (err) {
+      out(`buddi dashboard --unlock needs the dashboard token, and it could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      out('Or remove the PIN instead: buddi dashboard --remove-pin');
+      return 1;
+    }
+    const ticket = mintTicket(token);
+    const url = `${webUrl(config, ticket)}${opts.hash ?? ''}`;
+    out(`buddi dashboard — ${url}`);
+    out('  opens past the lock screen on this computer; good for 5 minutes');
+    if (config.publicOrigin) {
+      out(`  on another device: ${config.publicOrigin}/?t=${encodeURIComponent(ticket)}`);
+    }
+    out('  your PIN is unchanged; change or remove it in Settings → Lock screen');
+    if (!config.enabled) {
+      out(`  NOTE: ${WEB_ENABLED_VAR} is off, so \`buddi serve\` is not serving it right now`);
+    }
+    const launch = opts.launch ?? ((u: string) => defaultLaunch(opts.platform ?? process.platform, u));
+    launch(url);
+    return 0;
+  }
 
   /*
    * The open path. Loopback binding, no token touched: the URL is the whole
@@ -137,4 +174,32 @@ export async function runDashboard(
   const launch = opts.launch ?? ((u: string) => defaultLaunch(opts.platform ?? process.platform, u));
   launch(url);
   return 0;
+}
+
+/**
+ * `buddi dashboard --remove-pin`: forget the lock screen's PIN and open every
+ * locked session. Straight to the database, so it works with buddi stopped;
+ * a running gateway notices within a couple of seconds.
+ */
+async function removePin(env: NodeJS.ProcessEnv, out: (line: string) => void, injected?: Queryable): Promise<number> {
+  let db = injected;
+  let pool: ReturnType<typeof createPool> | undefined;
+  if (!db) {
+    const url = env.DATABASE_URL;
+    if (!url) {
+      out('DATABASE_URL is not set, so there is no PIN to remove.');
+      return 1;
+    }
+    pool = createPool(url);
+    db = pool;
+  }
+  try {
+    const removed = await removeLockPin(db);
+    out(removed
+      ? 'The lock screen PIN is removed: the dashboard no longer locks, on any device. Set a new one in Settings → Lock screen.'
+      : 'There was no lock screen PIN to remove.');
+    return 0;
+  } finally {
+    await pool?.end();
+  }
 }

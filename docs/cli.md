@@ -248,7 +248,7 @@ buddi chat --agent ledger --last
 Open the dashboard with a sign-in link that is good for five minutes.
 
 ```sh
-buddi dashboard [--token | --off | --install-app | --uninstall-app]
+buddi dashboard [--token | --off | --install-app | --uninstall-app | --unlock | --remove-pin]
 ```
 
 **Flags**
@@ -257,6 +257,8 @@ buddi dashboard [--token | --off | --install-app | --uninstall-app]
 - `--off`: Say how to turn the dashboard off.
 - `--install-app`: Put a double-clickable Buddi Dashboard in ~/Applications.
 - `--uninstall-app`: Remove it.
+- `--unlock`: Forgot the lock screen PIN: open the dashboard past it once, with a five-minute link (and one for your other devices when the tailnet address is set).
+- `--remove-pin`: Remove the lock screen PIN on every device. Set a new one in Settings → Lock screen.
 
 **Example**
 

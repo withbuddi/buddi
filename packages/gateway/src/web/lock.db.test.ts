@@ -1,0 +1,350 @@
+/**
+ * The lock screen, end to end against a throwaway database: the PIN is kept
+ * hashed, a locked session gets 423 for everything but the lock screen's own
+ * calls, tries are limited for the installation, a session left idle past the
+ * delay is locked by the server, a new browser session starts locked, a ticket
+ * opens one, buddi's own clients are never covered, open streams are cut, and
+ * removing the PIN from the command line opens everything.
+ *
+ * Skipped unless DATABASE_URL is set.
+ */
+import { request } from 'node:http';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, ToolRegistry, createPool, ensureOwner, migrate, removeLockPin, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { testDatabaseUrl } from '@buddi/core/testing';
+import pngjs from 'pngjs';
+import type { Pool } from 'pg';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { csrfCookieName, sessionCookieName } from './http.js';
+import { LOCK_GRACE_MS, allowedWhileLocked } from './lock.js';
+import { startWebServer, type WebServer } from './server.js';
+import { mintTicket } from './token.js';
+import { hostFetch } from '../__fixtures__/host-fetch.js';
+
+const databaseUrl = await testDatabaseUrl();
+const suite = databaseUrl ? describe : describe.skip;
+const TEST_DB = `buddi_lock_test_${process.pid}`;
+const TOKEN = 'a-test-dashboard-token-long-enough';
+const T0 = new Date('2026-10-01T12:00:00Z');
+
+suite('the lock screen', () => {
+  let admin: Pool;
+  let pool: Pool;
+  let app: WebServer;
+  let clock = T0;
+  const advance = (ms: number): void => { clock = new Date(clock.getTime() + ms); };
+
+  beforeAll(async () => {
+    admin = createPool(databaseUrl as string);
+    await admin.query(`drop database if exists ${TEST_DB}`);
+    await admin.query(`create database ${TEST_DB}`);
+    const url = new URL(databaseUrl as string);
+    url.pathname = `/${TEST_DB}`;
+    pool = createPool(url.toString());
+    await migrate(pool, { schema: CORE_SCHEMA, dir: CORE_MIGRATIONS_DIR });
+    await ensureOwner(pool, 'owner');
+    app = await startWebServer({
+      pool,
+      registry: new ToolRegistry(),
+      catalog: { list: () => [], get: () => undefined } as unknown as AgentCatalog,
+      ctx: { db: pool, ownerId: 'owner', now: () => clock, timezone: 'Europe/Paris' } as unknown as CoreToolContext,
+      timezone: 'Europe/Paris',
+      now: () => clock,
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      token: TOKEN,
+      openAccess: true,
+      log: () => {},
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await app?.close();
+    await pool?.end();
+    if (admin) {
+      await admin.query(`drop database if exists ${TEST_DB}`);
+      await admin.end();
+    }
+  });
+
+  beforeEach(async () => {
+    clock = new Date(clock.getTime() + 60 * 60_000);
+    await pool.query("delete from core.web_settings where key in ('lock', 'lock.pin')");
+    await pool.query('delete from core.lock_background');
+    await pool.query('truncate core.dashboard_sessions');
+    // The service trusts what it read for two seconds; the clock moved an hour.
+  });
+
+  const base = (): string => `http://127.0.0.1:${app.port}`;
+
+  /** A browser: its own cookie jar, its CSRF echoed on every write. */
+  async function browser(headers: Record<string, string> = {}) {
+    const res = await hostFetch(`${base()}/api/session`, { headers: { Connection: 'close', ...headers } });
+    const pairs = res.headers.getSetCookie().map((c) => c.split(';')[0]!);
+    return jar(pairs, headers);
+  }
+  function jar(pairs: string[], extra: Record<string, string> = {}) {
+    const csrf = pairs.find((p) => p.startsWith(`${csrfCookieName(app.port)}=`))?.split('=')[1] ?? '';
+    const cookie = pairs.join('; ');
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await hostFetch(`${base()}${path}`, {
+        method,
+        headers: {
+          Cookie: cookie,
+          Connection: 'close',
+          ...extra,
+          ...(method === 'GET' ? {} : { Origin: base(), 'X-Buddi-CSRF': csrf, 'Content-Type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const text = await res.text();
+      return { status: res.status, body: text ? JSON.parse(text) as Record<string, any> : null };
+    };
+    return {
+      cookie,
+      csrf,
+      get: (path: string) => call('GET', path),
+      post: (path: string, body: unknown = {}) => call('POST', path, body),
+      put: (path: string, body: unknown) => call('PUT', path, body),
+      del: (path: string) => call('DELETE', path),
+    };
+  }
+
+  it('is off until a PIN is set: nothing locks, Lock now says so', async () => {
+    const b = await browser();
+    expect((await b.get('/api/lock')).body).toMatchObject({ pin: false, locked: false, delayMinutes: 5, background: 'field' });
+    expect((await b.post('/api/lock')).status).toBe(409);
+    expect((await b.get('/api/overview')).status).toBe(200);
+  });
+
+  it('keeps only a scrypt hash of the PIN, and refuses one that is not four to eight digits', async () => {
+    const b = await browser();
+    expect((await b.put('/api/lock/pin', { pin: '12' })).status).toBe(400);
+    expect((await b.put('/api/lock/pin', { pin: '12345678901' })).status).toBe(400);
+    expect((await b.put('/api/lock/pin', { pin: 'abcd' })).status).toBe(400);
+    const set = await b.put('/api/lock/pin', { pin: '2468' });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ pin: true, locked: false });
+    const { rows } = await pool.query("select value::text as v from core.web_settings where key = 'lock.pin'");
+    expect(rows[0].v).toContain('scrypt$');
+    expect(rows[0].v).not.toContain('2468');
+  });
+
+  it('answers a locked session 423 for everything but the lock screen, and opens with the PIN', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    const locked = await b.post('/api/lock');
+    expect(locked.body).toMatchObject({ locked: true, reason: 'owner' });
+
+    for (const path of ['/api/overview', '/api/widgets', '/api/chat/agents', '/api/notifications', '/api/conversations']) {
+      const res = await b.get(path);
+      expect(res.status, path).toBe(423);
+      expect(res.body).toMatchObject({ locked: true });
+    }
+    expect((await b.post('/api/presence', { state: 'active' })).status).toBe(423);
+    expect((await b.post('/api/lock/activity')).status).toBe(423);
+    expect((await b.put('/api/lock/pin', { pin: '1111', current: '2468' })).status).toBe(423);
+
+    expect((await b.get('/api/session')).status).toBe(200);
+    expect((await b.get('/api/lock')).body).toMatchObject({ pin: true, locked: true });
+    const screen = await b.get('/api/lock/screen');
+    expect(screen.status).toBe(200);
+    expect(screen.body).toMatchObject({ locked: true, timezone: 'Europe/Paris', owner: 'owner', approvals: 0, widgets: [] });
+    expect(typeof screen.body!.unread).toBe('number');
+
+    const open = await b.post('/api/lock/unlock', { pin: '2468' });
+    expect(open.status).toBe(200);
+    expect(open.body).toMatchObject({ locked: false });
+    expect((await b.get('/api/overview')).status).toBe(200);
+  });
+
+  it('counts unread notifications for the lock screen, never what they say', async () => {
+    const b = await browser();
+    await pool.query('delete from core.owner_notifications');
+    await pool.query(
+      `insert into core.owner_notifications (kind, urgency, title, state, seen_at)
+       values ('plugin', 'now', 'a secret title', 'shown', null), ('plugin', 'now', 'another', 'shown', null),
+              ('plugin', 'now', 'read already', 'shown', now())`,
+    );
+    await b.put('/api/lock/pin', { pin: '2468' });
+    await b.post('/api/lock');
+    const screen = await b.get('/api/lock/screen');
+    expect(screen.body!.unread).toBe(2);
+    expect(JSON.stringify(screen.body)).not.toContain('secret');
+  });
+
+  it('limits tries for the installation: five wrong, then a wait that doubles', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    await b.post('/api/lock');
+    for (let i = 1; i <= 4; i++) {
+      const wrong = await b.post('/api/lock/unlock', { pin: '0000' });
+      expect(wrong.status).toBe(403);
+      expect(wrong.body).toMatchObject({ triesLeft: 5 - i, waitUntil: null });
+    }
+    const fifth = await b.post('/api/lock/unlock', { pin: '0000' });
+    expect(fifth.status).toBe(403);
+    expect(fifth.body!.triesLeft).toBe(0);
+    expect(Date.parse(fifth.body!.waitUntil) - clock.getTime()).toBe(30_000);
+    // Even the right PIN waits; and a new session does not reset the count.
+    expect((await b.post('/api/lock/unlock', { pin: '2468' })).status).toBe(429);
+    const other = await browser();
+    expect((await other.post('/api/lock/unlock', { pin: '2468' })).status).toBe(429);
+    advance(31_000);
+    const sixth = await b.post('/api/lock/unlock', { pin: '0000' });
+    expect(Date.parse(sixth.body!.waitUntil) - clock.getTime()).toBe(60_000);
+    advance(61_000);
+    expect((await b.post('/api/lock/unlock', { pin: '2468' })).status).toBe(200);
+    // A right PIN clears the count.
+    expect((await b.get('/api/lock')).body).toMatchObject({ triesLeft: null, waitUntil: null });
+  });
+
+  it('starts a new browser session locked while a PIN is set, but not a ticket or buddi’s own client', async () => {
+    const owner = await browser();
+    await owner.put('/api/lock/pin', { pin: '2468' });
+
+    const fresh = await browser();
+    expect((await fresh.get('/api/lock')).body).toMatchObject({ locked: true, reason: 'start' });
+    expect((await fresh.get('/api/overview')).status).toBe(423);
+
+    const mcp = await browser({ 'X-Buddi-Client': 'mcp' });
+    expect((await mcp.get('/api/overview')).status).toBe(200);
+    expect((await mcp.post('/api/lock')).status).toBe(409);
+
+    // `buddi dashboard --unlock`: a ticket opens a session past the lock.
+    const exchanged = await hostFetch(`${base()}/?t=${encodeURIComponent(mintTicket(TOKEN, clock))}`, { headers: { Connection: 'close' } });
+    expect(exchanged.status).toBe(302);
+    const ticketed = jar(exchanged.headers.getSetCookie().map((c) => c.split(';')[0]!));
+    expect(ticketed.cookie).toContain(sessionCookieName(app.port));
+    expect((await ticketed.get('/api/overview')).status).toBe(200);
+  });
+
+  it('locks a session the server saw no use of for the delay, whatever the page says', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    await b.put('/api/lock/settings', { delayMinutes: 1 });
+    // Polls are not use: only the page's activity report is.
+    advance(50_000);
+    expect((await b.get('/api/overview')).status).toBe(200);
+    expect((await b.post('/api/lock/activity')).status).toBe(204);
+    advance(60_000 + LOCK_GRACE_MS - 1_000);
+    expect((await b.get('/api/overview')).status).toBe(200);
+    advance(2_000);
+    expect((await b.get('/api/overview')).status).toBe(423);
+    const state = (await b.get('/api/lock')).body!;
+    expect(state).toMatchObject({ locked: true, reason: 'idle' });
+
+    // Never: no idle lock at all.
+    await b.post('/api/lock/unlock', { pin: '2468' });
+    await b.put('/api/lock/settings', { delayMinutes: null });
+    advance(10 * 60 * 60_000);
+    expect((await b.get('/api/overview')).status).toBe(200);
+    expect((await b.put('/api/lock/settings', { delayMinutes: 7 })).status).toBe(400);
+  });
+
+  it('keeps a lock across a restart of the session store', async () => {
+    const exchanged = await hostFetch(`${base()}/?t=${encodeURIComponent(mintTicket(TOKEN, clock))}`, { headers: { Connection: 'close' } });
+    const b = jar(exchanged.headers.getSetCookie().map((c) => c.split(';')[0]!));
+    await b.put('/api/lock/pin', { pin: '2468' });
+    await b.post('/api/lock');
+    await new Promise((r) => setTimeout(r, 50));
+    const { rows } = await pool.query('select locked_at, lock_reason, client from core.dashboard_sessions');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ lock_reason: 'owner', client: 'browser' });
+    expect(rows[0].locked_at).not.toBeNull();
+  });
+
+  it('changes and removes the PIN only with the current one', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    expect((await b.put('/api/lock/pin', { pin: '1357' })).status).toBe(400);
+    const wrong = await b.put('/api/lock/pin', { pin: '1357', current: '9999' });
+    expect(wrong.status).toBe(403);
+    expect(wrong.body!.error).toContain('current PIN');
+    expect((await b.put('/api/lock/pin', { pin: '1357', current: '2468' })).status).toBe(200);
+    expect((await b.post('/api/lock/pin/remove', { current: '2468' })).status).toBe(403);
+    expect((await b.post('/api/lock/pin/remove', { current: '1357' })).body).toMatchObject({ pin: false });
+  });
+
+  it('opens every session when the PIN is removed from the command line', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    await b.post('/api/lock');
+    expect((await b.get('/api/overview')).status).toBe(423);
+    expect(await removeLockPin(pool)).toBe(true);
+    // The service trusts its last read for two seconds of its clock.
+    advance(3_000);
+    expect((await b.get('/api/overview')).status).toBe(200);
+    expect((await b.get('/api/lock')).body).toMatchObject({ pin: false, locked: false });
+    expect(await removeLockPin(pool)).toBe(false);
+  });
+
+  it('closes a locked session’s open streams', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    const ended = new Promise<number>((resolve, reject) => {
+      const req = request({ host: '127.0.0.1', port: app.port, path: '/api/chat/attention/stream', headers: { Cookie: b.cookie } }, (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve(res.statusCode ?? 0));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await b.post('/api/lock');
+    expect(await ended).toBe(200);
+    // And a new one is refused while it stays locked.
+    expect((await b.get('/api/chat/attention/stream')).status).toBe(423);
+  }, 20_000);
+
+  it('takes a picture for the background, re-encoded as a JPEG, served while locked', async () => {
+    const b = await browser();
+    await b.put('/api/lock/pin', { pin: '2468' });
+    expect((await b.put('/api/lock/settings', { background: 'image' })).status).toBe(409);
+    expect((await b.put('/api/lock/settings', { background: 'dusk' })).body).toMatchObject({ background: 'dusk' });
+
+    const png = new pngjs.PNG({ width: 40, height: 30 });
+    png.data.fill(200);
+    const bytes = pngjs.PNG.sync.write(png);
+    const boundary = 'x-lock-test';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n`),
+      bytes,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const uploaded = await new Promise<{ status: number; body: any }>((resolve, reject) => {
+      const req = request({
+        host: '127.0.0.1', port: app.port, path: '/api/lock/background', method: 'POST',
+        headers: { Cookie: b.cookie, Origin: base(), 'X-Buddi-CSRF': b.csrf, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': String(body.length) },
+      }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.body).toMatchObject({ background: 'image' });
+    expect(uploaded.body.image).toMatch(/^\/api\/lock\/background\?v=[0-9a-f]{16}$/);
+
+    await b.post('/api/lock');
+    const picture = await hostFetch(`${base()}/api/lock/background`, { headers: { Cookie: b.cookie } });
+    expect(picture.status).toBe(200);
+    expect(picture.headers.get('content-type')).toBe('image/jpeg');
+    const jpeg = Buffer.from(await picture.arrayBuffer());
+    expect(jpeg.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))).toBe(true);
+
+    await b.post('/api/lock/unlock', { pin: '2468' });
+    expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'field', image: null });
+  });
+
+  it('allows only the lock screen’s own calls while locked', () => {
+    expect(allowedWhileLocked('GET', '/api/session')).toBe(true);
+    expect(allowedWhileLocked('GET', '/api/lock/screen')).toBe(true);
+    expect(allowedWhileLocked('POST', '/api/lock/unlock')).toBe(true);
+    expect(allowedWhileLocked('POST', '/api/lock/activity')).toBe(false);
+    expect(allowedWhileLocked('PUT', '/api/lock/pin')).toBe(false);
+    expect(allowedWhileLocked('GET', '/api/overview')).toBe(false);
+    expect(allowedWhileLocked('POST', '/api/lock/screen')).toBe(false);
+  });
+});

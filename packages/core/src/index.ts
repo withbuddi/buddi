@@ -35,6 +35,7 @@ export * from './onboarding/index.js';
 export * from './pending-input.js';
 export * from './recovery.js';
 export * from './web-settings.js';
+export * from './lock.js';
 export * from './plugins/index.js';
 export * from './backup/index.js';
 export { runMigrations } from './cli-migrate.js';

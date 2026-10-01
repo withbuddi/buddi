@@ -31,6 +31,9 @@ import {
   type TransportResponse,
 } from '@buddi/gateway';
 
+/** The header buddi's own clients name themselves with (docs/dashboard.md, "Lock screen"). */
+export const CLIENT_HEADER = 'x-buddi-client';
+
 /** The one sentence every call answers with when there is nothing to talk to. */
 export const NOT_RUNNING =
   'buddi is not running on this Mac (nothing answered on the dashboard port). Start it with `buddi service start`, then try again.';
@@ -122,7 +125,9 @@ export class GatewayClient implements Gateway {
 
   async #send(path: string, method: string, headers: Record<string, string>, body?: string): Promise<TransportResponse> {
     try {
-      return await this.#transport(`${this.#base}${path}`, { method, headers, ...(body !== undefined ? { body } : {}) });
+      // Named on every request, so the session minted for it is a client's and
+      // never a browser's: the dashboard's lock screen does not cover it.
+      return await this.#transport(`${this.#base}${path}`, { method, headers: { ...headers, [CLIENT_HEADER]: 'mcp' }, ...(body !== undefined ? { body } : {}) });
     } catch {
       this.#session = undefined;
       this.#signedIn = undefined;

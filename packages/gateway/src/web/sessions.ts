@@ -59,9 +59,22 @@ export type SessionScope = 'local' | 'remote';
  */
 export type SessionVia = 'local' | 'ticket' | 'tailscale';
 
+/**
+ * Who holds the session: a person's browser, or one of buddi's own
+ * command-line clients (`buddi mcp`, `buddi connections`), which say so with
+ * the `x-buddi-client: mcp` header when the session is minted. The lock screen
+ * covers browsers only (docs/dashboard.md, "Lock screen").
+ */
+export type SessionClient = 'browser' | 'mcp';
+
+/** Why a session is locked: Lock now, nobody used it for the delay, or it began while a PIN was set. */
+export type LockReason = 'owner' | 'idle' | 'start';
+
 /** What established a session, as `create` is told it. */
 export interface SessionProvenance {
   via: SessionVia;
+  /** Who holds it; a browser unless buddi's own client said otherwise. */
+  client?: SessionClient;
   /** The daemon-confirmed login, when `via` is `tailscale`. */
   tailscaleLogin?: string;
   /** The tailnet address it was confirmed at. */
@@ -112,6 +125,13 @@ export interface Session {
   absoluteExpiresAt?: Date;
   /** When the browser was last handed this cookie. Drives the refresh rule. */
   cookieIssuedAt: Date;
+  /** A browser, or buddi's own command-line client. */
+  client: SessionClient;
+  /** When the owner last used it, as the page reports. Polls and streams do not count. */
+  activeAt: Date;
+  /** When it locked; absent while it is open. */
+  lockedAt?: Date;
+  lockReason?: LockReason;
 }
 
 function id(bytes = 32): string {
@@ -189,10 +209,17 @@ interface Row {
   created_at: Date | string;
   expires_at: Date | string;
   absolute_expires_at: Date | string | null;
+  locked_at?: Date | string | null;
+  lock_reason?: LockReason | null;
+  active_at?: Date | string | null;
+  client?: SessionClient | null;
 }
 
 const COLUMNS = `id_hash, scope, via, tailscale_login, tailscale_address, tailscale_name, ttl_ms,
-  created_at, expires_at, absolute_expires_at`;
+  created_at, expires_at, absolute_expires_at, locked_at, lock_reason, active_at, client`;
+
+/** How often a session's `active_at` is written back, at most. */
+export const ACTIVE_WRITE_EVERY_MS = 60_000;
 
 /** Is this a row the table could have produced? Anything else is a miss. */
 function isRow(value: unknown): value is Row {
@@ -208,6 +235,8 @@ export class SessionStore {
   readonly #sessions = new Map<string, Session>();
   /** When each cached session's idle edge was last written back. */
   readonly #persistedAt = new Map<string, number>();
+  /** When each cached session's `active_at` was last written back. */
+  readonly #activeWrittenAt = new Map<string, number>();
   /** Destroyed while a read of the table may still be in flight. */
   readonly #revoked = new Set<string>();
   readonly #ttl: Record<SessionScope, number>;
@@ -244,7 +273,7 @@ export class SessionStore {
     scope: SessionScope,
     now: Date = new Date(),
     provenance: SessionProvenance = { via: scope === 'local' ? 'local' : 'ticket' },
-    options: { persist?: boolean } = {},
+    options: { persist?: boolean; locked?: LockReason } = {},
   ): Session {
     this.#prune(now);
     const ttlMs = this.#ttl[scope];
@@ -262,6 +291,9 @@ export class SessionStore {
       expiresAt: new Date(now.getTime() + ttlMs),
       ...(provenance.via === 'tailscale' ? { absoluteExpiresAt: new Date(now.getTime() + this.#tailscaleMaxMs) } : {}),
       cookieIssuedAt: now,
+      client: provenance.client ?? 'browser',
+      activeAt: now,
+      ...(options.locked ? { lockedAt: now, lockReason: options.locked } : {}),
     };
     const key = sessionIdHash(sessionId);
     this.#sessions.set(key, session);
@@ -270,10 +302,11 @@ export class SessionStore {
       const db = this.#db;
       void this.#enqueue('storing a session', () => db.query(
         `insert into core.dashboard_sessions (${COLUMNS}, last_seen_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $8)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $8)
          on conflict (id_hash) do nothing`,
         [key, session.scope, session.via, session.tailscaleLogin ?? null, session.tailscaleAddress ?? null,
-          session.tailscaleName ?? null, ttlMs, session.createdAt, session.expiresAt, session.absoluteExpiresAt ?? null],
+          session.tailscaleName ?? null, ttlMs, session.createdAt, session.expiresAt, session.absoluteExpiresAt ?? null,
+          session.lockedAt ?? null, session.lockReason ?? null, session.activeAt, session.client],
       ));
       this.#maybeSweep(now);
     }
@@ -418,6 +451,55 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Lock this session (or open it, with `null`): in memory at once, and on
+   * its row when it has one. The lock screen's own state, nothing more — the
+   * gate in `lock.ts` is what answers a locked session 423.
+   */
+  setLock(session: Session, lock: { at: Date; reason: LockReason } | null): void {
+    if (lock) {
+      session.lockedAt = lock.at;
+      session.lockReason = lock.reason;
+    } else {
+      delete session.lockedAt;
+      delete session.lockReason;
+    }
+    const key = session.id ? sessionIdHash(session.id) : undefined;
+    const db = this.#db;
+    if (!db || !key || !this.#persistedAt.has(key)) return;
+    void this.#enqueue(lock ? 'locking a session' : 'unlocking a session', () => db.query(
+      `update core.dashboard_sessions set locked_at = $2, lock_reason = $3 where id_hash = $1`,
+      [key, lock?.at ?? null, lock?.reason ?? null],
+    ));
+  }
+
+  /**
+   * The owner used this session now. Written back at most once a minute: a
+   * restart can cost the lock at most that much of its delay, never add to it.
+   */
+  touch(session: Session, now: Date): void {
+    const before = session.activeAt.getTime();
+    session.activeAt = now;
+    const key = session.id ? sessionIdHash(session.id) : undefined;
+    const db = this.#db;
+    if (!db || !key || !this.#persistedAt.has(key)) return;
+    const written = this.#activeWrittenAt.get(key) ?? before;
+    if (now.getTime() - written < ACTIVE_WRITE_EVERY_MS) return;
+    this.#activeWrittenAt.set(key, now.getTime());
+    void this.#enqueue('noting a session in use', () => db.query(
+      `update core.dashboard_sessions set active_at = greatest(coalesce(active_at, $2), $2) where id_hash = $1`,
+      [key, now],
+    ));
+  }
+
+  /** Open every cached session: the PIN is gone. The table is cleared by whoever removed it. */
+  unlockCached(): void {
+    for (const session of this.#sessions.values()) {
+      delete session.lockedAt;
+      delete session.lockReason;
+    }
+  }
+
   /** Every table operation queued so far has settled. A test seam. */
   async flush(): Promise<void> {
     await this.#chain;
@@ -430,6 +512,7 @@ export class SessionStore {
   #drop(key: string): void {
     this.#sessions.delete(key);
     this.#persistedAt.delete(key);
+    this.#activeWrittenAt.delete(key);
   }
 
   #deleteRows(keys: string[], rethrow = false): Promise<void> {
@@ -485,6 +568,11 @@ export class SessionStore {
       // Unknown after a restart, so treated as old: the browser's copy is
       // refreshed on the first response rather than trusted to outlive it.
       cookieIssuedAt: createdAt,
+      client: row.client === 'mcp' ? 'mcp' : 'browser',
+      // A row from before the lock screen has no use on record: its last
+      // renewal (the idle edge less the lifetime) is the best there is.
+      activeAt: row.active_at ? new Date(row.active_at) : new Date(new Date(row.expires_at).getTime() - Number(row.ttl_ms)),
+      ...(row.locked_at ? { lockedAt: new Date(row.locked_at), lockReason: row.lock_reason ?? 'owner' } : {}),
     };
   }
 
