@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
+import { LockContext } from './lock';
 import { RailStatus, StatusBar, linkKind, statusItems, statusTone, zoneName, type ShellStatus } from './StatusBar';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
@@ -94,6 +95,27 @@ describe('on a phone', { timeout: 180_000 }, () => {
     }
     await user.click(within(menu).getByRole('menuitem', { name: /^Work: / }));
     expect(go).toHaveBeenCalledWith('#/activity/jobs?state=failed');
+  });
+
+  it('ends with Lock now, apart, while a PIN is set — and not without one', async () => {
+    const lockNow = vi.fn();
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const { unmount } = render(
+      <LockContext.Provider value={{ pin: true, state: null, lockNow, update: () => {}, shortcut: '⌃⌘L' }}>
+        <RailStatus status={base} onNavigate={vi.fn()} />
+      </LockContext.Provider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Status' }));
+    const menu = await screen.findByRole('menu');
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.at(-1)).toHaveTextContent('Lock now');
+    expect(within(menu).getByRole('separator')).toBeInTheDocument();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Lock now' }));
+    expect(lockNow).toHaveBeenCalledTimes(1);
+    unmount();
+    render(<RailStatus status={base} onNavigate={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Status' }));
+    expect(within(await screen.findByRole('menu')).queryByRole('menuitem', { name: 'Lock now' })).not.toBeInTheDocument();
   });
 
   it('reads the dot from the state', () => {

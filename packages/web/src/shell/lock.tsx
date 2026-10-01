@@ -63,7 +63,8 @@ export interface LockControls {
   shortcut: string;
 }
 
-const LockContext = createContext<LockControls>({ pin: false, state: null, lockNow: () => {}, update: () => {}, shortcut: '⌃⌘L' });
+/** Exported for tests that draw a piece of the shell with a PIN set. */
+export const LockContext = createContext<LockControls>({ pin: false, state: null, lockNow: () => {}, update: () => {}, shortcut: '⌃⌘L' });
 
 /** The lock's controls, for the owner menu, the status line and Settings. */
 export function useLock(): LockControls {

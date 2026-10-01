@@ -216,6 +216,7 @@ export function StatusBar({ status, onNavigate }: { status: ShellStatus; onNavig
 /** The phone's fold: one dot on the rail, the same items behind it. */
 export function RailStatus({ status, onNavigate }: { status: ShellStatus; onNavigate: (route: string) => void }): JSX.Element {
   const now = useMinute();
+  const lock = useLock();
   const tone = statusTone(status);
   return (
     <div className="rail-status">
@@ -235,6 +236,15 @@ export function RailStatus({ status, onNavigate }: { status: ShellStatus; onNavi
                 </a>
               </DropdownMenu.Item>
             ))}
+            {/* The footer's padlock, last and apart: only while a PIN is set. */}
+            {lock.pin ? (
+              <>
+                <DropdownMenu.Separator className="ui-menu-sep" />
+                <DropdownMenu.Item className="ui-menu-item rail-status-item" data-item="lock" onSelect={() => lock.lockNow()}>
+                  <span className="rail-status-line"><Icon name="lock" size={12} /><span>Lock now</span></span>
+                </DropdownMenu.Item>
+              </>
+            ) : null}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
