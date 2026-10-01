@@ -425,7 +425,7 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'plugins update',
     group: 'Agents',
-    summary: 'Stage the next version of a plugin; --yes --integrity approves it.',
+    summary: 'Stage the next version of a plugin (a folder install is reread, the same version too); --yes --integrity approves it.',
     usage: 'buddi plugins update <name> [--version <v>] [--yes --integrity <hash>]',
     flags: [
       { flag: '--version <v>', meaning: 'This version instead of the newest.' },

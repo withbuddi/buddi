@@ -43,7 +43,7 @@ import { entryPointOf } from './install.js';
 import { manifestProblem } from './load.js';
 import { uninstallPlugin } from './uninstall.js';
 import { parsePluginSpec, splitNpmSpec } from './spec.js';
-import { isNewerVersion, parseSemver, updatePlugin } from './update.js';
+import { isNewerVersion, isRefresh, parseSemver, updatePlugin } from './update.js';
 import {
   integrityOfFile,
   lifecycleScripts,
@@ -491,6 +491,25 @@ describe('update', () => {
     expect(next.previousSource).toEqual({ kind: 'directory', path: MARKER_FIXTURE });
     // A path is not a package: nothing may replace a source from a disk.
     await expect(updatePlugin('fixture-marker', { env, from: MARKER_FIXTURE, npm: fakeNpm() })).rejects.toThrow(/names a package/);
+  });
+
+  it('rereads a plugin installed from a folder at the same version: a reinstall, approved like any update', async () => {
+    const staged = await stagePlugin(MARKER_FIXTURE, { env, npm: fakeNpm() });
+    await approveStaged(staged.id, { integrity: '', env });
+
+    const again = await updatePlugin('fixture-marker', { env, npm: fakeNpm() });
+    expect(again.source).toEqual({ kind: 'directory', path: MARKER_FIXTURE });
+    expect(again.version).toBe('1.0.0');
+    expect(again.previous).toEqual({ name: 'fixture-marker', version: '1.0.0' });
+    expect((await approveStaged(again.id, { integrity: '', env })).kind).toBe('installed');
+  });
+
+  it('says a reinstall is only a folder at an equal version', () => {
+    const folder = { version: '1.0.0', source: { kind: 'directory' as const, path: '/x' } };
+    expect(isRefresh(folder, { version: '1.0.0' })).toBe(true);
+    expect(isRefresh(folder, { version: '0.9.0' })).toBe(false);
+    expect(isRefresh(folder, { version: '1.0.0' }, 'pkg@1.0.0')).toBe(false);
+    expect(isRefresh({ version: '1.0.0', source: { kind: 'registry' as const, name: 'pkg' } } as never, { version: '1.0.0' })).toBe(false);
   });
 
   it('knows which version is newer', () => {

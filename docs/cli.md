@@ -304,7 +304,7 @@ Your agents, what they have scheduled, and the plugins they use.
 - [`buddi plugins describe`](#buddi-plugins-describe): Stage a plugin, read its manifest, print what it brings, and delete the stage.
 - [`buddi plugins info`](#buddi-plugins-info): Show what a plugin is, what it brought, and what it proposes.
 - [`buddi plugins install`](#buddi-plugins-install): Stage a plugin and read what it claims, then approve it with --yes.
-- [`buddi plugins update`](#buddi-plugins-update): Stage the next version of a plugin; --yes --integrity approves it.
+- [`buddi plugins update`](#buddi-plugins-update): Stage the next version of a plugin (a folder install is reread, the same version too); --yes --integrity approves it.
 - [`buddi plugins staged`](#buddi-plugins-staged): List what is staged and waiting for you.
 - [`buddi plugins approve`](#buddi-plugins-approve): Approve a staged plugin by its staging id.
 - [`buddi plugins reject`](#buddi-plugins-reject): Delete a stage and everything it fetched.
@@ -893,7 +893,7 @@ buddi plugins install @you/buddi-plugin-finance
 
 ### buddi plugins update
 
-Stage the next version of a plugin; --yes --integrity approves it.
+Stage the next version of a plugin (a folder install is reread, the same version too); --yes --integrity approves it.
 
 ```sh
 buddi plugins update <name> [--version <v>] [--yes --integrity <hash>]

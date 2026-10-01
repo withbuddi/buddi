@@ -1061,7 +1061,9 @@ function StagedFacts({
             { label: 'Published by', value: publisherWords(staged.source, staged.publisher) },
             ...(staged.previousSource && staged.previous
               ? [{ label: 'Replaces', value: `${staged.previous.version}, installed from ${sourceWords(staged.previousSource)}` }]
-              : []),
+              : staged.source.kind === 'directory' && staged.previous?.version === staged.version
+                ? [{ label: 'Reinstalls', value: `${staged.version}, the same version, its files read again from the folder` }]
+                : []),
             ...(staged.source.kind === 'directory'
               ? []
               : [
@@ -1511,7 +1513,8 @@ function InstalledRow({
   onDisable: () => void;
   onEnable: () => void;
   onRemove: () => void;
-  onUpdate: (version: string) => void;
+  /** No version: reread it from where it came (a folder: the same version too). */
+  onUpdate: (version?: string) => void;
   /** Its first step when it waits: set itself up, or get what it requires. */
   firstStep?: { label: string; run: () => void } | undefined;
 }): JSX.Element {
@@ -1570,6 +1573,10 @@ function InstalledRow({
               { label: 'Details', onSelect: onDetails },
               canOpen ? { label: 'Open its page', onSelect: onOpen } : null,
               onSettings ? { label: 'Its settings', onSelect: onSettings } : null,
+              // A folder you build in: read it again, the same version included.
+              plugin.source.kind === 'directory' && !busy
+                ? { label: 'Reinstall from folder', hint: 'reads its files again', onSelect: () => onUpdate() }
+                : null,
               disabled
                 ? { label: 'Enable', hint: 'all of it comes back', onSelect: onEnable }
                 : { label: 'Disable…', hint: 'keeps its data', onSelect: onDisable },
@@ -1769,7 +1776,7 @@ function InstalledSheet({
             </Button>
           ) : (
             <Button disabled={busy} onClick={() => onUpdate()}>
-              Check for an update
+              {plugin.source.kind === 'directory' ? 'Reinstall from folder' : 'Check for an update'}
             </Button>
           )}
         </Toolbar>

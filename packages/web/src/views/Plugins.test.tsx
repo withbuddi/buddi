@@ -954,6 +954,29 @@ describe('browsing the market', () => {
     expect(api.market).not.toHaveBeenCalled();
   });
 
+  it('reinstalls a folder install from its row and its detail, and the card says it is the same version', async () => {
+    const garden = { ...INSTALLED, source: { kind: 'directory' as const, path: '/home/o/code/garden' } };
+    vi.mocked(api.plugins).mockResolvedValue(view({ installed: [garden] }));
+    vi.mocked(api.updatePlugin).mockResolvedValue({ job: JOB });
+    vi.mocked(api.pluginJob).mockResolvedValue(JOB);
+    render(<Plugins />);
+    await openMenuItem('garden', 'Reinstall from folder');
+    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('garden', undefined));
+    vi.mocked(api.updatePlugin).mockClear();
+    fireEvent.click(screen.getByLabelText('garden: details'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reinstall from folder' }));
+    await waitFor(() => expect(api.updatePlugin).toHaveBeenCalledWith('garden', undefined));
+    expect(screen.queryByRole('button', { name: 'Check for an update' })).toBeNull();
+  });
+
+  it('draws a reinstall card as the same version read again, not a replacement', async () => {
+    const again: StagedPluginView = { ...STAGED, name: 'garden', version: '1.0.0', source: { kind: 'directory', path: '/home/o/code/garden' }, integrity: '', previous: { name: 'garden', version: '1.0.0' } };
+    vi.mocked(api.plugins).mockResolvedValue(view({ staged: [again] }));
+    render(<Plugins />);
+    expect(await screen.findByText('1.0.0, the same version, its files read again from the folder')).toBeInTheDocument();
+    expect(screen.queryByText('Replaces')).toBeNull();
+  });
+
   it('stages a market link once, on the Installed tab', async () => {
     vi.mocked(api.plugins).mockResolvedValue(view());
     vi.mocked(api.stagePlugin).mockResolvedValue({ job: JOB });

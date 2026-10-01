@@ -100,6 +100,10 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
   if (opts.allowDowngrade !== true) {
     try {
       newer = isNewerVersion(staged.version, record.version);
+      // A folder the owner builds in is reread at the same version: a refresh
+      // ("Reinstall from folder"). Its migrations ledger is unchanged — the
+      // same version runs nothing new — and it is approved like any update.
+      if (!newer && isRefresh(record, staged, from)) newer = true;
     } catch (err) {
       // A version nobody can compare is still unapproved code on disk.
       rejectStaged(staged.id, env);
@@ -118,6 +122,17 @@ export async function updatePlugin(name: string, opts: UpdateOptions = {}): Prom
     );
   }
   return staged;
+}
+
+/**
+ * Is this stage the installed folder read again at the same version? Only a
+ * directory install, from that same directory, at an equal version.
+ */
+export function isRefresh(record: Pick<InstalledPlugin, 'version' | 'source'>, staged: Pick<StagedPlugin, 'version'>, from?: string): boolean {
+  if (from !== undefined || record.source.kind !== 'directory') return false;
+  const a = parseSemver(staged.version);
+  const b = parseSemver(record.version);
+  return a !== undefined && b !== undefined && compareSemver(a, b) === 0;
 }
 
 /** What to stage for this record: the same source, at the asked-for version. */

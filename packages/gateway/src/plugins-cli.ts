@@ -100,7 +100,9 @@ export const USAGE = `buddi plugins — what this installation has installed
                                           never approved without it, not even with --yes.
                                           Without it the command stages, prints the card and
                                           exits 3: staged, not installed.
-  buddi plugins update <name> [--version] stage the next version; --yes --integrity approves it
+  buddi plugins update <name> [--version] stage the next version; --yes --integrity approves it.
+                                          A plugin installed from a folder is reread from
+                                          it, the same version included (a reinstall)
   buddi plugins staged                    what is staged and waiting for you
   buddi plugins approve <id> [--integrity <hash>] [--acknowledge-drift]
   buddi plugins reject <id>               delete a stage and everything it fetched
@@ -669,7 +671,9 @@ async function commandUpdate(
   console.log(renderStaged(staged).join('\n'));
   console.log('');
   console.log(
-    `This REPLACES ${staged.previous?.name ?? name} ${staged.previous?.version ?? '?'}. Its migrations run forward only.`,
+    staged.source.kind === 'directory' && staged.previous?.version === staged.version
+      ? `This REINSTALLS ${staged.previous.name} ${staged.version} from its folder: the same version, its files read again.`
+      : `This REPLACES ${staged.previous?.name ?? name} ${staged.previous?.version ?? '?'}. Its migrations run forward only.`,
   );
   if (!args.yes) {
     console.log('');
