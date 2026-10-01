@@ -92,6 +92,14 @@ export function clientOf(header: string | string[] | undefined): SessionClient {
   return value === 'mcp' ? 'mcp' : 'browser';
 }
 
+/** The lock's state could not be read and none is known: the request is refused with a 503, never let in. */
+export class LockUnavailable extends Error {
+  constructor() {
+    super('The lock screen’s state could not be read.');
+    this.name = 'LockUnavailable';
+  }
+}
+
 export interface LockStateView {
   pin: boolean;
   locked: boolean;
@@ -151,15 +159,33 @@ export function createLock(deps: LockDeps) {
   /** Every PIN check, one after another: two wrong tries at once are two tries. */
   let checking: Promise<unknown> = Promise.resolve();
 
+  /** What was last read for certain: the fallback when a read fails. Never cleared by `invalidate`. */
+  let known: { pin: LockPinRecord | null; settings: LockSettings } | null = null;
+
   async function current(fresh = false): Promise<NonNullable<typeof cached>> {
     const now = deps.now().getTime();
     if (!fresh && cached && now - cached.at < LOCK_CACHE_MS) return cached;
-    const [pin, settings, image] = await Promise.all([
-      readLockPin(deps.pool).catch(() => null),
-      readLockSettings(deps.pool).catch((): LockSettings => ({ delayMinutes: 5, background: 'field', clock: { ...DEFAULT_LOCK_CLOCK } })),
+    /*
+     * Fail closed. A PIN that cannot be read is not "no PIN": that would open
+     * every locked session on a database hiccup. The last state read for
+     * certain stands until a read answers; with none, the lock cannot say,
+     * and the request is refused (LockUnavailable, a 503) rather than let in.
+     */
+    const [pinRead, settingsRead, image] = await Promise.all([
+      readLockPin(deps.pool).then((pin) => ({ ok: true as const, pin }), () => ({ ok: false as const })),
+      readLockSettings(deps.pool).then((settings) => ({ ok: true as const, settings }), () => ({ ok: false as const })),
       imageVersion(deps.pool),
     ]);
-    const hadPin = cached?.pin != null;
+    if (!pinRead.ok && !known) throw new LockUnavailable();
+    const pin = pinRead.ok ? pinRead.pin : known!.pin;
+    const settings = settingsRead.ok
+      ? settingsRead.settings
+      : (known?.settings ?? { delayMinutes: 5, background: 'field', clock: { ...DEFAULT_LOCK_CLOCK } });
+    const hadPin = known?.pin != null;
+    if (pinRead.ok) known = { pin, settings };
+    else if (settingsRead.ok && known) known = { ...known, settings };
+    // A failed read is not cached: the next request asks again.
+    if (!pinRead.ok) return { at: now, pin, settings, image };
     cached = { at: now, pin, settings, image };
     // The PIN went away underneath us (`buddi dashboard --remove-pin`): every session opens.
     if (hadPin && !pin) deps.sessions.unlockCached();

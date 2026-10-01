@@ -252,7 +252,7 @@ import { BUILD_MISSING, serveAsset, serveShellAtRoot } from './static.js';
 import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
-import { LOCKED_BODY, allowedWhileLocked, clientOf, createLock } from './lock.js';
+import { LOCKED_BODY, LockUnavailable, allowedWhileLocked, clientOf, createLock } from './lock.js';
 import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
 import { apiTokensRoute, bearerOf, verifyApiToken, type ApiTokenView } from './api-tokens.js';
 import { LockImageRefusal, MAX_LOCK_IMAGE_BYTES, normaliseLockImage } from './lock-image.js';
@@ -819,6 +819,12 @@ export function createWebApp(deps: WebServerDeps): Server {
   // have to unpack.
   const server: Server = createServer((req, res) => {
     handle(req, res).catch((err) => {
+      // The lock could not say whether this request may pass: refused, never let in (web/lock.ts).
+      if (err instanceof LockUnavailable) {
+        log('web: the lock screen\'s state could not be read; refusing until it can');
+        if (!res.headersSent) return sendEmpty(res, 503, { 'Retry-After': '5' });
+        return res.end();
+      }
       // A defect is a 500 with nothing in it. The sentence goes to the log,
       // where only the owner can read it.
       log(`web: ${req.method} ${req.url} failed: ${err instanceof Error ? err.stack : String(err)}`);

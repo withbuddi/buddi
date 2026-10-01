@@ -369,6 +369,68 @@ suite('the lock screen', () => {
     expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'field', image: null });
   });
 
+  it('fails closed when the PIN cannot be read: a locked session stays locked, a new one is refused', async () => {
+    let failing = false;
+    // The same database, but reading the PIN fails while `failing` is set.
+    const flaky = new Proxy(pool, {
+      get(target, prop, receiver) {
+        if (prop === 'query') {
+          return (text: unknown, params?: unknown[]) => {
+            if (failing && Array.isArray(params) && params.includes('lock.pin')) return Promise.reject(new Error('connection terminated'));
+            return (target.query as (...a: unknown[]) => unknown).call(target, text, params);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const flakyApp = await startWebServer({
+      pool: flaky,
+      registry: new ToolRegistry(),
+      catalog: { list: () => [], get: () => undefined } as unknown as AgentCatalog,
+      ctx: { db: flaky, ownerId: 'owner', now: () => clock, timezone: 'Europe/Paris' } as unknown as CoreToolContext,
+      timezone: 'Europe/Paris',
+      now: () => clock,
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      token: TOKEN,
+      openAccess: true,
+      log: () => {},
+    });
+    try {
+      const at = `http://127.0.0.1:${flakyApp.port}`;
+      const open = async () => {
+        const res = await hostFetch(`${at}/api/session`, { headers: { Connection: 'close' } });
+        return { status: res.status, cookie: res.headers.getSetCookie().map((c) => c.split(';')[0]!).join('; ') };
+      };
+      const get = async (cookie: string, path: string) =>
+        (await hostFetch(`${at}${path}`, { headers: { Cookie: cookie, Connection: 'close' } })).status;
+
+      // Nothing known yet and the read fails: no session is minted unlocked.
+      failing = true;
+      const blind = await open();
+      expect(blind.status).toBe(503);
+
+      // A PIN, a session that starts locked; then the read fails: still locked.
+      failing = false;
+      const owner = await browser();
+      await owner.put('/api/lock/pin', { pin: '2468' });
+      const fresh = await open();
+      expect(fresh.status).toBe(200);
+      expect(await get(fresh.cookie, '/api/overview')).toBe(423);
+      failing = true;
+      advance(5_000);
+      expect(await get(fresh.cookie, '/api/overview')).toBe(423);
+      advance(5_000);
+      expect(await get(fresh.cookie, '/api/overview')).toBe(423);
+      const another = await open();
+      expect(another.status).toBe(200);
+      expect(await get(another.cookie, '/api/overview')).toBe(423);
+    } finally {
+      failing = false;
+      await flakyApp.close();
+    }
+  });
+
   it('allows only the lock screen’s own calls while locked', () => {
     expect(allowedWhileLocked('GET', '/api/session')).toBe(true);
     expect(allowedWhileLocked('GET', '/api/lock/screen')).toBe(true);
