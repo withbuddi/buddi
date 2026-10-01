@@ -51,6 +51,8 @@ const GLYPHS = {
   // A screen on its stand: the computer the agents may drive.
   monitor: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="10" rx="1.4" /><path d="M7.4 16.8h5.2M10 13.6v3.2" /></>],
   // An open eye: the watchers that check.
+  // A padlock, shut: the lock screen.
+  lock: [20, 1.6, <><rect x="4" y="8.6" width="12" height="8.6" rx="2.2" /><path d="M6.8 8.6V6.2a3.2 3.2 0 0 1 6.4 0v2.4" /></>],
   eye: [20, 1.6, <><path d="M2.4 10S5.2 4.8 10 4.8 17.6 10 17.6 10 14.8 15.2 10 15.2 2.4 10 2.4 10Z" /><circle cx="10" cy="10" r="2.4" /></>],
   // An archive box with its lid: the backup.
   archive: [20, 1.6, <><rect x="2.8" y="3.6" width="14.4" height="3.6" rx="1" /><path d="M4 7.2v8a1.2 1.2 0 0 0 1.2 1.2h9.6a1.2 1.2 0 0 0 1.2-1.2v-8M8.2 10.4h3.6" /></>],

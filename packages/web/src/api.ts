@@ -36,6 +36,12 @@ const statusChanged = <T,>(result: T): T => {
   return result;
 };
 
+/**
+ * A window event: the server answered 423 — this session is locked (the
+ * lock screen, docs/dashboard.md). The lock gate puts the lock screen up.
+ */
+export const LOCKED = 'buddi:locked';
+
 /** What a write refused by the CSRF gate tells the owner. */
 export const STALE_COOKIES = "This page's sign-in no longer matches its cookies. Reload the page and try again.";
 
@@ -127,6 +133,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (res.status === 401) {
     noteLink(true);
     throw new ApiError(401, 'This session has expired. Run `buddi dashboard` for a fresh link.');
+  }
+  if (res.status === 423) {
+    // Locked: nothing of the app is drawn until the PIN is typed.
+    noteLink(true);
+    window.dispatchEvent(new Event(LOCKED));
+    throw new ApiError(423, 'This dashboard is locked.');
   }
   const text = await res.text();
   const body: unknown = text === '' ? null : safeJson(text);
@@ -865,6 +877,38 @@ export interface FocusSchedule {
 }
 
 /** The focus in force now, manual or scheduled. */
+/** The lock screen's state (GET /api/lock). */
+export interface LockState {
+  /** A PIN is set: the lock screen is on. */
+  pin: boolean;
+  locked: boolean;
+  lockedAt: string | null;
+  /** `owner`: Lock now. `idle`: nobody used it for the delay. `start`: the session began while a PIN was set. */
+  reason: 'owner' | 'idle' | 'start' | null;
+  /** 1, 5, 15 or 60; null is never. */
+  delayMinutes: 1 | 5 | 15 | 60 | null;
+  background: LockBackground;
+  /** The owner's picture, when there is one. */
+  image: string | null;
+  /** No try is checked before this moment. */
+  waitUntil: string | null;
+  /** Wrong tries left before a wait; null while none were wrong. */
+  triesLeft: number | null;
+}
+
+export type LockBackground = 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image';
+
+/** What the lock screen draws (GET /api/lock/screen): counts only, and the widgets that are not sensitive. */
+export interface LockScreenData extends LockState {
+  now: string;
+  timezone: string;
+  owner: string | null;
+  approvals: number;
+  unread: number;
+  focus: FocusState | null;
+  widgets: Array<{ id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody } }>;
+}
+
 export interface FocusState {
   mode: Exclude<FocusMode, 'normal'>;
   /** ISO; null until turned off. */
@@ -2064,6 +2108,21 @@ export const api = {
   notificationSettings: () => get<NotificationSettingsView>('/notifications/settings'),
   saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),
   focus: () => get<{ focus: FocusState | null }>('/notifications/focus'),
+  /** The lock screen (docs/dashboard.md, "Lock screen"). */
+  lockState: () => get<LockState>('/lock'),
+  lockScreen: () => get<LockScreenData>('/lock/screen'),
+  lockNow: (reason: 'owner' | 'idle' = 'owner') => post<LockState>('/lock', { reason }),
+  unlock: (pin: string) => post<LockState>('/lock/unlock', { pin }),
+  lockActivity: () => post<null>('/lock/activity'),
+  setPin: (pin: string, current?: string) => put<LockState>('/lock/pin', current === undefined ? { pin } : { pin, current }),
+  removePin: (current: string) => post<LockState>('/lock/pin/remove', { current }),
+  setLockSettings: (settings: { delayMinutes?: LockState['delayMinutes']; background?: LockBackground }) => put<LockState>('/lock/settings', settings),
+  uploadLockBackground: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return upload<LockState>('/lock/background', form);
+  },
+  removeLockBackground: () => del<LockState>('/lock/background'),
   setFocus: (mode: FocusMode, duration?: FocusDuration) =>
     put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }).then(statusChanged),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),

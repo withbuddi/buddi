@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { registerWorker } from './serviceWorker';
 import { BootGate } from './shell/Unreachable';
+import { LockGate } from './shell/lock';
 import { ConnectionCallback } from './views/ConnectionCallback';
 import '@fontsource-variable/dm-sans/standard.css';
 import '@fontsource-variable/dm-sans/standard-italic.css';
@@ -15,7 +16,7 @@ if (root) {
   createRoot(root).render(
     <StrictMode>
       {/* A connected service's consent page lands here, outside the shell. */}
-      {location.pathname === '/connections/callback' ? <ConnectionCallback /> : <BootGate><App /></BootGate>}
+      {location.pathname === '/connections/callback' ? <ConnectionCallback /> : <BootGate><LockGate><App /></LockGate></BootGate>}
     </StrictMode>,
   );
 }

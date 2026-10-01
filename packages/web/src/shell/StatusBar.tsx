@@ -21,6 +21,7 @@ import { ACTIVITY_ROUTE, NEEDS_ROUTE, settingsRoute } from '../routes';
 import { Icon } from '../ui';
 import { FOCUS_LABELS, focusUntilLabel } from './Rail';
 import { LOOPBACK } from './Unreachable';
+import { useLock } from './lock';
 
 export type LinkKind = 'local' | 'tailnet' | 'reconnecting';
 
@@ -181,6 +182,7 @@ function StatusContent({ item }: { item: StatusItem }): JSX.Element {
 
 export function StatusBar({ status, onNavigate }: { status: ShellStatus; onNavigate: (route: string) => void }): JSX.Element {
   const now = useMinute();
+  const lock = useLock();
   const items = statusItems(status, now);
   const link = (item: StatusItem): JSX.Element => (
     <a
@@ -200,6 +202,12 @@ export function StatusBar({ status, onNavigate }: { status: ShellStatus; onNavig
       {items.filter((i) => !i.end).map(link)}
       <span className="shell-status-spacer" />
       {items.filter((i) => i.end).map(link)}
+      {/* Lock now, last: only while a PIN is set. */}
+      {lock.pin ? (
+        <button type="button" className="shell-status-item shell-status-lock" data-item="lock" aria-label={`Lock now (${lock.shortcut})`} title={`Lock now (${lock.shortcut})`} onClick={() => lock.lockNow()}>
+          <Icon name="lock" size={13} />
+        </button>
+      ) : null}
     </footer>
   );
 }

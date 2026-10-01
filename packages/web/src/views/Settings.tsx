@@ -26,6 +26,7 @@ import { Providers } from './Providers';
 import { Secrets } from './Secrets';
 import { CONNECTIONS_LEDE, Connections } from './Connections';
 import { Watchers } from './Watchers';
+import { LockSettings } from './LockSettings';
 import { You } from './You';
 import { Memory } from './Memory';
 import { Markdown } from '../chat/markdown';
@@ -104,6 +105,7 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
           {section === 'secrets' ? <Secrets embedded timezone={timezone} secret={parseSecretRoute(hash)} /> : null}
           {section === 'connections' ? <Connections embedded timezone={timezone} connection={parseConnectionRoute(hash)} /> : null}
+          {section === 'lock' ? <LockSettings navigate={navigate} /> : null}
           {section === 'watchers' ? <Watchers timezone={timezone} embedded /> : null}
           {section === 'backup' ? <Backup /> : null}
           {section === 'plugins' ? <Plugins railPages={plugins.rail} settingsPages={plugins.settings} navigate={navigate} hash={hash} /> : null}

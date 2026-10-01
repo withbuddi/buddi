@@ -39,6 +39,7 @@ const SECTION_ICONS: Record<(typeof SETTINGS_SECTIONS)[number]['id'], IconName> 
   computer: 'monitor',
   secrets: 'key',
   connections: 'globe',
+  lock: 'lock',
   watchers: 'eye',
   backup: 'archive',
   system: 'chip',

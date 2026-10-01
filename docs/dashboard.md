@@ -1,7 +1,7 @@
 ---
 title: "The dashboard"
 status: reference
-updated: 2026-09-26
+updated: 2026-10-01
 ---
 
 # The dashboard
@@ -63,9 +63,9 @@ decided: the connection (**Local**, **Tailnet**, or **Reconnecting…** while
 requests go unanswered) → Settings → System; the focus that is on and until
 when → Settings → Notifications; the work — agents working, the queue running
 or paused, failed jobs → Activity → Jobs; approvals waiting → Home's Needs you;
-the version, with a dot when a newer buddi is ready → Settings → System; and the
+the version, with a dot when a newer buddi is ready → Settings → System; the
 time in your timezone, naming the zone when this device's is a different one →
-Settings → Profile. The time moves on the minute. On a phone the line folds into
+Settings → Profile; and, once a PIN is set, a padlock that locks the dashboard. The time moves on the minute. On a phone the line folds into
 one dot on the rail under Settings, coloured by the worst of what it says, which
 opens the same items.
 
@@ -274,6 +274,8 @@ A list of sections in four groups.
 - **Computer & browser**: whether agents may act on this Mac, which apps, and
   which browser.
 - **Keys and secrets**: your vault, and where each secret may be used.
+- **Lock screen**: the PIN, how long before the dashboard locks, the
+  background (see [Lock screen](#lock-screen)).
 - **Watchers**: the checks plugins run on a schedule, with a switch each.
 - **Backup**: nightly backups, one now, a check, the passphrase, and restore.
 - **System**: the version and upgrade, pausing the queue, this host.
@@ -317,6 +319,56 @@ A list of sections in four groups.
   opens Browse. A plugin's own settings tabs follow it (see [Plugin
   pages](plugin-pages.md)).
 
+## Lock screen
+
+A privacy screen over the dashboard, opened with a PIN, drawn like a phone's
+lock screen: the date and the time large, in your timezone; how many approvals
+and notifications are waiting (counts, never what they are); the focus that is
+on; up to four of your Home widgets, compact and never a sensitive one; and the
+PIN field, with one line saying why it locked ("Locked by you at 14:02",
+"Locked after 5 minutes away, at 14:02", "Locked since this session began, at
+14:02") and **Forgot PIN?**. On a phone the glance comes first and **Enter
+PIN** opens a pad. While it shows, nothing of the dashboard is in the page:
+the app is not drawn underneath, so there is nothing to blur or read.
+
+It is off until you set a PIN in **Settings → Lock screen** (four to eight
+digits). Then the dashboard locks when nobody has used it for a while — 5
+minutes unless you pick 1, 15 or 60, or Never — and whenever you lock it:
+**Lock now** in the owner menu, the padlock at the end of the status line,
+**⌃⌘L** on a Mac or **Ctrl+Alt+L** elsewhere, from any page, a text field
+included. The same panel changes or removes the PIN (each asks for the current
+one), picks the background — Buddi, Dawn, Sea, Moss, Dusk, each with a light
+and a dark, or your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at
+most 2560 pixels, turned upright, without its location or any other details) —
+and links to Home to arrange the widgets it shows. All of it is kept by the
+installation, so every device signed in gets the same.
+
+What it is, honestly: a privacy screen over a session already signed in, not a
+second sign-in. It is enforced by buddi, not by the page, on every device — a
+phone over the tailnet included:
+
+- A locked session's every call is refused (`423 Locked`) except the lock
+  screen's own: the time and timezone, the widgets above, the counts, the
+  focus, the background, Lock now and Unlock. Live streams and the remote hand
+  of a session that locks are cut on the spot.
+- The page reports when you use it — a pointer, a key, a wheel, a touch; never
+  a poll — and a session nobody used for the delay (plus a minute) is locked by
+  buddi whatever the page says. Each device locks on its own; tabs in one
+  browser share theirs.
+- A new browser session starts locked while a PIN is set: another browser, a
+  private window, cleared cookies, a Tailscale sign-in, a restart.
+- Five wrong PINs in a row, then a wait of 30 seconds that doubles with every
+  further wrong one, up to an hour; counted for the installation, so a new
+  session does not reset it. The PIN is kept as a salted scrypt hash.
+- Telegram, `buddi mcp` and `buddi connections` are not covered.
+
+Forgot it? On the computer buddi runs on, `buddi dashboard --unlock` opens the
+dashboard past the lock once, with a link that works for five minutes (and,
+when the tailnet address is set, one for your other devices); `buddi dashboard
+--remove-pin` removes the PIN for every device. Anyone who can run those can
+open the dashboard without the PIN, which is the point: the lock keeps out a
+person at your screen, not someone already on your computer.
+
 ## Notifications on the dashboard
 
 A `now` message that arrives while you are on the dashboard shows as a card at
@@ -336,3 +388,5 @@ Needs you. See [Notifications](notifications.md).
 - **Delete** closes the selected canvas tab.
 - In the Settings list, the arrow keys, **Home** and **End** move between
   sections.
+- **⌃⌘L** on a Mac, **Ctrl+Alt+L** elsewhere, locks the dashboard once a PIN
+  is set (see [Lock screen](#lock-screen)).

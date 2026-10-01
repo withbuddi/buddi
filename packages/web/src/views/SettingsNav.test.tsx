@@ -69,7 +69,7 @@ describe('the settings list', () => {
       .toEqual(['You', 'Models and access', 'Running', 'Plugins']);
     const names = (group: HTMLElement): string[] => within(group).getAllByRole('link').map((a) => a.textContent ?? '');
     expect(names(groups[0]!)).toEqual(['Profile', 'Appearance', 'Notifications', 'Telegram', 'Memory', 'Proposals']);
-    expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections']);
+    expect(names(groups[1]!)).toEqual(['Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections', 'Lock screen']);
     expect(names(groups[2]!)).toEqual(['Watchers', 'Backup', 'System']);
     expect(names(groups[3]!)[0]).toBe('All plugins');
     // No tab strip is left.
@@ -210,7 +210,7 @@ describe('on a narrow window', () => {
     const options = [...list.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
     expect(options.map((o) => o.textContent)).toEqual([
       'Profile', 'Appearance', 'Notifications', 'Telegram', 'Memory', 'Proposals',
-      'Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections',
+      'Model accounts', 'Computer & browser', 'Keys and secrets', 'Connections', 'Lock screen',
       'Watchers', 'Backup', 'System',
       'All plugins', 'Alpha', 'mike', 'Zulu',
     ]);

@@ -29,6 +29,7 @@ import { pageIcon } from '../pages/icons';
 import type { ThemeChoice } from '../theme';
 import { Icon, Mark, Segment, useAsync } from '../ui';
 import { installApp, useInstallPrompt } from '../views/parts/KeepClose';
+import { useLock } from './lock';
 
 /** What the Settings dot says when a connection needs the owner (the rail's, and Connections' in the settings nav). */
 export const CONNECTION_DOT = 'a connection needs you';
@@ -160,6 +161,7 @@ function OwnerMenu({
   timezone?: string | undefined;
 }): JSX.Element {
   const owner = useAsync(() => api.owner(), []);
+  const lock = useLock();
   const focusView = useAsync(() => api.focus(), [], 60_000);
   const focus = focusView.data?.focus ?? null;
   const switchFocus = (mode: FocusMode, duration?: FocusDuration): void => {
@@ -202,6 +204,17 @@ function OwnerMenu({
               <Segment label="Theme" options={THEMES} value={theme} onChange={onTheme} />
             </div>
             <DropdownMenu.Separator className="ui-menu-sep" />
+            {/* With a PIN: Lock now, its shortcut on the right. Without one: where to set it up. */}
+            {lock.pin ? (
+              <DropdownMenu.Item className="ui-menu-item rail-owner-reload" onSelect={() => lock.lockNow()}>
+                <span>Lock now</span>
+                <kbd className="rail-owner-kbd">{lock.shortcut}</kbd>
+              </DropdownMenu.Item>
+            ) : (
+              <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('lock'))}>
+                Set up a lock screen…
+              </DropdownMenu.Item>
+            )}
             <DropdownMenu.Item className="ui-menu-item" onSelect={() => onNavigate(settingsRoute('appearance'))}>
               Change appearance
             </DropdownMenu.Item>

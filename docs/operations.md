@@ -266,6 +266,18 @@ cookie, the signed-out page and its Try again, a Tailscale session that ends,
 and a Tailscale question the daemon could not answer never count. A valid
 ticket and a Tailscale identity always sign in, lockout or not.
 
+**The lock screen.** With a PIN set (Settings → Lock screen; see [The
+dashboard](dashboard.md#lock-screen)), a session row also carries when it
+locked and why, when it was last used, and whether it is a browser's or one of
+buddi's own command-line clients'. A locked session is answered `423` for every
+call but the lock screen's own; the delay is enforced here from the last use
+the page reported, and a browser session minted while a PIN is set starts
+locked. Only a ticket (`buddi dashboard --unlock`) mints one open. The PIN's
+scrypt hash and its tries are in `core.web_settings` (`lock.pin`), the delay
+and background under `lock`, and the picture in `core.lock_background`; those
+three are in a backup, the sessions are not. `buddi dashboard --remove-pin`
+deletes the PIN and opens every session, with buddi running or not.
+
 **Tailscale that cannot answer is not a sign-out.** A Tailscale session is
 re-confirmed with the daemon on every request. When the daemon cannot be asked
 (a timeout, a daemon still starting, more than 30 questions in a minute), the
