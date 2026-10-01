@@ -53,6 +53,10 @@ export interface AgentEngineView {
   provider: ProviderKind;
   model: string;
   maxTurns: number;
+  /** True when the file sets no `maxTurns`, so `maxTurns` is the built-in default. */
+  maxTurnsIsDefault: boolean;
+  /** The built-in steps-per-reply budget an agent without `maxTurns` gets. */
+  defaultMaxTurns: number;
   language: string;
   /** Reasoning before the answer: on, off, or null for the model's default. */
   thinking: 'on' | 'off' | null;
@@ -103,10 +107,20 @@ function thinkingOnDisk(agent: CatalogAgent): 'on' | 'off' | null {
   }
 }
 
+/** Whether the file leaves `maxTurns` to the built-in default. */
+function maxTurnsUnsetOnDisk(agent: CatalogAgent): boolean {
+  try {
+    return parseAgentFile(readFileSync(agent.file, 'utf8'), { file: agent.file }).frontmatter.maxTurns === undefined;
+  } catch {
+    return agent.maxTurns === DEFAULT_MAX_TURNS;
+  }
+}
+
 function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineView {
   if (agent.provider.accountId !== undefined) return {
     id: agent.id, handle: agent.handle, name: agent.name, isDefault: agent.isDefault,
     provider: agent.provider.kind, model: agent.model, maxTurns: agent.maxTurns, language: agent.language,
+    maxTurnsIsDefault: maxTurnsUnsetOnDisk(agent), defaultMaxTurns: DEFAULT_MAX_TURNS,
     thinking: thinkingOnDisk(agent),
     credentialKind: agent.provider.credential.kind, credentialEnv: agent.provider.accountId || 'No account selected',
     available: agent.available, unavailableReason: agent.unavailableReason,
@@ -155,6 +169,8 @@ function engineView(agent: CatalogAgent, env: NodeJS.ProcessEnv): AgentEngineVie
     provider,
     model,
     maxTurns,
+    maxTurnsIsDefault: maxTurnsUnsetOnDisk(agent),
+    defaultMaxTurns: DEFAULT_MAX_TURNS,
     language,
     thinking: thinkingOnDisk(agent),
     credentialKind,

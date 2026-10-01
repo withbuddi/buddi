@@ -27,7 +27,7 @@ import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
 import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun } from '../chat/types';
-import { Avatar, Blob, Icon } from '../ui';
+import { Avatar, Blob, Button, Icon } from '../ui';
 import { useIsBlobStill } from '../ui/Blob';
 
 /**
@@ -73,6 +73,7 @@ export function MessageList({
   plain = false,
   workingLine,
   runs,
+  onContinue,
 }: {
   messages: ChatMessage[];
   live: LiveCall[];
@@ -126,6 +127,12 @@ export function MessageList({
    * The agent already says so in its own words; this is the fact under it.
    */
   runs?: ChatRun[];
+  /**
+   * The owner pressed Continue under a run that spent its step budget. The
+   * page sends "continue" through its ordinary send path, so it is a plain
+   * owner message and the next run picks up with the whole history.
+   */
+  onContinue?: () => void;
 }): JSX.Element {
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -160,6 +167,17 @@ export function MessageList({
   // A turn carrying on under a name already shown: that heading's mark moves.
   const heads = shown.filter((message, index) => index === 0 || (speakers ? (shown[index - 1]?.speaker ?? null) !== (message.speaker ?? null) : shown[index - 1]!.role !== message.role));
   const carriedHead = pending && !liveHead ? heads.at(-1)?.id ?? null : null;
+  /*
+   * Continue is offered under one marker only: the step-budget stop of the
+   * conversation's latest run, while it is still the last thing on screen and
+   * nothing is running. Once the owner writes anything — "continue" included —
+   * the last message is theirs and the button is gone.
+   */
+  const latestRun = (runs ?? []).reduce<ChatRun | null>((latest, run) => (latest === null || (run.startedAt ?? '') > (latest.startedAt ?? '') ? run : latest), null);
+  const runAlive = (runs ?? []).some((run) => run.finishedAt === null);
+  const continuable = onContinue && !pending && !runAlive && lastShown && latestRun?.stopped === 'max_turns' && stops.get(lastShown.id) === latestRun
+    ? lastShown.id
+    : null;
 
   return (
     <MarkdownAgents.Provider value={agents ?? speakers ?? []}>
@@ -323,7 +341,12 @@ export function MessageList({
               return null;
             })}
             {stop ? (
-              <div className="wb-msg-budget" data-testid="budget-stop">{budgetLine(stop)}</div>
+              <div className="wb-msg-budget" data-testid="budget-stop">
+                <span>{budgetLine(stop)}</span>
+                {continuable === message.id ? (
+                  <Button size="sm" variant="ghost" data-testid="budget-continue" onClick={onContinue}>Continue</Button>
+                ) : null}
+              </div>
             ) : null}
             {said !== '' ? <ReplyActions messageId={message.id} text={said} onReadAloud={onReadAloud} /> : null}
           </div>

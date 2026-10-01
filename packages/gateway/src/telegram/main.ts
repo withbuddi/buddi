@@ -679,6 +679,8 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         ...(canvas ? { canvas } : {}),
         ...(stored.length > 0 ? { offers: stored } : {}),
         ...(question ? { question } : {}),
+        // The run spent its steps per reply: the answer offers Continue.
+        ...(result.stopped === 'max_turns' ? { budgetStopped: true } : {}),
       };
     },
   });

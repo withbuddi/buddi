@@ -916,6 +916,10 @@ export interface AgentEngine {
   provider: string;
   model: string;
   maxTurns: number;
+  /** The file sets no `maxTurns`: `maxTurns` is the built-in default. Optional: an older server does not send it. */
+  maxTurnsIsDefault?: boolean;
+  /** The built-in steps-per-reply budget. */
+  defaultMaxTurns?: number;
   language: string;
   /** Reasoning before the answer: on, off, or null for the model's default. */
   thinking: 'on' | 'off' | null;

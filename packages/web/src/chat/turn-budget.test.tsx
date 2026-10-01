@@ -11,7 +11,7 @@
  * already sends, so a reloaded history draws the marker exactly as the live
  * run did.
  */
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,17 +47,18 @@ const said: ChatMessage[] = [
   { id: 'm2', role: 'assistant', at: '2026-01-01T10:00:40.000Z', blocks: [{ type: 'text', text: 'I got as far as the date picker.' }] },
 ];
 
-function show(runs: ChatRun[]): void {
+function show(runs: ChatRun[], extra: { onContinue?: () => void; messages?: ChatMessage[]; working?: boolean } = {}): void {
   render(
     <MessageList
-      messages={said}
+      messages={extra.messages ?? said}
       runs={runs}
+      {...(extra.onContinue ? { onContinue: extra.onContinue } : {})}
       agentName="Keeper"
       onOpen={() => {}}
       live={[]}
       now={Date.now()}
       emptyHint="Nothing yet."
-      working={false}
+      working={extra.working ?? false}
     />,
   );
 }
@@ -200,6 +201,59 @@ describe('the turn-budget marker', () => {
   });
 });
 
+describe('Continue under a step-budget stop', () => {
+  it('is offered under the latest run that spent its steps, and sends once pressed', () => {
+    const onContinue = vi.fn();
+    show([run({ stopped: 'max_turns', turns: 40 })], { onContinue });
+    fireEvent.click(screen.getByTestId('budget-continue'));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not offered for a length stop or a clean finish', () => {
+    show([run({ stopped: 'max_tokens' })], { onContinue: vi.fn() });
+    expect(screen.queryByTestId('budget-continue')).toBeNull();
+    cleanup();
+    show([run({ stopped: 'end_turn' })], { onContinue: vi.fn() });
+    expect(screen.queryByTestId('budget-continue')).toBeNull();
+  });
+
+  it('is not offered while a run is going', () => {
+    show([run({ stopped: 'max_turns' })], { onContinue: vi.fn(), working: true });
+    expect(screen.queryByTestId('budget-continue')).toBeNull();
+    cleanup();
+    show([run({ stopped: 'max_turns' }), run({ runId: 'r2', startedAt: '2026-01-01T10:02:00.000Z', finishedAt: null, stopped: null })], { onContinue: vi.fn() });
+    expect(screen.queryByTestId('budget-continue')).toBeNull();
+  });
+
+  it('is gone once the owner has written something after it', () => {
+    show([run({ stopped: 'max_turns' })], {
+      onContinue: vi.fn(),
+      messages: [...said, { id: 'm3', role: 'user', at: '2026-01-01T10:05:00.000Z', blocks: [{ type: 'text', text: 'never mind' }] }],
+    });
+    expect(screen.getByTestId('budget-stop')).toBeInTheDocument();
+    expect(screen.queryByTestId('budget-continue')).toBeNull();
+  });
+
+  it('is offered only under the latest of two budget stops', () => {
+    show(
+      [
+        run({ runId: 'r1', stopped: 'max_turns', turns: 40 }),
+        run({ runId: 'r2', startedAt: '2026-01-01T11:00:00.000Z', finishedAt: '2026-01-01T11:01:00.000Z', stopped: 'max_turns', turns: 40 }),
+      ],
+      {
+        onContinue: vi.fn(),
+        messages: [
+          ...said,
+          { id: 'm3', role: 'user', at: '2026-01-01T11:00:01.000Z', blocks: [{ type: 'text', text: 'continue' }] },
+          { id: 'm4', role: 'assistant', at: '2026-01-01T11:00:40.000Z', blocks: [{ type: 'text', text: 'Stopped again.' }] },
+        ],
+      },
+    );
+    expect(screen.getAllByTestId('budget-stop')).toHaveLength(2);
+    expect(screen.getAllByTestId('budget-continue')).toHaveLength(1);
+  });
+});
+
 /*
  * The page has to hand the runs down, or the marker exists and nobody ever
  * sees it. This is the only test that walks the wire the dashboard walks.
@@ -230,5 +284,16 @@ describe('the chat page', () => {
   it('draws the marker from the transcript it loaded', async () => {
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
     await waitFor(() => expect(screen.getByTestId('budget-stop')).toHaveTextContent('Turn budget reached · 40 steps'));
+  });
+
+  it('Continue sends "continue" as the owner through the ordinary send, then goes away', async () => {
+    const send = vi.spyOn(chatApi, 'send').mockResolvedValue({ conversationId: 'c1' } as Awaited<ReturnType<typeof chatApi.send>>);
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    const button = await screen.findByTestId('budget-continue');
+    fireEvent.click(button);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toBe('keeper');
+    expect(send.mock.calls[0]![1]).toMatchObject({ conversationId: 'c1', text: 'continue' });
+    await waitFor(() => expect(screen.queryByTestId('budget-continue')).toBeNull());
   });
 });

@@ -4,7 +4,14 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- A reply that stops because it used all its steps now offers **Continue**: a button on the "Turn budget reached" line under the conversation's latest reply (while nothing is running), and a Continue button under the answer on Telegram. Either sends "continue" as you into the same conversation, once, and the agent picks up with the whole history.
+
 ### Changed
+
+- The agent's Setup → Brain shows "Steps per reply" (was "Max turns"), with the built-in default of 40 named when the file sets none, a 10 to 500 range, and a hint that each tool call is a step. It saves through the same path as `buddi agents set --max-turns`.
+- The Developer agent the developer plugin proposes asks for 150 steps per reply instead of the default 40. An agent already installed keeps its file as it is.
 
 - Home opens on a glance: the date, a large greeting and what needs you as one line of counts, each a link to its list (failed jobs, urgent alerts, proposals; approvals and messages scroll to "Needs you"). On the right, the Weather plugin's card — now, sky and place, the next twelve hours as a small line, high and low — with the Blob in it; without the plugin the Blob stands there alone. The composer moved under the glance and is one line that grows as you type, with the Continue chips under it. On a phone it stacks.
 - The "Keep buddi one click away" card left the top of Home. Home now shows one quiet line at the foot, "Install buddi as an app, one click from your dock", only when the browser has offered an install; the owner menu has "Install the app" whenever it does, and Settings → System has "The dashboard as an app" with the bookmark tip and, on the Mac, `buddi dashboard --install-app`.

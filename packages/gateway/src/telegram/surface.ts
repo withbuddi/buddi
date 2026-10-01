@@ -614,20 +614,28 @@ export interface RunReply {
   artifacts?: readonly string[];
   /** What the turn left on the canvas, if it drew anything. */
   canvas?: CanvasView;
+  /**
+   * The run stopped because it spent its steps per reply (`stopped:
+   * 'max_turns'`). The answer then carries a Continue button.
+   */
+  budgetStopped?: boolean;
 }
 
 type RenderedTurn = RenderedOffers & {
   question?: Question;
   artifacts?: readonly string[];
   canvas?: CanvasView;
+  /** The agent whose run spent its step budget: the answer offers Continue. */
+  continueAgentId?: string;
 };
 
 /** The extras a reply carries past its text, copied onto the drawn turn. */
-function extrasOf(produced: string | RunReply): Pick<RenderedTurn, 'artifacts' | 'canvas'> {
+function extrasOf(produced: string | RunReply, agentId?: string): Pick<RenderedTurn, 'artifacts' | 'canvas' | 'continueAgentId'> {
   if (typeof produced === 'string') return {};
   return {
     ...(produced.artifacts && produced.artifacts.length > 0 ? { artifacts: produced.artifacts } : {}),
     ...(produced.canvas ? { canvas: produced.canvas } : {}),
+    ...(produced.budgetStopped === true && agentId !== undefined ? { continueAgentId: agentId } : {}),
   };
 }
 
@@ -1137,11 +1145,42 @@ export function questionKeyboard(question: Question): InlineKeyboardMarkup {
 /** What a tap answers once the run is queued. */
 export const OFFER_TAKEN_TEXT = 'On it.';
 
+/* ------------------------------------------------------------------ *
+ * Continue after a step-budget stop
+ * ------------------------------------------------------------------ */
+
+export const CONTINUE_CALLBACK_PREFIX = 'cnt';
+
+/** What a Continue tap sends as the owner: exactly what typing it would. */
+export const CONTINUE_TEXT = 'continue';
+
+/** `cnt:<agentId>`, refused rather than truncated if it cannot fit. */
+export function continueCallbackData(agentId: string): string {
+  const data = `${CONTINUE_CALLBACK_PREFIX}:${agentId}`;
+  if (Buffer.byteLength(data, 'utf8') > MAX_CALLBACK_DATA_BYTES) {
+    throw new Error(`continue callback data is too long for Telegram: ${data.length} bytes`);
+  }
+  return data;
+}
+
+/** The agent id in a `cnt:` callback, or nothing. */
+export function parseContinueCallback(data: string | undefined): string | undefined {
+  const raw = (data ?? '').trim();
+  if (!raw.startsWith(`${CONTINUE_CALLBACK_PREFIX}:`)) return undefined;
+  const id = raw.slice(CONTINUE_CALLBACK_PREFIX.length + 1);
+  return AGENT_ID_RE.test(id) ? id : undefined;
+}
+
+/** The one-button keyboard under an answer whose run spent its step budget. */
+export function continueKeyboard(agentId: string): InlineKeyboardMarkup {
+  return { inline_keyboard: [[{ text: 'Continue', callback_data: continueCallbackData(agentId) }]] };
+}
+
 /**
  * Which handler owns a callback payload. One small dispatcher keyed by prefix,
  * so approvals keep owning `apr:` and nothing else has to know about them.
  */
-export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'proposal' | 'approval';
+export type CallbackKind = 'agent' | 'reminder' | 'offer' | 'question' | 'proposal' | 'continue' | 'approval';
 
 export function callbackKind(data: string | undefined): CallbackKind {
   const raw = (data ?? '').trim();
@@ -1150,6 +1189,7 @@ export function callbackKind(data: string | undefined): CallbackKind {
   if (raw.startsWith(`${OFFER_CALLBACK_PREFIX}:`)) return 'offer';
   if (raw.startsWith(`${QUESTION_CALLBACK_PREFIX}:`)) return 'question';
   if (raw.startsWith(`${PROPOSAL_CALLBACK_PREFIX}:`)) return 'proposal';
+  if (raw.startsWith(`${CONTINUE_CALLBACK_PREFIX}:`)) return 'continue';
   return 'approval';
 }
 
@@ -1230,6 +1270,8 @@ export class TelegramSurface {
   readonly #pending = new PendingQuestions();
   /** The chats whose message in hand is a voice note the owner spoke; read by `#runFor`. */
   readonly #ownerSpoke = new Set<string>();
+  /** The Continue buttons already pressed, by `chat:message`, so a second tap runs nothing. */
+  readonly #continued = new Set<string>();
   /** The language of the voice note being run now, per chat, by name. */
   readonly #ownerLanguage = new Map<string, string>();
   #offset: number | undefined;
@@ -1326,6 +1368,10 @@ export class TelegramSurface {
       }
       if (kind === 'question') {
         this.enqueue(chain, () => this.handleQuestionCallback(callback));
+        return;
+      }
+      if (kind === 'continue') {
+        this.enqueue(chain, () => this.handleContinueCallback(callback));
         return;
       }
       if (kind === 'proposal') {
@@ -2081,7 +2127,7 @@ export class TelegramSurface {
             typeof produced === 'string' ? [] : (produced.offers ?? []),
             ),
             ...(typeof produced !== 'string' && produced.question ? { question: produced.question } : {}),
-            ...extrasOf(produced),
+            ...extrasOf(produced, agent.id),
           };
         },
         label,
@@ -2534,6 +2580,78 @@ export class TelegramSurface {
   }
 
   /**
+   * A tap on Continue under an answer whose run spent its step budget.
+   *
+   * It is the owner typing "continue" to that agent: the sender is
+   * re-authenticated against core like every other callback, a stranger gets
+   * an empty answer and a `surface.rejected` row, and the button is cleared
+   * before the run so it cannot be pressed twice. The callback names the
+   * agent, so the word lands in that agent's conversation for this chat and
+   * the run picks up with the whole history.
+   */
+  async handleContinueCallback(
+    query: NonNullable<TelegramUpdate['callback_query']>,
+  ): Promise<void> {
+    const api = this.#opts.api;
+    const pool = this.#opts.pool;
+    const userId = query.from?.id === undefined ? '' : String(query.from.id);
+    const chatId = query.message?.chat?.id === undefined ? '' : String(query.message.chat.id);
+    const messageId = query.message?.message_id;
+
+    const agentId = parseContinueCallback(query.data);
+    if (agentId === undefined || userId === '' || chatId === '') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    const resolution = await resolveOwnerForSurface(pool, {
+      surface: SURFACE,
+      externalUserId: userId,
+      externalChatId: chatId,
+    });
+    if (!resolution.ok) {
+      this.#log(
+        `telegram: continue callback rejected (${resolution.reason}) from user ${userId} in chat ${chatId}`,
+      );
+      await appendSurfaceEvent(pool, 'surface.rejected', {
+        surface: SURFACE,
+        kind: 'callback',
+        reason: resolution.reason,
+        externalUserId: userId,
+        externalChatId: chatId,
+        callbackId: query.id,
+        agentId,
+      });
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+
+    // Taps are serialized per chat, so a second tap on the same button arrives
+    // after the first has run; it finds the key and does nothing.
+    const key = messageId === undefined ? undefined : `${chatId}:${messageId}`;
+    if (key !== undefined && this.#continued.has(key)) {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      return;
+    }
+    if (key !== undefined) this.#continued.add(key);
+
+    const agent = this.#opts.catalog.get(agentId);
+    if (!agent) {
+      await api.answerCallbackQuery(query.id, UNKNOWN_AGENT_TEXT).catch(() => {});
+      return;
+    }
+
+    await api.answerCallbackQuery(query.id).catch(() => {});
+    if (messageId !== undefined) {
+      await api.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch((err) => {
+        this.#log(`telegram: clearing the Continue button failed: ${message(err)}`);
+      });
+    }
+    this.#pending.clear(chatId);
+    await this.#runFor(chatId, agent, CONTINUE_TEXT);
+  }
+
+  /**
    * A tap on an offered action.
    *
    * The whole authorization story is: this is the owner, and the owner chose a
@@ -2769,9 +2887,14 @@ export class TelegramSurface {
       const drawn: RenderedTurn = typeof produced === 'string' ? { text: produced, controls: [] } : produced;
       const reply = toPlainText(drawn.text);
       await progress.settle();
-      const keyboard = drawn.question && drawn.question.options.length > 0
+      const offered = drawn.question && drawn.question.options.length > 0
         ? questionKeyboard(drawn.question)
         : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls);
+      // A run that spent its step budget ends on a Continue button, under
+      // whatever else the answer offers.
+      const keyboard = drawn.continueAgentId === undefined
+        ? offered
+        : { inline_keyboard: [...(offered?.inline_keyboard ?? []), ...continueKeyboard(drawn.continueAgentId).inline_keyboard] };
       // Buttons need a text message to sit under: an answer that carries any
       // stays text, as cards and questions do.
       const voice = speak && keyboard === undefined ? await this.#speakAnswer(chatId, placeholderId, reply, progress) : { sent: false };

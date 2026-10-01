@@ -32,6 +32,9 @@ import { FacePicker, mascotFile, type FaceChoice } from './FacePicker';
 import { KNOWN_ROLES, holderOf, isKnownRole, orderRoles } from '../../shell/roles';
 
 const LANGUAGES = ['mirror', 'en', 'fr'];
+/** The range the Brain tab offers for steps per reply; the CLI accepts any positive number. */
+const MIN_STEPS = 10;
+const MAX_STEPS = 500;
 
 export const SETUP_SECTIONS = [
   { id: 'identity', label: 'Identity' },
@@ -148,6 +151,7 @@ function Agent({
   const group = providers.find((p) => p.kind === provider);
   const model = engine?.model ?? agent.model;
   const [turns, setTurns] = useState(String(engine?.maxTurns ?? agent.maxTurns));
+  const [turnsError, setTurnsError] = useState<string | null>(null);
 
   const set = (change: Record<string, unknown>): void => {
     onRun(api.setAgentEngine(agent.id, change));
@@ -235,17 +239,24 @@ function Agent({
 
               <Section title="Behaviour" aside="saved as you change them">
                 <FormGrid>
-                  <Field label="Max turns" hint="Per run. The agent stops when it runs out.">
+                  <Field
+                    label="Steps per reply"
+                    hint={`${engine?.maxTurnsIsDefault ? `Default ${engine.defaultMaxTurns ?? 40}. ` : ''}Each tool call is a step; a reply that uses them all stops and offers Continue.`}
+                    after={turnsError ? <span className="critical save-error" role="alert">{turnsError}</span> : null}
+                  >
                     <input
                       type="number"
-                      min={1}
+                      min={MIN_STEPS}
+                      max={MAX_STEPS}
                       value={turns}
-                      onChange={(e) => setTurns(e.target.value)}
+                      onChange={(e) => { setTurns(e.target.value); setTurnsError(null); }}
                       onBlur={() => {
                         const n = Number(turns);
-                        if (Number.isInteger(n) && n >= 1 && n !== (engine?.maxTurns ?? agent.maxTurns)) {
-                          set({ maxTurns: n });
+                        if (!Number.isInteger(n) || n < MIN_STEPS || n > MAX_STEPS) {
+                          setTurnsError(`Between ${MIN_STEPS} and ${MAX_STEPS}.`);
+                          return;
                         }
+                        if (n !== (engine?.maxTurns ?? agent.maxTurns)) set({ maxTurns: n });
                       }}
                     />
                   </Field>

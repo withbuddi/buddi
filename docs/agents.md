@@ -16,6 +16,21 @@ the agent loads with the rest. Procedures it follows sit
 beside it in `skills/`. Your agents live in your private agents directory;
 Agent Father writes them there, and every write waits for your approval.
 
+## Steps per reply
+
+Each tool call an agent makes in one reply is a step. `maxTurns` in the
+frontmatter caps them; without it an agent gets 40, which suits chat. Set it on
+the agent's Setup → Brain ("Steps per reply", 10 to 500) or with
+`buddi agents set <handle> --max-turns <n>`. The Developer agent the developer
+plugin proposes asks for 150, since coding spends many steps on one answer. An
+agent already installed keeps the number in its file; buddi does not rewrite it.
+
+A reply that uses all its steps stops and says so ("Stopped after 40 steps…").
+The dashboard marks it "Turn budget reached" and, under the conversation's
+latest reply while nothing is running, offers **Continue**, which sends
+"continue" as you so the next run picks up with the whole history. On Telegram
+the answer carries a Continue button that does the same once, then goes away.
+
 ## Telling the owner now
 
 `owner.notify` lets an agent message the owner itself, on the channel they

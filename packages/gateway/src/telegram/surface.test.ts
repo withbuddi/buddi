@@ -3681,6 +3681,79 @@ describe('a turn that offers the owner something to do', () => {
 });
 
 
+/*
+ * A reply that spent its steps per reply ends on a Continue button. A tap is
+ * the owner typing "continue" to that agent, once; a stranger's tap is refused.
+ */
+describe('Continue after a step-budget stop', () => {
+  const { continueCallbackData, parseContinueCallback, CONTINUE_TEXT } = telegramSurface;
+  const continueTap = (agentId: string, fromId = OWNER, updateId = 700): TelegramUpdate => ({
+    update_id: updateId,
+    callback_query: {
+      id: `cb-${updateId}`,
+      from: { id: fromId },
+      data: continueCallbackData(agentId),
+      message: { message_id: 77, chat: { id: OWNER, type: 'private' } },
+    },
+  } as unknown as TelegramUpdate);
+
+  it('owns its own prefix and binds an agent id', () => {
+    expect(continueCallbackData('finance-advisor')).toBe('cnt:finance-advisor');
+    expect(parseContinueCallback('cnt:finance-advisor')).toBe('finance-advisor');
+    expect(parseContinueCallback('cnt:a b')).toBeUndefined();
+    expect(callbackKind('cnt:finance-advisor')).toBe('continue');
+  });
+
+  it('puts a Continue button under the answer of a run that hit its budget', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => ({
+      text: 'Stopped after 4 steps; the work above is where I got to. Say "continue" to go on.',
+      budgetStopped: true,
+    })) as any);
+    await surface.processUpdates([message(710, OWNER, OWNER, 'refactor the module')]);
+    await surface.drain();
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    expect(final?.body.reply_markup).toEqual({
+      inline_keyboard: [[{ text: 'Continue', callback_data: 'cnt:finance-advisor' }]],
+    });
+  });
+
+  it('draws no button for a run that finished', async () => {
+    const db = withOwner(new FakeDb());
+    const { surface, sent } = surfaceWith(db, vi.fn(async () => ({ text: 'Done.' })) as any);
+    await surface.processUpdates([message(711, OWNER, OWNER, 'refactor the module')]);
+    await surface.drain();
+    const final = sent.filter((s) => s.method === 'editMessageText').at(-1);
+    expect('reply_markup' in (final?.body ?? {})).toBe(false);
+  });
+
+  it('sends "continue" as the owner to that agent once, and clears the button', async () => {
+    const db = withOwner(new FakeDb());
+    const run = vi.fn(async (_req?: any) => 'going on');
+    const { surface, sent } = surfaceWith(db, run);
+    await surface.processUpdates([continueTap('concierge', OWNER, 720), continueTap('concierge', OWNER, 721)]);
+    await surface.drain();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0].text).toBe(CONTINUE_TEXT);
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('concierge');
+    const cleared = sent.filter((s) => s.method === 'editMessageReplyMarkup');
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0]?.body).toMatchObject({ message_id: 77, reply_markup: { inline_keyboard: [] } });
+  });
+
+  it('refuses a tap from anyone but the owner, and runs nothing', async () => {
+    const db = withOwner(new FakeDb());
+    const run = vi.fn(async (_req?: any) => 'going on');
+    const { surface, sent } = surfaceWith(db, run);
+    await surface.processUpdates([continueTap('concierge', 5150, 730)]);
+    await surface.drain();
+    expect(run).not.toHaveBeenCalled();
+    expect(db.events.map((e) => e.kind)).toContain('surface.rejected');
+    expect(sent.some((s) => s.method === 'editMessageReplyMarkup')).toBe(false);
+    expect(sent.find((s) => s.method === 'answerCallbackQuery')?.body.text).toBeUndefined();
+  });
+});
+
 describe('read-only commands: /missions, /goals, /where', () => {
   it('answers /missions and /goals from their hooks, without a run', async () => {
     const db = alreadyGreeted(withOwner(new FakeDb()));

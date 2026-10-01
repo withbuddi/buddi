@@ -349,3 +349,38 @@ describe('Can ask', () => {
     expect(screen.queryByRole('button', { name: 'Limit to…' })).not.toBeInTheDocument();
   });
 });
+
+describe('steps per reply on Brain', () => {
+  const unset = { ...view, engines: [{ ...view.engines[0]!, maxTurns: 40, maxTurnsIsDefault: true, defaultMaxTurns: 40 }] } as unknown as AgentsView;
+
+  it('shows the built-in default when the file sets none, with the hint about Continue', async () => {
+    vi.mocked(api.agents).mockResolvedValue(unset);
+    render(<AgentSetup agentId="demo" section="brain" />);
+    const input = await screen.findByLabelText('Steps per reply');
+    expect(input).toHaveValue(40);
+    expect(screen.getByText(/Default 40\. Each tool call is a step; a reply that uses them all stops and offers Continue\./)).toBeInTheDocument();
+  });
+
+  it('shows a set value without the default, and saves a new one through the engine route', async () => {
+    vi.mocked(api.setAgentEngine).mockResolvedValue({ changed: ['maxTurns'], note: 'Saved' } as Awaited<ReturnType<typeof api.setAgentEngine>>);
+    render(<AgentSetup agentId="demo" section="brain" />);
+    const input = await screen.findByLabelText('Steps per reply');
+    expect(input).toHaveValue(12);
+    expect(screen.queryByText(/Default 40/)).toBeNull();
+    fireEvent.change(input, { target: { value: '150' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(api.setAgentEngine).toHaveBeenCalledWith('demo', { maxTurns: 150 }));
+  });
+
+  it('refuses a number outside 10 to 500 and sends nothing', async () => {
+    render(<AgentSetup agentId="demo" section="brain" />);
+    const input = await screen.findByLabelText('Steps per reply');
+    fireEvent.change(input, { target: { value: '5' } });
+    fireEvent.blur(input);
+    expect(await screen.findByText('Between 10 and 500.')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: '501' } });
+    fireEvent.blur(input);
+    expect(await screen.findByText('Between 10 and 500.')).toBeInTheDocument();
+    expect(api.setAgentEngine).not.toHaveBeenCalled();
+  });
+});
