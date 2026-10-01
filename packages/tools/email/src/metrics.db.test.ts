@@ -249,10 +249,28 @@ suite('the email metrics (postgres, read-only)', () => {
     expect(widget).toMatchObject({ title: 'Waiting on you', sizes: ['small'], link: { page: 'mail' } });
     expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'mail', text: 'Add a mailbox on Settings → Email to see who is waiting on you.' });
     await mailbox();
+    // A calm zero first: a sentence, not a bare 0.
+    expect(await widget.produce(ctx, { size: 'small' })).toEqual({ kind: 'text', icon: 'check', text: 'Nobody’s waiting on you.', sub: '0 unread in your inbox' });
     await waitingThread({ uid: 2, from: 'agent@letting.test' });
     expect(await widget.produce(ctx, { size: 'small' })).toEqual({
-      kind: 'stat', icon: 'mail', value: '1', caption: 'conversation waits on you', foot: '0 unread in your inbox', // these rows carry no folder generation
+      kind: 'stat', icon: 'mail', value: '1', caption: 'conversation', foot: '0 unread in your inbox', // these rows carry no folder generation
     });
+  });
+
+  it('counts one mailbox when a placement picks it, all of them otherwise, and offers each by address', async () => {
+    const widget = registry.widget('email.waiting')!;
+    await mailbox();
+    const work = await secondMailbox({ enabled: true, synced: true });
+    await waitingThread({ uid: 2, from: 'agent@letting.test' });
+    await waitingThread({ uid: 7, from: 'landlord@work.test', account: work });
+    await waitingThread({ uid: 9, from: 'boss@work.test', account: work });
+    expect(widget.settings!.map((f) => f.key)).toEqual(['mailbox']);
+    expect((await widget.options!('mailbox', ctx)).map((o) => o.label)).toEqual(['All mailboxes', OWNER_ADDRESS, 'owner@work.test']);
+    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: '' } })).toMatchObject({ value: '3' });
+    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: String(work.accountId) } })).toMatchObject({ value: '2', foot: '0 unread in owner@work.test' });
+    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: String(accountId) } })).toMatchObject({ value: '1', caption: 'conversation' });
+    // A mailbox since removed is no choice: every mailbox.
+    expect(await widget.produce(ctx, { size: 'small', settings: { mailbox: '99999' } })).toMatchObject({ value: '3' });
   });
 
   it('counts nothing in a mailbox that is switched off — the watcher does not either', async () => {

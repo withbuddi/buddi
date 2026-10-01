@@ -33,12 +33,15 @@
  *   POST /api/lock/activity        the owner used this session
  *   PUT  /api/lock/pin             { pin, current? }: set or change
  *   POST /api/lock/pin/remove      { current }
- *   PUT  /api/lock/settings        { delayMinutes?, background? }
+ *   PUT  /api/lock/settings        { delayMinutes?, background?, clock? }
  *   POST /api/lock/background      a JPEG or PNG (multipart), DELETE to remove
  */
 import {
+  DEFAULT_LOCK_CLOCK,
   getOwnerProfile,
   hashPin,
+  listOwnerPlaces,
+  lockClockOf,
   isValidPin,
   listPendingActions,
   LOCK_BACKGROUNDS,
@@ -53,6 +56,7 @@ import {
   writeLockPin,
   writeLockSettings,
   type LockBackground,
+  type LockClock,
   type LockDelay,
   type LockPinRecord,
   type LockSettings,
@@ -60,14 +64,13 @@ import {
 } from '@buddi/core';
 import type { LockImage } from './lock-image.js';
 import type { LockReason, Session, SessionClient, SessionStore } from './sessions.js';
-import type { WidgetsService } from './widgets.js';
+import { hourOf, LOCK_WIDGETS_MAX, type HourCycle, type WidgetsService } from './widgets.js';
 
 /** What a session idle past its delay is given before the server locks it: the page reports at most twice a minute. */
 export const LOCK_GRACE_MS = 60_000;
 /** How long the PIN record and settings are trusted between reads. `--remove-pin` is noticed this fast. */
 export const LOCK_CACHE_MS = 2_000;
-/** At most this many widgets on the lock screen. */
-export const LOCK_WIDGETS_MAX = 4;
+export { LOCK_WIDGETS_MAX } from './widgets.js';
 
 /** The one body every refused call gets: the page turns it into the lock screen. */
 export const LOCKED_BODY = { error: 'This dashboard is locked. Unlock it with your PIN.', locked: true } as const;
@@ -102,6 +105,8 @@ export interface LockStateView {
   waitUntil: string | null;
   /** Wrong tries left before a wait; null while none have been wrong. */
   triesLeft: number | null;
+  /** The lock screen's clock as the owner chose it (Settings → Lock screen → What it shows). */
+  clock: LockClock;
 }
 
 export interface LockScreenView extends LockStateView {
@@ -111,7 +116,17 @@ export interface LockScreenView extends LockStateView {
   approvals: number;
   unread: number;
   focus: unknown;
-  widgets: Array<{ id: string; title: string; size: string; view: unknown }>;
+  widgets: Array<{ key: string; id: string; title: string; size: string; view: unknown }>;
+  /** The clock with the Profile applied. */
+  clockView: LockClockView;
+}
+
+export interface LockClockView {
+  /** `12h`, `24h`, or null for Auto. */
+  time: '12h' | '24h' | null;
+  /** `short`, `long`, `iso`, `off` (no date), or null for Auto. */
+  date: 'short' | 'long' | 'iso' | 'off' | null;
+  zone: { label: string; timezone: string } | null;
 }
 
 export interface LockDeps {
@@ -141,7 +156,7 @@ export function createLock(deps: LockDeps) {
     if (!fresh && cached && now - cached.at < LOCK_CACHE_MS) return cached;
     const [pin, settings, image] = await Promise.all([
       readLockPin(deps.pool).catch(() => null),
-      readLockSettings(deps.pool).catch((): LockSettings => ({ delayMinutes: 5, background: 'field' })),
+      readLockSettings(deps.pool).catch((): LockSettings => ({ delayMinutes: 5, background: 'field', clock: { ...DEFAULT_LOCK_CLOCK } })),
       imageVersion(deps.pool),
     ]);
     const hadPin = cached?.pin != null;
@@ -209,6 +224,7 @@ export function createLock(deps: LockDeps) {
       image: state.image ? `/api/lock/background?v=${state.image.slice(0, 16)}` : null,
       waitUntil,
       triesLeft: pin && pin.failures > 0 ? Math.max(0, PIN_FREE_TRIES - pin.failures) : null,
+      clock: state.settings.clock,
     };
   }
 
@@ -250,7 +266,7 @@ export function createLock(deps: LockDeps) {
     return run;
   }
 
-  async function screen(session: Session): Promise<LockScreenView> {
+  async function screen(session: Session, hour?: HourCycle): Promise<LockScreenView> {
     const state = await current();
     const now = deps.now();
     const [profile, pending, unread, focus, widgets] = await Promise.all([
@@ -258,9 +274,10 @@ export function createLock(deps: LockDeps) {
       listPendingActions(deps.pool, { now }).catch(() => []),
       unreadCount(deps.pool),
       readFocusState(deps.pool, { now: deps.now, timezone: deps.timezone }).catch(() => null),
-      lockWidgets(deps.widgets),
+      lockWidgets(deps.widgets, hour),
     ]);
     const owner = profile?.preferredName?.trim() || profile?.displayName?.trim() || null;
+    const clockView = await lockClockView(deps.pool, state.settings.clock, profile);
     return {
       ...stateOf(session, state),
       now: now.toISOString(),
@@ -270,6 +287,7 @@ export function createLock(deps: LockDeps) {
       unread,
       focus,
       widgets,
+      clockView,
     };
   }
 
@@ -278,6 +296,7 @@ export function createLock(deps: LockDeps) {
     path: string;
     body: unknown;
     session: Session;
+    query?: URLSearchParams;
     upload?: () => Promise<{ ok: true; image: LockImage } | { ok: false; status: number; error: string }>;
   }): Promise<Answer | { status: 200; image: { jpeg: Buffer; sha256: string } } | null> {
     const { method, path, session } = req;
@@ -300,7 +319,7 @@ export function createLock(deps: LockDeps) {
     if (path === '/api/lock/screen') {
       if (method !== 'GET' && method !== 'HEAD') return { status: 405, body: { error: 'GET only' } };
       await locked(session);
-      return { status: 200, body: await screen(session) };
+      return { status: 200, body: await screen(session, hourOf(req.query?.get('hour'))) };
     }
 
     if (path === '/api/lock/unlock') {
@@ -366,6 +385,11 @@ export function createLock(deps: LockDeps) {
         if (!(LOCK_BACKGROUNDS as readonly unknown[]).includes(b)) return { status: 400, body: { error: `\`background\` is one of ${LOCK_BACKGROUNDS.join(', ')}.` } };
         if (b === 'image' && !state.image) return { status: 409, body: { error: 'Add a picture first.' } };
         next.background = b as LockBackground;
+      }
+      if ('clock' in body) {
+        const clock = lockClockOf(body.clock);
+        if (!clock) return { status: 400, body: { error: '`clock` is { time: profile|12h|24h, date: profile|short|long|iso|off, zone: null | { place } | { label, timezone } }.' } };
+        next.clock = clock;
       }
       await writeLockSettings(deps.pool, next);
       invalidate();
@@ -454,23 +478,44 @@ async function unreadCount(pool: Queryable): Promise<number> {
 }
 
 /**
- * The owner's widgets as the lock screen shows them: in their order, none
- * that is sensitive, only those with something to draw, at most four.
+ * The lock screen's own placements as it shows them: in their order, none
+ * that is sensitive (the service never places one there), only those with
+ * something to draw, at most four.
  */
-async function lockWidgets(service: WidgetsService | undefined): Promise<LockScreenView['widgets']> {
+async function lockWidgets(service: WidgetsService | undefined, hour?: HourCycle): Promise<LockScreenView['widgets']> {
   if (!service) return [];
   try {
-    const answer = await service.answer();
+    const answer = await service.answer({ surface: 'lock', ...(hour ? { hour } : {}) });
     const out: LockScreenView['widgets'] = [];
-    for (const item of answer.layout) {
+    for (const placement of answer.lock) {
       if (out.length >= LOCK_WIDGETS_MAX) break;
-      const info = answer.available.find((w) => w.id === item.id);
-      const view = answer.widgets[item.id];
+      const info = answer.available.find((w) => w.id === placement.widget);
+      const view = answer.views[placement.key];
       if (!info || info.sensitive || !view || !view.body || (view.state !== 'ok' && view.state !== 'stale')) continue;
-      out.push({ id: info.id, title: info.title, size: item.size, view: { state: view.state, body: view.body } });
+      out.push({ key: placement.key, id: info.id, title: placement.label, size: placement.size, view: { state: view.state, body: view.body } });
     }
     return out;
   } catch {
     return [];
   }
+}
+
+/**
+ * The clock as the lock screen draws it: the time and date formats with the
+ * owner's Profile applied (null: Auto, the browser's), and the second zone
+ * with its label and zone — a place of theirs read now, so a move follows.
+ */
+export async function lockClockView(pool: Queryable, clock: LockClock, profile: { timeFormat?: string | null; dateFormat?: string | null } | null): Promise<LockClockView> {
+  const time = clock.time === 'profile' ? (profile?.timeFormat === '12h' || profile?.timeFormat === '24h' ? profile.timeFormat : null) : clock.time;
+  const profileDate = profile?.dateFormat === 'short' || profile?.dateFormat === 'long' || profile?.dateFormat === 'iso' ? profile.dateFormat : null;
+  const date = clock.date === 'profile' ? profileDate : clock.date;
+  let zone: LockClockView['zone'] = null;
+  if (clock.zone && 'place' in clock.zone) {
+    const id = clock.zone.place;
+    const place = (await listOwnerPlaces(pool as never).catch(() => [])).find((p) => p.id === id);
+    if (place?.timezone) zone = { label: place.label, timezone: place.timezone };
+  } else if (clock.zone) {
+    zone = { label: clock.zone.label, timezone: clock.zone.timezone };
+  }
+  return { time, date, zone };
 }

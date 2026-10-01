@@ -84,7 +84,7 @@ const WAITING_SOURCE = `
   ),
   waiting as (
     select t.id as thread_id, t.subject as thread_subject,
-           li.id as message_id, li.from_addr, li.subject, li.body_text, li.snippet, li.at,
+           li.id as message_id, li.from_addr, li.subject, li.body_text, li.snippet, li.at, li.account_id,
            floor(extract(epoch from ($1::timestamptz - li.at)) / 86400.0)::int as age_days
       from last_inbound li
       join email.threads t on t.id = li.thread_id
@@ -135,6 +135,9 @@ const WAITING_KEYS_SQL = `${WAITING_SOURCE} select thread_id, message_id from wa
  * owner would be working against one number and hearing about another.
  */
 export const WAITING_COUNT_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting`;
+
+/** The same count in some mailboxes only: Home's widget set to one. */
+const WAITING_COUNT_IN_SQL = `${WAITING_SOURCE} select count(*)::int as n from waiting where account_id::text = any($4::text[])`;
 
 /** The rows worth raising this tick: newest first, capped. */
 const WAITING_ROWS_SQL = `${WAITING_SOURCE}
@@ -189,8 +192,12 @@ export const waitingOnMe: Sentinel = createWaitingOnMeSentinel();
 export async function countWaitingOnMe(
   db: Parameters<typeof loadWatcherSettings>[0],
   now: Date,
+  accountIds?: readonly string[],
 ): Promise<number> {
   const settings = await loadWatcherSettings(db);
-  const { rows } = await db.query(WAITING_COUNT_SQL, [now, settings.waitingDays, STALE_WAITING_DAYS]);
+  const bounds = [now, settings.waitingDays, STALE_WAITING_DAYS];
+  const { rows } = accountIds
+    ? await db.query(WAITING_COUNT_IN_SQL, [...bounds, [...accountIds]])
+    : await db.query(WAITING_COUNT_SQL, bounds);
   return Number((rows[0] as { n: unknown } | undefined)?.n ?? 0);
 }

@@ -1,8 +1,9 @@
 /**
- * Home's widgets over the wire, signed in: the default layout, the owner's
- * layout saved to `core.web_settings` and read back, a refused layout, a
- * failing widget kept to its frame, the CSRF gate on the write. Own database,
- * dropped after; skipped without one.
+ * Widgets over the wire, signed in: the default placements, Home's saved to
+ * `core.web_settings` and read back (one widget twice), the lock screen's own
+ * pick, refused placements, a failing widget kept to its frame, the CSRF gate
+ * on the write, the preview and the settings sheet, the widgets v1 layout
+ * read once. Own database, dropped after; skipped without one.
  */
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -112,20 +113,38 @@ suite('widgets against Postgres', () => {
     // Beside the built-in mail widget, which says to add a mailbox.
     const demo = (ids: string[]) => ids.filter((id) => id.startsWith('demo.'));
     expect(demo(first.body.available.map((w: { id: string }) => w.id))).toEqual(['demo.now', 'demo.broken', 'demo.money']);
-    expect(first.body.arranged).toBe(false);
-    expect(demo(first.body.layout.map((item: { id: string }) => item.id))).toEqual(['demo.now', 'demo.broken']);
-    expect(first.body.widgets['demo.now']).toMatchObject({ state: 'ok', body: { kind: 'stat', value: '18°C' } });
-    expect(first.body.widgets['demo.broken']).toEqual({ state: 'error', error: 'the service is down' });
+    expect(first.body.arranged).toEqual({ home: false, lock: false });
+    const ids = (list: Array<{ widget: string }>) => demo(list.map((p) => p.widget));
+    expect(ids(first.body.home)).toEqual(['demo.now', 'demo.broken']);
+    const keyOf = (list: Array<{ key: string; widget: string }>, widget: string) => list.find((p) => p.widget === widget)!.key;
+    expect(first.body.views[keyOf(first.body.home, 'demo.now')]).toMatchObject({ state: 'ok', body: { kind: 'stat', value: '18°C' } });
+    expect(first.body.views[keyOf(first.body.home, 'demo.broken')]).toEqual({ state: 'error', error: 'the service is down' });
 
-    const saved = await call('PUT', '/layout', { layout: [{ id: 'demo.money', size: 'small' }, { id: 'demo.now', size: 'medium' }] });
+    // Home: the same widget twice, each with its own key; the lock screen its own pick.
+    const saved = await call('PUT', '/home', { placements: [{ widget: 'demo.money', size: 'small' }, { widget: 'demo.now', size: 'medium' }, { widget: 'demo.now', size: 'small' }] });
     expect(saved.status).toBe(200);
-    expect(saved.body).toMatchObject({ arranged: true, layout: [{ id: 'demo.money', size: 'small' }, { id: 'demo.now', size: 'medium' }] });
-    expect(saved.body.widgets['demo.now'].body.value).toBe('18°C, clear');
-    expect(await readWebSetting(pool, WIDGETS_SETTINGS_KEY)).toEqual({ layout: [{ id: 'demo.money', size: 'small' }, { id: 'demo.now', size: 'medium' }] });
-    expect((await call('GET', '')).body.layout).toEqual([{ id: 'demo.money', size: 'small' }, { id: 'demo.now', size: 'medium' }]);
+    expect(saved.body.arranged).toEqual({ home: true, lock: false });
+    expect(saved.body.home.map((p: { widget: string; size: string }) => [p.widget, p.size])).toEqual([['demo.money', 'small'], ['demo.now', 'medium'], ['demo.now', 'small']]);
+    expect(saved.body.views[saved.body.home[1].key].body.value).toBe('18°C, clear');
+    expect(saved.body.views[saved.body.home[2].key].body.value).toBe('18°C');
+    expect(await readWebSetting(pool, WIDGETS_SETTINGS_KEY)).toMatchObject({ version: 2, home: [{ widget: 'demo.money' }, { widget: 'demo.now' }, { widget: 'demo.now' }] });
+    expect((await call('GET', '')).body.home.map((p: { key: string }) => p.key)).toEqual(saved.body.home.map((p: { key: string }) => p.key));
+    // Until it is arranged, the lock screen shows the first of Home's that may show there.
+    expect(saved.body.lock.map((p: { widget: string }) => p.widget)).toEqual(['demo.now', 'demo.now']);
+    const lock = await call('PUT', '/lock', { placements: [{ widget: 'demo.now', size: 'small' }] });
+    expect(lock.status).toBe(200);
+    expect(lock.body.lock.map((p: { widget: string }) => p.widget)).toEqual(['demo.now']);
+    expect((await call('GET', '?surface=lock')).body.views[lock.body.lock[0].key]).toMatchObject({ state: 'ok' });
 
-    expect((await call('PUT', '/layout', { layout: [{ id: 'demo.nope', size: 'small' }] })).status).toBe(400);
-    expect((await call('PUT', '/layout', { layout: [{ id: 'demo.money', size: 'small' }] }, {})).status).toBe(403);
-    expect((await call('POST', '/demo.now/refresh')).status).toBe(200);
+    expect((await call('PUT', '/home', { placements: [{ widget: 'demo.nope', size: 'small' }] })).status).toBe(400);
+    expect((await call('PUT', '/lock', { placements: [{ widget: 'demo.money', size: 'small' }] })).status).toBe(400);
+    expect((await call('PUT', '/home', { placements: [{ widget: 'demo.money', size: 'small' }] }, {})).status).toBe(403);
+    expect((await call('POST', `/${saved.body.home[1].key}/refresh`)).status).toBe(200);
+    expect((await call('POST', '/preview', { widget: 'demo.now', size: 'small', settings: {} })).body.view).toMatchObject({ state: 'ok' });
+    expect((await call('GET', '/settings/buddi.clock')).body).toMatchObject({ widget: 'buddi.clock', fields: [{ key: 'places' }, { key: 'time' }], places: [] });
+
+    // The widgets v1 layout reads as Home's placements.
+    await pool.query(`update core.web_settings set value = $1::jsonb where key = $2`, [JSON.stringify({ layout: [{ id: 'demo.now', size: 'medium' }] }), WIDGETS_SETTINGS_KEY]);
+    expect((await call('GET', '')).body.home).toEqual([{ key: 'v1-demo-now', widget: 'demo.now', size: 'medium', settings: {}, label: 'Now' }]);
   });
 });

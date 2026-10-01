@@ -264,6 +264,28 @@ suite('the lock screen', () => {
     expect((await b.post('/api/lock/pin/remove', { current: '1357' })).body).toMatchObject({ pin: false });
   });
 
+  it('keeps the lock screen’s clock: Profile by default, picked formats, a second zone from a place or a town', async () => {
+    const b = await browser();
+    expect((await b.get('/api/lock')).body).toMatchObject({ clock: { time: 'profile', date: 'profile', zone: null } });
+    expect((await b.get('/api/lock/screen')).body).toMatchObject({ clockView: { time: null, date: null, zone: null } });
+    await pool.query(`update core.owner set time_format = '24h', date_format = 'long' where id = 'owner'`);
+    expect((await b.get('/api/lock/screen')).body).toMatchObject({ clockView: { time: '24h', date: 'long', zone: null } });
+    const town = await b.put('/api/lock/settings', { clock: { time: '12h', date: 'off', zone: { label: 'Tokyo', timezone: 'Asia/Tokyo' } } });
+    expect(town.status).toBe(200);
+    expect(town.body).toMatchObject({ clock: { time: '12h', date: 'off', zone: { label: 'Tokyo', timezone: 'Asia/Tokyo' } } });
+    expect((await b.get('/api/lock/screen')).body).toMatchObject({ clockView: { time: '12h', date: 'off', zone: { label: 'Tokyo', timezone: 'Asia/Tokyo' } } });
+    // A place of the owner's is read by id, so its zone follows a move.
+    await pool.query(`insert into core.owner_places (id, label, place_name, latitude, longitude, timezone, position) values ('ben', 'Ben', 'Brooklyn, New York', 40.65, -73.95, 'America/New_York', 0) on conflict do nothing`);
+    await b.put('/api/lock/settings', { clock: { time: 'profile', date: 'short', zone: { place: 'ben' } } });
+    expect((await b.get('/api/lock/screen')).body).toMatchObject({ clockView: { time: '24h', date: 'short', zone: { label: 'Ben', timezone: 'America/New_York' } } });
+    for (const clock of [{ time: '13h' }, { date: 'weekly' }, { zone: { label: 'Mars', timezone: 'Mars/Olympus' } }, 'big']) {
+      expect((await b.put('/api/lock/settings', { clock })).status).toBe(400);
+    }
+    await b.put('/api/lock/settings', { clock: { time: 'profile', date: 'profile', zone: null } });
+    await pool.query(`update core.owner set time_format = null, date_format = null where id = 'owner'`);
+    await pool.query(`delete from core.owner_places where id = 'ben'`);
+  });
+
   it('opens every session when the PIN is removed from the command line', async () => {
     const b = await browser();
     await b.put('/api/lock/pin', { pin: '2468' });

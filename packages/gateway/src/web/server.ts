@@ -1216,6 +1216,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         path,
         body,
         session,
+        query: url.searchParams,
         ...(upload ? {
           upload: async () => {
             const file = await readUpload(req, MAX_LOCK_IMAGE_BYTES);
@@ -1250,14 +1251,14 @@ export function createWebApp(deps: WebServerDeps): Server {
     // Home's widgets: the gallery, the owner's layout, each placed one's body (web/widgets.ts).
     if (path === '/api/widgets' || path.startsWith('/api/widgets/')) {
       let body: unknown = {};
-      if (method === 'PUT') {
+      if (method === 'PUT' || (method === 'POST' && path === '/api/widgets/preview')) {
         try {
           body = await readJsonBody(req);
         } catch {
           return sendJson(res, 400, { error: 'request body must be JSON' });
         }
       }
-      const answer = await widgetsRoute(widgets, { method, path, body });
+      const answer = await widgetsRoute(widgets, { method, path, body, query: url.searchParams });
       return sendJson(res, answer.status, answer.body);
     }
 
