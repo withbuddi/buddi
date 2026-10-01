@@ -38,6 +38,7 @@ import {
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { defaultHttpTransport, type HttpTransport } from '@buddi/gateway';
 import { GatewayClient } from './gateway-client.js';
 import { knownSecrets, REDACTED } from './secrets.js';
 import { createMcpServer } from './server.js';
@@ -473,5 +474,72 @@ suite('buddi mcp', () => {
     expect(sent).toEqual(['landlord']);
     expect(json.answer).toContain('Paid the landlord.');
     expect(progress.some((m) => m.includes('waiting for your approval'))).toBe(true);
+  });
+});
+
+suite('buddi mcp against a dashboard that requires sign-in (the packaged install)', () => {
+  let admin: Pool;
+  let pool: Pool;
+  let server: ReturnType<typeof createWebApp>;
+  let base: string;
+  const DB = `${TEST_DB}_auth`;
+
+  const start = (port = 0): Promise<void> => {
+    const env = { BUDDI_WEB_REQUIRE_AUTH: '1' } as NodeJS.ProcessEnv;
+    const registry = createToolRegistry({});
+    const ctx = { db: pool, ownerId: 'owner', now: () => new Date(), timezone: 'UTC' } as unknown as CoreToolContext;
+    server = createWebApp({
+      pool, registry, catalog: reloadableCatalog(() => loadGatewayCatalog({ dir: mkdtempSync(path.join(tmpdir(), 'buddi-mcp-auth-')), env, registry, providerSelection: testAnthropicAccount() })),
+      ctx, timezone: 'UTC', now: () => new Date(),
+      config: { enabled: true, host: '127.0.0.1', port: 0 },
+      token: TOKEN, env, log: () => {},
+    });
+    return new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+  };
+
+  beforeAll(async () => {
+    admin = createPool(databaseUrl as string);
+    await admin.query(`drop database if exists ${DB}`);
+    await admin.query(`create database ${DB}`);
+    const url = new URL(databaseUrl as string);
+    url.pathname = `/${DB}`;
+    pool = createPool(url.toString());
+    await migrateInstalled(pool, {});
+    await ensureOwner(pool, 'owner');
+    await start();
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }, 60_000);
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => { server?.closeAllConnections?.(); server ? server.close(() => resolve()) : resolve(); });
+    await pool?.end();
+    await admin?.query(`drop database if exists ${DB}`);
+    await admin?.end();
+  });
+
+  it('signs in with the token, and keeps its session across a gateway restart', async () => {
+    const client = new GatewayClient({ baseUrl: base, token: async () => TOKEN });
+    const session = await client.get<{ csrf: string; signedInThrough: string }>('/api/session');
+    expect(session.signedInThrough).toBe('local');
+    await new Promise<void>((resolve) => { server.closeAllConnections?.(); server.close(() => resolve()); });
+    await start(Number(new URL(base).port));
+    // The same session, read back from the table: the CSRF value is the same.
+    const again = await client.get<{ csrf: string }>('/api/session');
+    expect(again.csrf).toBe(session.csrf);
+  });
+
+  it('never presents a ticket to a buddi that holds another token, and does not ask again at once', async () => {
+    const paths: string[] = [];
+    const transport: HttpTransport = async (url, init) => { paths.push(new URL(url).pathname + new URL(url).search.replace(/=.*/, '=')); return defaultHttpTransport(url, init); };
+    let now = 0;
+    const client = new GatewayClient({ baseUrl: base, token: async () => 'some-other-installations-token', transport, now: () => now });
+    await expect(client.get('/api/overview')).rejects.toThrow(/not the one this command belongs to/);
+    expect(paths).toEqual(['/api/session', '/_buddi/ready?challenge=']);
+    // Asked again straight away: answered from memory, nothing sent.
+    await expect(client.get('/api/overview')).rejects.toThrow(/not the one this command belongs to/);
+    expect(paths).toHaveLength(2);
+    now += 31_000;
+    await expect(client.get('/api/overview')).rejects.toThrow(/not the one/);
+    expect(paths).toHaveLength(4);
   });
 });

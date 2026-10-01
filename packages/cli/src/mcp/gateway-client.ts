@@ -14,6 +14,7 @@
  * `POST /api/mcp/request` (and a chat message for `buddi.ask`): every change
  * becomes an approval on the gateway's side.
  */
+import { createHmac, randomBytes } from 'node:crypto';
 import {
   csrfCookieName,
   CSRF_HEADER,
@@ -59,17 +60,34 @@ export interface Gateway {
   post<T = unknown>(path: string, body: unknown): Promise<{ status: number; body: T }>;
 }
 
+/** Said after every sign-in failure: what most often fixes it. */
+const STALE_HINT = 'If buddi was upgraded or moved since this MCP server started, restart the server (in Claude Code: /mcp, then reconnect buddi).';
+
+/** How long a failed sign-in is answered from memory before the gateway is asked again. */
+export const SIGN_IN_RETRY_MS = 30_000;
+
 export interface GatewayClientOptions {
   baseUrl: string;
-  /** How to sign in when the binding is not open: a five-minute ticket. */
+  /**
+   * The installation's dashboard token, when the binding is not open. Used to
+   * check that the gateway on `baseUrl` holds the same token (`/_buddi/ready`)
+   * before a ticket minted from it is ever presented there, and then to mint it.
+   */
+  token?: (() => Promise<string>) | undefined;
+  /** A five-minute ticket, for a caller that holds no token. Presented unchecked. */
   ticket?: (() => Promise<string>) | undefined;
   transport?: HttpTransport;
+  now?: () => number;
 }
 
 export class GatewayClient implements Gateway {
   readonly #base: string;
   readonly #ticket: (() => Promise<string>) | undefined;
+  readonly #token: (() => Promise<string>) | undefined;
   readonly #transport: HttpTransport;
+  readonly #now: () => number;
+  /** The last sign-in failure, answered from memory until `until`. */
+  #failed: { error: Error; until: number } | undefined;
   /** The session this client holds: its cookie, and the CSRF value it pairs with. */
   #session: { id: string; csrf: string; cookie: string } | undefined;
   #signedIn: Promise<void> | undefined;
@@ -77,7 +95,9 @@ export class GatewayClient implements Gateway {
   constructor(opts: GatewayClientOptions) {
     this.#base = opts.baseUrl.replace(/\/+$/, '');
     this.#ticket = opts.ticket;
+    this.#token = opts.token;
     this.#transport = opts.transport ?? defaultHttpTransport;
+    this.#now = opts.now ?? (() => Date.now());
   }
 
   get baseUrl(): string {
@@ -132,34 +152,98 @@ export class GatewayClient implements Gateway {
   }
 
   /**
-   * Open a session. On loopback the first request mints one; elsewhere a
-   * ticket is exchanged for one. Either way the session cookie is the first
-   * `Set-Cookie`, and the CSRF value it pairs with is read from `/api/session`.
+   * Open a session, presenting a credential only where it can be right.
+   *
+   * 1. Ask with no credential at all. On the open loopback binding that is
+   *    the whole sign-in (the gateway mints a session), and anywhere else it
+   *    is an empty 401 that counts as nothing.
+   * 2. Holding the token: ask `/_buddi/ready` to prove it holds the same one.
+   *    A port answered by some other buddi — a dev checkout, an older install
+   *    on a port this process remembers — fails the proof and never sees a
+   *    ticket, so it never counts a failed sign-in against this computer.
+   * 3. Exchange a five-minute ticket for a session, as the dashboard link does.
+   *
+   * A failure is remembered for `SIGN_IN_RETRY_MS`: a client asked again and
+   * again does not ask the gateway again and again.
    */
   #signIn(): Promise<void> {
-    this.#signedIn ??= (async () => {
-      const cookieOf = (res: TransportResponse): string | undefined => {
-        const line = res.headers.get('set-cookie') ?? '';
-        const match = new RegExp(`(?:^|[;,]\\s*)${sessionCookieName(portOf(new URL(this.#base)))}=([^;]+)`).exec(line);
-        return match?.[1];
-      };
-      let id: string | undefined;
-      if (this.#ticket) {
-        const exchanged = await this.#send(`/?t=${encodeURIComponent(await this.#ticket())}`, 'GET', {});
-        id = cookieOf(exchanged);
-      }
-      const res = await this.#send('/api/session', 'GET', id ? { cookie: `${sessionCookieName(portOf(new URL(this.#base)))}=${id}` } : {});
-      id = cookieOf(res) ?? id;
-      const body = res.ok ? ((await res.json().catch(() => null)) as { csrf?: unknown } | null) : null;
-      if (!id || typeof body?.csrf !== 'string') {
-        throw new GatewayError(res.status, 'buddi answered but would not open a session for this client. Is the dashboard bound somewhere this command cannot sign in?');
-      }
-      this.#session = { id, csrf: body.csrf, cookie: sessionCookieName(portOf(new URL(this.#base))) };
-    })().catch((err: unknown) => {
+    if (this.#failed && this.#now() < this.#failed.until) return Promise.reject(this.#failed.error);
+    this.#signedIn ??= this.#openSession().catch((err: unknown) => {
       this.#signedIn = undefined;
+      if (err instanceof GatewayError) this.#failed = { error: err, until: this.#now() + SIGN_IN_RETRY_MS };
       throw err;
     });
     return this.#signedIn;
+  }
+
+  async #openSession(): Promise<void> {
+    const name = sessionCookieName(portOf(new URL(this.#base)));
+    const cookieOf = (res: TransportResponse): string | undefined => {
+      const line = res.headers.get('set-cookie') ?? '';
+      const match = new RegExp(`(?:^|[;,]\\s*)${name}=([^;]+)`).exec(line);
+      return match?.[1];
+    };
+    const csrfOf = async (res: TransportResponse): Promise<string | undefined> => {
+      if (!res.ok) return undefined;
+      const body = (await res.json().catch(() => null)) as { csrf?: unknown } | null;
+      return typeof body?.csrf === 'string' ? body.csrf : undefined;
+    };
+
+    // 1. The open binding: no credential, nothing counted.
+    const open = await this.#send('/api/session', 'GET', {});
+    const openId = cookieOf(open);
+    const openCsrf = await csrfOf(open);
+    if (openId && openCsrf) {
+      this.#session = { id: openId, csrf: openCsrf, cookie: name };
+      this.#failed = undefined;
+      return;
+    }
+    if (open.status === 429) throw this.#refused(429);
+    if (!this.#token && !this.#ticket) {
+      throw new GatewayError(open.status, `buddi on ${this.#base} wants a sign-in, and this command has no dashboard token to make one with. ${STALE_HINT}`);
+    }
+
+    // 2. Is this our buddi? Asked before any ticket is presented.
+    let ticket: string;
+    if (this.#token) {
+      let token: string;
+      try {
+        token = await this.#token();
+      } catch (err) {
+        throw new GatewayError(0, `This command could not read the dashboard token (${err instanceof Error ? err.message : String(err)}). ${STALE_HINT}`);
+      }
+      const challenge = randomBytes(32).toString('hex');
+      const ready = await this.#send(`/_buddi/ready?challenge=${challenge}`, 'GET', {});
+      if (ready.ok && (ready.headers.get('content-type') ?? '').includes('json')) {
+        const proof = ((await ready.json().catch(() => null)) as { proof?: unknown } | null)?.proof;
+        const expected = createHmac('sha256', token).update(`buddi-ready-v1:${challenge}`).digest('hex');
+        if (proof !== expected) {
+          throw new GatewayError(ready.status, `The buddi answering on ${this.#base} is not the one this command belongs to (it holds a different dashboard token), so no sign-in was tried there. ${STALE_HINT}`);
+        }
+      }
+      ticket = mintTicket(token);
+    } else {
+      ticket = await this.#ticket!();
+    }
+
+    // 3. The ticket exchange, as the dashboard link does it.
+    const exchanged = await this.#send(`/?t=${encodeURIComponent(ticket)}`, 'GET', {});
+    const id = cookieOf(exchanged);
+    if (exchanged.status === 429) throw this.#refused(429);
+    if (!id) {
+      throw new GatewayError(exchanged.status, `buddi on ${this.#base} refused this command's sign-in link (HTTP ${exchanged.status}). ${STALE_HINT}`);
+    }
+    const res = await this.#send('/api/session', 'GET', { cookie: `${name}=${id}` });
+    const csrf = await csrfOf(res);
+    if (!csrf) {
+      throw new GatewayError(res.status, `buddi on ${this.#base} took this command's sign-in link but would not open a session with it (HTTP ${res.status}). ${STALE_HINT}`);
+    }
+    this.#session = { id: cookieOf(res) ?? id, csrf, cookie: name };
+    this.#failed = undefined;
+  }
+
+  #refused(status: number): GatewayError {
+    return new GatewayError(status, `buddi on ${this.#base} is refusing sign-ins from this computer for a minute (too many failed tries, often a forgotten tab). Try again shortly.`);
   }
 
   async #read(res: TransportResponse): Promise<unknown> {
@@ -198,6 +282,7 @@ export function gatewayFromEnvironment(env: NodeJS.ProcessEnv = process.env): Ga
   const open = isLoopback(config.host) && env.BUDDI_WEB_REQUIRE_AUTH !== '1';
   return new GatewayClient({
     baseUrl: webUrl(config),
-    ...(open ? {} : { ticket: async () => mintTicket((await ensureWebToken({ env })).token) }),
+    // Read-only: a missing token is a sentence, never a new token the gateway does not hold.
+    ...(open ? {} : { token: async () => (await ensureWebToken({ env, readOnly: true })).token }),
   });
 }
