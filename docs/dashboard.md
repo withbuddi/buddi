@@ -98,11 +98,10 @@ needs me, what is my team up to, what is coming.
   Tips bulb), a large greeting, and what needs you as one line of counts, each
   a link to its list (failed jobs and urgent alerts to Activity, proposals to
   Settings; approvals, messages and agents to set up scroll to Needs you). On
-  the right, a plugin's glance card — the Weather plugin's: now, sky and
-  place, the next twelve hours as a small line, high and low — with the Blob
-  in it; without one, the Blob alone. When the front desk's face is the Blob,
-  it breathes there, as it does on the first-run page; with reduced motion set
-  on your computer, it stays a still picture. On a phone it stacks.
+  the right, the Blob. When the front desk's face is the Blob, it breathes
+  there, as it does on the first-run page; with reduced motion set on your
+  computer, it stays a still picture. On a phone it stacks. A glance whose
+  widget is on Home leaves the date line: the widget says it.
 - **The composer** under it writes to your front desk (the default agent):
   one line that grows as you type, with files and voice like the chat; sending opens the new conversation
   where the answer arrives, and its last three conversations sit below as
@@ -112,6 +111,26 @@ needs me, what is my team up to, what is coming.
   shown without its "@handle:", since the agent is named beside it), failed
   jobs, urgent alerts, an agent a plugin needs, and proposals to keep or
   discard.
+- **Widgets**: small live panels the plugins export — the weather at home,
+  today's calendar, who is waiting on your reply — in your order and size,
+  under Needs you so what needs you stays first. A grid of cards on one row
+  height: small takes one column, medium two, as many columns as the page
+  fits, one column on a phone (each as tall as what it holds). A widget opens
+  its plugin's page; its ⋯ menu says which plugin and when it was updated, and
+  moves it, changes its size, opens Edit, or hides it from Home ("Today hidden
+  · Undo" stays in its place for a few seconds). **Edit** turns the cards
+  dashed: drag one by its grip, or focus the grip and use the arrow keys, or
+  the ‹ › buttons (up and down on a phone); pick Small or Medium; × takes one
+  off; "Add widgets" lists the rest. Done saves, Cancel puts it all back. A
+  widget whose last refresh failed keeps its last panel and says how old it is
+  ("2 h old"); one that never answered says "Couldn't load this." with Try
+  again; a sensitive one (a budget) is hidden on screen until Show. With
+  nothing placed, one line offers "Add widgets"; with no plugin offering any,
+  there is no section. The layout is kept by the installation, so the phone
+  shows what the laptop arranged. Until you arrange them, Home shows every
+  widget that is not sensitive. The weather card that used to sit beside the
+  greeting is the first widget; an older plugin's glance card appears as a
+  small widget too.
 - **Your team**: one face per agent, with what it is waiting on or what it
   does. A face opens a conversation with it.
 - **On offer**: up to six next steps your agents suggested, each a chip.

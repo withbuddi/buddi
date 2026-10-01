@@ -8,13 +8,11 @@
  * stands in its place for a few seconds; Undo puts it back through the same
  * server setting.
  *
- * A glance may also send a card (a figure, a quiet line, a short run of
- * numbers, a foot). The first shown glance with one is drawn as a card on the
- * right of the greeting, with the Blob in it, and leaves the date line; with
- * none, the Blob stands there alone. Nothing here knows a plugin: a glyph from
- * the pinned set and already formatted text and numbers.
+ * A glance that also sends a card is a widget now (HomeWidgets.tsx): while it
+ * is on Home it stays off this line. Nothing here knows a plugin: a glyph from
+ * the pinned set and already formatted text.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type HomeGlance } from '../../api';
 import { tileGlyph } from '../../canvas/tileIcons';
 import { pluginPageHref } from '../../pages/pageLinks';
@@ -42,11 +40,6 @@ function isHidden(glance: HomeGlance, o: GlanceOverrides): boolean {
 /** The ones Home draws: not hidden, the first three. */
 export function shownGlances(glances: readonly HomeGlance[] | undefined, overrides: GlanceOverrides = NO_OVERRIDES): HomeGlance[] {
   return (glances ?? []).filter((g) => !isHidden(g, overrides)).slice(0, HOME_GLANCES_SHOWN);
-}
-
-/** The glance Home draws as the card: the first shown one that sent a card. */
-export function cardGlance(glances: readonly HomeGlance[] | undefined, overrides: GlanceOverrides = NO_OVERRIDES): HomeGlance | null {
-  return shownGlances(glances, overrides).find((g) => g.card !== undefined) ?? null;
 }
 
 /** Where the glance just hidden was drawn, so its Undo line stands there. */
@@ -137,14 +130,14 @@ export function HomeGlances({
   navigate: (route: string) => void;
   /** After a hide is saved: the page re-reads the overview. */
   onChanged?: () => void;
-  /** The glance drawn as the card, left off the line. */
-  except?: string | undefined;
+  /** Glances left off the line: those whose id is a widget on Home. */
+  except?: ReadonlySet<string> | undefined;
   /** The page's hiding state, shared with the card; its own when left out. */
   hiding?: GlanceHiding;
 }): JSX.Element | null {
   const own = useGlanceHiding(onChanged);
   const h = hiding ?? own;
-  const shown = shownGlances(glances, h).filter((g) => g.id !== except);
+  const shown = shownGlances(glances, h).filter((g) => !except?.has(g.id));
   const undo = <GlanceUndo hiding={h} spot="line" />;
   if (shown.length === 0 && h.justHidden?.spot !== 'line') return null;
   return (
@@ -196,67 +189,12 @@ export function sparkPoints(points: readonly number[]): Array<[number, number]> 
 }
 
 /** A run of numbers as one line and a soft area under it: no axis, no labels. */
-function Spark({ points }: { points: readonly number[] }): JSX.Element {
+export function Spark({ points, className = 'wg-spark' }: { points: readonly number[]; className?: string }): JSX.Element {
   const xy = sparkPoints(points).map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`);
   return (
-    <svg className="home-spark" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true" data-testid="spark">
+    <svg className={className} viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true" data-testid="spark">
       <path d={`M0,24 L${xy.join(' L')} L100,24 Z`} fill="currentColor" opacity="0.12" stroke="none" />
       <polyline points={xy.join(' ')} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
     </svg>
-  );
-}
-
-/**
- * The card on the right of the greeting, the Blob in it. Hidden with its ×,
- * it leaves `alone` (the Blob by itself) in its place.
- */
-export function HomeGlanceCard({
-  glance,
-  navigate,
-  onChanged,
-  blob,
-  hiding,
-}: {
-  glance: HomeGlance;
-  navigate: (route: string) => void;
-  onChanged?: () => void;
-  /** The Blob: drawn in the card, or alone once the card is hidden. */
-  blob: ReactNode;
-  /** The page's hiding state, shared with the date line; its own when left out. */
-  hiding?: GlanceHiding;
-}): JSX.Element {
-  const own = useGlanceHiding(onChanged);
-  const h = hiding ?? own;
-  const card = glance.card;
-  if (!card || isHidden(glance, h)) return <>{hiding ? null : <GlanceUndo hiding={h} spot="card" />}{blob}</>;
-  const href = hrefOf(glance);
-  const body = (
-    <>
-      <span className="home-weather-now">
-        <span className="home-weather-icon"><Icon name={tileGlyph(glance.icon)} size={30} /></span>
-        <span className="home-weather-value">{card.value}</span>
-      </span>
-      {card.caption ? <span className="home-weather-caption">{card.caption}</span> : null}
-      {card.trend ? (
-        <span className="home-weather-trend">
-          <Spark points={card.trend.points} />
-          {card.trend.label ? <span>{card.trend.label}</span> : null}
-        </span>
-      ) : null}
-      {card.foot ? <span className="home-weather-foot">{card.foot}</span> : null}
-    </>
-  );
-  return (
-    <div className="home-weather" role="group" aria-label={glance.title}>
-      {href ? (
-        <a className="home-weather-main" href={href} onClick={(event) => { event.preventDefault(); navigate(href); }}>{body}</a>
-      ) : (
-        <div className="home-weather-main">{body}</div>
-      )}
-      {blob}
-      <button type="button" className="home-weather-hide" aria-label={`Hide ${glance.title} from Home`} title="Hide from Home" onClick={() => h.hide(glance, 'card')}>
-        <Icon name="close" size={10} />
-      </button>
-    </div>
   );
 }

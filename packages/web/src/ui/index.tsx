@@ -786,10 +786,13 @@ export interface MenuAction {
 export function ActionMenu({
   label,
   items,
+  note,
 }: {
   /** The button's name: "More for finance". */
   label: string;
   items: Array<MenuAction | 'separator' | null | false | undefined>;
+  /** A quiet line over the items: where it comes from, when it was updated. */
+  note?: ReactNode;
 }): JSX.Element {
   const stop = (event: { stopPropagation: () => void }): void => event.stopPropagation();
   /*
@@ -813,6 +816,7 @@ export function ActionMenu({
           onKeyDown={stop}
           onCloseAutoFocus={(event) => { if (chose.current) event.preventDefault(); }}
         >
+          {note ? <DropdownMenu.Label className="ui-menu-label">{note}</DropdownMenu.Label> : null}
           {items.map((item, index) =>
             !item ? null : item === 'separator' ? (
               <DropdownMenu.Separator key={`sep-${index}`} className="ui-menu-sep" />

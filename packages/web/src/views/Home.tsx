@@ -7,10 +7,10 @@
  * the agent that runs it.
  *
  * The top is a glance: the date, a large greeting and the counts that need
- * the owner (each a link to its list) on the left; on the right a plugin's
- * glance card (the Weather plugin's, say) with the Blob in it, or the Blob
- * alone. The front desk's slim composer sits under it; the install line, when
- * the browser offers one, at the foot.
+ * the owner (each a link to its list) on the left; the Blob on the right. The
+ * front desk's slim composer sits under it; then Needs you, then the owner's
+ * widgets (a glance card is one now); the install line, when the browser
+ * offers one, at the foot.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
@@ -47,7 +47,8 @@ import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
 import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
-import { GlanceUndo, HomeGlanceCard, HomeGlances, cardGlance, useGlanceHiding } from './parts/HomeGlances';
+import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
+import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
 
 export function Home({
@@ -131,10 +132,10 @@ export function Home({
   const onOffer = allOffers.slice(0, HOME_OFFERS);
   const tips = useTips();
   const moreOffers = allOffers.length - onOffer.length;
-  // One hiding state for the date line and the card, so a hidden card's Undo
-  // outlives the card and a glance put back comes back wherever it belongs.
   const hiding = useGlanceHiding(() => overview.reload());
-  const card = cardGlance(data?.glances, hiding);
+  // A glance whose id is a widget on Home stays off the date line: the widget says it.
+  const widgets = useWidgets();
+  const placed = useMemo(() => placedIds(widgets.answer), [widgets.answer]);
   const counts = glanceCounts({
     approvals: pending.length, failed: failedJobs, urgent, paused: data?.paused ?? false, proposals: proposed, agentsToSetUp: toSetUp.length, messages: told.length,
   });
@@ -142,25 +143,20 @@ export function Home({
   return (
     <>
       {/* The glance: the day, a large greeting and what needs you on the left;
-          a plugin's card with the Blob, or the Blob alone, on the right. */}
+          the Blob on the right. */}
       <div className="home-band">
-        <header className="home-top" data-card={card ? 'true' : undefined}>
+        <header className="home-top">
           <div className="home-top-text">
             <p className="home-date">
               <span>{fmtDay(data?.now, timezone)}</span>
-              <HomeGlances glances={data?.glances} navigate={navigate} except={card?.id} hiding={hiding} />
+              <HomeGlances glances={data?.glances} navigate={navigate} except={placed} hiding={hiding} />
               <TipsButton tips={tips} />
             </p>
             <h1 className="home-greeting">{greeting(data?.now, timezone, owner.data?.preferredName || owner.data?.displayName)}</h1>
             <GlanceCounts items={counts} navigate={navigate} />
           </div>
           <div className="home-side">
-            <GlanceUndo hiding={hiding} spot="card" />
-            {card ? (
-              <HomeGlanceCard glance={card} navigate={navigate} hiding={hiding} blob={<Mascot size="lg" anim="idle" />} />
-            ) : (
-              <Mascot size="lg" anim="idle" />
-            )}
+            <Mascot size="lg" anim="idle" />
           </div>
         </header>
       </div>
@@ -279,6 +275,9 @@ export function Home({
         </Section>
         </div>
       ) : null}
+
+      {/* Small live panels from the plugins, in the owner's order. */}
+      <HomeWidgets widgets={widgets} navigate={navigate} />
 
       <Section
         title="Your team"

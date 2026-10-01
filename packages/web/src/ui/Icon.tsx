@@ -104,6 +104,8 @@ const GLYPHS = {
   'chevron-left': [14, 1.6, <path d="M9 2.5 4.5 7 9 11.5" />],
   'chevron-right': [14, 1.6, <path d="M5 2.5 9.5 7 5 11.5" />],
   plus: [14, 1.6, <path d="M7 2.5v9M2.5 7h9" />],
+  /** A handle to drag by: two columns of three dots. */
+  grip: [16, 0, <g fill="currentColor" stroke="none"><circle cx="6" cy="4" r="1.2" /><circle cx="10" cy="4" r="1.2" /><circle cx="6" cy="8" r="1.2" /><circle cx="10" cy="8" r="1.2" /><circle cx="6" cy="12" r="1.2" /><circle cx="10" cy="12" r="1.2" /></g>],
 
   // ---- settings: plugins ----
   // Three dots, stacked: the row's other things to do. Filled, the kit's own.

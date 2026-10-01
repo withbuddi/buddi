@@ -6,10 +6,12 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Widgets on Home: small live panels from your plugins — the weather at home, today's calendar, who is waiting on your reply — in a Widgets section under Needs you. Pick, order and size them (small or medium) from Edit, by dragging, with the arrow keys or with the move buttons; a widget's ⋯ menu moves, resizes or hides it, with Undo. A widget that fails to refresh keeps its last panel and says how old it is, one that never loaded offers Try again, and a sensitive one is hidden until you show it. The layout is kept by the installation, so your phone shows what your laptop arranged.
 - Plugins can export widgets (plugin host API 1.17): a manifest's `widgets`, each a read-only `produce` answering a body from a fixed vocabulary — stat, list, strip, progress, text — that buddi caches for the widget's refresh interval and gives five seconds. The bundled mail plugin adds "Waiting on you".
 
 ### Changed
 
+- The weather card beside Home's greeting is now the first widget, and the Blob stands there alone. A plugin's older glance card still reaches Home, as a small widget, and a glance whose widget is on Home leaves the date line.
 - The signed-out page offers the way back in for how you arrived: on this computer the `buddi dashboard` command with a Copy button; over the tailnet with Tailscale sign-in on, "Sign in with Tailscale"; and while a lockout runs, "Too many tries — wait N min", saying that a fresh link works right away.
 - While a mailbox has instant mail (IDLE), buddi also checks its Sent folder every minute over the same connection, so a reply you send from your phone moves the conversation to "waiting on them" within a minute instead of up to 15.
 - Mail you archive, move or delete in another mail app now leaves buddi's inbox too: it stops counting as unread, `email.select_messages` no longer picks it, and the Mail page says where each message is now (archived, in Trash, in a label, or no longer in the inbox). On Gmail buddi finds where it went and keeps its labels; a message moved back into the inbox is the same one again, not a new arrival.

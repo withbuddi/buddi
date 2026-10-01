@@ -301,6 +301,46 @@ export interface HomeGlanceCard {
   foot?: string;
 }
 
+/* ---- Home's widgets (gateway web/widgets.ts) ---- */
+
+export type WidgetSize = 'small' | 'medium';
+
+/** The vocabulary a plugin fills; already formatted, cut to size by the gateway. */
+export type WidgetBody =
+  | { kind: 'stat'; icon?: string; value: string; caption?: string; trend?: { label?: string; points: number[] }; foot?: string }
+  | { kind: 'list'; rows: Array<{ title: string; sub?: string; side?: string; tone?: 'good' | 'critical' }>; more?: string }
+  | { kind: 'strip'; icon?: string; value?: string; caption?: string; items: Array<{ label: string; icon?: string; value: string }> }
+  | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
+  | { kind: 'text'; icon?: string; text: string; sub?: string };
+
+export interface WidgetInfo {
+  id: string;
+  plugin: string;
+  title: string;
+  sizes: WidgetSize[];
+  link?: { plugin: string; page: string; place: 'rail' | 'settings' };
+  sensitive?: boolean;
+}
+
+export interface WidgetView {
+  state: 'ok' | 'empty' | 'stale' | 'error';
+  body?: WidgetBody;
+  updatedAt?: string;
+  error?: string;
+}
+
+export interface WidgetLayoutItem {
+  id: string;
+  size: WidgetSize;
+}
+
+export interface WidgetsAnswer {
+  available: WidgetInfo[];
+  layout: WidgetLayoutItem[];
+  arranged: boolean;
+  widgets: Record<string, WidgetView>;
+}
+
 export interface Overview {
   now: string;
   timezone: string;
@@ -1921,6 +1961,12 @@ export const api = {
       { enabled },
     ),
   /** Hide one Home glance, or show it again. */
+  /** Home's widgets: what is offered, the owner's layout, each placed one now. */
+  widgets: () => get<WidgetsAnswer>('/widgets'),
+  /** Keep the owner's order and sizes; answers as `widgets()`. */
+  saveWidgetLayout: (layout: WidgetLayoutItem[]) => put<WidgetsAnswer>('/widgets/layout', { layout }),
+  /** Produce one widget now (Try again); answers as `widgets()`. */
+  refreshWidget: (id: string) => post<WidgetsAnswer>(`/widgets/${encodeURIComponent(id)}/refresh`),
   setGlanceHidden: (id: string, hidden: boolean) =>
     post<{ id: string; hidden: boolean }>(`/home/glances/${encodeURIComponent(id)}/hidden`, { hidden }),
   /** The plugin rail pages the owner hid, as `<plugin>:<page>`. */
