@@ -4108,3 +4108,102 @@ body:has(.lk) .ui-modal { z-index: 62; }
 .plugins-require { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .plugins-require-ok { color: var(--good); font-size: var(--text-sm); }
 .plugins-requires > .muted { font-size: var(--text-sm); line-height: var(--leading); }
+
+/* ---- Widgets v2: settings, placements, the lock screen's own pick (kit: Widgets.jsx, LockScreen.jsx) ---- */
+/* A sentence body (nothing today, nobody waiting) sits in the middle of its frame, not at the top. */
+.wg-frame[data-kind='text'] .wg-body { justify-content: center; }
+.wg-gallery-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.wg-gallery-aside { font-size: var(--text-sm); color: var(--accent); text-decoration: none; }
+.wg-gallery-aside:hover { text-decoration: underline; }
+.wg-add-note { font-size: var(--text-sm); color: var(--text-faint); padding-inline: var(--space-2); }
+/* The settings sheet: the placement live, then the fields. */
+.wg-sheet { display: flex; flex-direction: column; gap: var(--space-5); }
+.wg-preview { display: flex; justify-content: center; padding: var(--space-5) var(--space-4); border-radius: var(--radius-lg); background: var(--surface-sunken); }
+.wg-preview .wg-frame { pointer-events: none; height: calc(var(--space-10) * 5); width: calc(50% - var(--space-2)); }
+.wg-preview .wg-frame[data-size='medium'] { width: 100%; }
+.wg-preview[data-surface='lock'] { background: var(--field-base); background-image: var(--gradient-field); }
+.wg-preview[data-surface='lock'] .wg-frame { height: calc(var(--space-12) * 2 + var(--space-6)); }
+.wg-sheet-note { margin: 0; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+.wg-field { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.wg-field > input, .wg-field > select, .wg-field-stack, .wg-field .wg-options { align-self: stretch; }
+.wg-field-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.wg-field-stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.wg-options { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.wg-option { all: unset; box-sizing: border-box; display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) var(--space-3); cursor: pointer; }
+.wg-option + .wg-option { border-top: 1px solid var(--line); }
+.wg-option:hover { background: var(--surface-sunken); }
+.wg-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wg-option[data-on] { background: var(--accent-soft); }
+.wg-option-mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: var(--space-4); height: var(--space-4); margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--line-strong); color: var(--accent-contrast); }
+.wg-option-mark[data-multiple='true'] { border-radius: var(--radius-sm); }
+.wg-option[data-on] .wg-option-mark { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 8px var(--accent); }
+.wg-option[data-on] .wg-option-mark[data-multiple='true'] { box-shadow: none; background: var(--accent); }
+.wg-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wg-option-name { font-size: var(--text-md); font-weight: var(--weight-medium); }
+.wg-option-sub { font-size: var(--text-sm); color: var(--text-muted); }
+.wg-find { display: flex; gap: var(--space-2); align-self: stretch; }
+.wg-find input { flex: 1 1 auto; min-width: 0; }
+.wg-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); cursor: pointer; }
+
+/* The compact tile, on the lock screen: a sentence takes one column and reads as one. */
+.wg-frame[data-variant='compact'][data-kind='text'] .wg-text { align-items: center; gap: var(--space-2); }
+.wg-frame[data-variant='compact'][data-kind='text'] .wg-text-icon { width: var(--control-h-sm); height: var(--control-h-sm); background: color-mix(in oklab, var(--accent-soft) 70%, transparent); }
+.wg-frame[data-variant='compact'][data-kind='text'] .wg-text-main { font-size: var(--text-sm); font-weight: var(--weight-medium); -webkit-line-clamp: 3; }
+.wg-frame[data-variant='compact'][data-kind='text'] .wg-row-sub { white-space: normal; }
+
+/* The counts are buttons: tapped, the dashboard opens on that list once unlocked. */
+button.lk-chip { font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium); cursor: pointer; transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+button.lk-chip:hover:not(:disabled) { background: color-mix(in oklab, var(--surface) 80%, transparent); }
+button.lk-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+button.lk-chip[aria-pressed='true'] { border-color: var(--accent); }
+button.lk-chip:disabled { cursor: default; }
+.lk-badges li { display: contents; }
+
+/* The clock: a.m./p.m. small beside the figure, and a second zone under it. */
+.lk-ampm { margin-left: 0.12em; font-size: 0.32em; font-weight: var(--weight-medium); letter-spacing: 0; }
+.lk-zone { display: inline-flex; align-items: baseline; flex-wrap: wrap; justify-content: center; gap: 0 var(--space-2); margin: var(--space-1) 0 0; font-size: var(--text-md); color: var(--text-muted); }
+.lk-zone-name { font-weight: var(--weight-medium); color: var(--text); }
+.lk-zone-time { font-family: var(--font-display); font-size: var(--text-xl); font-weight: var(--weight-semibold); color: var(--text); font-variant-numeric: tabular-nums; }
+.lk-zone-off { font-size: var(--text-sm); }
+
+/* Settings → Lock screen → What it shows: the preview is the lock screen at its own size, scaled into its box. */
+.lke { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+.lke-look { position: sticky; top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
+.lke-preview { position: relative; width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-panel); background: var(--field-base); }
+.lke-preview[data-phone='true'] { width: min(100%, calc(var(--space-12) * 6)); margin-inline: auto; border-radius: calc(var(--radius-lg) * 2); }
+.lk[data-preview='true'] { position: absolute; inset: auto; top: 0; left: 0; z-index: auto; overflow: hidden; transform-origin: 0 0; pointer-events: none; }
+.lk[data-preview='true'] .lk-ground { position: absolute; }
+.lke-pin-hint { font-size: var(--text-md); color: var(--text-muted); }
+.lke-look-foot { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.lke-look-note { font-size: var(--text-sm); color: var(--text-muted); }
+.lke-controls { display: flex; flex-direction: column; gap: var(--space-5); min-width: 0; }
+.lke-group { display: flex; flex-direction: column; gap: var(--space-3); }
+.lke-group + .lke-group { padding-top: var(--space-5); border-top: 1px solid var(--line); }
+.lke-group-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.lke-group-title { margin: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); }
+.lke-count { margin-left: var(--space-1); font-weight: var(--weight-regular); color: var(--text-muted); font-size: var(--text-sm); }
+.lke-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); }
+.lke-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3); flex-wrap: wrap; }
+.lke-row + .lke-row { border-top: 1px solid var(--line); }
+.lke-row-text { flex: 1 1 calc(var(--space-12) * 2); display: flex; flex-direction: column; min-width: 0; }
+.lke-row-title { font-size: var(--text-md); font-weight: var(--weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lke-row-sub { font-size: var(--text-xs); color: var(--text-faint); }
+.lke-row-tools { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; }
+.lke-move { display: inline-flex; }
+.lke-row-acts { display: inline-flex; align-items: center; gap: var(--space-1); margin-left: auto; }
+.lke-empty { margin: 0; padding: var(--space-3); border: 1px dashed var(--line); border-radius: var(--radius); font-size: var(--text-sm); color: var(--text-muted); }
+.lke-note { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding-top: var(--space-4); border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading); }
+.lke-note svg { flex: none; margin-top: 3px; }
+@media (max-width: 960px) {
+  .lke { grid-template-columns: minmax(0, 1fr); }
+  .lke-look { position: static; }
+}
+@media (max-width: 720px) {
+  .wg-preview .wg-frame { width: 100%; }
+  /* On a phone a row's actions sit beside its name and the size takes the line under it, so × never runs off the edge. */
+  .lke-row { row-gap: var(--space-2); }
+  .lke-row-text { flex-basis: 0; }
+  .lke-row-tools { display: contents; }
+  .lke-row-acts { order: 1; }
+  .lke-row-tools > .ui-segment { order: 2; }
+}

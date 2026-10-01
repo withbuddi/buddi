@@ -1,13 +1,14 @@
 /**
  * Settings → Lock screen (docs/dashboard.md, "Lock screen"; the kit's
  * `LockSettings`): the honest sentence, the PIN (set, change, remove — each
- * in a small dialog), how long before it locks, the background, and what the
- * lock screen shows. Kept by the installation, so every device signed in to
- * this dashboard gets the same.
+ * in a small dialog), how long before it locks and the background; then What
+ * it shows (`LockFaceEditor`): a live preview beside the clock's options and
+ * the lock screen's own widgets. Kept by the installation, so every device
+ * signed in to this dashboard gets the same.
  */
 import { useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, type LockBackground, type LockState } from '../api';
-import { HOME_ROUTE } from '../routes';
+import { LockFaceEditor } from './LockFaceEditor';
 import { useLock } from '../shell/lock';
 import { Button, ErrorBanner, Field, Icon, Modal, Notice, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 
@@ -113,7 +114,7 @@ function PinDialog({ kind, onClose, onDone }: { kind: DialogKind; onClose: () =>
   );
 }
 
-export function LockSettings({ navigate }: { navigate: (route: string) => void }): JSX.Element {
+export function LockSettings(_props: { navigate: (route: string) => void }): JSX.Element {
   const lock = useLock();
   const read = useAsync(() => api.lockState(), []);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
@@ -161,6 +162,7 @@ export function LockSettings({ navigate }: { navigate: (route: string) => void }
   );
 
   return (
+    <>
     <Section
       title="Lock screen"
       aside="Kept for every device signed in to this dashboard."
@@ -218,15 +220,10 @@ export function LockSettings({ navigate }: { navigate: (route: string) => void }
             </Toolbar>
           ) : null}
         </div>
-        <div className="lk-pref ui-section">
-          <div className="lk-pref-text">
-            <div className="lk-pref-label">What it shows</div>
-            <div className="ui-field-hint">The date and time, up to four of your Home widgets (never a sensitive one), how many approvals and notifications are waiting — counts only — and your focus.</div>
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => navigate(HOME_ROUTE)}>Arrange widgets</Button>
-        </div>
       </Stack>
       {dialog ? <PinDialog kind={dialog} onClose={() => setDialog(null)} onDone={(next) => { setDialog(null); take(next); }} /> : null}
     </Section>
+    <LockFaceEditor clock={state.clock} onClock={(clock) => change(api.setLockSettings({ clock }))} version={`${state.background}:${state.image ?? ''}:${JSON.stringify(state.clock ?? null)}`} />
+    </>
   );
 }

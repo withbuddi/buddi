@@ -114,6 +114,8 @@ export const TILE_ICONS = [
   'fog',
   'wind',
   'moon-clear',
+  'check',
+  'clock',
 ] as const;
 
 export type TileIcon = (typeof TILE_ICONS)[number];

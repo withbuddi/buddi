@@ -8,7 +8,7 @@
  * Above them, Telegram itself: the bot, the phones paired with it, and
  * pairing another — what the first-run thread offers, for later.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ApiError,
   NOTIFICATION_KINDS,
@@ -23,7 +23,7 @@ import {
   type NotificationSettings,
 } from '../api';
 import { fmtRelative, fmtTime, notificationTitle } from '../format';
-import { settingsRoute } from '../routes';
+import { NOTIFICATIONS_RECENT_ROUTE, settingsRoute } from '../routes';
 import { Button, Empty, ErrorBanner, Field, List, ListRow, Notice, Section, Stack, useAsync } from '../ui';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
 
@@ -61,6 +61,13 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
   const view = useAsync(() => api.notificationSettings(), []);
   const roster = useAsync(() => api.agents(), []);
   const recent = useAsync(() => api.notifications(20), [], 30_000);
+  // Arrived from the lock screen's count: the list is what was asked for, not the settings above it.
+  const scrolled = useRef(false);
+  useEffect(() => {
+    if (scrolled.current || !recent.data || window.location.hash !== NOTIFICATIONS_RECENT_ROUTE) return;
+    scrolled.current = true;
+    document.getElementById('notifications-recent')?.scrollIntoView?.({ block: 'start' });
+  }, [recent.data]);
   const [draft, setDraft] = useState<NotificationSettings | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -186,6 +193,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
 
       <TipsSwitch />
 
+      <div id="notifications-recent" className="notifications-recent">
       <Section title="The last twenty" panel flush>
         <ErrorBanner message={recent.error} />
         {!recent.data ? (
@@ -205,6 +213,7 @@ export function Notifications({ timezone }: { timezone: string }): JSX.Element {
           </List>
         )}
       </Section>
+      </div>
     </Stack>
   );
 }

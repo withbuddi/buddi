@@ -26,6 +26,8 @@ const TILE_GLYPHS: Record<TileIcon, IconName> = {
   fog: 'fog',
   wind: 'wind',
   'moon-clear': 'moon-clear',
+  check: 'check',
+  clock: 'clock',
 };
 
 export function tileGlyph(icon: string | null | undefined): IconName {

@@ -367,6 +367,9 @@ export function settingsSectionOf(hash: string): string {
   return /^#\/settings\/([a-z0-9.-]+)/.exec(hash)?.[1] ?? 'you';
 }
 
+/** Settings → Notifications, scrolled to the last twenty: where the lock screen's count opens. */
+export const NOTIFICATIONS_RECENT_ROUTE = '#/settings/notifications/recent';
+
 /** Where the recovery banner sends the owner, and where a restore is started. */
 export const BACKUP_ROUTE = settingsRoute('backup');
 

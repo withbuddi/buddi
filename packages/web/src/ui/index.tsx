@@ -787,12 +787,16 @@ export function ActionMenu({
   label,
   items,
   note,
+  trigger,
 }: {
   /** The button's name: "More for finance". */
   label: string;
-  items: Array<MenuAction | 'separator' | null | false | undefined>;
+  /** `{ heading }` starts a group with a quiet line: "As on Home". */
+  items: Array<MenuAction | { heading: ReactNode } | 'separator' | null | false | undefined>;
   /** A quiet line over the items: where it comes from, when it was updated. */
   note?: ReactNode;
+  /** A button of its own instead of ⋯: "Add a widget". It must take a ref (a plain button). */
+  trigger?: ReactNode;
 }): JSX.Element {
   const stop = (event: { stopPropagation: () => void }): void => event.stopPropagation();
   /*
@@ -803,9 +807,11 @@ export function ActionMenu({
   return (
     <DropdownMenu.Root modal={false} onOpenChange={(open) => { if (open) chose.current = false; }}>
       <DropdownMenu.Trigger asChild>
-        <button type="button" className="ui-icon-btn" data-size="sm" aria-label={label} title={label} onClick={stop}>
-          <Icon name="more" />
-        </button>
+        {trigger ?? (
+          <button type="button" className="ui-icon-btn" data-size="sm" aria-label={label} title={label} onClick={stop}>
+            <Icon name="more" />
+          </button>
+        )}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -820,6 +826,8 @@ export function ActionMenu({
           {items.map((item, index) =>
             !item ? null : item === 'separator' ? (
               <DropdownMenu.Separator key={`sep-${index}`} className="ui-menu-sep" />
+            ) : 'heading' in item ? (
+              <DropdownMenu.Label key={`head-${index}`} className="ui-menu-label">{item.heading}</DropdownMenu.Label>
             ) : (
               <DropdownMenu.Item
                 key={index}

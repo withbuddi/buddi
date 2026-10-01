@@ -1,4 +1,4 @@
-/** Home's widgets: each body kind, the frame's states, the menu, edit mode (mouse and keyboard), the empty line, the phone's one column. */
+/** Home's widgets: each body kind, the frame's states, the menu, edit mode (mouse and keyboard), settings per placement, the same widget twice, the empty line, the phone's one column. */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api', async (original) => ({
   ...(await original<typeof import('../../api')>()),
-  api: { widgets: vi.fn(), saveWidgetLayout: vi.fn(), refreshWidget: vi.fn() },
+  api: { widgets: vi.fn(), saveWidgets: vi.fn(), refreshWidget: vi.fn(), widgetSettings: vi.fn(), previewWidget: vi.fn() },
 }));
 
-import { api, type WidgetInfo, type WidgetLayoutItem, type WidgetsAnswer, type WidgetView } from '../../api';
+import { api, type WidgetInfo, type WidgetPlacement, type WidgetsAnswer, type WidgetView } from '../../api';
 import { HomeWidgets, placedIds, useWidgets } from './HomeWidgets';
 import { GLANCE_UNDO_MS } from './HomeGlances';
 
@@ -18,8 +18,12 @@ import { GLANCE_UNDO_MS } from './HomeGlances';
 const openMenu = (name: string): void => { fireEvent.keyDown(screen.getByRole('button', { name }), { key: 'Enter' }); };
 const choose = (name: string): void => { fireEvent.click(screen.getByRole('menuitem', { name })); };
 
+const WEATHER_SETTINGS: WidgetInfo['settings'] = [
+  { key: 'place', kind: 'select', label: 'Place', inTitle: true, default: '', dynamic: true },
+  { key: 'units', kind: 'select', label: 'Units', default: '', options: [{ value: '', label: 'As on Weather' }, { value: 'metric', label: '°C' }, { value: 'imperial', label: '°F' }] },
+];
 const INFO: WidgetInfo[] = [
-  { id: 'weather.now', plugin: 'weather', title: 'Weather at home', sizes: ['small', 'medium'], link: { plugin: 'weather', page: 'weather', place: 'rail' } },
+  { id: 'weather.now', plugin: 'weather', title: 'Weather at home', sizes: ['small', 'medium'], link: { plugin: 'weather', page: 'weather', place: 'rail' }, settings: WEATHER_SETTINGS },
   { id: 'calendar.today', plugin: 'calendar', title: 'Today', sizes: ['medium', 'small'] },
   { id: 'finance.month', plugin: 'finance', title: 'Spent this month', sizes: ['small'], sensitive: true },
   { id: 'email.replies', plugin: 'email', title: 'Waiting on you', sizes: ['small'] },
@@ -35,8 +39,17 @@ const VIEWS: Record<string, WidgetView> = {
   'notes.tip': { state: 'ok', updatedAt: AT, body: { kind: 'text', icon: 'bulb', text: 'Drink water.', sub: 'Every day' } },
 };
 
-function answerOf(layout: WidgetLayoutItem[], views: Record<string, WidgetView> = VIEWS, available = INFO): WidgetsAnswer {
-  return { available, layout, arranged: true, widgets: Object.fromEntries(layout.map((item) => [item.id, views[item.id]!])) };
+/** A placement keyed by its widget, as most tests need only one of each. */
+const at = (widget: string, size: WidgetPlacement['size'], extra: Partial<WidgetPlacement> = {}): WidgetPlacement => ({ key: widget, widget, size, settings: {}, ...extra });
+
+function answerOf(home: WidgetPlacement[], views: Record<string, WidgetView> = VIEWS, available = INFO): WidgetsAnswer {
+  return {
+    available,
+    home,
+    lock: [],
+    arranged: { home: true, lock: false },
+    views: Object.fromEntries(home.map((p) => [p.key, views[p.key] ?? views[p.widget]!])),
+  };
 }
 
 function Harness({ navigate = () => {} }: { navigate?: (route: string) => void }): JSX.Element {
@@ -49,16 +62,18 @@ function Harness({ navigate = () => {} }: { navigate?: (route: string) => void }
   );
 }
 
-const ALL: WidgetLayoutItem[] = [
-  { id: 'weather.now', size: 'small' },
-  { id: 'calendar.today', size: 'medium' },
-  { id: 'finance.month', size: 'small' },
-  { id: 'email.replies', size: 'small' },
-  { id: 'notes.tip', size: 'small' },
+const ALL: WidgetPlacement[] = [
+  at('weather.now', 'small'),
+  at('calendar.today', 'medium'),
+  at('finance.month', 'small'),
+  at('email.replies', 'small'),
+  at('notes.tip', 'small'),
 ];
+/** What a save sends: no label, a key kept. */
+const sent = (list: WidgetPlacement[]) => list.map(({ label: _label, ...p }) => p);
 
 beforeEach(() => {
-  vi.mocked(api.saveWidgetLayout).mockImplementation(async (layout) => answerOf(layout));
+  vi.mocked(api.saveWidgets).mockImplementation(async (_surface, list) => answerOf(list.map((p) => ({ ...p, key: p.key ?? 'new' }))));
   try { window.localStorage.clear(); } catch { /* none */ }
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
@@ -153,11 +168,11 @@ describe('the menu', { timeout: 180_000 }, () => {
     openMenu('More for Today');
     expect(screen.getByText(/calendar · /)).toBeInTheDocument();
     choose('Hide from Home');
-    expect(api.saveWidgetLayout).toHaveBeenLastCalledWith([ALL[0], ALL[2]]);
+    expect(api.saveWidgets).toHaveBeenLastCalledWith('home', [ALL[0], ALL[2]]);
     const status = (await screen.findByText('Today hidden')).closest('[role="status"]') as HTMLElement;
     expect(status).toHaveAttribute('data-size', 'medium'); // it holds the hidden one's place
     fireEvent.click(within(status).getByRole('button', { name: 'Undo' }));
-    expect(api.saveWidgetLayout).toHaveBeenLastCalledWith(ALL.slice(0, 3));
+    expect(api.saveWidgets).toHaveBeenLastCalledWith('home', ALL.slice(0, 3));
     await waitFor(() => expect(order()).toEqual(['Weather at home', 'Today', 'Spent this month']));
   });
 
@@ -168,7 +183,7 @@ describe('the menu', { timeout: 180_000 }, () => {
     openMenu('More for Weather at home');
     expect(screen.queryByRole('menuitem', { name: 'Move earlier' })).toBeNull();
     choose('Make it medium');
-    expect(api.saveWidgetLayout).toHaveBeenLastCalledWith([{ id: 'weather.now', size: 'medium' }, ALL[1]]);
+    expect(api.saveWidgets).toHaveBeenLastCalledWith('home', [at('weather.now', 'medium'), ALL[1]]);
     await waitFor(() => expect(frame('Weather at home')).toHaveAttribute('data-size', 'medium'));
     openMenu('More for Today');
     choose('Move earlier');
@@ -183,7 +198,7 @@ describe('the menu', { timeout: 180_000 }, () => {
 
   it('puts the layout back and says so when a save fails', async () => {
     vi.mocked(api.widgets).mockResolvedValue(answerOf(ALL.slice(0, 2)));
-    vi.mocked(api.saveWidgetLayout).mockRejectedValue(new Error('the gateway said no'));
+    vi.mocked(api.saveWidgets).mockRejectedValue(new Error('the gateway said no'));
     render(<Harness />);
     await screen.findByRole('group', { name: 'Today' });
     openMenu('More for Today');
@@ -201,9 +216,13 @@ describe('edit mode', { timeout: 180_000 }, () => {
     await screen.findByRole('group', { name: 'Today' });
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     const gallery = screen.getByRole('region', { name: 'Add widgets' });
+    // Every widget: one placed with settings offers another, one placed without says it is on Home.
     expect(within(gallery).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
-      expect.stringContaining('Waiting on you'),
-      expect.stringContaining('A thought'),
+      expect.stringMatching(/Weather at home.*on Home.*Add another/),
+      expect.stringMatching(/Today.*On Home$/),
+      expect.stringMatching(/Spent this month.*On Home$/),
+      expect.stringMatching(/Waiting on you.*Add$/),
+      expect.stringMatching(/A thought.*Add$/),
     ]);
     // Nothing navigates while editing.
     expect(within(frame('Weather at home')).queryByRole('link')).toBeNull();
@@ -214,12 +233,12 @@ describe('edit mode', { timeout: 180_000 }, () => {
     fireEvent.click(within(gallery).getByRole('button', { name: 'Add Waiting on you' }));
     expect(order()).toEqual(['Today', 'Weather at home', 'Waiting on you']);
     expect(frame('Waiting on you')).toHaveTextContent('Fills in when you press Done.');
-    expect(api.saveWidgetLayout).not.toHaveBeenCalled();
+    expect(api.saveWidgets).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    expect(api.saveWidgetLayout).toHaveBeenCalledWith([
-      { id: 'calendar.today', size: 'small' },
-      { id: 'weather.now', size: 'small' },
-      { id: 'email.replies', size: 'small' },
+    expect(api.saveWidgets).toHaveBeenCalledWith('home', [
+      at('calendar.today', 'small'),
+      at('weather.now', 'small'),
+      { key: expect.stringMatching(/^w-[0-9a-f]{8}$/), widget: 'email.replies', size: 'small', settings: {} },
     ]);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument());
     expect(screen.queryByRole('region', { name: 'Add widgets' })).toBeNull();
@@ -242,7 +261,7 @@ describe('edit mode', { timeout: 180_000 }, () => {
     expect(order()).toEqual(['Today', 'Weather at home', 'Spent this month']);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(order()).toEqual(['Weather at home', 'Today', 'Spent this month']);
-    expect(api.saveWidgetLayout).not.toHaveBeenCalled();
+    expect(api.saveWidgets).not.toHaveBeenCalled();
   });
 
   it('drags one onto another to move it there', async () => {
@@ -256,6 +275,76 @@ describe('edit mode', { timeout: 180_000 }, () => {
     expect(frame('Weather at home')).toHaveAttribute('data-over', 'true');
     fireEvent.drop(frame('Weather at home'), { dataTransfer });
     expect(order()).toEqual(['Spent this month', 'Weather at home', 'Today']);
+  });
+});
+
+describe('settings per placement', { timeout: 180_000 }, () => {
+  const SHEET = {
+    widget: 'weather.now',
+    fields: [
+      { key: 'place', kind: 'select' as const, label: 'Place', inTitle: true, default: '', options: [{ value: '', label: 'Home' }, { value: 'profile-work', label: 'Work' }, { value: 'profile-mum', label: "Mum's" }, { value: 'ben', label: 'Ben' }] },
+      { key: 'units', kind: 'select' as const, label: 'Units', default: '', options: [{ value: '', label: 'As on Weather' }, { value: 'metric', label: '°C' }, { value: 'imperial', label: '°F' }] },
+    ],
+    places: [],
+    timeFormat: null,
+  };
+  beforeEach(() => {
+    vi.mocked(api.widgetSettings).mockResolvedValue(SHEET);
+    vi.mocked(api.previewWidget).mockImplementation(async ({ settings }) => ({
+      view: { state: 'ok', body: { kind: 'stat', value: settings.place === 'profile-work' ? '21°C' : '18°C' } },
+      label: settings.place === 'profile-work' ? 'Weather at home · Work' : 'Weather at home',
+    }));
+  });
+
+  it('opens a placement’s settings from its menu, shows it live as they change, and keeps them at once', async () => {
+    vi.mocked(api.widgets).mockResolvedValue(answerOf(ALL.slice(0, 2)));
+    render(<Harness />);
+    await screen.findByRole('group', { name: 'Weather at home' });
+    openMenu('More for Weather at home');
+    choose('Settings…');
+    const sheet = await screen.findByRole('dialog');
+    expect(within(sheet).getByText(/From the weather plugin · on Home\. These settings are this one’s own\./)).toBeInTheDocument();
+    await waitFor(() => expect(within(sheet).getByRole('img', { name: 'Preview of Weather at home' })).toHaveTextContent('18°C'));
+    // Four places are rows; three short units a segment.
+    fireEvent.click(within(sheet).getByRole('radio', { name: 'Work' }));
+    expect(within(sheet).getByRole('radiogroup', { name: 'Units' })).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('radio', { name: '°F' }));
+    await waitFor(() => expect(within(sheet).getByRole('img', { name: 'Preview of Weather at home · Work' })).toHaveTextContent('21°C'), { timeout: 2_000 });
+    expect(api.previewWidget).toHaveBeenLastCalledWith({ widget: 'weather.now', size: 'small', settings: { place: 'profile-work', units: 'imperial' } });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveWidgets).toHaveBeenCalledWith('home', [at('weather.now', 'small', { settings: { place: 'profile-work', units: 'imperial' } }), ALL[1]]));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('adds the same widget again in Edit, its settings open at once, and each keeps its own', async () => {
+    vi.mocked(api.widgets).mockResolvedValue(answerOf([at('weather.now', 'small')]));
+    render(<Harness />);
+    await screen.findByRole('group', { name: 'Weather at home' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add another Weather at home' }));
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(await within(sheet).findByRole('radio', { name: 'Work' }));
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // Two frames of one widget, the new one filled in on Done.
+    expect(screen.getAllByRole('group', { name: /^Weather at home/ })).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(api.saveWidgets).toHaveBeenCalledWith('home', [
+      at('weather.now', 'small'),
+      { key: expect.stringMatching(/^w-/), widget: 'weather.now', size: 'small', settings: { place: 'profile-work' } },
+    ]);
+  });
+
+  it('names a placement by its label, and Remove in the sheet takes it off', async () => {
+    vi.mocked(api.widgets).mockResolvedValue(answerOf([at('weather.now', 'small'), at('weather.now', 'small', { key: 'w-work', settings: { place: 'profile-work' }, label: 'Weather at home · Work' })]));
+    render(<Harness />);
+    const work = await screen.findByRole('group', { name: 'Weather at home · Work' });
+    expect(work).toHaveAttribute('data-key', 'w-work');
+    openMenu('More for Weather at home · Work');
+    choose('Settings…');
+    const sheet = await screen.findByRole('dialog');
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Remove from Home' }));
+    await waitFor(() => expect(api.saveWidgets).toHaveBeenLastCalledWith('home', [at('weather.now', 'small')]));
   });
 });
 

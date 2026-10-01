@@ -23,7 +23,7 @@ const screenData = (over: Partial<LockScreenData> = {}): LockScreenData => ({
   approvals: 2,
   unread: 3,
   focus: null,
-  widgets: [{ id: 'w1', title: 'Weather at home', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: '19°C', caption: 'Partly cloudy' } as never } }],
+  widgets: [{ key: 'l1', id: 'demo.now', title: 'Weather at home', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: '19°C', caption: 'Partly cloudy' } as never } }],
   ...over,
 });
 
@@ -165,6 +165,46 @@ describe('the lock screen', () => {
     await u.type(field, '2468{Enter}');
     await waitFor(() => expect(done).toHaveBeenCalledWith(open));
     expect(unlock).toHaveBeenLastCalledWith('2468');
+  });
+
+  it('draws its own clock: picked formats, no date, a second zone with how far ahead it is', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date('2026-10-01T12:32:00Z') });
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({ clockView: { time: '12h', date: 'off', zone: { label: 'Tokyo', timezone: 'Asia/Tokyo' } } }));
+    const { container } = render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    await screen.findByLabelText('Waiting for you');
+    const time = container.querySelector('.lk-time')!;
+    expect(time).toHaveAttribute('aria-label', '2:32 PM');
+    expect(time.querySelector('.lk-ampm')).toHaveTextContent('PM');
+    expect(container.querySelector('.lk-date')).toBeNull();
+    expect(container.querySelector('.lk-zone')).toHaveTextContent('Tokyo9:32 PM7 h ahead');
+  });
+
+  it('draws a sentence one column wide, so an empty day is never a hollow card', async () => {
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData({
+      widgets: [{ key: 'l2', id: 'demo.today', title: 'Coming up', size: 'medium', view: { state: 'ok', body: { kind: 'text', icon: 'calendar', text: 'Free for the rest of today.' } } }],
+    }));
+    render(<LockScreen initial={locked} onUnlocked={() => {}} />);
+    const tile = await screen.findByRole('group', { name: 'Coming up' });
+    expect(tile).toHaveAttribute('data-size', 'small');
+    expect(tile).toHaveAttribute('data-kind', 'text');
+    expect(tile.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
+  });
+
+  it('opens Notifications once unlocked when its count was tapped', async () => {
+    vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
+    vi.spyOn(api, 'unlock').mockResolvedValue(open);
+    window.location.hash = '#/';
+    const done = vi.fn();
+    render(<LockScreen initial={locked} onUnlocked={done} />);
+    const u = user();
+    await u.click(await screen.findByRole('button', { name: /3 notifications/ }));
+    expect(screen.getByRole('button', { name: /3 notifications/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('Unlock to open your notifications.');
+    expect(screen.getByLabelText('PIN')).toHaveFocus();
+    await u.type(screen.getByLabelText('PIN'), '2468{Enter}');
+    await waitFor(() => expect(done).toHaveBeenCalledWith(open));
+    expect(window.location.hash).toBe('#/settings/notifications/recent');
+    window.location.hash = '';
   });
 
   it('counts the wait down and keeps the field shut while it runs', async () => {

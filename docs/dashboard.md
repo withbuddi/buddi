@@ -112,22 +112,29 @@ needs me, what is my team up to, what is coming.
   jobs, urgent alerts, an agent a plugin needs, and proposals to keep or
   discard.
 - **Widgets**: small live panels the plugins export — the weather at home,
-  today's calendar, who is waiting on your reply — in your order and size,
-  under Needs you so what needs you stays first. A grid of cards on one row
+  what is coming up, who is waiting on your reply, the World clock buddi
+  itself provides — in your order and size, under Needs you so what needs you
+  stays first. Each card is one *placement*: a widget, a size and its own
+  settings, so the same widget can sit twice ("Weather" and "Weather · Work"). A grid of cards on one row
   height: small takes one column, medium two, as many columns as the page
   fits, one column on a phone (each as tall as what it holds). A widget opens
   its plugin's page; its ⋯ menu says which plugin and when it was updated, and
-  moves it, changes its size, opens Edit, or hides it from Home ("Today hidden
-  · Undo" stays in its place for a few seconds). **Edit** turns the cards
-  dashed: drag one by its grip, or focus the grip and use the arrow keys, or
-  the ‹ › buttons (up and down on a phone); pick Small or Medium; × takes one
-  off; "Add widgets" lists the rest. Done saves, Cancel puts it all back. A
+  opens its **Settings…**, moves it, changes its size, opens Edit, or hides it
+  from Home ("Today hidden · Undo" stays in its place for a few seconds).
+  Settings open in a sheet that draws the card live as you change them — the
+  place, the units, which calendars and how far ahead, which mailbox, a time
+  format (your Profile's by default) — from the fields the plugin declares.
+  **Edit** turns the cards dashed: drag one by its grip, or focus the grip and
+  use the arrow keys, or the ‹ › buttons (up and down on a phone); pick Small or
+  Medium; the gear opens its settings; × takes one off; "Add widgets" lists
+  every widget — one already on Home that has settings offers "Add another" and
+  opens its settings at once. Done saves, Cancel puts it all back. A
   widget whose last refresh failed keeps its last panel and says how old it is
   ("2 h old"); one that never answered says "Couldn't load this." with Try
   again; a sensitive one (a budget) is hidden on screen until Show. With
   nothing placed, one line offers "Add widgets"; with no plugin offering any,
   there is no section. The layout is kept by the installation, so the phone
-  shows what the laptop arranged. Until you arrange them, Home shows every
+  shows what the laptop arranged; the lock screen keeps its own (below). Until you arrange them, Home shows every
   widget that is not sensitive. The weather card that used to sit beside the
   greeting is the first widget; an older plugin's glance card appears as a
   small widget too.
@@ -334,10 +341,13 @@ A list of sections in four groups.
 ## Lock screen
 
 A privacy screen over the dashboard, opened with a PIN, drawn like a phone's
-lock screen: the date and the time large, in your timezone; how many approvals
-and notifications are waiting (counts, never what they are); the focus that is
-on; up to four of your Home widgets, compact and never a sensitive one; and the
-PIN field, with one line saying why it locked ("Locked by you at 14:02",
+lock screen: its own clock — the date and the time large, in your timezone,
+your Profile's way unless you pick otherwise, and a second clock if you want
+one; how many approvals and notifications are waiting (counts, never what they
+are — tap one and the dashboard opens on that list once unlocked); the focus
+while one is on; up to four widgets of its own, compact and never a sensitive
+one (a sentence such as "Free for the rest of today." takes one column, and a
+widget with nothing to show stays off); and the PIN field, with one line saying why it locked ("Locked by you at 14:02",
 "Locked after 5 minutes away, at 14:02", "Locked since this session began, at
 14:02") and **Forgot PIN?**. On a phone the glance comes first and **Enter
 PIN** opens a pad. While it shows, nothing of the dashboard is in the page:
@@ -351,16 +361,23 @@ minutes unless you pick 1, 15 or 60, or Never — and whenever you lock it:
 included. The same panel changes or removes the PIN (each asks for the current
 one), picks the background — Buddi, Dawn, Sea, Moss, Dusk, each with a light
 and a dark, or your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at
-most 2560 pixels, turned upright, without its location or any other details) —
-and links to Home to arrange the widgets it shows. All of it is kept by the
-installation, so every device signed in gets the same.
+most 2560 pixels, turned upright, without its location or any other details).
+Under it, **What it shows** is the lock screen editor: a live preview of the
+lock screen (on a desk or a phone) beside its clock — Time (Profile, 12-hour,
+24-hour), Date (Profile, three spellings, or none), A second clock (one of your
+places in another zone, or any town) — and its widgets: up to four, each with
+its size, its own settings, its order and ×; "Add a widget" offers Home's (a
+copy with the same settings) or any widget. Every change is kept at once. It
+works before a PIN is set too, and is reachable only from Settings, never from
+the lock screen itself. All of it is kept by the installation, so every device
+signed in gets the same.
 
 What it is, honestly: a privacy screen over a session already signed in, not a
 second sign-in. It is enforced by buddi, not by the page, on every device — a
 phone over the tailnet included:
 
 - A locked session's every call is refused (`423 Locked`) except the lock
-  screen's own: the time and timezone, the widgets above, the counts, the
+  screen's own: the time, timezone and clock, the widgets above, the counts, the
   focus, the background, Lock now and Unlock. Live streams and the remote hand
   of a session that locks are cut on the spot.
 - The page reports when you use it — a pointer, a key, a wheel, a touch; never

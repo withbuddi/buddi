@@ -6,7 +6,7 @@
  * header — the double-submit half of the protection; the server checks the
  * Origin for the other half. Nothing here ever touches a third-party host.
  */
-import type { TokenUsage } from './format';
+import { displayFormats, usesTwelveHours, type TokenUsage } from './format';
 import type { ViewDescriptor } from './canvas/types';
 import type { PageActResult, PluginPageDescriptor, PluginWorkspaceFiles } from './pages/types';
 import type {
@@ -186,6 +186,15 @@ export interface TipListRow extends TipView {
   shownAt?: string;
 }
 
+/**
+ * How this browser reads a clock, when the owner left Time on Auto: the
+ * gateway formats widget times (the World clock, a calendar) and cannot know.
+ * Nothing when the owner picked 12- or 24-hour; the gateway applies that.
+ */
+function hourCycle(): { hour?: string } {
+  return displayFormats().time === 'auto' ? { hour: usesTwelveHours() ? '12' : '24' } : {};
+}
+
 export function get<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -325,6 +334,32 @@ export type WidgetBody =
   | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
   | { kind: 'text'; icon?: string; text: string; sub?: string };
 
+export type WidgetSurface = 'home' | 'lock';
+
+/** One choice of a select or multiselect. */
+export interface WidgetSettingOption {
+  value: string;
+  label: string;
+}
+
+/** A setting a widget declares, from the fixed vocabulary (core widget-settings.ts). */
+export type WidgetSettingField = {
+  key: string;
+  label: string;
+  hint?: string;
+  inTitle?: boolean;
+} & (
+  | { kind: 'select'; options?: WidgetSettingOption[]; dynamic?: true; default?: string }
+  | { kind: 'multiselect'; options?: WidgetSettingOption[]; dynamic?: true; default?: string[] }
+  | { kind: 'toggle'; default?: boolean }
+  | { kind: 'text'; placeholder?: string; max?: number; default?: string }
+  | { kind: 'place'; multiple?: boolean }
+  | { kind: 'timeFormat' }
+);
+
+/** A place setting's value, as kept: the owner's place by id, or a town found by name. */
+export type WidgetPlaceValue = { place: string } | { label: string; name: string; latitude: number; longitude: number; timezone: string | null };
+
 export interface WidgetInfo {
   id: string;
   plugin: string;
@@ -332,6 +367,10 @@ export interface WidgetInfo {
   sizes: WidgetSize[];
   link?: { plugin: string; page: string; place: 'rail' | 'settings' };
   sensitive?: boolean;
+  /** What each placement of it can set; absent when nothing. */
+  settings?: WidgetSettingField[];
+  /** buddi's own (the World clock): no plugin behind it. */
+  builtIn?: true;
 }
 
 export interface WidgetView {
@@ -341,16 +380,32 @@ export interface WidgetView {
   error?: string;
 }
 
-export interface WidgetLayoutItem {
-  id: string;
+/** One widget on one surface, at a size, with its own settings. */
+export interface WidgetPlacement {
+  /** Absent on one the page just added: the gateway names it on save. */
+  key: string;
+  widget: string;
   size: WidgetSize;
+  settings: Record<string, unknown>;
+  /** "Weather · Work". */
+  label?: string;
 }
 
 export interface WidgetsAnswer {
   available: WidgetInfo[];
-  layout: WidgetLayoutItem[];
-  arranged: boolean;
-  widgets: Record<string, WidgetView>;
+  home: WidgetPlacement[];
+  lock: WidgetPlacement[];
+  arranged: { home: boolean; lock: boolean };
+  /** By placement key, for the surface asked. */
+  views: Record<string, WidgetView>;
+}
+
+/** The settings sheet: the fields with their choices read now, and the owner's places. */
+export interface WidgetSettingsSheet {
+  widget: string;
+  fields: WidgetSettingField[];
+  places: Array<{ id: string; label: string; name: string; timezone: string | null }>;
+  timeFormat: '12h' | '24h' | null;
 }
 
 export interface Overview {
@@ -894,6 +949,22 @@ export interface LockState {
   waitUntil: string | null;
   /** Wrong tries left before a wait; null while none were wrong. */
   triesLeft: number | null;
+  /** The lock screen's clock as chosen (Settings → Lock screen → What it shows). */
+  clock?: LockClock;
+}
+
+/** The lock screen's clock: the time and date the owner's way unless picked, and a second zone. */
+export interface LockClock {
+  time: 'profile' | '12h' | '24h';
+  date: 'profile' | 'short' | 'long' | 'iso' | 'off';
+  zone: { place: string } | { label: string; timezone: string } | null;
+}
+
+/** The clock with the Profile applied: null is Auto. */
+export interface LockClockView {
+  time: '12h' | '24h' | null;
+  date: 'short' | 'long' | 'iso' | 'off' | null;
+  zone: { label: string; timezone: string } | null;
 }
 
 export type LockBackground = 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image';
@@ -906,7 +977,8 @@ export interface LockScreenData extends LockState {
   approvals: number;
   unread: number;
   focus: FocusState | null;
-  widgets: Array<{ id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody } }>;
+  widgets: Array<{ key: string; id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody } }>;
+  clockView?: LockClockView;
 }
 
 export interface FocusState {
@@ -2063,12 +2135,18 @@ export const api = {
       { enabled },
     ),
   /** Hide one Home glance, or show it again. */
-  /** Home's widgets: what is offered, the owner's layout, each placed one now. */
-  widgets: () => get<WidgetsAnswer>('/widgets'),
-  /** Keep the owner's order and sizes; answers as `widgets()`. */
-  saveWidgetLayout: (layout: WidgetLayoutItem[]) => put<WidgetsAnswer>('/widgets/layout', { layout }),
-  /** Produce one widget now (Try again); answers as `widgets()`. */
-  refreshWidget: (id: string) => post<WidgetsAnswer>(`/widgets/${encodeURIComponent(id)}/refresh`),
+  /** The widgets: what is offered, both surfaces' placements, each placement of `surface` now. */
+  widgets: (surface: WidgetSurface = 'home') => get<WidgetsAnswer>('/widgets', { ...(surface === 'lock' ? { surface } : {}), ...hourCycle() }),
+  /** Keep one surface's placements; answers as `widgets(surface)`. */
+  saveWidgets: (surface: WidgetSurface, placements: Array<Omit<WidgetPlacement, 'key' | 'label'> & { key?: string }>) =>
+    put<WidgetsAnswer>(`/widgets/${surface}`, { placements: placements.map(({ key, widget, size, settings }) => ({ ...(key ? { key } : {}), widget, size, settings })) }),
+  /** A widget's fields with their choices read now: the settings sheet. */
+  widgetSettings: (widget: string) => get<WidgetSettingsSheet>(`/widgets/settings/${encodeURIComponent(widget)}`),
+  /** The body unsaved settings give: the sheet's live preview. */
+  previewWidget: (placement: { widget: string; size: WidgetSize; settings: Record<string, unknown> }) =>
+    post<{ view: WidgetView; label: string }>('/widgets/preview', { ...placement, ...hourCycle() }),
+  refreshWidget: (key: string, surface: WidgetSurface = 'home') =>
+    post<WidgetsAnswer>(`/widgets/${encodeURIComponent(key)}/refresh${surface === 'lock' ? '?surface=lock' : ''}`),
   setGlanceHidden: (id: string, hidden: boolean) =>
     post<{ id: string; hidden: boolean }>(`/home/glances/${encodeURIComponent(id)}/hidden`, { hidden }),
   /** The plugin rail pages the owner hid, as `<plugin>:<page>`. */
@@ -2168,13 +2246,13 @@ export const api = {
   focus: () => get<{ focus: FocusState | null }>('/notifications/focus'),
   /** The lock screen (docs/dashboard.md, "Lock screen"). */
   lockState: () => get<LockState>('/lock'),
-  lockScreen: () => get<LockScreenData>('/lock/screen'),
+  lockScreen: () => get<LockScreenData>('/lock/screen', hourCycle()),
   lockNow: (reason: 'owner' | 'idle' = 'owner') => post<LockState>('/lock', { reason }),
   unlock: (pin: string) => post<LockState>('/lock/unlock', { pin }),
   lockActivity: () => post<null>('/lock/activity'),
   setPin: (pin: string, current?: string) => put<LockState>('/lock/pin', current === undefined ? { pin } : { pin, current }),
   removePin: (current: string) => post<LockState>('/lock/pin/remove', { current }),
-  setLockSettings: (settings: { delayMinutes?: LockState['delayMinutes']; background?: LockBackground }) => put<LockState>('/lock/settings', settings),
+  setLockSettings: (settings: { delayMinutes?: LockState['delayMinutes']; background?: LockBackground; clock?: LockClock }) => put<LockState>('/lock/settings', settings),
   uploadLockBackground: (file: File) => {
     const form = new FormData();
     form.append('file', file);
