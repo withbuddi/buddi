@@ -152,4 +152,22 @@ export async function forgetNote(db: Db, input: { id: string; now: Date }): Prom
   return rows.length > 0;
 }
 
+/**
+ * Forget everything kept under one scope — a deleted group's room. Notes are
+ * marked deleted and preferences superseded, the way a single forget works,
+ * so nothing is recalled under it again. Returns how many went.
+ */
+export async function forgetScope(db: Db, input: { scope: string; now: Date }): Promise<number> {
+  const notes = await db.query(
+    `update memory.notes set deleted_at = $2 where scope = $1 and deleted_at is null returning id`,
+    [input.scope, input.now],
+  );
+  const prefs = await db.query(
+    `update memory.preferences set superseded_at = $2
+      where agent_scope is not distinct from $1 and superseded_at is null returning key`,
+    [toAgentScope(input.scope), input.now],
+  );
+  return notes.rows.length + prefs.rows.length;
+}
+
 export { SHARED as SHARED_SCOPE };

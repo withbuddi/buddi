@@ -102,9 +102,10 @@ import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
 import { CONNECTIONS_CALLBACK_PATH, connectionsRoute } from './connections.js';
 import { browserHost } from '../browser-host.js';
 import { hostService } from '@buddi/tool-host';
-import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
+import { listToolPermissions, revokeToolPermission, getArtifact, readArtifactBytes, artifactBytesExist, discardUnreferencedUpload, listLibrary, getLibraryEntry, decodeCursor, filterKey, textPreviewable, readArtifactPrefix, FILE_FAMILIES, LIBRARY_PAGE_MAX, type FileFamily, type FileOrigin, getOwnerProfile, setOwnerProfile, isKnownTimezone, listGroups, getGroup, createGroup, updateGroup, archiveGroup, deleteGroup, restoreGroup, clearGroupHistory, groupHistorySize, GROUP_UNDO_MS, GroupRefusal, type GroupCandidate, createGroupConversation, listGroupConversations, latestGroupConversation, openGroupRequest, conversationGroup, type GroupRow, type OwnerProfilePatch, type PermissionScope } from '@buddi/core';
 import { beginOnboarding, completeOnboarding, markStepDone, setOnboardingDetails, skipOnboarding, readWebSetting, writeWebSetting } from '@buddi/core';
 import { listMemory, setPreference, forgetPreference, updateNote, forgetNote } from '@buddi/tool-memory';
+import { purgeGroups, stopGroupWork } from './group-lifecycle.js';
 import {
   engineChangeFromBody,
   readAgentEngines,
@@ -1620,6 +1621,8 @@ export function createWebApp(deps: WebServerDeps): Server {
             default: readDefaultAgent(deps.catalog),
           });
         case '/api/groups':
+          // The list is read every few seconds, so it is also where a delete whose minute has passed is made final.
+          await purgeGroups(deps.pool, deps.now(), log);
           return sendJson(res, 200, { groups: (await listGroups(deps.pool)).map(groupView) });
         /*
          * The supervisor, when there is one. A developer checkout has no
@@ -1916,7 +1919,13 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (!group) return sendJson(res, 404, { error: 'no such group' });
         const latest = await latestGroupConversation(deps.pool, group.id);
         const open = latest ? await openGroupRequest(deps.pool, latest) : null;
-        return sendJson(res, 200, { ...groupView(group), latestConversationId: latest, openRequest: open ? { id: open.id, state: open.state, awaitingAgentId: open.awaitingAgentId, budgetReserved: open.budgetReserved, budgetTotal: open.budgetTotal } : null });
+        return sendJson(res, 200, {
+          ...groupView(group),
+          latestConversationId: latest,
+          openRequest: open ? { id: open.id, state: open.state, awaitingAgentId: open.awaitingAgentId, budgetReserved: open.budgetReserved, budgetTotal: open.budgetTotal } : null,
+          // What Clear history and Delete would take, for the sentence that asks first.
+          history: await groupHistorySize(deps.pool, group.id),
+        });
       }
       const chatConversations = /^\/api\/chat\/([^/]+)\/conversations$/.exec(path);
       if (chatConversations) {
@@ -2066,14 +2075,19 @@ export function createWebApp(deps: WebServerDeps): Server {
         }
       }
       /*
-       * A group the owner is done with leaves the rail and takes no new
-       * requests — and keeps everything that was said in it. Archived, never
-       * deleted: the transcript is the record of work that was done, and no
-       * amount of tidying the roster is worth destroying it.
+       * Delete a group: it leaves every list now, with whatever it was doing
+       * stopped, and is removed for good — its history and what the room
+       * remembered, never its agents — once GROUP_UNDO_MS has passed without
+       * a restore. The answer says until when Undo works.
        */
       const groupGone = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(path);
       if (groupGone) {
-        return (await archiveGroup(deps.pool, groupGone[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+        const at = deps.now();
+        if (!(await getGroup(deps.pool, groupGone[1]!))) return sendJson(res, 404, { error: 'no such group' });
+        await stopGroupWork(deps.pool, chat, groupGone[1]!, at, deps.ctx.ownerId);
+        if (!(await deleteGroup(deps.pool, groupGone[1]!, at))) return sendJson(res, 404, { error: 'no such group' });
+        await purgeGroups(deps.pool, at, log);
+        return sendJson(res, 200, { undoUntil: new Date(at.getTime() + GROUP_UNDO_MS).toISOString() });
       }
       /*
        * The owner read the note a rollover carried into this conversation and
@@ -2788,6 +2802,20 @@ export function createWebApp(deps: WebServerDeps): Server {
     const groupArchive = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/archive$/i.exec(path);
     if (groupArchive) {
       return (await archiveGroup(deps.pool, groupArchive[1]!, deps.now())) ? sendEmpty(res, 204) : sendEmpty(res, 404);
+    }
+    // Undo a delete, while the minute lasts. Too late: 410, and the page says so.
+    const groupRestore = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/restore$/i.exec(path);
+    if (groupRestore) {
+      const back = await restoreGroup(deps.pool, groupRestore[1]!, deps.now());
+      return back ? sendJson(res, 200, groupView(back)) : sendJson(res, 410, { error: 'Too late to undo: that group is gone for good.' });
+    }
+    // Clear the history, keep the group: its conversations go, its members and memory stay.
+    const groupClear = /^\/api\/groups\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/clear$/i.exec(path);
+    if (groupClear) {
+      const group = await getGroup(deps.pool, groupClear[1]!);
+      if (!group) return sendJson(res, 404, { error: 'no such group' });
+      await stopGroupWork(deps.pool, chat, group.id, deps.now(), deps.ctx.ownerId);
+      return sendJson(res, 200, { conversations: await clearGroupHistory(deps.pool, group.id) });
     }
 
     /*

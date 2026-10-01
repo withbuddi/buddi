@@ -1,7 +1,7 @@
 ---
 title: "Groups: a team of agents in one conversation"
 status: reference
-updated: 2026-09-27
+updated: 2026-10-01
 ---
 
 # Groups: a team of agents in one conversation
@@ -32,7 +32,9 @@ step in, and receive a coherent result, not several disconnected answers.
 and one coordinator picked by the owner at creation (Concierge by default). All
 three can be changed afterwards, by the owner from the room's menu or by the
 maker through `platform.update_group`, under the same rules creation applies;
-what a removed member already said stays in the transcript. What the first
+what a removed member already said stays in the transcript. Only what a change
+brings in is checked: a member that has since been removed from buddi does
+not block a rename, and can be taken out. What the first
 version still has none of is membership the *agents* change by themselves, and
 no voting, no autonomous debates and no workflow builder.
 
@@ -180,6 +182,10 @@ The existing chat and Canvas carry it:
   then the heading says "A group needs two agents; add a teammate." and links
   to the Agents page.
 - The header shows the members; every turn carries its agent's face and name.
+- The header's ⋯ menu is about the group: Members, Rename…, Clear history…,
+  Delete group… (see [Deleting a group](#deleting-a-group) and
+  [dashboard.md](dashboard.md#chat)). It never navigates to the members; a
+  member's page is a secondary action on its row inside Members.
 - `@` completion in the composer.
 - A compact activity line for coordination: "Concierge asked Ledger to analyse
   the transactions." Routine coordination is collapsed by default; the full
@@ -231,8 +237,43 @@ every write in a room landing in the room; rollover on a character cap with a
 one-call maintenance summary made through the same accounting and the same
 bound, and the new thread reading the summary just written; the roster entry, creation sheet, `@`
 completion, attribution and the activity line; routes under `/api/groups`, including `PATCH /api/groups/:id` for the
-name, the coordinator and the membership and `DELETE /api/groups/:id`, which
-archives the room and keeps everything said in it.
+name, the coordinator and the membership, `DELETE /api/groups/:id` with
+`POST …/restore`, `POST …/clear`, and `POST …/archive` for the maker's
+archive (see [Deleting a group](#deleting-a-group)).
+
+## Deleting a group
+
+From the room's menu, the owner can clear a group's history or delete the
+group. Both are owner-only writes behind the dashboard session and the CSRF
+pair, and both first stop whatever the group is doing: its open request is
+stopped and a member's pending approval rejected, as **Stop** does, so a late
+decision on Telegram finds it decided.
+
+- **Clear history** — `POST /api/groups/:id/clear` → `{ conversations }`.
+  Every conversation of the group is deleted with its messages, requests and
+  questions, and the summary a rollover carried forward is dropped, so the
+  next thread starts clean. The group, its members, its coordinator and the
+  group memory scope stay. Files it made keep their row in the library.
+- **Delete** — `DELETE /api/groups/:id` → `{ undoUntil }`. The group is
+  marked deleted (`core.groups.deleted_at`) and leaves every read at once —
+  the roster, the routes, the maker's tools. `POST /api/groups/:id/restore`
+  brings it back as it was until `undoUntil`, a minute later (410 after that);
+  the dashboard offers Undo for ten seconds of that minute. The next read of
+  the group list after the minute removes it for good: its conversations
+  (with everything that cascades from them), its member rows, the row itself,
+  and the notes and preferences kept in its memory scope. Its agents are never
+  touched; files it made stay in the library.
+- **Archive** — `POST /api/groups/:id/archive`, what `platform.archive_group`
+  does: the room leaves the roster and keeps its transcript. The dashboard
+  offers Delete with Undo instead; there is no list of archived groups to
+  come back from.
+
+There is no mute for a group: a group sends nothing of its own. Approvals
+cannot be muted, and a member's own messages are muted per agent in
+Settings → Notifications.
+
+Telegram has no group surface; the one place it meets a group is a member's
+approval, and deleting or clearing the group rejects that approval first.
 
 Deliberate deviations, to be closed later:
 

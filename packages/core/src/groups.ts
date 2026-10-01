@@ -154,8 +154,16 @@ export function planGroupChange(
     throw new GroupRefusal('coordinator-not-a-member', 'The coordinator has to be one of the members.');
   }
   if (roster) {
+    /*
+     * Only what the change brings in is checked: a member that is already in
+     * the room and has since been removed from buddi (or lost its account)
+     * must not make every later rename or removal fail. Bringing someone in,
+     * or handing them the coordinator's part, still has to pass.
+     */
     const known = new Map(roster.map((a) => [a.id, a]));
-    const refused = members.filter((id) => {
+    const incoming = new Set(members.filter((id) => !before.members.includes(id)));
+    if (coordinator !== before.coordinator) incoming.add(coordinator);
+    const refused = [...incoming].filter((id) => {
       const agent = known.get(id);
       return agent === undefined || !groupable(agent);
     });
@@ -215,7 +223,7 @@ export async function getGroup(pool: Queryable, id: string): Promise<GroupRow | 
             coalesce(array_agg(m.agent_id order by m.position) filter (where m.agent_id is not null), '{}') as members
        from core.groups g
        left join core.group_members m on m.group_id = g.id
-      where g.id = $1::uuid and g.archived_at is null
+      where g.id = $1::uuid and g.archived_at is null and g.deleted_at is null
       group by g.id`,
     [id],
   );
@@ -228,7 +236,7 @@ export async function listGroups(pool: Queryable): Promise<GroupRow[]> {
             coalesce(array_agg(m.agent_id order by m.position) filter (where m.agent_id is not null), '{}') as members
        from core.groups g
        left join core.group_members m on m.group_id = g.id
-      where g.archived_at is null
+      where g.archived_at is null and g.deleted_at is null
       group by g.id
       order by g.created_at asc`,
   );
@@ -237,10 +245,87 @@ export async function listGroups(pool: Queryable): Promise<GroupRow[]> {
 
 export async function archiveGroup(pool: Queryable, id: string, at: Date = new Date()): Promise<boolean> {
   const { rows } = await pool.query(
-    `update core.groups set archived_at = $2 where id = $1::uuid and archived_at is null returning id`,
+    `update core.groups set archived_at = $2 where id = $1::uuid and archived_at is null and deleted_at is null returning id`,
     [id, at],
   );
   return rows.length > 0;
+}
+
+/**
+ * How long a deleted group can still be brought back. The page offers Undo
+ * for less than this, so a click on its last second still lands.
+ */
+export const GROUP_UNDO_MS = 60_000;
+
+/**
+ * Delete a group, softly: it leaves every list now and is removed for good by
+ * `purgeDeletedGroups` once `GROUP_UNDO_MS` has passed. False when there was
+ * no such group to delete (already gone, archived, or never there).
+ */
+export async function deleteGroup(pool: Queryable, id: string, at: Date = new Date()): Promise<boolean> {
+  if (!UUID.test(id)) return false;
+  const { rows } = await pool.query(
+    `update core.groups set deleted_at = $2 where id = $1::uuid and archived_at is null and deleted_at is null returning id`,
+    [id, at],
+  );
+  return rows.length > 0;
+}
+
+/** Undo a delete while it can still be undone. The group, as it was; null when it is too late. */
+export async function restoreGroup(pool: Queryable, id: string, now: Date = new Date()): Promise<GroupRow | null> {
+  if (!UUID.test(id)) return null;
+  const { rows } = await pool.query(
+    `update core.groups set deleted_at = null
+      where id = $1::uuid and deleted_at is not null and deleted_at > $2
+      returning id`,
+    [id, new Date(now.getTime() - GROUP_UNDO_MS)],
+  );
+  return rows.length > 0 ? await getGroup(pool, id) : null;
+}
+
+/**
+ * Remove for good every group deleted before the undo window: its
+ * conversations (their messages, requests, questions and feedback go with
+ * them by cascade; files keep their row with no conversation), then the
+ * group (its members go by cascade). Returns the ids removed, so the caller
+ * can forget what else belonged to them — the room's memory scope.
+ */
+export async function purgeDeletedGroups(pool: Queryable, now: Date = new Date()): Promise<string[]> {
+  const { rows } = await pool.query(
+    `select id from core.groups where deleted_at is not null and deleted_at <= $1`,
+    [new Date(now.getTime() - GROUP_UNDO_MS)],
+  );
+  const ids = rows.map((r) => String(r.id));
+  for (const id of ids) {
+    await pool.query(`delete from core.conversations where group_id = $1::uuid`, [id]);
+    await pool.query(`delete from core.groups where id = $1::uuid and deleted_at is not null`, [id]);
+  }
+  return ids;
+}
+
+/**
+ * Clear a group's history and keep the group: every conversation it had is
+ * deleted, and the summary a rollover carried forward with them, so the next
+ * thread starts clean. Members, the coordinator and the room's memory stay.
+ * Returns how many conversations went.
+ */
+export async function clearGroupHistory(pool: Queryable, id: string): Promise<number> {
+  if (!UUID.test(id)) return 0;
+  const { rows } = await pool.query(`delete from core.conversations where group_id = $1::uuid returning id`, [id]);
+  await pool.query(`update core.groups set last_summary = null where id = $1::uuid`, [id]);
+  return rows.length;
+}
+
+/** How much a group holds, for the sentence that asks before clearing or deleting it. */
+export async function groupHistorySize(pool: Queryable, id: string): Promise<{ conversations: number; messages: number }> {
+  if (!UUID.test(id)) return { conversations: 0, messages: 0 };
+  const { rows } = await pool.query(
+    `select count(distinct c.id)::int as conversations, count(m.id)::int as messages
+       from core.conversations c left join core.messages m on m.conversation_id = c.id
+      where c.group_id = $1::uuid`,
+    [id],
+  );
+  return { conversations: Number(rows[0]?.conversations ?? 0), messages: Number(rows[0]?.messages ?? 0) };
 }
 
 /** A new conversation for the group. The row's agent is the coordinator. */

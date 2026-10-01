@@ -6,6 +6,9 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Delete a group from its chat: ⋯ → Delete group… asks once, naming what goes (the group, its conversations, what it remembers) and that its agents and files stay; the page returns to the chat you were in and offers Undo for ten seconds, and after a minute the group is gone for good. `DELETE /api/groups/:id` now deletes (with `POST /api/groups/:id/restore`); archiving moved to `POST /api/groups/:id/archive`.
+- Clear a group's history and keep the group: ⋯ → Clear history… (`POST /api/groups/:id/clear`) deletes its conversations; its members and memory stay.
+
 - Widgets have settings of their own: each one on Home (and on the lock screen) can be set apart — the weather's place and units, which calendars and how far ahead, which mailbox, a time format — from Settings… in its ⋯ menu or the gear in Edit, in a sheet that shows it live. The same widget can sit twice ("Weather" and "Weather · Work"): Add another in Edit.
 - The lock screen keeps its own widgets, apart from Home's, and its own clock: in Settings → Lock screen → What it shows, a live preview beside the time format, the date style, a second clock (one of your places or any town) and up to four widgets, each with its own settings.
 - The World clock, a widget buddi provides itself: the time at your places in other zones, or towns you pick.
@@ -22,6 +25,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- A group chat's ⋯ menu is about the group instead of linking to each member: Members (a sheet with the coordinator first, Make coordinator, Remove, Add a member), Rename…, Clear history… and Delete group…. On a phone, this menu and an agent's rise from the bottom as a sheet. The group sheet's edit mode and its Archive button are gone.
+- A group that lost an agent to an uninstall says so: with its coordinator gone the composer gives way to "Choose a coordinator"; with one member left a line offers "Add a member". Such a group can be renamed and the missing agent taken out, which the server used to refuse.
 - The lock screen: tapping the notifications count opens Notifications once you unlock (approvals open Needs you); a widget with only a sentence to say takes one column instead of a hollow card; the mail widget says "3 conversations", and "Nobody's waiting on you." at zero.
 - The weather card beside Home's greeting is now the first widget, and the Blob stands there alone. A plugin's older glance card still reaches Home, as a small widget, and a glance whose widget is on Home leaves the date line.
 - The signed-out page offers the way back in for how you arrived: on this computer the `buddi dashboard` command with a Copy button; over the tailnet with Tailscale sign-in on, "Sign in with Tailscale"; and while a lockout runs, "Too many tries — wait N min", saying that a fresh link works right away.

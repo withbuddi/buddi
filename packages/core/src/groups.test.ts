@@ -56,6 +56,16 @@ describe('planning a change to a group', () => {
     expect(() => planGroupChange(before, { name: 'x'.repeat(81) }, roster)).toThrow(/needs a name/);
   });
 
+  /* A member removed from buddi since it joined must not block every later change. */
+  it('checks only who the change brings in, so a room that lost an agent can still be renamed and tidied', () => {
+    const lost = { name: 'Test room', coordinator: 'concierge', members: ['concierge', 'ledger', 'gone'] };
+    expect(planGroupChange(lost, { name: 'Money' }, roster)).toEqual({ ...lost, name: 'Money' });
+    expect(planGroupChange(lost, { members: ['concierge', 'ledger'] }, roster).members).toEqual(['concierge', 'ledger']);
+    // Bringing it back in, or handing it the coordinator's part, is still refused.
+    expect(() => planGroupChange(before, { members: ['concierge', 'ledger', 'gone'] }, roster)).toThrow(/gone/);
+    expect(() => planGroupChange(lost, { coordinator: 'gone' }, roster)).toThrow(/gone/);
+  });
+
   it('duplicates are one member, not two', () => {
     expect(planGroupChange(before, { members: ['concierge', 'ledger', 'ledger'] }, roster).members)
       .toEqual(['concierge', 'ledger']);

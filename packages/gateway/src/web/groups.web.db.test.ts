@@ -1,5 +1,5 @@
 /**
- * Changing a group over the wire: `PATCH /api/groups/:id` and the archive.
+ * Changing a group over the wire: `PATCH /api/groups/:id`, the archive, delete with its undo, and clear.
  *
  * The rules are core's, and they are tested there; what is asserted here is
  * that the route applies them — the same refusals, in the same words — that it
@@ -215,15 +215,100 @@ suite('the group routes', () => {
     expect((await send('DELETE', `/api/groups/${group.id}`, undefined, { csrf: 'wrong' })).status).toBe(403);
   });
 
-  it('archives rather than deletes: gone from the list, rows still there', async () => {
+  it('archives on its own route: gone from the list, rows still there', async () => {
     const group = await room('Done with');
-    expect((await send('DELETE', `/api/groups/${group.id}`)).status).toBe(204);
+    expect((await send('POST', `/api/groups/${group.id}/archive`)).status).toBe(204);
     const list = (await (await send('GET', '/api/groups')).json()) as { groups: GroupBody[] };
     expect(list.groups.some((g) => g.id === group.id)).toBe(false);
     const { rows } = await pool.query('select archived_at from core.groups where id = $1::uuid', [group.id]);
-    expect(rows).toHaveLength(1);
     expect(rows[0].archived_at).not.toBeNull();
-    // A second archive has nothing left to archive.
+  });
+
+  it('deletes softly: gone from the list at once, an undo deadline, and back as it was on restore', async () => {
+    const group = await room('Undo me');
+    const res = await send('DELETE', `/api/groups/${group.id}`);
+    expect(res.status).toBe(200);
+    const { undoUntil } = (await res.json()) as { undoUntil: string };
+    expect(Date.parse(undoUntil)).toBeGreaterThan(Date.now());
+    const list = (await (await send('GET', '/api/groups')).json()) as { groups: GroupBody[] };
+    expect(list.groups.some((g) => g.id === group.id)).toBe(false);
+    expect((await send('GET', `/api/groups/${group.id}`)).status).toBe(404);
+    // A second delete has nothing left to delete.
     expect((await send('DELETE', `/api/groups/${group.id}`)).status).toBe(404);
+    const back = await send('POST', `/api/groups/${group.id}/restore`);
+    expect(back.status).toBe(200);
+    expect(await back.json()).toMatchObject({ id: group.id, name: 'Undo me', members: ['concierge', 'ledger'] });
+    const again = (await (await send('GET', '/api/groups')).json()) as { groups: GroupBody[] };
+    expect(again.groups.some((g) => g.id === group.id)).toBe(true);
+  });
+
+  it('is too late to restore once the minute is up, and the group and its history are then gone for good', async () => {
+    const group = await room('For good');
+    const { rows: [conv] } = await pool.query(`insert into core.conversations (agent_id, group_id) values ('concierge', $1::uuid) returning id`, [group.id]);
+    expect((await send('DELETE', `/api/groups/${group.id}`)).status).toBe(200);
+    // As if the minute had passed.
+    await pool.query(`update core.groups set deleted_at = now() - interval '2 minutes' where id = $1::uuid`, [group.id]);
+    const late = await send('POST', `/api/groups/${group.id}/restore`);
+    expect(late.status).toBe(410);
+    expect(((await late.json()) as { error: string }).error).toMatch(/Too late/);
+    await send('GET', '/api/groups');
+    expect((await pool.query('select 1 from core.groups where id = $1::uuid', [group.id])).rows).toHaveLength(0);
+    expect((await pool.query('select 1 from core.conversations where id = $1::uuid', [conv.id])).rows).toHaveLength(0);
+  });
+
+  it('stops what the group was doing before deleting it', async () => {
+    const group = await room('Busy');
+    const { rows: [conv] } = await pool.query(`insert into core.conversations (agent_id, group_id) values ('concierge', $1::uuid) returning id`, [group.id]);
+    const { rows: [request] } = await pool.query(
+      `insert into core.group_requests (group_id, conversation_id, text, state) values ($1::uuid, $2::uuid, 'Do it', 'suspended') returning id`,
+      [group.id, conv.id],
+    );
+    expect((await send('DELETE', `/api/groups/${group.id}`)).status).toBe(200);
+    const { rows } = await pool.query('select state from core.group_requests where id = $1::uuid', [request.id]);
+    expect(rows[0].state).toBe('stopped');
+  });
+
+  it('clears the history and keeps the group, its members and its id', async () => {
+    const group = await room('Clear me');
+    for (let i = 0; i < 2; i += 1) {
+      await pool.query(`insert into core.conversations (agent_id, group_id) values ('concierge', $1::uuid)`, [group.id]);
+    }
+    const before = (await (await send('GET', `/api/groups/${group.id}`)).json()) as { history: { conversations: number } };
+    expect(before.history.conversations).toBe(2);
+    const res = await send('POST', `/api/groups/${group.id}/clear`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ conversations: 2 });
+    const after = (await (await send('GET', `/api/groups/${group.id}`)).json()) as GroupBody & { history: { conversations: number }; latestConversationId: string | null };
+    expect(after).toMatchObject({ id: group.id, name: 'Clear me', members: ['concierge', 'ledger'], latestConversationId: null });
+    expect(after.history.conversations).toBe(0);
+    expect((await send('POST', '/api/groups/11111111-2222-3333-4444-555555555555/clear')).status).toBe(404);
+  });
+
+  it('adds a member and removes one, each a change of its own', async () => {
+    const group = await room('Members');
+    const added = await send('PATCH', `/api/groups/${group.id}`, { members: ['concierge', 'ledger', 'garage'] });
+    expect(await added.json()).toMatchObject({ members: ['concierge', 'ledger', 'garage'] });
+    const removed = await send('PATCH', `/api/groups/${group.id}`, { members: ['concierge', 'garage'] });
+    expect(await removed.json()).toMatchObject({ members: ['concierge', 'garage'] });
+  });
+
+  it('renames a room that lost an agent, and lets the owner take that agent out', async () => {
+    const group = await createGroup(pool, { name: 'Lost one', coordinator: 'concierge', members: ['ledger', 'uninstalled'] });
+    const renamed = await send('PATCH', `/api/groups/${group.id}`, { name: 'Found' });
+    expect(renamed.status).toBe(200);
+    const tidied = await send('PATCH', `/api/groups/${group.id}`, { members: ['concierge', 'ledger'] });
+    expect(await tidied.json()).toMatchObject({ name: 'Found', members: ['concierge', 'ledger'] });
+  });
+
+  it('guards delete, restore and clear with the session and the CSRF pair', async () => {
+    const group = await room('Guarded writes');
+    for (const [method, path] of [['DELETE', `/api/groups/${group.id}`], ['POST', `/api/groups/${group.id}/restore`], ['POST', `/api/groups/${group.id}/clear`]] as const) {
+      expect((await send(method, path, undefined, { csrf: null })).status).toBe(403);
+      expect((await send(method, path, undefined, { origin: 'http://evil.example' })).status).toBe(403);
+    }
+    // Without the session cookie at all.
+    const bare = await fetch(`${base}/api/groups/${group.id}`, { method: 'DELETE', headers: { origin: base } });
+    expect([401, 403]).toContain(bare.status);
+    expect((await send('GET', `/api/groups/${group.id}`)).status).toBe(200);
   });
 });
