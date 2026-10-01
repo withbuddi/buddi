@@ -649,12 +649,13 @@ export function createBackupService(opts: BackupServiceOptions): BackupControl {
         typed: core.databaseIn(databaseUrl),
         force: true,
         ...(phrase === undefined ? {} : { passphrase: phrase }),
-        afterDatabase: async (pool) => {
+        afterDatabase: async (pool, manifest) => {
           jobs.phase(job, 'recovery', 'noting what came back');
           const pending: RecoveryPending = await core.countPending(pool);
           await core.enterRecovery(pool, {
             archive: path.basename(archive),
-            buddiVersion: report?.manifest?.buddiVersion ?? null,
+            // From the hook's manifest: `report` is not assigned until the restore returns.
+            buddiVersion: manifest.buddiVersion,
             pending,
           });
         },

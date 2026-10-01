@@ -82,8 +82,10 @@ export interface RestoreOptions extends CreateOptions {
    * installation whose recovery row was not written is one that wakes up and
    * acts on a week-old queue, so "the row could not be written" has to mean
    * "the restore did not happen", not "the restore happened anyway".
+   * It is handed the archive's manifest, since the report it belongs to does
+   * not exist yet.
    */
-  afterDatabase?: ((pool: Pool) => Promise<void>) | undefined;
+  afterDatabase?: ((pool: Pool, manifest: BackupManifest) => Promise<void>) | undefined;
   onProgress?: OnProgress | undefined;
 }
 
@@ -420,7 +422,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<RestoreReport
       }
 
       // The caller's own step, inside the rollback: see `afterDatabase`.
-      if (opts.afterDatabase) await opts.afterDatabase(pool);
+      if (opts.afterDatabase) await opts.afterDatabase(pool, manifest);
 
       if (restoringFiles) {
         progress({ phase: PHASE.files, detail: 'artifacts and the private directories' });

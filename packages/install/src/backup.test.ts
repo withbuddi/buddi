@@ -289,6 +289,7 @@ describe('the job store', () => {
  */
 function fakeWorld(restore: (opts: any) => Promise<any>, recover?: () => Promise<void>) {
   const calls: string[] = [];
+  const recovered: unknown[] = [];
   const pool = {
     query: async () => { throw new Error('no schema'); },
     end: async () => {},
@@ -306,7 +307,7 @@ function fakeWorld(restore: (opts: any) => Promise<any>, recover?: () => Promise
     envelopePath: (file: string) => `${file}.json`,
     verifyEnvelope: async () => ({ ok: true }),
     countPending: async () => ({ jobs: 0, missions: 0, approvals: 0, telegramChats: 0 }),
-    enterRecovery: async () => { calls.push('enterRecovery'); if (recover) await recover(); },
+    enterRecovery: async (_pool: unknown, input: unknown) => { calls.push('enterRecovery'); recovered.push(input); if (recover) await recover(); },
     inRecovery: async () => false,
     restoreBackup: async (opts: any) => { calls.push('restoreBackup'); return restore(opts); },
   };
@@ -314,7 +315,7 @@ function fakeWorld(restore: (opts: any) => Promise<any>, recover?: () => Promise
     agentSearchPath: () => ({ ownerRoot: '/owner', owner: { dir: '/owner/agents', skillsDir: '/owner/skills' } }),
     installedManifests: () => [],
   };
-  return { core, gateway, calls };
+  return { core, gateway, calls, recovered };
 }
 
 function report(over: Record<string, unknown> = {}) {
@@ -331,7 +332,7 @@ function report(over: Record<string, unknown> = {}) {
 function engine(over: Record<string, unknown> = {}) {
   return async (opts: any) => {
     try {
-      if (opts.afterDatabase) await opts.afterDatabase({});
+      if (opts.afterDatabase) await opts.afterDatabase({}, { buddiVersion: '0.1.0-pre.27' });
     } catch (err) {
       return report({ ok: false, didNot: [`the restore failed: ${(err as Error).message}`], rolledBack: true, ...over });
     }
@@ -396,6 +397,14 @@ describe('a restore, as the service runs it', () => {
     expect(failed.phase).toBe('failed');
     expect(failed.error).toContain('the archive is not readable');
     expect(broke.started).toEqual(['stop', 'start']);
+  });
+
+  test('the recovery row names the version the archive was made by', async () => {
+    const world = fakeWorld(engine());
+    const { control, data } = await makeService(world);
+    const job = await control.restore({ name: await archived(data) }) as BackupJob;
+    expect((await settled(control, job.id)).phase).toBe('done');
+    expect(world.recovered).toEqual([expect.objectContaining({ buddiVersion: '0.1.0-pre.27' })]);
   });
 
   test('a recovery row that cannot be written takes the whole restore back with it', async () => {
