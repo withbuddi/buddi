@@ -497,6 +497,11 @@ suite('buddi mcp', () => {
       if (p.message) progress.push(p.message);
     });
     const card = await pendingCard('demo.pay');
+    // Decide only once the ask has seen the run wait: approving first lets the
+    // resumed run replace it before a poll notices, and the notice is skipped.
+    for (let i = 0; i < 200 && !progress.some((m) => m.includes('waiting for your approval')); i += 1) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     await decide(card.id, 'approve');
     const { json, isError } = await call_;
     expect(isError).toBe(false);
