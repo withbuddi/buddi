@@ -20,10 +20,11 @@ import type {
   EmailAuth,
   FetchedMessage,
   FlagState,
-  ImapClient,
   ImapClientFactory,
+  ImapWriter,
   MailboxInfo,
   MailboxStatus,
+  MoveResult,
   AccountRecord,
 } from '../ports.js';
 import { normalizeMessageId, parseReferences } from '../mail.js';
@@ -45,6 +46,15 @@ interface ImapFlowLike {
     part?: string,
     options?: Record<string, unknown>,
   ): Promise<{ content: AsyncIterable<Buffer> | null } | null>;
+  capabilities?: Map<string, unknown>;
+  messageFlagsAdd(range: string, flags: string[], options?: Record<string, unknown>): Promise<boolean>;
+  messageFlagsRemove(range: string, flags: string[], options?: Record<string, unknown>): Promise<boolean>;
+  messageMove(
+    range: string,
+    destination: string,
+    options?: Record<string, unknown>,
+  ): Promise<{ uidValidity?: bigint; uidMap?: Map<number, number> } | false | undefined>;
+  search(query: Record<string, unknown>, options?: Record<string, unknown>): Promise<number[] | false | undefined>;
 }
 
 type ImapFlowCtor = new (options: Record<string, unknown>) => ImapFlowLike;
@@ -152,8 +162,10 @@ async function readAll(content: AsyncIterable<Buffer> | null, maxBytes: number):
   return Buffer.concat(chunks).subarray(0, maxBytes).toString('utf8');
 }
 
-class ImapFlowClient implements ImapClient {
+class ImapFlowClient implements ImapWriter {
   #open: string | null = null;
+  /** Whether the open mailbox was selected read-write (only the writes below ask for that). */
+  #writable = false;
 
   constructor(private readonly client: ImapFlowLike) {}
 
@@ -186,6 +198,7 @@ class ImapFlowClient implements ImapClient {
     // Read-only: the source observes the mailbox, it never curates it.
     const box = await this.client.mailboxOpen(mailbox, { readOnly: true });
     this.#open = mailbox;
+    this.#writable = false;
     return {
       uidValidity: Number(box.uidValidity as number | bigint),
       uidNext: Number(box.uidNext ?? 0),
@@ -345,6 +358,74 @@ class ImapFlowClient implements ImapClient {
       chunks.push(chunk);
     }
     return Buffer.concat(chunks);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * The writes (`ImapWriter`). Reached only from `mailbox/actions.ts`.
+   * ---------------------------------------------------------------- */
+
+  /** SELECT read-write, once, for the writes below. Every read above stays EXAMINE. */
+  async #openWritable(mailbox: string): Promise<void> {
+    if (this.#open === mailbox && this.#writable) return;
+    await this.client.mailboxOpen(mailbox, { readOnly: false });
+    this.#open = mailbox;
+    this.#writable = true;
+  }
+
+  async capabilities(): Promise<string[]> {
+    return [...(this.client.capabilities?.keys() ?? [])].map((c) => String(c).toUpperCase());
+  }
+
+  async storeFlags(mailbox: string, uids: readonly number[], flags: readonly string[], op: 'add' | 'remove'): Promise<void> {
+    if (uids.length === 0) return;
+    await this.#openWritable(mailbox);
+    const ok = op === 'add'
+      ? await this.client.messageFlagsAdd(uidSet(uids), [...flags], { uid: true })
+      : await this.client.messageFlagsRemove(uidSet(uids), [...flags], { uid: true });
+    if (ok === false) throw new Error(`the server refused to change flags in ${mailbox}`);
+  }
+
+  /**
+   * `UID MOVE`, and only that. `imapflow` falls back to COPY + `\Deleted` +
+   * EXPUNGE on a server without MOVE, which can expunge more than was asked
+   * for; so a server that does not say MOVE is refused before the call.
+   */
+  async move(mailbox: string, uids: readonly number[], destination: string): Promise<MoveResult> {
+    if (uids.length === 0) return { uidValidity: null, uidMap: new Map() };
+    if (!(await this.capabilities()).includes('MOVE')) {
+      throw new Error('this mail server cannot move messages (no MOVE), and buddi never deletes to fake one');
+    }
+    await this.#openWritable(mailbox);
+    const result = await this.client.messageMove(uidSet(uids), destination, { uid: true });
+    if (!result) throw new Error(`the server refused to move messages from ${mailbox} to ${destination}`);
+    return {
+      uidValidity: result.uidValidity !== undefined ? Number(result.uidValidity) : null,
+      uidMap: result.uidMap ?? new Map(),
+    };
+  }
+
+  async findByMessageId(mailbox: string, messageId: string): Promise<number | null> {
+    if (this.#open !== mailbox) await this.open(mailbox);
+    const found = await this.client.search({ header: { 'message-id': messageId } }, { uid: true });
+    if (!found || found.length === 0) return null;
+    return Math.max(...found.map(Number));
+  }
+
+  async fetchLabels(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>> {
+    const out = new Map<number, string[]>();
+    if (uids.length === 0) return out;
+    if (this.#open !== mailbox) await this.open(mailbox);
+    for await (const msg of this.client.fetch(uidSet(uids), { uid: true, labels: true }, { uid: true })) {
+      out.set(Number(msg.uid), [...(msg.labels instanceof Set ? msg.labels : new Set<string>())].map(String));
+    }
+    return out;
+  }
+
+  async addLabels(mailbox: string, uids: readonly number[], labels: readonly string[]): Promise<void> {
+    if (uids.length === 0 || labels.length === 0) return;
+    await this.#openWritable(mailbox);
+    const ok = await this.client.messageFlagsAdd(uidSet(uids), [...labels], { uid: true, useLabels: true });
+    if (ok === false) throw new Error(`the server refused to restore labels in ${mailbox}`);
   }
 
   async close(): Promise<void> {

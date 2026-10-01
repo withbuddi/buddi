@@ -172,6 +172,49 @@ export interface ImapClient {
   close(): Promise<void>;
 }
 
+/**
+ * Where a moved message landed: the destination's UIDVALIDITY and the new uid
+ * of each source uid, as the server reported them (COPYUID, RFC 4315). A uid
+ * missing from the map is one the server did not report — the caller finds it
+ * by Message-ID, or records that it does not know.
+ */
+export interface MoveResult {
+  uidValidity: number | null;
+  uidMap: Map<number, number>;
+}
+
+/**
+ * The write half, kept apart from `ImapClient` on purpose.
+ *
+ * Reading is a peek and stays one: nothing in the poll, the read tools or the
+ * attachment fetch can reach a method below. Only the mailbox actions
+ * (`mailbox/actions.ts`) — every one of them gated or a rule the owner set —
+ * ask a client whether it is a writer, and a client that is not one is a
+ * refusal, not a fallback. There is deliberately no expunge and no delete:
+ * the most a writer can do to a message is move it, and Trash is a folder.
+ */
+export interface ImapWriter extends ImapClient {
+  /** The server's CAPABILITY list, upper-cased: `MOVE`, `UIDPLUS`, `X-GM-EXT-1`, … */
+  capabilities(): Promise<string[]>;
+  /** `UID STORE <uids> +FLAGS` / `-FLAGS`, on the mailbox opened read-write. */
+  storeFlags(mailbox: string, uids: readonly number[], flags: readonly string[], op: 'add' | 'remove'): Promise<void>;
+  /** `UID MOVE <uids> <destination>` (RFC 6851). Never COPY + EXPUNGE. */
+  move(mailbox: string, uids: readonly number[], destination: string): Promise<MoveResult>;
+  /** `UID SEARCH HEADER Message-ID <id>`: the uid of one message in a mailbox, or null. */
+  findByMessageId(mailbox: string, messageId: string): Promise<number | null>;
+  /** Gmail only: `UID FETCH <uids> (X-GM-LABELS)`. */
+  fetchLabels(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>>;
+  /** Gmail only: `UID STORE <uids> +X-GM-LABELS (…)`. */
+  addLabels(mailbox: string, uids: readonly number[], labels: readonly string[]): Promise<void>;
+}
+
+/** Whether a client can write. Duck-typed, so a test's stub stays a reader. */
+export function isImapWriter(client: ImapClient): client is ImapWriter {
+  const c = client as Partial<ImapWriter>;
+  return typeof c.capabilities === 'function' && typeof c.move === 'function' &&
+    typeof c.storeFlags === 'function' && typeof c.findByMessageId === 'function';
+}
+
 /** The exact bytes of intent for one send. Hashed into the action object. */
 export interface SmtpEnvelope {
   from: Address;

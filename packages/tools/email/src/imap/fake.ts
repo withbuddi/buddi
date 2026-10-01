@@ -11,15 +11,19 @@ import type {
   AttachmentInfo,
   FetchedMessage,
   FlagState,
-  ImapClient,
   ImapClientFactory,
+  ImapWriter,
   MailboxInfo,
   MailboxStatus,
+  MoveResult,
 } from '../ports.js';
+
+/** A message as this server holds it: what the port hands over, and Gmail's labels. */
+type HeldMessage = FetchedMessage & { labels?: string[] };
 
 export interface FakeMailbox {
   uidValidity: number;
-  messages: FetchedMessage[];
+  messages: HeldMessage[];
   /** The SPECIAL-USE attribute this folder is listed with, e.g. `\\Sent`. */
   specialUse?: string | null;
   /**
@@ -31,6 +35,21 @@ export interface FakeMailbox {
   condstore?: boolean;
   /** The mailbox's current HIGHESTMODSEQ. Maintained by the server. */
   highestModseq?: number;
+  /** The highest uid ever assigned here: a uid is never reused, even after a move out. */
+  uidNextFloor?: number;
+}
+
+/**
+ * Gmail's labels after a MOVE. Into Trash: none (Gmail drops them). Out of a
+ * label folder: that label goes. Into a label folder: that label comes. INBOX
+ * and All Mail are not labels here; `\\Inbox` membership is the folder itself.
+ */
+function gmailLabelsAfterMove(labels: string[], source: string, destination: string, server: FakeImapServer): string[] {
+  const special = (name: string): boolean => name === 'INBOX' || Boolean(server.mailboxes.get(name)?.specialUse);
+  if (server.mailboxes.get(destination)?.specialUse === '\\Trash') return [];
+  const out = labels.filter((l) => l !== source);
+  if (!special(destination) && !out.includes(destination)) out.push(destination);
+  return out;
 }
 
 /**
@@ -66,9 +85,100 @@ export class FakeImapServer {
   }> = [];
   /** Each message's mod-sequence, keyed `<mailbox>/<uid>`, for a CONDSTORE mailbox. */
   readonly modseqs = new Map<string, number>();
+  /**
+   * What CAPABILITY answers. A plain server by default (MOVE and UIDPLUS, as
+   * Dovecot, Fastmail and iCloud have); `gmail()` adds `X-GM-EXT-1`. A test
+   * about a server without MOVE or UIDPLUS takes them out.
+   */
+  capabilities: string[] = ['IMAP4REV1', 'MOVE', 'UIDPLUS'];
+  /**
+   * Every write this server accepted, in order. There is no `expunge` and no
+   * `\\Deleted` here because the client never sends one — a test asserting
+   * that reads this log.
+   */
+  readonly writes: Array<
+    | { op: 'store'; mailbox: string; uids: number[]; flags: string[]; how: 'add' | 'remove' }
+    | { op: 'move'; mailbox: string; uids: number[]; destination: string }
+    | { op: 'labels'; mailbox: string; uids: number[]; labels: string[] }
+  > = [];
 
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
+  }
+
+  /**
+   * A Gmail-shaped server: `X-GM-EXT-1`, INBOX, All Mail (`\\All`), Trash
+   * (`\\Trash`), Sent, and whatever labels a test adds as folders. Moving a
+   * message to Trash drops its labels, as Gmail does.
+   */
+  static gmail(labels: string[] = []): FakeImapServer {
+    const server = new FakeImapServer({
+      INBOX: { uidValidity: 1, messages: [] },
+      '[Gmail]/All Mail': { uidValidity: 11, messages: [], specialUse: '\\All' },
+      '[Gmail]/Sent Mail': { uidValidity: 12, messages: [], specialUse: '\\Sent' },
+      '[Gmail]/Trash': { uidValidity: 13, messages: [], specialUse: '\\Trash' },
+    });
+    labels.forEach((label, i) => server.mailboxes.set(label, { uidValidity: 20 + i, messages: [] }));
+    server.capabilities = ['IMAP4REV1', 'MOVE', 'UIDPLUS', 'X-GM-EXT-1'];
+    return server;
+  }
+
+  /** Whether this server says it is Gmail. */
+  get isGmail(): boolean {
+    return this.capabilities.includes('X-GM-EXT-1');
+  }
+
+  /** The message at `<mailbox>/<uid>`, or undefined. */
+  find(name: string, uid: number): HeldMessage | undefined {
+    return this.mailboxes.get(name)?.messages.find((m) => m.uid === uid);
+  }
+
+  /** Where a message with this Message-ID is now: every `{ mailbox, uid }` holding it. */
+  whereIs(messageId: string): Array<{ mailbox: string; uid: number }> {
+    const out: Array<{ mailbox: string; uid: number }> = [];
+    for (const [name, box] of this.mailboxes) {
+      for (const m of box.messages) if (m.messageId === messageId) out.push({ mailbox: name, uid: m.uid });
+    }
+    return out;
+  }
+
+  /** `UID MOVE`, as a server does it: the next uid in the destination, gone from the source. */
+  moveMessages(source: string, uids: readonly number[], destination: string): MoveResult {
+    if (!this.capabilities.includes('MOVE')) throw new Error('fake imap: MOVE is not supported here');
+    if (!this.mailboxes.has(destination)) throw new Error(`fake imap: [TRYCREATE] no mailbox ${destination}`);
+    const from = this.mailbox(source);
+    const to = this.mailbox(destination);
+    const uidMap = new Map<number, number>();
+    for (const uid of [...uids].sort((a, b) => a - b)) {
+      const message = from.messages.find((m) => m.uid === uid);
+      if (!message) continue;
+      const next = Math.max(0, ...to.messages.map((m) => m.uid), to.uidNextFloor ?? 0) + 1;
+      to.uidNextFloor = next;
+      const labels = this.isGmail ? gmailLabelsAfterMove(message.labels ?? [], source, destination, this) : message.labels;
+      to.messages.push({ ...message, uid: next, ...(labels ? { labels } : {}) });
+      from.messages = from.messages.filter((m) => m.uid !== uid);
+      this.modseqs.delete(`${source}/${uid}`);
+      this.#touch(destination, next);
+      uidMap.set(uid, next);
+    }
+    this.writes.push({ op: 'move', mailbox: source, uids: [...uids], destination });
+    return {
+      uidValidity: this.capabilities.includes('UIDPLUS') ? to.uidValidity : null,
+      uidMap: this.capabilities.includes('UIDPLUS') ? uidMap : new Map(),
+    };
+  }
+
+  /** `UID STORE ±FLAGS`. */
+  storeFlags(name: string, uids: readonly number[], flags: readonly string[], how: 'add' | 'remove'): void {
+    const box = this.mailbox(name);
+    for (const m of box.messages) {
+      if (!uids.includes(m.uid)) continue;
+      const set = new Set(m.flags);
+      for (const f of flags) how === 'add' ? set.add(f) : set.delete(f);
+      m.flags = [...set];
+      this.#touch(name, m.uid);
+    }
+    this.writes.push({ op: 'store', mailbox: name, uids: [...uids], flags: [...flags], how });
   }
 
   mailbox(name: string): FakeMailbox {
@@ -81,9 +191,10 @@ export class FakeImapServer {
   }
 
   /** Append a message, assigning the next uid. Returns the uid it got. */
-  add(name: string, message: Omit<FetchedMessage, 'uid'> & { uid?: number }): number {
+  add(name: string, message: Omit<FetchedMessage, 'uid'> & { uid?: number; labels?: string[] }): number {
     const box = this.mailbox(name);
-    const uid = message.uid ?? Math.max(0, ...box.messages.map((m) => m.uid)) + 1;
+    const uid = message.uid ?? Math.max(0, ...box.messages.map((m) => m.uid), box.uidNextFloor ?? 0) + 1;
+    box.uidNextFloor = Math.max(box.uidNextFloor ?? 0, uid);
     box.messages.push({ ...message, uid });
     this.#touch(name, uid);
     return uid;
@@ -137,13 +248,13 @@ export class FakeImapServer {
       flags: [],
       status: {
         uidValidity: box.uidValidity,
-        uidNext: Math.max(0, ...box.messages.map((m) => m.uid)) + 1,
+        uidNext: Math.max(0, ...box.messages.map((m) => m.uid), box.uidNextFloor ?? 0) + 1,
         exists: box.messages.length,
       },
     }));
   }
 
-  client(): ImapClient {
+  client(): ImapWriter {
     return new FakeImapClient(this);
   }
 
@@ -152,7 +263,7 @@ export class FakeImapServer {
   }
 }
 
-class FakeImapClient implements ImapClient {
+class FakeImapClient implements ImapWriter {
   #closed = false;
 
   constructor(private readonly server: FakeImapServer) {}
@@ -168,7 +279,7 @@ class FakeImapClient implements ImapClient {
     const box = this.server.mailbox(mailbox);
     return {
       uidValidity: box.uidValidity,
-      uidNext: Math.max(0, ...box.messages.map((m) => m.uid)) + 1,
+      uidNext: Math.max(0, ...box.messages.map((m) => m.uid), box.uidNextFloor ?? 0) + 1,
       exists: box.messages.length,
       highestModseq: box.condstore ? String(box.highestModseq ?? 1) : null,
     };
@@ -212,7 +323,7 @@ class FakeImapClient implements ImapClient {
     this.server.fetches.push({ mailbox, sinceUid, limit, returned: selected.length });
     // Deep-ish copy: a caller that mutates what it got must not reach into the
     // server's own flags, which is exactly the peek property under test.
-    return selected.map((m) => ({
+    return selected.map(({ labels: _labels, ...m }) => ({
       ...m,
       to: [...m.to],
       cc: [...m.cc],
@@ -252,6 +363,45 @@ class FakeImapClient implements ImapClient {
       );
     }
     return Buffer.from(bytes);
+  }
+
+  async capabilities(): Promise<string[]> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    return this.server.capabilities.map((c) => c.toUpperCase());
+  }
+
+  async storeFlags(mailbox: string, uids: readonly number[], flags: readonly string[], op: 'add' | 'remove'): Promise<void> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.storeFlags(mailbox, uids, flags, op);
+  }
+
+  async move(mailbox: string, uids: readonly number[], destination: string): Promise<MoveResult> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    return this.server.moveMessages(mailbox, uids, destination);
+  }
+
+  async findByMessageId(mailbox: string, messageId: string): Promise<number | null> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    const found = this.server.mailbox(mailbox).messages.find((m) => m.messageId === messageId);
+    return found ? found.uid : null;
+  }
+
+  async fetchLabels(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>> {
+    if (!this.server.isGmail) throw new Error('fake imap: X-GM-LABELS on a server that is not Gmail');
+    const out = new Map<number, string[]>();
+    for (const m of this.server.mailbox(mailbox).messages) {
+      if (uids.includes(m.uid)) out.set(m.uid, [...(m.labels ?? [])]);
+    }
+    return out;
+  }
+
+  async addLabels(mailbox: string, uids: readonly number[], labels: readonly string[]): Promise<void> {
+    if (!this.server.isGmail) throw new Error('fake imap: X-GM-LABELS on a server that is not Gmail');
+    for (const m of this.server.mailbox(mailbox).messages) {
+      if (!uids.includes(m.uid)) continue;
+      m.labels = [...new Set([...(m.labels ?? []), ...labels])];
+    }
+    this.server.writes.push({ op: 'labels', mailbox, uids: [...uids], labels: [...labels] });
   }
 
   async close(): Promise<void> {
