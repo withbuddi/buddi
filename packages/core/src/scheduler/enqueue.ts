@@ -50,8 +50,12 @@ export interface EnqueueOccurrenceInput {
   coalesce?: CoalesceOptions | null;
   /** Which occurrences may share a run, within the mission. Default: all of them. */
   group?: string;
-  /** Fold a joining payload into the waiting one. Default: a `batch` array of payloads. */
-  merge?: (waiting: Payload, joining: Payload) => Payload;
+  /**
+   * Fold a joining payload into the waiting one. Default: a `batch` array of
+   * payloads. `null` says the waiting one is full: the joining payload starts
+   * an occurrence of its own instead — nothing is ever dropped to make room.
+   */
+  merge?: (waiting: Payload, joining: Payload) => Payload | null;
 }
 
 export type EnqueueOccurrenceResult =
@@ -131,17 +135,19 @@ export async function enqueueOccurrence(pool: Pool, input: EnqueueOccurrenceInpu
     const waiting = await client.query<{ id: string; payload: Payload }>(
       `select id, payload from core.occurrences
        where mission_id = $1 and state = 'pending' and payload->'coalesce'->>'group' = $2
-       order by scheduled_at, id limit 1
+       order by scheduled_at desc, id desc limit 1
        for update`,
       [input.missionId, group],
     );
+    // The newest waiting run of the group: once one is full, the next is where newcomers go.
     const found = waiting.rows[0];
     const mark = found ? coalesceMarkOf(found.payload) : null;
+    const merged = found && mark ? merge(found.payload, input.payload) : null;
     let result: EnqueueOccurrenceResult;
-    if (found && mark) {
+    if (found && mark && merged !== null) {
       const firstAt = Date.parse(mark.firstAt);
       const at = new Date(Math.min(input.now.getTime() + options.windowSeconds * 1000, firstAt + options.maxWaitSeconds * 1000));
-      const payload: Payload = { ...merge(found.payload, input.payload), coalesce: { ...mark, count: mark.count + 1 } };
+      const payload: Payload = { ...merged, coalesce: { ...mark, count: mark.count + 1 } };
       // Moving the instant can collide with another occurrence's: step a millisecond.
       let moved: Date | null = null;
       for (let offset = 0; offset < 60 && moved === null; offset++) {

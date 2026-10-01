@@ -402,14 +402,22 @@ async function enqueueWake(
   return result.ok ? { ok: true, occurrenceId: result.occurrenceId } : { ok: false, reason: result.reason };
 }
 
-/** A finding joining a waiting wake: the first stays `finding`, all are in `findings`, a key once. */
-function mergeWakes(waiting: Record<string, unknown>, joining: Record<string, unknown>): Record<string, unknown> {
+/** The most findings one coalesced wake carries; the next starts another wake. */
+export const WAKE_FINDINGS_MAX = 50;
+
+/**
+ * A finding joining a waiting wake: the first stays `finding`, all are in
+ * `findings`, a key once. A wake already carrying `WAKE_FINDINGS_MAX` answers
+ * null, and the finding starts a wake of its own: none is ever dropped.
+ */
+function mergeWakes(waiting: Record<string, unknown>, joining: Record<string, unknown>): Record<string, unknown> | null {
   const first = waiting.finding as { key?: string } | undefined;
   const findings = (Array.isArray(waiting.findings) ? waiting.findings : first ? [first] : []) as Array<{ key?: string }>;
   const next = joining.finding as { key?: string } | undefined;
   if (!next) return waiting;
   const merged = [...findings.filter((f) => f.key !== next.key), next];
-  return { ...waiting, finding: !first || first.key === next.key ? next : first, findings: merged.slice(-50) };
+  if (merged.length > WAKE_FINDINGS_MAX) return null;
+  return { ...waiting, finding: !first || first.key === next.key ? next : first, findings: merged };
 }
 
 /** Take a key's still-unread digest line out of the queue. */

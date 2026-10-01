@@ -243,6 +243,17 @@ suite('sentinels (postgres)', () => {
       expect(queued.rows[0].payload.findings).toHaveLength(6);
     });
 
+    it('never drops a finding: past fifty in one run, the next starts another run', async () => {
+      await wakeMission();
+      const burst = Array.from({ length: 120 }, (_, i) => card(i + 1));
+      await runSentinels(pool, pluginWith(coalescing('w', [burst])), T0, 'UTC');
+      const queued = await pool.query(`select payload from core.occurrences where mission_id = $1 and state = 'pending' order by scheduled_at, id`, [SENTINEL_WAKE_MISSION_ID]);
+      const carried = queued.rows.flatMap((r) => (r.payload.findings ?? [r.payload.finding]).map((f: Finding) => f.key));
+      expect(carried.sort()).toEqual(burst.map((f) => f.key).sort());
+      expect(queued.rows.length).toBe(3);
+      for (const row of queued.rows) expect((row.payload.findings ?? [row.payload.finding]).length).toBeLessThanOrEqual(50);
+    });
+
     it('keeps one run per agent, and starts afresh once the run was claimed', async () => {
       await wakeMission();
       const watcher = coalescing('w', [[card(1), card(2)], [card(1), card(2), card(3)]], (f) => (f.key.endsWith('2') ? 'credit-coach' : 'finance-advisor'));
