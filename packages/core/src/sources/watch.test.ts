@@ -85,4 +85,67 @@ describe('createSourceWatches', () => {
     expect(watches.running()).toEqual(['c.flaky']);
     await watches.stopAll();
   });
+  it('a second stopAll (the signal handler, then finally) waits for the same stops', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let stoppedWatcher = false;
+    const slow: Source = {
+      id: 'a.slow',
+      description: 'slow',
+      every: 60,
+      async poll() {},
+      watch() {
+        return {
+          async stop() {
+            await gate;
+            stoppedWatcher = true;
+          },
+        };
+      },
+    };
+    const watches = createSourceWatches({} as Pool);
+    await watches.reconcile([manifestWith('a', [slow])], input);
+    const first = watches.stopAll();
+    let secondDone = false;
+    const second = watches.stopAll().then(() => {
+      secondDone = true;
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(secondDone).toBe(false);
+    release();
+    await Promise.all([first, second]);
+    expect(stoppedWatcher).toBe(true);
+  });
+
+  it('stopAll waits for a stop a reconcile already began', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let stoppedWatcher = false;
+    const slow: Source = {
+      id: 'a.slow',
+      description: 'slow',
+      every: 60,
+      async poll() {},
+      watch() {
+        return {
+          async stop() {
+            await gate;
+            stoppedWatcher = true;
+          },
+        };
+      },
+    };
+    const watches = createSourceWatches({} as Pool);
+    await watches.reconcile([manifestWith('a', [slow])], input);
+    const reconciling = watches.reconcile([], input);
+    let allDone = false;
+    const all = watches.stopAll().then(() => {
+      allDone = true;
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(allDone).toBe(false);
+    release();
+    await Promise.all([reconciling, all]);
+    expect(stoppedWatcher).toBe(true);
+  });
 });

@@ -39,17 +39,28 @@ export interface SourceWatches {
 
 export function createSourceWatches(pool: Pool): SourceWatches {
   const live = new Map<string, { source: Source; watch: SourceWatch }>();
+  /** Stops under way: a second caller waits for the same one, not for nothing. */
+  const stopping = new Map<string, Promise<void>>();
   let stopped = false;
+  let allStopped: Promise<void> | null = null;
 
-  const stopOne = async (id: string, log: (line: string) => void): Promise<void> => {
+  const stopOne = (id: string, log: (line: string) => void): Promise<void> => {
+    const pending = stopping.get(id);
+    if (pending) return pending;
     const entry = live.get(id);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
     live.delete(id);
-    try {
-      await entry.watch.stop();
-    } catch (err) {
-      log(`source ${id}: watcher did not stop cleanly: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    const done = (async () => {
+      try {
+        await entry.watch.stop();
+      } catch (err) {
+        log(`source ${id}: watcher did not stop cleanly: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        stopping.delete(id);
+      }
+    })();
+    stopping.set(id, done);
+    return done;
   };
 
   return {
@@ -82,10 +93,15 @@ export function createSourceWatches(pool: Pool): SourceWatches {
         }
       }
     },
-    async stopAll() {
+    stopAll() {
+      // The signal handler's call and the shutdown path's `finally` both
+      // land here: the second gets the first's promise, so nothing (the pool
+      // ending) runs while a watcher is still stopping.
+      if (allStopped) return allStopped;
       stopped = true;
       const log = (line: string): void => console.error(line);
-      await Promise.all([...live.keys()].map((id) => stopOne(id, log)));
+      allStopped = Promise.all([...[...live.keys()].map((id) => stopOne(id, log)), ...stopping.values()]).then(() => {});
+      return allStopped;
     },
     running() {
       return [...live.keys()];
