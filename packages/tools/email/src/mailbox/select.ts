@@ -82,9 +82,19 @@ export async function selectMessages(
     return `$${params.length}`;
   };
 
+  // A message the poll saw leave in another app, place unknown, is nowhere
+  // buddi could change it: never selected, whatever the folder asked.
+  where.push('m.gone_at is null');
   const folder = c.folder?.trim();
   if (!folder) where.push(`f.kind = 'inbox'`);
-  else if (folder.toLowerCase() !== 'any') where.push(`lower(f.name) = lower(${add(folder)})`);
+  else if (folder.toLowerCase() !== 'any') {
+    // A folder by name, or on Gmail a label the message carries (one
+    // labelled in another app sits in All Mail with that label).
+    const name = add(folder);
+    where.push(
+      `(lower(f.name) = lower(${name}) or exists (select 1 from jsonb_array_elements_text(coalesce(m.labels, '[]'::jsonb)) l where lower(l) = lower(${name})))`,
+    );
+  }
 
   if (c.from?.trim()) {
     const raw = c.from.trim();

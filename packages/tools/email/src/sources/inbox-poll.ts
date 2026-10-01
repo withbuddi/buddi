@@ -52,7 +52,8 @@ import { findAccount, INBOX, listAccounts, markAccountSynced, type EnvLike } fro
 import { mailboxAuth } from '../credentials.js';
 import { clearLoginFailure, isAuthFailure, recordLoginFailure } from '../logins.js';
 import { applyPendingArrivals, oweArrivalAction } from '../mailbox/arrival.js';
-import { planFolders } from '../folders.js';
+import { reconcilePendingChanges } from '../mailbox/actions.js';
+import { placeWords, planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
 import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
@@ -60,6 +61,7 @@ import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
 import type { AccountRecord, ImapClient, ImapClientFactory, ImapIdleFactory, MailboxStatus } from '../ports.js';
 import { IDLE_SLOW_POLL_SECONDS, IdleWatchers, type IdleWatchersOptions } from './idle.js';
+import { checkPresence } from './presence.js';
 import { FOLDER_COLUMNS, toFolder, type FolderRecord, type MessageDirection } from '../rows.js';
 import { findThread, joinThread, threadMessages } from '../threads.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
@@ -234,13 +236,15 @@ async function ensureFolder(
   kind: 'inbox' | 'sent' | 'other' = 'other',
   synced = false,
   boundary?: { uidValidity: number; lastUid: number },
+  specialUse: string | null = null,
 ): Promise<FolderRecord> {
   const { rows } = await db.query(
-    `insert into email.folders (account_id, name, kind, synced, uidvalidity, last_uid)
-     values ($1, $2, $3, $4, $5, $6)
+    `insert into email.folders (account_id, name, kind, synced, uidvalidity, last_uid, special_use)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (account_id, name) do update
         set kind = excluded.kind,
             synced = excluded.synced,
+            special_use = coalesce(excluded.special_use, email.folders.special_use),
             uidvalidity = case
               when email.folders.uidvalidity is null and excluded.kind = 'sent'
                 then excluded.uidvalidity
@@ -252,7 +256,7 @@ async function ensureFolder(
               else email.folders.last_uid
             end
      returning ${FOLDER_COLUMNS}`,
-    [account.id, name, kind, synced, boundary?.uidValidity ?? null, boundary?.lastUid ?? 0],
+    [account.id, name, kind, synced, boundary?.uidValidity ?? null, boundary?.lastUid ?? 0, specialUse],
   );
   const row = rows[0];
   if (!row) throw new Error('email.inbox-poll: folder upsert returned no row');
@@ -321,7 +325,11 @@ async function discoverFolders(
         }
       : undefined;
     try {
-      await ensureFolder(db, account, folder.name, folder.kind, folder.synced, boundary);
+      const use = listed
+        ? [listed.specialUse ?? '', ...listed.flags].map((f) => f.trim().toLowerCase())
+            .find((f) => ['\\all', '\\archive', '\\trash', '\\junk', '\\sent', '\\drafts'].includes(f)) ?? null
+        : null;
+      await ensureFolder(db, account, folder.name, folder.kind, folder.synced, boundary, use);
       if (folder.kind === 'sent') sentPersisted = true;
     } catch (err) {
       if (folder.kind === 'inbox') throw err;
@@ -392,6 +400,33 @@ async function commitBatch(
   return db.transaction(async (client) => {
     const pending: PendingTriage[] = [];
     for (const message of fetched) {
+      /*
+       * Back in the inbox: a message buddi holds as gone, placed outside
+       * the inbox (archived, labelled, trashed in another app), or put back
+       * here with its new uid unknown, arriving under a new uid is the same
+       * message — its row follows, and it is neither stored twice nor
+       * triaged again.
+       */
+      if (direction === 'in' && message.messageId) {
+        const back = await client.query(
+          `update email.messages m
+              set folder_id = $3, uidvalidity = $4, uid = $5, gone_at = null, flags = $6::jsonb
+             from email.folders f
+            where f.id = m.folder_id and m.account_id = $1 and m.message_id = $2 and m.direction = 'in'
+              and (m.gone_at is not null or f.kind <> 'inbox' or m.uidvalidity = 0)
+              and not exists (select 1 from email.messages o
+                               where o.account_id = $1 and o.folder_id = $3 and o.uidvalidity = $4 and o.uid = $5)
+           returning m.id`,
+          [account.id, message.messageId, folder.id, uidValidity, message.uid, JSON.stringify(message.flags)],
+        );
+        if ((back.rowCount ?? 0) > 0) {
+          await client.query(
+            `update email.threads set last_folder_id = $2, last_uidvalidity = $3, last_uid = $4 where last_message_id = $1`,
+            [String(back.rows[0]!.id), folder.id, uidValidity, message.uid],
+          );
+          continue;
+        }
+      }
       const { rows } = await client.query(
         `insert into email.messages
            (account_id, folder_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
@@ -679,6 +714,24 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
               complete = false;
               pass.failures.push(err);
             }
+            // What left the inbox in another app (`presence.ts`): after the
+            // flags, so a departed row keeps the flags it last had there.
+            try {
+              const reader = client;
+              await checkPresence(ctx.buddi!.db, account, reader, polled.folder, polled.status, {
+                window: FLAG_SYNC_WINDOW,
+                now: ctx.buddi!.clock.now(),
+                log,
+                deadline: (op, work) => withDeadline(op, timeoutMs, work),
+              });
+            } catch (err) {
+              log(
+                `email.inbox-poll: could not check what left ${account.address}/${folder.name}: ` +
+                  `${err instanceof Error ? err.message : String(err)}; new mail still landed`,
+              );
+              complete = false;
+              pass.failures.push(err);
+            }
           }
         } catch (err) {
           if (folder.kind !== 'sent') throw err;
@@ -733,6 +786,20 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
      * drain's, and an earlier poll's that failed — is tried; a failure is
      * logged, counted, and costs nobody their triage.
      */
+    /*
+     * Intent first: a mailbox change this process did not finish (buddi
+     * stopped between the server change and its record) left a `pending`
+     * trail row. Settle it with the server before any new change acts.
+     */
+    try {
+      const settled = await reconcilePendingChanges(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) });
+      if (settled > 0) log(`email.inbox-poll: settled ${settled} interrupted mailbox change(s) on ${account.address} with the server`);
+    } catch (err) {
+      log(
+        `email.inbox-poll: could not settle interrupted mailbox changes on ${account.address}: ` +
+          `${err instanceof Error ? err.message : String(err)}; the next poll tries again`,
+      );
+    }
     {
       try {
         await applyPendingArrivals(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) });
@@ -933,9 +1000,8 @@ async function pollFolder(
  * than skipped.
  *
  * **A message gone from INBOX** (archived or deleted in another client) is
- * simply not in the answer. `email.messages` has no "still in the inbox"
- * field, and this does not invent one: such a row keeps the flags it last had.
- * The full fetch could tell it apart; CONDSTORE without QRESYNC cannot.
+ * simply not in the answer here, and keeps the flags it last had; the
+ * presence check after this (`presence.ts`) is what records that it left.
  */
 async function syncFlags(
   db: Db,
@@ -950,7 +1016,7 @@ async function syncFlags(
   const serverModseq = status.highestModseq ?? null;
   const { rows } = await db.query(
     `select uid from email.messages
-      where folder_id = $1 and uidvalidity = $2
+      where folder_id = $1 and uidvalidity = $2 and gone_at is null
       order by uid desc
       limit $3`,
     [folder.id, status.uidValidity, FLAG_SYNC_WINDOW],
@@ -1013,7 +1079,11 @@ async function plantCursor(
   const { rows } = await db.query(
     `update email.folders set uidvalidity = $2, last_uid = $3,
             -- A modseq belongs to its generation; the next re-sync starts over.
-            highest_modseq = case when uidvalidity is distinct from $2 then null else highest_modseq end
+            highest_modseq = case when uidvalidity is distinct from $2 then null else highest_modseq end,
+            -- So does what the presence check last saw (presence.ts).
+            presence_uidnext = case when uidvalidity is distinct from $2 then null else presence_uidnext end,
+            presence_exists = case when uidvalidity is distinct from $2 then null else presence_exists end,
+            presence_modseq = case when uidvalidity is distinct from $2 then null else presence_modseq end
       where id = $1 returning ${FOLDER_COLUMNS}`,
     [folderId, uidValidity, lastUid],
   );
@@ -1273,7 +1343,9 @@ async function promptFor(
       (p) => p.scope === 'sender' && p.matcher === message.from.trim().toLowerCase(),
     ) ??
     null;
+  const place = await placeOf(ctx.buddi!.db, message.id);
   return triagePrompt({
+    ...(place ? { place } : {}),
     messageId: message.id,
     from: message.from,
     to: message.to,
@@ -1302,6 +1374,24 @@ async function promptFor(
       })),
     },
     ...(instructionFor(decision) ? { instruction: instructionFor(decision) as string } : {}),
+  });
+}
+
+/** Where a message is now, in words, when that is not the inbox (`placeWords`); '' otherwise. */
+async function placeOf(db: Db, messageId: string): Promise<string> {
+  const { rows } = await db.query(
+    `select m.gone_at, m.direction, f.kind, f.name, f.special_use
+       from email.messages m left join email.folders f on f.id = m.folder_id where m.id = $1`,
+    [messageId],
+  );
+  const r = rows[0] as Record<string, any> | undefined;
+  if (!r) return '';
+  return placeWords({
+    kind: r.kind ?? null,
+    name: r.name ?? null,
+    specialUse: r.special_use ?? null,
+    gone: r.gone_at !== null && r.gone_at !== undefined,
+    direction: r.direction === 'out' ? 'out' : 'in',
   });
 }
 

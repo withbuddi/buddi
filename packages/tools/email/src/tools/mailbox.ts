@@ -22,12 +22,14 @@ import {
   lastUndoable,
   MailboxRefusal,
   MAX_PER_CALL,
+  movedSince,
   performAction,
   plural,
   requireTargets,
   sampleLines,
   serverFacts,
   undoAction,
+  undoableItems,
   undoRefusal,
   verbOf,
   withWriter,
@@ -366,12 +368,12 @@ export function createUndoTool(opts: WriterOptions): GatedToolDefinition<z.infer
       const account = (await listAccounts(ctx.buddi!.db)).find((a) => a.id === change.accountId);
       if (!account) throw new MailboxRefusal('That change was made in a mailbox that is turned off or no longer here.');
       return {
-        envelope: { changeId: change.id, accountId: account.id, kind: change.kind, count: change.changed },
+        envelope: { changeId: change.id, accountId: account.id, kind: change.kind, count: undoableItems(change).length },
         preview: [
-          describeUndo(change, account.address),
+          describeUndo(change, account.address, await movedSince(ctx.buddi!.db, change)),
           `The change was made ${change.createdAt ?? ''} by ${change.origin === 'policy' ? `a rule (${change.actor})` : change.actor}.`,
           '',
-          ...sampleLines(change.items),
+          ...sampleLines(undoableItems(change)),
         ].join('\n'),
       };
     },

@@ -7,6 +7,12 @@ What changes in buddi from one release to the next, newest first.
 ### Changed
 
 - While a mailbox has instant mail (IDLE), buddi also checks its Sent folder every minute over the same connection, so a reply you send from your phone moves the conversation to "waiting on them" within a minute instead of up to 15.
+- Mail you archive, move or delete in another mail app now leaves buddi's inbox too: it stops counting as unread, `email.select_messages` no longer picks it, and the Mail page says where each message is now (archived, in Trash, in a label, or no longer in the inbox). On Gmail buddi finds where it went and keeps its labels; a message moved back into the inbox is the same one again, not a new arrival.
+- On Gmail, moving mail to a label adds that label and takes it out of the inbox, keeping its other labels; Undo puts the inbox and the labels back exactly as they were.
+
+### Fixed
+
+- A mailbox change or undo interrupted part-way (a dropped connection, or buddi stopping) no longer loses track of what it did: the change is recorded before the server is touched, the next poll checks with the server and finishes the record, and an undo that stopped part-way can be run again to put back the rest. Recent changes shows "Partly done", "Partly undone", "Checking" or "Unconfirmed" when that happens, and Undo says beforehand when some messages were moved in another app since and will stay where they are.
 
 ## 0.1.0-pre.28 — 2026-10-01
 

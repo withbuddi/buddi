@@ -93,9 +93,9 @@ export const waitingOnMe: MetricDefinition = {
  * re-sync keeps current: per account, the newest `FLAG_SYNC_WINDOW` messages
  * of the inbox folder's current generation, with `\Seen` unset.
  *
- * A message archived or deleted elsewhere keeps the flags it last had (the
- * schema has no "still in the inbox" field), so one archived unread still
- * counts until it falls out of the window.
+ * A message archived, moved or deleted in another app is not counted: the
+ * poll either points its row at where it went (Gmail) or marks it gone
+ * (`presence.ts`), and both take it out of this folder's rows.
  */
 export async function countInboxUnread(
   ctx: ToolContext,
@@ -107,7 +107,7 @@ export async function countInboxUnread(
        cross join lateral (
          select count(*) filter (where ${UNREAD_SQL}) as n
            from (select flags from email.messages
-                  where folder_id = f.id and uidvalidity = f.uidvalidity
+                  where folder_id = f.id and uidvalidity = f.uidvalidity and gone_at is null
                   order by uid desc
                   limit $2) m
        ) w

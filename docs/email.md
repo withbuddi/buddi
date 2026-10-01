@@ -73,6 +73,13 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   the work one.
 - `messages.bulk`: the message carried `List-Unsubscribe` or `Precedence:
   bulk|list|junk`, read at ingest (`018_learned_auto.sql`).
+- `messages.gone_at` and `messages.labels` (`020_mailbox_presence.sql`): the
+  poll saw the message leave the folder its row names in another mail app
+  and could not say where it went (§4a, "Moved in another app"); and on
+  Gmail, the labels it carries when buddi located it or moved it to a label.
+  `folders.special_use` records what the server says a folder is for (All
+  Mail, Archive, Trash, Spam), so a message's place reads "archived" or "in
+  Trash".
 - `folders`: discovered per account, once, from the server's own LIST.
   Completion is recorded on the account (`accounts.folders_discovered_at`),
   not inferred from how many folder rows there are: a pass that lost the Sent
@@ -244,11 +251,29 @@ keeps every guarantee of a scheduled one.
   this process has a live IDLE on that inbox, and "Checking every 5 min"
   otherwise.
 
-Mail moved out of the inbox in another app is still not reflected on the
-local row (§11b): the EXPUNGE wakes a poll, and that poll re-reads flags and
-fetches what is new, but `email.messages` has no "no longer in this folder"
-state for the poll to write, and finding where the message went means a
-search per folder.
+**Moved in another app.** Each inbox poll (IDLE's EXPUNGE starts one) asks
+which held messages left INBOX (`src/sources/presence.ts`):
+
+- **Usually free.** UIDNEXT and EXISTS from the poll's SELECT, unchanged
+  since the last check, mean nothing left and nothing came: no command.
+- **Else one command.** A server that ENABLEd QRESYNC (RFC 7162) answers
+  `VANISHED (EARLIER)` for the uids that left since the last check's modseq;
+  any other server gets one `UID SEARCH UID <lowest>:<highest>` over the rows
+  buddi holds (the flag re-sync's window), diffed with them.
+- **Gmail says where.** A departed message is looked up by Message-ID in All
+  Mail (archived: the row points there, with its X-GM-LABELS; a label the
+  owner gave it is the folder the row points at), then Trash, then Spam — up
+  to 50 lookups a poll. Elsewhere, and on Gmail when nothing has it, the row
+  is marked gone (`gone_at`): no longer in the inbox, place unknown.
+- **Everything honours it.** The unread count and `email.inbox_unread` leave
+  such rows out, `email.select_messages` never selects a gone one (and on
+  Gmail selects a label by name, wherever the message sits), a change naming
+  one skips it ("moved or deleted in another mail app"), the Mail page's
+  conversation says where each message is now ("archived", "in Trash", "in
+  Receipts", "no longer in the inbox"), `email.list_recent` carries the same
+  `place`, and a triage run for a message already out of the inbox is told
+  so. A message moved back into the inbox is the same row again, neither
+  stored twice nor triaged twice.
 
 ## 5. The policy gate
 
@@ -938,9 +963,13 @@ the live server (CAPABILITY, LIST), so a refusal (no Archive, unknown folder,
 no MOVE) comes before anybody is asked. The proposed @mail agent has these
 tools and uses them only when the owner asks.
 
-**Per server.** Gmail is recognised by `X-GM-EXT-1`. A label is a folder to
-MOVE into (Inbox off, that label on). Trash drops a Gmail message's labels, so
-a trash first reads them (`X-GM-LABELS`) and an undo adds them back. On any
+**Per server.** Gmail is recognised by `X-GM-EXT-1`. A move from the inbox
+to a label is two `X-GM-LABELS` stores — that label on, `\Inbox` off — so
+every other label stays; the labels before are on the trail, and undo puts
+`\Inbox` back and the label set exactly as it was (labels added since come
+off). Between labels, or from All Mail, it is a MOVE. Trash drops a Gmail
+message's labels, so a trash first reads them (`X-GM-LABELS`) and an undo
+adds them back. On any
 other server, SPECIAL-USE (RFC 6154) names Archive and Trash. Every server
 must offer MOVE (RFC 6851); without it the change is refused, because the
 alternative (COPY, flag `\Deleted`, EXPUNGE) can expunge more than was asked
@@ -955,7 +984,9 @@ see the mailbox as it is, and the next poll undoes nothing: a flag agrees with
 the server, and a message moved back into the inbox lands above the cursor
 with a quad that already exists, so it is neither ingested twice nor triaged
 again. A message no longer where buddi saw it (moved in another client,
-emptied from Trash) is skipped and counted, never guessed at.
+emptied from Trash) is skipped and counted, never guessed at. A moved row
+also keeps its thread's tie-break fields (`last_folder_id`,
+`last_uidvalidity`, `last_uid`) pointing at the message's new place.
 
 **The undo trail.** `email.mailbox_actions` has one row per change: kind,
 account, message ids, and for each message where it was and where it went,
@@ -968,6 +999,24 @@ Gmail). An undo is a row of its own (`reverts`), the original is stamped
 `undone_at`, and an undo is never itself undone. The Mail page lists the
 newest 20 under **Recent changes**, with Undo on every row that can still be
 undone.
+
+- **Intent first** (`020_mailbox_presence.sql`). The row is written
+  `pending` before the first server command; each folder's messages go on it
+  as `planned` before that folder's command and `done` after the answer. A
+  change stopped by an error is `partial` with what it did; one whose
+  command went out without an answer stays `pending`. The next poll settles
+  every `pending` row no change in this process is writing: per planned
+  message, by Message-ID, still in the old folder (it did not happen,
+  dropped), in the destination (done, the row follows), or neither
+  (`unknown`); a read mark is checked against the flag it wanted. Recent
+  changes shows "Checking", "Partly done" or "Unconfirmed", and a `pending`
+  change cannot be undone until it is settled.
+- **Undo, the same way.** An undo stopped part-way records what it put back
+  (`partial`), adds those messages to the change's `reverted_ids`, and leaves
+  the change undoable: Undo again puts back the rest ("Partly undone" on the
+  page). An undo leaves alone a message the poll saw move since in another
+  app (gone, or now elsewhere than the change left it), and says so, both in
+  its note and on the Undo confirmation beforehand.
 
 **Rules that act on arrival.** A policy's `params.onArrival` is `archive`,
 `mark-read`, or `move` with a `folder`. After the gate and the queue, the poll
@@ -998,10 +1047,9 @@ Calendar invites (parse and offer a reminder), unsubscribe (the
 List-Unsubscribe header as a gated action), creating folders or labels,
 permanent deletion, full-text search over
 archives, more than two synced folders by default, OAuth sign-in for
-Gmail instead of app passwords. Mail archived or deleted in another app
-keeps its local row as it was (the flag re-sync skips it); IDLE notices the
-EXPUNGE, but marking the row as gone needs a new column that the Mail page,
-the unread count and the selection tools all honour.
+Gmail instead of app passwords. Departures are only watched for in INBOX: a
+message buddi archived that is later trashed from All Mail in another app is
+found missing when it is next acted on (undo says so), not by the poll.
 
 ## 12. End to end
 

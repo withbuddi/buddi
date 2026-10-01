@@ -40,6 +40,12 @@ export interface FakeMailbox {
   highestModseq?: number;
   /** The highest uid ever assigned here: a uid is never reused, even after a move out. */
   uidNextFloor?: number;
+  /**
+   * Whether this mailbox answers QRESYNC (RFC 7162): with `condstore` too, a
+   * message leaving it bumps the mod-sequence and is remembered, so
+   * `departures` with `changedSince` answers VANISHED instead of a search.
+   */
+  qresync?: boolean;
 }
 
 /**
@@ -103,7 +109,12 @@ export class FakeImapServer {
     | { op: 'store'; mailbox: string; uids: number[]; flags: string[]; how: 'add' | 'remove' }
     | { op: 'move'; mailbox: string; uids: number[]; destination: string }
     | { op: 'labels'; mailbox: string; uids: number[]; labels: string[] }
+    | { op: 'store-labels'; mailbox: string; uids: number[]; labels: string[]; how: 'add' | 'remove' }
   > = [];
+  /** Every presence question served: how it was answered (`vanished` or `search`) and over which range. */
+  readonly departureChecks: Array<{ mailbox: string; via: 'vanished' | 'search'; fromUid: number; toUid: number }> = [];
+  /** Uids that left a QRESYNC mailbox, with the mod-sequence they left at. */
+  readonly vanishedLog: Array<{ mailbox: string; uid: number; modseq: number }> = [];
   /** How many times an IDLE session asked for Sent's UIDNEXT. */
   sentChecks = 0;
 
@@ -150,6 +161,22 @@ export class FakeImapServer {
     return this.mailboxes.get(name)?.messages.find((m) => m.uid === uid);
   }
 
+  /** All Mail's alias uids for messages this fake keeps in another (label or inbox) folder. */
+  readonly allMailAliases = new Map<number, { mailbox: string; uid: number }>();
+
+  /** An All Mail uid for a message held outside All Mail, Trash and Spam, or null. */
+  allMailAlias(messageId: string): number | null {
+    for (const [name, box] of this.mailboxes) {
+      if (box.specialUse === '\\Trash' || box.specialUse === '\\Junk' || box.specialUse === '\\All') continue;
+      const m = box.messages.find((x) => x.messageId === messageId);
+      if (!m) continue;
+      const uid = 1_000_000 + this.allMailAliases.size + 1;
+      this.allMailAliases.set(uid, { mailbox: name, uid: m.uid });
+      return uid;
+    }
+    return null;
+  }
+
   /** Where a message with this Message-ID is now: every `{ mailbox, uid }` holding it. */
   whereIs(messageId: string): Array<{ mailbox: string; uid: number }> {
     const out: Array<{ mailbox: string; uid: number }> = [];
@@ -174,7 +201,7 @@ export class FakeImapServer {
       const labels = this.isGmail ? gmailLabelsAfterMove(message.labels ?? [], source, destination, this) : message.labels;
       to.messages.push({ ...message, uid: next, ...(labels ? { labels } : {}) });
       from.messages = from.messages.filter((m) => m.uid !== uid);
-      this.modseqs.delete(`${source}/${uid}`);
+      this.#vanish(source, uid);
       this.#touch(destination, next);
       uidMap.set(uid, next);
       this.#notify(source, 'expunge');
@@ -237,8 +264,83 @@ export class FakeImapServer {
   remove(name: string, uid: number): void {
     const box = this.mailbox(name);
     box.messages = box.messages.filter((m) => m.uid !== uid);
-    this.modseqs.delete(`${name}/${uid}`);
+    this.#vanish(name, uid);
     this.#notify(name, 'expunge');
+  }
+
+  /**
+   * What another mail app does when it moves a message: gone from `source`,
+   * in `destination` under the next uid there (labels as Gmail would leave
+   * them). Returns the new uid.
+   */
+  moveElsewhere(source: string, uid: number, destination: string): number {
+    const caps = this.capabilities;
+    this.capabilities = caps.includes('MOVE') ? caps : [...caps, 'MOVE'];
+    try {
+      const result = this.moveMessages(source, [uid], destination);
+      this.writes.pop();
+      const to = result.uidMap.get(uid);
+      if (to !== undefined) return to;
+      return Math.max(...this.mailbox(destination).messages.map((m) => m.uid));
+    } finally {
+      this.capabilities = caps;
+    }
+  }
+
+  /** A message left `name`: forget its modseq, and on a QRESYNC mailbox remember it vanished. */
+  #vanish(name: string, uid: number): void {
+    this.modseqs.delete(`${name}/${uid}`);
+    const box = this.mailbox(name);
+    if (box.condstore && box.qresync) {
+      box.highestModseq = (box.highestModseq ?? 1) + 1;
+      this.vanishedLog.push({ mailbox: name, uid, modseq: box.highestModseq });
+    }
+  }
+
+  /**
+   * Gmail's `UID STORE ±X-GM-LABELS`. `\\Inbox` is membership of INBOX,
+   * not a stored label here: taking it off moves the message to the label
+   * folder it was given last (else All Mail), putting it on brings it back to
+   * INBOX. Taking off the label of the folder it sits in moves it the same
+   * way. Other labels are just kept on the message.
+   */
+  storeLabels(name: string, uids: readonly number[], labels: readonly string[], how: 'add' | 'remove'): void {
+    if (!this.isGmail) throw new Error('fake imap: X-GM-LABELS on a server that is not Gmail');
+    const box = this.mailbox(name);
+    const allMail = [...this.mailboxes.entries()].find(([, b]) => b.specialUse === '\\All')?.[0] ?? null;
+    const isLabelFolder = (l: string): boolean => this.mailboxes.has(l) && !this.mailboxes.get(l)!.specialUse && l !== 'INBOX';
+    for (const uid of [...uids]) {
+      const message = box.messages.find((m) => m.uid === uid);
+      if (!message) continue;
+      const held = new Set((message.labels ?? []).filter((l) => l !== '\\Inbox'));
+      let inbox = name === 'INBOX';
+      for (const label of labels) {
+        if (label === '\\Inbox') inbox = how === 'add';
+        else if (how === 'add') held.add(label);
+        else held.delete(label);
+      }
+      message.labels = [...held];
+      let home: string | null = name;
+      if (inbox) home = 'INBOX';
+      else if (name === 'INBOX' || (isLabelFolder(name) && !held.has(name))) {
+        // The label added last: the single copy here sits where the newest label puts it.
+        home = [...held].reverse().find(isLabelFolder) ?? allMail;
+      }
+      if (home && home !== name) {
+        const to = this.mailbox(home);
+        const next = Math.max(0, ...to.messages.map((m) => m.uid), to.uidNextFloor ?? 0) + 1;
+        to.uidNextFloor = next;
+        to.messages.push({ ...message, uid: next });
+        box.messages = box.messages.filter((m) => m.uid !== uid);
+        this.#vanish(name, uid);
+        this.#touch(home, next);
+        this.#notify(name, 'expunge');
+        this.#notify(home, 'exists');
+      } else {
+        this.#touch(name, uid);
+      }
+    }
+    this.writes.push({ op: 'store-labels', mailbox: name, uids: [...uids], labels: [...labels], how });
   }
 
   /** Tell every session idling on this mailbox, as an untagged response would. */
@@ -484,23 +586,60 @@ class FakeImapClient implements ImapWriter {
   async findByMessageId(mailbox: string, messageId: string): Promise<number | null> {
     if (this.#closed) throw new Error('fake imap: client is closed');
     const found = this.server.mailbox(mailbox).messages.find((m) => m.messageId === messageId);
-    return found ? found.uid : null;
+    if (found) return found.uid;
+    // Gmail's All Mail holds every message not in Trash or Spam, whichever
+    // label folder this fake keeps its one copy in: answer with an alias uid.
+    if (this.server.isGmail && this.server.mailboxes.get(mailbox)?.specialUse === '\\All') {
+      return this.server.allMailAlias(messageId);
+    }
+    return null;
   }
 
   async fetchLabels(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>> {
     if (!this.server.isGmail) throw new Error('fake imap: X-GM-LABELS on a server that is not Gmail');
     const out = new Map<number, string[]>();
+    for (const uid of uids) {
+      const alias = this.server.allMailAliases.get(uid);
+      if (alias && this.server.mailboxes.get(mailbox)?.specialUse === '\\All') {
+        const m = this.server.find(alias.mailbox, alias.uid);
+        if (m) out.set(uid, [...(m.labels ?? [])]);
+      }
+    }
     for (const m of this.server.mailbox(mailbox).messages) {
       if (uids.includes(m.uid)) out.set(m.uid, [...(m.labels ?? [])]);
     }
     return out;
   }
 
+  async departures(
+    mailbox: string,
+    range: { fromUid: number; toUid: number; changedSince?: string | null },
+  ): Promise<{ vanished: number[] } | { present: number[] }> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    const box = this.server.mailbox(mailbox);
+    const inRange = (uid: number): boolean => uid >= range.fromUid && uid <= range.toUid;
+    if (range.changedSince && box.condstore && box.qresync) {
+      const since = Number(range.changedSince);
+      const vanished = this.server.vanishedLog
+        .filter((v) => v.mailbox === mailbox && v.modseq > since && inRange(v.uid))
+        .map((v) => v.uid);
+      this.server.departureChecks.push({ mailbox, via: 'vanished', fromUid: range.fromUid, toUid: range.toUid });
+      return { vanished };
+    }
+    this.server.departureChecks.push({ mailbox, via: 'search', fromUid: range.fromUid, toUid: range.toUid });
+    return { present: box.messages.map((m) => m.uid).filter(inRange).sort((a, b) => a - b) };
+  }
+
+  async storeLabels(mailbox: string, uids: readonly number[], labels: readonly string[], op: 'add' | 'remove'): Promise<void> {
+    if (this.#closed) throw new Error('fake imap: client is closed');
+    this.server.storeLabels(mailbox, uids, labels, op);
+  }
+
   async addLabels(mailbox: string, uids: readonly number[], labels: readonly string[]): Promise<void> {
     if (!this.server.isGmail) throw new Error('fake imap: X-GM-LABELS on a server that is not Gmail');
     for (const m of this.server.mailbox(mailbox).messages) {
       if (!uids.includes(m.uid)) continue;
-      m.labels = [...new Set([...(m.labels ?? []), ...labels])];
+      m.labels = [...new Set([...(m.labels ?? []), ...labels])].filter((l) => l !== '\\Inbox');
     }
     this.server.writes.push({ op: 'labels', mailbox, uids: [...uids], labels: [...labels] });
   }

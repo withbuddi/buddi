@@ -23,6 +23,7 @@
  * sender in charge of whether the owner is waiting.
  */
 import type { DbArea } from '@buddi/core/plugin';
+import { placeWords } from './folders.js';
 import { normalizeAddresses } from './mail.js';
 import type { MessageDirection } from './rows.js';
 
@@ -348,6 +349,8 @@ export interface ThreadMessage {
   date: string | null;
   snippet: string;
   bodyText: string | null;
+  /** Where it is now, in words; empty for the inbox and for sent mail (`placeWords`). */
+  place: string;
 }
 
 /**
@@ -360,9 +363,9 @@ export async function threadMessages(
   limit: number,
 ): Promise<ThreadMessage[]> {
   const { rows } = await db.query(
-    `select id, direction, from_addr, to_addrs, subject, date, snippet, body_text
+    `select newest.*, f.kind as folder_kind, f.name as folder_name, f.special_use
        from (
-         select id, direction, from_addr, to_addrs, subject, date, snippet, body_text,
+         select id, direction, from_addr, to_addrs, subject, date, snippet, body_text, gone_at,
                 -- The ordering clock: INTERNALDATE, fetched_at as fallback —
                 -- never the sender's Date header. Folder, UIDVALIDITY, uid,
                 -- then row id break a tie deterministically.
@@ -372,7 +375,8 @@ export async function threadMessages(
           order by at desc, folder_id desc, uidvalidity desc, uid desc, id desc
           limit $2
        ) newest
-      order by at asc, folder_id asc, uidvalidity asc, uid asc, id asc`,
+       left join email.folders f on f.id = newest.folder_id
+      order by newest.at asc, newest.folder_id asc, newest.uidvalidity asc, newest.uid asc, newest.id asc`,
     [threadId, limit],
   );
   return rows.map((row: Record<string, any>) => ({
@@ -384,6 +388,13 @@ export async function threadMessages(
     date: iso(row.date),
     snippet: row.snippet ?? '',
     bodyText: row.body_text ?? null,
+    place: placeWords({
+      kind: row.folder_kind ?? null,
+      name: row.folder_name ?? null,
+      specialUse: row.special_use ?? null,
+      gone: row.gone_at !== null && row.gone_at !== undefined,
+      direction: row.direction === 'out' ? 'out' : 'in',
+    }),
   }));
 }
 

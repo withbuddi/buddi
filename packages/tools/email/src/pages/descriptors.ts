@@ -432,8 +432,22 @@ const mail: PageDescriptor = {
             meta: [{ path: 'when' }],
             pill: {
               value: { path: 'state' },
-              labels: { undone: 'Undone', undo: 'Put back' },
-              tones: { undone: 'neutral', undo: 'neutral' },
+              labels: {
+                undone: 'Undone',
+                undo: 'Put back',
+                'partly-undone': 'Partly undone',
+                partial: 'Partly done',
+                pending: 'Checking',
+                unknown: 'Unconfirmed',
+              },
+              tones: {
+                undone: 'neutral',
+                undo: 'neutral',
+                'partly-undone': 'warning',
+                partial: 'warning',
+                pending: 'neutral',
+                unknown: 'warning',
+              },
             },
           },
           actions: [

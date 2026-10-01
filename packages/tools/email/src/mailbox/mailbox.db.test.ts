@@ -30,7 +30,7 @@ import { secretNameFor, writeGmailAccount } from '../config.js';
 import { FakeImapServer, fakeMessage } from '../imap/fake.js';
 import { createEmailManifest, manifest as emailManifestForHost } from '../index.js';
 import { countInboxUnread } from '../metrics.js';
-import { loadTargets, performAction } from './actions.js';
+import { findAction, loadTargets, performAction, undoAction } from './actions.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
 import { createInboxPollSource } from '../sources/inbox-poll.js';
 import { setPolicy } from '../tools/policies.js';
@@ -596,6 +596,301 @@ suite('mailbox actions (postgres, fake IMAP)', () => {
       await expect(
         setPolicy.describe({ account: GMAIL, scope: 'sender', matcher: 'a@b.test', action: 'wake', onArrival: 'move', folder: 'Nowhere' }, ctx),
       ).rejects.toThrow(/no folder called "Nowhere"/);
+    });
+  });
+
+  const changesQuery = async (): Promise<any> =>
+    (manifest.queries ?? []).find((q) => q.name === 'mailbox_changes')!.produce({}, pageQueryContext(ctx));
+  const uidOf = (server: FakeImapServer, messageId: string): number => server.whereIs(messageId)[0]!.uid;
+
+  describe('mail moved in another mail app', () => {
+    const threadQuery = async (messageRowId: string): Promise<any> => {
+      const { rows } = await pool.query(`select thread_id from email.messages where id = $1`, [messageRowId]);
+      return (manifest.queries ?? []).find((q) => q.name === 'thread')!.produce({ id: String(rows[0].thread_id) }, pageQueryContext(ctx));
+    };
+    const goneOf = async (id: string): Promise<boolean> =>
+      (await pool.query(`select gone_at from email.messages where id = $1`, [id])).rows[0].gone_at !== null;
+    it('plain IMAP: archived elsewhere is no longer in the inbox — not counted, not selected, said on the Mail page; an unchanged inbox costs no command', async () => {
+      const id = (await idsOf(PLAIN, 'Newsletter 7'))[0]!;
+      const unreadBefore = await countInboxUnread(ctx as never, [accounts[PLAIN]!.id]);
+      const selectedBefore = (await call('email.select_messages', { account: PLAIN })).count;
+      plain.moveElsewhere('INBOX', uidOf(plain, `<news-7@${PLAIN}>`), 'Archive');
+      await poll();
+      expect(await goneOf(id)).toBe(true);
+      expect((await rowOf(id)).folder).toBe('INBOX');
+      expect(plain.departureChecks.at(-1)).toMatchObject({ mailbox: 'INBOX', via: 'search' });
+      expect(await countInboxUnread(ctx as never, [accounts[PLAIN]!.id])).toBe(unreadBefore - 1);
+      expect((await call('email.select_messages', { account: PLAIN })).count).toBe(selectedBefore - 1);
+      expect((await call('email.select_messages', { account: PLAIN, folder: 'any' })).ids).not.toContain(id);
+      const thread = await threadQuery(id);
+      expect(thread.messages.at(-1).summary).toContain('no longer in the inbox');
+      const recent = await call('email.list_recent', { account: PLAIN });
+      expect(recent.messages.find((m: any) => m.id === id).place).toBe('no longer in the inbox');
+      expect((await call('email.list_recent', { account: PLAIN, unreadOnly: true })).messages.map((m: any) => m.id)).not.toContain(id);
+      // A change naming it skips it, and says why.
+      const out = await approve('email.mark', { ids: [id], state: 'read' });
+      expect(out.out.changed).toBe(0);
+      expect(out.out.note).toContain('moved or deleted in another mail app');
+
+      // Nothing changed on the server: UIDNEXT and EXISTS say so, no command is sent.
+      const checks = plain.departureChecks.length;
+      await poll();
+      expect(plain.departureChecks.length).toBe(checks);
+    });
+
+    it('Gmail: finds where it went — archived to All Mail, trashed, labelled — and a message moved back is the same row, not a second one', async () => {
+      const archivedId = (await idsOf(GMAIL, 'Newsletter 1'))[0]!;
+      const trashedId = (await idsOf(GMAIL, 'Newsletter 2'))[0]!;
+      const labelledId = (await idsOf(GMAIL, 'Dinner?'))[0]!;
+      gmail.moveElsewhere('INBOX', uidOf(gmail, `<news-1@${GMAIL}>`), '[Gmail]/All Mail');
+      gmail.moveElsewhere('INBOX', uidOf(gmail, `<news-2@${GMAIL}>`), '[Gmail]/Trash');
+      const dinner = uidOf(gmail, `<friend@${GMAIL}>`);
+      gmail.storeLabels('INBOX', [dinner], ['Receipts'], 'add');
+      gmail.storeLabels('INBOX', [dinner], ['\\Inbox'], 'remove');
+      const count = await messageCount();
+      await poll();
+
+      expect(await rowOf(archivedId)).toMatchObject({ folder: '[Gmail]/All Mail', uid: uidOf(gmail, `<news-1@${GMAIL}>`), uidvalidity: 11 });
+      expect((await rowOf(trashedId)).folder).toBe('[Gmail]/Trash');
+      expect((await rowOf(labelledId)).folder).toBe('Receipts');
+      const labels = async (id: string): Promise<string[]> =>
+        (await pool.query(`select labels from email.messages where id = $1`, [id])).rows[0].labels;
+      expect((await labels(archivedId)).sort()).toEqual(['Newsletters', '\\Important'].sort());
+      expect(await labels(trashedId)).toEqual([]);
+      expect(await labels(labelledId)).toEqual(['Receipts']);
+      for (const id of [archivedId, trashedId, labelledId]) expect(await goneOf(id)).toBe(false);
+      // The Mail page says where each one is now.
+      expect((await threadQuery(archivedId)).messages.at(-1).summary).toContain('archived');
+      expect((await threadQuery(trashedId)).messages.at(-1).summary).toContain('in Trash');
+      expect((await threadQuery(labelledId)).messages.at(-1).summary).toContain('in Receipts');
+      // A label is selectable by name.
+      expect((await call('email.select_messages', { account: GMAIL, folder: 'Receipts' })).ids).toEqual([labelledId]);
+      // Not in the inbox: neither selected there nor counted.
+      expect((await call('email.select_messages', { account: GMAIL })).ids).not.toContain(labelledId);
+
+      // Moved back to the inbox in the other app: the row follows; no duplicate, no second triage.
+      const runsBefore = runs.length;
+      gmail.moveElsewhere('[Gmail]/All Mail', uidOf(gmail, `<news-1@${GMAIL}>`), 'INBOX');
+      await poll();
+      expect(await messageCount()).toBe(count);
+      expect(runs.length).toBe(runsBefore);
+      expect(await rowOf(archivedId)).toMatchObject({ folder: 'INBOX', uid: uidOf(gmail, `<news-1@${GMAIL}>`) });
+      const thread = await pool.query(`select last_folder_id, last_uid from email.threads t join email.messages m on m.thread_id = t.id where m.id = $1`, [archivedId]);
+      expect(Number(thread.rows[0].last_uid)).toBe(uidOf(gmail, `<news-1@${GMAIL}>`));
+    });
+
+    it('asks QRESYNC for VANISHED uids where the server offers it', async () => {
+      gmail.mailbox('INBOX').condstore = true;
+      gmail.mailbox('INBOX').qresync = true;
+      // A first pass records the modseq; the next one asks what vanished since.
+      gmail.add('INBOX', fakeMessage({ messageId: `<late@${GMAIL}>`, from: 'late@people.test', to: [GMAIL], subject: 'Late' }));
+      await poll();
+      const id = (await idsOf(GMAIL, 'Newsletter 4'))[0]!;
+      gmail.moveElsewhere('INBOX', uidOf(gmail, `<news-4@${GMAIL}>`), '[Gmail]/All Mail');
+      await poll();
+      expect(gmail.departureChecks.at(-1)).toMatchObject({ via: 'vanished' });
+      expect((await rowOf(id)).folder).toBe('[Gmail]/All Mail');
+    });
+
+    it('undo leaves a message the owner moved since where he put it, and says so', async () => {
+      const [first, second] = (await idsOf(PLAIN)).slice(0, 2);
+      const { out } = await approve('email.mark', { ids: [first!, second!], state: 'read' });
+      plain.moveElsewhere('INBOX', uidOf(plain, `<news-1@${PLAIN}>`), 'Receipts');
+      await poll();
+      const recent = await changesQuery();
+      expect(recent.changes[0].undoLine).toContain('1 of them has since been moved in another mail app and will stay where it is');
+      const undo = await approve('email.undo', { change: out.change.id });
+      expect(undo.out.changed).toBe(1);
+      expect(undo.out.note).toContain('1 message could not be put back: 1 moved in another mail app since, so left where you put it');
+      expect(plain.find('Receipts', uidOf(plain, `<news-1@${PLAIN}>`))?.flags).toContain('\\Seen');
+    });
+  });
+
+  describe('Gmail labels', () => {
+    it('a move to a label adds it and takes Inbox off, keeping every other label; undo restores the labels exactly', async () => {
+      const id = (await idsOf(GMAIL, 'Newsletter 5'))[0]!;
+      const { out, preview } = await approve('email.move', { ids: [id], folder: 'Receipts' });
+      expect(preview).toContain('Receipts');
+      const ops = gmail.writes.map((w) => w.op);
+      expect(ops).not.toContain('move');
+      expect(gmail.writes).toEqual([
+        expect.objectContaining({ op: 'store-labels', mailbox: 'INBOX', labels: ['Receipts'], how: 'add' }),
+        expect.objectContaining({ op: 'store-labels', mailbox: 'INBOX', labels: ['\\Inbox'], how: 'remove' }),
+      ]);
+      const [where] = gmail.whereIs(`<news-5@${GMAIL}>`);
+      expect(where?.mailbox).toBe('Receipts');
+      expect(gmail.find('Receipts', where!.uid)?.labels?.sort()).toEqual(['Newsletters', 'Receipts', '\\Important'].sort());
+      expect(await rowOf(id)).toMatchObject({ folder: 'Receipts', uid: where!.uid });
+      const trail = await pool.query(`select state, items from email.mailbox_actions where id = $1`, [out.change.id]);
+      expect(trail.rows[0].state).toBe('done');
+      expect(trail.rows[0].items[0]).toMatchObject({ via: 'labels', status: 'done', prevLabels: ['Newsletters', '\\Important'].sort() });
+
+      // In the meantime the owner adds a label in the web client; undo puts the set back as it was.
+      gmail.storeLabels('Receipts', [where!.uid], ['Later'], 'add');
+      gmail.writes.length = 0;
+      await approve('email.undo', { change: out.change.id });
+      expect(gmail.writes.map((w) => w.op)).not.toContain('move');
+      const [back] = gmail.whereIs(`<news-5@${GMAIL}>`);
+      expect(back?.mailbox).toBe('INBOX');
+      expect(gmail.find('INBOX', back!.uid)?.labels?.sort()).toEqual(['Newsletters', '\\Important'].sort());
+      expect(await rowOf(id)).toMatchObject({ folder: 'INBOX', uid: back!.uid });
+    });
+
+    it('plain IMAP is unchanged: a MOVE', async () => {
+      const id = (await idsOf(PLAIN, 'Newsletter 5'))[0]!;
+      await approve('email.move', { ids: [id], folder: 'Receipts' });
+      expect(plain.writes.map((w) => w.op)).toEqual(['move']);
+    });
+  });
+
+  describe('undo safety', () => {
+    /** A plain client whose MOVE into `folder` reaches the server and then loses its answer. */
+    const failingMove = (folder: string): unknown => {
+      const real = plain.client();
+      return new Proxy(real, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (prop === 'move') {
+            return async (from: string, uids: number[], destination: string) => {
+              const result = await (value as Function).call(target, from, uids, destination);
+              if (destination !== folder) return result;
+              throw new Error('Connection not available');
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+    /** A plain client whose connection drops after its first MOVE: the next command fails. */
+    const droppingAfterMove = (): unknown => {
+      const real = plain.client();
+      let moved = false;
+      return new Proxy(real, {
+        get(target, prop, receiver) {
+          const value = Reflect.get(target, prop, receiver);
+          if (prop === 'move') {
+            return async (...args: unknown[]) => {
+              const result = await (value as Function).apply(target, args);
+              moved = true;
+              return result;
+            };
+          }
+          if (prop === 'open') {
+            return async (...args: unknown[]) => {
+              if (moved) throw new Error('Connection not available');
+              return (value as Function).apply(target, args);
+            };
+          }
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    };
+
+    it('an undo stopped part-way records what it put back, marks it partial, and the rest can be undone again', async () => {
+      const ids = (await idsOf(PLAIN)).slice(0, 2);
+      await approve('email.archive', { ids: [ids[0]!] });
+      await pool.query('truncate email.mailbox_actions');
+      const { out } = await approve('email.trash', { ids: [ids[1]!, ids[0]!] });
+      const change = (await findAction(pool, out.change.id))!;
+      // One folder's move back works; then the connection drops before the other's.
+      await expect(
+        undoAction(pool, droppingAfterMove() as never, {
+          account: { id: accounts[PLAIN]!.id, address: PLAIN } as AccountRecord,
+          action: change,
+          provenance: { origin: 'owner', actor: 'owner' },
+          now: NOW,
+        }),
+      ).rejects.toThrow(/Connection not available/);
+      const undoRow = (await pool.query(`select state, changed, note, message_ids from email.mailbox_actions where kind = 'undo'`)).rows[0];
+      expect(undoRow).toMatchObject({ state: 'partial', changed: 1 });
+      expect(undoRow.note).toMatch(/Partial: stopped by an error after 1 message/);
+      // ids[0] goes back to Archive, ids[1] to INBOX; whichever went first is back, the other still in Trash.
+      const [first] = undoRow.message_ids as string[];
+      const home = new Map([[ids[0]!, { mid: `<news-1@${PLAIN}>`, folder: 'Archive' }], [ids[1]!, { mid: `<news-2@${PLAIN}>`, folder: 'INBOX' }]]);
+      const rest = ids.find((id) => id !== first)!;
+      const original = (await findAction(pool, out.change.id))!;
+      expect(original.revertedIds).toEqual([first]);
+      expect(original.undoneAt).toBeNull();
+      expect(plain.whereIs(home.get(first!)!.mid)[0]?.mailbox).toBe(home.get(first!)!.folder);
+      expect(plain.whereIs(home.get(rest)!.mid)[0]?.mailbox).toBe('Trash');
+      const recent = await changesQuery();
+      const row = recent.changes.find((c: any) => c.id === out.change.id);
+      expect(row).toMatchObject({ state: 'partly-undone', undoable: true });
+      expect(row.undoLine).toContain('Undo the rest of "Move to Trash" on 1 message');
+
+      // Undo again: only the rest.
+      const again = await approve('email.undo', { change: out.change.id });
+      expect(again.out.changed).toBe(1);
+      expect(plain.whereIs(home.get(rest)!.mid)[0]?.mailbox).toBe(home.get(rest)!.folder);
+      const done = (await findAction(pool, out.change.id))!;
+      expect(done.revertedIds.sort()).toEqual([...ids].sort());
+      expect(done.undoneAt).not.toBeNull();
+    });
+
+    it('intent first: a change whose answer never came stays "checking" until the next poll settles it with the server', async () => {
+      const ids = (await idsOf(PLAIN)).slice(0, 1);
+      await expect(
+        performAction(pool, failingMove('Archive') as never, {
+          account: { id: accounts[PLAIN]!.id, address: PLAIN } as AccountRecord,
+          kind: 'archive',
+          targets: await loadTargets(pool, ids),
+          provenance: { origin: 'owner', actor: 'owner' },
+          now: NOW,
+        }),
+      ).rejects.toThrow(/Connection not available/);
+      const pending = (await pool.query(`select id, state, items from email.mailbox_actions`)).rows;
+      expect(pending).toHaveLength(1);
+      expect(pending[0].state).toBe('pending');
+      expect(pending[0].items[0]).toMatchObject({ status: 'planned', toFolder: 'Archive' });
+      const shown = (await changesQuery()).changes[0];
+      expect(shown).toMatchObject({ state: 'pending', undoable: false });
+      await expect(tool('email.undo').describe({ change: String(pending[0].id) }, ctx)).rejects.toThrow(/has not yet checked/);
+
+      await poll();
+      const settled = (await pool.query(`select state, changed, note, items from email.mailbox_actions`)).rows[0];
+      expect(settled).toMatchObject({ state: 'done', changed: 1 });
+      expect(settled.items[0]).toMatchObject({ status: 'done', toFolder: 'Archive', toUid: uidOf(plain, `<news-1@${PLAIN}>`) });
+      expect(settled.note).toContain('buddi stopped while making this change');
+      expect((await rowOf(ids[0]!)).folder).toBe('Archive');
+      const undo = await approve('email.undo', {});
+      expect(undo.out.changed).toBe(1);
+      expect(plain.whereIs(`<news-1@${PLAIN}>`)[0]?.mailbox).toBe('INBOX');
+    });
+
+    it('after a crash the next poll finalises each planned message from the server: done, never happened, or unknown', async () => {
+      const ids = await idsOf(PLAIN);
+      const targets = await loadTargets(pool, ids.slice(0, 4));
+      // As a process that died mid-change leaves it: pending, every message planned.
+      const item = (t: (typeof targets)[number], extra: Record<string, unknown>) => ({
+        id: t.id, subject: t.subject, from: t.from, messageId: t.messageId,
+        fromFolder: 'INBOX', fromUidValidity: 1, fromUid: t.uid, prevFlags: [], status: 'planned', ...extra,
+      });
+      // 1: moved before the crash. 2: never moved. 3: gone from both (emptied elsewhere).
+      plain.moveElsewhere('INBOX', targets[0]!.uid, 'Archive');
+      plain.remove('INBOX', targets[2]!.uid);
+      // 4: a read mark that did reach the server.
+      plain.setFlags('INBOX', targets[3]!.uid, ['\\Seen']);
+      await pool.query(
+        `insert into email.mailbox_actions (account_id, kind, destination, origin, actor, message_ids, items, state)
+         values ($1, 'archive', 'Archive', 'owner', 'owner', $2::uuid[], $3::jsonb, 'pending'),
+                ($1, 'mark-read', null, 'owner', 'owner', $4::uuid[], $5::jsonb, 'pending')`,
+        [
+          accounts[PLAIN]!.id,
+          targets.slice(0, 3).map((t) => t.id),
+          JSON.stringify(targets.slice(0, 3).map((t) => item(t, { toFolder: 'Archive', toUidValidity: 0, toUid: null }))),
+          [targets[3]!.id],
+          JSON.stringify([item(targets[3]!, { wantSeen: true })]),
+        ],
+      );
+      await poll();
+      const rows = (await pool.query(`select kind, state, changed, items, message_ids from email.mailbox_actions order by kind`)).rows;
+      expect(rows[0]).toMatchObject({ kind: 'archive', state: 'unknown', changed: 1 });
+      expect(rows[0].items.map((i: any) => [i.id, i.status])).toEqual([[targets[0]!.id, 'done'], [targets[2]!.id, 'unknown']]);
+      expect(rows[1]).toMatchObject({ kind: 'mark-read', state: 'done', changed: 1 });
+      expect((await rowOf(targets[0]!.id)).folder).toBe('Archive');
+      expect((await rowOf(targets[3]!.id)).flags).toContain('\\Seen');
+      const shown = await changesQuery();
+      expect(shown.changes.map((c: any) => c.state)).toContain('unknown');
     });
   });
 

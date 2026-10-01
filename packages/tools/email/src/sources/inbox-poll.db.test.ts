@@ -588,8 +588,10 @@ suite('email.inbox-poll (postgres + fake imap)', () => {
       expect(await messageCount()).toBe(3);
       expect(again.runs).toEqual([]);
       expect(await storedModseq()).toBeNull();
-      // The archived one keeps its last flags: the schema has no "in the inbox" field.
-      expect((await inboxUnread.measure({}, metricContext()))?.value).toBe(2);
+      // The archived one keeps its last flags, but it left the inbox (a plain
+      // server cannot say where), so it no longer counts as unread there.
+      expect((await pool.query(`select uid from email.messages where gone_at is not null`)).rows.map((r) => Number(r.uid))).toEqual([3]);
+      expect((await inboxUnread.measure({}, metricContext()))?.value).toBe(1);
     });
 
     it('caps the full fetch at the newest FLAG_SYNC_WINDOW rows, in batches', async () => {

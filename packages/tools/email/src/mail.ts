@@ -576,6 +576,12 @@ export function triagePrompt(input: {
   thread?: ThreadForPrompt;
   /** A standing instruction from a policy, e.g. "draft a reply". */
   instruction?: string;
+  /**
+   * Where the message is now when it already left the inbox before this run
+   * ("archived", "in Trash", "no longer in the inbox"): the owner dealt with
+   * it in another mail app, which is itself something triage should weigh.
+   */
+  place?: string;
 }): string {
   const cap = input.bodyChars ?? 4000;
   const body = input.bodyText.length > cap
@@ -606,6 +612,9 @@ export function triagePrompt(input: {
     `Subject: ${quoted(input.subject || '(no subject)')}`,
     `Date: ${quoted(input.date ?? '(unknown)')}`,
     `Attachments: ${quoted(attachments)}`,
+    ...(input.place
+      ? [`Already out of the inbox: ${input.place} — the owner moved it in another mail app before this run; there is no need to bring it to his attention unless it is urgent.`]
+      : []),
     ...threadBlock(input.thread),
     ...senderHistoryBlock(input.history),
     ...(input.instruction ? ['', `The owner has a standing instruction for this sender: ${input.instruction}`] : []),

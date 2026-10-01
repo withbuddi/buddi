@@ -47,7 +47,7 @@ import { policyLists, threadChoices } from '../tools/policies.js';
 import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
-import { describeUndo, plural, recentActions, undoRefusal, verbOf } from '../mailbox/actions.js';
+import { describeUndo, movedSince, plural, recentActions, undoRefusal, verbOf, type ActionRecord } from '../mailbox/actions.js';
 import { learnedRules } from '../policies/auto.js';
 
 /** How many conversations the list shows before the owner narrows it. */
@@ -371,12 +371,16 @@ export function threadQuery(): PageQuery {
           snippet: message.snippet,
           who: message.direction === 'out' ? 'you wrote' : 'they wrote',
           when: relative(message.date, now),
+          // Where it is now when that is not the inbox: archived, in Trash,
+          // in a label, or no longer in the inbox (moved in another app).
+          place: message.place,
           // One line, because a repeated component draws text and formats
-          // nothing: who wrote it, when, and what it opens with.
+          // nothing: who wrote it, when, where it is now, and what it opens with.
           summary: [
             message.from,
             message.direction === 'out' ? 'you wrote' : 'they wrote',
             relative(message.date, now),
+            message.place,
           ]
             .filter((part) => part !== '')
             .join(' · ') + (message.snippet ? ` — ${message.snippet}` : ''),
@@ -776,6 +780,10 @@ export function mailboxChangesQuery(): PageQuery {
       const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
       const address = new Map(accounts.map((a) => [a.id, a.address]));
       const changes = await recentActions(ctx.buddi!.db, accounts.map((a) => a.id), RECENT_CHANGES);
+      // How many of each undoable change's messages moved since in another
+      // app: the Undo confirmation says they will stay where they are.
+      const moved = new Map<string, number>();
+      for (const c of changes) if (undoRefusal(c) === null) moved.set(c.id, await movedSince(ctx.buddi!.db, c));
       return {
         changes: changes.map((c) => {
           const who = c.origin === 'policy' ? `by ${c.actor}` : c.origin === 'owner' ? 'by you' : `by @${c.actor}`;
@@ -791,14 +799,29 @@ export function mailboxChangesQuery(): PageQuery {
               c.note ?? '',
             ].filter((part) => part !== '').join(' · '),
             when: relative(c.createdAt, now),
-            state: c.undoneAt ? 'undone' : c.kind === 'undo' ? 'undo' : null,
+            state: changeState(c),
             undoable: undoRefusal(c) === null,
-            undoLine: describeUndo(c, address.get(c.accountId) ?? 'your mailbox'),
+            undoLine: describeUndo(c, address.get(c.accountId) ?? 'your mailbox', moved.get(c.id) ?? 0),
           };
         }),
       };
     },
   };
+}
+
+/**
+ * The pill on a Recent changes row: undone, partly undone (an undo stopped
+ * part-way; Undo finishes it), an undo itself, or a change that did not go
+ * all the way — partial, still being checked after a stop, or unconfirmed.
+ */
+export function changeState(c: ActionRecord): string | null {
+  if (c.undoneAt) return 'undone';
+  if (c.state === 'pending') return 'pending';
+  if (c.state === 'unknown') return 'unknown';
+  if (c.kind !== 'undo' && c.revertedIds.length > 0) return 'partly-undone';
+  if (c.state === 'partial') return 'partial';
+  if (c.kind === 'undo') return 'undo';
+  return null;
 }
 
 /** How many rules that kept themselves the Mail page lists. */

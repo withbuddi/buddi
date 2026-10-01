@@ -12,6 +12,7 @@
  */
 import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
+import { placeWords } from '../folders.js';
 import { isUnread, quoted, UNREAD_SQL, UNTRUSTED_NOTICE } from '../mail.js';
 import {
   buildSearch,
@@ -76,7 +77,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
   name: 'email.list_recent',
   untrusted: 'mail',
   description:
-    'List recent messages in the inbox, newest first: sender, subject, date, a short snippet, whether it is unread, whether it has attachments, which of the owner\'s mailboxes it arrived in, and what triage decided about it if anything has. Every mailbox is searched unless you name one with `account`. Use it to see what has arrived; use email.read for the full body of one message.',
+    'List recent messages in the inbox, newest first: sender, subject, date, a short snippet, whether it is unread, whether it has attachments, which of the owner\'s mailboxes it arrived in, and what triage decided about it if anything has, and — when it has left the inbox — where it is now (`place`: archived, in Trash, in a label, or no longer in the inbox when it was moved in another mail app). Every mailbox is searched unless you name one with `account`. Use it to see what has arrived; use email.read for the full body of one message.',
   tier: 'auto',
   input: listRecentInput,
   async execute(input, ctx) {
@@ -89,7 +90,8 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
       where.push(`date >= $${params.length}::date`);
     }
     if (input.unreadOnly) {
-      where.push(UNREAD_SQL);
+      // Unread in the inbox: one that left in another app is not waiting there.
+      where.push(UNREAD_SQL, 'gone_at is null');
     }
     params.push(limit);
     const { rows } = await ctx.buddi!.db.query(
@@ -99,6 +101,7 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
         limit $${params.length}`,
       params,
     );
+    const places = await placesOf(ctx.buddi!.db, rows.map((r) => String(r.id)));
     const messages = [];
     for (const row of rows) {
       const message = toMessage(row);
@@ -113,12 +116,38 @@ export const listRecent: ToolDefinition<z.infer<typeof listRecentInput>, unknown
         snippet: message.snippet,
         unread: isUnread(message.flags),
         hasAttachments: message.hasAttachments,
+        // Where it is now when not the inbox: "archived", "in Trash", "in
+        // Receipts", "no longer in the inbox" (moved in another mail app).
+        ...(places.get(message.id) ? { place: places.get(message.id) } : {}),
         triage: await latestTriage(ctx.buddi!.db, message.id),
       });
     }
     return { ...scopeSummary(scope), count: messages.length, messages };
   },
 };
+
+/** Each message's place in words (`placeWords`), only where it is not the inbox or Sent. */
+async function placesOf(db: Pick<import('@buddi/core/plugin').DbArea, 'query'>, ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const { rows } = await db.query(
+    `select m.id, m.direction, m.gone_at, f.kind, f.name, f.special_use
+       from email.messages m left join email.folders f on f.id = m.folder_id
+      where m.id = any($1::uuid[])`,
+    [ids],
+  );
+  const out = new Map<string, string>();
+  for (const r of rows as Array<Record<string, any>>) {
+    const words = placeWords({
+      kind: r.kind ?? null,
+      name: r.name ?? null,
+      specialUse: r.special_use ?? null,
+      gone: r.gone_at !== null && r.gone_at !== undefined,
+      direction: r.direction === 'out' ? 'out' : 'in',
+    });
+    if (words) out.set(String(r.id), words);
+  }
+  return out;
+}
 
 const readInput = z.object({
   id: UUID.describe('The message id from email.list_recent or email.search.'),

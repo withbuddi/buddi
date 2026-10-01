@@ -58,6 +58,10 @@ interface ImapFlowLike {
     options?: Record<string, unknown>,
   ): Promise<{ uidValidity?: bigint; uidMap?: Map<number, number> } | false | undefined>;
   search(query: Record<string, unknown>, options?: Record<string, unknown>): Promise<number[] | false | undefined>;
+  /** What the session ENABLEd (CONDSTORE, QRESYNC, …). */
+  enabled?: Set<string>;
+  on?(event: string, listener: (...args: unknown[]) => void): unknown;
+  off?(event: string, listener: (...args: unknown[]) => void): unknown;
 }
 
 type ImapFlowCtor = new (options: Record<string, unknown>) => ImapFlowLike;
@@ -241,6 +245,39 @@ class ImapFlowClient implements ImapWriter {
       });
     }
     return out;
+  }
+
+  /**
+   * Which held uids left the mailbox. On a session that ENABLEd QRESYNC and
+   * given a modseq, `UID FETCH from:to (UID FLAGS) (CHANGEDSINCE m VANISHED)`
+   * — imapflow adds VANISHED itself — and the server's `VANISHED (EARLIER)`
+   * arrives as `expunge` events, collected here. Otherwise `UID SEARCH UID
+   * from:to`: the uids still there. Neither reads a header or a body.
+   */
+  async departures(
+    mailbox: string,
+    range: { fromUid: number; toUid: number; changedSince?: string | null },
+  ): Promise<{ vanished: number[] } | { present: number[] }> {
+    if (this.#open !== mailbox) await this.open(mailbox);
+    const span = `${range.fromUid}:${range.toUid}`;
+    if (range.changedSince && this.client.enabled?.has('QRESYNC') && this.client.on && this.client.off) {
+      const vanished: number[] = [];
+      const listener = (payload: unknown): void => {
+        const p = payload as { path?: string; uid?: number; vanished?: boolean } | undefined;
+        if (p?.vanished && typeof p.uid === 'number' && (p.path === undefined || p.path === mailbox)) vanished.push(p.uid);
+      };
+      this.client.on('expunge', listener);
+      try {
+        for await (const _msg of this.client.fetch(span, { uid: true, flags: true }, { uid: true, changedSince: BigInt(range.changedSince) })) {
+          // Flag changes are the flag re-sync's business; only VANISHED matters here.
+        }
+      } finally {
+        this.client.off('expunge', listener);
+      }
+      return { vanished: vanished.filter((uid) => uid >= range.fromUid && uid <= range.toUid) };
+    }
+    const found = await this.client.search({ uid: span }, { uid: true });
+    return { present: (found || []).map(Number) };
   }
 
   async fetchSince(mailbox: string, sinceUid: number, limit: number): Promise<FetchedMessage[]> {
@@ -432,6 +469,15 @@ class ImapFlowClient implements ImapWriter {
     if (ok === false) throw new Error(`the server refused to restore labels in ${mailbox}`);
   }
 
+  async storeLabels(mailbox: string, uids: readonly number[], labels: readonly string[], op: 'add' | 'remove'): Promise<void> {
+    if (uids.length === 0 || labels.length === 0) return;
+    await this.#openWritable(mailbox);
+    const ok = op === 'add'
+      ? await this.client.messageFlagsAdd(uidSet(uids), [...labels], { uid: true, useLabels: true })
+      : await this.client.messageFlagsRemove(uidSet(uids), [...labels], { uid: true, useLabels: true });
+    if (ok === false) throw new Error(`the server refused to change labels in ${mailbox}`);
+  }
+
   async close(): Promise<void> {
     await this.client.logout().catch(() => {});
   }
@@ -489,6 +535,9 @@ export const imapflowFactory: ImapClientFactory = async (
     // Verified TLS. Never relaxed — an app password is a full-mailbox bearer.
     tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
     logger: false,
+    // ENABLE QRESYNC where the server offers it, so the presence check can
+    // ask for VANISHED uids instead of searching (inbox-poll.ts).
+    qresync: true,
   });
   await client.connect();
   return new ImapFlowClient(client);

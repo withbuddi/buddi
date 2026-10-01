@@ -119,3 +119,27 @@ export function planFolders(listing: readonly MailboxInfo[]): FolderPlan[] {
 export function sentFolderOf(listing: readonly MailboxInfo[]): string | null {
   return planFolders(listing).find((f) => f.kind === 'sent')?.name ?? null;
 }
+
+/**
+ * Where a message is now, in the owner's words — empty for the inbox (where
+ * mail is expected) and for the owner's own sent mail. "archived" for Gmail's
+ * All Mail or a server's Archive, "in Trash", "in Spam", "in <folder>" (a
+ * Gmail label reads as itself), and "no longer in the inbox" for a message
+ * the poll saw leave in another app without learning where it went.
+ */
+export function placeWords(place: {
+  kind: string | null;
+  name: string | null;
+  specialUse: string | null;
+  gone: boolean;
+  direction?: 'in' | 'out';
+}): string {
+  if (place.gone) return place.kind === 'inbox' || place.kind === null ? 'no longer in the inbox' : `no longer in ${place.name ?? 'its folder'}`;
+  if (place.kind === 'inbox' || place.kind === 'sent' || place.direction === 'out') return '';
+  const use = (place.specialUse ?? '').toLowerCase();
+  if (use === '\\all' || use === '\\archive') return 'archived';
+  if (use === '\\trash') return 'in Trash';
+  if (use === '\\junk') return 'in Spam';
+  if (!place.name) return '';
+  return `in ${place.name.replace(/^\[Gmail\]\//, '')}`;
+}

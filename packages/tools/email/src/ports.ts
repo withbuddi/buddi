@@ -176,6 +176,27 @@ export interface ImapClient {
     part: string,
     maxBytes: number,
   ): Promise<Buffer | null>;
+  /**
+   * Which of the messages buddi holds in `[fromUid, toUid]` have left this
+   * mailbox (archived, moved or deleted in another app). Optional: a client
+   * without it simply never notices.
+   *
+   * With `changedSince` (an earlier HIGHESTMODSEQ) on a server that ENABLEd
+   * QRESYNC (RFC 7162), the answer is the server's own VANISHED (EARLIER)
+   * list: `{ vanished }`. Otherwise one bounded `UID SEARCH UID from:to`
+   * answers which uids are still there: `{ present }`. Uids only, never a
+   * header or a body, so it cannot set `\Seen`.
+   */
+  departures?(
+    mailbox: string,
+    range: { fromUid: number; toUid: number; changedSince?: string | null },
+  ): Promise<{ vanished: number[] } | { present: number[] }>;
+  /** The server's CAPABILITY list, upper-cased. Optional on a reader; a writer has it. */
+  capabilities?(): Promise<string[]>;
+  /** `UID SEARCH HEADER Message-ID <id>`. Optional on a reader; a writer has it. */
+  findByMessageId?(mailbox: string, messageId: string): Promise<number | null>;
+  /** Gmail only: `UID FETCH <uids> (X-GM-LABELS)`. Optional on a reader; a writer has it. */
+  fetchLabels?(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>>;
   close(): Promise<void>;
 }
 
@@ -213,6 +234,12 @@ export interface ImapWriter extends ImapClient {
   fetchLabels(mailbox: string, uids: readonly number[]): Promise<Map<number, string[]>>;
   /** Gmail only: `UID STORE <uids> +X-GM-LABELS (…)`. */
   addLabels(mailbox: string, uids: readonly number[], labels: readonly string[]): Promise<void>;
+  /**
+   * Gmail only: `UID STORE <uids> ±X-GM-LABELS (…)`. Taking `\Inbox` off is
+   * how a message leaves the inbox with every other label kept; putting it
+   * back is how it returns.
+   */
+  storeLabels(mailbox: string, uids: readonly number[], labels: readonly string[], op: 'add' | 'remove'): Promise<void>;
 }
 
 /** Whether a client can write. Duck-typed, so a test's stub stays a reader. */
