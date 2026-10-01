@@ -321,6 +321,11 @@ A list of sections in four groups.
 - **Keys and secrets**: your vault, and where each secret may be used.
 - **Lock screen**: the PIN, how long before the dashboard locks, the
   background (see [Lock screen](#lock-screen)).
+- **API tokens**: tokens for calling buddi's HTTP API from a script or
+  another program — each with the name you gave it, its last four
+  characters and when it was last used. Make a token shows it once, with
+  Copy; Revoke ends it at the next request. What a token may and may not
+  call is in [the HTTP API](api.md).
 - **Watchers**: the checks plugins run on a schedule, with a switch each.
 - **Backup**: nightly backups, one now, a check, the passphrase, and restore.
 - **System**: the version and upgrade, pausing the queue, this host.

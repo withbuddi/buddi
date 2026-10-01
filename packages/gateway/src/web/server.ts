@@ -252,6 +252,8 @@ import { StreamBudget, resumeCursor, streamConversation } from './stream.js';
 import { ensureWebToken, verifyTicket } from './token.js';
 import { MAX_UPLOAD_BYTES, readUpload } from './upload.js';
 import { LOCKED_BODY, allowedWhileLocked, clientOf, createLock } from './lock.js';
+import { matchApiRoute, TOKEN_REFUSALS } from './api-routes.js';
+import { apiTokensRoute, bearerOf, verifyApiToken, type ApiTokenView } from './api-tokens.js';
 import { LockImageRefusal, MAX_LOCK_IMAGE_BYTES, normaliseLockImage } from './lock-image.js';
 import {
   cancelJobFromWeb,
@@ -565,6 +567,24 @@ export function createWebApp(deps: WebServerDeps): Server {
    */
   const lock = createLock({ pool: deps.pool, sessions, now: deps.now, timezone: deps.timezone, widgets, log });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
+  /*
+   * The session a live API token acts through: minted on its first request,
+   * kept in memory only, one per token (and scope), so a stream budget or a
+   * sign-in in progress keyed by session id holds across its requests.
+   */
+  const tokenSessions = new Map<string, Session>();
+  const tokenSession = (holder: ApiTokenView, scope: SessionScope, now: Date): Session => {
+    const key = `${holder.id}:${scope}`;
+    const held = tokenSessions.get(key);
+    if (held && held.expiresAt.getTime() > now.getTime()) {
+      held.expiresAt = new Date(now.getTime() + held.ttlMs);
+      return held;
+    }
+    for (const [k, s] of tokenSessions) if (s.expiresAt.getTime() <= now.getTime()) tokenSessions.delete(k);
+    const session = sessions.create(scope, now, { via: 'token', client: 'api' }, { persist: false });
+    tokenSessions.set(key, session);
+    return session;
+  };
   const holdStream = (session: Session, res: ServerResponse): (() => void) => {
     let entry = openStreams.get(session.id);
     if (!entry) openStreams.set(session.id, (entry = { session, responses: new Set() }));
@@ -880,6 +900,42 @@ export function createWebApp(deps: WebServerDeps): Server {
         Location: `${clean.pathname}${clean.search}`,
         'Set-Cookie': sessionCookies(req, session),
       });
+    }
+
+    /*
+     * An owner API token (docs/api.md, "Authentication"): `Authorization:
+     * Bearer buddi_…` on an /api request, from a script or another program.
+     *
+     * It is a credential presented, so a wrong or revoked one counts as a
+     * failed sign-in for this address exactly as a stale cookie does. A live
+     * one is the owner with no cookie and therefore no CSRF to check, and is
+     * answered only on a route the table lets a token call: never one that
+     * decides an approval, changes a grant, installs code, opens access or
+     * touches a secret. The lock screen does not cover it.
+     */
+    const bearer = url.pathname === '/api' || url.pathname.startsWith('/api/') ? bearerOf(req.headers.authorization) : undefined;
+    if (bearer !== undefined) {
+      if (limiter.blocked(key, now)) {
+        return sendEmpty(res, 429, { 'Retry-After': String(Math.max(1, Math.ceil(limiter.retryAfterMs(key, now) / 1000))) });
+      }
+      let holder: ApiTokenView | null;
+      try {
+        holder = await verifyApiToken(deps.pool, bearer, now);
+      } catch (err) {
+        log(`web: checking an API token failed: ${err instanceof Error ? err.message : String(err)}`);
+        return sendEmpty(res, 503, { 'Retry-After': '5' });
+      }
+      if (!holder) {
+        limiter.failCredential(key, bearer, now);
+        return sendEmpty(res, 401, { 'WWW-Authenticate': 'Bearer realm="buddi"' });
+      }
+      const path = url.pathname.replace(/\/+$/, '') || '/api';
+      const route = matchApiRoute(method, path);
+      if (!route) return method === 'GET' || method === 'HEAD' ? sendJson(res, 404, { error: 'no such endpoint' }) : sendEmpty(res, 405);
+      if (route.token) {
+        return sendJson(res, 403, { error: `An API token cannot call ${route.method} ${route.path}. ${TOKEN_REFUSALS[route.token]} Do it on the dashboard.` });
+      }
+      return api(req, res, url, method, now, tokenSession(holder, scope, now));
     }
 
     const cookies = parseCookies(req.headers.cookie);
@@ -1755,6 +1811,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             return sendJson(res, 503, { error: `Memory is unavailable: ${err instanceof Error ? err.message : String(err)}` });
           }
         }
+        // Settings → API tokens. A token is refused these by the table: it cannot list or make its kind.
+        case '/api/api-tokens':
+          return reply(res, await apiTokensRoute(deps.pool, { method, path, body: null, now }));
         case '/api/provider-accounts':
           if (!deps.providerAccounts) return sendJson(res, 503, { error: 'Provider accounts are unavailable in this process.' });
           await deps.providerAccounts.refresh();
@@ -2061,6 +2120,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       if (path === '/api/extension/pair') {
         const forgotten = await extension.unpair();
         return sendJson(res, forgotten.status, forgotten.body);
+      }
+      // Revoke an API token: the next request carrying it is a 401.
+      const tokenGone = /^\/api\/api-tokens\/([0-9a-f-]{36})$/i.exec(path);
+      if (tokenGone) {
+        const revoked = await apiTokensRoute(deps.pool, { method, path, body: null, now });
+        return revoked.status === 204 ? sendEmpty(res, 204) : sendJson(res, revoked.status, revoked.body);
       }
       // A phone the owner no longer wants talking to their agents. Same as
       // `buddi telegram unpair <id>`, and as immediate.
@@ -2381,6 +2446,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     }
 
     if (path === '/api/presence') return reply(res, await presenceRoute(deps.pool, body, deps.now()));
+    if (path === '/api/api-tokens') return reply(res, await apiTokensRoute(deps.pool, { method, path, body, now }));
     if (path === '/api/notifications/test') return reply(res, await testChannelRoute(body, deps.now()));
     if (path === '/api/notifications/agent-mute') return reply(res, await agentMuteRoute(deps.pool, body));
     const seen = /^\/api\/notifications\/([^/]+)\/seen$/.exec(path);

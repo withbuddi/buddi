@@ -184,7 +184,7 @@ export function createLock(deps: LockDeps) {
 
   /** The reason a session minted now starts locked, or undefined when it starts open. */
   async function startLocked(client: SessionClient): Promise<LockReason | undefined> {
-    if (client === 'mcp') return undefined;
+    if (client !== 'browser') return undefined;
     return (await current()).pin ? 'start' : undefined;
   }
 
@@ -193,7 +193,7 @@ export function createLock(deps: LockDeps) {
    * the delay. Opens it when the PIN is gone.
    */
   async function locked(session: Session): Promise<boolean> {
-    if (session.client === 'mcp') return false;
+    if (session.client !== 'browser') return false;
     const state = await current();
     if (!state.pin) {
       if (session.lockedAt) deps.sessions.setLock(session, null);
@@ -216,7 +216,7 @@ export function createLock(deps: LockDeps) {
     const waitUntil = pin?.waitUntil && Date.parse(pin.waitUntil) > deps.now().getTime() ? pin.waitUntil : null;
     return {
       pin: pin !== null,
-      locked: pin !== null && !!session.lockedAt && session.client !== 'mcp',
+      locked: pin !== null && !!session.lockedAt && session.client === 'browser',
       lockedAt: pin && session.lockedAt ? session.lockedAt.toISOString() : null,
       reason: pin && session.lockedAt ? (session.lockReason ?? 'owner') : null,
       delayMinutes: state.settings.delayMinutes,
@@ -311,7 +311,7 @@ export function createLock(deps: LockDeps) {
       if (method !== 'POST') return { status: 405, body: { error: 'GET or POST' } };
       const state = await current(true);
       if (!state.pin) return { status: 409, body: { error: 'Set a PIN first, in Settings → Lock screen.' } };
-      if (session.client === 'mcp') return { status: 409, body: { error: 'This client is not covered by the lock screen.' } };
+      if (session.client !== 'browser') return { status: 409, body: { error: 'This client is not covered by the lock screen.' } };
       lockSession(session, body.reason === 'idle' ? 'idle' : 'owner', now);
       return { status: 200, body: stateOf(session, state) };
     }

@@ -39,6 +39,7 @@ import {
   runChatCli,
   runMissionsCli,
   runAccountsCli,
+  runApiTokenCli,
   runNudgesCli,
   runPluginsCli,
   runRemindersCli,
@@ -201,6 +202,12 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       const blocked = await requireDatabase(process.env.DATABASE_URL);
       if (blocked !== 0) return blocked;
       return runAccountsCli(withJson(command.argv, json));
+    }
+    case 'api-token': {
+      await loadEnvironment();
+      const blocked = await requireDatabase(process.env.DATABASE_URL);
+      if (blocked !== 0) return blocked;
+      return runApiTokenCli(withJson(command.argv, json));
     }
     case 'reminders': {
       await loadEnvironment();

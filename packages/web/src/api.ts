@@ -1455,6 +1455,17 @@ export interface UpgradeAttempt {
 }
 
 /** Signing in through Tailscale, as the System panel draws it. */
+/** One owner API token, as Settings lists it: never the token, only its last four characters. */
+export interface ApiTokenView {
+  id: string;
+  name: string;
+  hint: string;
+  scope: 'owner';
+  createdVia: 'dashboard' | 'cli';
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 export interface TailscaleView {
   enabled: boolean;
   login: string;
@@ -2408,6 +2419,11 @@ export const api = {
   /* ---- signing in through Tailscale ---- */
   tailscale: () => get<TailscaleView>('/tailscale'),
   setTailscale: (change: { enabled: boolean; login: string }) => put<TailscaleView>('/tailscale', change),
+  /* ---- owner API tokens (docs/api.md, "Authentication") ---- */
+  apiTokens: () => get<{ tokens: ApiTokenView[] }>('/api-tokens'),
+  /** The answer's `token` is the only time the token itself exists outside the program that will use it. */
+  createApiToken: (name: string) => post<{ token: string; apiToken: ApiTokenView }>('/api-tokens', { name }),
+  revokeApiToken: (id: string) => del<unknown>(`/api-tokens/${encodeURIComponent(id)}`),
   /**
    * Start an upgrade. Accepted rather than completed, like a restart: it takes
    * a backup, installs the new version and restarts buddi under this page.

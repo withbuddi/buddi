@@ -198,6 +198,7 @@ describe('the command table', () => {
       'telegram devices',
       'backup list',
       'jobs',
+      'api-token list',
     ]);
     const service = COMMANDS.filter((e) => e.json !== undefined && e.name.startsWith('service ')).map((e) => e.name);
     expect(service).toEqual(['service status', 'service start', 'service stop', 'service restart']);

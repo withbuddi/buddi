@@ -44,6 +44,8 @@ export { main as runChatCli, parseArgs as parseChatArgs } from './cli.js';
 export { main as runAgentsCli, parseAgentsArgs } from './agents-cli.js';
 export { main as runMissionsCli, parseMissionsArgs } from './missions-cli.js';
 export { main as runAccountsCli, parseAccountsArgs } from './accounts-cli.js';
+export { main as runApiTokenCli, parseApiTokenArgs } from './api-token-cli.js';
+export { API_ROUTES, API_AREAS, API_SINCE, TOKEN_REFUSALS, matchApiRoute, renderApiReference, type ApiRoute } from './web/api-routes.js';
 export { main as runRemindersCli, parseRemindersArgs } from './reminders-cli.js';
 export { main as runNudgesCli, parseNudgesArgs } from './nudges-cli.js';
 export { main as runPluginsCli, parsePluginsArgs, type PluginsCliHooks, type ToggleInGateway } from './plugins-cli.js';

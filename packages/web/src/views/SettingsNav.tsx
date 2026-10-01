@@ -40,6 +40,7 @@ const SECTION_ICONS: Record<(typeof SETTINGS_SECTIONS)[number]['id'], IconName> 
   secrets: 'key',
   connections: 'globe',
   lock: 'lock',
+  api: 'terminal',
   watchers: 'eye',
   backup: 'archive',
   system: 'chip',

@@ -81,6 +81,8 @@ export type Command =
   | { kind: 'missions'; argv: string[] }
   /** The model accounts, read-only: delegated to the gateway's accounts CLI. */
   | { kind: 'accounts'; argv: string[] }
+  /** Owner API tokens: delegated to the gateway's api-token CLI. */
+  | { kind: 'api-token'; argv: string[] }
   /** Install, uninstall, list and inspect plugins. The gateway's CLI owns it. */
   | { kind: 'plugins'; argv: string[] }
   /** One-off reminders the agents set. Delegated to the gateway's CLI. */
@@ -334,6 +336,7 @@ export function parseArgs(argv: string[]): Command {
   }
   if (head === 'missions') return { kind: 'missions', argv: rest };
   if (head === 'accounts') return { kind: 'accounts', argv: rest };
+  if (head === 'api-token') return { kind: 'api-token', argv: rest };
   if (head === 'plugins') return { kind: 'plugins', argv: rest };
   if (head === 'reminders') return { kind: 'reminders', argv: rest };
   if (head === 'nudges') return { kind: 'nudges', argv: rest };

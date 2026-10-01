@@ -15,6 +15,8 @@ unbuilt specs are kept outside this repository.
 - [The dashboard](dashboard.md): the page in your browser, place by place.
 - [Telegram](telegram.md): pairing, what arrives on your phone, the commands.
 - [The command line](cli.md): every `buddi` command, its flags and exit codes.
+- [The HTTP API](api.md): every route the dashboard uses, and how a script
+  calls buddi without it (an API token).
 - [Using buddi from Claude Code](mcp.md) (`buddi mcp`).
 - [Notifications](notifications.md): how buddi reaches you when you are not
   looking.

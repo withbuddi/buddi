@@ -53,19 +53,20 @@ export type SessionScope = 'local' | 'remote';
  * `local` is a request that arrived on loopback with no proxy metadata on it —
  * the open mint, or a ticket exchanged from this machine. `ticket` is a ticket
  * exchanged from anywhere else. `tailscale` is an identity the local daemon
- * confirmed. This lives on the session rather than in a second map beside it,
+ * confirmed. `token` is an owner API token (`api-tokens.ts`); such a session is
+ * never stored. This lives on the session rather than in a second map beside it,
  * so provenance cannot drift out of step with the session it describes, and so
  * a route that must refuse everything but "this machine" can simply say so.
  */
-export type SessionVia = 'local' | 'ticket' | 'tailscale';
+export type SessionVia = 'local' | 'ticket' | 'tailscale' | 'token';
 
 /**
  * Who holds the session: a person's browser, or one of buddi's own
  * command-line clients (`buddi mcp`, `buddi connections`), which say so with
- * the `x-buddi-client: mcp` header when the session is minted. The lock screen
- * covers browsers only (docs/dashboard.md, "Lock screen").
+ * the `x-buddi-client: mcp` header when the session is minted, or a program
+ * holding an API token (`api`). The lock screen covers browsers only (docs/dashboard.md, "Lock screen").
  */
-export type SessionClient = 'browser' | 'mcp';
+export type SessionClient = 'browser' | 'mcp' | 'api';
 
 /** Why a session is locked: Lock now, nobody used it for the delay, or it began while a PIN was set. */
 export type LockReason = 'owner' | 'idle' | 'start';

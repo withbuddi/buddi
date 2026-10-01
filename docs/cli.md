@@ -1375,6 +1375,9 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - [`buddi jobs`](#buddi-jobs): List the work queue: what is waiting, running and failed.
 - [`buddi jobs retry`](#buddi-jobs-retry): Run a failed job again, or every failed job with --all.
 - [`buddi jobs cancel`](#buddi-jobs-cancel): Cancel a job that has not run yet.
+- [`buddi api-token create`](#buddi-api-token-create): Make an owner API token, for calling the HTTP API from a script or another program. Printed once.
+- [`buddi api-token list`](#buddi-api-token-list): List the API tokens: id, name, last four characters, when made and last used. Never the token.
+- [`buddi api-token revoke`](#buddi-api-token-revoke): Revoke an API token: a request carrying it is refused from the next one on.
 - [`buddi pause`](#buddi-pause): Stop taking new work. What is running finishes.
 - [`buddi resume`](#buddi-resume): Start taking work again.
 
@@ -2015,6 +2018,79 @@ buddi jobs cancel 1234
 - `1`: It failed; the message says why.
 - `2`: The command was not typed right.
 - `3`: The database is not reachable, or not configured.
+
+### buddi api-token create
+
+Make an owner API token, for calling the HTTP API from a script or another program. Printed once.
+
+```sh
+buddi api-token create <name>
+```
+
+**Example**
+
+```sh
+buddi api-token create "home automation"
+```
+
+**Then**: The token alone is printed on stdout (the note on stderr), so `TOKEN=$(buddi api-token create cron)` keeps it. Send it as `Authorization: Bearer <token>`; docs/api.md lists every route and which a token may call.
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable, or not configured.
+- `4`: Refused: no name, a name over 60 characters, or 20 tokens already.
+
+### buddi api-token list
+
+List the API tokens: id, name, last four characters, when made and last used. Never the token.
+
+```sh
+buddi api-token list [--json]
+```
+
+**Flags**
+
+- `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+
+**Example**
+
+```sh
+buddi api-token list
+```
+
+**JSON**: [{ id, name, hint, scope, createdVia, createdAt, lastUsedAt }]
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable, or not configured.
+
+### buddi api-token revoke
+
+Revoke an API token: a request carrying it is refused from the next one on.
+
+```sh
+buddi api-token revoke <id>
+```
+
+**Example**
+
+```sh
+buddi api-token revoke 6b2f9c1e
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: No token has that id (or the database is not reachable).
+- `4`: More than one token starts with that id.
 
 ### buddi pause
 

@@ -356,6 +356,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'secrets', label: 'Keys and secrets', group: 'access' },
   { id: 'connections', label: 'Connections', group: 'access' },
   { id: 'lock', label: 'Lock screen', group: 'access' },
+  { id: 'api', label: 'API tokens', group: 'access' },
   { id: 'watchers', label: 'Watchers', group: 'running' },
   { id: 'backup', label: 'Backup', group: 'running' },
   { id: 'system', label: 'System', group: 'running' },
