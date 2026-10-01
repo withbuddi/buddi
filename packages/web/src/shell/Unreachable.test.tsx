@@ -1,8 +1,13 @@
-/** buddi isn't answering: both hints, Retry, the quiet retry, and the bar. */
+/** buddi isn't answering: both hints, Retry, the quiet retry, and the lost link the banner says. */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, resetLink } from '../api';
-import { BootGate, LostBar, RETRY_MS, Unreachable, hintFor } from './Unreachable';
+import { BootGate, RETRY_MS, Unreachable, hintFor, useLostLink } from './Unreachable';
+
+/** What the banner slot reads, drawn as the line it becomes. */
+function LostProbe(): JSX.Element | null {
+  return useLostLink() ? <p>Lost buddi. Retrying…</p> : null;
+}
 
 const answer = (status: number, body: unknown = { current: '0.1.0', checkEnabled: false, updateAvailable: false, history: [], supervised: false }) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -79,12 +84,12 @@ describe('BootGate', () => {
   });
 });
 
-describe('LostBar', () => {
+describe('useLostLink', () => {
   it('shows after thirty seconds of silence and goes on recovery', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetch = vi.fn(async (): Promise<Response> => { throw new TypeError('Failed to fetch'); });
     vi.stubGlobal('fetch', fetch);
-    render(<LostBar />);
+    render(<LostProbe />);
     await api.version().catch(() => {});
     expect(screen.queryByText('Lost buddi. Retrying…')).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });

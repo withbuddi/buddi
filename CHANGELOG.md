@@ -17,6 +17,7 @@ What changes in buddi from one release to the next, newest first.
 - Each agent has its own "New chat after" on Setup → Brain: 3 hours (the default), a day, a week, or never. A chat idle longer than that starts a fresh conversation with your next message; a transcript that grows too long still does, whatever the setting. Also `buddi agents set --idle-rollover` and `buddi.agent_update` over MCP. A plugin's proposed agent can ask for its own default; the Developer agent asks for a day. Plugin host API 1.16.
 - When a chat rolls over (idle or size), the new conversation opens with a short note the agent's own model wrote from the old one: what you were doing, decisions, open threads, what's next. It shows as a folded "Carried over" item above the chat that you can read and delete, and the agent reads it as context. Plugins can add lines of their own; the developer plugin adds the workspace, branch, last commit and uncommitted files. If the summary can't be written, the chat still rolls over (with the old copied note after a long transcript, or nothing after an idle gap). Plugin host API 1.16.
 - Settings → Email can change a mailbox's password: "Set password" on each row opens a small form that signs in with the new app password against the mailbox's own server first, keeps it only if that works (otherwise the old one stays and the server's reason is shown), and leaves the mailbox's mail where it is. A mailbox whose password buddi can't read says "Password needed" with the same button. Agents can't use it.
+- A thin status line at the foot of every dashboard page, each item a link: how this page reaches buddi (Local, Tailnet, or Reconnecting…), the focus that is on and until when, the work (agents working, the queue running or paused, failed jobs), approvals waiting, the version with a dot when a newer buddi is ready, and the time in your timezone, naming it when this device's differs. On a phone it folds into a dot on the rail that opens the same items.
 
 ### Fixed
 
@@ -31,6 +32,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- One banner slot at the top of the dashboard replaces the separate banners: recovery, a lost connection and a paused queue use the same strip, shown only while it matters, the most important first with "+N more" for the rest. The paused queue's Resume moved there from Home's "Needs you".
 - The Continue on the "Turn budget reached" line is now an outlined button you can see and tap (taller on a touch screen), not a word that read as plain text.
 - Agent Father can now give an agent up to 500 steps per reply when it creates or updates one (it was capped at 64), the same range as Setup → Brain; the approval card names the number.
 - Hiding a glance on Home with its × now leaves "<Title> hidden · Undo" in its place for about eight seconds; Undo brings it back (the same setting as Settings → Appearance).

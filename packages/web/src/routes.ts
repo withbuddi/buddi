@@ -7,6 +7,8 @@
  * lands where it always did, just on the page that now owns that content.
  */
 export const HOME_ROUTE = '#/';
+/** Home, scrolled to "Needs you": where the footer's approvals go. */
+export const NEEDS_ROUTE = '#/needs';
 export const CHAT_ROUTE = '#/chat';
 export const AGENTS_ROUTE = '#/agents';
 export const ACTIVITY_ROUTE = '#/activity';

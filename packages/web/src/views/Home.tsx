@@ -16,7 +16,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
-import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
+import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, NEEDS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import type { AgentAttention } from '../shell/roster';
 import { orderAgents, waitingText } from '../shell/roster';
 import { accentAttrs, accentOf } from '../shell/accent';
@@ -115,7 +115,13 @@ export function Home({
   };
   const fromOf = (row: NotificationRow): string =>
     fromWithAlso(row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind], row, nameOf);
-  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (data?.paused ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
+  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
+
+  // The footer's approvals land here: Home, scrolled to "Needs you".
+  useEffect(() => {
+    if (hash !== NEEDS_ROUTE) return;
+    document.getElementById(NEEDS_ID)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }, [hash]);
 
   const upcoming = useMemo(() => upcomingOf(missions.data?.missions ?? [], reminders.data?.reminders ?? []), [missions.data, reminders.data]);
   const lately: ConversationSummary[] = (conversations.data?.conversations ?? []).slice(0, 5);
@@ -202,12 +208,7 @@ export function Home({
           ) : undefined}
         >
           <Stack>
-            {data?.paused ? (
-              <Notice tone="warning" title="The installation is paused.">
-                Nothing is being claimed until you resume it.{' '}
-                <Button size="sm" onClick={() => { void api.setPaused(false).then(() => overview.reload()); }}>Resume</Button>
-              </Notice>
-            ) : null}
+            {/* A paused queue is the shell's banner now, not a line here. */}
             {pending.map((action) => (
               <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} />
             ))}
@@ -629,8 +630,8 @@ export interface GlanceCount { key: string; count: number | null; label: string;
 
 /**
  * The counts under the greeting, each a door to its list: failed jobs and
- * urgent alerts to Activity, proposals to Settings, and what Home lists itself
- * (approvals, agents to set up, messages, a paused queue) to "Needs you".
+ * urgent alerts to Activity, a paused queue to the jobs, proposals to Settings,
+ * and what Home lists itself (approvals, agents to set up, messages) to "Needs you".
  */
 export function glanceCounts(c: { approvals: number; failed: number; urgent: number; paused: boolean; proposals: number; agentsToSetUp: number; messages: number }): GlanceCount[] {
   const plural = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
@@ -638,7 +639,7 @@ export function glanceCounts(c: { approvals: number; failed: number; urgent: num
   if (c.approvals > 0) items.push({ key: 'approvals', count: c.approvals, label: plural(c.approvals, 'approval') });
   if (c.failed > 0) items.push({ key: 'failed', count: c.failed, label: plural(c.failed, 'failed job'), tone: 'critical', route: `${ACTIVITY_ROUTE}/jobs?state=failed` });
   if (c.urgent > 0) items.push({ key: 'urgent', count: c.urgent, label: plural(c.urgent, 'urgent alert'), tone: 'critical', route: `${ACTIVITY_ROUTE}/alerts` });
-  if (c.paused) items.push({ key: 'paused', count: null, label: 'Paused' });
+  if (c.paused) items.push({ key: 'paused', count: null, label: 'Paused', route: `${ACTIVITY_ROUTE}/jobs` });
   if (c.proposals > 0) items.push({ key: 'proposals', count: c.proposals, label: plural(c.proposals, 'proposal'), route: settingsRoute('proposals') });
   if (c.agentsToSetUp > 0) items.push({ key: 'agents', count: c.agentsToSetUp, label: plural(c.agentsToSetUp, 'agent to set up', 'agents to set up') });
   if (c.messages > 0) items.push({ key: 'messages', count: c.messages, label: plural(c.messages, 'message') });

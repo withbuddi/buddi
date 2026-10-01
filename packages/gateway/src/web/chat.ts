@@ -1321,6 +1321,11 @@ export class WebChat {
   readonly #running = new Map<string, LiveRun>();
   readonly #log: (line: string) => void;
 
+  /** Runs in progress right now, across every conversation: the footer's "N agents working". */
+  get runningCount(): number {
+    return this.#running.size;
+  }
+
   constructor(deps: WebChatDeps) {
     this.#deps = deps;
     this.#log = deps.log ?? ((line) => console.error(line));

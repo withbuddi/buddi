@@ -1436,6 +1436,20 @@ suite('the dashboard chat API', () => {
       return rows;
     };
 
+    it('is counted on the overview while it runs, for the footer, and not once it has settled', async () => {
+      const client = await signedIn();
+      expect((await client.json<any>('/api/overview')).running).toBe(0);
+      provider.script = [say('Done.')];
+      provider.block = () => {};
+      const first = (await (await client.post(`/api/chat/${AGENT_ID}/messages`, { text: 'anything new?' })).json()) as any;
+      await calls(1);
+      expect((await client.json<any>('/api/overview')).running).toBe(1);
+      provider.block?.();
+      await settled(first.conversationId);
+      for (let i = 0; i < 100 && (await client.json<any>('/api/overview')).running !== 0; i += 1) await new Promise((r) => setTimeout(r, 25));
+      expect((await client.json<any>('/api/overview')).running).toBe(0);
+    });
+
     it('waits in its own table, rides in the tool-results turn, and is marked delivered after the model sees it', async () => {
       const client = await signedIn();
       provider.script = [call('t1', 'demo.read', { what: 'the ledger' }), say('In euros: 12.')];

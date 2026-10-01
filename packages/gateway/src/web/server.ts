@@ -1275,14 +1275,17 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(
             res,
             200,
-            await readOverview({
-              pool: deps.pool,
-              registry: deps.registry,
-              catalog: deps.catalog,
-              ctx: deps.ctx,
-              timezone: deps.timezone,
-              now,
-            }),
+            {
+              ...(await readOverview({
+                pool: deps.pool,
+                registry: deps.registry,
+                catalog: deps.catalog,
+                ctx: deps.ctx,
+                timezone: deps.timezone,
+                now,
+              })),
+              running: chat?.runningCount ?? 0,
+            },
           );
         case '/api/events':
           return sendJson(

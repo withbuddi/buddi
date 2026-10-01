@@ -4,7 +4,8 @@
  * A buddi that came back from a backup holds everything except the things a
  * backup deliberately never carries — keys, tokens, the plugins themselves —
  * and it deliberately runs nothing on its own until a person has looked at
- * what is missing. That is two pieces of screen: a banner on every page, and
+ * what is missing. That is two pieces of screen: the shell's banner (its slot
+ * puts recovery first), and
  * the checklist at the top of Settings → Backup, which ends in the one action
  * that turns the installation back on.
  *
@@ -15,7 +16,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, ApiError, type RecoveryView } from '../api';
 import {
-  BACKUP_ROUTE,
   PLUGINS_BROWSE_ROUTE,
   accountRoute,
   connectionRoute,
@@ -86,35 +86,6 @@ export function pluginSentence(plugin: RecoveryPlugin): string {
 export const RECOVERY_BANNER =
   'This buddi was restored from a backup. Nothing runs on its own until you finish the checklist.';
 
-/**
- * The banner, above every page.
- *
- * It is a link rather than a button: the owner may be halfway through
- * something, and the checklist is a place, not an action.
- */
-export function RecoveryBanner({
-  active,
-  onNavigate,
-}: {
-  active: boolean;
-  onNavigate: (route: string) => void;
-}): JSX.Element | null {
-  if (!active) return null;
-  return (
-    <div className="recovery-banner" role="status">
-      <span>{RECOVERY_BANNER}</span>
-      <a
-        href={BACKUP_ROUTE}
-        onClick={(event) => {
-          event.preventDefault();
-          onNavigate(BACKUP_ROUTE);
-        }}
-      >
-        Finish the checklist
-      </a>
-    </div>
-  );
-}
 
 /**
  * What is left to do, and the one way out.

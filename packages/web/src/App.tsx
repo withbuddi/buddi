@@ -12,8 +12,8 @@
  */
 import * as Toast from '@radix-ui/react-toast';
 import * as Tooltip from '@radix-ui/react-tooltip';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AGENTS_CHANGED, api, chatApi, type ConnectionSignal, type VersionView } from './api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AGENTS_CHANGED, STATUS_CHANGED, api, chatApi, type ConnectionSignal, type VersionView } from './api';
 import { ChatPage } from './chat/ChatPage';
 import type { ChatAgent } from './chat/types';
 import {
@@ -61,7 +61,10 @@ import { Settings } from './views/Settings';
 import { NARROW_QUERY, useMediaQuery } from './useMediaQuery';
 import { Meet } from './views/Meet';
 import { MascotProvider } from './views/parts/Avatar';
-import { RecoveryBanner, useRecovery } from './views/Recovery';
+import { useRecovery } from './views/Recovery';
+import { BannerSlot, shellBanners } from './shell/BannerSlot';
+import { RailStatus, StatusBar, linkKind, useLinkDown, type ShellStatus } from './shell/StatusBar';
+import { useLostLink } from './shell/Unreachable';
 import { buildDiffers } from './build';
 import { BUILD_CHECK_MS, useAutoReload, useCheckOnReconnect } from './shell/freshness';
 
@@ -78,6 +81,9 @@ export { NARROW_QUERY, useMediaQuery };
  * has room to be read; below that the agent rail is the one that gives way.
  */
 export const AGENT_RAIL_QUERY = '(max-width: 1080px)';
+
+/** A phone: the footer status line folds into a dot on the rail. */
+export const PHONE_QUERY = '(max-width: 720px)';
 
 export function useHash(): [string, (next: string, replace?: boolean) => void] {
   const [hash, setHash] = useState(() => window.location.hash || HOME_ROUTE);
@@ -114,7 +120,7 @@ const reportedPages = new Map<string, string>();
 export function App(): JSX.Element {
   const [hash, navigate] = useHash();
   const [timezone, setTimezone] = useState('UTC');
-  const [badges, setBadges] = useState<{ approvals: number; failed: number }>({ approvals: 0, failed: 0 });
+  const [badges, setBadges] = useState<{ approvals: number; failed: number; paused: boolean; running: number }>({ approvals: 0, failed: 0, paused: false, running: 0 });
   const [theme, setTheme] = useThemeChoice();
   const narrow = useMediaQuery(NARROW_QUERY);
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -319,19 +325,39 @@ export function App(): JSX.Element {
   const toasts = useToastQueue(signedIn);
   usePresence(signedIn, toasts.refresh, () => setSignedIn(false));
 
+  /*
+   * One read for the rail's badge, the footer's work and approvals, and the
+   * paused queue's banner: every twenty seconds, and at once when this page
+   * paused or resumed the queue.
+   */
   useEffect(() => {
     const refresh = (): void => {
       api
         .overview()
         .then((overview) =>
-          setBadges({ approvals: overview.approvals.pending, failed: overview.jobs.failed ?? 0 }),
+          setBadges({ approvals: overview.approvals.pending, failed: overview.jobs.failed ?? 0, paused: overview.paused, running: overview.running ?? 0 }),
         )
         .catch(() => {});
     };
     refresh();
     const handle = window.setInterval(refresh, 20_000);
-    return () => window.clearInterval(handle);
+    window.addEventListener(STATUS_CHANGED, refresh);
+    return () => { window.clearInterval(handle); window.removeEventListener(STATUS_CHANGED, refresh); };
   }, []);
+
+  /* The focus that is on, for the footer; the owner menu switches it and says so. */
+  const focusRead = useAsync(() => Promise.resolve().then(() => api.focus()), [], 60_000);
+  const reloadFocus = useRef(focusRead.reload);
+  reloadFocus.current = focusRead.reload;
+  useEffect(() => {
+    const reload = (): void => reloadFocus.current();
+    window.addEventListener(STATUS_CHANGED, reload);
+    return () => window.removeEventListener(STATUS_CHANGED, reload);
+  }, []);
+  /* Reconnecting while requests go unanswered; lost — the banner — after thirty seconds of it. */
+  const linkDown = useLinkDown();
+  const lost = useLostLink();
+  const phone = useMediaQuery(PHONE_QUERY);
 
   // The tips learn which pages were opened: one report per page per day.
   useEffect(() => {
@@ -347,6 +373,18 @@ export function App(): JSX.Element {
     reportedPages.set(page, day);
     void api.tipsSeenPage(page).catch(() => {});
   }, [hash, signedIn, navigate]);
+
+  const status: ShellStatus = {
+    link: linkKind(window.location.hostname, linkDown),
+    focus: focusRead.data?.focus ?? null,
+    working: badges.running,
+    paused: badges.paused,
+    failed: badges.failed,
+    approvals: badges.approvals,
+    version: version ? { current: version.current, latest: version.latest, updateAvailable: !version.checkout && version.updateAvailable } : undefined,
+    timezone,
+  };
+  const banners = shellBanners({ recovery: recovery.data?.active === true, lost, paused: badges.paused });
 
   const welcome = parseWelcomeRoute(hash);
   const place = placeOf(hash);
@@ -400,7 +438,7 @@ export function App(): JSX.Element {
       <Toast.Provider swipeDirection="right">
         {groupSheet}
         <div className="wb-shell">
-        <RecoveryBanner active={recovery.data?.active === true} onNavigate={navigate} />
+        <BannerSlot banners={banners} onNavigate={navigate} />
         <div className="wb">
           <Rail
             attention={badges.approvals + badges.failed}
@@ -414,6 +452,7 @@ export function App(): JSX.Element {
             stale={stale}
             timezone={timezone}
             version={version && !version.checkout ? { current: version.current, latest: version.latest, updateAvailable: version.updateAvailable } : version ? { current: version.current, updateAvailable: false } : undefined}
+            status={phone ? <RailStatus status={status} onNavigate={navigate} /> : undefined}
           />
 
           {onChat && !railNarrow ? (
@@ -471,6 +510,7 @@ export function App(): JSX.Element {
             </main>
           )}
         </div>
+        {phone ? null : <StatusBar status={status} onNavigate={navigate} />}
         </div>
         {askShown && frontDesk ? (
           <AskDock agent={frontDesk} agents={agents} open={askOpen} onOpenChange={setAskOpen} navigate={navigate} />

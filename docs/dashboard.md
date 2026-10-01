@@ -47,8 +47,27 @@ Installed, buddi also opens when the gateway is out of reach: instead of the
 browser's error it says buddi isn't answering at that address and what to
 check (on this Mac, `buddi status`; on the tailnet address, whether Tailscale
 is on and the Mac awake), asks again every ten seconds and comes back on its
-own. A page already open shows a thin "Lost buddi. Retrying…" bar after thirty
-seconds without an answer.
+own. A page already open says "Lost buddi. Retrying…" in the banner slot after
+thirty seconds without an answer.
+
+## The banner and the status line
+
+One banner slot sits at the top of every page and appears only while something
+matters: a buddi restored from a backup (until its checklist is done), a lost
+connection, a paused queue. It shows the most important of them — in that
+order — with "+N more" for the rest, and its one action on the right
+(**Finish the checklist**, **Resume**).
+
+A thin status line runs along the foot, each item a link to where it is
+decided: the connection (**Local**, **Tailnet**, or **Reconnecting…** while
+requests go unanswered) → Settings → System; the focus that is on and until
+when → Settings → Notifications; the work — agents working, the queue running
+or paused, failed jobs → Activity → Jobs; approvals waiting → Home's Needs you;
+the version, with a dot when a newer buddi is ready → Settings → System; and the
+time in your timezone, naming the zone when this device's is a different one →
+Settings → Profile. The time moves on the minute. On a phone the line folds into
+one dot on the rail under Settings, coloured by the worst of what it says, which
+opens the same items.
 
 ## The rail
 

@@ -954,6 +954,12 @@ export interface Overview {
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
+  /**
+   * Agent runs in progress in the dashboard's conversations right now, for the
+   * footer's "N agents working". Added by the web server, which owns the runs;
+   * absent where nothing does.
+   */
+  running?: number;
 }
 
 export async function readOverview(deps: {

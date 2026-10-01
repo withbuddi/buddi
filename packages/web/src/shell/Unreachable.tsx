@@ -9,8 +9,8 @@
  * comes back on its own; a build that changed in the meantime is a reload.
  *
  * At boot it takes the whole window. Once the page is open, a link that stays
- * down for thirty seconds is a thin bar at the top instead: the page under it
- * is still worth reading.
+ * down for thirty seconds is the shell's banner instead (`useLostLink`, read by
+ * the banner slot): the page under it is still worth reading.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ApiError, UNREACHABLE, api, isUnreachable, linkDownSince, onLinkChange, type VersionView } from '../api';
@@ -25,7 +25,7 @@ export const LOST_AFTER_MS = 30_000;
 /** How long the boot question waits: a sleeping Mac never says no, it just never answers. */
 export const BOOT_TIMEOUT_MS = 6_000;
 
-const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$|\.localhost$/i;
+export const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$|\.localhost$/i;
 
 /** The one thing to check, by the address the page was opened on. */
 export function hintFor(hostname: string): ReactNode {
@@ -109,12 +109,7 @@ export function BootGate({ children }: { children: ReactNode }): JSX.Element | n
 
   if (state === 'checking') return null;
   if (state === 'down') return <Unreachable host={window.location.host} onRetry={() => void ask()} retrying={retrying} />;
-  return (
-    <>
-      <LostBar />
-      {children}
-    </>
-  );
+  return <>{children}</>;
 }
 
 /** True once the page's requests have gone unanswered for `after` ms. */
@@ -137,8 +132,12 @@ export function useLinkLost(after = LOST_AFTER_MS): boolean {
   return lost;
 }
 
-/** "Lost buddi. Retrying…": asks every ten seconds, gone the moment anything answers. */
-export function LostBar(): JSX.Element | null {
+/**
+ * Lost buddi once the page is open: true after thirty seconds unanswered, and
+ * while it is, asks again every ten seconds; false the moment anything answers.
+ * The shell's banner slot says so.
+ */
+export function useLostLink(): boolean {
   const lost = useLinkLost();
   useEffect(() => {
     if (!lost) return undefined;
@@ -147,6 +146,5 @@ export function LostBar(): JSX.Element | null {
     }, RETRY_MS);
     return () => window.clearInterval(timer);
   }, [lost]);
-  if (!lost) return null;
-  return <div className="lost-bar" role="status">Lost buddi. Retrying…</div>;
+  return lost;
 }

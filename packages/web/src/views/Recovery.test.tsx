@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type RecoveryView } from '../api';
-import { RecoveryBanner, RecoveryChecklist, useRecovery } from './Recovery';
+import { RecoveryChecklist, useRecovery } from './Recovery';
 
 vi.mock('../api', async (load) => ({
   ...(await load<typeof import('../api')>()),
@@ -182,17 +182,5 @@ describe('coming back to it', () => {
     fireEvent.focus(window);
     await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
     expect(api.recovery).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe('the banner', () => {
-  it('is absent until this buddi was restored, and then points at the checklist', () => {
-    const { container, rerender } = render(<RecoveryBanner active={false} onNavigate={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
-    const go = vi.fn();
-    rerender(<RecoveryBanner active onNavigate={go} />);
-    expect(screen.getByRole('status')).toHaveTextContent(/restored from a backup/);
-    fireEvent.click(screen.getByRole('link', { name: 'Finish the checklist' }));
-    expect(go).toHaveBeenCalledWith('#/settings/backup');
   });
 });

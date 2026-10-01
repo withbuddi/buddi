@@ -46,6 +46,7 @@ export function Rail({
   stale = false,
   reload,
   timezone,
+  status,
 }: {
   /** Things waiting on the owner: approvals plus failed jobs. */
   attention: number;
@@ -71,6 +72,8 @@ export function Rail({
   reload?: () => void;
   /** The owner's zone, for when a focus ends; the browser's when absent. */
   timezone?: string | undefined;
+  /** On a phone, the footer status line folded into a dot, under Settings. */
+  status?: ReactNode;
 }): JSX.Element {
   return (
     <nav className="rail" aria-label="Places">
@@ -119,6 +122,8 @@ export function Rail({
       >
         {ICONS[SETTINGS_ROUTE]}
       </RailLink>
+
+      {status}
 
       <OwnerMenu theme={theme} onTheme={onTheme} onNavigate={onNavigate} version={version} stale={stale} reload={reload} timezone={timezone} />
     </nav>

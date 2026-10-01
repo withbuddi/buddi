@@ -29,6 +29,12 @@ export const CSRF_COOKIE_PREFIX = 'buddi_csrf';
 export const CSRF_HEADER = 'x-buddi-csrf';
 /** A window event: the roster changed (a picture, say); re-read it now rather than in 15 s. */
 export const AGENTS_CHANGED = 'buddi:agents-changed';
+/** A window event: focus or the queue's pause changed here; the footer and the banner re-read now. */
+export const STATUS_CHANGED = 'buddi:status-changed';
+const statusChanged = <T,>(result: T): T => {
+  window.dispatchEvent(new Event(STATUS_CHANGED));
+  return result;
+};
 
 /** What a write refused by the CSRF gate tells the owner. */
 export const STALE_COOKIES = "This page's sign-in no longer matches its cookies. Reload the page and try again.";
@@ -314,6 +320,8 @@ export interface Overview {
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
+  /** Agent runs in progress in the dashboard's conversations right now. Absent from an older gateway. */
+  running?: number;
 }
 
 
@@ -2008,7 +2016,7 @@ export const api = {
   saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),
   focus: () => get<{ focus: FocusState | null }>('/notifications/focus'),
   setFocus: (mode: FocusMode, duration?: FocusDuration) =>
-    put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }),
+    put<{ focus: FocusState | null }>('/notifications/focus', duration ? { mode, duration } : { mode }).then(statusChanged),
   testChannel: (channel: string) => post<{ ok: true }>('/notifications/test', { channel }),
   setAgentMuted: (agentId: string, muted: boolean) =>
     post<{ agents: AgentMessageSettings }>('/notifications/agent-mute', { agentId, muted }),
@@ -2118,7 +2126,7 @@ export const api = {
         ? { ...(permissionScope ? { permissionScope } : {}), ...(ownerChoices ? { ownerChoices } : {}) }
         : undefined,
     ),
-  setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }),
+  setPaused: (paused: boolean) => post<{ paused: boolean }>('/pause', { paused }).then(statusChanged),
   service: () => get<ServiceView>('/service'),
   /**
    * Start, stop or restart the gateway through the supervisor. A `stop` or a
