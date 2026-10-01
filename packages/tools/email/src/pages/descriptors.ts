@@ -833,6 +833,8 @@ const settings: PageDescriptor = {
             // which ones a mailbox answers to is part of what it *is*.
             { key: 'aliases', label: 'Also receives as', fit: 'wrap' },
             { key: 'host', label: 'Host', fit: 'truncate' },
+            // "Instant" while IDLE is live, else how often the poll checks.
+            { key: 'arrival', label: 'New mail' },
             { key: 'lastSync', label: 'Last sync' },
             // Where the password is, in words; the vault's name for it on hover.
             { key: 'password', label: 'Password', hint: 'secretName' },

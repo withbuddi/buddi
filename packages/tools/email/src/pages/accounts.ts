@@ -39,6 +39,7 @@ import type { EnvLike } from '../config.js';
 import { clearLoginFailure } from '../logins.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
 import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
+import { accountChanged } from '../sources/idle.js';
 
 /** One provider's endpoints. Implicit or STARTTLS on the ports named here. */
 export interface MailHosts {
@@ -351,6 +352,8 @@ export function createAddAccountTool(opts: AccountToolOptions): ToolDefinition<A
        * here, in the answer the page shows, and offered on the same page.
        */
       const triageMissing = !ctx.buddi!.owner.hasAgent(TRIAGE_AGENT_ID);
+      // The IDLE watchers pick the new mailbox up now, not at the next poll.
+      accountChanged();
       return {
         added: true,
         address: written.address,
@@ -395,6 +398,8 @@ export function createRemoveAccountTool(
       if (account.addedVia === 'page' && account.secretName === secretNameFor(account.address)) {
         secretRemoved = (await ctx.buddi!.secrets?.delete(account.secretName).catch(() => false)) ?? false;
       }
+      // Its IDLE connection closes now.
+      accountChanged();
       return {
         removed: true,
         address: account.address,
@@ -503,6 +508,8 @@ export function createSetPasswordTool(
       // The server took this password a moment ago: whatever refusal the
       // poll recorded is over.
       await clearLoginFailure(ctx.buddi!.db, current.id);
+      // IDLE reconnects with the new password (and stops waiting on a refusal).
+      accountChanged({ accountId: current.id, password: true });
       // One use, as the poll makes it: the value is taken and dropped here.
       const check = await mailboxAuth(ctx, current);
       return {

@@ -796,6 +796,7 @@ export interface Source {
   description: string;
   every: number;       // poll period in SECONDS
   poll(ctx: SourceContext): Promise<void>;
+  watch?(ctx: SourceContext): SourceWatch;  // optional push channel, since 1.15
 }
 
 export interface SourceContext {
@@ -814,6 +815,15 @@ reaches its schema through `ctx.buddi.db`, the time through
 owner's channel; a source notifies nobody — and starts a run through
 `ctx.buddi.schedule.enqueueRun({ agentId, prompt, dedupKey,
 conversationHint? })`, which needs `schedule` in `uses`.
+
+A source whose world can push (IMAP IDLE, a websocket) may also have a
+`watch`: core calls it once the plugin is loaded and calls the `stop()` it
+returns when the plugin is taken out or buddi stops. The watcher keeps its
+own connection and calls the source's own poll code when something changed;
+serialising that against the scheduled poll is the source's job. The poll
+stays the safety net, and an older buddi never calls `watch`. The email
+inbox's IDLE watcher (`packages/tools/email/src/sources/idle.ts`) is the
+worked example.
 
 The rules, all of them learned from `packages/tools/email/src/sources/inbox-poll.ts`:
 
@@ -3026,6 +3036,7 @@ closed when it is absent rather than guess.
 | `description` | `string` | yes | One line, for the install summary and the logs. |
 | `every` | `number` | yes | Poll period in **seconds**. |
 | `poll` | `(ctx) => Promise<void>` | yes | One pass. It owns its cursor and its transaction; core decides only when it is due. |
+| `watch` | `(ctx) => SourceWatch` | no | A long-lived watcher beside the poll (since host API 1.15), for a push channel such as IMAP IDLE that lets the source poll right away. Core starts it once the plugin is loaded, with a live clock, and calls the returned `stop()` when the plugin is taken out or buddi stops; `stop` must release every socket and timer. Keep the poll as the safety net. |
 
 #### `SourceContext`
 

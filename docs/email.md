@@ -100,7 +100,8 @@ history — as proposals, for the reason above.
 ## 4. Accounts
 
 - Settings → Email lists accounts: address, the name the owner gave it, the
-  addresses it also receives as, host, last sync, the vault secret's name,
+  addresses it also receives as, host, how soon new mail is seen ("Instant"
+  or "Checking every 5 min", §4a), last sync, the vault secret's name,
   whether it is on, whether buddi can read its password, Set password and
   remove. It is a **page descriptor this
   plugin contributes** ([plugin-pages.md](plugin-pages.md)), not a screen compiled
@@ -197,6 +198,50 @@ stay unstamped (so the first poll after the accept triages them), it logs "no
 triage agent yet — accept the Mail offer on the dashboard" once per poll, and
 records `accounts.triage_waiting_since` (migration `016`), which the mailbox
 row shows as "triage waiting".
+
+## 4a. New mail almost instantly (IMAP IDLE)
+
+The poll (`email.inbox-poll`, every 5 minutes) is the safety net. Beside it
+the source has a `watch` (host API 1.15, [plugins.md](plugins.md) §2.2): one
+IMAP IDLE connection per enabled mailbox, on INBOX only
+(`src/sources/idle.ts`). When the server reports a change there (a new
+message, one expunged, a flag changed) that account's ordinary poll runs
+within about two seconds; nothing in the poll changes, so a poll IDLE started
+keeps every guarantee of a scheduled one. Sent stays on the poll.
+
+- **Its own connection.** Not the poll's reader and not the write port's:
+  a mailbox action (§11) cannot break IDLE, and INBOX is opened read-only.
+- **One poll of an account at a time.** A burst of changes is gathered for
+  2 seconds and starts one poll. The scheduled pass skips an account whose
+  IDLE poll is still running, and a change seen during a poll earns exactly
+  one more poll after it.
+- **Slower safety net while IDLE is live.** The scheduled pass polls such an
+  account every 15 minutes instead of every 5; an account whose IDLE is down,
+  retrying or unsupported keeps the 5 minutes.
+- **Re-issued and reconnected.** imapflow breaks and re-issues IDLE every 10
+  minutes (inside the 29 a server may allow; its 5-minute socket timeout
+  also sends a NOOP during a silent IDLE). A dropped connection or a failed
+  connect is retried after 5s, 10s, 20s … up to 5 minutes; a session that
+  stayed up a minute starts the backoff over. After a reconnect the poll runs
+  once, for whatever arrived while it was down.
+- **Quiet when it cannot.** A server without IDLE gets one log line and the
+  poll. A refused login records the same `login_failed_at` the poll does
+  ("Password needed", §11) and is not retried until a login works again: Set
+  password reconnects at once, and so does the next poll whose own login
+  succeeds.
+- **Stopped cleanly.** Removing a mailbox closes its connection at once (the
+  page tools say so to the watcher; the next poll would also catch it);
+  taking the plugin out stops every watcher within a source tick (30s), and
+  buddi stopping closes them before the database pool.
+- **On the page.** The mailbox row's "New mail" cell says "Instant" while
+  this process has a live IDLE on that inbox, and "Checking every 5 min"
+  otherwise.
+
+Mail moved out of the inbox in another app is still not reflected on the
+local row (§11b): the EXPUNGE wakes a poll, and that poll re-reads flags and
+fetches what is new, but `email.messages` has no "no longer in this folder"
+state for the poll to write, and finding where the message went means a
+search per folder.
 
 ## 5. The policy gate
 
@@ -942,7 +987,10 @@ Calendar invites (parse and offer a reminder), unsubscribe (the
 List-Unsubscribe header as a gated action), creating folders or labels,
 permanent deletion, full-text search over
 archives, more than two synced folders by default, OAuth sign-in for
-Gmail instead of app passwords.
+Gmail instead of app passwords. Mail archived or deleted in another app
+keeps its local row as it was (the flag re-sync skips it); IDLE notices the
+EXPUNGE, but marking the row as gone needs a new column that the Mail page,
+the unread count and the selection tools all honour.
 
 ## 12. End to end
 

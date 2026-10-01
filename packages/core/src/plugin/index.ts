@@ -53,6 +53,7 @@ export type {
   PreviewProvider,
   Source,
   SourceContext,
+  SourceWatch,
   SuggestedAgent,
   SuggestedAgentMission,
   SuggestedMission,

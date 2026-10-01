@@ -20,7 +20,8 @@
  */
 import { z } from 'zod';
 import { QueryRefusal, type DbArea, type PageQuery, type ProposalsArea, type ToolContext } from '@buddi/core/plugin';
-import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
+import { POLL_EVERY_SECONDS, TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
+import { idleLive } from '../sources/idle.js';
 import {
   booleanFilter,
   buildSearch,
@@ -538,6 +539,17 @@ export function accountsQuery(): PageQuery {
           // password at login, or null since a login worked (`logins.ts`).
           loginRefused: account.loginError ?? null,
           secretName: account.secretName,
+          /*
+           * How soon new mail is seen: the IDLE watcher of this process has
+           * the inbox open and the server tells us ("Instant"), or the poll
+           * checks on its period (no IDLE on the server, the connection is
+           * down and retrying, or the password is refused).
+           */
+          arrival: !account.enabled
+            ? '—'
+            : idleLive(account.id)
+              ? 'Instant'
+              : `Checking every ${Math.round(POLL_EVERY_SECONDS / 60)} min`,
           lastSync: synced.get(account.id)
             ? relative(synced.get(account.id) ?? null, now)
             : 'no mail has arrived yet',

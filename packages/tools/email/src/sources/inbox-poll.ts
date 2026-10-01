@@ -48,7 +48,7 @@
  * no double triage.
  */
 import type { DbArea, DbTransaction } from '@buddi/core/plugin';
-import { INBOX, listAccounts, markAccountSynced, type EnvLike } from '../config.js';
+import { findAccount, INBOX, listAccounts, markAccountSynced, type EnvLike } from '../config.js';
 import { mailboxAuth } from '../credentials.js';
 import { clearLoginFailure, isAuthFailure, recordLoginFailure } from '../logins.js';
 import { applyArrivalActions, type ArrivalMatch } from '../mailbox/arrival.js';
@@ -58,11 +58,13 @@ import { scanMessageDates, skipDates } from '../dates-store.js';
 import { applyPolicies, type GateDecision, type PolicyRecord } from '../policies/gate.js';
 import { loadPolicies, recordEvent, settleEvent } from '../policies/store.js';
 import { ownerReplies, senderVerdicts } from '../policies/learn.js';
-import type { AccountRecord, ImapClient, ImapClientFactory, MailboxStatus } from '../ports.js';
+import type { AccountRecord, ImapClient, ImapClientFactory, ImapIdleFactory, MailboxStatus } from '../ports.js';
+import { IDLE_SLOW_POLL_SECONDS, IdleWatchers, type IdleWatchersOptions } from './idle.js';
 import { FOLDER_COLUMNS, toFolder, type FolderRecord, type MessageDirection } from '../rows.js';
 import { findThread, joinThread, threadMessages } from '../threads.js';
 import { PROCESSING_VERSION } from '../tools/shared.js';
 import type { Source, SourceContext } from '../types.js';
+import type { SourceWatch } from '@buddi/core/plugin';
 
 /** `ctx.buddi.db`, a transaction's handle, or anything that answers a query as they do. */
 type Db = Pick<DbArea, 'query'>;
@@ -174,6 +176,16 @@ export interface InboxPollOptions {
   timeoutMs?: number;
   /** Newest-N to bring along on first contact. Overrides `EMAIL_BACKFILL`. */
   backfill?: number;
+  /**
+   * How IDLE connections are made. With one, the source has a `watch` that
+   * keeps one IDLE connection per enabled account on INBOX (`idle.ts`);
+   * without one (tests, one-shot callers) it only polls.
+   */
+  idle?: ImapIdleFactory;
+  /** Debounce and backoff, for tests. */
+  idleTuning?: Pick<IdleWatchersOptions, 'debounceMs' | 'backoffFirstMs' | 'backoffMaxMs' | 'stableMs'>;
+  /** The poll period, in seconds, for an account whose IDLE is live. Default 15 minutes. */
+  slowPollSeconds?: number;
 }
 
 /**
@@ -501,8 +513,228 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
   const onlyFolder = opts.mailbox;
   const limit = Math.min(Math.max(1, opts.limit ?? MAX_PER_POLL), MAX_PER_POLL);
   const agentId = opts.agentId ?? TRIAGE_AGENT_ID;
+  const slowPollMs = (opts.slowPollSeconds ?? IDLE_SLOW_POLL_SECONDS) * 1000;
 
-  return {
+  /*
+   * One poll of one account at a time, whoever asked: the scheduled pass, or
+   * IDLE. `inFlight` is the lock; `again` is a change IDLE saw while a poll
+   * was already running, which earns exactly one more poll after it.
+   * `lastPolled` is this process's own clock of when each account last
+   * finished, for the slower safety-net period while IDLE is live.
+   */
+  const inFlight = new Map<string, Promise<void>>();
+  const again = new Set<string>();
+  const lastPolled = new Map<string, number>();
+  let watchers: IdleWatchers | null = null;
+  let watchCtx: SourceContext | null = null;
+
+  /** Run `work` as this account's poll. Callers check `inFlight` first; this sets it synchronously. */
+  function runLocked(accountId: string, work: () => Promise<void>): Promise<void> {
+    const running = (async () => {
+      try {
+        await work();
+      } finally {
+        inFlight.delete(accountId);
+        lastPolled.set(accountId, Date.now());
+        if (again.delete(accountId) && watcherCtx() !== null) void pollNow(accountId);
+      }
+    })();
+    inFlight.set(accountId, running);
+    return running;
+  }
+
+  function watcherCtx(): SourceContext | null {
+    return watchers ? watchCtx : null;
+  }
+
+  /** IDLE saw a change: this account's poll, now, or once more after the one running. */
+  function pollNow(accountId: string): Promise<void> {
+    const ctx = watcherCtx();
+    if (ctx === null) return Promise.resolve();
+    if (inFlight.has(accountId)) {
+      again.add(accountId);
+      return Promise.resolve();
+    }
+    return runLocked(accountId, async () => {
+      const account = await findAccount(ctx.buddi!.db, accountId);
+      if (account === null) return;
+      const pass: PollPass = { failures: [], triageReady: ctx.buddi!.owner.hasAgent(agentId), saidWaiting: false };
+      await pollAccount(ctx, account, pass);
+      if (pass.failures.length > 0) throw pass.failures[0];
+    });
+  }
+
+  /** One account's whole pass: connect, folders, flags, drain, on-arrival actions. */
+  async function pollAccount(ctx: SourceContext, account: AccountRecord, pass: PollPass): Promise<void> {
+    const log = ctx.buddi?.log ?? ((line: string) => console.error(line));
+    const env = opts.env ?? process.env;
+    const auth = await mailboxAuth(ctx, account, opts.env);
+    if (!auth.ok) {
+      // A typed configuration problem: say it once per poll and stop. An
+      // unattended run that needs a secret fails with a problem; it never
+      // hangs and never falls back to asking.
+      log(`email.inbox-poll: ${auth.problem.code}: ${auth.problem.message}`);
+      return;
+    }
+
+    const timeoutMs = Math.max(1, opts.timeoutMs ?? envInt(env, POLL_TIMEOUT_VAR, DEFAULT_POLL_TIMEOUT_MS));
+    const backfill = Math.max(0, opts.backfill ?? envInt(env, BACKFILL_VAR, DEFAULT_BACKFILL));
+
+    // The connection is opened for this poll and closed at the end of it,
+    // always. A long-lived IMAP session is a socket that silently dies while
+    // nobody is looking; one per poll is cheap (half a second) and honest.
+    // Both folders are walked over the same connection.
+    let client: ImapClient | null = null;
+    const pending: PendingTriage[] = [];
+    /*
+     * Did this account's pass get all the way through? Only then is it a
+     * sync, and only then is `last_synced_at` moved: a Sent folder that
+     * timed out still let the inbox land, but it means what we hold for
+     * this mailbox is no longer everything the server has, and a metric
+     * that stamped it "as of now" would be saying otherwise.
+     */
+    let complete = true;
+    try {
+      try {
+        client = await withDeadline(
+          'connect',
+          timeoutMs,
+          opts.connect(account, auth.value),
+          // We gave up waiting, but the connection may still arrive: close it
+          // rather than leave a socket nobody owns.
+          (late) => void late.close().catch(() => {}),
+        );
+      } catch (err) {
+        // The provider refused the password it was given: written on the
+        // row so Settings → Email says "Password needed" (`logins.ts`).
+        if (isAuthFailure(err)) {
+          await recordLoginFailure(ctx.buddi!.db, account.id, err, ctx.buddi!.clock.now()).catch(() => {});
+          log(`email.inbox-poll: ${account.address} refused its stored password; Settings → Email → Set password`);
+        }
+        throw err;
+      }
+      await clearLoginFailure(ctx.buddi!.db, account.id);
+
+      // Which folders this account has, discovered once and remembered.
+      // A caller that named one folder gets that folder and no listing:
+      // the CLI and the tests both drive a single mailbox on purpose.
+      const folders = onlyFolder
+        ? [await ensureFolder(ctx.buddi!.db, account, onlyFolder, 'inbox', true)]
+        : (await discoverFolders(ctx.buddi!.db, account, client, timeoutMs, log)).filter((f) => f.synced);
+
+      // New discovery persists Sent's LIST/STATUS boundary above. This
+      // loop is for an older or partially initialised row that still has
+      // no generation: try to plant it before INBOX work, but isolate a
+      // failed SELECT or cursor write so incoming mail still lands.
+      const attemptedSent = new Set<string>();
+      for (const folder of folders.filter((f) => f.kind === 'sent' && f.uidValidity === null)) {
+        attemptedSent.add(folder.id);
+        try {
+          await pollFolder(ctx, account, client, folder, { timeoutMs, backfill, limit, log });
+        } catch (err) {
+          log(
+            `email.inbox-poll: could not initialize Sent folder ${account.address}/${folder.name}: ` +
+              `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
+          );
+          complete = false;
+          pass.failures.push(err);
+        }
+      }
+
+      // The inbox first: it is the one that wakes anybody, and a Sent
+      // folder that times out must not cost the new mail its run.
+      for (const folder of [...folders].filter((f) => !attemptedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
+        try {
+          const polled = await pollFolder(ctx, account, client, folder, {
+            timeoutMs,
+            backfill,
+            limit,
+            log,
+          });
+          pending.push(...polled.pending);
+          if (folder.kind === 'inbox') {
+            // After ingest, so the new rows are in the window with the
+            // flags they arrived with. A re-sync that fails costs nobody
+            // their mail: the rows landed, the runs are queued below, and
+            // only this pass stops counting as a sync — the unread count
+            // it would have corrected is not stamped as current.
+            try {
+              await syncFlags(ctx.buddi!.db, account, client, polled.folder, polled.status, timeoutMs, log);
+            } catch (err) {
+              log(
+                `email.inbox-poll: could not re-sync flags on ${account.address}/${folder.name}: ` +
+                  `${err instanceof Error ? err.message : String(err)}; new mail still landed`,
+              );
+              complete = false;
+              pass.failures.push(err);
+            }
+          }
+        } catch (err) {
+          if (folder.kind !== 'sent') throw err;
+          log(
+            `email.inbox-poll: could not poll Sent folder ${account.address}/${folder.name}: ` +
+              `${err instanceof Error ? err.message : String(err)}; INBOX was still polled`,
+          );
+          complete = false;
+          pass.failures.push(err);
+        }
+      }
+      /*
+       * The pass finished. This is the one place `last_synced_at` moves,
+       * and it moves whether or not a single message was new: "we read
+       * this mailbox and there was nothing" is an answer, and without a
+       * mark of its own it is indistinguishable from never having looked.
+       */
+      if (complete) await markAccountSynced(ctx.buddi!.db, account.id, ctx.buddi!.clock.now());
+    } catch (err) {
+      complete = false;
+      if (err instanceof ImapTimeoutError) {
+        // A recorded give-up. Rethrowing it at the end of the pass is
+        // deliberate: `runSources` writes it to
+        // core.source_runs.last_error and emits `source.polled` with it,
+        // so a mailbox that stopped answering is visible rather than silent.
+        log(
+          `email.inbox-poll: ${err.message} on ${account.address}; ` +
+            `connection closed, retrying next poll`,
+        );
+      }
+      pass.failures.push(err);
+      // Whatever did land before the failure is still drained below: a
+      // Sent folder that timed out is no reason to sit on the inbox.
+    } finally {
+      await client?.close().catch(() => {});
+    }
+
+    const arrivals: ArrivalMatch[] = [];
+    try {
+      const waiting = await drain(ctx, account, agentId, limit, pending, pass.triageReady, arrivals);
+      if (waiting > 0 && !pass.saidWaiting) {
+        pass.saidWaiting = true;
+        log(`email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard`);
+      }
+      await recordTriageWaiting(ctx.buddi!.db, account.id, pass.triageReady ? false : waiting > 0 ? true : null, ctx.buddi!.clock.now());
+    } catch (err) {
+      pass.failures.push(err);
+    }
+    /*
+     * Rules with an on-arrival mailbox action (archive, mark read, move):
+     * after the gate and the queue, over a connection of their own, and
+     * on the undo trail (`mailbox/arrival.ts`). A failure there is logged
+     * and costs nobody their triage.
+     */
+    if (arrivals.length > 0) {
+      try {
+        await applyArrivalActions(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) }, arrivals);
+      } catch (err) {
+        log(
+          `email.inbox-poll: on-arrival rule actions on ${account.address} failed: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  const source: Source = {
     id: 'email.inbox-poll',
     description: onlyFolder
       ? `Poll ${onlyFolder} for new mail and start a triage run for each new message.`
@@ -511,7 +743,6 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
 
     async poll(ctx: SourceContext): Promise<void> {
       const log = ctx.buddi?.log ?? ((line: string) => console.error(line));
-      const env = opts.env ?? process.env;
 
       // Accounts are plural (docs/email.md §2). Every enabled one is polled in
       // this pass, each with its own folders and its own cursor per folder. No
@@ -522,7 +753,6 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
       // a mailbox that stopped answering is collected and rethrown after every
       // other account has had its turn, so `runSources` still records it in
       // `core.source_runs.last_error` and the rest of the mail still lands.
-      const failures: unknown[] = [];
       /*
        * Is there anybody to hand new mail to? The triage agent is proposed by
        * this plugin, not shipped: until the owner accepts it, a run enqueued
@@ -531,178 +761,62 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
        * runs wait, the messages stay unstamped, and the next poll after the
        * agent exists starts them. Said once per poll, not once per message.
        */
-      const triageReady = ctx.buddi!.owner.hasAgent(agentId);
-      let saidWaiting = false;
+      const pass: PollPass = { failures: [], triageReady: ctx.buddi!.owner.hasAgent(agentId), saidWaiting: false };
+      // The IDLE watchers follow the accounts: one added, removed or turned
+      // off since the last pass is picked up here at the latest.
+      if (watchers) await watchers.reconcile();
       for (const account of await listAccounts(ctx.buddi!.db)) {
-        const auth = await mailboxAuth(ctx, account, opts.env);
-        if (!auth.ok) {
-          // A typed configuration problem: say it once per poll and stop. An
-          // unattended run that needs a secret fails with a problem; it never
-          // hangs and never falls back to asking.
-          log(`email.inbox-poll: ${auth.problem.code}: ${auth.problem.message}`);
+        // Never two polls of one account at once: IDLE already has it.
+        if (inFlight.has(account.id)) {
+          log(`email.inbox-poll: ${account.address} is being polled already (IDLE); skipping it this pass`);
           continue;
         }
-
-        const timeoutMs = Math.max(1, opts.timeoutMs ?? envInt(env, POLL_TIMEOUT_VAR, DEFAULT_POLL_TIMEOUT_MS));
-        const backfill = Math.max(0, opts.backfill ?? envInt(env, BACKFILL_VAR, DEFAULT_BACKFILL));
-
-        // The connection is opened for this poll and closed at the end of it,
-        // always. A long-lived IMAP session is a socket that silently dies while
-        // nobody is looking; one per poll is cheap (half a second) and honest.
-        // Both folders are walked over the same connection.
-        let client: ImapClient | null = null;
-        const pending: PendingTriage[] = [];
-        /*
-         * Did this account's pass get all the way through? Only then is it a
-         * sync, and only then is `last_synced_at` moved: a Sent folder that
-         * timed out still let the inbox land, but it means what we hold for
-         * this mailbox is no longer everything the server has, and a metric
-         * that stamped it "as of now" would be saying otherwise.
-         */
-        let complete = true;
-        try {
-          try {
-            client = await withDeadline(
-              'connect',
-              timeoutMs,
-              opts.connect(account, auth.value),
-              // We gave up waiting, but the connection may still arrive: close it
-              // rather than leave a socket nobody owns.
-              (late) => void late.close().catch(() => {}),
-            );
-          } catch (err) {
-            // The provider refused the password it was given: written on the
-            // row so Settings → Email says "Password needed" (`logins.ts`).
-            if (isAuthFailure(err)) {
-              await recordLoginFailure(ctx.buddi!.db, account.id, err, ctx.buddi!.clock.now()).catch(() => {});
-              log(`email.inbox-poll: ${account.address} refused its stored password; Settings → Email → Set password`);
-            }
-            throw err;
-          }
-          await clearLoginFailure(ctx.buddi!.db, account.id);
-
-          // Which folders this account has, discovered once and remembered.
-          // A caller that named one folder gets that folder and no listing:
-          // the CLI and the tests both drive a single mailbox on purpose.
-          const folders = onlyFolder
-            ? [await ensureFolder(ctx.buddi!.db, account, onlyFolder, 'inbox', true)]
-            : (await discoverFolders(ctx.buddi!.db, account, client, timeoutMs, log)).filter((f) => f.synced);
-
-          // New discovery persists Sent's LIST/STATUS boundary above. This
-          // loop is for an older or partially initialised row that still has
-          // no generation: try to plant it before INBOX work, but isolate a
-          // failed SELECT or cursor write so incoming mail still lands.
-          const attemptedSent = new Set<string>();
-          for (const folder of folders.filter((f) => f.kind === 'sent' && f.uidValidity === null)) {
-            attemptedSent.add(folder.id);
-            try {
-              await pollFolder(ctx, account, client, folder, { timeoutMs, backfill, limit, log });
-            } catch (err) {
-              log(
-                `email.inbox-poll: could not initialize Sent folder ${account.address}/${folder.name}: ` +
-                  `${err instanceof Error ? err.message : String(err)}; continuing with INBOX`,
-              );
-              complete = false;
-              failures.push(err);
-            }
-          }
-
-          // The inbox first: it is the one that wakes anybody, and a Sent
-          // folder that times out must not cost the new mail its run.
-          for (const folder of [...folders].filter((f) => !attemptedSent.has(f.id)).sort((a, b) => (a.kind === 'inbox' ? -1 : b.kind === 'inbox' ? 1 : 0))) {
-            try {
-              const polled = await pollFolder(ctx, account, client, folder, {
-                timeoutMs,
-                backfill,
-                limit,
-                log,
-              });
-              pending.push(...polled.pending);
-              if (folder.kind === 'inbox') {
-                // After ingest, so the new rows are in the window with the
-                // flags they arrived with. A re-sync that fails costs nobody
-                // their mail: the rows landed, the runs are queued below, and
-                // only this pass stops counting as a sync — the unread count
-                // it would have corrected is not stamped as current.
-                try {
-                  await syncFlags(ctx.buddi!.db, account, client, polled.folder, polled.status, timeoutMs, log);
-                } catch (err) {
-                  log(
-                    `email.inbox-poll: could not re-sync flags on ${account.address}/${folder.name}: ` +
-                      `${err instanceof Error ? err.message : String(err)}; new mail still landed`,
-                  );
-                  complete = false;
-                  failures.push(err);
-                }
-              }
-            } catch (err) {
-              if (folder.kind !== 'sent') throw err;
-              log(
-                `email.inbox-poll: could not poll Sent folder ${account.address}/${folder.name}: ` +
-                  `${err instanceof Error ? err.message : String(err)}; INBOX was still polled`,
-              );
-              complete = false;
-              failures.push(err);
-            }
-          }
-          /*
-           * The pass finished. This is the one place `last_synced_at` moves,
-           * and it moves whether or not a single message was new: "we read
-           * this mailbox and there was nothing" is an answer, and without a
-           * mark of its own it is indistinguishable from never having looked.
-           */
-          if (complete) await markAccountSynced(ctx.buddi!.db, account.id, ctx.buddi!.clock.now());
-        } catch (err) {
-          complete = false;
-          if (err instanceof ImapTimeoutError) {
-            // A recorded give-up. Rethrowing it at the end of the pass is
-            // deliberate: `runSources` writes it to
-            // core.source_runs.last_error and emits `source.polled` with it,
-            // so a mailbox that stopped answering is visible rather than silent.
-            log(
-              `email.inbox-poll: ${err.message} on ${account.address}; ` +
-                `connection closed, retrying next poll`,
-            );
-          }
-          failures.push(err);
-          // Whatever did land before the failure is still drained below: a
-          // Sent folder that timed out is no reason to sit on the inbox.
-        } finally {
-          await client?.close().catch(() => {});
-        }
-
-        const arrivals: ArrivalMatch[] = [];
-        try {
-          const waiting = await drain(ctx, account, agentId, limit, pending, triageReady, arrivals);
-          if (waiting > 0 && !saidWaiting) {
-            saidWaiting = true;
-            log(`email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard`);
-          }
-          await recordTriageWaiting(ctx.buddi!.db, account.id, triageReady ? false : waiting > 0 ? true : null, ctx.buddi!.clock.now());
-        } catch (err) {
-          failures.push(err);
-        }
-        /*
-         * Rules with an on-arrival mailbox action (archive, mark read, move):
-         * after the gate and the queue, over a connection of their own, and
-         * on the undo trail (`mailbox/arrival.ts`). A failure there is logged
-         * and costs nobody their triage.
-         */
-        if (arrivals.length > 0) {
-          try {
-            await applyArrivalActions(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) }, arrivals);
-          } catch (err) {
-            log(
-              `email.inbox-poll: on-arrival rule actions on ${account.address} failed: ` +
-                `${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
+        // IDLE is live: the server says when mail comes, and this pass is
+        // the safety net, at the slower period.
+        const last = lastPolled.get(account.id);
+        if (watchers?.state(account.id) === 'live' && last !== undefined && Date.now() - last < slowPollMs) continue;
+        await runLocked(account.id, () => pollAccount(ctx, account, pass));
       }
 
-      if (failures.length > 0) throw failures[0];
+      if (pass.failures.length > 0) throw pass.failures[0];
     },
   };
+
+  if (opts.idle) {
+    const idle = opts.idle;
+    source.watch = (ctx: SourceContext): SourceWatch => {
+      const manager = new IdleWatchers({
+        idle,
+        host: ctx.buddi!,
+        poll: (accountId) => pollNow(accountId),
+        ...(opts.env ? { env: opts.env } : {}),
+        ...(opts.idleTuning ?? {}),
+      });
+      watchers = manager;
+      watchCtx = ctx;
+      void manager.reconcile();
+      return {
+        async stop() {
+          if (watchers === manager) {
+            watchers = null;
+            watchCtx = null;
+          }
+          await manager.stop();
+          // A poll IDLE started finishes (each IMAP call has its deadline);
+          // nothing of this watcher outlives `stop`.
+          await Promise.allSettled([...inFlight.values()]);
+        },
+      };
+    };
+  }
+  return source;
+}
+
+/** What one pass shares across its accounts. */
+interface PollPass {
+  failures: unknown[];
+  triageReady: boolean;
+  saidWaiting: boolean;
 }
 
 /**

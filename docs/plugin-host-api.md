@@ -88,7 +88,7 @@ area, `owner.notify`, must be declared too.
 
 ```ts
 interface BuddiHost {
-  readonly version: string;            // '1.14'; see §7
+  readonly version: string;            // '1.15'; see §7
   readonly plugin: string;             // this plugin's name
   log(line: string): void;             // operational log, scrubbed (owner-secrets §5)
   owner: OwnerArea; clock: ClockArea; db: DbArea; dir: DirArea;
@@ -360,7 +360,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.14`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.15`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -385,6 +385,12 @@ use it asks for `^1.13`.
 1.14 adds `proposals.listOpen`, `keepItself`, `trackRecord` and `takeBack`,
 and `proposePolicy`'s optional `{ announce }` (§4, proposals). A plugin that
 keeps rules itself asks for `^1.14`.
+
+1.15 adds no method either: it is the first buddi that starts a source's
+optional `watch` (a long-lived watcher beside the poll, such as IMAP IDLE;
+docs/plugins.md §2.2) and stops it when the plugin is taken out. An older
+buddi ignores the field and only polls, so a plugin with a `watch` keeps
+working there and need not ask for `^1.15`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

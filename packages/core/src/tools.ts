@@ -474,6 +474,21 @@ export interface Source {
   /** Poll period in **seconds**. */
   every: number;
   poll(ctx: SourceContext): Promise<void>;
+  /**
+   * A long-lived watcher beside the poll (optional, since host API 1.15): the
+   * place for a push channel such as IMAP IDLE, so a source can poll *now*
+   * instead of waiting for its period. Core starts it once the plugin is
+   * loaded, with a context whose clock is live, and calls `stop()` when the
+   * plugin is taken out or buddi shuts down. The watcher owns its own
+   * connections, timers and reconnects; the poll stays the safety net, and an
+   * older buddi that never calls `watch` simply polls.
+   */
+  watch?(ctx: SourceContext): SourceWatch;
+}
+
+/** What `Source.watch` hands back: how core stops it. Must release every socket and timer. */
+export interface SourceWatch {
+  stop(): Promise<void>;
 }
 
 /**

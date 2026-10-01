@@ -11,7 +11,10 @@ import type {
   AttachmentInfo,
   FetchedMessage,
   FlagState,
+  IdleChange,
   ImapClientFactory,
+  ImapIdleFactory,
+  ImapIdleSession,
   ImapWriter,
   MailboxInfo,
   MailboxStatus,
@@ -102,6 +105,18 @@ export class FakeImapServer {
     | { op: 'labels'; mailbox: string; uids: number[]; labels: string[] }
   > = [];
 
+  /**
+   * IDLE (RFC 2177): sessions open on this server, every IDLE login it
+   * accepted or refused, and the switches a test flips. A server without
+   * `IDLE` in `capabilities` answers the IDLE factory with 'unsupported'.
+   */
+  readonly idlers = new Set<FakeIdleSession>();
+  idleConnects = 0;
+  /** When set, an IDLE login is refused the way a provider refuses a revoked app password. */
+  refuseIdleLogin = false;
+  /** When set, an IDLE connect fails like a network that is down (not a refusal). */
+  idleUnreachable = false;
+
   constructor(seed: Record<string, FakeMailbox> = {}) {
     for (const [name, box] of Object.entries(seed)) this.mailboxes.set(name, box);
   }
@@ -160,6 +175,8 @@ export class FakeImapServer {
       this.modseqs.delete(`${source}/${uid}`);
       this.#touch(destination, next);
       uidMap.set(uid, next);
+      this.#notify(source, 'expunge');
+      this.#notify(destination, 'exists');
     }
     this.writes.push({ op: 'move', mailbox: source, uids: [...uids], destination });
     return {
@@ -177,6 +194,7 @@ export class FakeImapServer {
       for (const f of flags) how === 'add' ? set.add(f) : set.delete(f);
       m.flags = [...set];
       this.#touch(name, m.uid);
+      this.#notify(name, 'flags');
     }
     this.writes.push({ op: 'store', mailbox: name, uids: [...uids], flags: [...flags], how });
   }
@@ -197,6 +215,7 @@ export class FakeImapServer {
     box.uidNextFloor = Math.max(box.uidNextFloor ?? 0, uid);
     box.messages.push({ ...message, uid });
     this.#touch(name, uid);
+    this.#notify(name, 'exists');
     return uid;
   }
 
@@ -209,6 +228,7 @@ export class FakeImapServer {
     if (!message) throw new Error(`fake imap: no uid ${uid} in ${name}`);
     message.flags = [...flags];
     this.#touch(name, uid);
+    this.#notify(name, 'flags');
   }
 
   /** Archive or delete elsewhere: the message is simply not in this mailbox any more. */
@@ -216,6 +236,40 @@ export class FakeImapServer {
     const box = this.mailbox(name);
     box.messages = box.messages.filter((m) => m.uid !== uid);
     this.modseqs.delete(`${name}/${uid}`);
+    this.#notify(name, 'expunge');
+  }
+
+  /** Tell every session idling on this mailbox, as an untagged response would. */
+  #notify(name: string, change: IdleChange): void {
+    for (const session of this.idlers) session.push(name, change);
+  }
+
+  /** The network drops every IDLE connection: each session ends with an error. */
+  dropIdle(): void {
+    for (const session of [...this.idlers]) session.drop(new Error('fake imap: connection reset'));
+  }
+
+  /** The IDLE factory: a connection of its own on INBOX, as the real one opens. */
+  idleFactory(): ImapIdleFactory {
+    return async (_account, auth, onChange) => {
+      this.idleConnects += 1;
+      if (this.idleUnreachable) throw Object.assign(new Error('fake imap: connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      if (this.refuseIdleLogin || auth.pass === 'wrong') {
+        throw Object.assign(new Error('Command failed'), {
+          authenticationFailed: true,
+          responseText: 'Invalid credentials (Failure)',
+        });
+      }
+      if (!this.capabilities.includes('IDLE')) return 'unsupported';
+      const session = new FakeIdleSession(this, 'INBOX', onChange);
+      this.idlers.add(session);
+      return session;
+    };
+  }
+
+  /** @internal */
+  forget(session: FakeIdleSession): void {
+    this.idlers.delete(session);
   }
 
   /** Bump the mailbox's mod-sequence and give it to this message, when the mailbox has one. */
@@ -260,6 +314,42 @@ export class FakeImapServer {
 
   factory(): ImapClientFactory {
     return async () => this.client();
+  }
+}
+
+/** One IDLE connection on the fake server. */
+class FakeIdleSession implements ImapIdleSession {
+  readonly ended: Promise<{ error?: unknown }>;
+  #settle!: (outcome: { error?: unknown }) => void;
+  #done = false;
+
+  constructor(
+    private readonly server: FakeImapServer,
+    private readonly mailbox: string,
+    private readonly onChange: (change: IdleChange) => void,
+  ) {
+    this.ended = new Promise((resolve) => {
+      this.#settle = resolve;
+    });
+  }
+
+  push(mailbox: string, change: IdleChange): void {
+    if (this.#done || mailbox !== this.mailbox) return;
+    this.onChange(change);
+  }
+
+  drop(error: unknown): void {
+    if (this.#done) return;
+    this.#done = true;
+    this.server.forget(this);
+    this.#settle({ error });
+  }
+
+  async close(): Promise<void> {
+    if (this.#done) return;
+    this.#done = true;
+    this.server.forget(this);
+    this.#settle({});
   }
 }
 

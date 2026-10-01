@@ -20,7 +20,10 @@ import type {
   EmailAuth,
   FetchedMessage,
   FlagState,
+  IdleChange,
   ImapClientFactory,
+  ImapIdleFactory,
+  ImapIdleSession,
   ImapWriter,
   MailboxInfo,
   MailboxStatus,
@@ -489,4 +492,94 @@ export const imapflowFactory: ImapClientFactory = async (
   });
   await client.connect();
   return new ImapFlowClient(client);
+};
+
+/** What the IDLE connection uses of imapflow, beside `connect` and `logout`. */
+interface ImapFlowIdleLike {
+  connect(): Promise<void>;
+  logout(): Promise<void>;
+  close(): void;
+  mailboxOpen(path: string, opts?: { readOnly?: boolean }): Promise<unknown>;
+  idle(): Promise<unknown>;
+  capabilities: Map<string, unknown>;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+}
+
+/**
+ * How long one IDLE runs before imapflow breaks and re-issues it. RFC 2177
+ * lets a server drop an IDLE after 30 minutes and some do after 29; ten is
+ * well inside that. (imapflow's 5-minute socket timeout also sends a NOOP
+ * during a silent IDLE and re-arms it; this does not depend on that.)
+ */
+export const IDLE_RESTART_MS = 10 * 60_000;
+
+/**
+ * The IDLE factory the gateway installs: a connection of its own, INBOX
+ * opened read-only (EXAMINE, so idling can never set a flag), IDLE started at
+ * once and re-armed by imapflow after every interruption.
+ */
+export const imapflowIdleFactory: ImapIdleFactory = async (account, auth, onChange) => {
+  const mod = (await import('imapflow')) as unknown as { ImapFlow: new (o: Record<string, unknown>) => ImapFlowIdleLike };
+  const client = new mod.ImapFlow({
+    host: account.imapHost,
+    port: account.imapPort,
+    secure: true,
+    auth: { user: auth.user, pass: auth.pass },
+    tls: { rejectUnauthorized: true, minVersion: 'TLSv1.2' },
+    logger: false,
+    maxIdleTime: IDLE_RESTART_MS,
+    autoIdleDelay: 1_000,
+    // Never imapflow's NOOP loop: a server without IDLE is the poll's job.
+    missingIdleCommand: 'NOOP',
+  });
+  let settle!: (outcome: { error?: unknown }) => void;
+  const ended = new Promise<{ error?: unknown }>((resolve) => {
+    settle = resolve;
+  });
+  let lastError: unknown;
+  let closing = false;
+  client.on('error', (err) => {
+    lastError = err;
+  });
+  client.on('close', () => settle(closing ? {} : { error: lastError ?? new Error('IDLE connection closed by the server') }));
+  const report = (change: IdleChange) => (payload: unknown): void => {
+    const path = (payload as { path?: unknown } | undefined)?.path;
+    if (typeof path === 'string' && path.toUpperCase() !== 'INBOX') return;
+    onChange(change);
+  };
+  client.on('exists', report('exists'));
+  client.on('expunge', report('expunge'));
+  client.on('flags', report('flags'));
+
+  try {
+    await client.connect();
+  } catch (err) {
+    closing = true;
+    client.close();
+    throw err;
+  }
+  const session: ImapIdleSession = {
+    ended,
+    async close() {
+      if (closing) return;
+      closing = true;
+      await client.logout().catch(() => {});
+      client.close();
+      settle({});
+    },
+  };
+  if (!client.capabilities.has('IDLE') && !client.capabilities.has('IMAP4REV2')) {
+    await session.close();
+    return 'unsupported';
+  }
+  try {
+    await client.mailboxOpen('INBOX', { readOnly: true });
+  } catch (err) {
+    await session.close();
+    throw err;
+  }
+  // The first IDLE now rather than after the auto-idle delay; imapflow
+  // re-arms it after every break (maxIdleTime, a socket-timeout NOOP).
+  void client.idle().catch(() => {});
+  return session;
 };

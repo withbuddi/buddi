@@ -46,6 +46,7 @@ import {
   runScheduler,
   runSentinels,
   runSources,
+  createSourceWatches,
   runWorker,
   collectSentinels,
   createPool,
@@ -532,6 +533,8 @@ export async function main(): Promise<void> {
    */
 
   const idle = idleLoops();
+  // Created here so the `finally` below can stop them before the pool ends.
+  const sourceWatches = createSourceWatches(pool);
 
   try {
     // "Your browser" mode drives the owner's Chrome through the dashboard's
@@ -803,7 +806,15 @@ export async function main(): Promise<void> {
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_POLL_TIMEOUT_MS;
     })();
     const sourceAbortMs = sourcePollTimeoutMs * 2;
+    /*
+     * Watchers beside the polls (`Source.watch`, e.g. the inbox's IMAP IDLE):
+     * reconciled on every source tick, so a plugin taken out stops its
+     * watcher within a tick, and stopped before the pool closes.
+     */
     const sourceTick = async (): Promise<void> => {
+      await sourceWatches
+        .reconcile(wiring.registry.manifests(), { now, timezone: wiring.timezone, enqueueRun, log: logOut })
+        .catch((err) => console.error(`source watchers: ${err instanceof Error ? err.message : String(err)}`));
       const outcomes = await runSources(pool, wiring.registry.manifests(), {
         now: now(),
         timezone: wiring.timezone,
@@ -1105,7 +1116,7 @@ export async function main(): Promise<void> {
         if (process.env.BUDDI_WEB_REQUIRE_AUTH === '1') {
           clearInterval(sweep); clearInterval(orphanSweep);
           sentinelLoop.stop(); sourceLoop.stop(); reminderLoop.stop(); deadLetterLoop.stop(); notificationsLoop.stop(); proposalLoop.stop();
-          await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop()]);
+          await Promise.all([scheduler.stop(), worker.stop(), telegram?.stop(), sourceWatches.stopAll()]);
           throw err;
         }
       }
@@ -1186,6 +1197,7 @@ export async function main(): Promise<void> {
       clearInterval(sweep);
       sentinelLoop.stop();
       sourceLoop.stop();
+      void sourceWatches.stopAll();
       reminderLoop.stop();
       deadLetterLoop.stop();
       notificationsLoop.stop();
@@ -1203,6 +1215,7 @@ export async function main(): Promise<void> {
     await closingDashboard?.catch(() => {});
     console.log('buddi serve stopped cleanly');
   } finally {
+    await sourceWatches.stopAll();
     await browserHost(process.env).shutdown();
     // Every program a connection started, with whatever it started (its process group).
     await wiring.connections?.close().catch(() => {});

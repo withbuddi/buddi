@@ -323,3 +323,36 @@ export type SmtpClientFactory = (
   account: AccountRecord,
   auth: EmailAuth,
 ) => Promise<SmtpClient>;
+
+/**
+ * What an idling INBOX connection reports: a message arrived (`EXISTS`), one
+ * left (`EXPUNGE`, moved or deleted in another app), or a message's flags
+ * changed (`FETCH … FLAGS`). The watcher only needs to know *that* something
+ * changed; the poll reads what.
+ */
+export type IdleChange = 'exists' | 'expunge' | 'flags';
+
+/**
+ * One IDLE connection on INBOX, its own socket: never the poll's reader and
+ * never the write port's, so a mailbox action cannot break it.
+ */
+export interface ImapIdleSession {
+  /**
+   * Settles once, when the connection is gone: `{}` after `close()`, the
+   * error when the server or the network dropped it. Never rejects.
+   */
+  readonly ended: Promise<{ error?: unknown }>;
+  /** Log out and release the socket. Idempotent. */
+  close(): Promise<void>;
+}
+
+/**
+ * Open an IDLE connection on INBOX and report every change to `onChange`.
+ * Resolves `'unsupported'` (connection already closed) when the server does
+ * not advertise IDLE; rejects when the login or the connection fails.
+ */
+export type ImapIdleFactory = (
+  account: AccountRecord,
+  auth: EmailAuth,
+  onChange: (change: IdleChange) => void,
+) => Promise<ImapIdleSession | 'unsupported'>;

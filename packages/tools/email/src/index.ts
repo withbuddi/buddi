@@ -14,7 +14,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginManifest, Source } from '@buddi/core/plugin';
-import { imapflowFactory } from './imap/imapflow-client.js';
+import { imapflowFactory, imapflowIdleFactory } from './imap/imapflow-client.js';
 import { smtpFactory } from './smtp/nodemailer-client.js';
 import { emailMetrics } from './metrics.js';
 import { emailSentinels } from './sentinels/index.js';
@@ -38,7 +38,7 @@ import { mailAgents } from './agent.js';
 import type { EnvLike } from './config.js';
 import { accountDestination } from './credentials.js';
 import { createSelfChannel } from './channel.js';
-import type { ImapClientFactory, SmtpClientFactory } from './ports.js';
+import type { ImapClientFactory, ImapIdleFactory, SmtpClientFactory } from './ports.js';
 
 /** Absolute path to this plugin's migrations, resolved from the built file. */
 export const MIGRATIONS_DIR = path.resolve(
@@ -50,6 +50,12 @@ export const MIGRATIONS_DIR = path.resolve(
 export interface EmailPluginOptions {
   /** How IMAP clients are made. Defaults to the real `imapflow` adapter. */
   connect?: ImapClientFactory;
+  /**
+   * How IMAP IDLE connections are made (`sources/idle.ts`). Defaults to the
+   * real `imapflow` adapter, except when `connect` is injected: a caller that
+   * fakes the reader gets no real IDLE socket unless it hands a fake here too.
+   */
+  idle?: ImapIdleFactory;
   /** How SMTP clients are made. Defaults to the real `nodemailer` adapter. */
   send?: SmtpClientFactory;
   /**
@@ -74,6 +80,7 @@ export function createEmailSources(opts: EmailPluginOptions = {}): Source[] {
     createInboxPollSource({
       connect: opts.connect ?? imapflowFactory,
       ...(opts.env ? { env: opts.env } : {}),
+      ...(opts.idle ? { idle: opts.idle } : opts.connect ? {} : { idle: imapflowIdleFactory }),
     }),
     // Housekeeping, not ingest: it originates no run and wakes nobody. It
     // rides the source contract only for the period ledger — see
@@ -510,7 +517,8 @@ export {
   THREAD_MESSAGE_LIMIT,
   type MailHosts,
 } from './pages/index.js';
-export { imapflowFactory } from './imap/imapflow-client.js';
+export { imapflowFactory, imapflowIdleFactory, IDLE_RESTART_MS } from './imap/imapflow-client.js';
+export { accountChanged, idleLive, IdleWatchers, IDLE_DEBOUNCE_MS, IDLE_SLOW_POLL_SECONDS, type IdleState } from './sources/idle.js';
 export * from './mailbox/actions.js';
 export * from './mailbox/select.js';
 export * from './mailbox/arrival.js';
