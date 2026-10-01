@@ -7,7 +7,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from './db.js';
 import { refreshOwnerTimezone, setOwnerProfile } from './onboarding/store.js';
-import { saveOwnerProfile } from './owner-timezone.js';
+import { alignSchedulesToOwnerZone, saveOwnerProfile } from './owner-timezone.js';
 import { getActiveSchedule, setSchedule, upsertMission } from './scheduler/missions.js';
 import { ownerTimezone, rememberOwnerTimezone } from './time.js';
 import { testDatabaseUrl } from './testing/database-url.js';
@@ -79,5 +79,18 @@ suite('owner timezone (postgres)', () => {
     const cleared = await saveOwnerProfile(pool, { timezone: null }, ENV);
     expect(cleared.zoneChange?.to).toBe('America/New_York');
     expect(await getActiveSchedule(pool, 'recap')).toMatchObject({ timezone: 'America/New_York', revision: 3 });
+  });
+
+  it('at start, moves what was made in the fallback zone to the profile zone set before this release', async () => {
+    // As an older buddi left it: the digest made in New York, the profile saying Lisbon.
+    await mission('learning-digest', 'America/New_York');
+    await mission('tokyo-market', 'Asia/Tokyo');
+    expect(await alignSchedulesToOwnerZone(pool, ENV)).toBeUndefined(); // no profile zone yet
+    await setOwnerProfile(pool, { timezone: 'Europe/Lisbon' });
+    expect(await alignSchedulesToOwnerZone(pool, ENV)).toEqual({ from: 'America/New_York', to: 'Europe/Lisbon', missions: ['learning-digest'] });
+    expect(await getActiveSchedule(pool, 'learning-digest')).toMatchObject({ timezone: 'Europe/Lisbon' });
+    expect(await getActiveSchedule(pool, 'tokyo-market')).toMatchObject({ timezone: 'Asia/Tokyo' });
+    // Once is enough: the next start finds nothing to move.
+    expect(await alignSchedulesToOwnerZone(pool, ENV)).toBeUndefined();
   });
 });

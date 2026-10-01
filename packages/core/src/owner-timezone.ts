@@ -35,3 +35,24 @@ export async function saveOwnerProfile(
   const missions = await rezoneSchedules(pool, from, to);
   return { profile, zoneChange: { from, to, missions } };
 }
+
+/**
+ * At start: the schedules still kept in the configured fallback zone
+ * (`BUDDI_TZ`, else New York) move to the profile's zone when the profile
+ * names another. An installation set up before the profile drove the clock
+ * made its recap and digest in the fallback zone, and its owner's zone was
+ * the profile's all along. Nothing to do when the profile names no zone or
+ * the same one. Returns what moved, if anything did.
+ */
+export async function alignSchedulesToOwnerZone(
+  pool: Pool,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ from: string; to: string; missions: string[] } | undefined> {
+  const zone = (await getOwnerProfile(pool)).timezone;
+  if (zone === null || !isKnownTimezone(zone)) return undefined;
+  const from = timezoneFromEnv(env);
+  const to = zone.trim();
+  if (from === to) return undefined;
+  const missions = await rezoneSchedules(pool, from, to);
+  return missions.length > 0 ? { from, to, missions } : undefined;
+}

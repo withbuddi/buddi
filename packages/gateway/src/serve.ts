@@ -70,7 +70,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
-import { scrubText } from '@buddi/core';
+import { alignSchedulesToOwnerZone, scrubText } from '@buddi/core';
 import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
@@ -875,6 +875,11 @@ export async function main(): Promise<void> {
     if (!recovering) {
       await seedOwnerFromEnv(pool, process.env).catch((err) =>
         console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
+      // Schedules made in the fallback zone before the profile drove the clock
+      // follow the profile's zone, once; afterwards a save moves them.
+      await alignSchedulesToOwnerZone(pool, process.env)
+        .then((moved) => { if (moved) console.log(`owner: schedules moved ${moved.from} → ${moved.to}: ${moved.missions.join(', ')}`); })
+        .catch((err) => console.error(`owner: schedules not moved to the profile's zone: ${err instanceof Error ? err.message : String(err)}`));
     }
 
     /*

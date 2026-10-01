@@ -24,6 +24,8 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   it on every save and re-reads it every minute. Schedules kept in the old zone
   (the recap, the learning digest, recurring reminders) move to the new one as
   a new schedule revision; a schedule a plugin set in a zone of its own stays.
+  At start, schedules still in the fallback zone move to the profile's zone
+  when it names another (an installation from before the profile drove the clock).
 - How the owner reads times and dates (Settings → Profile: 12-hour or 24-hour,
   "Thu, Oct 1", "Thursday, 1 October" or ISO) is one line under "About the
   owner" for every agent, so a reply writes "2:05 PM" to someone who reads

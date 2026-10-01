@@ -321,7 +321,9 @@ export async function createWiringAsync(
   // The first automaton, before any sync sink (a plugin's buddi.log, the
   // serve loops' lines) writes a word: the async choke points re-prime later.
   await primeSecretScrubber();
-  return { ...wiring, secrets, providerSettings, providerAccounts, model: selected.model,
+  // The zone stays a getter through the spread: a spread would freeze the
+  // zone of this moment, and Settings → Profile can change it at any time.
+  return { ...wiring, get timezone() { return wiring.timezone; }, secrets, providerSettings, providerAccounts, model: selected.model,
     providerKind: selected.provider.kind, credentialKind: selected.provider.credential.kind };
 }
 
