@@ -766,6 +766,15 @@ export class ToolRegistry {
     return answer;
   }
 
+  /**
+   * The host binding this registry made for `plugin`: the one whose
+   * `plugins.call`, `tools` and runtime network a context outside a tool —
+   * a source, a watcher, a sentinel — must share to act as the same plugin.
+   */
+  hostBinding(plugin: string): HostBinding | undefined {
+    return this.#bindings.get(plugin);
+  }
+
   /** The plugins `plugin` requires, with their ranges; empty when none or not registered. */
   requiresOf(plugin: string): Readonly<Record<string, string>> {
     return this.#bindings.get(plugin)?.requires ?? {};

@@ -18,7 +18,7 @@
  */
 import type { Pool } from 'pg';
 import type { CoreSourceContext, PluginManifest, Source, SourceWatch } from '../tools.js';
-import { createPluginHost, hostBindingOf } from '../host/build.js';
+import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
 
 export type SourceWatchInput = {
   /** The live clock. Called every time, never captured. */
@@ -26,6 +26,8 @@ export type SourceWatchInput = {
   timezone: string;
   enqueueRun: CoreSourceContext['enqueueRun'];
   log?: (line: string) => void;
+  /** As `RunSourcesInput.bindingOf`: the registry's binding, so a watcher can call an export. */
+  bindingOf?: (manifest: PluginManifest) => HostBinding | undefined;
 };
 
 export interface SourceWatches {
@@ -86,7 +88,7 @@ export function createSourceWatches(pool: Pool): SourceWatches {
           enqueueRun: input.enqueueRun,
         };
         try {
-          ctx.buddi = createPluginHost(hostBindingOf(manifest), ctx);
+          ctx.buddi = createPluginHost(input.bindingOf?.(manifest) ?? hostBindingOf(manifest), ctx);
           live.set(id, { source, watch: source.watch!(ctx) });
         } catch (err) {
           log(`source ${id}: watcher did not start: ${err instanceof Error ? err.message : String(err)}`);

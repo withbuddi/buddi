@@ -52,6 +52,13 @@ export type RunSourcesInput = {
   /** How a source originates a run. Idempotent on `dedupKey`. */
   enqueueRun: CoreSourceContext['enqueueRun'];
   log?: (line: string) => void;
+  /**
+   * The binding a plugin's sources run under — the registry's
+   * (`ToolRegistry.hostBinding`), so `ctx.buddi.plugins.call` reaches the
+   * plugins it requires as from a tool. A fresh, unregistered binding
+   * otherwise, which can call no other plugin.
+   */
+  bindingOf?: (manifest: PluginManifest) => HostBinding | undefined;
 };
 
 type RunLedgerRow = { source_id: string; last_run_at: Date; last_error: string | null };
@@ -68,7 +75,7 @@ export async function runSources(
   const bindings = new Map<string, HostBinding>();
   for (const manifest of manifests) {
     if ((manifest.sources ?? []).length === 0) continue;
-    const binding = hostBindingOf(manifest);
+    const binding = input.bindingOf?.(manifest) ?? hostBindingOf(manifest);
     for (const source of manifest.sources ?? []) bindings.set(source.id, binding);
   }
   const log = input.log ?? ((line: string) => console.error(line));

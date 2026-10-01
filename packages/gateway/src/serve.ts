@@ -768,6 +768,8 @@ export async function main(): Promise<void> {
         // The same owner every other part of this process runs as: core's
         // goal watcher builds a CoreToolContext from it to measure a metric.
         wiring.ctx.ownerId,
+        // The registry's own binding: a sentinel calls an export it requires as a tool would.
+        (manifest) => wiring.registry.hostBinding(manifest.name),
       );
       for (const outcome of outcomes) {
         if (!outcome.ran) continue;
@@ -816,15 +818,18 @@ export async function main(): Promise<void> {
      * reconciled on every source tick, so a plugin taken out stops its
      * watcher within a tick, and stopped before the pool closes.
      */
+    // The registry's binding for each plugin, so a source or a watcher can call an export it requires.
+    const bindingOf = (manifest: { name: string }) => wiring.registry.hostBinding(manifest.name);
     const sourceTick = async (): Promise<void> => {
       await sourceWatches
-        .reconcile(wiring.registry.manifests(), { now, timezone: wiring.timezone, enqueueRun, log: logOut })
+        .reconcile(wiring.registry.manifests(), { now, timezone: wiring.timezone, enqueueRun, log: logOut, bindingOf })
         .catch((err) => console.error(`source watchers: ${err instanceof Error ? err.message : String(err)}`));
       const outcomes = await runSources(pool, wiring.registry.manifests(), {
         now: now(),
         timezone: wiring.timezone,
         enqueueRun,
         log: logOut,
+        bindingOf,
       });
       for (const outcome of outcomes) {
         if (outcome.error) console.error(`source ${outcome.sourceId}: ${outcome.error}`);

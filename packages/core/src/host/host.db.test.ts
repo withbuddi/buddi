@@ -19,6 +19,8 @@ import { testDatabaseUrl } from '../testing/database-url.js';
 import { ToolRegistry } from '../registry.js';
 import { createAction } from '../actions/store.js';
 import { runSources } from '../sources/run.js';
+import { createSourceWatches } from '../sources/watch.js';
+import { runSentinels } from '../sentinels/run.js';
 import type { PluginManifest, CoreToolContext } from '../tools.js';
 import type { ProviderAccountsAccess } from '../provider-accounts.js';
 import { configurePluginHost, createPluginHost, hostBindingOf, resetPluginHost } from './build.js';
@@ -459,6 +461,42 @@ suite('ctx.buddi', () => {
     expect(await theirs.proposals!.takeBack(created.proposal.id)).toBeNull();
     expect(await mine.proposals!.takeBack(created.proposal.id, { reason: 'undone' })).toMatchObject({ state: 'discarded', decidedBy: 'owner', reason: 'undone' });
     expect(await mine.proposals!.trackRecord('quiet')).toMatchObject({ discarded: 1 });
+  });
+
+  it('lets a source, a watcher and a sentinel call an export they require, under the same rules', async () => {
+    const answers: Record<string, unknown> = {};
+    const call = async (where: string, buddi: BuddiHost | undefined): Promise<void> => {
+      try {
+        answers[where] = await buddi!.plugins!.call('weather', 'forecast', { place: where });
+      } catch (err) {
+        answers[where] = err instanceof Error ? err.message : String(err);
+      }
+    };
+    const registry = new ToolRegistry();
+    registry.register(plugin('weather', {
+      version: '0.2.1',
+      exports: { forecast: { params: z.object({ place: z.string() }), produce: async (p: { place: string }) => `sunny at ${p.place}` } },
+    }));
+    registry.register(plugin('commute', {
+      requires: { weather: '^0.2.0' },
+      sources: [{
+        id: 'commute.poll', description: 'poll', every: 60,
+        poll: async (c) => call('poll', c.buddi),
+        watch: (c) => { void call('watch', c.buddi); return { stop: async () => {} }; },
+      }],
+      sentinels: [{ id: 'commute.rain', description: 'rain', every: 60, run: async (c) => { await call('sentinel', c.buddi); return []; } }],
+    }));
+    const bindingOf = (m: PluginManifest) => registry.hostBinding(m.name);
+    const manifests = registry.manifests();
+    await runSources(pool, manifests, { now, timezone: 'UTC', enqueueRun: async () => {}, bindingOf });
+    const watches = createSourceWatches(pool);
+    await watches.reconcile(manifests, { now: () => now, timezone: 'UTC', enqueueRun: async () => {}, bindingOf });
+    await runSentinels(pool, manifests, now, 'UTC', undefined, undefined, bindingOf);
+    await watches.stopAll();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(answers).toEqual({ poll: 'sunny at poll', watch: 'sunny at watch', sentinel: 'sunny at sentinel' });
+    await pool.query("delete from core.source_runs where source_id = 'commute.poll'");
+    await pool.query("delete from core.sentinel_runs where sentinel_id = 'commute.rain'");
   });
 
   it('hands a source the host of the plugin that ships it', async () => {

@@ -110,6 +110,8 @@ export async function runSentinels(
    * own `OWNER_ID`, which is what every single-owner process already runs as.
    */
   ownerId: string = OWNER_ID,
+  /** As `RunSourcesInput.bindingOf`: the registry's binding, so a sentinel can call an export. */
+  bindingOf?: (manifest: PluginManifest) => HostBinding | undefined,
 ): Promise<SentinelOutcome[]> {
   const sentinels = collectSentinels(manifests);
   if (sentinels.length === 0) return [];
@@ -117,7 +119,7 @@ export async function runSentinels(
   const bindings = new Map<string, HostBinding>();
   for (const manifest of manifests) {
     if ((manifest.sentinels ?? []).length === 0) continue;
-    const binding = hostBindingOf(manifest);
+    const binding = bindingOf?.(manifest) ?? hostBindingOf(manifest);
     for (const sentinel of manifest.sentinels ?? []) bindings.set(sentinel.id, binding);
   }
 

@@ -187,7 +187,9 @@ the clock, `db`, `dir`, `approvals`, `pages`, `http` for GET and HEAD,
 `network.declared`, `tools.registered`, `files.get|read|list`,
 `accounts.list`, `memory.recall`, `secrets.list` and `plugins.call`. Anything
 else — `schedule`, `owner.notify`, `proposals`, `channels`, registering a tool
-or a host, a POST — throws a `PluginCallRefusal`. It runs within five seconds. A refusal is a `PluginCallRefusal` naming why. No
+or a host, a POST — throws a `PluginCallRefusal`. It runs within five seconds,
+and is open alike from a tool, a page, a widget and the background: a source,
+a watcher and a sentinel run under the same binding the registry made. A refusal is a `PluginCallRefusal` naming why. No
 tool is ever reachable this way, and no schema but the target's own.
 
 **owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,
