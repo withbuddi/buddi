@@ -9,7 +9,7 @@ import type { AccountRecord, AttachmentInfo } from './ports.js';
 
 export const ACCOUNT_COLUMNS =
   'id, address, imap_host, imap_port, smtp_host, smtp_port, auth_mode, secret_name, ' +
-  'aliases, display_name, enabled, added_via, folders_discovered_at, created_at';
+  'aliases, display_name, enabled, added_via, folders_discovered_at, created_at, login_failed_at, login_error';
 
 export function toAccount(row: Record<string, any>): AccountRecord {
   return {
@@ -31,6 +31,8 @@ export function toAccount(row: Record<string, any>): AccountRecord {
     // `folders_discovered_at` in migration 008 and `discoverFolders`.
     foldersDiscoveredAt: iso(row.folders_discovered_at),
     createdAt: iso(row.created_at),
+    loginFailedAt: iso(row.login_failed_at),
+    loginError: row.login_error ?? null,
   };
 }
 

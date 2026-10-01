@@ -10,6 +10,7 @@
  *
  * Everything here is pure: a row, a clock, a sentence.
  */
+import { arrivalWords, type ArrivalAction } from '../policies/gate.js';
 import type { DraftRecord } from '../rows.js';
 
 /** `3 days ago`, in the same words the dashboard used to write client-side. */
@@ -65,10 +66,14 @@ export function policyLine(
     runsSaved: number;
     createdAt: string | null;
     keptAt?: string | null;
+    params?: Record<string, unknown>;
   },
   now: Date,
 ): string {
   const parts = [`${policy.scope}, ${originWord(policy.origin)}`];
+  // What the rule also does in the mailbox when mail arrives, said on its card.
+  const onArrival = arrivalWords(policy.params?.onArrival as ArrivalAction | undefined);
+  if (onArrival) parts.push(`on arrival: ${onArrival}`);
   if (policy.learnedFrom > 0) parts.push(`from ${policy.learnedFrom} verdicts`);
   parts.push(
     policy.proposed

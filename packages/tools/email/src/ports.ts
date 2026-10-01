@@ -296,6 +296,14 @@ export interface AccountRecord {
    */
   foldersDiscoveredAt: string | null;
   createdAt: string | null;
+  /**
+   * When the server last refused this mailbox's stored password at login, and
+   * what it said; null since the last login that worked (migration 017). What
+   * makes the Email settings row say "Password needed" when the secret itself
+   * was delivered fine.
+   */
+  loginFailedAt?: string | null;
+  loginError?: string | null;
 }
 
 /** How a client is made for an account. Injected, so a test never dials out. */

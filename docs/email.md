@@ -74,12 +74,13 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   not inferred from how many folder rows there are: a pass that lost the Sent
   row to a transient error leaves it null and the next poll lists again.
   **INBOX and Sent are synced**, each with its own UIDVALIDITY and cursor;
-  every other folder is recorded and polled on request (§11). Sent is
+  every other folder is recorded and polled on request (§11b). Sent is
   recognised by its SPECIAL-USE `\Sent` attribute, then by Gmail's
   `[Gmail]/Sent Mail`, then by name; an account with no Sent folder keeps
   working and simply never hears the owner's side — and keeps being listed, so
-  a Sent folder created later is found. Labels applied through IMAP
-  flags or Gmail labels are not done — the port is peek-only (§5).
+  a Sent folder created later is found. Reading stays peek-only; the only
+  writes are the gated mailbox changes of §11 (mark, archive, move, trash,
+  undo) and a rule's on-arrival action (§5).
 - `attachments`: name, type, size, and, when fetched, the artifact id.
 - `events`: what the policy engine did to each message (skipped a run,
   archived, labelled, notified), so the owner can audit the silence.
@@ -143,8 +144,9 @@ history — as proposals, for the reason above.
   in its Password cell, with Set password beside it. The plugin never opens
   the vault, so this is read from what core records: no owner secret of the
   row's name bound to this mailbox's login, the last use of it for this
-  mailbox refused or failed (what an unreadable value leaves behind), or a
-  row the old `.env` seed left that start could not adopt.
+  mailbox refused or failed (what an unreadable value leaves behind), a
+  row the old `.env` seed left that start could not adopt, or a password the
+  provider refused at the last login (§11, "Failed logins").
 - The recovery checklist's mailbox item links straight to that form:
   `#/settings/p.email.settings?account=<id>&set=password` opens the page
   with that row's Set password open (the row action's `openWhen`,
@@ -214,11 +216,13 @@ Before a new message wakes anyone, the source runs the gate:
    A `sender` policy matches the normalised **exact** address: plus-address
    equivalence is not a rule every provider follows, and `sales+legal@` is
    not `sales@`.
-2. `ignore` writes the triage row from the policy and stops. `archive` and
-   `label` do the IMAP action, write the row, stop. `notify` sends the
+2. `ignore` writes the triage row from the policy and stops. `notify` sends the
    Telegram line and stops. `hand-to-agent` queues a run for that agent
    with the message. `draft` queues the triage agent with the instruction
    to draft. `wake` queues the triage agent as a message with no policy would.
+   Then, whatever the action, a policy's **on-arrival mailbox action**
+   (`params.onArrival`: archive, mark read, or move to an existing folder)
+   is carried out on the server — §11.
 3. No policy: the triage run happens, and its verdict becomes a candidate
    for a *proposed* policy after three consistent verdicts in that same
    account. A proposal decides nothing until the owner keeps it.
@@ -241,11 +245,11 @@ Three rules worth stating:
   silence a correspondent of ten years. It is proposed, and the Learned list
   is one tap from applying it.
 
-- **`archive` and `label` are refused, not performed.** The IMAP port is
-  peek-only by construction — reading mail must not mutate it — so both are
-  valid vocabulary with nothing behind them, and a policy carrying one is
-  refused at creation with "not yet" rather than written and silently never
-  fired.
+- **`archive` and `label` are refused as actions.** A rule that should
+  archive (or mark read, or move) matching mail picks one of the other
+  actions and adds the on-arrival mailbox action (§11); a policy carrying
+  `archive` or `label` as its action is refused at creation with a sentence
+  that says so.
 - **`notify` queues a run rather than sending the line itself.** A source
   has no channel to the owner: its host gives it a database, a clock, a log
   and `schedule.enqueueRun`, and speaking is an agent's act. So the action
@@ -519,9 +523,10 @@ named by `{ account }`, `asOf` the stalest completed poll as above. It needs
 flags that move, so each inbox poll re-reads FLAGS (never a body) for the
 newest 2,000 rows it holds and updates them in place: `CHANGEDSINCE` the stored
 HIGHESTMODSEQ on a CONDSTORE server (Gmail), a capped full FLAGS fetch
-otherwise. The count is taken over the same 2,000. The schema has no "still in
-the inbox" field, so a message archived unread elsewhere keeps its last flags
-and counts until it leaves the window.
+otherwise. The count is taken over the same 2,000. A message buddi archived,
+moved or trashed leaves the count at once (its row follows it, §11); one
+archived unread in another mail app keeps its last flags and counts until it
+leaves the window.
 
 ## 8. Drafts and sending
 
@@ -804,10 +809,88 @@ owner's window; the artifact a fetch produced is the owner's own file, in their
 own library, and is never deleted by the mail sweep. The message row keeps its
 listing, artifact id included.
 
-## 11. Not done, on purpose
+## 11. Changing the mailbox: mark, archive, move, trash, undo
+
+Migration `017_mailbox_actions.sql`. Reading is still a peek; these are the
+only writes, and each one is a gated call the owner approved, the owner's own
+button, or a rule he set acting on arrival.
+
+**The tools, and their tiers.**
+
+| Tool | Tier | What it does |
+|---|---|---|
+| `email.select_messages` | auto (read) | Criteria → ids, a count, five to show, and the criteria in words: sender or domain, older/newer than N days, a rule's senders (`policy`), read state, folder or label (default the inbox; `any`), words in subject, sender or body. Up to 500 ids; the count is always the whole match. |
+| `email.mark` | gated, may be remembered | `\Seen` set (`read`) or cleared (`unread`) on the server. |
+| `email.archive` | gated, may be remembered | Gmail: out of the inbox (MOVE INBOX → All Mail, `\All`), labels kept. Elsewhere: MOVE to the folder the server marks `\Archive`; a server with none is refused with its folder list. |
+| `email.move` | gated, may be remembered | MOVE to an existing folder or Gmail label by name (exact, then any case, then last path segment). Nothing is created; an unknown name is refused with the list of folders there are. Trash and Junk are refused (that is `email.trash`, asked every time). |
+| `email.trash` | gated, **asked every time** | MOVE to the folder the server marks `\Trash`. Never EXPUNGE, never `\Deleted`. Not remembered: the provider empties Trash on its own schedule. |
+| `email.undo` | gated, may be remembered | Puts back the most recent change, or one named by id. |
+| `email.undo_change` | `ownerOnly` | The Undo on the Mail page's Recent changes. Never listed to a model. |
+
+The flow, written into each description: select, tell the owner how many and
+show a few, then one gated call for all of them. One call covers up to 500
+messages in one mailbox. The approval card says the count, the mailbox, the
+criteria the agent passed ("newsletters older than a week"), what happens,
+and the first five (sender — subject), then "…and N more". `describe` reads
+the live server (CAPABILITY, LIST), so a refusal (no Archive, unknown folder,
+no MOVE) comes before anybody is asked. The proposed @mail agent has these
+tools and uses them only when the owner asks.
+
+**Per server.** Gmail is recognised by `X-GM-EXT-1`. A label is a folder to
+MOVE into (Inbox off, that label on). Trash drops a Gmail message's labels, so
+a trash first reads them (`X-GM-LABELS`) and an undo adds them back. On any
+other server, SPECIAL-USE (RFC 6154) names Archive and Trash. Every server
+must offer MOVE (RFC 6851); without it the change is refused, because the
+alternative (COPY, flag `\Deleted`, EXPUNGE) can expunge more than was asked
+for. New uids come from COPYUID (UIDPLUS, RFC 4315), else a Message-ID search
+in the destination; a uid still unknown is stored as UIDVALIDITY 0 and looked
+up by Message-ID the next time.
+
+**buddi's rows follow the message.** After a change, the message row takes its
+new folder, UIDVALIDITY and uid (the destination gets a folder row, unsynced,
+if it had none) and its new flags. The unread count, the Mail page and triage
+see the mailbox as it is, and the next poll undoes nothing: a flag agrees with
+the server, and a message moved back into the inbox lands above the cursor
+with a quad that already exists, so it is neither ingested twice nor triaged
+again. A message no longer where buddi saw it (moved in another client,
+emptied from Trash) is skipped and counted, never guessed at.
+
+**The undo trail.** `email.mailbox_actions` has one row per change: kind,
+account, message ids, and for each message where it was and where it went,
+plus its flags and Gmail labels before. It also records `origin` (`agent`,
+`owner`, `policy`), `actor` (the agent, `owner`, or `rule <scope> <matcher>`),
+the policy id, the run and approved action ids, the criteria, and how many
+changed. Undo reverts by kind: flags are restored per message, and moved
+messages go back to each one's own original folder (labels restored on
+Gmail). An undo is a row of its own (`reverts`), the original is stamped
+`undone_at`, and an undo is never itself undone. The Mail page lists the
+newest 20 under **Recent changes**, with Undo on every row that can still be
+undone.
+
+**Rules that act on arrival.** A policy's `params.onArrival` is `archive`,
+`mark-read`, or `move` with a `folder`. After the gate and the queue, the poll
+hands every new message whose deciding rule carries one to
+`mailbox/arrival.ts`. That is the one path for an owner's rule and a kept
+learned rule alike. It makes one change per rule over a connection of its
+own, recorded with `origin = policy`, and never acts twice on a message for
+the same rule. A failure is logged and costs nobody their triage. Setting
+such a rule stays `email.set_policy` (gated). Its card says "When one
+arrives, buddi will also archive it in your mailbox", a move to a folder the
+poll never listed is refused when set, and the rule's line on Settings →
+Email says "on arrival: …". Add a rule on that page has the same choice
+("In the mailbox").
+
+**Failed logins.** When the provider refuses the stored password, at a poll or
+at one of these changes, the account row records when and the server's
+sentence (`login_failed_at`, `login_error`). The next login that works clears
+it, and so does Set password. The Email settings row reads it as "Password
+needed", next to Set password.
+
+## 11b. Not done, on purpose
 
 Calendar invites (parse and offer a reminder), unsubscribe (the
-List-Unsubscribe header as a gated action), full-text search over
+List-Unsubscribe header as a gated action), creating folders or labels,
+permanent deletion, full-text search over
 archives, more than two synced folders by default, OAuth sign-in for
 Gmail instead of app passwords.
 

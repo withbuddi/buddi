@@ -53,19 +53,41 @@ export const POLICY_ACTIONS = [
 export type PolicyAction = (typeof POLICY_ACTIONS)[number];
 
 export const POLICY_ORIGINS = ['owner', 'learned', 'plugin'] as const;
+
+/** What a rule may do in the mailbox when a message it matches arrives. */
+export const ARRIVAL_KINDS = ['archive', 'mark-read', 'move'] as const;
+export type ArrivalKind = (typeof ARRIVAL_KINDS)[number];
+export interface ArrivalAction {
+  kind: ArrivalKind;
+  /** `move`: the folder or Gmail label, by its server name. */
+  folder?: string;
+}
+
+/** The words a policy card and an approval use for an on-arrival action. */
+export function arrivalWords(action: ArrivalAction | undefined | null): string | null {
+  if (!action) return null;
+  switch (action.kind) {
+    case 'archive':
+      return 'archive it in your mailbox';
+    case 'mark-read':
+      return 'mark it read in your mailbox';
+    case 'move':
+      return `move it to ${action.folder ?? '(no folder named)'} in your mailbox`;
+  }
+}
 export type PolicyOrigin = (typeof POLICY_ORIGINS)[number];
 
 /**
- * Actions that need an IMAP write this client does not have.
+ * Actions that are vocabulary, not behaviour.
  *
- * `ImapClient` is a peek-only port by construction (`ports.ts`): reading mail
- * must not mutate it, and nothing in this build can set a flag or move a
- * message. So `archive` and `label` are part of the vocabulary — they are what
- * the owner will want, and refusing to *name* them would be a worse lie than
- * refusing to perform them — and both are refused at the point a policy is
- * created, with "not yet". Should a row carrying one reach the gate anyway
- * (written by an older build, or by hand), the gate refuses it and falls
- * through to a run rather than silently dropping the message.
+ * `archive` and `label` are what an owner might ask a rule to do, and refusing
+ * to *name* them would be a worse lie than refusing them. They are refused as
+ * a rule's action at the point a policy is created: a rule that should archive
+ * matching mail picks a real action and carries an on-arrival mailbox action
+ * (`params.onArrival`, carried out by `mailbox/arrival.ts`). Should a row
+ * carrying one reach the gate anyway (written by an older build, or by hand),
+ * the gate refuses it and falls through to a run rather than silently
+ * dropping the message.
  */
 export const UNIMPLEMENTED_ACTIONS: readonly PolicyAction[] = ['archive', 'label'];
 
@@ -86,6 +108,14 @@ export interface PolicyParams {
   /** `ignore`: the triage row written from the policy. */
   category?: string;
   urgency?: 'urgent' | 'normal' | 'low';
+  /**
+   * What the rule also does in the mailbox itself, the moment a matching
+   * message arrives: archive it, mark it read, or move it to a folder that
+   * already exists. Any action may carry one (an `ignore` that also
+   * archives is the common case). Applied by `mailbox/arrival.ts` after the
+   * gate, recorded on the undo trail like any other mailbox change.
+   */
+  onArrival?: ArrivalAction;
   /**
    * `thread` and `list-id`: the sender this policy was created about.
    *

@@ -18,6 +18,7 @@ import {
 } from './policies-tools.js';
 import { createDiscardDraftTool, createSaveDraftTool } from './drafts-tools.js';
 import { emailPageDescriptors } from './descriptors.js';
+import { createUndoChangeTool } from '../tools/mailbox.js';
 import { emailPageQueries } from './queries.js';
 
 export * from './accounts.js';
@@ -37,6 +38,7 @@ export function emailPageTools(opts: AccountToolOptions): ToolDefinition<never, 
     createRevokePoliciesTool(),
     createSaveDraftTool(),
     createDiscardDraftTool(),
+    createUndoChangeTool(opts),
   ] as unknown as ToolDefinition<never, unknown>[];
 }
 

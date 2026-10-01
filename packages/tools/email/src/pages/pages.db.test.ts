@@ -324,6 +324,7 @@ suite('the mail pages, over postgres', () => {
       policies: await ask('policies'),
       rule_threads: await ask('rule_threads'),
       watcher_settings: await ask('watcher_settings'),
+      mailbox_changes: await ask('mailbox_changes'),
     };
     const at = readPath;
 
@@ -355,6 +356,7 @@ suite('the mail pages, over postgres', () => {
       'message.attachments',
       'thread.drafts',
       'thread.older',
+      'mailbox_changes.changes',
       'accounts.accounts',
       'policies.applied',
       // The rule drawer's two pickers: the mailboxes, and that mailbox's

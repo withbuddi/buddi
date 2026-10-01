@@ -22,7 +22,7 @@
 import type { ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import { normalizeAddress } from '../mail.js';
-import { POLICY_ACTIONS, POLICY_SCOPES, type PolicyParams } from '../policies/gate.js';
+import { ARRIVAL_KINDS, arrivalWords, POLICY_ACTIONS, POLICY_SCOPES, type PolicyParams } from '../policies/gate.js';
 import { bulkPolicies, createPolicy, refusalFor, PolicyRefusal } from '../policies/store.js';
 
 /** How many rules one act may carry. The page holds seventy-odd proposals. */
@@ -55,6 +55,9 @@ const ruleInput = z
     instruction: z.string().optional(),
     note: z.string().optional(),
     agentId: z.string().optional(),
+    /** Also act in the mailbox when a match arrives: '' (nothing), archive, mark-read, move. */
+    onArrival: z.union([z.enum(ARRIVAL_KINDS), z.literal('')]).optional(),
+    folder: z.string().optional(),
   })
   .strict();
 
@@ -102,6 +105,11 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
       if (input.action === 'ignore') {
         params.category = 'promo';
         params.urgency = 'low';
+      }
+      if (input.onArrival) {
+        params.onArrival = input.onArrival === 'move'
+          ? { kind: 'move', folder: (input.folder ?? '').trim() }
+          : { kind: input.onArrival };
       }
       // A thread or a list is named by a header its sender writes, so an
       // `ignore` on one silences only the address recorded with it (`gate.ts`).
@@ -179,10 +187,11 @@ export function createAddRuleTool(): ToolDefinition<RuleInput, unknown> {
           },
           ctx.buddi!.clock.now(),
         );
+        const onArrival = arrivalWords(policy.params.onArrival);
         return {
           added: true,
           policyId: policy.id,
-          note: `The rule is on: ${policy.action} ${policy.scope} ${policy.matcher}.`,
+          note: `The rule is on: ${policy.action} ${policy.scope} ${policy.matcher}.${onArrival ? ` When one arrives buddi will also ${onArrival}.` : ''}`,
         };
       } catch (err) {
         if (err instanceof PolicyRefusal) throw new RuleRefusal(err.message);

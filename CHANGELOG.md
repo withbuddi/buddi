@@ -6,10 +6,14 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Agents can clean your mailbox, with your approval: mark mail read or unread, archive it (on Gmail it leaves the inbox and keeps its labels; elsewhere it goes to the server's Archive folder), move it to an existing folder or label, or move it to Trash. An agent first shows how many messages and five of them, then one approval covers up to 500, and the card says the count, the mailbox and why ("newsletters older than a week"). Nothing is ever deleted outright and no folder is created. Mark, archive and move can be allowed always; Trash is asked every time.
+- The Mail page lists "Recent changes" buddi made to your mailbox, with Undo on each: marked mail goes back to how it was, archived or moved mail goes back to its folder, and trashed mail comes back while it is still in Trash (Gmail labels included). Agents can undo too, with your approval.
+- A mail rule can also act on arrival: archive, mark read, or move each matching message to a folder as it comes in. The rule's approval card and its line on Settings → Email say so, Add a rule has the same choice, and each change shows under Recent changes with Undo.
 - Settings → Email can change a mailbox's password: "Set password" on each row opens a small form that signs in with the new app password against the mailbox's own server first, keeps it only if that works (otherwise the old one stays and the server's reason is shown), and leaves the mailbox's mail where it is. A mailbox whose password buddi can't read says "Password needed" with the same button. Agents can't use it.
 
 ### Fixed
 
+- Settings → Email now says "Password needed" when your mail provider rejects the saved password while checking mail (an app password revoked at Google, say); it used to keep saying the password was in the vault while nothing was read. The next sign-in that works, or Set password, clears it.
 - Restarting or upgrading buddi no longer signs you out of the dashboard: sessions are kept in the database (only a hash of each session id is stored, and the CSRF value is derived rather than stored), with the same 30-day / 12-hour idle lifetimes and the 7-day Tailscale cap. Sessions from before this version end once at the upgrade. Backups do not carry them.
 - Opening the dashboard while signed out now shows a buddi page ("You're signed out of this buddi … run `buddi dashboard` for a sign-in link", with Try again) instead of the browser's "This site can't be reached"; through Tailscale with a login that isn't allowed, it says so. API calls still get an empty 401, and the lockout counts the same.
 

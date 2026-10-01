@@ -410,6 +410,47 @@ const mail: PageDescriptor = {
         },
       ],
     },
+    /*
+     * What buddi changed in the mailbox itself — an agent's approved
+     * cleanup, a rule acting on arrival, an undo — newest first, with Undo
+     * on each row that can still be undone. Undo is the owner's own button:
+     * `email.undo_change` is never listed to a model.
+     */
+    {
+      kind: 'section',
+      title: 'Recent changes',
+      note: 'What buddi changed on your mail server. Undo puts it back while the messages are still where it left them.',
+      body: [
+        {
+          kind: 'list',
+          query: { query: 'mailbox_changes' },
+          rows: 'changes',
+          key: 'id',
+          item: {
+            title: { path: 'title' },
+            sub: { path: 'line' },
+            meta: [{ path: 'when' }],
+            pill: {
+              value: { path: 'state' },
+              labels: { undone: 'Undone', undo: 'Put back' },
+              tones: { undone: 'neutral', undo: 'neutral' },
+            },
+          },
+          actions: [
+            {
+              tool: 'email.undo_change',
+              label: 'Undo',
+              busy: 'Putting it back…',
+              when: { path: 'undoable', equals: true },
+              confirm: '{undoLine}',
+              done: { path: 'note' },
+              args: { id: { row: 'id' } },
+            },
+          ],
+          empty: 'buddi has not changed anything in your mailbox.',
+        },
+      ],
+    },
   ],
 };
 
@@ -584,6 +625,28 @@ const addRule: Component = {
       type: 'text',
       when: { path: 'action', equals: 'draft' },
     },
+    {
+      // A change on the mail server itself, made as each match arrives and
+      // listed under Recent changes on the Mail page, where Undo puts it back.
+      name: 'onArrival',
+      label: 'In the mailbox',
+      type: 'select',
+      options: [
+        { value: '', label: 'Leave it where it is' },
+        { value: 'archive', label: 'Archive it' },
+        { value: 'mark-read', label: 'Mark it read' },
+        { value: 'move', label: 'Move it to a folder' },
+      ],
+      hint: 'Done on your mail server as each message arrives. Recent changes on the Mail page can undo it.',
+    },
+    {
+      name: 'folder',
+      label: 'Folder',
+      type: 'text',
+      required: true,
+      when: { path: 'onArrival', equals: 'move' },
+      hint: 'An existing folder or Gmail label, by its name. Nothing is created.',
+    },
   ],
   submit: {
     tool: 'email.add_rule',
@@ -601,6 +664,8 @@ const addRule: Component = {
       sender: { field: 'sender' },
       note: { field: 'note' },
       instruction: { field: 'instruction' },
+      onArrival: { field: 'onArrival' },
+      folder: { field: 'folder' },
     },
   },
 };

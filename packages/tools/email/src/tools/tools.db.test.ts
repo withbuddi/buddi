@@ -687,10 +687,15 @@ suite('email tools (postgres)', () => {
       // this machine, but a standing rule decides every future message from a
       // sender with no model and no second chance to object, so the moment it
       // is *written* is the moment the owner has to agree to it. Muting a
-      // conversation is the same kind of act, about one thread.
+      // conversation is the same kind of act, about one thread. The mailbox
+      // changes (mark, archive, move, trash, undo) write to the IMAP server,
+      // and none of them can send.
       const gated = registry.list().filter((t) => t.tier !== 'auto');
       expect(new Set(gated.map((t) => t.name))).toEqual(
-        new Set(['email.send', 'email.set_policy', 'email.revoke_policy', 'email.mute_thread']),
+        new Set([
+          'email.send', 'email.set_policy', 'email.revoke_policy', 'email.mute_thread',
+          'email.mark', 'email.archive', 'email.move', 'email.trash', 'email.undo',
+        ]),
       );
 
       // And drafting, the thing a tapped action actually does, sends nothing.

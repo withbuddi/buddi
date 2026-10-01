@@ -717,14 +717,14 @@ suite('email policies (postgres + fake imap)', () => {
       expect(after.applied).toHaveLength(0);
     });
 
-    it('refuses archive and label with "not yet"', async () => {
+    it('refuses archive and label as rule actions, pointing at the on-arrival action', async () => {
       const ctx = toolContext();
       await expect(
         setPolicy.execute({ scope: 'sender', matcher: 'a@b.test', action: 'archive' }, ctx),
-      ).rejects.toThrow(/not yet/);
+      ).rejects.toThrow(/on-arrival/);
       await expect(
         setPolicy.execute({ scope: 'sender', matcher: 'a@b.test', action: 'label', label: 'Ads' }, ctx),
-      ).rejects.toThrow(/not yet/);
+      ).rejects.toThrow(/on-arrival/);
       expect(await loadPolicies(pool, accountId)).toHaveLength(0);
     });
 

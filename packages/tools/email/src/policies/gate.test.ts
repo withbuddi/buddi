@@ -151,8 +151,8 @@ describe('every action', () => {
       expect(decision.detail).toMatch(/cannot do yet/);
     });
 
-    it(`refuses to create a ${action} policy at all, with "not yet"`, () => {
-      expect(refusalFor({ scope: 'sender', matcher: 'a@b.test', action })).toMatch(/^not yet/);
+    it(`refuses to create a ${action} policy at all, pointing at the on-arrival action`, () => {
+      expect(refusalFor({ scope: 'sender', matcher: 'a@b.test', action })).toMatch(/on-arrival mailbox action/);
     });
   }
 });

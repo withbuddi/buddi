@@ -46,6 +46,7 @@ import { policyLists, threadChoices } from '../tools/policies.js';
 import { loadWatcherSettings, DEFAULT_WATCHER_SETTINGS } from '../watchers.js';
 import type { AttachmentInfo } from '../ports.js';
 import { draftStatusLine, isoOf, policyLine, relative } from './format.js';
+import { describeUndo, plural, recentActions, undoRefusal, verbOf } from '../mailbox/actions.js';
 
 /** How many conversations the list shows before the owner narrows it. */
 export const THREAD_LIST_LIMIT = 30;
@@ -480,6 +481,12 @@ async function passwordsNeeded(accounts: AccountRecord[], ctx: ToolContext): Pro
   }
   for (const account of accounts) {
     if (account.authMode !== 'app-password') continue;
+    // The provider refused the stored password at the last login (the poll
+    // records it, `logins.ts`): the secret is readable, and still wrong.
+    if (account.loginFailedAt) {
+      out.add(account.id);
+      continue;
+    }
     if (account.addedVia === 'env') {
       out.add(account.id);
       continue;
@@ -526,6 +533,9 @@ export function accountsQuery(): PageQuery {
           // nothing in the email schema holds a credential.
           password: needed.has(account.id) ? 'Password needed' : 'In the vault',
           passwordNeeded: needed.has(account.id),
+          // What the provider said the last time it refused the stored
+          // password at login, or null since a login worked (`logins.ts`).
+          loginRefused: account.loginError ?? null,
           secretName: account.secretName,
           lastSync: synced.get(account.id)
             ? relative(synced.get(account.id) ?? null, now)
@@ -737,6 +747,47 @@ export function triageOfferQuery(): PageQuery {
 }
 
 /** Every read the two mail pages make. */
+/** How many changes the Mail page lists. */
+export const RECENT_CHANGES = 20;
+
+/**
+ * Recent changes to the mailbox itself, for the Mail page: what was done, to
+ * how many, by whom, when, and whether Undo still applies.
+ */
+export function mailboxChangesQuery(): PageQuery {
+  return {
+    name: 'mailbox_changes',
+    params: noParams,
+    async produce(_params, ctx: ToolContext) {
+      const now = ctx.buddi!.clock.now();
+      const accounts = await listAccounts(ctx.buddi!.db, { enabledOnly: false });
+      const address = new Map(accounts.map((a) => [a.id, a.address]));
+      const changes = await recentActions(ctx.buddi!.db, accounts.map((a) => a.id), RECENT_CHANGES);
+      return {
+        changes: changes.map((c) => {
+          const who = c.origin === 'policy' ? `by ${c.actor}` : c.origin === 'owner' ? 'by you' : `by @${c.actor}`;
+          const sample = c.items[0];
+          const more = c.items.length > 1 ? ` and ${c.items.length - 1} more` : '';
+          return {
+            id: c.id,
+            title: `${verbOf(c.kind, c.destination)} · ${plural(c.changed, 'message')}`,
+            line: [
+              address.get(c.accountId) ?? '',
+              who,
+              sample ? `${sample.from} — ${sample.subject || '(no subject)'}${more}` : '',
+              c.note ?? '',
+            ].filter((part) => part !== '').join(' · '),
+            when: relative(c.createdAt, now),
+            state: c.undoneAt ? 'undone' : c.kind === 'undo' ? 'undo' : null,
+            undoable: undoRefusal(c) === null,
+            undoLine: describeUndo(c, address.get(c.accountId) ?? 'your mailbox'),
+          };
+        }),
+      };
+    },
+  };
+}
+
 export function emailPageQueries(): PageQuery[] {
   return [
     triageOfferQuery(),
@@ -748,5 +799,6 @@ export function emailPageQueries(): PageQuery[] {
     policiesQuery(),
     ruleThreadsQuery(),
     watcherSettingsQuery(),
+    mailboxChangesQuery(),
   ];
 }

@@ -50,6 +50,8 @@
 import type { DbArea, DbTransaction } from '@buddi/core/plugin';
 import { INBOX, listAccounts, markAccountSynced, type EnvLike } from '../config.js';
 import { mailboxAuth } from '../credentials.js';
+import { clearLoginFailure, isAuthFailure, recordLoginFailure } from '../logins.js';
+import { applyArrivalActions, type ArrivalMatch } from '../mailbox/arrival.js';
 import { planFolders } from '../folders.js';
 import { prepareForIngest, triagePrompt, type ThreadForPrompt } from '../mail.js';
 import { scanMessageDates, skipDates } from '../dates-store.js';
@@ -558,14 +560,25 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
          */
         let complete = true;
         try {
-          client = await withDeadline(
-            'connect',
-            timeoutMs,
-            opts.connect(account, auth.value),
-            // We gave up waiting, but the connection may still arrive: close it
-            // rather than leave a socket nobody owns.
-            (late) => void late.close().catch(() => {}),
-          );
+          try {
+            client = await withDeadline(
+              'connect',
+              timeoutMs,
+              opts.connect(account, auth.value),
+              // We gave up waiting, but the connection may still arrive: close it
+              // rather than leave a socket nobody owns.
+              (late) => void late.close().catch(() => {}),
+            );
+          } catch (err) {
+            // The provider refused the password it was given: written on the
+            // row so Settings → Email says "Password needed" (`logins.ts`).
+            if (isAuthFailure(err)) {
+              await recordLoginFailure(ctx.buddi!.db, account.id, err, ctx.buddi!.clock.now()).catch(() => {});
+              log(`email.inbox-poll: ${account.address} refused its stored password; Settings → Email → Set password`);
+            }
+            throw err;
+          }
+          await clearLoginFailure(ctx.buddi!.db, account.id);
 
           // Which folders this account has, discovered once and remembered.
           // A caller that named one folder gets that folder and no listing:
@@ -657,8 +670,9 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
           await client?.close().catch(() => {});
         }
 
+        const arrivals: ArrivalMatch[] = [];
         try {
-          const waiting = await drain(ctx, account, agentId, limit, pending, triageReady);
+          const waiting = await drain(ctx, account, agentId, limit, pending, triageReady, arrivals);
           if (waiting > 0 && !saidWaiting) {
             saidWaiting = true;
             log(`email.inbox-poll: no triage agent yet — accept the Mail offer on the dashboard`);
@@ -666,6 +680,22 @@ export function createInboxPollSource(opts: InboxPollOptions): Source {
           await recordTriageWaiting(ctx.buddi!.db, account.id, triageReady ? false : waiting > 0 ? true : null, ctx.buddi!.clock.now());
         } catch (err) {
           failures.push(err);
+        }
+        /*
+         * Rules with an on-arrival mailbox action (archive, mark read, move):
+         * after the gate and the queue, over a connection of their own, and
+         * on the undo trail (`mailbox/arrival.ts`). A failure there is logged
+         * and costs nobody their triage.
+         */
+        if (arrivals.length > 0) {
+          try {
+            await applyArrivalActions(ctx, account, { connect: opts.connect, ...(opts.env ? { env: opts.env } : {}) }, arrivals);
+          } catch (err) {
+            log(
+              `email.inbox-poll: on-arrival rule actions on ${account.address} failed: ` +
+                `${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
       }
 
@@ -905,6 +935,7 @@ async function drain(
   limit: number,
   pending: PendingTriage[],
   triageReady = true,
+  arrivals: ArrivalMatch[] = [],
 ): Promise<number> {
   const recovered = await unstamped(ctx.buddi!.db, account.id, limit);
   const byId = new Map(recovered.map((p) => [p.id, p]));
@@ -1003,6 +1034,7 @@ async function drain(
         `email.inbox-poll: ${message.from} handled by policy ${decision.policy.scope} ` +
           `${decision.policy.matcher} (ignore); no run started`,
       );
+      if (decision.policy.params.onArrival) arrivals.push({ messageId: message.id, policy: decision.policy });
       continue;
     }
 
@@ -1040,6 +1072,9 @@ async function drain(
     }
     await settleEvent(ctx.buddi!.db, message.id, 'done');
     await stamp(ctx, message.id);
+    if (!decision.refused && decision.policy?.params.onArrival) {
+      arrivals.push({ messageId: message.id, policy: decision.policy });
+    }
   }
   return waiting;
 }

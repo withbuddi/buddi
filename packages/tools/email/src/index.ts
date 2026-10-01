@@ -31,6 +31,7 @@ import { createSendTool } from './tools/send.js';
 import { listPolicies, revokeEmailPolicy, setPolicy } from './tools/policies.js';
 import { getSettings, setSettings } from './tools/settings.js';
 import { triageRecord } from './tools/triage.js';
+import { createMailboxTools } from './tools/mailbox.js';
 import { emailPolicyHandler } from './policies/learned.js';
 import { emailPages, emailPageTools, emailQueries } from './pages/index.js';
 import { mailAgents } from './agent.js';
@@ -118,11 +119,20 @@ export function createEmailManifest(
       }),
       // --- end step 6b ---
       /*
+       * Changing the mailbox itself: a read that selects, four gated changes
+       * and the undo (docs/email.md §11). They write over IMAP, so they take
+       * the same client factory the source does.
+       */
+      ...createMailboxTools({
+        connect: opts.connect ?? imapflowFactory,
+        ...(opts.env ? { env: opts.env } : {}),
+      }),
+      /*
        * What the owner's own screens write through (docs/plugin-pages.md).
        * Every one of them is `ownerOnly`: the registry never lists them to a
        * model, and `invoke` refuses them for anyone but the owner's own path.
        */
-      ...emailPageTools({ connect: opts.connect ?? imapflowFactory }),
+      ...emailPageTools({ connect: opts.connect ?? imapflowFactory, ...(opts.env ? { env: opts.env } : {}) }),
     ],
     // The triage agent the poll hands every new message to, proposed rather
     // than assumed: nothing exists until the owner accepts it (`agent.ts`).
@@ -499,6 +509,20 @@ export {
   type MailHosts,
 } from './pages/index.js';
 export { imapflowFactory } from './imap/imapflow-client.js';
+export * from './mailbox/actions.js';
+export * from './mailbox/select.js';
+export * from './mailbox/arrival.js';
+export { clearLoginFailure, isAuthFailure, recordLoginFailure } from './logins.js';
+export {
+  createMailboxTools,
+  createUndoChangeTool,
+  createUndoTool,
+  renderMailboxPreview,
+  runUndo,
+  selectTool,
+  type MailboxEnvelope,
+  type UndoEnvelope,
+} from './tools/mailbox.js';
 export { smtpFactory } from './smtp/nodemailer-client.js';
 export { FakeImapServer, fakeMessage, type FakeMailbox } from './imap/fake.js';
 export { FakeSmtpServer } from './smtp/fake.js';

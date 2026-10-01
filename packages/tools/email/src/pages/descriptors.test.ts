@@ -40,6 +40,7 @@ describe('the mail pages, as contributions', () => {
       'policies',
       'rule_threads',
       'watcher_settings',
+      'mailbox_changes',
     ]);
   });
 

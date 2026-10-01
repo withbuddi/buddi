@@ -35,6 +35,8 @@ import { TRIAGE_OFFER_TEXT } from '../agent.js';
 import { INBOX, secretNameFor } from '../config.js';
 import { ACCOUNT_KIND, mailboxAuth } from '../credentials.js';
 import { ACCOUNT_COLUMNS, toAccount } from '../rows.js';
+import type { EnvLike } from '../config.js';
+import { clearLoginFailure } from '../logins.js';
 import type { AccountRecord, ImapClientFactory } from '../ports.js';
 import { TRIAGE_AGENT_ID } from '../sources/inbox-poll.js';
 
@@ -93,6 +95,8 @@ export class AccountRefusal extends Error {
 export interface AccountToolOptions {
   /** How the login is tested. Injected by tests; the real IMAP client otherwise. */
   connect: ImapClientFactory;
+  /** Passwords by name, for tests and one-shot callers (the Mail page's Undo opens the mailbox). */
+  env?: EnvLike;
 }
 
 const ADDRESS = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
@@ -496,6 +500,9 @@ export function createSetPasswordTool(
         );
         if (moved[0]) current = toAccount(moved[0]);
       }
+      // The server took this password a moment ago: whatever refusal the
+      // poll recorded is over.
+      await clearLoginFailure(ctx.buddi!.db, current.id);
       // One use, as the poll makes it: the value is taken and dropped here.
       const check = await mailboxAuth(ctx, current);
       return {

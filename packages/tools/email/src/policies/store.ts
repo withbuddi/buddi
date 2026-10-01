@@ -7,6 +7,7 @@
 import type { DbArea } from '@buddi/core/plugin';
 import { normalizeAddress, normalizeListId } from '../mail.js';
 import {
+  ARRIVAL_KINDS,
   domainOf,
   isUnimplementedAction,
   POLICY_ACTIONS,
@@ -93,7 +94,12 @@ export function refusalFor(input: {
   if (input.scope === 'sender' && !matcher.includes('@')) return 'a sender policy needs an address';
   if (input.scope === 'domain' && !matcher.includes('.')) return 'a domain policy needs a domain';
   if (isUnimplementedAction(input.action)) {
-    return `not yet: "${input.action}" needs to write to the mailbox over IMAP, and this build only ever reads it. Ignore, notify, draft, hand-to-agent and wake work today.`;
+    return `not as an action: "${input.action}" is not one. To archive (or mark read, or move) matching mail as it arrives, pick ignore, notify, draft, hand-to-agent or wake and add the on-arrival mailbox action.`;
+  }
+  const arrival = input.params?.onArrival;
+  if (arrival) {
+    if (!ARRIVAL_KINDS.includes(arrival.kind)) return `unknown on-arrival action: ${String(arrival.kind)}`;
+    if (arrival.kind === 'move' && !arrival.folder?.trim()) return 'moving on arrival needs the folder to move to';
   }
   if (input.action === 'hand-to-agent' && !input.params?.agentId?.trim()) {
     return 'hand-to-agent needs the id of the agent that should get the message';

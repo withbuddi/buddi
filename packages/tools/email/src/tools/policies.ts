@@ -14,6 +14,8 @@
 import type { EffectDescription, ToolContext, ToolDefinition } from '@buddi/core/plugin';
 import { z } from 'zod';
 import {
+  ARRIVAL_KINDS,
+  arrivalWords,
   POLICY_ACTIONS,
   POLICY_SCOPES,
   isUnimplementedAction,
@@ -139,7 +141,7 @@ const setInput = z.object({
       "What happens to the next message that matches. 'ignore' files it with no model run at all; " +
         "'notify' tells the owner in one line; 'draft' starts a run with the instruction to write a reply; " +
         "'hand-to-agent' gives it to the agent named in agentId; 'wake' is the ordinary triage run. " +
-        "'archive' and 'label' are named here but refused: they need to write to the mailbox, which this build cannot do.",
+        "'archive' and 'label' are named here but refused as actions: to archive matching mail as it arrives, pick one of the others and set onArrival.",
     ),
   agentId: z
     .string()
@@ -153,6 +155,17 @@ const setInput = z.object({
     .describe('For draft: what the reply should say, in one line.'),
   note: z.string().min(1).optional().describe('For notify: the line the owner gets.'),
   label: z.string().min(1).optional().describe('For label: the label to apply.'),
+  onArrival: z
+    .enum(ARRIVAL_KINDS)
+    .optional()
+    .describe(
+      "Also act in the owner's mailbox itself the moment a matching message arrives: 'archive' (out of the inbox), 'mark-read', or 'move' to an existing folder named in `folder`. Recorded on the undo trail; the owner undoes it from Recent changes on the Mail page or with email.undo.",
+    ),
+  folder: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("For onArrival 'move': the folder or Gmail label, by its name. It must already exist."),
   sender: z
     .string()
     .min(1)
@@ -179,6 +192,11 @@ function paramsOf(input: SetInput): Record<string, unknown> {
   if (input.instruction) params.instruction = input.instruction.trim();
   if (input.note) params.note = input.note.trim();
   if (input.label) params.label = input.label.trim();
+  if (input.onArrival) {
+    params.onArrival = input.onArrival === 'move'
+      ? { kind: 'move', folder: (input.folder ?? '').trim() }
+      : { kind: input.onArrival };
+  }
   if (input.action === 'ignore') {
     params.category = 'promo';
     params.urgency = 'low';
@@ -215,6 +233,14 @@ export function renderPolicyPreview(input: SetInput, verdicts: number, account?:
     `From now on, ${subject}${account ? ` arriving at ${account}` : ''} will ${what[input.action] ?? input.action}.`,
     'This decides every future message that matches, with no model run and nothing to approve each time.',
   ];
+  const onArrival = arrivalWords(
+    input.onArrival ? { kind: input.onArrival, ...(input.folder ? { folder: input.folder.trim() } : {}) } : null,
+  );
+  if (onArrival) {
+    lines.push(
+      `When one arrives, buddi will also ${onArrival} — a change on your mail server, recorded under Recent changes on the Mail page, where Undo puts it back.`,
+    );
+  }
   if (verdicts > 0) {
     lines.push(`${verdicts} earlier message${verdicts === 1 ? '' : 's'} from this sender ${verdicts === 1 ? 'has' : 'have'} been triaged.`);
   }
@@ -231,10 +257,35 @@ export function renderPolicyPreview(input: SetInput, verdicts: number, account?:
   return lines.join('\n');
 }
 
+/**
+ * A rule that moves mail on arrival must name a folder that exists. Checked
+ * against the folders the poll discovered (no connection needed); an account
+ * whose folders were never listed is let through, and the move refuses at
+ * arrival if the folder is not there.
+ */
+async function checkArrivalFolder(
+  db: Parameters<typeof policyStats>[0],
+  accountId: string,
+  address: string,
+  input: { onArrival?: string | undefined; folder?: string | undefined },
+): Promise<void> {
+  if (input.onArrival !== 'move') return;
+  const wanted = (input.folder ?? '').trim();
+  if (wanted === '') throw new PolicyRefusal('moving on arrival needs the folder to move to');
+  const { rows } = await db.query(`select name from email.folders where account_id = $1 order by name`, [accountId]);
+  const names = rows.map((r: Record<string, any>) => String(r.name));
+  if (names.length <= 1) return;
+  const lower = wanted.toLowerCase();
+  if (names.some((n) => n.toLowerCase() === lower || n.toLowerCase().split(/[/.]/).pop() === lower)) return;
+  throw new PolicyRefusal(
+    `${address} has no folder called "${wanted}", and buddi creates none. Its folders are: ${names.join(', ')}.`,
+  );
+}
+
 export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> = {
   name: 'email.set_policy',
   description:
-    'Write a standing decision about incoming mail: what should happen, from now on, to messages from one sender, domain, mailing list or thread. It replaces whatever rule covered the same thing before. Use it when the owner says what they want done with a correspondent, not to record a one-off judgement about a single message.',
+    "Write a standing decision about incoming mail: what should happen, from now on, to messages from one sender, domain, mailing list or thread — and, optionally, what buddi also does in the mailbox when one arrives (`onArrival`: archive, mark-read, or move to an existing folder). It replaces whatever rule covered the same thing before. Use it when the owner says what they want done with a correspondent, not to record a one-off judgement about a single message; to clean up mail already there, use email.select_messages and the mailbox tools.",
   tier: 'gated',
   input: setInput,
 
@@ -243,6 +294,7 @@ export const setPolicy: GatedToolDefinition<SetInput, unknown, PolicyEnvelope> =
     // Which mailbox this rule is about is part of the sentence being approved:
     // "ignore this sender" reads differently for work mail than for personal.
     const account = await requireOneAccount(_ctx.buddi!.db, input.account);
+    await checkArrivalFolder(_ctx.buddi!.db, account.id, account.address, input);
     const verdicts =
       input.scope === 'sender'
         ? (await senderVerdicts(_ctx.buddi!.db, account.id, matcher, 20)).length
