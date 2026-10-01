@@ -25,6 +25,7 @@ import {
   normalizeForReplay,
   producedArtifactIds,
   runAgent,
+  runningAgentRuns,
   SCREENSHOT_REFUSED_TEXT,
   selectTools,
   type Queryable,
@@ -208,6 +209,28 @@ it('injects platform context on every surface and applies owner timezone to tool
     expect(seenTimezone).toBe('Asia/Tokyo');
     expect(runCtx.timezone).toBe('UTC');
   }
+});
+
+it("counts a top-level run while it is in progress, from any surface, and not a delegate's", async () => {
+  const db = new FakeDb();
+  const seen: number[] = [];
+  const provider: RuntimeProvider = {
+    async complete() {
+      seen.push(runningAgentRuns());
+      return { model: 'fixture', content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn', usage };
+    },
+  };
+  const before = runningAgentRuns();
+  await runAgent({ agent, provider, registry: registryWithDouble(), ctx, pool: db,
+    conversationId: await createConversation(db, agent.id), userMessage: 'hi', surface: TELEGRAM_SURFACE });
+  await runAgent({ agent, provider, registry: registryWithDouble(), ctx: { ...ctx, delegationDepth: 1 }, pool: db,
+    conversationId: await createConversation(db, agent.id), userMessage: 'hi' });
+  expect(seen).toEqual([before + 1, before]);
+  expect(runningAgentRuns()).toBe(before);
+  const failing: RuntimeProvider = { async complete() { throw new Error('down'); } };
+  await runAgent({ agent, provider: failing, registry: registryWithDouble(), ctx, pool: db,
+    conversationId: await createConversation(db, agent.id), userMessage: 'hi' }).catch(() => undefined);
+  expect(runningAgentRuns()).toBe(before);
 });
 
 /* ---------------- tests ---------------- */

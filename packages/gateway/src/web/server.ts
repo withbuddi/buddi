@@ -41,6 +41,7 @@
  * No `Access-Control-*` header is ever emitted, and `OPTIONS` is refused: a
  * page on another origin gets no preflight and no permission.
  */
+import { runningAgentRuns } from '@buddi/runtime';
 import { agentMuteRoute, focusRoute, listNotificationsRoute, markSeenRoute, notificationSettingsRoute, presenceRoute, testChannelRoute } from './notifications.js';
 import { catalogSkillLookup, discardProposalFromWeb, keepAllProposalsFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
@@ -1557,7 +1558,9 @@ export function createWebApp(deps: WebServerDeps): Server {
                 timezone: deps.timezone,
                 now,
               })),
-              running: chat?.runningCount ?? 0,
+              // Every surface's runs (Telegram, the queue, the terminal), not only
+              // this dashboard's; a chat send still being set up counts too.
+              running: Math.max(runningAgentRuns(), chat?.runningCount ?? 0),
             },
           );
         case '/api/events':

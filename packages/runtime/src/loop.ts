@@ -824,7 +824,29 @@ export function composeSystem(
  * The loop
  * ------------------------------------------------------------------ */
 
+/**
+ * Owner-level runs in progress in this process — the dashboard's, Telegram's,
+ * the terminal's and the job queue's alike; a delegate's run is part of the
+ * run that asked for it. The footer's "N agents working" reads it.
+ */
+let runsInProgress = 0;
+
+/** How many top-level agent runs are in progress right now, from every surface. */
+export function runningAgentRuns(): number {
+  return runsInProgress;
+}
+
 export async function runAgent(opts: RunAgentOptions): Promise<RunResult> {
+  const counted = (opts.ctx.delegationDepth ?? 0) === 0;
+  if (counted) runsInProgress += 1;
+  try {
+    return await runAgentOnce(opts);
+  } finally {
+    if (counted) runsInProgress -= 1;
+  }
+}
+
+async function runAgentOnce(opts: RunAgentOptions): Promise<RunResult> {
   const { agent, provider, registry, ctx, pool, conversationId, userMessage } = opts;
   const budgetNotice = opts.budgetNotice ?? true;
   ctx.signal?.throwIfAborted();
