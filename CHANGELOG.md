@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.27 — 2026-10-01
+
 ### Added
 
 - A reply that stops because it used all its steps now offers **Continue**: a button on the "Turn budget reached" line under the conversation's latest reply (while nothing is running), and a Continue button under the answer on Telegram. Either sends "continue" as you into the same conversation, once, and the agent picks up with the whole history.
