@@ -142,11 +142,20 @@ export async function setSchedule(
  * A schedule in any other zone (a plugin that named its own) is left alone.
  * Returns the mission ids moved.
  */
-export async function rezoneSchedules(pool: Pool, from: string, to: string): Promise<string[]> {
+export async function rezoneSchedules(
+  pool: Pool,
+  from: string,
+  to: string,
+  /** Only these missions, when given. */
+  opts: { only?: readonly string[] } = {},
+): Promise<string[]> {
   if (from === to) return [];
+  if (opts.only !== undefined && opts.only.length === 0) return [];
   const { rows } = await pool.query<ScheduleSpecRow>(
-    `select ${SPEC_COLUMNS} from core.schedule_specs where active and timezone = $1 order by mission_id`,
-    [from],
+    `select ${SPEC_COLUMNS} from core.schedule_specs
+      where active and timezone = $1 and ($2::text[] is null or mission_id = any($2::text[]))
+      order by mission_id`,
+    [from, opts.only === undefined ? null : [...opts.only]],
   );
   const moved: string[] = [];
   for (const row of rows) {

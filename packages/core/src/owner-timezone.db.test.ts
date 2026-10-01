@@ -44,6 +44,7 @@ suite('owner timezone (postgres)', () => {
     rememberOwnerTimezone(null);
     await pool.query('truncate core.missions cascade');
     await pool.query('truncate core.owner cascade');
+    await pool.query("delete from core.web_settings where key = 'owner.schedules-aligned'");
   });
 
   const mission = async (id: string, timezone: string): Promise<void> => {
@@ -81,16 +82,30 @@ suite('owner timezone (postgres)', () => {
     expect(await getActiveSchedule(pool, 'recap')).toMatchObject({ timezone: 'America/New_York', revision: 3 });
   });
 
-  it('at start, moves what was made in the fallback zone to the profile zone set before this release', async () => {
-    // As an older buddi left it: the digest made in New York, the profile saying Lisbon.
+  it('at start, once, moves only the built-in schedules made in the fallback zone to the profile zone set before this release', async () => {
+    // As an older buddi left it: the digest and the arc made in New York, the profile saying Lisbon.
     await mission('learning-digest', 'America/New_York');
+    await mission('getting-started', 'America/New_York');
+    // An agent's or the owner's own, which may have named New York on purpose: left alone.
+    await mission('scout-standup', 'America/New_York');
     await mission('tokyo-market', 'Asia/Tokyo');
-    expect(await alignSchedulesToOwnerZone(pool, ENV)).toBeUndefined(); // no profile zone yet
     await setOwnerProfile(pool, { timezone: 'Europe/Lisbon' });
-    expect(await alignSchedulesToOwnerZone(pool, ENV)).toEqual({ from: 'America/New_York', to: 'Europe/Lisbon', missions: ['learning-digest'] });
+    const builtIn = { missions: ['learning-digest', 'getting-started', 'friday-recap'] };
+    expect(await alignSchedulesToOwnerZone(pool, ENV, builtIn)).toEqual({ from: 'America/New_York', to: 'Europe/Lisbon', missions: ['getting-started', 'learning-digest'] });
     expect(await getActiveSchedule(pool, 'learning-digest')).toMatchObject({ timezone: 'Europe/Lisbon' });
+    expect(await getActiveSchedule(pool, 'scout-standup')).toMatchObject({ timezone: 'America/New_York' });
     expect(await getActiveSchedule(pool, 'tokyo-market')).toMatchObject({ timezone: 'Asia/Tokyo' });
-    // Once is enough: the next start finds nothing to move.
-    expect(await alignSchedulesToOwnerZone(pool, ENV)).toBeUndefined();
+    // The owner then puts the digest in New York on purpose: every later start leaves it there.
+    await setSchedule(pool, 'learning-digest', { cron: '0 8 * * *', timezone: 'America/New_York', misfirePolicy: 'coalesce' });
+    expect(await alignSchedulesToOwnerZone(pool, ENV, builtIn)).toBeUndefined();
+    expect(await getActiveSchedule(pool, 'learning-digest')).toMatchObject({ timezone: 'America/New_York' });
+  });
+
+  it('is done at the first start even when the profile names no zone yet; later a save moves schedules, not a start', async () => {
+    await mission('learning-digest', 'America/New_York');
+    expect(await alignSchedulesToOwnerZone(pool, ENV, { missions: ['learning-digest'] })).toBeUndefined();
+    await setOwnerProfile(pool, { timezone: 'Europe/Lisbon' });
+    expect(await alignSchedulesToOwnerZone(pool, ENV, { missions: ['learning-digest'] })).toBeUndefined();
+    expect(await getActiveSchedule(pool, 'learning-digest')).toMatchObject({ timezone: 'America/New_York' });
   });
 });

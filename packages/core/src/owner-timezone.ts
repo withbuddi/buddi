@@ -13,6 +13,7 @@ import { getOwnerProfile, setOwnerProfile } from './onboarding/store.js';
 import type { OwnerProfile, OwnerProfilePatch } from './onboarding/types.js';
 import { rezoneSchedules } from './scheduler/missions.js';
 import { isKnownTimezone, timezoneFromEnv } from './time.js';
+import { readWebSetting, writeWebSetting } from './web-settings.js';
 
 export interface SavedOwnerProfile {
   profile: OwnerProfile;
@@ -36,23 +37,33 @@ export async function saveOwnerProfile(
   return { profile, zoneChange: { from, to, missions } };
 }
 
+/** Where the one-time alignment below records that it ran. */
+export const SCHEDULES_ALIGNED_KEY = 'owner.schedules-aligned';
+
 /**
- * At start: the schedules still kept in the configured fallback zone
- * (`BUDDI_TZ`, else New York) move to the profile's zone when the profile
- * names another. An installation set up before the profile drove the clock
- * made its recap and digest in the fallback zone, and its owner's zone was
- * the profile's all along. Nothing to do when the profile names no zone or
- * the same one. Returns what moved, if anything did.
+ * Once, at the first start of a buddi whose clock follows the profile: the
+ * built-in schedules still kept in the configured fallback zone (`BUDDI_TZ`,
+ * else New York) move to the profile's zone when the profile names another.
+ * An installation set up before the profile drove the clock made its recap,
+ * digest and first-run arc in the fallback zone, and its owner's zone was the
+ * profile's all along.
+ *
+ * Only `missions` — the schedules that follow the owner's zone, which the
+ * caller names (built-in ones registered with no zone of their own) — and
+ * only once (`SCHEDULES_ALIGNED_KEY`): a schedule in the fallback zone may
+ * have been put there on purpose since, and from then on a profile save is
+ * what moves schedules (`saveOwnerProfile`). Returns what moved, if anything.
  */
 export async function alignSchedulesToOwnerZone(
   pool: Pool,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
+  opts: { missions: readonly string[] },
 ): Promise<{ from: string; to: string; missions: string[] } | undefined> {
+  if ((await readWebSetting(pool, SCHEDULES_ALIGNED_KEY)) !== null) return undefined;
   const zone = (await getOwnerProfile(pool)).timezone;
-  if (zone === null || !isKnownTimezone(zone)) return undefined;
   const from = timezoneFromEnv(env);
-  const to = zone.trim();
-  if (from === to) return undefined;
-  const missions = await rezoneSchedules(pool, from, to);
+  const to = zone !== null && isKnownTimezone(zone) ? zone.trim() : from;
+  const missions = from === to ? [] : await rezoneSchedules(pool, from, to, { only: opts.missions });
+  await writeWebSetting(pool, SCHEDULES_ALIGNED_KEY, { at: new Date().toISOString(), from, to, missions });
   return missions.length > 0 ? { from, to, missions } : undefined;
 }
