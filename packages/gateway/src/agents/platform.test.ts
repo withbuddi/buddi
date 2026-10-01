@@ -36,6 +36,7 @@ import {
   bindPlatformTools,
   type PlatformAccounts,
   createPlatformManifest,
+  MAX_AGENT_TURNS,
   type CreateAgentEnvelope,
   type DeleteAgentEnvelope,
   type UpdateAgentEnvelope,
@@ -399,6 +400,21 @@ describe('the envelope carries the whole file and the resolved grant', () => {
     const { preview } = described<CreateAgentEnvelope>(h, 'platform.create_agent', baseCreate);
     expect(preview).toContain(`${DEFAULT_MAX_TURNS} turns per run`);
   });
+
+  /*
+   * The cap is the Brain tab's top (500), not the old 64: an agent made in
+   * chat can have the budget Setup can give it, and the preview names it.
+   */
+  it('takes a step budget up to the Brain tab\'s 500 and names it in the preview', () => {
+    const input = h.tool('platform.create_agent').input!;
+    expect(input.safeParse({ ...baseCreate, maxTurns: 300 }).success).toBe(true);
+    expect(input.safeParse({ ...baseCreate, maxTurns: MAX_AGENT_TURNS }).success).toBe(true);
+    expect(input.safeParse({ ...baseCreate, maxTurns: MAX_AGENT_TURNS + 1 }).success).toBe(false);
+    expect(input.safeParse({ ...baseCreate, maxTurns: 0 }).success).toBe(false);
+    expect(input.safeParse({ ...baseCreate, maxTurns: 2.5 }).success).toBe(false);
+    const { preview } = described<CreateAgentEnvelope>(h, 'platform.create_agent', { ...baseCreate, maxTurns: 300 });
+    expect(preview).toContain('300 turns per run');
+  });
 });
 
 describe('an update that widens a grant says so', () => {
@@ -435,6 +451,14 @@ describe('an update that widens a grant says so', () => {
     expect(envelope.widened).toBe(false);
     expect(preview).toContain('Its tool grant does not change');
     expect(preview).toContain('maxTurns: 7 → 9');
+  });
+
+  it('raises a step budget up to 500, names the number, and refuses past it', () => {
+    const input = h.tool('platform.update_agent').input!;
+    expect(input.safeParse({ id: 'scout', maxTurns: 501 }).success).toBe(false);
+    expect(input.safeParse({ id: 'scout', maxTurns: 0 }).success).toBe(false);
+    const { preview } = described<UpdateAgentEnvelope>(h, 'platform.update_agent', { id: 'scout', maxTurns: 500 });
+    expect(preview).toContain('maxTurns: 7 → 500');
   });
 });
 

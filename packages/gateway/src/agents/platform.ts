@@ -130,6 +130,12 @@ export const MAX_AGENT_ID = 40;
  * family repeats its interview rules: a model reads one description at the
  * moment it decides to call that tool, not a preamble it saw earlier.
  */
+/**
+ * The most steps per reply Agent Father may give an agent: the top of the
+ * Brain tab's range, so an agent made in chat can be what Setup can make it.
+ */
+export const MAX_AGENT_TURNS = 500;
+
 const CONDUCT =
   'Ask what the agent is FOR before you propose anything, and propose the smallest tool grant ' +
   'that does that job. Never hand an agent finance or mail access it does not need. Say in one ' +
@@ -735,7 +741,16 @@ const createInput = z
       ),
     model: z.string().min(1).optional().describe("Pin a model the account serves. Leave it out for the account's default."),
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
-    maxTurns: z.number().int().positive().max(64).optional().describe('Turn budget per run. Leave it out for the default of 40.'),
+    maxTurns: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_AGENT_TURNS)
+      .optional()
+      .describe(
+        `Steps per reply (each tool call is a step), 1 to ${MAX_AGENT_TURNS}. Leave it out for the default of ${DEFAULT_MAX_TURNS}; ` +
+          'ask for more (100 to 200) only for an agent whose work is long, like coding or research.',
+      ),
     language: z.enum(['mirror', 'en', 'fr']).optional().describe('Default "mirror": answer in the owner\'s language.'),
     avatar: z
       .string()
@@ -924,7 +939,13 @@ const updateInput = z
     account: z.string().min(1).optional().describe('Move it to another named model account, by name (platform.list_accounts).'),
     model: z.string().min(1).optional().describe('A model the account serves.'),
     provider: z.enum(['anthropic', 'openai']).optional().describe('Legacy: only for installations without named accounts.'),
-    maxTurns: z.number().int().positive().max(64).optional(),
+    maxTurns: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_AGENT_TURNS)
+      .optional()
+      .describe(`A new steps-per-reply budget (each tool call is a step), 1 to ${MAX_AGENT_TURNS}.`),
     language: z.enum(['mirror', 'en', 'fr']).optional(),
     avatar: z
       .string()
