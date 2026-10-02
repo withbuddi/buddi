@@ -39,6 +39,13 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- A catalogue update approves exactly the plan it showed: `update/plan` answers a fingerprint (the package's integrity, the resolved grant, the file's and every affected skill's hash) that `POST /api/catalogue/:name/update` now requires, refusing with 409 `plan-moved` when anything moved; the dashboard and `buddi agents update` send it, and an approval raised from chat binds each skill's hash too, so a skill edited after the preview is never overwritten.
+- Adding a catalogue agent whose plugin was missing no longer shows the listing's tool claims (outside its integrity) and then approves whatever the plugins resolved: the sheet lists the package's own tools, and when the grant that resolves is not the one the click carried, the install job stops at `confirm` with the grant as it is (`POST /api/catalogue/jobs/:id/confirm`; Add / Don't add it on the sheet, a question at the terminal, never `--yes`).
+- A catalogue update no longer overwrites a skill of your own (or a learned one) that has the same name as one the new version brings: it counts as an edit, is replaced only when you replace your changes, and goes to the trash first.
+- Skills a catalogue update drops now go to the trash instead of running on with no provenance; one you changed waits for Replace my changes.
+- An install or update the agents would not load with (a private skill named like a shared one) is undone and fails, instead of reporting success and breaking the next restart.
+- Two clicks on Add at once make one install job, and a job in flight is never dropped from the job list.
+- An agent's watch approved too late (its end already passed) no longer creates an enabled mission without an end: the end the owner approved is used, checked before anything is written, and the mission, its schedule and its end are written in one transaction.
 - Missions stop themselves: every mission run is told its own id, and a run of an agent's own watch is told to call `schedule.cancel_mine` and say so once when its goal is met or no longer applies (it now holds that tool whatever its file grants), so a watch whose answer is known stops firing every hour.
 - A watch an agent proposes carries when it is done (`stopWhen`) and an end (`endsOn`, 30 days unless it names a day); past its end it switches off quietly and stays listed as ended. Your own missions and plugins' have no end.
 - An agent's watch that told you nothing for 48 runs in a row asks once in Needs you, "Still useful?", and its card on Missions offers Keep (the count starts again) and Stop. Route `POST /api/missions/:id/keep`.

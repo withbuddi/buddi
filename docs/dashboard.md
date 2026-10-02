@@ -366,12 +366,17 @@ Settings → Plugins, with **Try again**. Something Add cannot install on the wa
 (a drawing account, a plugin not made by buddi) holds the button and offers
 its one fix. If the install waits on an approval, the sheet says so and opens
 Needs you.
+If the plugins it installed resolve a different grant from the one the sheet
+listed, it stops and shows what the agent would reach, with **Don't add it** /
+**Add**.
 
 **Update** opens the update sheet: the changes line, what changes in its file,
 the reach and the missions in a sentence each, **Not now** / **Update**. An
 agent you edited is never updated on its own: the sheet says what is new, your
 file against the new version behind **See what changed**, and **Keep mine** /
-**Replace my changes** (your version goes to the trash folder).
+**Replace my changes** (your version goes to the trash folder). A skill of your own named
+like one the new version brings counts as a change too. If anything moved
+since the sheet was read, the update is refused and the sheet reads it again.
 
 ## Activity
 

@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { parseCron } from './cron.js';
 import { coalesceOptions, type CoalesceOptions } from './enqueue.js';
 import {
@@ -89,6 +89,22 @@ export async function setSchedule(
   missionId: string,
   input: SetScheduleInput,
 ): Promise<ScheduleSpec> {
+  checkSchedule(input);
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const spec = await insertScheduleRevision(client, missionId, input);
+    await client.query('commit');
+    return spec;
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function checkSchedule(input: SetScheduleInput): void {
   parseCron(input.cron); // fail loudly here, not at materialization time
   if (!MISFIRE_POLICIES.includes(input.misfirePolicy)) {
     throw new Error(`setSchedule: unknown misfire policy "${input.misfirePolicy}"`);
@@ -101,40 +117,64 @@ export async function setSchedule(
   if (input.misfirePolicy === 'skip-after-deadline' && !(Number(input.deadlineMinutes) > 0)) {
     throw new Error('setSchedule: skip-after-deadline requires a positive deadlineMinutes');
   }
+}
 
+/** The new revision, inside a transaction the caller holds. */
+async function insertScheduleRevision(client: PoolClient, missionId: string, input: SetScheduleInput): Promise<ScheduleSpec> {
+  const mission = await client.query(
+    `select id from core.missions where id = $1 for update`,
+    [missionId],
+  );
+  if (mission.rowCount === 0) throw new Error(`setSchedule: no such mission "${missionId}"`);
+
+  await client.query(
+    `update core.schedule_specs set active = false where mission_id = $1 and active`,
+    [missionId],
+  );
+  const { rows } = await client.query<ScheduleSpecRow>(
+    `insert into core.schedule_specs
+       (mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active)
+     values (
+       $1,
+       coalesce((select max(revision) from core.schedule_specs where mission_id = $1), 0) + 1,
+       $2, $3, $6, $4, $5, true
+     )
+     returning ${SPEC_COLUMNS}`,
+    [
+      missionId,
+      input.cron.trim(),
+      input.timezone,
+      input.misfirePolicy,
+      input.deadlineMinutes ?? null,
+      input.timezoneExplicit ?? true,
+    ],
+  );
+  return toScheduleSpec(rows[0] as ScheduleSpecRow);
+}
+
+/**
+ * A mission, its schedule and its lifespan in one transaction: all of them,
+ * or none. For a mission that must never run without its end (an agent's own
+ * watch, `schedule.propose`).
+ */
+export async function upsertScheduledMission(
+  pool: Pool,
+  input: {
+    mission: UpsertMissionInput;
+    schedule: SetScheduleInput;
+    lifespan?: { stopWhen: string | null; endsAt: Date | null };
+  },
+): Promise<{ mission: Mission; spec: ScheduleSpec }> {
+  checkSchedule(input.schedule);
   const client = await pool.connect();
   try {
     await client.query('begin');
-    const mission = await client.query(
-      `select id from core.missions where id = $1 for update`,
-      [missionId],
-    );
-    if (mission.rowCount === 0) throw new Error(`setSchedule: no such mission "${missionId}"`);
-
-    await client.query(
-      `update core.schedule_specs set active = false where mission_id = $1 and active`,
-      [missionId],
-    );
-    const { rows } = await client.query<ScheduleSpecRow>(
-      `insert into core.schedule_specs
-         (mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active)
-       values (
-         $1,
-         coalesce((select max(revision) from core.schedule_specs where mission_id = $1), 0) + 1,
-         $2, $3, $6, $4, $5, true
-       )
-       returning ${SPEC_COLUMNS}`,
-      [
-        missionId,
-        input.cron.trim(),
-        input.timezone,
-        input.misfirePolicy,
-        input.deadlineMinutes ?? null,
-        input.timezoneExplicit ?? true,
-      ],
-    );
+    const asPool = client as unknown as Pool;
+    let mission = await upsertMission(asPool, input.mission);
+    const spec = await insertScheduleRevision(client, mission.id, input.schedule);
+    if (input.lifespan) mission = (await setMissionLifespan(asPool, mission.id, input.lifespan)) ?? mission;
     await client.query('commit');
-    return toScheduleSpec(rows[0] as ScheduleSpecRow);
+    return { mission, spec };
   } catch (err) {
     await client.query('rollback').catch(() => {});
     throw err;

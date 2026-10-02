@@ -41,6 +41,7 @@ import { composeProvenance } from '../plugins/provenance.js';
 import {
   agentsCatalogue,
   catalogueJobSettled,
+  confirmJobRoute,
   catalogueRoute,
   installRoute,
   planRoute,
@@ -157,6 +158,17 @@ suite('the agent catalogue', () => {
     return reply.body as Record<string, any>;
   };
   const card = async (name: string): Promise<Record<string, any>> => (await view()).agents.find((a: { name: string }) => a.name === name);
+  /** The update sheet's click: the plan it read, sent back with the click. */
+  const update = async (name: string, agentId: string, extra: Record<string, unknown> = {}): Promise<{ status: number; body: unknown }> => {
+    const plan = await updatePlanRoute(deps, name, { agentId });
+    return updateRoute(deps, name, { agentId, plan: (plan.body as { plan?: string }).plan, ...extra });
+  };
+  /** The install sheet's click: the picks, and the grant the plan listed. */
+  const install = async (name: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: unknown }> => {
+    const plan = await planRoute(deps, name, body);
+    const tools = ((plan.body as { tools?: Array<{ name: string }> }).tools ?? []).map((t) => t.name);
+    return installRoute(deps, name, { version: (plan.body as { version?: string }).version, ...body, tools });
+  };
 
   beforeAll(async () => {
     admin = createPool(databaseUrl as string);
@@ -218,6 +230,7 @@ suite('the agent catalogue', () => {
       service,
       binding: { catalog, agentsDir, trashRoot: path.join(root, '.trash') },
       approve: (actionId) => decideApprovalFromWeb({ pool, registry, ctx, now }, actionId, 'approved'),
+      reject: (actionId) => decideApprovalFromWeb({ pool, registry, ctx, now }, actionId, 'rejected'),
       engine,
       liveRegistry: registry as never,
       fetch: marketFetch(market),
@@ -290,9 +303,10 @@ suite('the agent catalogue', () => {
     const plan = await planRoute(deps, 'gardener', {});
     expect(plan.status).toBe(200);
     expect(plan.body).toMatchObject({ plugins: [{ name: 'garden', byBuddi: true }], preview: null, handle: 'gardener' });
+    // The package's own list, inside its integrity: never the listing's claims (empty here).
+    expect((plan.body as { tools: Array<{ name: string }> }).tools.map((t) => t.name)).toEqual(['memory.*', 'garden.*', 'owner.notify']);
 
-    const started = await installRoute(deps, 'gardener', {
-      version: '1.0.0',
+    const started = await install('gardener', {
       fills: { plants: 'The tomatoes', 'round-time': '06:30' },
       missionsOn: ['sunday-log'],
     });
@@ -344,7 +358,7 @@ suite('the agent catalogue', () => {
     publish([agentEntry('researcher', { persona: RESEARCHER_PERSONA, skills: [{ file: 'answering-with-sources.md', text: RESEARCHER_SKILL }] })]);
     const plan = await planRoute(deps, 'researcher', {});
     expect(plan.body).toMatchObject({ id: 'researcher', handle: 'researcher-2' });
-    const job = await catalogueJobSettled(((await installRoute(deps, 'researcher', { version: '1.0.0' })).body as { jobId: string }).jobId);
+    const job = await catalogueJobSettled(((await install('researcher')).body as { jobId: string }).jobId);
     expect(job, JSON.stringify(job)).toMatchObject({ state: 'done', agent: { id: 'researcher', handle: 'researcher-2' } });
     expect(existsSync(path.join(agentsDir, 'researcher', 'skills', 'answering-with-sources.md'))).toBe(true);
   });
@@ -367,7 +381,7 @@ suite('the agent catalogue', () => {
 
     // Its face did not arrive at install: the update brings it.
     await pool.query('delete from core.agent_avatars where agent_id = $1', ['researcher']);
-    const done = await updateRoute(deps, 'researcher', { agentId: 'researcher' });
+    const done = await update('researcher', 'researcher');
     expect(done.status, JSON.stringify(done.body)).toBe(200);
     expect((await pool.query('select agent_id from core.agent_avatars where agent_id = $1', ['researcher'])).rows).toHaveLength(1);
     const action = await getAction(pool, (done.body as { approvalId: string }).approvalId);
@@ -400,7 +414,7 @@ suite('the agent catalogue', () => {
     expect((await updatePlanRoute(deps, 'researcher', { agentId: 'researcher' })).body).toMatchObject({ edited: false });
     // A face the owner chose stays through an update.
     await pool.query(`update core.agent_avatars set sha256 = 'owner-chose-this' where agent_id = $1`, ['researcher']);
-    const done = await updateRoute(deps, 'researcher', { agentId: 'researcher' });
+    const done = await update('researcher', 'researcher');
     expect(done.status, JSON.stringify(done.body)).toBe(200);
     expect((await pool.query('select sha256 from core.agent_avatars where agent_id = $1', ['researcher'])).rows).toEqual([{ sha256: 'owner-chose-this' }]);
     const after = readFileSync(file, 'utf8');
@@ -432,11 +446,11 @@ suite('the agent catalogue', () => {
     expect(await card('gardener')).toMatchObject({ installed: { drift: 'edited-update' } });
     const plan = await updatePlanRoute(deps, 'gardener', { agentId: 'gardener' });
     expect(plan.body).toMatchObject({ edited: true });
-    const refused = await updateRoute(deps, 'gardener', { agentId: 'gardener' });
+    const refused = await update('gardener', 'gardener');
     expect(refused.status).toBe(409);
     expect(readFileSync(file, 'utf8')).toContain('You are MY gardener.');
 
-    const replaced = await updateRoute(deps, 'gardener', { agentId: 'gardener', replace: true });
+    const replaced = await update('gardener', 'gardener', { replace: true });
     expect(replaced.status, JSON.stringify(replaced.body)).toBe(200);
     expect(readFileSync(file, 'utf8')).toContain('You are the kind gardener.');
     // The plants pick survives the update; the owner's version is in the trash.
@@ -475,7 +489,7 @@ suite('the agent catalogue', () => {
       state: 'installed',
       installed: { agentId: 'planner', handle: 'planner', drift: 'update', via: 'buddi/planner', version: '0.1.0' },
     });
-    const done = await updateRoute(deps, 'chief-of-staff', { agentId: 'planner' });
+    const done = await update('chief-of-staff', 'planner');
     expect(done.status, JSON.stringify(done.body)).toBe(200);
     const file = readFileSync(path.join(dir, 'agent.md'), 'utf8');
     expect(file).toMatch(/^id: planner$/m);
@@ -547,6 +561,137 @@ suite('the agent catalogue', () => {
     const refused = await registry.invoke('platform.install_agent', { name: 'nobody' }, { ...ctx, agentId: 'agent-father', now });
     expect(refused.ok).toBe(false);
     expect((refused as { message: string }).message).toMatch(/lists no agent "nobody"/);
+  });
+
+  const skill = (name: string, body: string): { file: string; text: string } => ({
+    file: `${name}.md`,
+    text: `---\nname: ${name}\ndescription: How to ${name.replace(/-/g, ' ')}.\n---\n\n${body}`,
+  });
+  const scribe = (version: string, skills: Array<{ file: string; text: string }>, tools = ['memory.*', 'owner.notify']): Record<string, unknown> =>
+    agentEntry('scribe', { skills, manifest: { version, changes: `Version ${version}.`, tools } });
+  const scribeSkill = (name: string): string => path.join(agentsDir, 'scribe', 'skills', `${name}.md`);
+  const trashedSkills = (name: string): string[] =>
+    readdirSync(path.join(root, '.trash', 'agents'))
+      .filter((d) => d.startsWith('scribe-'))
+      .map((d) => path.join(root, '.trash', 'agents', d, 'skills', `${name}.md`))
+      .filter((f) => existsSync(f));
+
+  it('two clicks at once make one install job', async () => {
+    publish([scribe('1.0.0', [skill('take-notes', 'Write it down.'), skill('old-habit', 'Underline everything.')])]);
+    const plan = await planRoute(deps, 'scribe', {});
+    const body = { version: '1.0.0', tools: (plan.body as { tools: Array<{ name: string }> }).tools.map((t) => t.name) };
+    const [a, b] = await Promise.all([installRoute(deps, 'scribe', body), installRoute(deps, 'scribe', body)]);
+    expect((a.body as { jobId: string }).jobId).toBe((b.body as { jobId: string }).jobId);
+    const job = await catalogueJobSettled((a.body as { jobId: string }).jobId);
+    expect(job, JSON.stringify(job)).toMatchObject({ state: 'done', agent: { id: 'scribe' } });
+  });
+
+  it('an update approves the plan it showed: anything moved since answers 409 and touches nothing', async () => {
+    publish([scribe('1.1.0', [skill('take-notes', 'Write it down, dated.'), skill('summarise', 'Three lines.')])]);
+    const first = (await updatePlanRoute(deps, 'scribe', { agentId: 'scribe' })).body as { plan: string; retires: string[] };
+    expect(first.retires).toEqual(['old-habit']);
+    // Without the plan, refused: the click must say what it saw.
+    expect((await updateRoute(deps, 'scribe', { agentId: 'scribe' })).status).toBe(400);
+    // The catalogue moves on (and widens the grant) before the click.
+    publish([scribe('1.1.1', [skill('take-notes', 'Write it down, dated.'), skill('summarise', 'Three lines.')], ['memory.*', 'owner.notify', 'reminder.*'])]);
+    const moved = await updateRoute(deps, 'scribe', { agentId: 'scribe', plan: first.plan });
+    expect(moved.status, JSON.stringify(moved.body)).toBe(409);
+    expect(moved.body).toMatchObject({ code: 'plan-moved' });
+    expect(JSON.parse(readFileSync(path.join(agentsDir, 'scribe', 'plugin.json'), 'utf8'))).toMatchObject({ version: '1.0.0' });
+    expect(readFileSync(scribeSkill('take-notes'), 'utf8')).toContain('Write it down.');
+
+    // Read again and clicked: the skill it dropped goes to the trash, not on running.
+    const done = await update('scribe', 'scribe');
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(existsSync(scribeSkill('old-habit'))).toBe(false);
+    expect(readFileSync(trashedSkills('old-habit')[0]!, 'utf8')).toContain('Underline everything.');
+    expect(readFileSync(scribeSkill('summarise'), 'utf8')).toContain('Three lines.');
+    const sidecar = JSON.parse(readFileSync(path.join(agentsDir, 'scribe', 'plugin.json'), 'utf8'));
+    expect(Object.keys(sidecar.skills).sort()).toEqual(['summarise', 'take-notes']);
+    catalog.reload();
+    const names = catalog.get('scribe')?.skills?.map((s: { name: string }) => s.name) ?? [];
+    expect(names).toEqual(expect.arrayContaining(['summarise', 'take-notes']));
+    expect(names).not.toContain('old-habit');
+  });
+
+  it("a skill of the owner's own with a package skill's name counts as an edit: replaced only on their say, kept in the trash", async () => {
+    writeFileSync(scribeSkill('cite'), '---\nname: cite\ndescription: My own way to cite.\n---\n\nMine: footnotes.\n');
+    publish([scribe('1.2.0', [skill('take-notes', 'Write it down, dated.'), skill('summarise', 'Three lines.'), skill('cite', 'Their way.')])]);
+    const plan = (await updatePlanRoute(deps, 'scribe', { agentId: 'scribe' })).body as { plan: string; edited: boolean; replacesOwn: string[] };
+    expect(plan).toMatchObject({ edited: true, replacesOwn: ['cite'] });
+    const refused = await updateRoute(deps, 'scribe', { agentId: 'scribe', plan: plan.plan });
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ code: 'owner-edited' });
+    expect(readFileSync(scribeSkill('cite'), 'utf8')).toContain('Mine: footnotes.');
+
+    // The owner changes it again after the sheet was read: the old plan no longer approves.
+    writeFileSync(scribeSkill('cite'), '---\nname: cite\ndescription: My own way to cite.\n---\n\nMine: footnotes, numbered.\n');
+    const stale = await updateRoute(deps, 'scribe', { agentId: 'scribe', plan: plan.plan, replace: true });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toMatchObject({ code: 'plan-moved' });
+
+    // An approval waiting on its card binds the skill too: changed after it was proposed, it does not run.
+    const proposed = await registry.invoke('platform.install_agent', { name: 'scribe', agent: 'scribe', replaceEdits: true }, { ...ctx, agentId: 'agent-father', now });
+    if (proposed.ok || proposed.reason !== 'approval-required') throw new Error(JSON.stringify(proposed));
+    expect((await getAction(pool, proposed.actionId))?.preview).toContain('YOUR OWN SKILL cite');
+    writeFileSync(scribeSkill('cite'), '---\nname: cite\ndescription: My own way to cite.\n---\n\nMine: footnotes, numbered, always.\n');
+    const decided = await deps.approve(proposed.actionId);
+    expect(decided.ok && decided.body.execution?.state === 'succeeded').toBe(false);
+    expect(readFileSync(scribeSkill('cite'), 'utf8')).toContain('numbered, always.');
+
+    const replaced = await update('scribe', 'scribe', { replace: true });
+    expect(replaced.status, JSON.stringify(replaced.body)).toBe(200);
+    expect(readFileSync(scribeSkill('cite'), 'utf8')).toContain('Their way.');
+    expect(trashedSkills('cite').map((f) => readFileSync(f, 'utf8'))).toEqual([expect.stringContaining('numbered, always.')]);
+  });
+
+  it('an install or update the agents would not load with is undone and fails, never left for the next start', async () => {
+    const shared = path.join(root, 'skills', 'clash.md');
+    writeFileSync(shared, '---\nname: clash\ndescription: A shared procedure.\n---\n\nShared.\n');
+    catalog.reload();
+    try {
+      publish([agentEntry('clasher', { skills: [skill('clash', 'Private.')] }), scribe('1.3.0', [skill('take-notes', 'Write it down, dated.'), skill('summarise', 'Three lines.'), skill('cite', 'Their way.'), skill('clash', 'Mine too.')])]);
+      const job = await catalogueJobSettled(((await install('clasher')).body as { jobId: string }).jobId);
+      expect(job, JSON.stringify(job)).toMatchObject({ state: 'failed' });
+      expect(job?.error).toMatch(/nothing was changed/);
+      expect(existsSync(path.join(agentsDir, 'clasher'))).toBe(false);
+
+      const before = readFileSync(path.join(agentsDir, 'scribe', 'agent.md'), 'utf8');
+      const failed = await update('scribe', 'scribe');
+      expect(failed.status, JSON.stringify(failed.body)).toBe(409);
+      expect(readFileSync(path.join(agentsDir, 'scribe', 'agent.md'), 'utf8')).toBe(before);
+      expect(existsSync(scribeSkill('clash'))).toBe(false);
+      expect(JSON.parse(readFileSync(path.join(agentsDir, 'scribe', 'plugin.json'), 'utf8'))).toMatchObject({ version: '1.2.0' });
+      // And the running catalogue still loads.
+      expect(() => catalog.reload()).not.toThrow();
+    } finally {
+      rmSync(shared, { force: true });
+      catalog.reload();
+    }
+  });
+
+  it('stops at confirm when the click did not carry the grant that resolved, and the owner answers', async () => {
+    publish([agentEntry('tidy', { manifest: { tools: ['memory.*', 'owner.notify'] } })]);
+    // No grant sent back: it asks, with the grant as it is.
+    const asked = await catalogueJobSettled(((await installRoute(deps, 'tidy', { version: '1.0.0' })).body as { jobId: string }).jobId);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ state: 'confirm', steps: [{ kind: 'agent', state: 'confirm' }] });
+    expect(asked?.confirm?.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['owner.notify']));
+    expect(existsSync(path.join(agentsDir, 'tidy'))).toBe(false);
+    // A second click while it waits is the same job.
+    expect(((await installRoute(deps, 'tidy', { version: '1.0.0' })).body as { jobId: string }).jobId).toBe(asked!.id);
+    const no = await confirmJobRoute(deps, asked!.id, { approve: false });
+    expect(no.body).toMatchObject({ state: 'failed' });
+    expect((await getAction(pool, asked!.approvalId!))?.state).toBe('rejected');
+    expect(existsSync(path.join(agentsDir, 'tidy'))).toBe(false);
+
+    // A grant narrower than what resolves (a listing's understated claim) asks too; yes adds it.
+    const narrow = await catalogueJobSettled(((await installRoute(deps, 'tidy', { version: '1.0.0', tools: ['owner.notify'] })).body as { jobId: string }).jobId);
+    expect(narrow).toMatchObject({ state: 'confirm' });
+    expect(narrow?.confirm?.unshown.length).toBeGreaterThan(0);
+    expect(narrow?.confirm?.unshown).not.toContain('owner.notify');
+    const yes = await confirmJobRoute(deps, narrow!.id, { approve: true });
+    expect(yes.body, JSON.stringify(yes.body)).toMatchObject({ state: 'done', agent: { id: 'tidy' } });
+    expect(existsSync(path.join(agentsDir, 'tidy', 'agent.md'))).toBe(true);
   });
 
   // Last: it leaves an image plugin registered.

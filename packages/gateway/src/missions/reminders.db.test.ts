@@ -367,6 +367,28 @@ suite('reminders and proposed schedules (postgres)', () => {
     expect(await endExpiredMissions(pool, after)).toEqual([]);
   });
 
+  it('keeps the end the owner approved, and an approval executed after it writes nothing', async () => {
+    const registry = createToolRegistry();
+    const agentCtx: CoreToolContext = { ...ctx, agentId: 'finance-advisor' };
+    // No day named: 30 days from when it was proposed, not from when it ran.
+    const later = new Date(NOW.getTime() + 2 * 3_600_000);
+    const open = await registry.invoke('schedule.propose', { name: 'Slow approval', cron: '0 * * * *', prompt: 'p' }, agentCtx);
+    if (open.ok || open.reason !== 'approval-required') throw new Error('expected an approval');
+    await decideApproval(pool, { actionId: open.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    expect((await executeApproved(pool, { actionId: open.actionId, registry, ctx: { ...ctx, now: () => later }, worker: 'test', now: later })).ok).toBe(true);
+    expect((await getMission(pool, agentMissionId('finance-advisor', 'slow-approval')))?.endsAt?.getTime()).toBe(NOW.getTime() + 30 * 86_400_000);
+
+    // Today, in the owner's zone, approved — and run only after the day is over.
+    const today = await registry.invoke('schedule.propose', { name: 'Same day', cron: '0 * * * *', prompt: 'p', endsOn: '2026-09-14' }, agentCtx);
+    if (today.ok || today.reason !== 'approval-required') throw new Error('expected an approval');
+    await decideApproval(pool, { actionId: today.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    const tomorrow = new Date('2026-09-15T05:00:00Z');
+    const ran = await executeApproved(pool, { actionId: today.actionId, registry, ctx: { ...ctx, now: () => tomorrow }, worker: 'test', now: tomorrow });
+    expect(ran.ok).toBe(false);
+    // Nothing on without its end: no mission at all.
+    expect(await getMission(pool, agentMissionId('finance-advisor', 'same-day'))).toBeNull();
+  });
+
   it('refuses an end date already past', async () => {
     const registry = createToolRegistry();
     await expect(registry.invoke(

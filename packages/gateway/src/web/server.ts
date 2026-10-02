@@ -250,6 +250,7 @@ import {
   agentsCatalogue,
   installRoute as catalogueInstallRoute,
   jobRoute as catalogueJobRoute,
+  confirmJobRoute as catalogueConfirmJobRoute,
   planRoute as cataloguePlanRoute,
   removePreviewRoute,
   removeRoute as removeAgentRoute,
@@ -1282,6 +1283,7 @@ export function createWebApp(deps: WebServerDeps): Server {
         service: bound?.service ?? createCatalogueService({ env, log, registry: deps.registry, ctx: deps.ctx, now: deps.now }),
         binding: bound ?? { catalog: deps.catalog as never, agentsDir, trashRoot: path_.join(path_.dirname(path_.resolve(agentsDir)), '.trash') },
         approve: (actionId) => decideApprovalFromWeb(writeDeps, actionId, 'approved'),
+        reject: (actionId) => decideApprovalFromWeb(writeDeps, actionId, 'rejected'),
         ...(deps.plugins ? { engine: deps.plugins } : {}),
         ...(live.register && live.unregister && live.manifests ? { liveRegistry: deps.registry as never } : {}),
       };
@@ -2928,6 +2930,10 @@ export function createWebApp(deps: WebServerDeps): Server {
      * job; update and remove are the owner's click as the approval, like the
      * accept route below.
      */
+    const catalogueConfirm = /^\/api\/catalogue\/jobs\/([0-9a-f-]{36})\/confirm$/i.exec(path);
+    if (catalogueConfirm) {
+      return reply(res, await catalogueConfirmJobRoute(catalogueDeps(), catalogueConfirm[1] as string, (body ?? {}) as Record<string, unknown>));
+    }
     const catalogueWrite = /^\/api\/catalogue\/([a-z][a-z0-9-]{0,39})\/(plan|install|update\/plan|update)$/.exec(path);
     if (catalogueWrite) {
       const name = catalogueWrite[1] as string;

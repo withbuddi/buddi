@@ -79,7 +79,7 @@ function stepWords(step: CatalogueJob['steps'][number]): { state: StepView; word
 }
 
 /** Follow one install job until it ends. */
-function useJob(id: string | null): { job: CatalogueJob | null; error: string | null } {
+function useJob(id: string | null): { job: CatalogueJob | null; error: string | null; setJob: (job: CatalogueJob) => void } {
   const [job, setJob] = useState<CatalogueJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -106,7 +106,7 @@ function useJob(id: string | null): { job: CatalogueJob | null; error: string | 
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [id]);
-  return { job, error };
+  return { job, error, setJob };
 }
 
 /* ------------------------------------------------------------------ *
@@ -134,7 +134,10 @@ export function InstallSheet({
   const [jobId, setJobId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
-  const { job, error: jobError } = useJob(jobId);
+  const { job, error: jobError, setJob } = useJob(jobId);
+  const [answering, setAnswering] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [allConfirmReach, setAllConfirmReach] = useState(false);
   const told = useRef(false);
   /** The plugins it installs on the way, as withbuddi.com lists them: their icon and their one line. */
   const [listings, setListings] = useState<MarketEntryView[]>([]);
@@ -178,7 +181,8 @@ export function InstallSheet({
     setStartError(null);
     told.current = false;
     api
-      .catalogueInstall(entry.name, { version: plan.version, fills, handle, missionsOn: on })
+      // The grant the sheet lists: the click approves it only if that is what resolves.
+      .catalogueInstall(entry.name, { version: plan.version, fills, handle, missionsOn: on, tools: plan.tools.map((t) => t.name) })
       .then((answer) => setJobId(answer.jobId))
       .catch((err: unknown) => setStartError(errorText(err)))
       .finally(() => setStarting(false));
@@ -196,6 +200,64 @@ export function InstallSheet({
     onClose();
     navigate(chatRoute(agent.id));
   };
+
+  const answer = (approve: boolean): void => {
+    if (!job) return;
+    setAnswering(true);
+    setConfirmError(null);
+    api
+      .catalogueConfirm(job.id, approve)
+      .then((next) => {
+        setJob(next);
+        if (!approve) onClose();
+      })
+      .catch((err: unknown) => setConfirmError(errorText(err)))
+      .finally(() => setAnswering(false));
+  };
+
+  /* ---- the grant that resolved is not the one shown ---- */
+  if (job?.state === 'confirm' && job.confirm) {
+    const confirmRows = reachRows(job.confirm.tools.map((t) => t.name), tierMap(job.confirm.tools));
+    const installed = job.steps.filter((s) => s.kind === 'plugin' && s.state === 'done').map((s) => s.title);
+    return (
+      <Sheet
+        title={<SheetTitle entry={entry}>Add {title}</SheetTitle>}
+        onClose={onClose}
+        foot={
+          <Toolbar>
+            <Spacer />
+            <Button variant="ghost" disabled={answering} onClick={() => answer(false)}>Don’t add it</Button>
+            <Button variant="accent" disabled={answering} onClick={() => answer(true)}>Add {title}</Button>
+          </Toolbar>
+        }
+      >
+        <ol className="cat-steps" data-testid="cat-confirm">
+          {job.steps.filter((s) => s.kind === 'plugin').map((step) => {
+            const { state, words } = stepWords(step);
+            return <Step key={`${step.kind}-${step.name}`} state={state}>{words}</Step>;
+          })}
+        </ol>
+        <Notice tone="warning" title={`${title} would get more than the list showed.`}>
+          {installed.length > 0 ? `With ${and(installed)} installed, ` : ''}its tools resolved to a different set
+          {job.confirm.unshown.length > 0 ? `, including ${and(job.confirm.unshown)}` : ''}. Look at what it can reach before you add it.
+        </Notice>
+        <ErrorBanner message={confirmError} />
+        <div className="cat-block">
+          <h3 className="cat-block-title">What it can reach</h3>
+          <p className="cat-prose">
+            {reachLine(confirmRows)}{' '}
+            <button type="button" className="plugins-link cat-link" onClick={() => setAllConfirmReach(!allConfirmReach)}>{allConfirmReach ? 'Hide' : 'See all'}</button>
+          </p>
+          {allConfirmReach ? (
+            <dl className="cat-reach">
+              {confirmRows.map(([k, v]) => <div key={k} className="cat-reach-row"><dt>{k}</dt><dd>{v}</dd></div>)}
+            </dl>
+          ) : null}
+        </div>
+        <p className="cat-small">The plugins stay installed either way; Settings → Plugins removes them.</p>
+      </Sheet>
+    );
+  }
 
   /* ---- progress ---- */
   if (jobId && (!job || job.state === 'running')) {
@@ -311,7 +373,8 @@ export function InstallSheet({
   const blocked = plan?.blocked ?? [];
   const firstBlock = blocked[0];
   const blockFix = firstBlock ? missingFix(firstBlock) : null;
-  const rows = reachRows(plan ? plan.tools.map((t) => t.name) : entry.tools, tierMap(plan?.tools));
+  // The names are the plan's (the package's own list while a plugin is missing); the listing's claims only lend their tiers' words.
+  const rows = reachRows(plan ? plan.tools.map((t) => t.name) : entry.tools, tierMap([...(entry.claims?.tools ?? []), ...(plan?.tools ?? []).filter((t) => t.tier !== 'unknown')]));
   const whenOf = (id: string): string => entry.missions.find((m) => m.id === id)?.when ?? '';
   return (
     <Sheet
@@ -473,15 +536,20 @@ export function UpdateSheet({
   }, [entry.name, agentId]);
   const latest = shortVersion(plan?.version ?? entry.version);
   const run = (replace: boolean): void => {
+    if (!plan) return;
     setBusy(true);
     setError(null);
     api
-      .catalogueUpdate(entry.name, agentId, replace)
+      .catalogueUpdate(entry.name, agentId, plan.plan, replace)
       .then(() => {
         setDone(true);
         onUpdated?.();
       })
-      .catch((err: unknown) => setError(errorText(err)))
+      .catch((err: unknown) => {
+        setError(errorText(err));
+        // Something moved since this sheet was read (a new version, a file on disk): show what is true now.
+        api.catalogueUpdatePlan(entry.name, agentId).then(setPlan).catch(() => {});
+      })
       .finally(() => setBusy(false));
   };
 
@@ -525,7 +593,11 @@ export function UpdateSheet({
           </Toolbar>
         }
       >
-        <Notice tone="accent">You’ve changed {entry.title} since you added it, so nothing is updated on its own. Your file stays exactly as it is unless you replace it.</Notice>
+        <Notice tone="accent">
+          {plan.replacesOwn && plan.replacesOwn.length > 0
+            ? `${latest} brings ${plan.replacesOwn.length === 1 ? 'a skill' : 'skills'} named like your own (${and(plan.replacesOwn)}), so nothing is updated on its own. Yours stay exactly as they are unless you replace them; replaced, they go to the trash folder.`
+            : `You’ve changed ${entry.title} since you added it, so nothing is updated on its own. Your file stays exactly as it is unless you replace it.`}
+        </Notice>
         <ErrorBanner message={error} />
         <Stack divided gap="lg">
           <div className="cat-block">
@@ -590,6 +662,12 @@ export function UpdateSheet({
               : 'None added. Yours stay as they are.'}
           </p>
         </div>
+        {plan.retires && plan.retires.length > 0 ? (
+          <div className="cat-block">
+            <h3 className="cat-block-title">Skills</h3>
+            <p className="cat-prose">{latest} no longer has {and(plan.retires)}; {plan.retires.length === 1 ? 'it goes' : 'they go'} to the trash folder.</p>
+          </div>
+        ) : null}
       </Stack>
     </Sheet>
   );

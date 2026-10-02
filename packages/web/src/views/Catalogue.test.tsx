@@ -30,6 +30,7 @@ vi.mock('../api', async (load) => {
       cataloguePlan: vi.fn(),
       catalogueInstall: vi.fn(),
       catalogueJob: vi.fn(),
+      catalogueConfirm: vi.fn(),
       catalogueUpdatePlan: vi.fn(),
       catalogueUpdate: vi.fn(),
       agentRemovePreview: vi.fn(),
@@ -337,7 +338,11 @@ describe('the install sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'See all' }));
     expect(screen.getByText(/Asks you first before it changes anything/)).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add CFO' })); });
-    expect(api.catalogueInstall).toHaveBeenCalledWith('cfo', { version: '1.0.0', fills: { 'recap-time': '17:00' }, handle: 'money', missionsOn: ['friday-recap'] });
+    expect(api.catalogueInstall).toHaveBeenCalledWith('cfo', {
+      version: '1.0.0', fills: { 'recap-time': '17:00' }, handle: 'money', missionsOn: ['friday-recap'],
+      // The grant the sheet listed: the click approves that, never more.
+      tools: ['finance.overview', 'finance.delete_account', 'memory.remember'],
+    });
     expect(await screen.findByTestId('cat-progress')).toHaveTextContent('Installing Finance…');
     expect(await screen.findByText('CFO is on your team.', {}, { timeout: 3_000 })).toBeInTheDocument();
     expect(screen.getByTestId('cat-done')).toHaveTextContent('@money · Finance installed');
@@ -378,6 +383,29 @@ describe('the install sheet', () => {
     expect(visited).toContain(NEEDS_ROUTE);
   });
 
+  it('when the plugins resolve more than the sheet showed, it stops and asks with the grant as it is', async () => {
+    vi.mocked(api.cataloguePlan).mockResolvedValue(PLAN);
+    vi.mocked(api.catalogueInstall).mockResolvedValue({ jobId: '11111111-1111-1111-1111-111111111111' });
+    vi.mocked(api.catalogueJob).mockResolvedValue(job({
+      state: 'confirm', approvalId: 'act-3',
+      steps: [{ kind: 'plugin', name: 'finance', title: 'Finance', state: 'done' }, { kind: 'agent', name: 'cfo', title: 'CFO', state: 'confirm' }],
+      confirm: { tools: [{ name: 'finance.overview', tier: 'auto' }, { name: 'email.send', tier: 'gated' }], unshown: ['email.send'], preview: 'Add CFO …' },
+    }));
+    vi.mocked(api.catalogueConfirm).mockResolvedValue(job({
+      state: 'done', agent: { id: 'cfo', handle: 'cfo', name: 'CFO' },
+      steps: [{ kind: 'plugin', name: 'finance', title: 'Finance', state: 'done' }, { kind: 'agent', name: 'cfo', title: 'CFO', state: 'done' }],
+    }));
+    await openInstall();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add CFO' })); });
+    expect(await screen.findByText('CFO would get more than the list showed.')).toBeInTheDocument();
+    expect(screen.getByTestId('cat-confirm')).toHaveTextContent('Installed Finance');
+    expect(screen.getByText(/including email\.send/)).toBeInTheDocument();
+    expect(screen.getByText(/Reaches Finance and Mail\./)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add CFO' })); });
+    expect(api.catalogueConfirm).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111', true);
+    expect(await screen.findByText('CFO is on your team.')).toBeInTheDocument();
+  });
+
   it('something it cannot install on the way holds Add, with its one fix', async () => {
     vi.mocked(api.cataloguePlan).mockResolvedValue({ ...PLAN, name: 'illustrator', title: 'Illustrator', plugins: [{ name: 'image', title: 'Image', version: '0.1.0', byBuddi: true, fix: 'install' }], blocked: [{ kind: 'need', name: 'image-account', fix: 'accounts' }], fills: [], missions: [] });
     render(<Harness />);
@@ -404,6 +432,7 @@ describe('the update sheet', () => {
     vi.mocked(api.catalogueUpdatePlan).mockResolvedValue({
       agentId: 'writer', handle: 'writer', name: 'writer', title: 'Writer', fromVersion: '1.0.0', version: '1.1.0', changes: 'Shorter edits by default.',
       edited: false, widened: false, added: [], removed: [], personaDiff: ['- Rewrite freely.', '+ Edit lightly.'], missionsAdded: [], preview: null,
+      plan: 'fp-writer', retires: ['old-habit'],
     });
     vi.mocked(api.catalogueUpdate).mockResolvedValue({ approvalId: 'a1', result: null });
     const updated = vi.fn();
@@ -412,8 +441,9 @@ describe('the update sheet', () => {
     expect(screen.getByRole('region', { name: 'Writer 1.0 against 1.1' })).toHaveTextContent('Edit lightly.');
     expect(screen.getByText('No new tools. It reaches what it reaches today.')).toBeInTheDocument();
     expect(screen.getByText('None added. Yours stay as they are.')).toBeInTheDocument();
+    expect(screen.getByText('1.1 no longer has old-habit; it goes to the trash folder.')).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update Writer' })); });
-    expect(api.catalogueUpdate).toHaveBeenCalledWith('writer', 'writer', false);
+    expect(api.catalogueUpdate).toHaveBeenCalledWith('writer', 'writer', 'fp-writer', false);
     expect(await screen.findByText('Writer is on 1.1.')).toBeInTheDocument();
     expect(updated).toHaveBeenCalled();
   });
@@ -422,6 +452,7 @@ describe('the update sheet', () => {
     vi.mocked(api.catalogueUpdatePlan).mockResolvedValue({
       agentId: 'home', handle: 'home', name: 'home-manager', title: 'Home Manager', fromVersion: '1.1.0', version: '1.2.0', changes: 'Asks about frost only when it is cold.',
       edited: true, widened: false, added: [], removed: [], personaDiff: ['- The garage code is in the blue folder.', '+ Check for frost under 2 °C.'], missionsAdded: [], preview: null,
+      plan: 'fp-home',
     });
     vi.mocked(api.catalogueUpdate).mockResolvedValue({ approvalId: 'a2', result: null });
     const close = vi.fn();
@@ -434,7 +465,7 @@ describe('the update sheet', () => {
     expect(close).toHaveBeenCalled();
     expect(api.catalogueUpdate).not.toHaveBeenCalled();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Replace my changes' })); });
-    expect(api.catalogueUpdate).toHaveBeenCalledWith('home-manager', 'home', true);
+    expect(api.catalogueUpdate).toHaveBeenCalledWith('home-manager', 'home', 'fp-home', true);
     expect(await screen.findByText('Your version is in the trash folder if you want any of it back.')).toBeInTheDocument();
   });
 });
@@ -474,8 +505,8 @@ describe('suggestions', () => {
     expect(screen.getByRole('button', { name: 'Add these 2' })).toBeEnabled();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add these 2' })); });
     expect(await screen.findByText('Chief Of Staff and CFO are on your team.')).toBeInTheDocument();
-    expect(api.catalogueInstall).toHaveBeenNthCalledWith(1, 'chief-of-staff', { version: '1.0.0' });
-    expect(api.catalogueInstall).toHaveBeenNthCalledWith(2, 'cfo', { version: '1.0.0' });
+    expect(api.catalogueInstall).toHaveBeenNthCalledWith(1, 'chief-of-staff', { version: '1.0.0', tools: expect.any(Array) });
+    expect(api.catalogueInstall).toHaveBeenNthCalledWith(2, 'cfo', { version: '1.0.0', tools: expect.any(Array) });
     fireEvent.click(screen.getByRole('button', { name: 'See all teammates' }));
     expect(navigate).toHaveBeenCalledWith('#/agents/catalogue');
   });

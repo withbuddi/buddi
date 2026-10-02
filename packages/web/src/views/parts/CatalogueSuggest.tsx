@@ -61,7 +61,8 @@ export function teamIsNew(agents: readonly ChatAgent[], defaultAgentId: string |
 /** Add one package with its defaults and wait for the job to end. */
 export async function addAndWait(entry: CatalogueAgent, pollMs = JOB_POLL_MS): Promise<CatalogueJob | { error: string }> {
   try {
-    const { jobId } = await api.catalogueInstall(entry.name, { version: entry.version });
+    // The card's grant, as the package declares it: the click approves that, or the job asks.
+    const { jobId } = await api.catalogueInstall(entry.name, { version: entry.version, tools: entry.tools });
     for (;;) {
       const job = await api.catalogueJob(jobId);
       if (job.state !== 'running') return job;
@@ -205,6 +206,7 @@ export function HandoverTeam({ setUp, navigate }: { setUp: SetUp; navigate: (rou
       const job = await addAndWait(entry);
       if ('error' in job && !('state' in job)) bad.push({ entry, error: job.error });
       else if ((job as CatalogueJob).state === 'done') ok.push(entry);
+      else if ((job as CatalogueJob).state === 'confirm') bad.push({ entry, error: 'it gets more than its card showed, so it waits for your approval in Needs you' });
       else bad.push({ entry, error: (job as CatalogueJob).error ?? 'it stopped before it finished' });
     }
     setJoined(ok);

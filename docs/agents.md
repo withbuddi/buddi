@@ -191,8 +191,26 @@ Approving it writes the file again from the new package with the same picks;
 a grant that gains tools says so loudly and names them. When you edited the
 file or one of its skills, nothing is touched, ever: the card says a new
 version is out, with "See what changed" and "Replace my changes" (your file
-and your changed skills go to the trash first). Missions are your rows: an update adds new suggested ones off and
+and your changed skills go to the trash first). A skill of your own (or a
+learned one) with the same name as one the new version brings counts as an
+edit too, and is kept in the trash when replaced. A skill the earlier version
+wrote and the new one dropped goes to the trash, so it stops running.
+Missions are your rows: an update adds new suggested ones off and
 never changes or turns on one you have.
+
+The click approves exactly what was shown. The update sheet (and `buddi
+agents update`) sends back the plan's fingerprint: the package's integrity,
+the tools as they resolve, the file's and every affected skill's hash. If any
+of it moved before the click (a new version, a plugin update, a skill you
+edited again) nothing is touched and the sheet reads it again. An approval
+Agent Father raised binds the same things. A write the agents would not load
+with (a private skill named like a shared one) is undone and the install or
+update fails, rather than waiting for the next restart.
+
+On Add, the sheet lists the package's own tools (its integrity covers them;
+the listing's claims are only descriptions). When the plugins installed on the
+way resolve a different grant from the one the click carried, the install
+stops and shows the grant as it is, with **Add** and **Don't add it**.
 
 **Removing** an agent moves its directory to the trash beside your agents and
 pauses its missions in the same approval. Plugins stay; the preview names the

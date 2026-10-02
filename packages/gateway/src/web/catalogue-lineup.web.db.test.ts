@@ -213,14 +213,17 @@ suite('the first lineup, from a copy of the market index', () => {
       const fills = textFills(entry);
       const plan = await planRoute(deps, name, { fills });
       expect(plan.status, JSON.stringify(plan.body)).toBe(200);
-      const planned = plan.body as { handle: string; tools: Array<{ name: string }>; missions: Array<{ id: string; enabled: boolean }>; plugins: Array<{ name: string }> };
+      const planned = plan.body as { handle: string; tools: Array<{ name: string }>; missions: Array<{ id: string; enabled: boolean }>; plugins: Array<{ name: string }>; preview: string | null };
       expect(planned.handle).toBe(entry.handle);
       expect(planned.missions.every((m) => m.enabled === false)).toBe(true);
       // Every plugin it requires and lacks is installed on the way, and nothing else.
       const missing = Object.keys(entry.requires as Record<string, string>).filter((p) => !registry.manifests().some((m) => m.name === p));
       expect(planned.plugins.map((p) => p.name).sort()).toEqual(missing.sort());
 
-      const started = await installRoute(deps, name, { version: entry.version, fills });
+      // The grant the sheet listed goes back with the click: the resolved one when its plugins are here, the
+      // package's own list (its integrity covers it) while one is missing.
+      if (planned.preview === null) expect(planned.tools.map((t) => t.name)).toEqual(entry.tools);
+      const started = await installRoute(deps, name, { version: entry.version, fills, tools: planned.tools.map((t) => t.name) });
       expect(started.status, JSON.stringify(started.body)).toBe(202);
       const job = await catalogueJobSettled((started.body as { jobId: string }).jobId);
       expect(job, JSON.stringify(job)).toMatchObject({ state: 'done', agent: { id: name, handle: entry.handle } });
@@ -230,7 +233,7 @@ suite('the first lineup, from a copy of the market index', () => {
       catalog.reload();
       const agent = catalog.get(name);
       expect(agent, `${name} did not load: ${JSON.stringify(catalog.refused?.())}`).toBeDefined();
-      expect([...agent!.tools].sort()).toEqual(planned.tools.map((t) => t.name).sort());
+      if (planned.preview !== null) expect([...agent!.tools].sort()).toEqual(planned.tools.map((t) => t.name).sort());
       for (const claim of entry.claims.tools as Array<{ name: string; plugin: string; optional: boolean }>) {
         const here = claim.plugin === 'core' || registry.manifests().some((m) => m.name === claim.plugin);
         if (here) expect(agent!.tools, `${name} lacks ${claim.name}`).toContain(claim.name);

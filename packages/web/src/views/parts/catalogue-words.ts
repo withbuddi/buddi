@@ -144,7 +144,10 @@ export function reachRows(tools: readonly string[], tiers: ReadonlyMap<string, s
   return order.map((key) => {
     const list = byFamily.get(key)!;
     const words = FAMILIES[key];
-    const gated = list.some((t) => tiers.get(t) === 'gated');
+    // A family named whole (`finance.*`) asks first when any tool it covers does.
+    const gated = list.some(
+      (t) => tiers.get(t) === 'gated' || (t.endsWith('.*') && [...tiers].some(([name, tier]) => tier === 'gated' && name.startsWith(t.slice(0, -1)))),
+    );
     const line = words ? words.line(list) : `${list.length === 1 ? 'One of its tools' : `${list.length} of its tools`}.`;
     return [words?.title ?? capitalise(key), gated && !/asks you/i.test(line) ? `${line} Asks you first before it changes anything.` : line];
   });

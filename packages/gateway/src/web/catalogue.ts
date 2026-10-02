@@ -52,6 +52,8 @@ export interface CatalogueDeps extends PagesDeps {
   binding: CatalogueBinding;
   /** Decide an approval `approved` as the owner: the card's own decide. */
   approve: (actionId: string) => Promise<WriteResult<DecideResult>>;
+  /** Decide it `rejected`: the owner said no at the install sheet's extra step. */
+  reject?: (actionId: string) => Promise<WriteResult<DecideResult>>;
   engine?: TakeOnDeps['engine'];
   /** The running registry, when it can load a plugin live. */
   liveRegistry?: TakeOnDeps['registry'];
@@ -249,7 +251,12 @@ async function findListed(deps: CatalogueDeps, name: string): Promise<{ pkg: Age
 function refusalReply(err: unknown): RouteReply {
   const code = (err as { code?: unknown })?.code;
   if (err instanceof Error && (err.name === 'PlatformRefusal' || typeof code === 'string')) {
-    const status = code === 'already-added' || code === 'owner-edited' || code === 'up-to-date' || code === 'version-moved' ? 409 : code === 'offline' ? 503 : 400;
+    const status =
+      code === 'already-added' || code === 'owner-edited' || code === 'up-to-date' || code === 'version-moved' || code === 'plan-moved'
+        ? 409
+        : code === 'offline'
+          ? 503
+          : 400;
     return { status, body: { error: err.message, ...(typeof code === 'string' ? { code } : {}) } };
   }
   throw err;
@@ -345,21 +352,21 @@ export async function planRoute(deps: CatalogueDeps, name: string, body: Record<
   };
   if (plugins.length > 0 || blocking.length > 0) {
     // The grant cannot be resolved until its plugins load: the sheet shows the
-    // package's own list, and the approval is built when the job gets there.
+    // package's own list (inside its integrity; the listing's `claims` are not),
+    // and the install job asks again when what resolves is not exactly that.
     let picks;
     try {
       picks = resolvePicks(pkg, fills, choices);
     } catch (err) {
       return refusalReply(err);
     }
-    const claimed = (pkg.manifest.claims as { tools?: unknown } | undefined)?.tools;
     return {
       status: 200,
       body: {
         ...base,
         handle: handle ?? freeHandle(deps, pkg.manifest.handle),
         fills: pkg.manifest.fills.map((f) => ({ ...f, value: picks.find((p) => p.id === f.id)?.value ?? '', choices: choicesFor(f.kind, choices) })),
-        tools: Array.isArray(claimed) ? claimed : pkg.manifest.tools.map((t) => ({ name: t, tier: 'unknown', description: '' })),
+        tools: toolRows(deps.registry, pkg.manifest.tools),
         missions: pkg.manifest.missions.map((m) => ({ id: m.id, name: m.name, cron: m.cron, enabled: (missionsOn ?? []).includes(m.id), prompt: m.prompt })),
         preview: null,
         note: blocking.length > 0
@@ -369,7 +376,7 @@ export async function planRoute(deps: CatalogueDeps, name: string, body: Record<
     };
   }
   try {
-    const { envelope, preview } = await planCatalogueInstall(
+    const { envelope, preview, plan } = await planCatalogueInstall(
       deps.registry,
       { name: pkg.manifest.name, version: pkg.manifest.version, ...(fills ? { fills } : {}), ...(missionsOn ? { missionsOn } : {}), ...(handle ? { handle } : {}) },
       { timezone: deps.ctx.timezone, db: deps.ctx.db, agentId: OWNER_AGENT_ID },
@@ -378,6 +385,7 @@ export async function planRoute(deps: CatalogueDeps, name: string, body: Record<
       status: 200,
       body: {
         ...base,
+        plan,
         id: envelope.id,
         handle: envelope.handle,
         fills: pkg.manifest.fills.map((f) => ({ ...f, value: envelope.picks.find((p) => p.id === f.id)?.value ?? '', choices: choicesFor(f.kind, choices) })),
@@ -396,17 +404,20 @@ export async function planRoute(deps: CatalogueDeps, name: string, body: Record<
  * The install job
  * ------------------------------------------------------------------ */
 
-export type JobStepState = 'waiting' | 'fetching' | 'reading' | 'installing' | 'loading' | 'adding' | 'done' | 'failed';
+export type JobStepState = 'waiting' | 'fetching' | 'reading' | 'installing' | 'loading' | 'adding' | 'confirm' | 'done' | 'failed';
 
 export interface CatalogueJob {
   id: string;
   name: string;
   version: string;
   title: string;
-  state: 'running' | 'done' | 'failed';
+  /** `confirm`: the grant that resolved is not the one shown; the owner says yes or no (`POST …/confirm`). */
+  state: 'running' | 'confirm' | 'done' | 'failed';
   steps: Array<{ kind: 'plugin' | 'agent'; name: string; title: string; state: JobStepState; reason?: string }>;
   agent?: { id: string; handle: string; name: string };
   approvalId?: string;
+  /** With `confirm`: the whole grant as it resolved, the tools not shown before, and the approval's preview. */
+  confirm?: { tools: Array<{ name: string; tier: string; description: string }>; unshown: string[]; preview: string };
   error?: string;
   startedAt: string;
   finishedAt?: string;
@@ -414,12 +425,19 @@ export interface CatalogueJob {
 
 const JOBS = new Map<string, CatalogueJob>();
 
+/** How many finished jobs are kept to be asked about; a job in flight is never forgotten. */
+const KEPT_FINISHED = 20;
+
 /** For tests: forget the jobs. */
 export function resetCatalogueJobs(): void {
   JOBS.clear();
 }
 
-/** For tests: wait until a job has finished. */
+function inFlight(job: CatalogueJob): boolean {
+  return job.state === 'running' || job.state === 'confirm';
+}
+
+/** For tests: wait until a job has finished, or stopped to ask. */
 export async function catalogueJobSettled(id: string, timeoutMs = 30_000): Promise<CatalogueJob | undefined> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
@@ -432,11 +450,8 @@ export async function catalogueJobSettled(id: string, timeoutMs = 30_000): Promi
 
 function remember(job: CatalogueJob): void {
   JOBS.set(job.id, job);
-  while (JOBS.size > 20) {
-    const oldest = JOBS.keys().next();
-    if (oldest.done) break;
-    JOBS.delete(oldest.value);
-  }
+  const finished = [...JOBS.values()].filter((j) => !inFlight(j));
+  for (const old of finished.slice(0, Math.max(0, finished.length - KEPT_FINISHED))) JOBS.delete(old.id);
 }
 
 /** `GET /api/catalogue/jobs/:id`. */
@@ -445,64 +460,90 @@ export function jobRoute(id: string): RouteReply {
   return job ? { status: 200, body: job } : { status: 404, body: { error: 'No such job; buddi may have restarted.' } };
 }
 
+type InstallInput = { fills?: Record<string, string>; missionsOn?: string[]; handle?: string; account?: string; version?: string; plan?: string };
+
 /**
- * `POST /api/catalogue/:name/install` `{ version, fills, handle, missionsOn }`
+ * `POST /api/catalogue/:name/install` `{ version, fills, handle, missionsOn, plan?, tools? }`
  * — answers 202 with the job at once; `GET /api/catalogue/jobs/:id` gives its
- * progress.
+ * progress. `plan` is the fingerprint the plan route gave for the same picks;
+ * `tools` the grant the sheet listed. The click approves the agent only when
+ * one of them is exactly what resolves; otherwise the job stops at `confirm`.
  */
 export async function installRoute(deps: CatalogueDeps, name: string, body: Record<string, unknown>): Promise<RouteReply> {
   const found = await findListed(deps, name);
   if ('reply' in found) return found.reply;
   const { pkg } = found;
-  let input: { fills?: Record<string, string>; missionsOn?: string[]; handle?: string; account?: string; version?: string };
+  let input: InstallInput;
+  let shown: string[] | undefined;
   try {
     const fills = stringRecord(body.fills);
     const missionsOn = stringList(body.missionsOn, 'missionsOn');
     const handle = optionalString(body.handle, 'handle');
     const account = optionalString(body.account, 'account');
     const version = optionalString(body.version, 'version');
-    input = { ...(fills ? { fills } : {}), ...(missionsOn ? { missionsOn } : {}), ...(handle ? { handle } : {}), ...(account ? { account } : {}), ...(version ? { version } : {}) };
+    const plan = optionalString(body.plan, 'plan');
+    shown = stringList(body.tools, 'tools');
+    input = {
+      ...(fills ? { fills } : {}),
+      ...(missionsOn ? { missionsOn } : {}),
+      ...(handle ? { handle } : {}),
+      ...(account ? { account } : {}),
+      ...(version ? { version } : {}),
+      ...(plan ? { plan } : {}),
+    };
   } catch (err) {
     return { status: 400, body: { error: (err as Error).message } };
   }
   if (input.version !== undefined && input.version !== pkg.manifest.version) {
     return { status: 409, body: { error: `The catalogue now lists ${pkg.manifest.title} ${pkg.manifest.version}; look at it again before adding it.`, version: pkg.manifest.version } };
   }
-  const running = [...JOBS.values()].find((j) => j.name === name && j.state === 'running');
+  // The check and the reservation happen with no await between them, so two
+  // clicks at once make one job, never two racing to stage the same plugin.
+  const running = [...JOBS.values()].find((j) => j.name === name && inFlight(j));
   if (running) return { status: 202, body: { jobId: running.id } };
-  const state = packageState(pkg, await stateContext(deps.registry, deps.service, deps.binding));
-  if (state.state === 'installed') {
-    return { status: 409, body: { error: `${pkg.manifest.title} is already on the team as @${state.installed.handle}.`, installed: state.installed } };
-  }
-  if (state.state === 'unavailable') return { status: 409, body: { error: state.reason } };
-  const listings = await marketPlugins(deps);
-  const missing = missingViews(state.state === 'needs' ? state.missing : [], listings);
-  const blocking = missing.filter((m) => !(m.kind === 'plugin' && m.fix === 'install' && m.byBuddi));
-  if (blocking.length > 0) {
-    const words = blocking.map((m) =>
-      m.kind === 'need'
-        ? m.name === 'mailbox' ? 'a mailbox (Settings → Email)' : 'an account that draws (Settings → Model accounts)'
-        : m.fix === 'enable' ? `${m.title} turned on (Settings → Plugins)`
-        : m.fix === 'update' ? `${m.title} ${m.range} (Settings → Plugins → Update)`
-        : `${m.title}, which is not made by buddi, so it waits for you to install it in Settings → Plugins`,
-    );
-    return { status: 409, body: { error: `${pkg.manifest.title} needs ${words.join(' and ')} first.`, blocked: blocking } };
-  }
-  const plugins = missing.filter((m): m is Extract<MissingView, { kind: 'plugin' }> => m.kind === 'plugin');
+  const agentStep = { kind: 'agent' as const, name, title: pkg.manifest.title, state: 'waiting' as JobStepState };
   const job: CatalogueJob = {
     id: randomUUID(),
     name,
     version: pkg.manifest.version,
     title: pkg.manifest.title,
     state: 'running',
-    steps: [
-      ...plugins.map((p) => ({ kind: 'plugin' as const, name: p.name, title: p.title, state: 'waiting' as JobStepState })),
-      { kind: 'agent', name, title: pkg.manifest.title, state: 'waiting' },
-    ],
+    steps: [agentStep],
     startedAt: new Date().toISOString(),
   };
   remember(job);
-  void runJob(deps, job, pkg, input, listings).catch((err: unknown) => {
+  const refused = (reply: RouteReply): RouteReply => {
+    finish(job, 'failed', String((reply.body as { error?: unknown }).error ?? 'It could not start'));
+    return reply;
+  };
+  let listings: MarketEntry[];
+  let plugins: Array<Extract<MissingView, { kind: 'plugin' }>>;
+  try {
+    const state = packageState(pkg, await stateContext(deps.registry, deps.service, deps.binding));
+    if (state.state === 'installed') {
+      return refused({ status: 409, body: { error: `${pkg.manifest.title} is already on the team as @${state.installed.handle}.`, installed: state.installed } });
+    }
+    if (state.state === 'unavailable') return refused({ status: 409, body: { error: state.reason } });
+    listings = await marketPlugins(deps);
+    const missing = missingViews(state.state === 'needs' ? state.missing : [], listings);
+    const blocking = missing.filter((m) => !(m.kind === 'plugin' && m.fix === 'install' && m.byBuddi));
+    if (blocking.length > 0) {
+      const words = blocking.map((m) =>
+        m.kind === 'need'
+          ? m.name === 'mailbox' ? 'a mailbox (Settings → Email)' : 'an account that draws (Settings → Model accounts)'
+          : m.fix === 'enable' ? `${m.title} turned on (Settings → Plugins)`
+          : m.fix === 'update' ? `${m.title} ${m.range} (Settings → Plugins → Update)`
+          : `${m.title}, which is not made by buddi, so it waits for you to install it in Settings → Plugins`,
+      );
+      return refused({ status: 409, body: { error: `${pkg.manifest.title} needs ${words.join(' and ')} first.`, blocked: blocking } });
+    }
+    plugins = missing.filter((m): m is Extract<MissingView, { kind: 'plugin' }> => m.kind === 'plugin');
+  } catch (err) {
+    finish(job, 'failed', err instanceof Error ? err.message : String(err));
+    throw err;
+  }
+  job.steps = [...plugins.map((p) => ({ kind: 'plugin' as const, name: p.name, title: p.title, state: 'waiting' as JobStepState })), agentStep];
+  void runJob(deps, job, pkg, input, shown, listings).catch((err: unknown) => {
     finish(job, 'failed', err instanceof Error ? err.message : String(err));
     deps.log(`catalogue: adding ${name} failed: ${job.error}`);
   });
@@ -524,11 +565,18 @@ async function waitForPlugin(deps: CatalogueDeps, name: string): Promise<boolean
   }
 }
 
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = [...new Set(a)].sort();
+  const right = [...new Set(b)].sort();
+  return left.length === right.length && left.every((v, i) => v === right[i]);
+}
+
 async function runJob(
   deps: CatalogueDeps,
   job: CatalogueJob,
   pkg: AgentPackage,
-  input: { fills?: Record<string, string>; missionsOn?: string[]; handle?: string; account?: string },
+  input: InstallInput,
+  shown: readonly string[] | undefined,
   listings: readonly MarketEntry[],
 ): Promise<void> {
   for (const step of job.steps) {
@@ -556,43 +604,124 @@ async function runJob(
   }
   const agentStep = job.steps[job.steps.length - 1] as CatalogueJob['steps'][number];
   agentStep.state = 'adding';
+  const { plan: shownPlan, ...rest } = input;
+  const base = { name: pkg.manifest.name, version: pkg.manifest.version, ...rest };
+  const fail = (message: string): void => {
+    agentStep.state = 'failed';
+    agentStep.reason = message;
+    finish(job, 'failed', message);
+  };
+  // What adding it does now its plugins are here. The approval is bound to
+  // exactly this (`plan`), and the click approves it only when the owner saw
+  // it: the same plan, the same grant tool for tool, or the package's own list
+  // (inside its integrity, resolved against plugins staged on their exact
+  // integrity). Never the listing's `claims`, which no integrity covers.
+  let planned: Awaited<ReturnType<typeof planCatalogueInstall>>;
+  try {
+    planned = await planCatalogueInstall(deps.registry, base, { timezone: deps.ctx.timezone, db: deps.ctx.db, agentId: OWNER_AGENT_ID });
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  if (shownPlan !== undefined && shownPlan !== planned.plan) {
+    fail(`What adding ${pkg.manifest.title} would do changed since it was shown. Look at it again before you add it`);
+    return;
+  }
+  const seen =
+    shownPlan !== undefined ||
+    (shown !== undefined && (sameSet(shown, planned.envelope.tools) || sameSet(shown, pkg.manifest.tools)));
   const result = await deps.registry.invoke(
     'platform.install_agent',
-    { name: pkg.manifest.name, version: pkg.manifest.version, ...input },
+    { ...base, plan: planned.plan },
     { ...deps.ctx, agentId: OWNER_AGENT_ID, now: deps.now },
   );
   if (!result.ok && result.reason !== 'approval-required') {
-    agentStep.state = 'failed';
-    agentStep.reason = result.message;
-    finish(job, 'failed', result.message);
+    fail(result.message);
     return;
   }
   if (!result.ok) {
     job.approvalId = result.actionId;
-    const decided = await deps.approve(result.actionId);
-    if (!decided.ok) {
-      agentStep.state = 'failed';
-      agentStep.reason = decided.body.error;
-      finish(job, 'failed', decided.body.error);
+    if (!seen) {
+      // The listing showed one grant and the plugins resolved another: the
+      // owner's click was not for this one. Ask, with the grant as it is.
+      const unshown = planned.envelope.tools.filter((t) => !(shown ?? []).includes(t));
+      job.confirm = { tools: toolRows(deps.registry, planned.envelope.tools), unshown, preview: planned.preview };
+      agentStep.state = 'confirm';
+      job.state = 'confirm';
       return;
     }
-    const execution = decided.body.execution;
-    if (execution && execution.state !== 'succeeded') {
-      agentStep.state = 'failed';
-      agentStep.reason = execution.message ?? execution.state;
-      finish(job, 'failed', execution.message ?? `Adding ${pkg.manifest.title} did not finish (${execution.state})`);
-      return;
-    }
+    await approveJob(deps, job, pkg, input.handle);
+    return;
   }
+  settleAdded(deps, job, pkg, input.handle);
+}
+
+/** Decide the job's approval as the owner and finish the job from what it did. */
+async function approveJob(deps: CatalogueDeps, job: CatalogueJob, pkg: AgentPackage, handle: string | undefined): Promise<void> {
+  const agentStep = job.steps[job.steps.length - 1] as CatalogueJob['steps'][number];
+  const decided = await deps.approve(job.approvalId as string);
+  if (!decided.ok) {
+    // Approved meanwhile in Needs you: the agent is there.
+    if (addedAgents(deps.binding.agentsDir).some((a) => a.provenance.source === 'market' && a.provenance.package === pkg.manifest.name)) {
+      settleAdded(deps, job, pkg, handle);
+      return;
+    }
+    agentStep.state = 'failed';
+    agentStep.reason = decided.body.error;
+    finish(job, 'failed', decided.body.error);
+    return;
+  }
+  const execution = decided.body.execution;
+  if (execution && execution.state !== 'succeeded') {
+    agentStep.state = 'failed';
+    agentStep.reason = execution.message ?? execution.state;
+    finish(job, 'failed', execution.message ?? `Adding ${pkg.manifest.title} did not finish (${execution.state})`);
+    return;
+  }
+  settleAdded(deps, job, pkg, handle);
+}
+
+function settleAdded(deps: CatalogueDeps, job: CatalogueJob, pkg: AgentPackage, handle: string | undefined): void {
+  const agentStep = job.steps[job.steps.length - 1] as CatalogueJob['steps'][number];
   const added = addedAgents(deps.binding.agentsDir).find(
     (a) => a.provenance.source === 'market' && a.provenance.package === pkg.manifest.name,
   );
   const agent = added ? deps.binding.catalog.get(added.agentId) : undefined;
   job.agent = agent
     ? { id: agent.id, handle: agent.handle, name: agent.name }
-    : { id: added?.agentId ?? pkg.manifest.name, handle: input.handle ?? pkg.manifest.handle, name: pkg.manifest.title };
+    : { id: added?.agentId ?? pkg.manifest.name, handle: handle ?? pkg.manifest.handle, name: pkg.manifest.title };
   agentStep.state = 'done';
+  delete job.confirm;
   finish(job, 'done');
+}
+
+/**
+ * `POST /api/catalogue/jobs/:id/confirm` `{ approve: boolean }` — the owner's
+ * answer to a job stopped at `confirm`: yes approves the agent with the grant
+ * the job showed; no rejects the approval and ends the job. Its plugins stay.
+ */
+export async function confirmJobRoute(deps: CatalogueDeps, id: string, body: Record<string, unknown>): Promise<RouteReply> {
+  const job = JOBS.get(id);
+  if (!job) return { status: 404, body: { error: 'No such job; buddi may have restarted.' } };
+  if (job.state !== 'confirm' || !job.approvalId) return { status: 409, body: { error: 'This job is not waiting for you.', job } };
+  if (typeof body.approve !== 'boolean') return { status: 400, body: { error: '`approve` is true or false.' } };
+  const found = await findListed(deps, job.name);
+  if ('reply' in found) return found.reply;
+  if (job.state !== 'confirm') return { status: 409, body: { error: 'This job is not waiting for you.', job } };
+  const agentStep = job.steps[job.steps.length - 1] as CatalogueJob['steps'][number];
+  if (!body.approve) {
+    if (deps.reject) await deps.reject(job.approvalId).catch(() => undefined);
+    agentStep.state = 'failed';
+    agentStep.reason = 'you said no';
+    delete job.confirm;
+    finish(job, 'failed', `${job.title} was not added`);
+    return { status: 200, body: job };
+  }
+  job.state = 'running';
+  agentStep.state = 'adding';
+  delete job.confirm;
+  await approveJob(deps, job, found.pkg, undefined);
+  return { status: 200, body: job };
 }
 
 /* ------------------------------------------------------------------ *
@@ -609,7 +738,7 @@ export async function updatePlanRoute(deps: CatalogueDeps, name: string, body: R
   const agentId = typeof body.agentId === 'string' ? body.agentId : '';
   if (agentId === '') return { status: 400, body: { error: '`agentId` names the agent to update.' } };
   try {
-    const { envelope, preview } = await planCatalogueInstall(
+    const { envelope, preview, plan } = await planCatalogueInstall(
       deps.registry,
       // A read: built as if replacing, so an edited file's diff shows too.
       { name, agent: agentId, replaceEdits: true },
@@ -619,6 +748,7 @@ export async function updatePlanRoute(deps: CatalogueDeps, name: string, body: R
     return {
       status: 200,
       body: {
+        plan,
         agentId: envelope.id,
         handle: envelope.handle,
         name,
@@ -628,6 +758,8 @@ export async function updatePlanRoute(deps: CatalogueDeps, name: string, body: R
         changes: envelope.package.changes,
         via: u.via,
         edited: u.edited,
+        replacesOwn: u.replacesOwn,
+        retires: u.retires,
         widened: u.widened,
         added: toolRows(deps.registry, u.added),
         removed: u.removed,
@@ -663,14 +795,19 @@ async function invokeApproved(
 }
 
 /**
- * `POST /api/catalogue/:name/update` `{ agentId, replace? }` — the owner's
- * click on Update (or "Replace my changes", with `replace: true`) is the
- * approval. An edited file without `replace` is refused, untouched.
+ * `POST /api/catalogue/:name/update` `{ agentId, plan, replace? }` — the
+ * owner's click on Update (or "Replace my changes", with `replace: true`) is
+ * the approval, of the plan `update/plan` showed: `plan` is its fingerprint,
+ * and anything it covers that moved since (the package, the grant, the file
+ * or a skill on disk) answers 409, untouched. An edited file without
+ * `replace` is refused, untouched.
  */
 export async function updateRoute(deps: CatalogueDeps, name: string, body: Record<string, unknown>): Promise<RouteReply> {
   const agentId = typeof body.agentId === 'string' ? body.agentId : '';
   if (agentId === '') return { status: 400, body: { error: '`agentId` names the agent to update.' } };
-  const input = { name, agent: agentId, ...(body.replace === true ? { replaceEdits: true as const } : {}) };
+  const plan = typeof body.plan === 'string' ? body.plan : '';
+  if (plan === '') return { status: 400, body: { error: '`plan` is the fingerprint `update/plan` answered: the update approves what was shown.' } };
+  const input = { name, agent: agentId, plan, ...(body.replace === true ? { replaceEdits: true as const } : {}) };
   // Checked first for its typed refusal (an edited file, nothing to update): the card's would be a sentence only.
   try {
     await planCatalogueInstall(deps.registry, input, { timezone: deps.ctx.timezone, db: deps.ctx.db, agentId: OWNER_AGENT_ID });

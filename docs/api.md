@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-281 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+282 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1154,8 +1154,9 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | DELETE | `/api/agents/:id/avatar` | Remove the uploaded picture; the agent's icon is drawn again. | yes |
 | GET | `/api/catalogue` | The agent catalogue from withbuddi.com, each package with where it stands here; fetched when stale, the kept copy offline. | yes |
 | POST | `/api/catalogue/:name/plan` | What adding this agent would do, writing nothing: plugins installed on the way, picks with defaults and choices, the handle, tools with tiers, missions, the approval preview. | yes |
-| POST | `/api/catalogue/:name/install` | Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval. | no |
+| POST | `/api/catalogue/:name/install` | Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval of the plan shown (plan, for the same picks) or of the grant shown (tools). When neither is what resolves, the job stops at confirm. | no |
 | GET | `/api/catalogue/jobs/:id` | An install job's progress. | yes |
+| POST | `/api/catalogue/jobs/:id/confirm` | Answer a job stopped at confirm (the grant that resolved is not the one shown): yes adds the agent with it, no rejects the approval. | no |
 | POST | `/api/catalogue/:name/update/plan` | The update sheet for an agent added from this package: changes, persona diff, tools added and removed, new missions, and whether the owner edited it. | yes |
 | POST | `/api/catalogue/:name/update` | Update an agent from its package with the same picks; an edited file only with replace (the old file goes to the trash). The click is the approval. | no |
 | GET | `/api/agents/:id/remove` | What removing this agent does: its missions paused, the plugins no other agent uses. Nothing changes. | yes |
@@ -1478,7 +1479,7 @@ What adding this agent would do, writing nothing: plugins installed on the way, 
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ fills?: { [id]: string }, handle?, missionsOn?: string[] }`
-- **Answer:** `{ name, version, title, plugins: [{ name, title, version, byBuddi, fix }], blocked, id?, handle, fills: [{ id, kind, label, optional?, mission?, value, choices? }], tools: [{ name, tier, description }], missions: [{ id, name, cron, enabled, prompt }], account?, preview: string | null, note? }`
+- **Answer:** `{ name, version, title, plugins: [{ name, title, version, byBuddi, fix }], blocked, plan?, id?, handle, fills: [{ id, kind, label, optional?, mission?, value, choices? }], tools: [{ name, tier, description }], missions: [{ id, name, cron, enabled, prompt }], account?, preview: string | null, note? } — plan: the fingerprint of exactly this plan (absent while a plugin is missing); tools: the package's own list while one is`
 - **Errors:** 400 a pick or handle refused; 404; 409 already added or unavailable; 503 offline
 - **Since:** unreleased
 
@@ -1488,10 +1489,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `POST /api/catalogue/:name/install`
 
-Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval.
+Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval of the plan shown (plan, for the same picks) or of the grant shown (tools). When neither is what resolves, the job stops at confirm.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It decides an approval, or the click is the approval. A token never decides for the owner.
-- **Body:** `{ version, fills?, handle?, missionsOn?: string[], account? }`
+- **Body:** `{ version, fills?, handle?, missionsOn?: string[], account?, plan?, tools?: string[] }`
 - **Answer:** `202 { jobId }`
 - **Errors:** 400; 404; 409 already added, the version moved, or something it needs is not here (blocked); 503 offline
 - **Since:** unreleased
@@ -1505,12 +1506,26 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 An install job's progress.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ id, name, version, title, state: running|done|failed, steps: [{ kind: plugin|agent, name, title, state, reason? }], agent?: { id, handle, name }, approvalId?, error?, startedAt, finishedAt? }`
+- **Answer:** `{ id, name, version, title, state: running|confirm|done|failed, steps: [{ kind: plugin|agent, name, title, state, reason? }], agent?: { id, handle, name }, approvalId?, confirm?: { tools: [{ name, tier, description }], unshown: string[], preview }, error?, startedAt, finishedAt? }`
 - **Errors:** 404
 - **Since:** unreleased
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/catalogue/jobs/<id>"
+```
+
+#### `POST /api/catalogue/jobs/:id/confirm`
+
+Answer a job stopped at confirm (the grant that resolved is not the one shown): yes adds the agent with it, no rejects the approval.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It decides an approval, or the click is the approval. A token never decides for the owner.
+- **Body:** `{ approve: boolean }`
+- **Answer:** `the job`
+- **Errors:** 400; 404; 409 not waiting
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"approve":true}' "$BUDDI_URL/api/catalogue/jobs/<id>/confirm"
 ```
 
 #### `POST /api/catalogue/:name/update/plan`
@@ -1519,7 +1534,7 @@ The update sheet for an agent added from this package: changes, persona diff, to
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Body:** `{ agentId }`
-- **Answer:** `{ agentId, handle, name, title, fromVersion, version, changes, via, edited, widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }`
+- **Answer:** `{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }`
 - **Errors:** 400; 409 already up to date
 - **Since:** unreleased
 
@@ -1532,9 +1547,9 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 Update an agent from its package with the same picks; an edited file only with replace (the old file goes to the trash). The click is the approval.
 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It decides an approval, or the click is the approval. A token never decides for the owner.
-- **Body:** `{ agentId, replace?: true }`
+- **Body:** `{ agentId, plan, replace?: true }`
 - **Answer:** `{ approvalId, result }`
-- **Errors:** 400; 409 edited without replace, or up to date
+- **Errors:** 400 no plan; 409 edited without replace, up to date, or the plan moved (code plan-moved)
 - **Since:** unreleased
 
 ```sh

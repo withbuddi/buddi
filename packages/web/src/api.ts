@@ -768,10 +768,12 @@ export interface CataloguePlan {
   tools: Array<{ name: string; tier: string; description?: string }>;
   missions: Array<{ id: string; name: string; cron: string; enabled: boolean; prompt: string }>;
   preview: string | null;
+  /** The fingerprint of exactly this plan; absent while a plugin it needs is missing. */
+  plan?: string;
   note?: string;
 }
 
-export type CatalogueStepState = 'waiting' | 'fetching' | 'reading' | 'installing' | 'loading' | 'adding' | 'done' | 'failed';
+export type CatalogueStepState = 'waiting' | 'fetching' | 'reading' | 'installing' | 'loading' | 'adding' | 'confirm' | 'done' | 'failed';
 
 /** The install job (`GET /api/catalogue/jobs/:id`). */
 export interface CatalogueJob {
@@ -779,11 +781,14 @@ export interface CatalogueJob {
   name: string;
   version: string;
   title: string;
-  state: 'running' | 'done' | 'failed';
+  /** `confirm`: what resolved once its plugins loaded is not the grant the sheet showed; the owner answers. */
+  state: 'running' | 'confirm' | 'done' | 'failed';
   steps: Array<{ kind: 'plugin' | 'agent'; name: string; title: string; state: CatalogueStepState; reason?: string }>;
   agent?: { id: string; handle: string; name: string };
   /** The approval the agent step recorded: still open when the job waits on it. */
   approvalId?: string;
+  /** With `confirm`: the whole grant as it resolved, and the tools the sheet did not show. */
+  confirm?: { tools: Array<{ name: string; tier: string; description?: string }>; unshown: string[]; preview: string };
   error?: string;
   startedAt: string;
   finishedAt?: string;
@@ -791,6 +796,8 @@ export interface CatalogueJob {
 
 /** The update sheet (`POST /api/catalogue/:name/update/plan`). */
 export interface CatalogueUpdatePlan {
+  /** The fingerprint of this plan: the update approves exactly it, or answers 409. */
+  plan: string;
   agentId: string;
   handle: string;
   name: string;
@@ -801,6 +808,10 @@ export interface CatalogueUpdatePlan {
   via?: string;
   /** The owner changed the file: nothing is touched unless they replace it. */
   edited: boolean;
+  /** Skills of the owner's own that a package skill of the same name would replace (they count as edits). */
+  replacesOwn?: string[];
+  /** Skills the earlier version wrote that this one dropped: they go to the trash. */
+  retires?: string[];
   /** A tool or a required plugin was added: the approval lists the reach. */
   widened: boolean;
   added: Array<{ name: string; tier: string; description?: string }>;
@@ -2421,13 +2432,15 @@ export const api = {
   cataloguePlan: (name: string, body: { fills?: Record<string, string>; handle?: string; missionsOn?: string[] } = {}) =>
     post<CataloguePlan>(`/catalogue/${encodeURIComponent(name)}/plan`, body),
   /** The owner's click on Add is the approval; answers the job at once. */
-  catalogueInstall: (name: string, body: { version: string; fills?: Record<string, string>; handle?: string; missionsOn?: string[] }) =>
+  catalogueInstall: (name: string, body: { version: string; fills?: Record<string, string>; handle?: string; missionsOn?: string[]; plan?: string; tools?: string[] }) =>
     post<{ jobId: string }>(`/catalogue/${encodeURIComponent(name)}/install`, body),
   catalogueJob: (id: string) => get<CatalogueJob>(`/catalogue/jobs/${encodeURIComponent(id)}`),
+  /** The owner's answer to a job stopped at `confirm`. */
+  catalogueConfirm: (id: string, approve: boolean) => post<CatalogueJob>(`/catalogue/jobs/${encodeURIComponent(id)}/confirm`, { approve }),
   catalogueUpdatePlan: (name: string, agentId: string) => post<CatalogueUpdatePlan>(`/catalogue/${encodeURIComponent(name)}/update/plan`, { agentId }),
   /** Update, or with `replace` "Replace my changes": the click is the approval. Refused (409) for an edited file without `replace`. */
-  catalogueUpdate: (name: string, agentId: string, replace = false) =>
-    post<{ approvalId: string | null; result: unknown }>(`/catalogue/${encodeURIComponent(name)}/update`, { agentId, ...(replace ? { replace: true } : {}) }),
+  catalogueUpdate: (name: string, agentId: string, plan: string, replace = false) =>
+    post<{ approvalId: string | null; result: unknown }>(`/catalogue/${encodeURIComponent(name)}/update`, { agentId, plan, ...(replace ? { replace: true } : {}) }),
   agentRemovePreview: (id: string) => get<AgentRemovePreview>(`/agents/${encodeURIComponent(id)}/remove`),
   /** Remove from team: the click is the approval; its folder goes to the trash. */
   removeAgent: (id: string) => post<{ approvalId: string | null; result: unknown }>(`/agents/${encodeURIComponent(id)}/remove`),

@@ -229,7 +229,9 @@ export async function runAgentsCatalogue(
             blocked: Array<{ kind: string; name: string; title?: string }>;
             fills: Array<{ id: string; label: string; value: string; kind: string }>;
             missions: Array<{ id: string; name: string; enabled: boolean }>;
+            tools?: Array<{ name: string }>;
             preview: string | null;
+            plan?: string;
             note?: string;
           }>(`/api/catalogue/${encodeURIComponent(command.name)}/plan`, {
             fills: command.fills,
@@ -253,6 +255,7 @@ export async function runAgentsCatalogue(
           }
           for (const mission of plan.missions) io.out(`  Mission ${mission.name}: ${mission.enabled ? 'on' : 'off'}   --mission ${mission.id}`);
           io.out('');
+          if (plan.preview === null && plan.tools && plan.tools.length > 0) io.out(`It asks for: ${plan.tools.map((t) => t.name).join(', ')}`);
           io.out(plan.preview ?? plan.note ?? '');
         }
         const again = ['buddi agents add', command.name, ...Object.entries(command.fills).map(([k, v]) => `--fill ${k}=${JSON.stringify(v)}`), ...command.missions.map((m) => `--mission ${m}`), ...(command.handle ? [`--handle ${command.handle}`] : []), '--yes'].join(' ');
@@ -262,9 +265,20 @@ export async function runAgentsCatalogue(
           fills: command.fills,
           missionsOn: command.missions,
           ...(command.handle ? { handle: command.handle } : {}),
+          // What the owner approved: this exact plan, or (while a plugin was missing) this grant.
+          ...(plan.plan ? { plan: plan.plan } : {}),
+          ...(plan.tools ? { tools: plan.tools.map((t) => t.name) } : {}),
         });
         let said = '';
-        const job = await poll<{ state: string; steps: Array<{ title: string; state: string }>; agent?: { handle: string; name: string }; error?: string }>(
+        type Job = {
+          id: string;
+          state: string;
+          steps: Array<{ title: string; state: string }>;
+          agent?: { handle: string; name: string };
+          confirm?: { unshown: string[]; preview: string };
+          error?: string;
+        };
+        let job = await poll<Job>(
           gateway,
           `/api/catalogue/jobs/${started.body.jobId}`,
           io,
@@ -275,6 +289,25 @@ export async function runAgentsCatalogue(
             said = line || said;
           },
         );
+        if (job.state === 'confirm' && job.confirm) {
+          // The plugins resolved a grant that is not the one shown: a new question, never the --yes already given.
+          if (command.json) io.out(JSON.stringify(job, null, 2));
+          else {
+            io.out('');
+            io.out(`What ${plan.title} gets is not what was listed${job.confirm.unshown.length ? ` (also: ${job.confirm.unshown.join(', ')})` : ''}:`);
+            io.out(job.confirm.preview);
+          }
+          if (!io.interactive || command.yes) {
+            if (!command.json) io.err(`${plan.title} was not added yet: approve it in Needs you on the dashboard, or run buddi agents add ${command.name} again to see it.`);
+            return 1;
+          }
+          const yes = await io.confirm(`Add ${plan.title} with these tools?`);
+          job = (await gateway.post<Job>(`/api/catalogue/jobs/${job.id}/confirm`, { approve: yes })).body;
+          if (!yes) {
+            io.out('Nothing was added.');
+            return 0;
+          }
+        }
         if (command.json) io.out(JSON.stringify(job, null, 2));
         if (job.state !== 'done') {
           if (!command.json) io.err(job.error ?? 'It did not finish.');
@@ -287,7 +320,7 @@ export async function runAgentsCatalogue(
         const card = await findInstalled(gateway, command.agent);
         const agentId = card.installed!.agentId;
         const plan = (
-          await gateway.post<{ title: string; version: string; fromVersion: string; changes: string; edited: boolean; preview: string; handle: string }>(
+          await gateway.post<{ plan: string; title: string; version: string; fromVersion: string; changes: string; edited: boolean; preview: string; handle: string }>(
             `/api/catalogue/${encodeURIComponent(card.name)}/update/plan`,
             { agentId },
           )
@@ -303,7 +336,7 @@ export async function runAgentsCatalogue(
           return 0;
         }
         await approve(io, command.yes, `Update @${plan.handle} to ${plan.version}?`, `buddi agents update ${plan.handle}${command.replace ? ' --replace' : ''} --yes`);
-        const done = await gateway.post(`/api/catalogue/${encodeURIComponent(card.name)}/update`, { agentId, ...(command.replace ? { replace: true } : {}) });
+        const done = await gateway.post(`/api/catalogue/${encodeURIComponent(card.name)}/update`, { agentId, plan: plan.plan, ...(command.replace ? { replace: true } : {}) });
         if (command.json) io.out(JSON.stringify(done.body, null, 2));
         else io.out(`@${plan.handle} is ${plan.title} ${plan.version} now.`);
         return 0;

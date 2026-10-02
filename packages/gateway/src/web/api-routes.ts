@@ -440,27 +440,31 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'POST', path: '/api/catalogue/:name/plan', area: 'agents', summary: 'What adding this agent would do, writing nothing: plugins installed on the way, picks with defaults and choices, the handle, tools with tiers, missions, the approval preview.',
     body: '{ fills?: { [id]: string }, handle?, missionsOn?: string[] }',
-    answer: '{ name, version, title, plugins: [{ name, title, version, byBuddi, fix }], blocked, id?, handle, fills: [{ id, kind, label, optional?, mission?, value, choices? }], tools: [{ name, tier, description }], missions: [{ id, name, cron, enabled, prompt }], account?, preview: string | null, note? }',
+    answer: '{ name, version, title, plugins: [{ name, title, version, byBuddi, fix }], blocked, plan?, id?, handle, fills: [{ id, kind, label, optional?, mission?, value, choices? }], tools: [{ name, tier, description }], missions: [{ id, name, cron, enabled, prompt }], account?, preview: string | null, note? } — plan: the fingerprint of exactly this plan (absent while a plugin is missing); tools: the package\'s own list while one is',
     errors: '400 a pick or handle refused; 404; 409 already added or unavailable; 503 offline',
   },
   {
-    method: 'POST', path: '/api/catalogue/:name/install', area: 'agents', token: 'decides', summary: 'Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval.',
-    body: '{ version, fills?, handle?, missionsOn?: string[], account? }', answer: '202 { jobId }',
+    method: 'POST', path: '/api/catalogue/:name/install', area: 'agents', token: 'decides', summary: 'Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval of the plan shown (plan, for the same picks) or of the grant shown (tools). When neither is what resolves, the job stops at confirm.',
+    body: '{ version, fills?, handle?, missionsOn?: string[], account?, plan?, tools?: string[] }', answer: '202 { jobId }',
     errors: '400; 404; 409 already added, the version moved, or something it needs is not here (blocked); 503 offline',
   },
   {
     method: 'GET', path: '/api/catalogue/jobs/:id', area: 'agents', summary: 'An install job\'s progress.',
-    answer: '{ id, name, version, title, state: running|done|failed, steps: [{ kind: plugin|agent, name, title, state, reason? }], agent?: { id, handle, name }, approvalId?, error?, startedAt, finishedAt? }',
+    answer: '{ id, name, version, title, state: running|confirm|done|failed, steps: [{ kind: plugin|agent, name, title, state, reason? }], agent?: { id, handle, name }, approvalId?, confirm?: { tools: [{ name, tier, description }], unshown: string[], preview }, error?, startedAt, finishedAt? }',
     errors: '404',
   },
   {
+    method: 'POST', path: '/api/catalogue/jobs/:id/confirm', area: 'agents', token: 'decides', summary: 'Answer a job stopped at confirm (the grant that resolved is not the one shown): yes adds the agent with it, no rejects the approval.',
+    body: '{ approve: boolean }', answer: 'the job', errors: '400; 404; 409 not waiting',
+  },
+  {
     method: 'POST', path: '/api/catalogue/:name/update/plan', area: 'agents', summary: 'The update sheet for an agent added from this package: changes, persona diff, tools added and removed, new missions, and whether the owner edited it.',
-    body: '{ agentId }', answer: '{ agentId, handle, name, title, fromVersion, version, changes, via, edited, widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }',
+    body: '{ agentId }', answer: '{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }',
     errors: '400; 409 already up to date',
   },
   {
     method: 'POST', path: '/api/catalogue/:name/update', area: 'agents', token: 'decides', summary: 'Update an agent from its package with the same picks; an edited file only with replace (the old file goes to the trash). The click is the approval.',
-    body: '{ agentId, replace?: true }', answer: '{ approvalId, result }', errors: '400; 409 edited without replace, or up to date',
+    body: '{ agentId, plan, replace?: true }', answer: '{ approvalId, result }', errors: '400 no plan; 409 edited without replace, up to date, or the plan moved (code plan-moved)',
   },
   {
     method: 'GET', path: '/api/agents/:id/remove', area: 'agents', summary: 'What removing this agent does: its missions paused, the plugins no other agent uses. Nothing changes.',

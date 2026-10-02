@@ -45,10 +45,8 @@ import {
   parseCron,
   parseReminderWhen,
   setMissionEnabled,
-  setMissionLifespan,
-  setSchedule,
   AGENT_MISSION_DEFAULT_DAYS,
-  upsertMission,
+  upsertScheduledMission,
   type PluginManifest,
   type Reminder,
   type ReminderLimits,
@@ -631,27 +629,40 @@ export function createScheduleManifest(): PluginManifest {
         throw new Error(`"${input.cron}" would run more than once an hour`);
       }
       const missionId = agentMissionId(agentId, slugify(input.name));
-      const mission = await upsertMission(ctx.db, {
-        id: missionId,
-        name: input.name.trim(),
-        agentId,
-        prompt: input.prompt.trim(),
-        enabled: true,
-        // The notify policy applies: a schedule the agent asked for does not get
-        // to speak unconditionally.
-        alwaysDeliver: false,
+      // The end the owner approved, as an instant: the approval's own, never one
+      // worked out again now (a default 30 days would drift by the wait, a day
+      // named near midnight could have passed). Checked before anything is
+      // written, and written with the mission and its schedule in one
+      // transaction, so no watch the agent asked for is ever on without its end.
+      const approved = (ctx.approvedEffect?.envelope ?? null) as Partial<ScheduleEnvelope> | null;
+      const endsAt = typeof approved?.endsAt === 'string' ? new Date(approved.endsAt) : missionEnd(input.endsOn, timezone, ctx.now());
+      if (Number.isNaN(endsAt.getTime()) || endsAt.getTime() <= ctx.now().getTime()) {
+        throw new Error(
+          `this approval came too late: the watch was to end ${localDateTimeString(endsAt, timezone)}, which has passed. Propose it again`,
+        );
+      }
+      const { mission, spec } = await upsertScheduledMission(ctx.db, {
+        mission: {
+          id: missionId,
+          name: input.name.trim(),
+          agentId,
+          prompt: input.prompt.trim(),
+          enabled: true,
+          // The notify policy applies: a schedule the agent asked for does not get
+          // to speak unconditionally.
+          alwaysDeliver: false,
+        },
+        schedule: {
+          cron: input.cron.trim(),
+          timezone,
+          // Named by the agent: kept. Left out: it follows the owner's zone.
+          timezoneExplicit: (input.timezone ?? '').trim() !== '',
+          misfirePolicy: input.misfirePolicy ?? 'coalesce',
+        },
+        // A watch the agent asked for ends: on the day it named, or 30 days on.
+        // The owner's own missions and plugins' never get here.
+        lifespan: { stopWhen: input.stopWhen?.trim() || null, endsAt },
       });
-      const spec = await setSchedule(ctx.db, mission.id, {
-        cron: input.cron.trim(),
-        timezone,
-        // Named by the agent: kept. Left out: it follows the owner's zone.
-        timezoneExplicit: (input.timezone ?? '').trim() !== '',
-        misfirePolicy: input.misfirePolicy ?? 'coalesce',
-      });
-      // A watch the agent asked for ends: on the day it named, or 30 days on.
-      // The owner's own missions and plugins' never get here.
-      const endsAt = missionEnd(input.endsOn, timezone, ctx.now());
-      await setMissionLifespan(ctx.db, mission.id, { stopWhen: input.stopWhen?.trim() || null, endsAt });
       return {
         missionId: mission.id,
         endsAt: endsAt.toISOString(),

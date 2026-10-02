@@ -23,7 +23,7 @@
  * (`web/catalogue-source.ts`), so this module never imports a web route and a
  * test hands in a fixture.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   AGENT_FILE,
@@ -31,6 +31,7 @@ import {
   assertApprovedEffect,
   getMission,
   HANDLE_MAX,
+  hashEnvelope,
   parseAgentFile,
   parseSkillFile,
   satisfiesRange,
@@ -311,7 +312,7 @@ export interface CatalogueHelpers {
   speakingAccount(registry: ToolRegistry, agentId: string): { account: AccountChoice; from: string | null } | null;
   checkTools(declared: readonly string[], registry: ToolRegistry, id: string): string[];
   renderCreatePreview(envelope: CreateAgentEnvelope, specs: readonly ToolSpec[]): string;
-  reload(registry: ToolRegistry): { reloaded: boolean; message: string };
+  reload(registry: ToolRegistry): { reloaded: boolean; message: string; error?: string };
   assignAccount(registry: ToolRegistry, agentId: string, account: AccountChoice | null): Promise<string>;
   proposals(registry: ToolRegistry): Array<{ plugin: string; pluginVersion: string; agent: SuggestedAgent }>;
 }
@@ -378,6 +379,16 @@ export interface InstallAgentEnvelope {
     edited: boolean;
     /** sha256 of the file as it is now. */
     previousFile: string;
+    /**
+     * Every skill file the update writes or retires, as it is now: its sha256,
+     * or null when there is none. Bound into the approval, so a skill changed
+     * after the preview refuses the approval instead of being overwritten.
+     */
+    skillsBefore: Record<string, string | null>;
+    /** Skills of the owner's own (or learned) that a package skill of the same name would replace. */
+    replacesOwn: string[];
+    /** Skills the earlier version wrote that this one no longer carries: they go to the trash. */
+    retires: string[];
     toolsBefore: string[];
     added: string[];
     removed: string[];
@@ -427,6 +438,14 @@ export const installAgentInput = z
       .literal(true)
       .optional()
       .describe('Only when the owner said to replace their own changes to that agent\'s file. Their file goes to the trash first.'),
+    plan: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        'The plan fingerprint the dashboard or `buddi agents` showed the owner. Refused when anything it covers moved ' +
+          '(the package, the grant, the files on disk). Leave it out from chat: your approval card is the preview.',
+      ),
   })
   .strict();
 
@@ -635,10 +654,39 @@ function checkDenied(pkg: AgentPackage, resolvedTools: readonly string[]): void 
 }
 
 /**
- * Build the envelope for adding (or, with `agent`, updating) a package.
- * Everything knowable is checked here, before any approval exists.
+ * The plan the owner was shown, as one fingerprint: the whole envelope but who
+ * proposed it — the package's integrity, the resolved grant, the file's and
+ * every affected skill's hash as they are now, the missions. The dashboard and
+ * `buddi agents` send it back with the click, so the approval the route
+ * records is the plan the owner read, or nothing (agent-catalogue.md §8).
+ */
+export function planFingerprint(envelope: InstallAgentEnvelope): string {
+  const { proposedBy: _proposedBy, created, ...rest } = envelope;
+  const bound = created ? { ...rest, created: { ...created, proposedBy: '' } } : rest;
+  return hashEnvelope(bound);
+}
+
+/**
+ * Build the envelope for adding (or, with `agent`, updating) a package, and
+ * refuse it when the plan the owner was shown (`plan`) is no longer it.
  */
 export async function buildInstallEnvelope(input: InstallAgentInput, deps: BuildDeps): Promise<InstallAgentEnvelope> {
+  const envelope = await composeInstallEnvelope(input, deps);
+  if (input.plan !== undefined && planFingerprint(envelope) !== input.plan) {
+    refuse(
+      'plan-moved',
+      `what ${envelope.mode === 'update' ? `updating @${envelope.handle}` : `adding ${envelope.package.title}`} would do changed since ` +
+        'it was shown (the package, the tools it gets, or a file on disk). Look at it again before you approve it.',
+    );
+  }
+  return envelope;
+}
+
+/**
+ * Compose the envelope. Everything knowable is checked here, before any
+ * approval exists.
+ */
+async function composeInstallEnvelope(input: InstallAgentInput, deps: BuildDeps): Promise<InstallAgentEnvelope> {
   const { registry, helpers } = deps;
   const service = helpers.service(registry);
   const pkg = await findPackage(service, input.name);
@@ -766,11 +814,43 @@ async function buildUpdate(
   if (how === 'package' && added.provenance.proposal === m.integrity && !added.edited) {
     refuse('up-to-date', `@${agent.handle} is already ${m.title} ${m.version}, unchanged on both sides.`);
   }
-  if (added.edited && input.replaceEdits !== true) {
+  // Every skill file the update touches, as it is now. A file of the same name the
+  // earlier version never wrote is the owner's (or a learned one): replacing it is
+  // replacing their work. A skill the earlier version wrote and this one dropped
+  // goes to the trash, or it would keep running with nobody's provenance on it.
+  const skills = packageSkills(pkg, dir);
+  const tracked = added.provenance.skills ?? {};
+  const readNow = (file: string): string | null => {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const skillsBefore: Record<string, string | null> = {};
+  const replacesOwn: string[] = [];
+  for (const skill of skills) {
+    const now = readNow(skill.file);
+    skillsBefore[skill.name] = now === null ? null : fileHash(now);
+    if (now !== null && !(skill.name in tracked) && now !== skill.content) replacesOwn.push(skill.name);
+  }
+  const retires: string[] = [];
+  for (const name of Object.keys(tracked).sort()) {
+    if (skills.some((skill) => skill.name === name)) continue;
+    const now = readNow(path.join(dir, SKILLS_DIR, `${name}.md`));
+    skillsBefore[name] = now === null ? null : fileHash(now);
+    if (now !== null) retires.push(name);
+  }
+  const edited = added.edited || replacesOwn.length > 0;
+  if (edited && input.replaceEdits !== true) {
     refuse(
       'owner-edited',
-      `you have changed @${agent.handle}'s file or one of its skills, so nothing will touch it. ${m.title} ${m.version} is out; ` +
-        'to replace your changes with it, the owner has to say so (replaceEdits), and their file goes to the trash first.',
+      replacesOwn.length > 0 && !added.edited
+        ? `@${agent.handle} has ${replacesOwn.length === 1 ? 'a skill' : 'skills'} of your own (${replacesOwn.join(', ')}) that ` +
+            `${m.title} ${m.version} would replace with ${replacesOwn.length === 1 ? 'one' : 'ones'} of the same name, so nothing will ` +
+            'touch it. To replace them, the owner has to say so (replaceEdits), and theirs go to the trash first.'
+        : `you have changed @${agent.handle}'s file or one of its skills, so nothing will touch it. ${m.title} ${m.version} is out; ` +
+            'to replace your changes with it, the owner has to say so (replaceEdits), and their file goes to the trash first.',
     );
   }
   if (input.handle !== undefined) refuse('not-a-field', 'an update keeps the handle; rename it on the Agents page');
@@ -830,15 +910,18 @@ async function buildUpdate(
     account: null,
     inheritedFrom: null,
     content,
-    skills: packageSkills(pkg, dir),
+    skills,
     missions,
     picks,
     avatar,
     update: {
       fromVersion: added.provenance.version,
       via,
-      edited: added.edited,
+      edited,
       previousFile: fileHash(current),
+      skillsBefore,
+      replacesOwn,
+      retires,
       toolsBefore: [...agent.tools],
       added: grant.added,
       removed: grant.removed,
@@ -871,8 +954,19 @@ export function renderInstallPreview(
       '',
       ...(u.edited
         ? [
-            `YOU CHANGED THIS FILE. Approving replaces your changes with the catalogue's; your version is kept in ` +
-              'the trash beside your agents, and moving it back restores it.',
+            u.replacesOwn.length > 0
+              ? `YOUR OWN SKILL${u.replacesOwn.length === 1 ? '' : 'S'} ${u.replacesOwn.join(', ')} would be replaced by the ` +
+                `catalogue's of the same name. Approving replaces ${u.replacesOwn.length === 1 ? 'it' : 'them'} (and any change you made ` +
+                'to its file); your versions are kept in the trash beside your agents, and moving them back restores them.'
+              : `YOU CHANGED THIS FILE. Approving replaces your changes with the catalogue's; your version is kept in ` +
+                'the trash beside your agents, and moving it back restores it.',
+            '',
+          ]
+        : []),
+      ...(u.retires.length > 0
+        ? [
+            `This version no longer carries ${u.retires.length === 1 ? 'the skill' : 'the skills'} ${u.retires.join(', ')}: ` +
+              `${u.retires.length === 1 ? 'it goes' : 'they go'} to the trash beside your agents.`,
             '',
           ]
         : []),
@@ -1131,29 +1225,64 @@ export function createCatalogueTools(
         skills: Object.fromEntries(envelope.skills.map((skill) => [skill.name, skill.content])),
       });
       let trashed: string | null = null;
+      /** Put the tree back as it was, when the catalogue will not load with the change. */
+      let undo: () => void;
       if (envelope.mode === 'install') {
         createAgentDirAtomic(dir, {
           [AGENT_FILE]: envelope.content,
           [PROVENANCE_FILE]: sidecar,
           ...Object.fromEntries(envelope.skills.map((skill) => [path.join(SKILLS_DIR, `${skill.name}.md`), skill.content])),
         });
+        undo = () => rmSync(dir, { recursive: true, force: true });
       } else {
-        if (envelope.update?.edited) {
-          // The owner's own version first, where a deleted agent goes: moving it back restores it.
-          const aside = path.join(binding.trashRoot, 'agents', `${envelope.id}-${trashStamp(ctx.now())}-replaced`);
-          trashed = path.join(aside, AGENT_FILE);
-          const theirs = envelope.skills
-            .filter((skill) => existsSync(skill.file) && readFileSync(skill.file, 'utf8') !== skill.content)
-            .map((skill) => ({ path: path.join(aside, SKILLS_DIR, `${skill.name}.md`), content: readFileSync(skill.file, 'utf8') }));
-          writeFilesAtomic([{ path: trashed, content: readFileSync(envelope.file, 'utf8') }, ...theirs]);
+        const u = envelope.update as NonNullable<InstallAgentEnvelope['update']>;
+        const retiredFile = (name: string): string => path.join(dir, SKILLS_DIR, `${name}.md`);
+        // Every path this touches, as it is now: what an undo writes back.
+        const before = new Map<string, string | null>();
+        for (const file of [envelope.file, path.join(dir, PROVENANCE_FILE), ...envelope.skills.map((s) => s.file), ...u.retires.map(retiredFile)]) {
+          before.set(file, existsSync(file) ? readFileSync(file, 'utf8') : null);
         }
+        // What goes to the trash, where a deleted agent goes: moving it back restores it.
+        // The owner's file when they changed it; any skill of theirs a package skill
+        // replaces; every skill this version retires.
+        const aside = path.join(binding.trashRoot, 'agents', `${envelope.id}-${trashStamp(ctx.now())}-replaced`);
+        const kept: Array<{ path: string; content: string }> = [];
+        if (u.edited) {
+          trashed = path.join(aside, AGENT_FILE);
+          kept.push({ path: trashed, content: before.get(envelope.file) ?? '' });
+        }
+        for (const skill of envelope.skills) {
+          const now = before.get(skill.file);
+          if (now !== null && now !== undefined && now !== skill.content) kept.push({ path: path.join(aside, SKILLS_DIR, `${skill.name}.md`), content: now });
+        }
+        for (const name of u.retires) {
+          const now = before.get(retiredFile(name));
+          if (now !== null && now !== undefined) kept.push({ path: path.join(aside, SKILLS_DIR, `${name}.md`), content: now });
+        }
+        if (kept.length > 0) writeFilesAtomic(kept);
         writeFilesAtomic([
           { path: envelope.file, content: envelope.content },
           { path: path.join(dir, PROVENANCE_FILE), content: sidecar },
           ...envelope.skills.map((skill) => ({ path: skill.file, content: skill.content })),
         ]);
+        for (const name of u.retires) rmSync(retiredFile(name), { force: true });
+        undo = () => {
+          writeFilesAtomic([...before].filter((e): e is [string, string] => e[1] !== null).map(([file, content]) => ({ path: file, content })));
+          for (const [file, content] of before) if (content === null) rmSync(file, { force: true });
+          if (kept.length > 0) rmSync(aside, { recursive: true, force: true });
+        };
       }
       const reload = helpers.reload(registry);
+      if (!reload.reloaded) {
+        // A tree the catalogue refuses would not boot either: nothing stays written.
+        undo();
+        helpers.reload(registry);
+        refuse(
+          'would-not-load',
+          `${envelope.mode === 'install' ? `${envelope.package.title} was not added` : `@${envelope.handle} was not updated`}, and ` +
+            `nothing was changed: the agents would not load with it (${reload.error ?? reload.message}).`,
+        );
+      }
       const assigned = envelope.mode === 'install' ? await helpers.assignAccount(registry, envelope.id, envelope.account) : '';
       let pictured = false;
       // The package's picture is kept in the database at install, so every page draws it without asking
@@ -1227,7 +1356,7 @@ export async function planInstall(
   helpers: CatalogueHelpers,
   input: InstallAgentInput,
   ctx: Pick<CoreToolContext, 'timezone' | 'db'> & { agentId?: string },
-): Promise<{ envelope: InstallAgentEnvelope; preview: string }> {
+): Promise<{ envelope: InstallAgentEnvelope; preview: string; plan: string }> {
   const envelope = await buildInstallEnvelope(input, {
     registry,
     helpers,
@@ -1235,5 +1364,5 @@ export async function planInstall(
     timezone: ctx.timezone,
     ...(ctx.db ? { db: ctx.db } : {}),
   });
-  return { envelope, preview: renderInstallPreview(envelope, registry.list(), helpers.renderCreatePreview) };
+  return { envelope, preview: renderInstallPreview(envelope, registry.list(), helpers.renderCreatePreview), plan: planFingerprint(envelope) };
 }

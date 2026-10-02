@@ -1922,7 +1922,7 @@ async function assignAccount(binding: ResolvedBinding, agentId: string, account:
   }
 }
 
-export function reloadResult(binding: ResolvedBinding): { reloaded: boolean; message: string } {
+export function reloadResult(binding: ResolvedBinding): { reloaded: boolean; message: string; error?: string } {
   try {
     binding.reload();
     return {
@@ -1934,6 +1934,7 @@ export function reloadResult(binding: ResolvedBinding): { reloaded: boolean; mes
   } catch (err) {
     return {
       reloaded: false,
+      error: err instanceof Error ? err.message : String(err),
       message:
         'The file is written, but reloading the catalog failed, so the running surfaces still hold the ' +
         `previous one: ${err instanceof Error ? err.message : String(err)}. Tell the owner to fix that ` +
@@ -1971,7 +1972,7 @@ export function planCatalogueInstall(
   registry: ToolRegistry,
   input: InstallAgentInput,
   ctx: Pick<CoreToolContext, 'timezone' | 'db'> & { agentId?: string },
-): Promise<{ envelope: InstallAgentEnvelope; preview: string }> {
+): Promise<{ envelope: InstallAgentEnvelope; preview: string; plan: string }> {
   return planInstall(registry, CATALOGUE_HELPERS, input, ctx);
 }
 
