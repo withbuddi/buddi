@@ -43,7 +43,7 @@ export function avatarUrl(entry: Pick<CatalogueAgent, 'avatar'>): string | undef
 /** What a requirement that is not a plugin is called, and where it is fixed. */
 const NEED_WORDS: Record<string, { title: string; fix: string; route: string }> = {
   mailbox: { title: 'your mailbox', fix: 'Add a mailbox', route: pluginSettingsRoute('email', 'settings') },
-  'image-account': { title: 'a drawing account', fix: 'Link an account', route: settingsRoute('accounts') },
+  'image-account': { title: 'a drawing account', fix: 'Choose a drawing account', route: pluginSettingsRoute('image', 'settings') },
 };
 
 export function needWords(name: string): { title: string; fix: string; route: string } {

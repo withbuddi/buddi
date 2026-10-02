@@ -100,14 +100,14 @@ const VIEW: CatalogueView = {
 const FATHER = { id: 'agent-father', handle: 'father', name: 'Agent Father', description: 'Makes agents.', available: true, roles: ['maker'], provider: 'anthropic', model: 'm' } as unknown as ChatAgent;
 
 let visited: string[] = [];
-function Harness({ name }: { name?: string }): JSX.Element {
+function Harness({ name, agents = [FATHER] }: { name?: string; agents?: ChatAgent[] }): JSX.Element {
   const [at, setAt] = useState(name);
   const navigate = (route: string): void => {
     visited.push(route);
     const m = /^#\/agents\/catalogue(?:\/([a-z0-9-]+))?$/.exec(route);
     if (m) setAt(m[1]);
   };
-  return <Catalogue name={at} agents={[FATHER]} navigate={navigate} />;
+  return <Catalogue name={at} agents={agents} navigate={navigate} />;
 }
 
 beforeEach(() => {
@@ -217,6 +217,14 @@ describe('the catalogue gaps', () => {
     expect(within(list).getByText('@garden keeps working as it is; no updates will come.')).toBeInTheDocument();
     fireEvent.click(within(list).getByText('Gardener'));
     expect(visited).toEqual(['#/agents/gardener']);
+  });
+
+  it('draws a delisted agent with the picture it was installed with', async () => {
+    vi.mocked(api.catalogue).mockResolvedValue({ ...VIEW, delisted: [{ agentId: 'gardener', handle: 'garden', name: 'Gardener', package: 'gardener', version: '1.0.0' }] });
+    const gardener = { id: 'gardener', handle: 'garden', name: 'Gardener', available: true, picture: '/api/agents/gardener/avatar?v=abc' } as unknown as ChatAgent;
+    render(<Harness agents={[FATHER, gardener]} />);
+    const list = await screen.findByTestId('cat-delisted');
+    expect(list.querySelector('.ui-avatar[data-kind="image"] img')?.getAttribute('src')).toBe('/api/agents/gardener/avatar?v=abc');
   });
 
   it('?add=1 opens the install sheet over the detail page (the front desk\'s "Add Chef")', async () => {
@@ -377,8 +385,8 @@ describe('the install sheet', () => {
     fireEvent.click(within(card('illustrator')).getByRole('button', { name: 'Add Illustrator' }));
     expect(await screen.findByText(/Illustrator needs a drawing account first/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add Illustrator' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Link an account' }));
-    expect(visited).toContain('#/settings/accounts');
+    fireEvent.click(screen.getByRole('button', { name: 'Choose a drawing account' }));
+    expect(visited.at(-1)).toMatch(/image/);
   });
 
   it('a refused start (the listing moved on) is said on the sheet', async () => {

@@ -171,8 +171,12 @@ verbatim, then a short "## For this owner" section from the picks, nothing
 else. Your name, language, timezone and places are never written into it,
 because every agent is told them on every turn (above). Missions arrive off
 unless you turned them on. Its picture comes from the listing, checked
-against its hash and re-encoded like an upload. The file is yours from then
-on.
+against its hash and re-encoded like an upload, and kept in buddi's database:
+every place an agent's face appears (the rail, the chat, its page, Home, the
+Skills page) draws it from there, offline too, without asking withbuddi.com
+again. An agent whose picture did not arrive at install gets it with its next
+update; a picture you chose yourself is never replaced. An agent without one
+keeps its initials. The file is yours from then on.
 
 Beside the file, `plugin.json` records where it came from: `source:
 "market"`, the package and version, the package integrity you approved, the
@@ -213,6 +217,25 @@ added with `platform.accept_plugin_agent`.
 `buddi agents add <name> [--fill pick=answer]… [--mission id]… [--yes]`,
 `buddi agents update <handle> [--replace]` and `buddi agents remove <handle>`
 ([cli.md](cli.md)). The routes are `/api/catalogue…` ([api.md](api.md)).
+
+**Trying packages before they are listed.** `BUDDI_MARKET_URL` points the
+catalogue and Browse at another copy of withbuddi.com instead (unset, it is
+withbuddi.com). The copy only has to serve `/plugins/index.json` and the
+pictures beside it; build one from a buddi-market checkout and serve it
+locally:
+
+```
+node scripts/index.mjs /tmp/market/plugins/index.json http://127.0.0.1:8090
+for a in agents/*; do mkdir -p /tmp/market/plugins/$a; cp $a/avatar.png /tmp/market/plugins/$a/; done
+(cd /tmp/market && python3 -m http.server 8090 --bind 127.0.0.1)
+BUDDI_MARKET_URL=http://127.0.0.1:8090 buddi serve
+```
+
+Use it on a throwaway installation (its own `BUDDI_DATA_DIR`, database and
+`BUDDI_PLUGINS_FILE`), not your own: the copy's listings are trusted the way
+withbuddi.com's are. The gateway's `catalogue-lineup.web.db.test.ts` installs
+every lineup package from a copy of the index kept in
+`packages/gateway/src/__fixtures__/catalogue-lineup.json`.
 
 What a package may not ask for, whatever it says: the tools that write agents
 (`platform.*` writes), `host.*`, `secret.*`, `developer.*`, connection tools

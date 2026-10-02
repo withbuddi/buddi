@@ -17,7 +17,7 @@ import type { ChatAgent } from '../chat/types';
 import { leaveDraft } from '../chat/draft';
 import { AGENTS_ROUTE, agentRoute, catalogueAddRequested, catalogueRoute, chatRoute } from '../routes';
 import { ROLE_MAKER } from '../shell/roster';
-import { Avatar, Breadcrumb, Button, Card, Code, Details, Empty, ErrorBanner, FilterChips, Icon, Notice, Page, PageHeader, Panel, Pill, SearchField, Spacer, useAsync } from '../ui';
+import { AgentAvatar, Avatar, Breadcrumb, Button, Card, Code, Details, Empty, ErrorBanner, FilterChips, Icon, Notice, Page, PageHeader, Panel, Pill, SearchField, Spacer, useAsync } from '../ui';
 import { useAcceptPluginAgent } from './parts/AgentOffer';
 import { pluginTitle as pagesTitle, type PluginPages } from '../pages/usePages';
 import { CatFace } from './parts/CatFace';
@@ -158,7 +158,7 @@ export function CatCard({
 }
 
 /** A plugin's own agent ("From Mail"), added through the plugin's accept as before. */
-function PluginAgentCard({ row, navigate, pages }: { row: CataloguePluginAgent; navigate: (route: string) => void; pages?: PluginPages | undefined }): JSX.Element {
+function PluginAgentCard({ row, agents, navigate, pages }: { row: CataloguePluginAgent; agents: readonly ChatAgent[]; navigate: (route: string) => void; pages?: PluginPages | undefined }): JSX.Element {
   const offer = useAcceptPluginAgent(row.plugin, row.agent, () => window.dispatchEvent(new Event(AGENTS_CHANGED)));
   const added = offer.created ?? (row.state === 'installed' ? { id: row.agent, handle: row.handle, name: row.name } : null);
   // Named by its page when it has one ("Mail"), as Home names a plugin.
@@ -167,7 +167,7 @@ function PluginAgentCard({ row, navigate, pages }: { row: CataloguePluginAgent; 
     <div className="cat-card" data-state={added ? 'added' : 'ready'} data-testid={`cat-card-${row.agent}`}>
       <Card onClick={added ? () => navigate(agentRoute(added.id)) : undefined} label={added ? `Open @${added.handle}` : undefined}>
         <div className="cat-card-head">
-          <span className="cat-face" data-size="lg"><Avatar id={row.agent} name={row.name} size="lg" /></span>
+          <span className="cat-face" data-size="lg"><Avatar id={row.agent} name={row.name} size="lg" face={agents.find((a) => a.id === row.agent)} /></span>
           <div className="cat-card-name">
             <h3 className="ui-card-title">{row.name}</h3>
             <div className="cat-card-kind">From {from}</div>
@@ -371,7 +371,7 @@ export function Catalogue({
               onUpdate={() => setSheet({ kind: 'update', name: a.name })}
             />
           ))}
-          {fromPlugins.map((p) => <PluginAgentCard key={`${p.plugin}/${p.agent}`} row={p} navigate={navigate} pages={pluginPages} />)}
+          {fromPlugins.map((p) => <PluginAgentCard key={`${p.plugin}/${p.agent}`} row={p} agents={agents} navigate={navigate} pages={pluginPages} />)}
         </div>
       ) : (
         <Empty
@@ -392,7 +392,7 @@ export function Catalogue({
           <ul className="cat-plugins" data-testid="cat-delisted">
             {view.delisted.map((d) => (
               <li key={d.agentId}>
-                <Avatar id={d.agentId} name={d.name ?? d.handle} size="sm" />
+                <AgentAvatar agents={agents} id={d.agentId} size="sm" />
                 <span className="cat-plugin-text">
                   <a className="cat-plugin-name" href={agentRoute(d.agentId)} onClick={(e) => { e.preventDefault(); navigate(agentRoute(d.agentId)); }}>{d.name ?? `@${d.handle}`}</a>
                   <span className="cat-small">@{d.handle} keeps working as it is; no updates will come.</span>

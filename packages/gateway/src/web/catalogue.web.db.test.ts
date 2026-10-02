@@ -365,8 +365,11 @@ suite('the agent catalogue', () => {
     expect(body.added.map((t: { name: string }) => t.name)).toEqual(expect.arrayContaining(['schedule.propose']));
     expect(body.personaDiff).toContain('+ - Say what would change your mind.');
 
+    // Its face did not arrive at install: the update brings it.
+    await pool.query('delete from core.agent_avatars where agent_id = $1', ['researcher']);
     const done = await updateRoute(deps, 'researcher', { agentId: 'researcher' });
     expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect((await pool.query('select agent_id from core.agent_avatars where agent_id = $1', ['researcher'])).rows).toHaveLength(1);
     const action = await getAction(pool, (done.body as { approvalId: string }).approvalId);
     expect(action?.preview).toContain('schedule.propose');
     expect(action?.preview).toMatch(/ADD|WIDEN/i);
@@ -395,8 +398,11 @@ suite('the agent catalogue', () => {
     // An update, not "you changed it": the grant is the owner's, not an edit of the package.
     expect(await card('researcher')).toMatchObject({ installed: { drift: 'update' } });
     expect((await updatePlanRoute(deps, 'researcher', { agentId: 'researcher' })).body).toMatchObject({ edited: false });
+    // A face the owner chose stays through an update.
+    await pool.query(`update core.agent_avatars set sha256 = 'owner-chose-this' where agent_id = $1`, ['researcher']);
     const done = await updateRoute(deps, 'researcher', { agentId: 'researcher' });
     expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect((await pool.query('select sha256 from core.agent_avatars where agent_id = $1', ['researcher'])).rows).toEqual([{ sha256: 'owner-chose-this' }]);
     const after = readFileSync(file, 'utf8');
     expect(after).toContain('Date every source.');
     expect(after).toMatch(/^skills: \[writing-for-the-surface\]$/m);
@@ -543,4 +549,22 @@ suite('the agent catalogue', () => {
     expect((refused as { message: string }).message).toMatch(/lists no agent "nobody"/);
   });
 
+  // Last: it leaves an image plugin registered.
+  it('counts a drawing account only once one is chosen in Settings → Image', async () => {
+    publish([agentEntry('painter', { manifest: { needs: ['image-account'] } })]);
+    const settings = { account: '', choices: [{ id: 'acct-1', label: 'OpenAI' }] };
+    registry.register({
+      name: 'image',
+      version: '1.0.0',
+      description: 'Draws.',
+      schema: 'image',
+      migrationsDir: '',
+      tools: [],
+      queries: [{ name: 'settings', params: z.object({}), async produce() { return settings; } }],
+    } as unknown as PluginManifest);
+    // Linked but not chosen: image.generate refuses, so the agent still needs it.
+    expect(await card('painter')).toMatchObject({ state: 'needs', missing: [{ kind: 'need', name: 'image-account' }] });
+    settings.account = 'acct-1';
+    expect(await card('painter')).toMatchObject({ state: 'ready' });
+  });
 });

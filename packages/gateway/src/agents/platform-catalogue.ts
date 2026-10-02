@@ -65,7 +65,7 @@ import { composeAgentFile, composeSkillFile, createAgentDirAtomic, trashStamp, w
 import { diffGrant, grantChangeBlock } from './platform-grant.js';
 import { agentMissionId, describeCadence } from '../missions/reminders.js';
 import { normaliseAvatar } from './avatar-image.js';
-import { writeAvatar } from './avatars.js';
+import { readAvatar, writeAvatar } from './avatars.js';
 import type { AccountChoice, CreateAgentEnvelope } from './platform.js';
 
 /* ------------------------------------------------------------------ *
@@ -1156,7 +1156,12 @@ export function createCatalogueTools(
       const reload = helpers.reload(registry);
       const assigned = envelope.mode === 'install' ? await helpers.assignAccount(registry, envelope.id, envelope.account) : '';
       let pictured = false;
-      if (envelope.mode === 'install' && envelope.avatar && ctx.db) {
+      // The package's picture is kept in the database at install, so every page draws it without asking
+      // the market again. An update gives one only to an agent that has none (the fetch failed at install,
+      // or it came through `replaces`); a face the owner chose is never replaced.
+      const wantsPicture =
+        envelope.mode === 'install' || (ctx.db ? (await readAvatar(ctx.db as never, envelope.id).catch(() => null)) === null : false);
+      if (wantsPicture && envelope.avatar && ctx.db) {
         // Best effort: an agent without its face is still the agent the owner approved.
         try {
           const service = helpers.service(registry);

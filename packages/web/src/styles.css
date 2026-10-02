@@ -516,7 +516,8 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 
 .wb-face-mark[data-agent] { background: var(--agent-soft); color: var(--agent-ink); }
 .wb-face-mark[data-kind='emoji'] { font-family: var(--font-sans); font-size: 15px; }
-.wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
+/* A catalogue agent's picture is a transparent Blob cut-out: it sits on the agent's soft tile, as in the kit. */
+.wb-face-mark[data-kind='image'] { overflow: hidden; background: var(--agent-soft, var(--surface-sunken)); }
 .wb-face-mark[data-kind='image'] img { width: 100%; height: 100%; object-fit: cover; }
 
 /* Which one you are talking to: a ring, plus the rail's own edge marker —
@@ -830,7 +831,7 @@ main[data-layout='split'] { display: flex; padding: 0; overflow: hidden; }
 }
 .wb-group-chip:first-child { top: 0; left: 0; z-index: 1; }
 .wb-group-chip:nth-child(2) { right: 0; bottom: 0; }
-.wb-group-chip[data-kind='image'] { background: var(--surface-sunken); }
+.wb-group-chip[data-kind='image'] { background: var(--agent-soft, var(--surface-sunken)); }
 .wb-group-chip img { width: 100%; height: 100%; object-fit: cover; }
 .wb-group-chip[data-kind='emoji'] { background: var(--surface-sunken); font-size: var(--text-xs); }
 .wb-face[data-active='true'] .wb-group-chip { box-shadow: 0 0 0 var(--space-0) var(--accent-soft); }

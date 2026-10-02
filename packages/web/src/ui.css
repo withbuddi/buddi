@@ -934,7 +934,7 @@ fieldset:disabled { opacity: 0.6; }
 .ui-avatar[data-kind='emoji'][data-size='sm'] { font-size: 13px; }
 .ui-avatar[data-kind='emoji'][data-size='lg'] { font-size: 24px; }
 .ui-avatar[data-kind='emoji'][data-size='xl'] { font-size: 34px; }
-.ui-avatar[data-kind='image'] { overflow: hidden; background: var(--surface-sunken); }
+.ui-avatar[data-kind='image'] { overflow: hidden; background: var(--agent-soft, var(--surface-sunken)); }
 .ui-avatar[data-kind='image'] img { width: 100%; height: 100%; object-fit: cover; }
 .ui-avatar[data-tint='1']:not([data-agent]) { background: var(--face-1-bg); color: var(--face-1-ink); }
 .ui-avatar[data-tint='2']:not([data-agent]) { background: var(--face-2-bg); color: var(--face-2-ink); }

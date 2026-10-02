@@ -108,7 +108,9 @@ export function createCatalogueService(deps: CatalogueSourceDeps): CatalogueServ
       const image = await queryData(deps, 'image', 'settings');
       return {
         mailbox: rows(mail?.accounts).length > 0,
-        'image-account': rows(image?.choices).length > 0,
+        // An account the image plugin will draw with: the one chosen in Settings → Image. A linked
+        // account nobody chose yet is refused by image.generate, so it does not count.
+        'image-account': typeof image?.account === 'string' && image.account !== '',
       };
     },
     async avatar(pkg: AgentPackage): Promise<Buffer | null> {
