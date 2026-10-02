@@ -15,7 +15,8 @@
  * screen, as on any load.
  *
  * "A new one" is a different `boot` in the answer. When the page never learnt
- * the old one, a failed answer followed by any answer stands in for it.
+ * the old one, the first answer while waiting becomes it, and a failed answer
+ * followed by any answer still stands in for a change.
  */
 import { isUnreachable } from '../api';
 import { somethingInProgress } from './freshness';
@@ -126,9 +127,17 @@ export async function learnBoot(): Promise<void> {
   if (boot) knownBoot = boot;
 }
 
-/** Ask until the old process is gone and a new one answers, then reload. */
+/**
+ * Ask until the old process is gone and a new one answers, then reload.
+ *
+ * The old process is the boot the page learnt; when it never learnt one (the
+ * first `learnBoot` failed), the first boot that answers here is taken as the
+ * baseline, so a restart that falls between two asks — the old boot, then a
+ * new one, no silence between — still reloads. Any change from the last boot
+ * seen is a restart.
+ */
 function watch(): () => void {
-  const old = knownBoot;
+  let last = knownBoot;
   let stopped = false;
   let sawGone = false;
   let delay = READY_FIRST_MS;
@@ -138,10 +147,12 @@ function watch(): () => void {
     const boot = await askReady();
     if (stopped) return;
     if (boot === null) sawGone = true;
-    else if (old !== null ? boot !== old : sawGone) {
+    else if (last !== null ? boot !== last : sawGone) {
       stopped = true;
       restartDeps.reload();
       return;
+    } else if (last === null && boot !== '') {
+      last = boot;
     }
     delay = Math.min(Math.round(delay * 1.5), READY_MAX_MS);
     timer = setTimeout(() => void tick(), delay);
@@ -206,8 +217,13 @@ export function noticeClosing(data: Record<string, unknown>): void {
  * unless something on the page would be lost, which a stale page is not worth.
  */
 export async function checkForRestart(): Promise<void> {
-  if (state || knownBoot === null) return;
+  if (state) return;
   const boot = await askReady();
+  // Never learnt (the first ask failed): this answer is the baseline.
+  if (knownBoot === null) {
+    if (boot) knownBoot = boot;
+    return;
+  }
   if (!boot || boot === knownBoot || state) return;
   if (somethingInProgress()) {
     knownBoot = boot;

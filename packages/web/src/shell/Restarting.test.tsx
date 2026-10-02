@@ -113,6 +113,20 @@ describe('waiting for buddi to come back', () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
+  it('without the old boot, learns it from the first answer and reloads when the boot changes with no silence between', async () => {
+    answers = [null];
+    await act(async () => { await learnBoot(); });
+    expect(pageBoot()).toBeNull();
+    // The old process answers, then the new one — the restart fell between two asks.
+    answers = ['before', 'before', 'after'];
+    act(() => beginRestart({ kind: 'restart' }));
+    await tick(500);
+    await tick(750);
+    expect(reload).not.toHaveBeenCalled();
+    await tick(5_000);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
   it('calls a refused restart off, and keeps waiting when nobody answered the ask', async () => {
     await learnt('old');
     answers = ['old'];
@@ -207,6 +221,19 @@ describe('a restart the page did not start', () => {
     act(() => beginRestart({ kind: 'plugins', line: 'Loading weather 0.1.3…' }));
     noticeClosing({ for: 'restart' });
     expect(restartState()).toMatchObject({ kind: 'plugins', line: 'Loading weather 0.1.3…' });
+  });
+
+  it('learns the boot when the stream comes back after a first ask that failed', async () => {
+    answers = [null];
+    await act(async () => { await learnBoot(); });
+    expect(pageBoot()).toBeNull();
+    answers = ['first'];
+    await act(async () => { await checkForRestart(); });
+    expect(pageBoot()).toBe('first');
+    expect(restartState()).toBeNull();
+    answers = ['second'];
+    await act(async () => { await checkForRestart(); });
+    expect(restartState()?.kind).toBe('detected');
   });
 
   it('notices a new boot once the live stream is back, and reloads through the screen', async () => {
