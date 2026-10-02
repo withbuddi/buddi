@@ -176,6 +176,28 @@ describe('the Skills page, server side', () => {
     expect(grantSkillRoute(deps, 'researcher/compare-sources', { agents: ['researcher', 'nobody'] }).status).toBe(400);
   });
 
+  it("shows a shared skill and an agent's own of the same name apart; the agent's own wins for it alone", () => {
+    write(path.join(skillsDir, 'compare-sources.md'), skillFile('compare-sources', 'description: The house way.\nprovenance: imported\nsource: web@0.1.0\n', 'The house way.'));
+    deps.catalog.reload?.();
+    expect(deps.catalog.get('researcher')).toBeDefined();
+    expect(prompt('researcher')).toContain('Read three sources.');
+    expect(prompt('researcher')).not.toContain('The house way.');
+    expect(prompt('scout')).toContain('The house way.');
+    expect(rows().filter((r) => r.name === 'compare-sources').map((r) => r.id).sort()).toEqual(['compare-sources', 'researcher/compare-sources']);
+    expect(row('compare-sources').every).toBe(true);
+    expect(row('compare-sources').holders.map((h) => h.agent)).not.toContain('researcher');
+    expect(row('compare-sources').holders.map((h) => h.agent)).toContain('scout');
+    expect(row('researcher/compare-sources').holders).toEqual([{ agent: 'researcher', how: 'home' }]);
+
+    const refused = grantSkillRoute(deps, 'compare-sources', { agents: ['scout', 'researcher'] });
+    expect(refused.status).toBe(409);
+    expect((refused.body as { error: string }).error).toMatch(/Researcher already has its own skill called "compare-sources"/);
+    expect(declared('scout')).toEqual([]);
+    expect(grantSkillRoute(deps, 'compare-sources', { agents: ['scout'] }).status).toBe(200);
+    expect(declared('scout')).toEqual(['compare-sources']);
+    expect(row('compare-sources').holders).toEqual([{ agent: 'scout', how: 'granted' }]);
+  });
+
   it('refuses to write a grant into an agent that ships with buddi', () => {
     const refused = grantSkillRoute(deps, 'my-voice', { agents: ['concierge'] });
     expect(refused.status).toBe(409);
@@ -283,8 +305,8 @@ describe('the Skills page, server side', () => {
   });
 
   it('puts every file back when the catalog refuses the result', () => {
-    // A shared skill named like Researcher's own collides in its prompt: the loader refuses, nothing stays written.
-    writeFileSync(path.join(skillsDir, 'compare-sources.md'), skillFile('compare-sources', 'description: d\nagents: []\n', 'b'));
+    // A shared skill file the loader refuses (a skill never grants a tool): nothing stays written.
+    writeFileSync(path.join(skillsDir, 'broken.md'), skillFile('broken', 'description: d\ntools: [web.*]\n', 'b'));
     const before = readFileSync(path.join(agentsDir, 'ledger', 'agent.md'), 'utf8');
     const refused = grantSkillRoute(deps, 'my-voice', { agents: ['ledger'] });
     expect(refused.status).toBe(409);

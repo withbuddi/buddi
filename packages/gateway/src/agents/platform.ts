@@ -1291,8 +1291,8 @@ function buildSkillEnvelope(
     refuse('examples-tree', `I will not write into ${binding.examplesDir}: that tree belongs to the platform.`);
   }
 
-  // A shared skill that collides with an agent's private one fails the catalog
-  // load for that agent — one name, one procedure. Caught here, not at boot.
+  // A shared skill named like an agent's private one would be shadowed for that
+  // agent — two procedures under one name. Refused here rather than made.
   if (input.scope === 'shared') {
     for (const summary of binding.catalog.list()) {
       const agent = binding.catalog.get(summary.id);

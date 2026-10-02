@@ -735,7 +735,8 @@ export function generatedSection(
  *  - every private skill under `agents/<id>/skills/`, unconditionally;
  *  - every shared skill whose `agents` filter admits this agent — no filter
  *    means every agent, which is how a house rule reaches agents whose files
- *    nobody edited.
+ *    nobody edited — unless the agent has its own skill of that name, which
+ *    shadows the shared one for this agent only (logged once).
  *
  * `skills:` in the frontmatter is an explicit request by name; a name that is
  * not a shared skill, or is one whose `agents` filter names others and not this
@@ -749,6 +750,9 @@ export function generatedSection(
  * the skill was removed — is skipped with a line in the log rather than taking
  * every agent down with it.
  */
+/** Shadowing pairs already logged, so a reload does not repeat the line. */
+const shadowWarned = new Set<string>();
+
 export function selectSkills(
   agentId: string,
   declared: readonly string[],
@@ -757,19 +761,33 @@ export function selectSkills(
   privateOf?: (agentId: string) => readonly Skill[] | undefined,
   warn?: (line: string) => void,
 ): Skill[] {
+  const ownNames = new Set(privateSkills.map((s) => s.name));
+  // A plain request for a name the agent owns is satisfied by its own skill.
+  declared = declared.filter((name) => name.includes('/') || !ownNames.has(name));
   const chosen: Skill[] = [...privateSkills];
   const byName = new Map(privateSkills.map((s) => [s.name, s]));
 
+  /*
+   * An agent's own skill shadows a shared skill of the same name, for that
+   * agent only: a catalogue agent's packaged skill can meet a shared one the
+   * owner imported earlier, and refusing the load would leave the agent
+   * unusable. Other agents keep the shared one. Logged once per pair.
+   */
+  const shadowed = new Set<string>();
   for (const skill of sharedSkills) {
-    const shadowed = byName.get(skill.name);
-    if (shadowed !== undefined) {
-      throw new AgentCatalogError(
-        'duplicate-skill',
-        `agent "${agentId}": shared skill "${skill.name}" (${skill.file}) collides with its own ` +
-          `skill (${shadowed.file}); one name, one procedure`,
+    const own = byName.get(skill.name);
+    if (own === undefined) continue;
+    shadowed.add(skill.name);
+    const key = `${agentId}\0${skill.file}\0${own.file}`;
+    if (!shadowWarned.has(key)) {
+      shadowWarned.add(key);
+      warn?.(
+        `agents: ${agentId} has its own skill "${skill.name}" (${own.file}); it shadows the shared one ` +
+          `(${skill.file}) for this agent only`,
       );
     }
   }
+  sharedSkills = sharedSkills.filter((s) => !shadowed.has(s.name));
 
   const plain = declared.filter((name) => !name.includes('/'));
   for (const name of plain) {

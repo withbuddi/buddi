@@ -13,7 +13,7 @@ import { api, type CatalogueAgent, type CatalogueJob, type CataloguePlan, type C
 import type { ChatAgent } from '../chat/types';
 import { DRAFT_KEY } from '../chat/draft';
 import { NEEDS_ROUTE } from '../routes';
-import { Catalogue, cardState } from './Catalogue';
+import { Catalogue, CatCard, cardState } from './Catalogue';
 import { CatalogueLine, RemoveFromTeam } from './parts/AgentCatalogueBits';
 import { HandoverTeam, suggestFrom, suggestNames, teamIsNew } from './parts/CatalogueSuggest';
 import { UpdateSheet } from './parts/CatalogueSheets';
@@ -558,7 +558,18 @@ describe("Browse's kind filter", () => {
 describe('the words', () => {
   it('card states from the list', () => {
     expect(VIEW.agents.map(cardState)).toEqual(['ready', 'added', 'ready', 'update', 'edited', 'ready', 'ready', 'ready']);
-    expect(cardState(pkg('keeper', { state: 'installed', installed: { agentId: 'keeper', handle: 'keeper', version: '0.1.0', drift: 'edited', via: 'buddi/keeper' } }))).toBe('replaced');
+    expect(cardState(pkg('keeper', { state: 'installed', installed: { agentId: 'keeper', handle: 'keeper', version: '0.1.0', drift: 'edited-update', via: 'buddi/keeper' } }))).toBe('edited');
+    expect(cardState(pkg('keeper', { state: 'installed', installed: { agentId: 'keeper', handle: 'keeper', version: '0.1.0', drift: 'update', via: 'buddi/keeper' } }))).toBe('update');
+  });
+
+  it('an older agent the package replaces is offered as an update, by its handle', () => {
+    const entry = pkg('researcher', { title: 'Researcher', state: 'installed', installed: { agentId: 'scout', handle: 'scout', version: 'unknown', drift: 'edited-update', via: 'buddi/scout' } });
+    const onUpdate = vi.fn();
+    render(<CatCard entry={entry} loaded={new Set()} onOpen={() => {}} onAdd={() => {}} onUpdate={onUpdate} />);
+    expect(screen.getByText('Replaces your @scout, which you’ve changed.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'See what changed' }));
+    expect(onUpdate).toHaveBeenCalled();
   });
 
   it('reach is read family by family, a missions grant folded into reminders', () => {

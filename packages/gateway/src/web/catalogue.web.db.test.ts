@@ -501,11 +501,52 @@ suite('the agent catalogue', () => {
     expect(await card('chief-of-staff')).toMatchObject({ installed: { agentId: 'planner', drift: 'current', version: '1.0.0' } });
   });
 
-  it('leaves an edited old agent alone and says it does this', async () => {
+  it('leaves an agent the owner edited after its update alone', async () => {
     const file = path.join(agentsDir, 'planner', 'agent.md');
     writeFileSync(file, `${readFileSync(file, 'utf8')}\nMy own line.\n`);
     catalog.reload();
     expect(await card('chief-of-staff')).toMatchObject({ installed: { drift: 'edited' } });
+  });
+
+  it('maps an old agent with no sidecar by its id and handle, and updates it on the owner\'s say, writing the sidecar', async () => {
+    const dir = path.join(agentsDir, 'scout');
+    mkdirSync(dir, { recursive: true });
+    const content = '---\nid: scout\nhandle: scout\nname: Scout\ndescription: My researcher.\ntools: [memory.*, reminder.*]\n---\n\nYou are Scout, my way.\n';
+    writeFileSync(path.join(dir, 'agent.md'), content);
+    // Same id as the old Keeper, another handle: an agent of the owner's own, not Keeper.
+    const keeperDir = path.join(agentsDir, 'keeper');
+    mkdirSync(keeperDir, { recursive: true });
+    writeFileSync(path.join(keeperDir, 'agent.md'), '---\nid: keeper\nhandle: garage\nname: Garage\ndescription: The car.\ntools: [memory.*]\n---\n\nYou keep the car.\n');
+    await upsertMission(pool, { id: 'agent:scout:watch', name: 'Watch', agentId: 'scout', prompt: 'Look.', enabled: true });
+    catalog.reload();
+    publish([
+      agentEntry('second-opinion', { manifest: { handle: 'second', title: 'Second Opinion', replaces: ['buddi/scout'], tools: ['memory.*', 'reminder.*'] } }),
+      agentEntry('home-manager', { manifest: { handle: 'home', title: 'Home Manager', replaces: ['buddi/keeper'], tools: ['memory.*'] } }),
+    ]);
+    expect(await card('second-opinion')).toMatchObject({
+      state: 'installed',
+      installed: { agentId: 'scout', handle: 'scout', drift: 'edited-update', via: 'buddi/scout' },
+    });
+    expect((await card('home-manager')).state).toBe('ready');
+    expect((await agentsCatalogue(deps)).scout).toMatchObject({ package: 'second-opinion', via: 'buddi/scout', drift: 'edited-update' });
+
+    const plan = await updatePlanRoute(deps, 'second-opinion', { agentId: 'scout' });
+    expect(plan.body).toMatchObject({ via: 'buddi/scout', edited: true, handle: 'scout' });
+    expect((await update('second-opinion', 'scout')).status).toBe(409);
+    expect(readFileSync(path.join(dir, 'agent.md'), 'utf8')).toBe(content);
+
+    const done = await update('second-opinion', 'scout', { replace: true });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const file = readFileSync(path.join(dir, 'agent.md'), 'utf8');
+    expect(file).toMatch(/^id: scout$/m);
+    expect(file).toMatch(/^handle: scout$/m);
+    expect(file).toMatch(/^name: Second Opinion$/m);
+    expect(JSON.parse(readFileSync(path.join(dir, 'plugin.json'), 'utf8'))).toMatchObject({ source: 'market', package: 'second-opinion' });
+    expect(await getMission(pool, 'agent:scout:watch')).toMatchObject({ prompt: 'Look.', enabled: true });
+    expect(await card('second-opinion')).toMatchObject({ installed: { agentId: 'scout', drift: 'current' } });
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(keeperDir, { recursive: true, force: true });
+    catalog.reload();
   });
 
   it('removes an agent: its missions paused, the plugins nobody else uses named, the directory in the trash', async () => {
@@ -645,10 +686,27 @@ suite('the agent catalogue', () => {
     expect(trashedSkills('cite').map((f) => readFileSync(f, 'utf8'))).toEqual([expect.stringContaining('numbered, always.')]);
   });
 
-  it('an install or update the agents would not load with is undone and fails, never left for the next start', async () => {
-    const shared = path.join(root, 'skills', 'clash.md');
-    writeFileSync(shared, '---\nname: clash\ndescription: A shared procedure.\n---\n\nShared.\n');
+  it("adds a package whose skill is named like a shared one: its own shadows it for that agent only", async () => {
+    const shared = path.join(root, 'skills', 'answering-with-sources.md');
+    writeFileSync(shared, '---\nname: answering-with-sources\ndescription: The house way.\nprovenance: imported\nsource: web@0.1.0\n---\n\nShared way.\n');
     catalog.reload();
+    try {
+      publish([agentEntry('sourcer', { skills: [skill('answering-with-sources', 'Its own way.')] })]);
+      const job = await catalogueJobSettled(((await install('sourcer')).body as { jobId: string }).jobId);
+      expect(job, JSON.stringify(job)).toMatchObject({ state: 'done' });
+      expect(catalog.get('sourcer')?.systemPromptTemplate).toContain('Its own way.');
+      expect(catalog.get('sourcer')?.systemPromptTemplate).not.toContain('Shared way.');
+      expect(catalog.get('scribe')?.systemPromptTemplate).toContain('Shared way.');
+    } finally {
+      rmSync(shared, { force: true });
+      catalog.reload();
+    }
+  });
+
+  it('an install or update the agents would not load with is undone and fails, never left for the next start', async () => {
+    // A shared skill file the loader refuses (a skill never grants a tool): every reload fails while it is there.
+    const shared = path.join(root, 'skills', 'clash.md');
+    writeFileSync(shared, '---\nname: clash\ndescription: A shared procedure.\ntools: [web.*]\n---\n\nShared.\n');
     try {
       publish([agentEntry('clasher', { skills: [skill('clash', 'Private.')] }), scribe('1.3.0', [skill('take-notes', 'Write it down, dated.'), skill('summarise', 'Three lines.'), skill('cite', 'Their way.'), skill('clash', 'Mine too.')])]);
       const job = await catalogueJobSettled(((await install('clasher')).body as { jobId: string }).jobId);
@@ -662,7 +720,8 @@ suite('the agent catalogue', () => {
       expect(readFileSync(path.join(agentsDir, 'scribe', 'agent.md'), 'utf8')).toBe(before);
       expect(existsSync(scribeSkill('clash'))).toBe(false);
       expect(JSON.parse(readFileSync(path.join(agentsDir, 'scribe', 'plugin.json'), 'utf8'))).toMatchObject({ version: '1.2.0' });
-      // And the running catalogue still loads.
+      // And the catalogue loads again once the broken file is gone.
+      rmSync(shared, { force: true });
       expect(() => catalog.reload()).not.toThrow();
     } finally {
       rmSync(shared, { force: true });

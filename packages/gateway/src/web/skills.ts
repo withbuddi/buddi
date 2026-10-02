@@ -235,7 +235,12 @@ function titleOf(skill: Skill): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function holdersOf(entry: Entry, agents: readonly AgentRecord[]): { every: boolean; holders: SkillHolder[] } {
+/** Whether `agentId` has its own skill called `name`, which shadows a shared one for it. */
+function ownsName(entries: readonly Entry[], agentId: string, name: string): boolean {
+  return entries.some((e) => e.home === agentId && e.skill.name === name);
+}
+
+function holdersOf(entry: Entry, agents: readonly AgentRecord[], entries: readonly Entry[] = []): { every: boolean; holders: SkillHolder[] } {
   const { skill } = entry;
   if (entry.home !== null) {
     const ref = idOf(entry);
@@ -247,6 +252,8 @@ function holdersOf(entry: Entry, agents: readonly AgentRecord[]): { every: boole
       ],
     };
   }
+  // An agent with its own skill of this name does not use the shared one.
+  agents = agents.filter((a) => !ownsName(entries, a.id, skill.name));
   if (skill.agents === undefined) return { every: true, holders: agents.map((a) => ({ agent: a.id, how: 'every' as const })) };
   const holders: SkillHolder[] = [];
   for (const a of agents) {
@@ -256,7 +263,7 @@ function holdersOf(entry: Entry, agents: readonly AgentRecord[]): { every: boole
   return { every: false, holders };
 }
 
-function rowOf(entry: Entry, agents: readonly AgentRecord[], installed: ReadonlySet<string>): SkillRow {
+function rowOf(entry: Entry, agents: readonly AgentRecord[], installed: ReadonlySet<string>, entries: readonly Entry[] = []): SkillRow {
   const { skill } = entry;
   const grouped = groupOf(entry);
   const from: SkillFrom | null =
@@ -267,7 +274,7 @@ function rowOf(entry: Entry, agents: readonly AgentRecord[], installed: Readonly
   } catch {
     updatedAt = null;
   }
-  const { every, holders } = holdersOf(entry, agents);
+  const { every, holders } = holdersOf(entry, agents, entries);
   return {
     id: idOf(entry),
     name: skill.name,
@@ -314,7 +321,7 @@ const GROUP_ORDER: readonly SkillGroup[] = ['mine', 'learned', 'plugin', 'catalo
 export function listSkillsRoute(deps: SkillsDeps): RouteReply {
   const snap = snapshot(deps);
   const skills = snap.entries
-    .map((e) => rowOf(e, snap.agents, snap.installed))
+    .map((e) => rowOf(e, snap.agents, snap.installed, snap.entries))
     .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group) || a.title.localeCompare(b.title));
   return { status: 200, body: { skills, agents: agentsView(snap.agents) } };
 }
@@ -324,7 +331,7 @@ function agentsView(agents: readonly AgentRecord[]): SkillsAgent[] {
 }
 
 function detail(snap: Snapshot, entry: Entry): Record<string, unknown> {
-  const row = rowOf(entry, snap.agents, snap.installed);
+  const row = rowOf(entry, snap.agents, snap.installed, snap.entries);
   const versions = entry.skill.learned && entry.home !== null ? skillVersions(path.dirname(entry.skill.file), entry.skill.name) : [];
   return {
     skill: row,
@@ -452,7 +459,7 @@ function planGrant(snap: Snapshot, entry: Entry, every: boolean, wanted: readonl
       if (agent.id === entry.home) continue;
       const hold = wanted.includes(agent.id);
       if (hold && !agent.declared.includes(ref)) {
-        const clash = snap.entries.find((e) => e.skill.name === entry.skill.name && e !== entry && (e.home === agent.id || (e.home === null && holdersOf(e, snap.agents).holders.some((h) => h.agent === agent.id))));
+        const clash = snap.entries.find((e) => e.skill.name === entry.skill.name && e !== entry && (e.home === agent.id || (e.home === null && holdersOf(e, snap.agents, snap.entries).holders.some((h) => h.agent === agent.id))));
         if (clash) return { writes, error: fail(409, `${agent.name} already has a skill called "${entry.skill.name}"; one name, one procedure.`) };
       }
       const refused = agentWrite(agent, hold);
@@ -467,6 +474,14 @@ function planGrant(snap: Snapshot, entry: Entry, every: boolean, wanted: readonl
   const skillFile = applyFrontmatterPatch(source, patch, entry.skill.file);
   parseSkillFile(skillFile, { fileName: entry.skill.name, file: entry.skill.file });
   if (skillFile !== source || skillText !== undefined) writes.push({ path: entry.skill.file, content: skillFile });
+  const shadowedFor = wanted.filter((id) => ownsName(snap.entries, id, entry.skill.name));
+  if (!every && shadowedFor.length > 0) {
+    const names = shadowedFor.map((id) => snap.agents.find((a) => a.id === id)?.name ?? id).join(', ');
+    return {
+      writes,
+      error: fail(409, `${names} already ${shadowedFor.length === 1 ? 'has its' : 'have their'} own skill called "${entry.skill.name}", which ${shadowedFor.length === 1 ? 'it uses' : 'they use'} instead of the shared one. Give the shared one to other agents, or delete the agent's own first.`),
+    };
+  }
   for (const agent of snap.agents) {
     const hold = !every && wanted.includes(agent.id);
     if (!agent.writable) {
@@ -493,7 +508,7 @@ function parseGrant(body: Record<string, unknown>): { every: boolean; agents: st
 function answer(deps: SkillsDeps, id: string, status = 200, extra: Record<string, unknown> = {}): RouteReply {
   const snap = snapshot(deps);
   const entry = find(snap, id);
-  return { status, body: { ...(entry ? { skill: rowOf(entry, snap.agents, snap.installed) } : {}), ...extra } };
+  return { status, body: { ...(entry ? { skill: rowOf(entry, snap.agents, snap.installed, snap.entries) } : {}), ...extra } };
 }
 
 /** `POST /api/skills/:id/grants` `{ every?, agents }`: who uses it, written in each agent's file. */
@@ -645,7 +660,7 @@ export function editSkillRoute(deps: SkillsDeps, id: string, body: Record<string
   const snap = snapshot(deps);
   const entry = find(snap, id);
   if (!entry) return fail(404, `There is no skill "${id}".`);
-  const row = rowOf(entry, snap.agents, snap.installed);
+  const row = rowOf(entry, snap.agents, snap.installed, snap.entries);
   if (!row.editable) {
     return fail(409, `"${row.title}" comes with the ${row.from?.kind === 'plugin' ? row.from.plugin : ''} plugin, so it is changed there. To stop an agent using it, take it away.`);
   }
@@ -718,7 +733,7 @@ export async function deleteSkillRoute(deps: SkillsDeps, id: string): Promise<Ro
   const snap = snapshot(deps);
   const entry = find(snap, id);
   if (!entry) return fail(404, `There is no skill "${id}".`);
-  const row = rowOf(entry, snap.agents, snap.installed);
+  const row = rowOf(entry, snap.agents, snap.installed, snap.entries);
   if (!row.deletable && row.from?.kind === 'plugin') {
     return fail(409, `"${row.title}" comes with the ${row.from.plugin} plugin and goes with it. To stop an agent using it, take it away.`);
   }

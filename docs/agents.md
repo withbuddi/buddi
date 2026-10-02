@@ -89,6 +89,14 @@ a tier. Skills live in two places:
   that came with a catalogue agent, or one you put there by hand. That agent
   always uses it.
 
+**One name, one procedure per agent.** When an agent's own skill has the name
+of a shared one (a catalogue agent's packaged skill meeting one a plugin
+imported earlier, say), the agent uses its own and not the shared one; every
+other agent keeps the shared one. The log says so once. The Skills page lists
+both (`answering-with-sources` and `researcher/answering-with-sources`), leaves
+that agent out of the shared one's users, and refuses to give it the shared one
+by name.
+
 Agents → Skills lists them in four groups: **Yours** (written or uploaded by
 you), **Learned** (an agent proposed it and you kept it), **From plugins**
 (accepted from a plugin; its text reads only and it goes with the plugin) and
@@ -204,8 +212,9 @@ the tools as they resolve, the file's and every affected skill's hash. If any
 of it moved before the click (a new version, a plugin update, a skill you
 edited again) nothing is touched and the sheet reads it again. An approval
 Agent Father raised binds the same things. A write the agents would not load
-with (a private skill named like a shared one) is undone and the install or
-update fails, rather than waiting for the next restart.
+with is undone and the install or update fails, rather than waiting for the
+next restart. A packaged skill named like one of your shared skills is not
+such a write: that agent uses its own (above).
 
 On Add, the sheet lists the package's own tools (its integrity covers them;
 the listing's claims are only descriptions). When the plugins installed on the
@@ -220,9 +229,16 @@ ones no other agent uses.
 catalogue) and Ledger and Illustrator (proposed by the finance and image
 plugins) keep working with their handles, files and data. Each maps to its
 package (Chief of Staff, Researcher, Home Manager, CFO, Illustrator) through
-the package's `replaces`, so the catalogue shows it as added, and offers the
-update only while its file is untouched; an update keeps its id and handle,
-so @planner and @ledger stay. A new install of CFO is @cfo.
+the package's `replaces`, so the catalogue shows it as "Replaces your @scout"
+with Update instead of Add; an update keeps its id, handle, memory and
+missions, so @planner and @ledger stay, and writes the sidecar it lacked. One
+you changed is never replaced on its own: the sheet offers Keep mine or
+Replace my changes. An agent made before buddi recorded where agents came
+from (no `plugin.json` beside it) is matched when its directory, id and handle
+are the older agent's (the Finance Advisor buddi shipped is `finance-advisor`
+with handle `ledger`); it counts as changed unless its file is a version that
+shipped. An agent of your own that only shares a name (a `garage` you made)
+is not matched. A new install of CFO is @cfo.
 
 **From chat**, Agent Father reads the catalogue (`platform.catalogue`) and adds
 one with `platform.install_agent` (gated, the same plan and preview), asking

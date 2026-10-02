@@ -127,9 +127,9 @@ function stateWords(card: Card): string {
     }
     case 'installed': {
       const i = card.installed!;
-      const base = `on the team as @${i.handle}${i.via ? ` (from ${i.via})` : ''}`;
-      if (i.drift === 'update') return `${base}; ${card.version} is out: buddi agents update ${i.handle}`;
-      if (i.drift === 'edited-update' || (i.drift === 'edited' && i.via)) return `${base}; you changed it, so it is left alone`;
+      const base = i.via ? `replaces your @${i.handle}` : `on the team as @${i.handle}`;
+      if (i.drift === 'update') return `${base}; ${i.via ? 'update it' : `${card.version} is out`}: buddi agents update ${i.handle}`;
+      if (i.drift === 'edited-update') return `${base}; you changed it, so it is left alone unless you replace your changes: buddi agents update ${i.handle} --replace`;
       return base;
     }
     case 'unavailable':

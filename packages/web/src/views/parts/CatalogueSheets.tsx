@@ -596,7 +596,9 @@ export function UpdateSheet({
         <Notice tone="accent">
           {plan.replacesOwn && plan.replacesOwn.length > 0
             ? `${latest} brings ${plan.replacesOwn.length === 1 ? 'a skill' : 'skills'} named like your own (${and(plan.replacesOwn)}), so nothing is updated on its own. Yours stay exactly as they are unless you replace them; replaced, they go to the trash folder.`
-            : `You’ve changed ${entry.title} since you added it, so nothing is updated on its own. Your file stays exactly as it is unless you replace it.`}
+            : plan.via
+              ? `${entry.title} replaces your @${plan.handle}. You’ve changed @${plan.handle}, so nothing is replaced on its own. Your file stays exactly as it is unless you replace it; its handle, chats, memory and missions stay either way.`
+              : `You’ve changed ${entry.title} since you added it, so nothing is updated on its own. Your file stays exactly as it is unless you replace it.`}
         </Notice>
         <ErrorBanner message={error} />
         <Stack divided gap="lg">
@@ -645,7 +647,7 @@ export function UpdateSheet({
         <div className="cat-block">
           <h3 className="cat-block-title">What changes in its file</h3>
           {plan.personaDiff.length > 0 ? (
-            <Diff lines={plan.personaDiff} label={`${entry.title} ${shortVersion(plan.fromVersion)} against ${latest}`} />
+            <Diff lines={plan.personaDiff} label={plan.via ? `@${plan.handle} against ${entry.title} ${latest}` : `${entry.title} ${shortVersion(plan.fromVersion)} against ${latest}`} />
           ) : (
             <p className="cat-prose">Its persona stays word for word.</p>
           )}

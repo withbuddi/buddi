@@ -43,16 +43,15 @@ import {
 /**
  * The card's state: `ready` (Add), `added`, `update` (an untouched file with a
  * newer version listed), `edited` (the owner changed the file and a newer one
- * is out: See what changed), `replaced` (an older agent this package does the
- * job of, changed by the owner, so it is left alone), `unavailable`.
+ * is out: See what changed), `unavailable`. An older agent the package replaces
+ * (`installed.via`) is `update` while untouched and `edited` once changed.
  */
-export type CardState = 'ready' | 'added' | 'update' | 'edited' | 'replaced' | 'unavailable';
+export type CardState = 'ready' | 'added' | 'update' | 'edited' | 'unavailable';
 
 export function cardState(entry: CatalogueAgent): CardState {
   if (entry.state === 'unavailable') return 'unavailable';
   const installed = entry.installed;
   if (entry.state !== 'installed' || !installed) return 'ready';
-  if (installed.via && (installed.drift === 'edited' || installed.drift === 'edited-update')) return 'replaced';
   if (installed.drift === 'update') return 'update';
   if (installed.drift === 'edited-update') return 'edited';
   return 'added';
@@ -100,7 +99,7 @@ export function CatChips({ entry, loaded, mailbox }: { entry: CatalogueAgent; lo
 export function CatAction({ entry, onAdd, onUpdate }: { entry: CatalogueAgent; onAdd: () => void; onUpdate: () => void }): JSX.Element | null {
   const state = cardState(entry);
   const stop = (fn: () => void) => (e: { stopPropagation: () => void }): void => { e.stopPropagation(); fn(); };
-  if (state === 'added' || state === 'replaced') return <span className="cat-added"><CheckGlyph />Added</span>;
+  if (state === 'added') return <span className="cat-added"><CheckGlyph />Added</span>;
   if (state === 'update') return <Button size="sm" onClick={stop(onUpdate)} aria-label={`Update ${entry.title}`}>Update</Button>;
   if (state === 'edited') return <Button size="sm" onClick={stop(onUpdate)}>See what changed</Button>;
   if (state === 'unavailable') return null;
@@ -110,9 +109,11 @@ export function CatAction({ entry, onAdd, onUpdate }: { entry: CatalogueAgent; o
 function CatNote({ entry }: { entry: CatalogueAgent }): JSX.Element | null {
   const state = cardState(entry);
   const latest = shortVersion(entry.version);
+  const handle = entry.installed?.handle;
+  if (entry.installed?.via && state === 'update') return <p className="cat-note">Replaces your @{handle}: it keeps its handle, chats, memory and missions.</p>;
+  if (entry.installed?.via && state === 'edited') return <p className="cat-note">Replaces your @{handle}, which you’ve changed.</p>;
   if (state === 'update') return <p className="cat-note">{latest} is out: {entry.changes.charAt(0).toLowerCase() + entry.changes.slice(1)}</p>;
   if (state === 'edited') return <p className="cat-note">You’ve changed {entry.title}; {latest} is out.</p>;
-  if (state === 'replaced') return <p className="cat-note" data-quiet="true">You have @{entry.installed?.handle}, which does this.</p>;
   if (state === 'added') return <p className="cat-note" data-quiet="true">On your team as @{entry.installed?.handle}</p>;
   if (state === 'unavailable') return <p className="cat-note" data-quiet="true">{entry.reason}</p>;
   return null;
@@ -486,6 +487,7 @@ export function AgentDetail({
   const agentId = entry.installed?.agentId;
   const added = agentId;
   const latest = shortVersion(entry.version);
+  const via = entry.installed?.via ? entry.installed : undefined;
   const openChat = (text?: string): void => {
     if (!added) return;
     if (text) leaveDraft(added, text);
@@ -507,7 +509,7 @@ export function AgentDetail({
             {entry.trust === 'by-buddi' ? <Pill tone="accent">by buddi</Pill> : null}
             <span>{categoryWord(entry.category)}</span>
             <span aria-hidden="true">·</span>
-            <span className="mono">{entry.installed?.version ?? entry.version}</span>
+            <span className="mono">{via ? entry.version : (entry.installed?.version ?? entry.version)}</span>
             {entry.installed ? (
               <>
                 <span aria-hidden="true">·</span>
@@ -522,7 +524,7 @@ export function AgentDetail({
           ) : state === 'update' ? (
             <>
               <Button variant="ghost" onClick={() => openChat()}>Open chat</Button>
-              <Button variant="accent" onClick={onUpdate}>Update to {latest}</Button>
+              <Button variant="accent" onClick={onUpdate}>{via ? `Update @${via.handle} to ${entry.title}` : `Update to ${latest}`}</Button>
             </>
           ) : state === 'edited' ? (
             <>
@@ -534,7 +536,9 @@ export function AgentDetail({
           )}
         </div>
       </header>
-      {state === 'edited' ? (
+      {state === 'edited' && via ? (
+        <Notice tone="accent">{entry.title} replaces your @{via.handle}. You’ve changed it, so it isn’t replaced on its own: your file stays as it is unless you replace it.</Notice>
+      ) : state === 'edited' ? (
         <Notice tone="accent">You’ve changed {entry.title} since you added it, so {latest} isn’t applied on its own. Your file stays as it is unless you replace it.</Notice>
       ) : state === 'unavailable' ? (
         <Notice tone="warning">{entry.reason}</Notice>

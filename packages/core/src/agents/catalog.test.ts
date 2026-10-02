@@ -1078,13 +1078,21 @@ describe('skills in the catalog', () => {
     expect((caught as Error).message).toMatch(/never grants a tool/);
   });
 
-  it('refuses a shared skill that collides with a private one', () => {
-    expect(() =>
-      load({ 'finance-advisor': FINANCE }, {
-        shared: { verdicts: VERDICTS },
-        skills: { 'finance-advisor': { verdicts: VERDICTS } },
-      }),
-    ).toThrow(/one name, one procedure/);
+  it("lets an agent's own skill shadow a shared one of the same name, for that agent only", () => {
+    const lines: string[] = [];
+    const own = skillFile(['name: verdicts', 'description: Mine.', 'provenance: owner'].join('\n'), 'Mine, not the house one.');
+    const dir = catalogDir({ 'finance-advisor': FINANCE, concierge: CONCIERGE }, { shared: { verdicts: VERDICTS }, skills: { 'finance-advisor': { verdicts: own } } });
+    const open = () => loadAgentCatalog({ dir, registry: registryOf(), env: {}, log: (line) => lines.push(line) });
+    const catalog = open();
+    const mine = catalog.get('finance-advisor')!.skills.filter((s) => s.name === 'verdicts');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.file).toContain(path.join('finance-advisor', 'skills'));
+    const theirs = catalog.get('concierge')!.skills.filter((s) => s.name === 'verdicts');
+    expect(theirs).toHaveLength(1);
+    expect(theirs[0]!.file).not.toContain(path.join('finance-advisor', 'skills'));
+    expect(lines.filter((l) => /shadows the shared one/.test(l))).toHaveLength(1);
+    open();
+    expect(lines.filter((l) => /shadows the shared one/.test(l))).toHaveLength(1);
   });
 });
 
@@ -1094,6 +1102,12 @@ describe('selectSkills', () => {
       `---\nname: ${name}\ndescription: d${agents ? `\nagents: [${agents.join(', ')}]` : ''}\n---\n\nbody\n`,
       { scope: 'shared' },
     );
+
+  it('takes its own skill for a name it declares and owns, the shared one left out', () => {
+    const own = parseSkillFile('---\nname: answering-with-sources\ndescription: mine\n---\n\nmine\n', { scope: 'private' });
+    const picked = selectSkills('b', ['answering-with-sources'], [own], [shared('answering-with-sources', [])]);
+    expect(picked).toEqual([own]);
+  });
 
   it('includes an unfiltered shared skill without it being declared', () => {
     expect(selectSkills('a', [], [], [shared('house')]).map((s) => s.name)).toEqual(['house']);

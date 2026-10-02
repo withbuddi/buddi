@@ -30,7 +30,7 @@ export function CatalogueLine({ entry, navigate, onUpdated }: { entry: AgentFrom
   const [listing, setListing] = useState<CatalogueAgent | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-  const offered = entry.delisted ? null : entry.drift === 'update' ? 'update' : entry.drift === 'edited-update' && !entry.via ? 'edited' : null;
+  const offered = entry.delisted ? null : entry.drift === 'update' ? 'update' : entry.drift === 'edited-update' ? 'edited' : null;
   const open = (): void => {
     setOpening(true);
     setFailure(null);

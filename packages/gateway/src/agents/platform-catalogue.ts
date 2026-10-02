@@ -189,7 +189,11 @@ export function addedAgents(agentsDir: string): AddedAgent[] {
       continue;
     }
     const provenance = readProvenance(dir);
-    if (!provenance) continue;
+    if (!provenance) {
+      const legacy = legacyAgent(name, file);
+      if (legacy) out.push(legacy);
+      continue;
+    }
     let edited = true;
     try {
       // The `skills:` grants are the owner's, not the package's: they never count here.
@@ -200,6 +204,89 @@ export function addedAgents(agentsDir: string): AddedAgent[] {
     out.push({ agentId: name, dir, file, provenance, edited });
   }
   return out;
+}
+
+/**
+ * Agents buddi shipped or plugins proposed before sidecars were written, by the
+ * `<source>/<id>` a package's `replaces` names them with: the id (and directory)
+ * and handle they were written with, and the package-owned hash of every
+ * version that shipped, so an untouched copy reads as untouched.
+ */
+export const LEGACY_AGENTS: ReadonlyArray<{ ref: string; id: string; handle: string; shipped: readonly string[] }> = [
+  {
+    ref: 'buddi/scout',
+    id: 'scout',
+    handle: 'scout',
+    shipped: [
+      'd6c53334e69810b41b6b75710df8294d147b48dcfea94ad7c1d4ffd42cb0f57c',
+      '294753258548cfdc61fca4b7551f5e1fb4fa7c4c8993e899dfcd686b0ecf85eb',
+      'e75f52ff83d0160fbfb0fe1ca62e60ad61c5db329b6f8654c3180690c92a8843',
+    ],
+  },
+  {
+    ref: 'buddi/planner',
+    id: 'planner',
+    handle: 'planner',
+    shipped: [
+      'e1a923b8e636a69aeb6c6a9a610946d1a5970f19e0717edec408ff684f118999',
+      'c070159c0881f1fe82d034bf64ce4cdb383ba569f20ad411f45fef6fc67a82c3',
+      '0b71881b5c8de2eb671b8d5ffddb861d11772a4192ae5f3562320a804365fcbd',
+    ],
+  },
+  {
+    ref: 'buddi/keeper',
+    id: 'keeper',
+    handle: 'keeper',
+    shipped: [
+      '5cf57ea646667c7b7ff059e97287a9f075008c82a0facb3160ba98eac91176c2',
+      '5d0cd96a7637141b17567a149c00c828080f1088c59a64589c74e6016430b267',
+    ],
+  },
+  {
+    // The finance advisor buddi shipped before the finance plugin proposed Ledger.
+    ref: 'buddi/finance-advisor',
+    id: 'finance-advisor',
+    handle: 'ledger',
+    shipped: [
+      '493ebf6f81a58099b0d85ff5a374c73ed2e683cbb3494300497d88eed437fc11',
+      '45460f66f51fff8dc1aaef801d2aaf9db71de9fd9b75a5164fc188ec32c57a54',
+      '3542ebac3ae82e2173d52ec72fca6919c1bf1cbc39f23a0145e73e0bd399e760',
+      'bb5096ebda55a3937062894df76c0df33638409e02b4e6acad898afe147754df',
+    ],
+  },
+  { ref: 'finance/ledger', id: 'ledger', handle: 'ledger', shipped: [] },
+  { ref: 'image/illustrator', id: 'illustrator', handle: 'art', shipped: [] },
+];
+
+/**
+ * An agent with no sidecar, read as the older agent it is when its directory,
+ * id and handle all match one in `LEGACY_AGENTS`. Edited unless its file is a
+ * version that shipped; the update writes the sidecar it never had.
+ */
+function legacyAgent(dirName: string, file: string): AddedAgent | undefined {
+  let text: string;
+  let id: string;
+  let handle: string;
+  try {
+    text = readFileSync(file, 'utf8');
+    const front = parseAgentFile(text, { file }).frontmatter;
+    id = front.id;
+    handle = front.handle;
+  } catch {
+    return undefined;
+  }
+  const legacy = LEGACY_AGENTS.find((l) => l.id === dirName && l.id === id && l.handle === handle);
+  if (!legacy) return undefined;
+  const [plugin, agent] = legacy.ref.split('/') as [string, string];
+  const owned = fileHash(packageOwnedText(text));
+  const untouched = legacy.shipped.includes(owned);
+  return {
+    agentId: dirName,
+    dir: path.dirname(file),
+    file,
+    provenance: { plugin, version: 'unknown', agent, acceptedAt: 'unknown', proposal: '', file: untouched ? owned : '' },
+    edited: !untouched,
+  };
 }
 
 /** Is this added agent a copy of the package, directly or by `replaces`? */
@@ -220,7 +307,7 @@ export function installedAsFor(
   if (!match) return undefined;
   const via = direct ? undefined : `${match.provenance.plugin}/${match.provenance.agent}`;
   const moved = via !== undefined || match.provenance.proposal !== pkg.manifest.integrity;
-  const drift: Drift = match.edited ? (moved && via === undefined ? 'edited-update' : 'edited') : moved ? 'update' : 'current';
+  const drift: Drift = match.edited ? (moved ? 'edited-update' : 'edited') : moved ? 'update' : 'current';
   return {
     agentId: match.agentId,
     handle: handleOf(match.agentId),
