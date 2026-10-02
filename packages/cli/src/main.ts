@@ -15,7 +15,7 @@
  */
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { compareVersions, createPool, createVault, timezoneFromEnv } from '@buddi/core';
+import { compareVersions, createPool, createVault, timezoneFromEnv, ToolRegistry } from '@buddi/core';
 import {
   createWiringAsync,
   currentVersion,
@@ -32,7 +32,7 @@ import {
   parsePluginsArgs,
   parseRemindersArgs,
   probeDatabase,
-  readAgentAttention,
+  readNeedsYou,
   readUpgradeFile,
   recapMissionId,
   requireDatabase,
@@ -471,14 +471,22 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
         ];
       });
     },
-    attention: async () => {
+    needsYou: async ({ serviceRunning }) => {
+      // The dashboard's own count (needsYou on /api/overview), so this line
+      // and Home, the rail and the lock screen agree. With the service down,
+      // the same function over the database: what needs plugins loaded
+      // (watchers' decisions, connections, agents to set up) is not counted.
+      if (serviceRunning) {
+        const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
+        const gateway = gatewayFromEnvironment(env);
+        if (!('off' in gateway)) {
+          const overview = await gateway.get<{ needsYou?: { total?: number } }>('/api/overview').catch(() => null);
+          if (typeof overview?.needsYou?.total === 'number') return overview.needsYou.total;
+        }
+      }
       const pool = createPool(env.DATABASE_URL as string);
       try {
-        const snapshot = await readAgentAttention(pool);
-        return {
-          approvals: snapshot.agents.reduce((sum, a) => sum + a.approvals, 0),
-          questions: snapshot.agents.filter((a) => a.question !== null).length,
-        };
+        return (await readNeedsYou({ pool, registry: new ToolRegistry(), now: new Date() })).total;
       } finally {
         await pool.end().catch(() => {});
       }

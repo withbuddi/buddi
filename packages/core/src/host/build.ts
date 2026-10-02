@@ -32,6 +32,7 @@ import { getProposal, keepProposal, policyTrackRecord, revokeKeptProposal, toPro
 import type { Proposal } from '../learning/types.js';
 import { registerChannel } from '../notifications/channels.js';
 import { notifyOwner } from '../notifications/notify.js';
+import { AGENT_ACTION_MAX } from '../notifications/agent.js';
 import type { DeliverableMessage } from '../notifications/types.js';
 import { OWNER_ID } from '../owner.js';
 import { getOwnerProfile } from '../onboarding/store.js';
@@ -524,6 +525,15 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
     // cannot forge, so neither passes through. Keys are namespaced so one
     // plugin cannot collapse another's messages or core's.
     host.owner.notify = async (message) => {
+      // The agent's rule for `action` (owner.notify): optional, trimmed, at
+      // most AGENT_ACTION_MAX. A blank one is no action.
+      const action = typeof message.action === 'string' ? message.action.trim() : '';
+      if (message.action !== undefined && typeof message.action !== 'string') {
+        throw new Error('owner.notify: action is a string');
+      }
+      if (action.length > AGENT_ACTION_MAX) {
+        throw new Error(`owner.notify: action is at most ${AGENT_ACTION_MAX} characters`);
+      }
       const result = await notifyOwner(
         facts.db,
         { now: () => facts.now(), timezone: facts.timezone, log },
@@ -535,6 +545,7 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
           ...(message.link ? { link: { route: message.link.route } } : {}),
           ...(message.dedupeKey ? { dedupeKey: `plugin:${plugin}:${message.dedupeKey}` } : {}),
           ...(message.agentId ? { agentId: message.agentId } : {}),
+          ...(action ? { action } : {}),
           pluginId: plugin,
         },
       );

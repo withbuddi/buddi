@@ -147,6 +147,13 @@ export interface PluginOwnerMessage {
   dedupeKey?: string;
   /** The agent this is about, when there is one. */
   agentId?: string;
+  /**
+   * What the owner is asked to do, in a few words ("Renew the card?"), at most
+   * 80 characters once trimmed. With it the message waits in Needs you and
+   * counts on every badge until the owner deals with it; without it the
+   * message is information. Since 1.24; an older buddi ignores it.
+   */
+  action?: string;
 }
 
 /** The clock. Never read the wall clock directly. */

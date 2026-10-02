@@ -25,8 +25,12 @@ export interface StatusReport {
     unavailable: Array<{ handle: string; id: string; reason: string }>;
     error?: string;
   };
-  /** Null when the database could not be read. */
-  needsYou: { approvals: number; questions: number } | null;
+  /**
+   * What needs the owner, by the dashboard's one count (needsYou on
+   * /api/overview: Home, the rail's badge, the lock screen). Null when the
+   * database could not be read.
+   */
+  needsYou: number | null;
   lastRecapAt: string | null;
   update: { available: boolean; latest?: string };
   /** Ollama Cloud accounts connected with a device key: "connected as <user>, device <name>". */
@@ -41,7 +45,8 @@ export interface StatusSources {
   probeDatabase(): Promise<void>;
   describeDatabaseError(err: unknown): string;
   agents(): Promise<Array<{ handle: string; id: string; available: boolean; reason?: string }>>;
-  attention(): Promise<{ approvals: number; questions: number }>;
+  /** The Needs you total; `serviceRunning` says whether the gateway can be asked. */
+  needsYou(opts: { serviceRunning: boolean }): Promise<number>;
   lastRecapAt(): Promise<Date | null>;
   update(): Promise<{ available: boolean; latest?: string }>;
   /** Optional: the device-key accounts, each with its one line. */
@@ -74,7 +79,9 @@ export async function collectStatus(sources: StatusSources): Promise<StatusRepor
     agents.error = message(err);
   }
 
-  const needsYou = database.reachable ? await sources.attention().catch(() => null) : null;
+  const needsYou = database.reachable
+    ? await sources.needsYou({ serviceRunning: service.state === 'running' }).catch(() => null)
+    : null;
   const lastRecap = database.reachable ? await sources.lastRecapAt().catch(() => null) : null;
   const update = await sources.update().catch(() => ({ available: false }));
   const ollama = database.reachable && sources.ollama ? await sources.ollama().catch(() => []) : [];
@@ -131,15 +138,9 @@ export function renderStatus(report: StatusReport, timezone = 'UTC'): string {
   if (report.needsYou === null) {
     lines.push(report.database.reachable ? 'What needs you could not be read.' : 'What needs you is unknown without the database.');
   } else {
-    const { approvals, questions } = report.needsYou;
-    if (approvals + questions === 0) lines.push('Nothing needs you.');
-    else {
-      const parts = [
-        ...(approvals > 0 ? [count(approvals, 'approval', 'approvals')] : []),
-        ...(questions > 0 ? [count(questions, 'question', 'questions')] : []),
-      ];
-      lines.push(`${parts.join(' and ')} ${approvals + questions === 1 ? 'needs' : 'need'} you. Open the dashboard with buddi.`);
-    }
+    const n = report.needsYou;
+    // The lock screen's words: "3 things need you".
+    lines.push(n === 0 ? 'Nothing needs you.' : `${count(n, 'thing needs', 'things need')} you. Open the dashboard with buddi.`);
   }
 
   if (report.lastRecapAt !== null) {

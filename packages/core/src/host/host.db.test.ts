@@ -29,6 +29,7 @@ import { BlockedError } from '../plugin/url.js';
 import { clearChannels, deliverTo, listChannels } from '../notifications/channels.js';
 import type { RegisterHost } from './types.js';
 import { setOwnerProfile } from '../onboarding/store.js';
+import { countOpenAsks } from '../notifications/needs.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -100,7 +101,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather'));
     const host = await hostOf(registry, 'weather.host');
-    expect(host.version).toBe('1.23');
+    expect(host.version).toBe('1.24');
     expect(host.plugin).toBe('weather');
     for (const area of ['owner', 'clock', 'db', 'dir', 'approvals', 'pages'] as const) {
       expect(host[area], area).toBeDefined();
@@ -212,6 +213,26 @@ suite('ctx.buddi', () => {
       action_id: null,
       offers: [],
     });
+  });
+
+  it("lets a plugin's message carry an action, which then needs the owner (host API 1.24)", async () => {
+    const registry = new ToolRegistry();
+    registry.register(plugin('weather', { uses: ['owner:notify'] }));
+    const host = await hostOf(registry, 'weather.host');
+    const before = await countOpenAsks(pool, now);
+    const asked = await host.owner.notify!({ urgency: 'today', title: 'Frost tonight', action: '  Bring the plants in?  ' });
+    const plain = await host.owner.notify!({ urgency: 'today', title: 'Sunny all week', action: '   ' });
+    const { rows } = await pool.query(
+      'select id, kind, plugin_id, action from core.owner_notifications where id = any($1::uuid[]) order by title',
+      [[asked.id, plain.id]],
+    );
+    expect(rows).toEqual([
+      { id: asked.id, kind: 'plugin', plugin_id: 'weather', action: 'Bring the plants in?' },
+      { id: plain.id, kind: 'plugin', plugin_id: 'weather', action: null },
+    ]);
+    // The one rule (core needsOwner): the ask counts in Needs you, the news does not.
+    expect(await countOpenAsks(pool, now)).toBe(before + 1);
+    await expect(host.owner.notify!({ urgency: 'now', title: 'Too long', action: 'y'.repeat(81) })).rejects.toThrow(/at most 80/);
   });
 
   it('builds each plugin its own host from one shared context', async () => {

@@ -86,7 +86,7 @@ export const COMMANDS: readonly CommandEntry[] = [
     json:
       '{ version, install, service: { state, detail }, database: { reachable, error? }, ' +
       'agents: { ready: [{ handle, id }], unavailable: [{ handle, id, reason }] }, ' +
-      'needsYou: { approvals, questions } | null, lastRecapAt | null, ' +
+      'needsYou: number | null (the dashboard\'s Needs you count), lastRecapAt | null, ' +
       'update: { available, latest? }, ollama: [{ label, line }] }. service.state is running, stopped, not-installed or unknown.',
   },
   {

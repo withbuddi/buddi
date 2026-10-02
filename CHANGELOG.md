@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - The buddi extension is on the Chrome Web Store. Computer & browser → Your browser now leads with Add to Chrome (the store listing, in a new tab) and folds the load-unpacked folder under Developer install; Firefox and Safari are told it needs Chrome, Edge, Brave or Arc, and a phone leaves the install out. The dashboard finds and pairs a store-installed extension exactly like the unpacked one.
+- Plugins (host API 1.24): `owner.notify` takes an optional `action`, what the owner is asked to do in at most 80 characters, like an agent's. A plugin's message with one waits in Needs you and counts on every badge; without one it stays information.
 
 ### Fixed
 
@@ -15,6 +16,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Changed
 
+- `buddi status` counts what needs you by the dashboard's rule (the same count as Home, the rail's badge and the lock screen) and says "3 things need you", not just approvals and questions. In `--json`, `needsYou` is that number.
 - Needs you holds only what you can act on: approvals, the watchers' urgent decisions, a question an agent is holding for your answer (now listed, opening its conversation), a message that carries an action, failed jobs, proposals, a connection to sign in to again or review (moved into Needs you), an agent a plugin needs and a restore's checklist. A mission's report, an agent's plain message and a reminder that fired still reach you on your channel and are listed in Settings → Notifications → Recent ("All notifications" on the section), but no longer sit in Needs you or count anywhere. Home's counts, the badge on Home in the rail (which counted approvals and failed jobs only) and the lock screen (which counted every unseen notification, now "N more need you" opening Needs you) all read one count, `needsYou` on `GET /api/overview`; `GET /api/notifications?needs=1` lists the messages, each row says `needsOwner`. A watcher's or source's error moved above Needs you.
 - `owner.notify` takes `action`: what the owner is asked to do, in a few words ("Confirm with the bank?"). With it the message waits in Needs you until opened or marked done, and Telegram shows the ask as its last line; without it the message is information. The MCP overview's `needsYou` is the same count (the per-agent list is `waiting`).
 - Home: "What buddi learned this week" reads like a person wrote it — one line per kind with one place to look ("Remembered 18 things · See memory", "Quieted 26 senders · See rules", "Kept 2 skills: …", "Your rules handled 436 emails") — with no raw rule lists, no cut-off notes and no empty sections. It shows for three days after the digest runs and × hides it until next week's. The Telegram digest says the same lines.

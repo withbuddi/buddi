@@ -193,13 +193,15 @@ a watcher and a sentinel run under the same binding the registry made. A refusal
 tool is ever reachable this way, and no schema but the target's own.
 
 **owner:notify.** `ctx.buddi.owner.notify({ urgency, title, text?, link?,
-dedupeKey?, agentId? }): Promise<{ id }>` tells the owner something
+dedupeKey?, agentId?, action? }): Promise<{ id }>` tells the owner something
 ([notifications.md](notifications.md)). The kind is always `plugin` and the
 plugin's name is on the row. A plugin picks an urgency (`now`, `today`,
 `digest`), never a channel: the owner's settings pick that, so a plugin
 cannot send anything through a channel the owner did not choose. Offers and
 approval cards are core's and do not pass through. A `dedupeKey` collapses
-only with the plugin's own messages.
+only with the plugin's own messages. `action` (1.24, at most 80 characters)
+is what the owner is asked to do; with it the message needs the owner and
+sits in Needs you, without it the message is information.
 
 **owner:channel.** `ctx.buddi.channels.register({ kind, describe(buddi),
 can, deliver(message, buddi) }): () => void` (1.3) adds a way to reach the
@@ -393,7 +395,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.23`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.24`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -484,6 +486,14 @@ agent brief and is never shown), `kind`, `subject`, `group` and `actions`
 only urgent findings, grouped, with Not now, Stop telling me this and Clear
 all. An older buddi ignores the fields and shows the title, so a watcher that
 sets them need not ask for `^1.23`.
+
+1.24 adds an optional argument: `owner.notify`'s `action`, what the owner is
+asked to do in a few words ("Bring the plants in?"), at most 80 characters
+once trimmed — the same rule as an agent's `owner.notify`. A message with one
+waits in Home's Needs you and counts on every badge until the owner deals
+with it, and Telegram says it last; one without is information. An older
+buddi ignores the field and delivers the message as information, so a plugin
+that sets it need not ask for `^1.24`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

@@ -143,8 +143,9 @@ still asking, open proposals, connections to check, agents a plugin needs and
 a restore's checklist.
 
 An agent is told to set `action` only when you have something to do; a
-plugin's `owner.notify` carries none yet, so a plugin's message is information
-(its setup and its agents have their own rows).
+plugin's `owner.notify` takes the same `action` since host API 1.24, so a
+plugin's message without one is information (its setup and its agents have
+their own rows).
 
 ## On the dashboard
 
@@ -322,7 +323,7 @@ registerChannel(channel), listChannels(), deliverTo(kind, message)
 `notifyOwner` takes `action?` too: a message with one needs the owner (above).
 
 For a plugin, `ctx.buddi.owner.notify({ urgency, title, text?, link?,
-dedupeKey?, agentId? })`, declared as `owner:notify`
+dedupeKey?, agentId?, action? })` (`action` since host API 1.24), declared as `owner:notify`
 ([plugin-host-api.md](plugin-host-api.md) §4.2). The kind is always
 `plugin`; the owner's settings pick the channel.
 

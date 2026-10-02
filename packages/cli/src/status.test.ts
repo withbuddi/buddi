@@ -16,7 +16,7 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
       { handle: 'buddi', id: 'concierge', available: true },
       { handle: 'scout', id: 'scout', available: false, reason: 'environment variable OPENAI_API_KEY is not set' },
     ],
-    attention: async () => ({ approvals: 2, questions: 1 }),
+    needsYou: async () => 3,
     lastRecapAt: async () => new Date('2026-09-20T22:00:00Z'),
     update: async () => ({ available: true, latest: '0.2.0' }),
     ...over,
@@ -32,7 +32,7 @@ describe('collectStatus', () => {
       service: { state: 'running' },
       database: { reachable: true },
       agents: { ready: [{ handle: 'buddi', id: 'concierge' }], unavailable: [{ handle: 'scout' }] },
-      needsYou: { approvals: 2, questions: 1 },
+      needsYou: 3,
       lastRecapAt: '2026-09-20T22:00:00.000Z',
       update: { available: true, latest: '0.2.0' },
     });
@@ -50,7 +50,7 @@ describe('collectStatus', () => {
         agents: async () => {
           throw new Error('no agents directory');
         },
-        attention: async () => {
+        needsYou: async () => {
           throw new Error('should not be asked');
         },
       }),
@@ -72,7 +72,7 @@ describe('renderStatus', () => {
       'The database is reachable.',
       '1 agent can run: @buddi.',
       '@scout cannot run: environment variable OPENAI_API_KEY is not set.',
-      '2 approvals and 1 question need you. Open the dashboard with buddi.',
+      '3 things need you. Open the dashboard with buddi.',
       'The last recap went out 2026-09-20 22:00 UTC.',
       'A newer buddi is available: 0.2.0. Run buddi upgrade.',
     ]);
@@ -88,8 +88,24 @@ describe('renderStatus', () => {
   });
 
   it('says nothing needs you when nothing does', async () => {
-    const text = renderStatus(await collectStatus(sources({ attention: async () => ({ approvals: 0, questions: 0 }) })));
+    const text = renderStatus(await collectStatus(sources({ needsYou: async () => 0 })));
     expect(text).toContain('Nothing needs you.');
+    expect(renderStatus(await collectStatus(sources({ needsYou: async () => 1 })))).toContain('1 thing needs you.');
+  });
+
+  it("reads the dashboard's one count, asking the gateway only while the service runs", async () => {
+    const asked: boolean[] = [];
+    const needsYou = async ({ serviceRunning }: { serviceRunning: boolean }) => {
+      asked.push(serviceRunning);
+      return serviceRunning ? 5 : 2;
+    };
+    expect((await collectStatus(sources({ needsYou }))).needsYou).toBe(5);
+    const stopped = await collectStatus(sources({ needsYou, service: async () => ({ state: 'stopped', detail: 'x' }) }));
+    expect(stopped.needsYou).toBe(2);
+    expect(asked).toEqual([true, false]);
+    // A count that cannot be read costs one line.
+    const failed = await collectStatus(sources({ needsYou: async () => { throw new Error('boom'); } }));
+    expect(renderStatus(failed)).toContain('What needs you could not be read.');
   });
 });
 
