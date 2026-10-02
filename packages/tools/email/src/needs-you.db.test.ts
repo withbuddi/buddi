@@ -297,7 +297,7 @@ suite('needs you: the one rule (postgres)', () => {
     const widgetCount = async (): Promise<string> =>
       ((await registry.widget('email.waiting')!.produce(ctx, { size: 'small' })) as any).value;
 
-    expect(await reasonOf(threads.known)).toBe('known');
+    expect(await reasonOf(threads.known!)).toBe('known');
     const before = await widgetCount();
     const selectedCount = async (): Promise<number> =>
       (await selectMessages(pool, [{ id: accountId, address: OWNER }], { needsReply: true }, NOW)).count;
@@ -306,7 +306,7 @@ suite('needs you: the one rule (postgres)', () => {
 
     // Archived on the phone, on a server where buddi only learns it is gone.
     await pool.query(`update email.messages set gone_at = $2 where id = $1`, [row, NOW]);
-    expect(await reasonOf(threads.known)).toBe('filed');
+    expect(await reasonOf(threads.known!)).toBe('filed');
     expect(await needing()).not.toContain(threads.known);
     expect(await widgetCount()).toBe(String(Number(before) - 1));
     expect((await ask('thread', { id: threads.known })).stateLabel).toBe('They wrote — no reply expected: it is no longer in the inbox.');
@@ -318,11 +318,11 @@ suite('needs you: the one rule (postgres)', () => {
       [accountId],
     )).rows[0].id);
     await pool.query(`update email.messages set gone_at = null, folder_id = $2 where id = $1`, [row, allMail]);
-    expect(await reasonOf(threads.known)).toBe('filed');
+    expect(await reasonOf(threads.known!)).toBe('filed');
 
     // Moved back into the inbox: the same row in INBOX, waiting on him again.
     await pool.query(`update email.messages set folder_id = $2 where id = $1`, [row, inbox]);
-    expect(await reasonOf(threads.known)).toBe('known');
+    expect(await reasonOf(threads.known!)).toBe('known');
     expect(await widgetCount()).toBe(before);
   });
 });
