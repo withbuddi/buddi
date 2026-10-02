@@ -9,7 +9,7 @@ import { useState } from 'react';
 import type { ChatAgent } from '../../chat/types';
 import { AppIcon, Button, Empty, ErrorBanner, Icon, List, ListRow, Notice, Panel, useAsync } from '../../ui';
 import { SkillOverlays, SkillPickerFor, groupTitle, type SkillDialog } from '../Skills';
-import { originLine, skillsApi, skillsRoute, untrustedLine, type SkillRow } from './skills-data';
+import { heldBy, originLine, skillsApi, skillsRoute, untrustedLine, type SkillRow } from './skills-data';
 
 export function AgentSkills({
   agentId,
@@ -48,7 +48,7 @@ export function AgentSkills({
   }
   const data = view.data;
   const agent = data.agents.find((a) => a.id === agentId) ?? { id: agentId, handle: agentId, name: agentName, writable: false };
-  const mine = data.skills.filter((s) => s.every || s.holders.some((h) => h.agent === agentId));
+  const mine = data.skills.filter((s) => heldBy(s, agentId));
   const allSkills = skillsRoute();
 
   return (

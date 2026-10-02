@@ -779,9 +779,10 @@ export function selectSkills(
     if (own === undefined) continue;
     shadowed.add(skill.name);
     const key = `${agentId}\0${skill.file}\0${own.file}`;
-    if (!shadowWarned.has(key)) {
+    // A caller without a log (the Skills page's resolving) does not use up the one warning.
+    if (warn !== undefined && !shadowWarned.has(key)) {
       shadowWarned.add(key);
-      warn?.(
+      warn(
         `agents: ${agentId} has its own skill "${skill.name}" (${own.file}); it shadows the shared one ` +
           `(${skill.file}) for this agent only`,
       );

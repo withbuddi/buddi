@@ -50,6 +50,8 @@ import {
   deleteSentence,
   downloadSkill,
   editNote,
+  everyLine,
+  heldBy,
   holdersLine,
   nobodyUses,
   originLine,
@@ -513,7 +515,7 @@ export function SkillSheet({
         <SheetSection title="Used by" aside={<Button size="sm" onClick={onPicker}>Change…</Button>}>
           {row.every ? (
             <List>
-              <ListRow lead={<AppIcon icon="agents" />} title="Every agent" sub="Now, and any you add later." />
+              <ListRow lead={<AppIcon icon="agents" />} title={everyLine(row, agents)} sub="Now, and any you add later." />
             </List>
           ) : row.holders.length ? (
             <List>
@@ -662,16 +664,17 @@ export function AgentPicker({
           )}
           {shown.map((a) => {
             const home = row.home === a.id;
-            const fixed = home || !a.writable;
+            const own = (row.shadowedBy ?? []).includes(a.id);
+            const fixed = home || own || !a.writable;
             return (
               <CheckRow
                 key={a.id}
-                checked={every || home || picked.includes(a.id)}
+                checked={!own && (every || home || picked.includes(a.id))}
                 disabled={every || fixed}
                 onChange={(on) => toggle(a.id, on)}
                 lead={<Avatar id={a.id} name={a.name} size="sm" face={faces.find((f) => f.id === a.id)} />}
                 title={<>{a.name} <span className="skills-handle">@{a.handle}</span></>}
-                sub={home ? 'Its own skill, in its folder' : !a.writable ? 'Ships with buddi, so its file doesn’t change' : undefined}
+                sub={home ? 'Its own skill, in its folder' : own ? 'Has its own skill of this name, and uses that' : !a.writable ? 'Ships with buddi, so its file doesn’t change' : undefined}
               />
             );
           })}
@@ -695,7 +698,7 @@ export function SkillPickerFor({
   onCancel: () => void;
   onSaved: () => void;
 }): JSX.Element {
-  const holds = (s: SkillRow): boolean => s.every || s.holders.some((h) => h.agent === agent.id);
+  const holds = (s: SkillRow): boolean => heldBy(s, agent.id);
   const [picked, setPicked] = useState<string[]>(view.skills.filter(holds).map((s) => s.id));
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
@@ -747,11 +750,15 @@ export function SkillPickerFor({
                 {rows.map((s) => (
                   <CheckRow
                     key={s.id}
-                    checked={s.every || picked.includes(s.id)}
+                    checked={picked.includes(s.id)}
                     disabled={fixed(s)}
                     onChange={(on) => setPicked(on ? [...picked, s.id] : picked.filter((x) => x !== s.id))}
                     title={s.title}
-                    sub={s.every ? 'Every agent uses it' : s.home === agent.id ? 'Its own skill, in its folder' : s.description}
+                    sub={
+                      s.every
+                        ? holds(s) ? 'Every agent uses it' : everyLine(s, view.agents)
+                        : s.home === agent.id ? 'Its own skill, in its folder' : s.description
+                    }
                   />
                 ))}
               </div>

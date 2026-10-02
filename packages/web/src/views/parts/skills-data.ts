@@ -29,8 +29,12 @@ export interface SkillRow {
   group: SkillGroup;
   file: string;
   home: string | null;
+  /** The every-agent policy (no `agents` filter) — not membership: `holders` says who loads it. */
   every: boolean;
+  /** The agents that actually load it. */
   holders: SkillHolder[];
+  /** A shared skill's: agents with their own skill of this name, which use theirs instead. */
+  shadowedBy?: string[];
   untrusted: 'upload' | 'page' | null;
   provenance: string;
   source: string | null;
@@ -137,9 +141,22 @@ export function pluginTitle(plugin: string): string {
   return plugin.charAt(0).toUpperCase() + plugin.slice(1);
 }
 
+/** The every-agent policy in one phrase, naming the agents that use their own skill of the name instead. */
+export function everyLine(row: SkillRow, agents: readonly SkillsAgent[]): string {
+  const except = row.shadowedBy ?? [];
+  if (!except.length) return 'Every agent';
+  const handles = except.map((id) => `@${agents.find((a) => a.id === id)?.handle ?? id}`);
+  return `Every agent except ${andList(handles)} (${except.length === 1 ? 'has its own' : 'each has its own'})`;
+}
+
+/** Whether this agent actually loads it (an every-agent skill it shadows with its own does not count). */
+export function heldBy(row: SkillRow, agent: string): boolean {
+  return row.holders.some((h) => h.agent === agent);
+}
+
 /** Who uses it, in one phrase. */
 export function holdersLine(row: SkillRow, agents: readonly SkillsAgent[]): string {
-  if (row.every) return 'Every agent';
+  if (row.every) return everyLine(row, agents);
   const names = row.holders.map((h) => agentName(agents, h.agent));
   return names.length ? andList(names) : 'No agent uses it yet';
 }

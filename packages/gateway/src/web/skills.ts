@@ -40,7 +40,9 @@ import {
   parseAgentFile,
   parseSkillFile,
   parseYamlSubset,
+  selectSkills,
   serializeYamlValue,
+  skillRequestable,
   skillSlug,
   skillVersions,
   skillVersionsDir,
@@ -98,8 +100,12 @@ export interface SkillRow {
   file: string;
   /** The agent whose folder holds it; null for a shared skill. */
   home: string | null;
+  /** A shared skill with no `agents` filter: the policy, not membership — see `holders` and `shadowedBy`. */
   every: boolean;
+  /** The agents that actually load it, as the catalog resolves each one's skills. */
   holders: SkillHolder[];
+  /** A shared skill's: the agents with their own skill of this name, which use theirs instead. */
+  shadowedBy: string[];
   /** upload: a file the owner has not marked as theirs (read as outside text); page: untrusted text was in view when it was learned. */
   untrusted: 'upload' | 'page' | null;
   provenance: Skill['provenance'];
@@ -240,6 +246,27 @@ function ownsName(entries: readonly Entry[], agentId: string, name: string): boo
   return entries.some((e) => e.home === agentId && e.skill.name === name);
 }
 
+/** An agent's own skills: from the inventory for the owner's agents, from its folder for a shipped one. */
+function privateSkillsOf(agents: readonly AgentRecord[], entries: readonly Entry[], agentId: string): Skill[] | undefined {
+  const agent = agents.find((a) => a.id === agentId);
+  if (!agent) return undefined;
+  if (agent.writable) return entries.filter((e) => e.home === agentId).map((e) => e.skill);
+  return readDir(path.join(path.dirname(agent.file), SKILLS_DIR), 'private');
+}
+
+/**
+ * The skills an agent loads, as core's `selectSkills` picks them from these
+ * entries — with `declared` in place of its file's list when given. A plain
+ * name that is not a shared skill here (a shipped one) is left out rather
+ * than refused: the catalog's own load says what is wrong with it.
+ */
+function resolvedFor(agent: AgentRecord, agents: readonly AgentRecord[], entries: readonly Entry[], declared: readonly string[] = agent.declared): Skill[] {
+  const shared = entries.filter((e) => e.home === null).map((e) => e.skill);
+  const own = privateSkillsOf(agents, entries, agent.id) ?? [];
+  const asked = declared.filter((name) => name.includes('/') || own.some((s) => s.name === name) || shared.some((s) => s.name === name && skillRequestable(s, agent.id)));
+  return selectSkills(agent.id, asked, own, shared, (id) => privateSkillsOf(agents, entries, id));
+}
+
 function holdersOf(entry: Entry, agents: readonly AgentRecord[], entries: readonly Entry[] = []): { every: boolean; holders: SkillHolder[] } {
   const { skill } = entry;
   if (entry.home !== null) {
@@ -248,7 +275,10 @@ function holdersOf(entry: Entry, agents: readonly AgentRecord[], entries: readon
       every: false,
       holders: [
         { agent: entry.home, how: 'home' },
-        ...agents.filter((a) => a.id !== entry.home && a.declared.includes(ref)).map((a) => ({ agent: a.id, how: 'granted' as const })),
+        // Granted, and not displaced by another skill of the name the agent loads first.
+        ...agents
+          .filter((a) => a.id !== entry.home && a.declared.includes(ref) && resolvedFor(a, agents, entries).some((s) => s.file === skill.file))
+          .map((a) => ({ agent: a.id, how: 'granted' as const })),
       ],
     };
   }
@@ -285,6 +315,7 @@ function rowOf(entry: Entry, agents: readonly AgentRecord[], installed: Readonly
     home: entry.home,
     every,
     holders,
+    shadowedBy: entry.home === null ? agents.filter((a) => ownsName(entries, a.id, skill.name)).map((a) => a.id) : [],
     untrusted: !skill.untrusted ? null : skill.learned ? 'page' : 'upload',
     provenance: skill.provenance,
     source: skill.source ?? null,
@@ -458,9 +489,12 @@ function planGrant(snap: Snapshot, entry: Entry, every: boolean, wanted: readonl
     for (const agent of snap.agents) {
       if (agent.id === entry.home) continue;
       const hold = wanted.includes(agent.id);
-      if (hold && !agent.declared.includes(ref)) {
-        const clash = snap.entries.find((e) => e.skill.name === entry.skill.name && e !== entry && (e.home === agent.id || (e.home === null && holdersOf(e, snap.agents, snap.entries).holders.some((h) => h.agent === agent.id))));
-        if (clash) return { writes, error: fail(409, `${agent.name} already has a skill called "${entry.skill.name}"; one name, one procedure.`) };
+      if (hold) {
+        // Checked for a grant already written too: a shared skill given later may have taken the name.
+        const others = resolvedFor(agent, snap.agents, snap.entries, agent.declared.filter((s) => s !== ref));
+        if (others.some((s) => s.name === entry.skill.name)) {
+          return { writes, error: fail(409, `${agent.name} already has a skill called "${entry.skill.name}"; one name, one procedure.`) };
+        }
       }
       const refused = agentWrite(agent, hold);
       if (refused) return { writes, error: refused };
@@ -480,6 +514,25 @@ function planGrant(snap: Snapshot, entry: Entry, every: boolean, wanted: readonl
     return {
       writes,
       error: fail(409, `${names} already ${shadowedFor.length === 1 ? 'has its' : 'have their'} own skill called "${entry.skill.name}", which ${shadowedFor.length === 1 ? 'it uses' : 'they use'} instead of the shared one. Give the shared one to other agents, or delete the agent's own first.`),
+    };
+  }
+  /*
+   * An agent given this skill that loads another agent's own skill of the
+   * same name (`<agent>/<name>`) would lose that one to it: refuse, naming
+   * them, rather than report a grant that no longer runs.
+   */
+  const displaced = snap.agents.flatMap((agent) => {
+    if (ownsName(snap.entries, agent.id, entry.skill.name)) return [];
+    if (!every && !wanted.includes(agent.id)) return [];
+    const loaded = resolvedFor(agent, snap.agents, snap.entries).find((s) => s.name === entry.skill.name);
+    const owner = loaded && snap.entries.find((e) => e.skill.file === loaded.file && e.home !== null && e.home !== agent.id)?.home;
+    return owner ? [{ agent, owner }] : [];
+  });
+  if (displaced.length > 0) {
+    const lines = displaced.map(({ agent, owner }) => `${agent.name} uses ${owner}'s own "${entry.skill.name}" (${owner}/${entry.skill.name})`);
+    return {
+      writes,
+      error: fail(409, `${lines.join('; ')}. The shared one would replace it; take that grant away first${every ? '' : `, or leave ${displaced.length === 1 ? 'that agent' : 'those agents'} out`}.`),
     };
   }
   for (const agent of snap.agents) {

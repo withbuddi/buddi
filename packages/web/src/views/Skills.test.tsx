@@ -217,6 +217,18 @@ describe('the sheet', { timeout: 180_000 }, () => {
     expect(skillsApi.grant).toHaveBeenCalledWith('weekly-recap', { agents: ['ledger'] });
   });
 
+  it('names the agents that use their own skill of the name instead of an every-agent one', async () => {
+    const SHARED: SkillRow = { ...RECAP, id: 'sources', name: 'sources', title: 'Cite sources', every: true, holders: [{ agent: 'ledger', how: 'every' }], shadowedBy: ['scout'] };
+    vi.mocked(skillsApi.list).mockResolvedValue({ ...VIEW, skills: [...VIEW.skills, SHARED] });
+    vi.mocked(skillsApi.detail).mockResolvedValue(detailOf(SHARED));
+    await show({ openSkill: 'sources' });
+    expect(within(sheet()).getByText('Every agent except @scout (has its own)')).toBeInTheDocument();
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Change…' }));
+    const picker = await screen.findByRole('alertdialog');
+    expect(within(picker).getByRole('checkbox', { name: /Scout/ })).not.toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: /Ledger/ })).toBeChecked();
+  });
+
   it('keeps the agent whose folder holds it: no Take away there', async () => {
     await show({ openSkill: 'dev/open-project' });
     expect(within(sheet()).getByText('Proposed it')).toBeInTheDocument();

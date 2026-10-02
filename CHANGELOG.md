@@ -8,6 +8,7 @@ What changes in buddi from one release to the next, newest first.
 
 - Adding a catalogue agent whose skill is named like one of your shared skills (Researcher's `answering-with-sources` beside the one the web plugin imported) no longer fails: that agent uses its own and every other agent keeps the shared one. The Skills page lists both, and giving the shared one to that agent is refused with a reason.
 - Agents from before buddi recorded where agents came from (an old @scout or @ledger with no `plugin.json`) are matched to the catalogue package that replaces them by directory, id and handle, so the catalogue offers "Update @scout to Researcher" instead of adding a second one; an agent you changed gets Keep mine or Replace my changes, and the update keeps its handle, memory and missions.
+- The Skills page no longer shows a shared every-agent skill as used by an agent that has its own skill of that name: it reads "Every agent except @researcher (has its own)" and that agent's picker leaves it unticked. Giving a shared skill to agents that use another agent's own skill of the same name (`researcher/sources`) is refused, naming them, instead of silently replacing it, and that skill's holders list only agents that actually load it.
 
 ## 0.1.0-pre.32 — 2026-10-02
 

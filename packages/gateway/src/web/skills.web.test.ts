@@ -187,6 +187,7 @@ describe('the Skills page, server side', () => {
     expect(row('compare-sources').every).toBe(true);
     expect(row('compare-sources').holders.map((h) => h.agent)).not.toContain('researcher');
     expect(row('compare-sources').holders.map((h) => h.agent)).toContain('scout');
+    expect(row('compare-sources').shadowedBy).toEqual(['researcher']);
     expect(row('researcher/compare-sources').holders).toEqual([{ agent: 'researcher', how: 'home' }]);
 
     const refused = grantSkillRoute(deps, 'compare-sources', { agents: ['scout', 'researcher'] });
@@ -196,6 +197,33 @@ describe('the Skills page, server side', () => {
     expect(grantSkillRoute(deps, 'compare-sources', { agents: ['scout'] }).status).toBe(200);
     expect(declared('scout')).toEqual(['compare-sources']);
     expect(row('compare-sources').holders).toEqual([{ agent: 'scout', how: 'granted' }]);
+  });
+
+  it("refuses a shared grant that would displace another agent's own skill given by its qualified name", () => {
+    const shared = path.join(skillsDir, 'compare-sources.md');
+    write(shared, skillFile('compare-sources', 'description: The house way.\nagents: []\n', 'The house way.'));
+    deps.catalog.reload?.();
+    expect(grantSkillRoute(deps, 'researcher/compare-sources', { agents: ['researcher', 'scout'] }).status).toBe(200);
+    expect(prompt('scout')).toContain('Read three sources.');
+
+    for (const grant of [{ every: true, agents: [] }, { agents: ['scout'] }]) {
+      const refused = grantSkillRoute(deps, 'compare-sources', grant);
+      expect(refused.status).toBe(409);
+      expect((refused.body as { error: string }).error).toMatch(/Scout uses researcher's own "compare-sources" \(researcher\/compare-sources\)/);
+    }
+    expect(readFileSync(shared, 'utf8')).toContain('agents: []');
+    expect(declared('scout')).toEqual(['researcher/compare-sources']);
+    // Other agents can still have the shared one.
+    expect(grantSkillRoute(deps, 'compare-sources', { agents: ['ledger'] }).status).toBe(200);
+
+    // Made every-agent by hand: the shared one displaces the grant, and the page says so.
+    write(shared, skillFile('compare-sources', 'description: The house way.\n', 'The house way.'));
+    deps.catalog.reload?.();
+    expect(prompt('scout')).toContain('The house way.');
+    expect(row('researcher/compare-sources').holders).toEqual([{ agent: 'researcher', how: 'home' }]);
+    const again = grantSkillRoute(deps, 'researcher/compare-sources', { agents: ['researcher', 'scout'] });
+    expect(again.status).toBe(409);
+    expect((again.body as { error: string }).error).toMatch(/Scout already has a skill called "compare-sources"/);
   });
 
   it('refuses to write a grant into an agent that ships with buddi', () => {

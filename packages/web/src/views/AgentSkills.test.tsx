@@ -115,6 +115,19 @@ describe('the agent page’s Skills', { timeout: 180_000 }, () => {
     expect(skillsApi.grant).toHaveBeenCalledWith('weekly-recap', { agents: ['ledger', 'dev'] });
   });
 
+  it('leaves out an every-agent skill this agent shadows with its own, and says so in the picker', async () => {
+    const SOURCES = row({ id: 'sources', title: 'Cite sources', group: 'mine', every: true, holders: [{ agent: 'ledger', how: 'every' }], shadowedBy: ['dev'] });
+    vi.mocked(skillsApi.list).mockResolvedValue({ ...VIEW, skills: [...VIEW.skills, SOURCES] });
+    await show();
+    expect(screen.queryByText('Cite sources')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose skills…' }));
+    const picker = await screen.findByRole('alertdialog');
+    const box = within(picker).getByRole('checkbox', { name: /Cite sources/ });
+    expect(box).not.toBeChecked();
+    expect(box).toBeDisabled();
+    expect(within(picker).getByText('Every agent except @dev (has its own)')).toBeInTheDocument();
+  });
+
   it('says so when the agent uses no skills', async () => {
     vi.mocked(skillsApi.list).mockResolvedValue({ ...VIEW, skills: [RECAP] });
     render(<AgentSkills agentId="dev" agentName="Dev" navigate={vi.fn()} />);
