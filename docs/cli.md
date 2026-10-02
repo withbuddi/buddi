@@ -174,7 +174,7 @@ buddi status [--json]
 buddi status
 ```
 
-**JSON**: { version, install, service: { state, detail }, database: { reachable, error? }, agents: { ready: [{ handle, id }], unavailable: [{ handle, id, reason }] }, needsYou: number | null (the dashboard's Needs you count), lastRecapAt | null, update: { available, latest? }, ollama: [{ label, line }] }. service.state is running, stopped, not-installed or unknown.
+**JSON**: { version, install, service: { state, detail }, database: { reachable, error? }, agents: { ready: [{ handle, id }], unavailable: [{ handle, id, reason }] }, needsYou: { approvals, questions, total } | null (total is the dashboard's Needs you count), lastRecapAt | null, update: { available, latest? }, ollama: [{ label, line }] }. service.state is running, stopped, not-installed or unknown.
 
 **Exit codes**
 

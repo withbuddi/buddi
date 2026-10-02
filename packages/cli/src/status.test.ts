@@ -16,7 +16,7 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
       { handle: 'buddi', id: 'concierge', available: true },
       { handle: 'scout', id: 'scout', available: false, reason: 'environment variable OPENAI_API_KEY is not set' },
     ],
-    needsYou: async () => 3,
+    needsYou: async () => ({ approvals: 1, questions: 1, total: 3 }),
     lastRecapAt: async () => new Date('2026-09-20T22:00:00Z'),
     update: async () => ({ available: true, latest: '0.2.0' }),
     ...over,
@@ -32,7 +32,8 @@ describe('collectStatus', () => {
       service: { state: 'running' },
       database: { reachable: true },
       agents: { ready: [{ handle: 'buddi', id: 'concierge' }], unavailable: [{ handle: 'scout' }] },
-      needsYou: 3,
+      // The fields the JSON always had, and the dashboard's total beside them.
+      needsYou: { approvals: 1, questions: 1, total: 3 },
       lastRecapAt: '2026-09-20T22:00:00.000Z',
       update: { available: true, latest: '0.2.0' },
     });
@@ -88,20 +89,20 @@ describe('renderStatus', () => {
   });
 
   it('says nothing needs you when nothing does', async () => {
-    const text = renderStatus(await collectStatus(sources({ needsYou: async () => 0 })));
+    const text = renderStatus(await collectStatus(sources({ needsYou: async () => ({ approvals: 0, questions: 0, total: 0 }) })));
     expect(text).toContain('Nothing needs you.');
-    expect(renderStatus(await collectStatus(sources({ needsYou: async () => 1 })))).toContain('1 thing needs you.');
+    expect(renderStatus(await collectStatus(sources({ needsYou: async () => ({ approvals: 0, questions: 0, total: 1 }) })))).toContain('1 thing needs you.');
   });
 
   it("reads the dashboard's one count, asking the gateway only while the service runs", async () => {
     const asked: boolean[] = [];
     const needsYou = async ({ serviceRunning }: { serviceRunning: boolean }) => {
       asked.push(serviceRunning);
-      return serviceRunning ? 5 : 2;
+      return serviceRunning ? { approvals: 2, questions: 0, total: 5 } : { approvals: 2, questions: 0, total: 2 };
     };
-    expect((await collectStatus(sources({ needsYou }))).needsYou).toBe(5);
+    expect((await collectStatus(sources({ needsYou }))).needsYou?.total).toBe(5);
     const stopped = await collectStatus(sources({ needsYou, service: async () => ({ state: 'stopped', detail: 'x' }) }));
-    expect(stopped.needsYou).toBe(2);
+    expect(stopped.needsYou?.total).toBe(2);
     expect(asked).toEqual([true, false]);
     // A count that cannot be read costs one line.
     const failed = await collectStatus(sources({ needsYou: async () => { throw new Error('boom'); } }));

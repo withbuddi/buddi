@@ -26,15 +26,21 @@ export interface StatusReport {
     error?: string;
   };
   /**
-   * What needs the owner, by the dashboard's one count (needsYou on
-   * /api/overview: Home, the rail's badge, the lock screen). Null when the
-   * database could not be read.
+   * What needs the owner: pending approvals and held questions, as before,
+   * and `total`, the dashboard's one count (needsYou on /api/overview: Home,
+   * the rail's badge, the lock screen). Null when the database could not be read.
    */
-  needsYou: number | null;
+  needsYou: NeedsYouCounts | null;
   lastRecapAt: string | null;
   update: { available: boolean; latest?: string };
   /** Ollama Cloud accounts connected with a device key: "connected as <user>, device <name>". */
   ollama: Array<{ label: string; line: string }>;
+}
+
+export interface NeedsYouCounts {
+  approvals: number;
+  questions: number;
+  total: number;
 }
 
 /** Everything `collectStatus` reads, injectable so the report is testable. */
@@ -45,8 +51,8 @@ export interface StatusSources {
   probeDatabase(): Promise<void>;
   describeDatabaseError(err: unknown): string;
   agents(): Promise<Array<{ handle: string; id: string; available: boolean; reason?: string }>>;
-  /** The Needs you total; `serviceRunning` says whether the gateway can be asked. */
-  needsYou(opts: { serviceRunning: boolean }): Promise<number>;
+  /** The Needs you counts; `serviceRunning` says whether the gateway can be asked. */
+  needsYou(opts: { serviceRunning: boolean }): Promise<NeedsYouCounts>;
   lastRecapAt(): Promise<Date | null>;
   update(): Promise<{ available: boolean; latest?: string }>;
   /** Optional: the device-key accounts, each with its one line. */
@@ -138,7 +144,7 @@ export function renderStatus(report: StatusReport, timezone = 'UTC'): string {
   if (report.needsYou === null) {
     lines.push(report.database.reachable ? 'What needs you could not be read.' : 'What needs you is unknown without the database.');
   } else {
-    const n = report.needsYou;
+    const n = report.needsYou.total;
     // The lock screen's words: "3 things need you".
     lines.push(n === 0 ? 'Nothing needs you.' : `${count(n, 'thing needs', 'things need')} you. Open the dashboard with buddi.`);
   }

@@ -480,13 +480,19 @@ async function status(json: boolean, env: NodeJS.ProcessEnv): Promise<number> {
         const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
         const gateway = gatewayFromEnvironment(env);
         if (!('off' in gateway)) {
-          const overview = await gateway.get<{ needsYou?: { total?: number } }>('/api/overview').catch(() => null);
-          if (typeof overview?.needsYou?.total === 'number') return overview.needsYou.total;
+          const overview = await gateway
+            .get<{ needsYou?: { approvals?: number; questions?: number; total?: number } }>('/api/overview')
+            .catch(() => null);
+          const n = overview?.needsYou;
+          if (typeof n?.total === 'number' && typeof n.approvals === 'number' && typeof n.questions === 'number') {
+            return { approvals: n.approvals, questions: n.questions, total: n.total };
+          }
         }
       }
       const pool = createPool(env.DATABASE_URL as string);
       try {
-        return (await readNeedsYou({ pool, registry: new ToolRegistry(), now: new Date() })).total;
+        const n = await readNeedsYou({ pool, registry: new ToolRegistry(), now: new Date() });
+        return { approvals: n.approvals, questions: n.questions, total: n.total };
       } finally {
         await pool.end().catch(() => {});
       }
