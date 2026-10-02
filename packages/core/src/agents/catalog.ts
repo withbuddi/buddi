@@ -44,6 +44,7 @@ import type { IdleRollover } from './idle-rollover.js';
 import {
   loadSkillsDir,
   skillAdmits,
+  skillRequestable,
   skillsSection,
   SkillFileError,
   SKILLS_DIR,
@@ -737,14 +738,24 @@ export function generatedSection(
  *    nobody edited.
  *
  * `skills:` in the frontmatter is an explicit request by name; a name that is
- * not a shared skill, or is one this agent is not admitted to, fails the load
- * rather than quietly composing a prompt missing its procedure.
+ * not a shared skill, or is one whose `agents` filter names others and not this
+ * agent, fails the load rather than quietly composing a prompt missing its
+ * procedure. A shared skill with `agents: []` loads only for the agents that
+ * request it — the Skills page's grant, recorded in the agent's own file.
+ *
+ * A qualified name, `<agent>/<skill>`, asks for another agent's own skill (a
+ * learned one, or one that came with a catalogue agent). That one is looked up
+ * through `privateOf`, and a reference that no longer resolves — the agent or
+ * the skill was removed — is skipped with a line in the log rather than taking
+ * every agent down with it.
  */
 export function selectSkills(
   agentId: string,
   declared: readonly string[],
   privateSkills: readonly Skill[],
   sharedSkills: readonly Skill[],
+  privateOf?: (agentId: string) => readonly Skill[] | undefined,
+  warn?: (line: string) => void,
 ): Skill[] {
   const chosen: Skill[] = [...privateSkills];
   const byName = new Map(privateSkills.map((s) => [s.name, s]));
@@ -760,7 +771,8 @@ export function selectSkills(
     }
   }
 
-  for (const name of declared) {
+  const plain = declared.filter((name) => !name.includes('/'));
+  for (const name of plain) {
     const skill = sharedSkills.find((s) => s.name === name);
     if (skill === undefined) {
       throw new AgentCatalogError(
@@ -769,7 +781,7 @@ export function selectSkills(
           `(shared: ${sharedSkills.map((s) => s.name).join(', ') || 'none'})`,
       );
     }
-    if (!skillAdmits(skill, agentId)) {
+    if (!skillRequestable(skill, agentId)) {
       throw new AgentCatalogError(
         'unknown-skill',
         `agent "${agentId}" declares skill "${name}", which lists agents ` +
@@ -779,7 +791,29 @@ export function selectSkills(
   }
 
   for (const skill of sharedSkills) {
-    if (skillAdmits(skill, agentId) || declared.includes(skill.name)) chosen.push(skill);
+    if (skillAdmits(skill, agentId) || plain.includes(skill.name)) {
+      chosen.push(skill);
+      byName.set(skill.name, skill);
+    }
+  }
+
+  for (const ref of declared.filter((name) => name.includes('/'))) {
+    const [owner, name, ...rest] = ref.split('/');
+    if (!owner || !name || rest.length > 0 || owner === agentId) {
+      warn?.(`agents: ${agentId} asks for skill "${ref}", which is not <agent>/<skill> of another agent; skipped`);
+      continue;
+    }
+    const skill = privateOf?.(owner)?.find((s) => s.name === name);
+    if (skill === undefined) {
+      warn?.(`agents: ${agentId} asks for skill "${ref}", which is no longer there; skipped`);
+      continue;
+    }
+    if (byName.has(skill.name)) {
+      warn?.(`agents: ${agentId} asks for skill "${ref}", but it already has a skill called "${skill.name}"; skipped`);
+      continue;
+    }
+    chosen.push(skill);
+    byName.set(skill.name, skill);
   }
   return chosen;
 }
@@ -821,6 +855,8 @@ function buildAgent(
   refused?: AgentHoldBack,
   /** The ids an open allowlist ("everyone") resolves to. */
   openTargets: readonly string[] = [],
+  /** Another agent's own skills, for a qualified `skills:` entry. */
+  privateOf?: (agentId: string) => readonly Skill[] | undefined,
 ): CatalogAgent {
   /*
    * The front desk may always tell the owner something (`owner.notify`), the
@@ -872,7 +908,14 @@ function buildAgent(
       ? { ok: true }
       : { ok: false, problem: resolution.problem }));
   const privateSkills = readSkills(path.join(path.dirname(file), SKILLS_DIR), 'private');
-  const skills = selectSkills(frontmatter.id, frontmatter.skills ?? [], privateSkills, sharedSkills);
+  const skills = selectSkills(
+    frontmatter.id,
+    frontmatter.skills ?? [],
+    privateSkills,
+    sharedSkills,
+    privateOf,
+    opts.log ?? ((line: string) => console.warn(line)),
+  );
   const section = skillsSection(skills);
   const colleagues = roster.filter((entry) => entry.id !== frontmatter.id);
   /*
@@ -1164,8 +1207,25 @@ export function loadAgentCatalog(opts: LoadAgentCatalogOptions): AgentCatalog {
     })
     .map(({ frontmatter }) => frontmatter.id);
 
+  // Each agent's own skills, read once on first ask: a qualified `skills:` entry reads another's.
+  const ownSkills = new Map<string, readonly Skill[] | undefined>();
+  const dirOf = new Map(loadable.map(({ frontmatter, file }) => [frontmatter.id, path.dirname(file)]));
+  const privateOf = (id: string): readonly Skill[] | undefined => {
+    if (!ownSkills.has(id)) {
+      const dir = dirOf.get(id);
+      let read: readonly Skill[] | undefined;
+      try {
+        read = dir === undefined ? undefined : readSkills(path.join(dir, SKILLS_DIR), 'private');
+      } catch {
+        read = undefined; // that agent's own load reports it
+      }
+      ownSkills.set(id, read);
+    }
+    return ownSkills.get(id);
+  };
+
   for (const { frontmatter, body, file, source, order } of loadable) {
-    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster, undefined, openTargets);
+    const agent = buildAgent(frontmatter, body, file, source, sharedSkills, opts, roster, undefined, openTargets, privateOf);
     agents.set(agent.id, agent);
     byHandle.set(agent.handle.toLowerCase(), agent);
     if (agent.isDefault) claimed.push({ id: agent.id, order });

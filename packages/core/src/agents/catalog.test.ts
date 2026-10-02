@@ -1108,6 +1108,20 @@ describe('selectSkills', () => {
       'house',
     ]);
   });
+  it('loads an on-request skill (`agents: []`) only for an agent that names it, and still refuses one filtered to others', () => {
+    expect(selectSkills('a', [], [], [shared('house', [])])).toEqual([]);
+    expect(selectSkills('a', ['house'], [], [shared('house', [])]).map((s) => s.name)).toEqual(['house']);
+    expect(() => selectSkills('a', ['house'], [], [shared('house', ['b'])])).toThrow(/lists agents b and not this one/);
+  });
+
+  it("loads another agent's own skill by its qualified name, and skips one that is gone", () => {
+    const own = parseSkillFile('---\nname: compare\ndescription: d\n---\n\nRead three.\n');
+    const lines: string[] = [];
+    const chosen = selectSkills('a', ['b/compare', 'b/missing', 'c/compare'], [], [], (id) => (id === 'b' || id === 'c' ? [own] : undefined), (l) => lines.push(l));
+    expect(chosen.map((s) => s.name)).toEqual(['compare']);
+    expect(lines.join('\n')).toMatch(/b\/missing", which is no longer there/);
+    expect(lines.join('\n')).toMatch(/already has a skill called "compare"/);
+  });
 });
 
 

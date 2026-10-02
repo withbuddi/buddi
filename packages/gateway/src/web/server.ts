@@ -46,6 +46,17 @@ import { agentMuteRoute, focusRoute, listNotificationsRoute, markSeenRoute, noti
 import { catalogSkillLookup, discardProposalFromWeb, keepAllProposalsFromWeb, keepProposalFromWeb, readProposals, registryChangeLookup } from './proposals.js';
 import { latestDigest, readDigestSchedule, setDigestSchedule } from '../agents/learning-digest.js';
 import { readAgentSkills, removeLearnedSkillFromWeb } from '../agents/learned-skills.js';
+import {
+  createSkillRoute,
+  deleteSkillRoute,
+  editSkillRoute,
+  grantSkillRoute,
+  listSkillsRoute,
+  skillDetailRoute,
+  skillDownload,
+  trustSkillRoute,
+  type SkillsDeps,
+} from './skills.js';
 import { bindMcpRequests, requestThroughMcp } from '../mcp/requests.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -1273,6 +1284,21 @@ export function createWebApp(deps: WebServerDeps): Server {
         ...(live.register && live.unregister && live.manifests ? { liveRegistry: deps.registry as never } : {}),
       };
     };
+    /** The Skills page (skills.ts): the owner's folders, the catalog to check each write against. */
+    const skillsDeps = (): SkillsDeps => {
+      const bound = catalogueBindingOf(deps.registry);
+      const search = agentSearchPath(deps.env ?? process.env);
+      const agentsDir = bound?.agentsDir ?? search.owner.dir;
+      return {
+        catalog: deps.catalog as SkillsDeps['catalog'],
+        agentsDir,
+        skillsDir: search.owner.skillsDir,
+        trashRoot: bound?.trashRoot ?? path_.join(path_.dirname(path_.resolve(agentsDir)), '.trash'),
+        plugins: () => deps.registry.manifests().map((m) => m.name),
+        now: deps.now,
+        pool: deps.pool,
+      };
+    };
     /** Is a mailbox connected? The email plugin's own read, the one Home's offer asks. */
     const mailboxSet = async (): Promise<boolean> => {
       const answer = await runPageQuery(pagesDeps(), 'email', 'triage_offer', new URLSearchParams()).catch(() => null);
@@ -2050,6 +2076,22 @@ export function createWebApp(deps: WebServerDeps): Server {
         if (!view) return sendJson(res, 404, { error: 'no such agent' });
         return sendJson(res, 200, view);
       }
+      // The Skills page: every skill, grouped, who holds each; one whole; one as its file.
+      if (path === '/api/skills') return reply(res, listSkillsRoute(skillsDeps()));
+      const skillRead = /^\/api\/skills\/([^/]+)(\/download)?$/.exec(path);
+      if (skillRead) {
+        const id = decodeURIComponent(skillRead[1] as string);
+        if (!skillRead[2]) return reply(res, skillDetailRoute(skillsDeps(), id));
+        const file = skillDownload(skillsDeps(), id);
+        if (!file) return sendJson(res, 404, { error: `There is no skill "${id}".` });
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.end(method === 'HEAD' ? undefined : file.text);
+        return;
+      }
       // The Skills tab: every skill the agent loads, learned ones with their versions.
       const agentSkills = /^\/api\/agents\/([^/]+)\/skills$/.exec(path);
       if (agentSkills) {
@@ -2259,6 +2301,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         const forgotten = await extension.unpair();
         return sendJson(res, forgotten.status, forgotten.body);
       }
+      // Delete a skill: the agents that asked for it stop, the file goes to the trash.
+      const skillGone = /^\/api\/skills\/([^/]+)$/.exec(path);
+      if (skillGone) return reply(res, await deleteSkillRoute(skillsDeps(), decodeURIComponent(skillGone[1] as string)));
       // Revoke an API token: the next request carrying it is a 401.
       const tokenGone = /^\/api\/api-tokens\/([0-9a-f-]{36})$/i.exec(path);
       if (tokenGone) {
@@ -3580,6 +3625,16 @@ export function createWebApp(deps: WebServerDeps): Server {
             })
           : await discardProposalFromWeb(writeDeps, id, typeof body.reason === 'string' ? body.reason : undefined),
       );
+    }
+
+    /* The Skills page's writes (skills.ts): each checked by reloading the catalog. */
+    if (path === '/api/skills') return reply(res, createSkillRoute(skillsDeps(), body));
+    const skillWrite = /^\/api\/skills\/([^/]+)\/(text|grants|trust)$/.exec(path);
+    if (skillWrite) {
+      const id = decodeURIComponent(skillWrite[1] as string);
+      if (skillWrite[2] === 'text') return reply(res, editSkillRoute(skillsDeps(), id, body));
+      if (skillWrite[2] === 'grants') return reply(res, grantSkillRoute(skillsDeps(), id, body));
+      return reply(res, trustSkillRoute(skillsDeps(), id));
     }
 
     /*

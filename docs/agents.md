@@ -76,6 +76,53 @@ It is the only placeholder. Anything else between double braces, `{{date}}` or
 `{{owner}}`, stays in the persona as written, so the agent sees the braces
 rather than a value.
 
+## Skills
+
+A skill is one Markdown file: front matter with its `name` (the file's name),
+a `description` saying when it is used, and optionally a `title`; then the
+steps. A skill informs an agent's reasoning; it never grants a tool or lowers
+a tier. Skills live in two places:
+
+- your **shared skills folder** (`skills/` beside your agents directory):
+  every skill you write or upload goes here;
+- an **agent's own folder** (`agents/<id>/skills/`): a skill it learned, one
+  that came with a catalogue agent, or one you put there by hand. That agent
+  always uses it.
+
+Agents → Skills lists them in four groups: **Yours** (written or uploaded by
+you), **Learned** (an agent proposed it and you kept it), **From plugins**
+(accepted from a plugin; its text reads only and it goes with the plugin) and
+**From the catalogue** (came with a teammate; yours to change, and a change
+means its next update asks before replacing it). The shipped house rules in
+`examples/skills` are the platform's and are not listed.
+
+**Who uses a skill is written in the agents' files**, so the file stays the
+record. A shared skill with no `agents` key is used by every agent; one with
+`agents: []` is used only by the agents whose own `skills:` line names it.
+Another agent's own skill is given by its qualified name:
+
+```yaml
+skills: [my-voice, researcher/compare-sources]
+```
+
+A qualified name that no longer resolves (the skill or its agent was removed)
+is skipped with a line in the log; a plain name that is not a shared skill
+still stops the agent loading. Every change on the Skills page is checked by
+reloading the agents, and a change the loader would refuse is undone before
+it answers.
+
+**Uploads.** A single `.md` is read in the browser and saved like a written
+skill. Unless you tick "Mark as mine", it is untrusted: its text reaches the
+agents fenced as outside text they may learn from but never obey, until you
+mark it as yours. (`.zip` bundles with scripts come later.)
+
+**Edits.** A learned skill's edit is saved as its next version, marked as
+your correction; the earlier versions stay in `skills/versions/`. Deleting a
+skill takes it off every agent that named it; a learned one keeps its
+versions and is not proposed again for 90 days, anything else goes to the
+trash folder beside your agents. `buddi skills list` prints the page in the
+terminal; the routes are under `/api/skills` (docs/api.md).
+
 ## The catalogue
 
 A fresh install has two agents: the front desk and Agent Father. Everything
@@ -116,17 +163,18 @@ on.
 
 Beside the file, `plugin.json` records where it came from: `source:
 "market"`, the package and version, the package integrity you approved, the
-hash of the file as written, and the picks. That is how buddi tells an
-untouched agent from one you edited.
+hash of the file as written, the hash of each skill it came with, and the
+picks. That is how buddi tells an untouched agent from one you edited: a
+changed or deleted skill counts as an edit too.
 
 **Updates** are offered, never written on their own. When a newer version is
 listed and you have not touched the file, Update shows what changed: the
 version's one line, the persona diff, tools added and removed, new missions.
 Approving it writes the file again from the new package with the same picks;
 a grant that gains tools says so loudly and names them. When you edited the
-file, nothing is touched, ever: the card says a new version is out, with
-"See what changed" and "Replace my changes" (your file goes to the trash
-first). Missions are your rows: an update adds new suggested ones off and
+file or one of its skills, nothing is touched, ever: the card says a new
+version is out, with "See what changed" and "Replace my changes" (your file
+and your changed skills go to the trash first). Missions are your rows: an update adds new suggested ones off and
 never changes or turns on one you have.
 
 **Removing** an agent moves its directory to the trash beside your agents and

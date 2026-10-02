@@ -317,6 +317,7 @@ Your agents, what they have scheduled, and the plugins they use.
 - [`buddi plugins uninstall`](#buddi-plugins-uninstall): Say what removing a plugin would do; --yes removes it and keeps its data.
 - [`buddi plugins init`](#buddi-plugins-init): Write a new plugin you can build and install.
 - [`buddi plugins dev`](#buddi-plugins-dev): Watch a plugin's dist/ and restart buddi when it changes.
+- [`buddi skills list`](#buddi-skills-list): List every skill, grouped as the Skills page groups them (yours, learned, from plugins, from the catalogue), with the agents that use each.
 - [`buddi connections list`](#buddi-connections-list): List the connected services: their state, their tools, and the agents that hold them.
 - [`buddi connections add`](#buddi-connections-add): Connect a service that speaks MCP: address, sign-in, review and give, as on the dashboard. GitHub signs in with a code you type on github.com. With -- <command>, a program on this computer that buddi starts as you.
 - [`buddi connections review`](#buddi-connections-review): Print every tool a connection brings with its tier, and keep them with --keep.
@@ -1213,6 +1214,33 @@ buddi plugins dev ./weather
 - `0`: Done.
 - `1`: It failed; the message says why.
 - `2`: The command was not typed right.
+
+### buddi skills list
+
+List every skill, grouped as the Skills page groups them (yours, learned, from plugins, from the catalogue), with the agents that use each.
+
+```sh
+buddi skills list [--json]
+```
+
+**Flags**
+
+- `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+
+**Example**
+
+```sh
+buddi skills list
+```
+
+**JSON**: [{ id, name, title, description, group, file, home, every, holders: [{ agent, how }], untrusted, provenance, source, learned, from, editable, deletable, shareable }]
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: buddi is not running: these commands go through the running gateway.
 
 ### buddi connections list
 

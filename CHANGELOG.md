@@ -10,9 +10,12 @@ What changes in buddi from one release to the next, newest first.
 - Updates from the catalogue are offered, never written on their own: an untouched agent is rewritten from the new version with the same picks after you approve the diff, and an agent you edited is left alone unless you replace your changes (your file goes to the trash).
 - Agent Father reads the catalogue and adds an agent from chat (`platform.catalogue`, `platform.install_agent`), asking the picks in words; the approval is the same one the dashboard makes.
 - `buddi agents catalogue`, `buddi agents add <name>`, `buddi agents update <handle>` and `buddi agents remove <handle>`, through the running service.
+- Skills, server side of the Skills page: every skill listed in four groups (yours, learned, from plugins, from the catalogue) with the agents that use it; write a new one, save one from a single `.md`, edit its text (a learned one becomes its next version; a plugin's reads only), give it to every agent or to some, mark an upload as yours, download, delete. Who uses a skill is written in each agent's file (`skills:`), and another agent's own skill is given as `<agent>/<skill>`. Routes `/api/skills…`; the dashboard page comes next. `buddi skills list` prints it.
+- An uploaded skill is untrusted until you mark it as yours: its text reaches the agents fenced as outside text, never as instructions.
 
 ### Changed
 
+- Editing or deleting a skill that came with a catalogue agent counts as editing that agent: its next update asks before replacing your change, and Replace my changes puts your version of the skill in the trash too.
 - Removing an agent also pauses its missions, in the same approval, and names the plugins no other agent uses (they stay installed).
 - The starter team (Scout, Planner, Keeper) is gone from buddi: Researcher, Chief of Staff and Home Manager replace them in the catalogue. A Scout, Planner or Keeper you added keeps working with its handle and its data, and is offered its catalogue version while you have not edited it; the same goes for Ledger (CFO) and Illustrator. First run no longer says Planner is ready to be introduced.
 

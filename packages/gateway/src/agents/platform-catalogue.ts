@@ -152,6 +152,24 @@ export interface AddedAgent {
   edited: boolean;
 }
 
+/**
+ * The skills written with this agent that the owner has changed or deleted
+ * since, by name. Only the skills the sidecar recorded: one the owner added
+ * is theirs and no update touches it.
+ */
+export function editedSkills(dir: string, provenance: AgentProvenance): string[] {
+  const out: string[] = [];
+  for (const [name, hash] of Object.entries(provenance.skills ?? {})) {
+    const file = path.join(dir, SKILLS_DIR, `${name}.md`);
+    try {
+      if (fileHash(readFileSync(file, 'utf8')) !== hash) out.push(name);
+    } catch {
+      out.push(name);
+    }
+  }
+  return out;
+}
+
 /** Every agent directory with a sidecar, read once. */
 export function addedAgents(agentsDir: string): AddedAgent[] {
   if (!existsSync(agentsDir)) return [];
@@ -169,7 +187,7 @@ export function addedAgents(agentsDir: string): AddedAgent[] {
     if (!provenance) continue;
     let edited = true;
     try {
-      edited = provenance.file === '' || provenance.file !== fileHash(readFileSync(file, 'utf8'));
+      edited = provenance.file === '' || provenance.file !== fileHash(readFileSync(file, 'utf8')) || editedSkills(dir, provenance).length > 0;
     } catch {
       edited = true;
     }
@@ -746,7 +764,7 @@ async function buildUpdate(
   if (added.edited && input.replaceEdits !== true) {
     refuse(
       'owner-edited',
-      `you have changed @${agent.handle}'s file, so nothing will touch it. ${m.title} ${m.version} is out; ` +
+      `you have changed @${agent.handle}'s file or one of its skills, so nothing will touch it. ${m.title} ${m.version} is out; ` +
         'to replace your changes with it, the owner has to say so (replaceEdits), and their file goes to the trash first.',
     );
   }
@@ -1101,6 +1119,7 @@ export function createCatalogueTools(
         proposal: envelope.package.integrity,
         file: envelope.content,
         fills: pickRecord(envelope.picks),
+        skills: Object.fromEntries(envelope.skills.map((skill) => [skill.name, skill.content])),
       });
       let trashed: string | null = null;
       if (envelope.mode === 'install') {
@@ -1112,8 +1131,12 @@ export function createCatalogueTools(
       } else {
         if (envelope.update?.edited) {
           // The owner's own version first, where a deleted agent goes: moving it back restores it.
-          trashed = path.join(binding.trashRoot, 'agents', `${envelope.id}-${trashStamp(ctx.now())}-replaced`, AGENT_FILE);
-          writeFilesAtomic([{ path: trashed, content: readFileSync(envelope.file, 'utf8') }]);
+          const aside = path.join(binding.trashRoot, 'agents', `${envelope.id}-${trashStamp(ctx.now())}-replaced`);
+          trashed = path.join(aside, AGENT_FILE);
+          const theirs = envelope.skills
+            .filter((skill) => existsSync(skill.file) && readFileSync(skill.file, 'utf8') !== skill.content)
+            .map((skill) => ({ path: path.join(aside, SKILLS_DIR, `${skill.name}.md`), content: readFileSync(skill.file, 'utf8') }));
+          writeFilesAtomic([{ path: trashed, content: readFileSync(envelope.file, 'utf8') }, ...theirs]);
         }
         writeFilesAtomic([
           { path: envelope.file, content: envelope.content },

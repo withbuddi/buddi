@@ -113,6 +113,8 @@ export type Command =
   | { kind: 'mcp' }
   /** Settings → Connections from the terminal, through the running gateway. */
   | { kind: 'connections'; command: ConnectionsCommand }
+  /** Agents → Skills from the terminal, through the running gateway. */
+  | { kind: 'skills'; action: 'list' }
   /** Secrets in the OS keychain; the name is optional only for `list`. */
   | { kind: 'vault'; action: VaultAction; name?: string }
   /** Global pause control (docs/architecture.md, "Queue, concurrency, recovery"). */
@@ -441,6 +443,13 @@ export function parseArgs(argv: string[]): Command {
   }
 
   if (head === 'connections') return { kind: 'connections', command: parseConnectionsArgs(rest) };
+
+  if (head === 'skills') {
+    const [action, ...more] = rest;
+    if (action !== 'list') throw new UsageError(`unknown skills action: ${action ?? '(none)'} (expected list)`);
+    if (more.length > 0) throw new UsageError(`unexpected argument: ${more[0]}`);
+    return { kind: 'skills', action: 'list' };
+  }
 
   if (head === 'mcp') {
     if (rest.length > 0) throw new UsageError(`unexpected argument: ${rest[0]}`);

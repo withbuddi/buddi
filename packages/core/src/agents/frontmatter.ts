@@ -218,7 +218,7 @@ export const agentFrontmatterSchema = z
       .array(z.string().min(1).max(STARTER_MAX, `a starter must be at most ${STARTER_MAX} characters`))
       .max(STARTERS_MAX, `at most ${STARTERS_MAX} starters`)
       .optional(),
-    /** Shared skills to load by name; private skills are always loaded. */
+    /** Shared skills to load by name, or `<agent>/<skill>` for another agent's own; private skills are always loaded. */
     skills: z.array(z.string().min(1)).optional(),
     maxTurns: z.number().int().positive().optional(),
     /** Reasoning before answering: `on`, `off`, or absent for the model's default. */

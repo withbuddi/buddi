@@ -58,6 +58,12 @@ export interface AgentProvenance {
   source?: 'market';
   package?: string;
   fills?: Record<string, string>;
+  /**
+   * sha256 of each skill written beside the agent, by name: a catalogue
+   * agent's skills are the owner's to change too, and a changed or deleted
+   * one counts as an owner edit exactly as a changed `agent.md` does.
+   */
+  skills?: Record<string, string>;
 }
 
 function sha256(text: string): string {
@@ -112,6 +118,9 @@ export function readProvenance(agentDir: string): AgentProvenance | undefined {
       ...(raw.fills !== null && typeof raw.fills === 'object' && !Array.isArray(raw.fills)
         ? { fills: Object.fromEntries(Object.entries(raw.fills).filter((e): e is [string, string] => typeof e[1] === 'string')) }
         : {}),
+      ...(raw.skills !== null && typeof raw.skills === 'object' && !Array.isArray(raw.skills)
+        ? { skills: Object.fromEntries(Object.entries(raw.skills).filter((e): e is [string, string] => typeof e[1] === 'string')) }
+        : {}),
     };
   } catch {
     // A sidecar nobody can read is a missing sidecar: it records provenance,
@@ -131,6 +140,8 @@ export function composeProvenance(input: {
   source?: 'market';
   package?: string;
   fills?: Record<string, string>;
+  /** Each skill written beside the agent, by name: its text, hashed here. */
+  skills?: Record<string, string>;
 }): string {
   const record: AgentProvenance = {
     ...(input.source === undefined ? {} : { source: input.source }),
@@ -142,6 +153,7 @@ export function composeProvenance(input: {
     proposal: input.proposal,
     file: sha256(input.file),
     ...(input.fills === undefined ? {} : { fills: input.fills }),
+    ...(input.skills === undefined ? {} : { skills: Object.fromEntries(Object.entries(input.skills).map(([name, text]) => [name, sha256(text)])) }),
   };
   return `${JSON.stringify(record, null, 2)}\n`;
 }

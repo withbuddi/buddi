@@ -579,6 +579,17 @@ export const COMMANDS: readonly CommandEntry[] = [
     applies: 'both',
   },
   {
+    name: 'skills list',
+    group: 'Agents',
+    summary: 'List every skill, grouped as the Skills page groups them (yours, learned, from plugins, from the catalogue), with the agents that use each.',
+    usage: 'buddi skills list [--json]',
+    flags: [JSON_FLAG],
+    example: 'buddi skills list',
+    exitCodes: [NOT_RUNNING],
+    applies: 'both',
+    json: '[{ id, name, title, description, group, file, home, every, holders: [{ agent, how }], untrusted, provenance, source, learned, from, editable, deletable, shareable }]',
+  },
+  {
     name: 'connections list',
     group: 'Agents',
     summary: 'List the connected services: their state, their tools, and the agents that hold them.',

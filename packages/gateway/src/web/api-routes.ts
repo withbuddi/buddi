@@ -54,6 +54,7 @@ export interface ApiRoute {
 export const TOKEN_REFUSALS = {
   decides: 'It decides an approval, or the click is the approval. A token never decides for the owner.',
   grants: 'It changes what an agent may do without asking.',
+  shapes: 'It changes the instructions an agent follows: a skill\'s text, who holds it, or whether it is read as the owner\'s.',
   code: 'It installs or runs code buddi has not run before.',
   access: 'It changes how buddi is reached, unlocked or signed in to, or replaces the whole installation.',
   secret: 'It reads or stores a secret.',
@@ -343,6 +344,55 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'POST', path: '/api/agents/:id/skills/:skill/remove', area: 'agents', summary: 'Remove a learned skill (its versions are kept).',
     errors: '404; 409 not a learned skill',
+  },
+  {
+    method: 'GET', path: '/api/skills', area: 'agents',
+    summary: 'The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed.',
+    answer:
+      '{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent\'s folder), name, title, ' +
+      'description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], ' +
+      'untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, ' +
+      'from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable }',
+  },
+  {
+    method: 'POST', path: '/api/skills', area: 'agents', token: 'shapes',
+    summary: 'Write a new skill, or save one taken from a single .md (read in the browser): it goes in the owner\'s skills folder. An upload not marked as theirs is untrusted.',
+    body: '{ title, description, body, every?: boolean, agents?: agent id[], upload?: { filename: string (.md), mine?: boolean } }',
+    answer: '201 { skill: SkillRow }',
+    errors: '400 a field missing or the loader\'s sentence; 409 an agent that ships with buddi, or the catalog refused the result (nothing written); 413 over 50 KB; 415 not .md',
+  },
+  {
+    method: 'GET', path: '/api/skills/:id', area: 'agents', summary: 'One skill whole: its row, its text, the file as written, a learned one\'s versions, and what deleting it does.',
+    answer: '{ skill: SkillRow, body, text, versions?: number[], onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }',
+    errors: '404',
+  },
+  {
+    method: 'GET', path: '/api/skills/:id/download', area: 'agents', kind: 'bytes', summary: 'The skill as its .md file, as an attachment.',
+    answer: 'text/markdown', errors: '404',
+  },
+  {
+    method: 'POST', path: '/api/skills/:id/text', area: 'agents', token: 'shapes',
+    summary: 'Edit the text. A learned skill is saved as its next version, marked as the owner\'s correction; a catalogue one counts as an owner edit for its updates; a plugin\'s reads only. Who holds it and where it came from are not changed here.',
+    body: '{ text: the whole file as the Source view shows it } | { body, description?, title? }',
+    answer: '{ skill: SkillRow, version?: number, ignored?: string[] }',
+    errors: '400; 404; 409 a plugin\'s skill, or the catalog refused the result (nothing written)',
+  },
+  {
+    method: 'POST', path: '/api/skills/:id/grants', area: 'agents', token: 'shapes',
+    summary: "Who uses it: every agent, or the ones named, written in each agent's file (skills:) so the file stays the record. One in an agent's folder is always that agent's, and is given to others one by one.",
+    body: '{ every?: boolean, agents: agent id[] }', answer: '{ skill: SkillRow }',
+    errors: '400 an unknown agent; 404; 409 an agent that ships with buddi, a name the agent already has, or the catalog refused the result',
+  },
+  {
+    method: 'POST', path: '/api/skills/:id/trust', area: 'agents', token: 'shapes',
+    summary: 'Mark as mine: an uploaded skill stops being read as outside text (a learned one loses its untrusted mark).',
+    answer: '{ skill: SkillRow }', errors: '404; 409',
+  },
+  {
+    method: 'DELETE', path: '/api/skills/:id', area: 'agents', token: 'shapes',
+    summary: "Delete a skill. The agents that asked for it stop (their skills: line loses it). A learned one's versions stay and it is not proposed again for 90 days; anything else goes to the trash folder. A plugin's goes with its plugin.",
+    answer: '{ deleted, stopped: agent id[], movedTo?: string, versionsKept?: string }',
+    errors: '404; 409 a plugin\'s skill while the plugin is installed, or a shipped agent\'s file needs it; 503 the database, for a learned one',
   },
   { method: 'GET', path: '/api/agents/:id/tools', area: 'agents', summary: 'Every installed tool, for the agent’s tool picker.', errors: '404' },
   {

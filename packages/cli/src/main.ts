@@ -303,6 +303,13 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
       return runConnections(command.command, { gateway: gatewayFromEnvironment(process.env), json });
     }
+    case 'skills': {
+      // Only `.env`, like `buddi connections`: the Skills page's route answers.
+      loadEnv();
+      const { runSkills } = await import('./skills-cmd.js');
+      const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
+      return runSkills({ gateway: gatewayFromEnvironment(process.env), json });
+    }
     case 'mcp':
       // Only `.env`: the dashboard's host and port, and the credential names
       // whose values are cut from every result. No database, no plugins, and

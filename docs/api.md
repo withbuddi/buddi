@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-273 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+281 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1135,6 +1135,14 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/agents/:id/profile` | One agent whole: its grant with every tool's tier, engine, skills, delegates. | yes |
 | GET | `/api/agents/:id/skills` | Every skill the agent loads; learned ones with their versions. | yes |
 | POST | `/api/agents/:id/skills/:skill/remove` | Remove a learned skill (its versions are kept). | yes |
+| GET | `/api/skills` | The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed. | yes |
+| POST | `/api/skills` | Write a new skill, or save one taken from a single .md (read in the browser): it goes in the owner's skills folder. An upload not marked as theirs is untrusted. | no |
+| GET | `/api/skills/:id` | One skill whole: its row, its text, the file as written, a learned one's versions, and what deleting it does. | yes |
+| GET | `/api/skills/:id/download` | The skill as its .md file, as an attachment. | yes |
+| POST | `/api/skills/:id/text` | Edit the text. A learned skill is saved as its next version, marked as the owner's correction; a catalogue one counts as an owner edit for its updates; a plugin's reads only. Who holds it and where it came from are not changed here. | no |
+| POST | `/api/skills/:id/grants` | Who uses it: every agent, or the ones named, written in each agent's file (skills:) so the file stays the record. One in an agent's folder is always that agent's, and is given to others one by one. | no |
+| POST | `/api/skills/:id/trust` | Mark as mine: an uploaded skill stops being read as outside text (a learned one loses its untrusted mark). | no |
+| DELETE | `/api/skills/:id` | Delete a skill. The agents that asked for it stop (their skills: line loses it). A learned one's versions stay and it is not proposed again for 90 days; anything else goes to the trash folder. A plugin's goes with its plugin. | no |
 | GET | `/api/agents/:id/tools` | Every installed tool, for the agent’s tool picker. | yes |
 | GET | `/api/agents/:id/file` | The agent's file as written: front matter and persona. | yes |
 | POST | `/api/agents/:id/file` | Edit the agent's front matter: name, handle, tools, persona…; checked as the loader checks it. | no |
@@ -1219,6 +1227,113 @@ Remove a learned skill (its versions are kept).
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/skills/<skill>/remove"
+```
+
+#### `GET /api/skills`
+
+The Skills page: every skill on this computer, grouped yours / learned / from plugins / from the catalogue, with who holds each. The shipped examples are not listed.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent's folder), name, title, description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills"
+```
+
+#### `POST /api/skills`
+
+Write a new skill, or save one taken from a single .md (read in the browser): it goes in the owner's skills folder. An upload not marked as theirs is untrusted.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Body:** `{ title, description, body, every?: boolean, agents?: agent id[], upload?: { filename: string (.md), mine?: boolean } }`
+- **Answer:** `201 { skill: SkillRow }`
+- **Errors:** 400 a field missing or the loader's sentence; 409 an agent that ships with buddi, or the catalog refused the result (nothing written); 413 over 50 KB; 415 not .md
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/skills"
+```
+
+#### `GET /api/skills/:id`
+
+One skill whole: its row, its text, the file as written, a learned one's versions, and what deleting it does.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ skill: SkillRow, body, text, versions?: number[], onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>"
+```
+
+#### `GET /api/skills/:id/download`
+
+The skill as its .md file, as an attachment.
+
+- **Auth:** Session or API token.
+- **Kind:** bytes, not JSON
+- **Answer:** `text/markdown`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/download" -o out
+```
+
+#### `POST /api/skills/:id/text`
+
+Edit the text. A learned skill is saved as its next version, marked as the owner's correction; a catalogue one counts as an owner edit for its updates; a plugin's reads only. Who holds it and where it came from are not changed here.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Body:** `{ text: the whole file as the Source view shows it } | { body, description?, title? }`
+- **Answer:** `{ skill: SkillRow, version?: number, ignored?: string[] }`
+- **Errors:** 400; 404; 409 a plugin's skill, or the catalog refused the result (nothing written)
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"text":"…"}' "$BUDDI_URL/api/skills/<id>/text"
+```
+
+#### `POST /api/skills/:id/grants`
+
+Who uses it: every agent, or the ones named, written in each agent's file (skills:) so the file stays the record. One in an agent's folder is always that agent's, and is given to others one by one.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Body:** `{ every?: boolean, agents: agent id[] }`
+- **Answer:** `{ skill: SkillRow }`
+- **Errors:** 400 an unknown agent; 404; 409 an agent that ships with buddi, a name the agent already has, or the catalog refused the result
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"agents":[]}' "$BUDDI_URL/api/skills/<id>/grants"
+```
+
+#### `POST /api/skills/:id/trust`
+
+Mark as mine: an uploaded skill stops being read as outside text (a learned one loses its untrusted mark).
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Answer:** `{ skill: SkillRow }`
+- **Errors:** 404; 409
+- **Since:** unreleased
+
+```sh
+curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/<id>/trust"
+```
+
+#### `DELETE /api/skills/:id`
+
+Delete a skill. The agents that asked for it stop (their skills: line loses it). A learned one's versions stay and it is not proposed again for 90 days; anything else goes to the trash folder. A plugin's goes with its plugin.
+
+- **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
+- **Answer:** `{ deleted, stopped: agent id[], movedTo?: string, versionsKept?: string }`
+- **Errors:** 404; 409 a plugin's skill while the plugin is installed, or a shipped agent's file needs it; 503 the database, for a learned one
+- **Since:** unreleased
+
+```sh
+curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/<id>"
 ```
 
 #### `GET /api/agents/:id/tools`
