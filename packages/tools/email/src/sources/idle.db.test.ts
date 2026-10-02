@@ -361,11 +361,24 @@ suite('email IDLE watcher (postgres + fake imap)', () => {
     await waitFor(async () => (await threadState()) === 'waiting-on-them');
     expect(server.sentChecks).toBeGreaterThan(0);
     expect(server.idleConnects).toBe(idleConnects);
-    // Once seen, the same Sent message asks for no further polls (one already
-    // asked for may still be finishing; after that, quiet).
-    await sleep(200);
+    // Once seen, the same Sent message asks for no further polls. Polls asked
+    // for before it was seen may still run — on a loaded machine the INBOX
+    // poll can still be going when Sent's check asks for one more, which runs
+    // after it — so wait for the polls to settle (no connection open, no fetch
+    // for 300 ms; a poll loop never settles and times this out), then quiet.
+    let settled = server.fetches.length;
+    let since = Date.now();
+    await waitFor(() => {
+      if (open !== 0 || server.fetches.length !== settled) {
+        settled = server.fetches.length;
+        since = Date.now();
+        return false;
+      }
+      return Date.now() - since >= 300;
+    });
     const fetches = server.fetches.length;
     await sleep(200);
     expect(server.fetches.length).toBe(fetches);
+    expect(open).toBe(0);
   });
 });
