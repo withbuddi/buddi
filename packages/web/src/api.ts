@@ -2032,6 +2032,8 @@ export interface SecretListingView {
   usedBy?: SecretUserView[];
   /** Nothing can reach it any more: a suggestion to remove it, never a removal. */
   unused?: boolean;
+  /** Whether anything holds it could not be checked (a lookup failed): never offered for removal. */
+  usageUnknown?: boolean;
 }
 
 export interface SecretsView {

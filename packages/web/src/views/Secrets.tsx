@@ -75,6 +75,8 @@ import {
   targetInputText,
   targetPlaceholder,
   unusedLine,
+  uncheckedLine,
+  offersRemove,
   whereLine,
   type AccountName,
   type SecretFix,
@@ -304,16 +306,16 @@ function rowMenu(secret: SecretListingView, group: SecretGroupId, onOpen: (what:
         ? { label: 'Set a new password', hint: 'On the Email page, which tests it first', onSelect: () => { window.location.hash = mailboxPasswordHref(mailbox.id); } }
         : null,
       { label: 'Usage history', onSelect: () => onOpen('sheet') },
-      secret.unused ? ('separator' as const) : null,
-      secret.unused ? { label: 'Remove…', tone: 'critical' as const, onSelect: () => onOpen('delete') } : null,
+      offersRemove(secret) ? ('separator' as const) : null,
+      offersRemove(secret) ? { label: 'Remove…', tone: 'critical' as const, onSelect: () => onOpen('delete') } : null,
     ];
   }
   // A plugin's: its value may change here; its name and places are the plugin's to keep.
   return [
     { label: group === 'plugin:calendar' ? 'Replace link…' : 'Replace value…', onSelect: () => onOpen('replace') },
     { label: 'Usage history', onSelect: () => onOpen('sheet') },
-    secret.unused ? ('separator' as const) : null,
-    secret.unused ? { label: 'Remove…', tone: 'critical' as const, onSelect: () => onOpen('delete') } : null,
+    offersRemove(secret) ? ('separator' as const) : null,
+    offersRemove(secret) ? { label: 'Remove…', tone: 'critical' as const, onSelect: () => onOpen('delete') } : null,
   ];
 }
 
@@ -334,6 +336,7 @@ function SecretRow({
   const line = [whereLine(secret), lastUsedLine(secret)].filter(Boolean).join(' · ');
   const problem = secretProblem(secret);
   const unused = unusedLine(secret);
+  const unchecked = uncheckedLine(secret);
   const managed = isManagedElsewhere(group) ? managedHref(secret) : null;
   return (
     <ListRow
@@ -355,12 +358,13 @@ function SecretRow({
             </span>
           ) : null}
           {unused ? <span className="secrets-status">{unused}</span> : null}
+          {unchecked ? <span className="secrets-status">{unchecked}</span> : null}
         </>
       }
       side={
         <span className="secrets-side">
           {problem?.fix ? <FixButton fix={problem.fix} onOpen={onOpen} /> : null}
-          {unused ? (
+          {unused && offersRemove(secret) ? (
             <Button size="sm" variant="ghost" onClick={stop(() => onOpen('delete'))}>
               Remove…
             </Button>
@@ -437,8 +441,13 @@ function SecretSheet({
           </Notice>
         ) : null}
         {unused ? (
-          <Notice action={<Button size="sm" onClick={() => onOpen('delete')}>Remove…</Button>}>{unused} Nothing removes it but you.</Notice>
+          offersRemove(secret) ? (
+            <Notice action={<Button size="sm" onClick={() => onOpen('delete')}>Remove…</Button>}>{unused} Nothing removes it but you.</Notice>
+          ) : (
+            <Notice>{unused}</Notice>
+          )
         ) : null}
+        {uncheckedLine(secret) ? <Notice>{uncheckedLine(secret)}</Notice> : null}
         <Stack gap="sm">
           <h3 className="secrets-sheet-head">Usage history</h3>
           <UseLog name={secret.name} timezone={timezone} />

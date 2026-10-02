@@ -498,6 +498,16 @@ export function unusedLine(secret: SecretListingView): string {
   return 'Not used by anything — what it was for is gone.';
 }
 
+/** The quiet note when the server could not check what holds a secret: no Remove then. */
+export function uncheckedLine(secret: SecretListingView): string {
+  return secret.usageUnknown && !secret.unused ? 'Couldn’t check what uses it just now.' : '';
+}
+
+/** Whether the page offers Remove: only for a confirmed unused secret, and never in a group managed elsewhere. */
+export function offersRemove(secret: SecretListingView): boolean {
+  return Boolean(secret.unused) && !isManagedElsewhere(secretGroup(secret));
+}
+
 /** What a delete stops, in one sentence, for the dialog that asks. */
 export function deleteStops(secret: SecretListingView): string {
   if (secret.unused || secret.bindings.length === 0) return 'Nothing uses it, so nothing stops working.';

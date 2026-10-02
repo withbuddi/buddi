@@ -254,8 +254,12 @@ names it, or a kind no installed plugin registers — or it has no binding and
 its name is one buddi generated for a row, or the old `.env` mailbox password
 `GMAIL_APP_PASSWORD` (a mailbox the old `.env` named still counts as using
 it). The row says so quietly and offers **Remove**; nothing is removed by
-itself. An owner's own secret with no binding is "not usable yet", not
-unused.
+itself. Model accounts and Connections, managed on their own pages, never
+offer Remove here. Only a confirmed absence counts: when the lookup of what
+holds secrets fails (a timeout, a lost connection — a table that is not
+installed is an absence), no secret it could hold is called unused; the row
+says "Couldn't check what uses it just now." instead (`usageUnknown`). An
+owner's own secret with no binding is "not usable yet", not unused.
 
 **The ⋯ menu** (a sheet from the bottom on a phone): for the owner's own,
 **Replace value**, **Rename**, **Change where it may go**, **Usage history**,

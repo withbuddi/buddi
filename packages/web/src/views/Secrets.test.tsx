@@ -200,6 +200,21 @@ describe('the groups and their rows', { timeout: 180_000 }, () => {
     await waitFor(() => expect(api.secretsAct).toHaveBeenCalledWith('secrets.delete', { name: 'GMAIL_APP_PASSWORD' }));
   });
 
+  it('says it couldn\u2019t check, and offers no Remove, when the lookup of what holds a secret failed', async () => {
+    const unknown = { ...LEGACY, unused: false, usageUnknown: true } as SecretListingView;
+    await openPage({ ...VIEW, secrets: [unknown, PNC] });
+    expect(screen.getByText('Couldn’t check what uses it just now.')).toBeInTheDocument();
+    expect(screen.queryByText(/Not used by anything/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove…' })).toBeNull();
+  });
+
+  it('never offers Remove in a group managed elsewhere', async () => {
+    const orphan = { ...CLAUDE, usedBy: [], unused: true } as SecretListingView;
+    await openPage({ ...VIEW, secrets: [orphan, PNC] });
+    expect(screen.getByText('Not used by anything — no model account uses it any more.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove…' })).toBeNull();
+  });
+
   it('folds buddi’s own keys under the panel', async () => {
     await openPage();
     expect(screen.getByText('buddi’s own keys · 1')).toBeInTheDocument();

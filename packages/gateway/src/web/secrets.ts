@@ -74,9 +74,24 @@ export type SecretUser =
 /** The kinds whose target names the thing that holds the secret: the binding is alive only while that thing still points back. */
 const HELD_KINDS = new Set(['email.account', 'accounts.provider', 'mcp.env']);
 
-/** Every row that names an owner secret as its credential, by secret name. A table that is not installed holds nothing. */
-export async function secretUsers(pool: Pick<Pool, 'query'>): Promise<Map<string, SecretUser[]>> {
+/** A table or schema that is not installed: a confirmed absence, not a failed lookup. */
+function notInstalled(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === '42P01' || code === '3F000';
+}
+
+/**
+ * Every row that names an owner secret as its credential, by secret name, and
+ * whether every lookup answered. A table that is not installed holds nothing;
+ * any other failure — a timeout, a lost connection — leaves `complete` false,
+ * because "nothing found" is then not an answer (`isUnused`).
+ */
+export async function readSecretUsers(pool: Pick<Pool, 'query'>): Promise<{ users: Map<string, SecretUser[]>; complete: boolean }> {
   const users = new Map<string, SecretUser[]>();
+  let complete = true;
+  const failed = (err: unknown): void => {
+    if (!notInstalled(err)) complete = false;
+  };
   const add = (name: string | null | undefined, user: SecretUser): void => {
     if (!name) return;
     users.set(name, [...(users.get(name) ?? []), user]);
@@ -89,16 +104,18 @@ export async function secretUsers(pool: Pick<Pool, 'query'>): Promise<Map<string
       // until its own password is set (`adoptEnvMailbox`, `missingMailboxes`).
       if (account.addedVia === 'env' && account.secretName !== LEGACY_PASSWORD_VAR) add(LEGACY_PASSWORD_VAR, user);
     }
-  } catch {
+  } catch (err) {
     // No email schema: no mailboxes here.
+    failed(err);
   }
   try {
     const { rows } = await pool.query<{ id: string; label: string; auth: string; secret_ref: string | null }>(
       `select id, label, auth, secret_ref from core.provider_accounts where not deleting`,
     );
     for (const row of rows) add(row.secret_ref, { kind: 'model-account', id: row.id, label: row.label, auth: row.auth });
-  } catch {
+  } catch (err) {
     // An installation that predates model accounts.
+    failed(err);
   }
   try {
     const { rows } = await pool.query<{ id: string; name: string; vault_ref: string | null; env: unknown }>(
@@ -113,10 +130,16 @@ export async function secretUsers(pool: Pick<Pool, 'query'>): Promise<Map<string
         }
       }
     }
-  } catch {
+  } catch (err) {
     // No connections table: nothing connected here.
+    failed(err);
   }
-  return users;
+  return { users, complete };
+}
+
+/** `readSecretUsers`, the users alone. */
+export async function secretUsers(pool: Pick<Pool, 'query'>): Promise<Map<string, SecretUser[]>> {
+  return (await readSecretUsers(pool)).users;
 }
 
 interface ListedSecret {
@@ -132,9 +155,13 @@ interface ListedSecret {
  * mailbox, an account or a connection generated, or the old `.env` mailbox
  * password. An owner's fresh secret with no binding is "not usable yet", a
  * different sentence the page says itself.
+ *
+ * `complete` false — a lookup of what holds secrets failed — means nobody
+ * knows: never unused then, only confirmed absence counts.
  */
-export function isUnused(secret: ListedSecret, users: readonly SecretUser[], registered: ReadonlySet<string>): boolean {
+export function isUnused(secret: ListedSecret, users: readonly SecretUser[], registered: ReadonlySet<string>, complete = true): boolean {
   if (users.length > 0) return false;
+  if (!complete) return false;
   if (secret.bindings.length === 0) return GENERATED_NAME.test(secret.name) || secret.name === LEGACY_PASSWORD_VAR;
   return secret.bindings.every((binding) => HELD_KINDS.has(binding.kind) || !registered.has(binding.kind));
 }
@@ -148,13 +175,16 @@ export async function listSecrets(deps: SecretsDeps): Promise<RouteReply> {
     secrets: ListedSecret[];
     destinations: Array<{ kind: string }>;
   };
-  const users = await secretUsers(deps.pool);
+  const { users, complete } = await readSecretUsers(deps.pool);
   const registered = new Set(result.destinations.map((d) => d.kind));
   return reply(200, {
     ...result,
     secrets: result.secrets.map((secret) => {
       const usedBy = users.get(secret.name) ?? [];
-      return { ...secret, usedBy, unused: isUnused(secret, usedBy, registered) };
+      // `usageUnknown`: it would read as unused, but a lookup failed — the page
+      // says it couldn't check instead of offering Remove.
+      const usageUnknown = !complete && isUnused(secret, usedBy, registered, true);
+      return { ...secret, usedBy, unused: isUnused(secret, usedBy, registered, complete), ...(usageUnknown ? { usageUnknown } : {}) };
     }),
   });
 }

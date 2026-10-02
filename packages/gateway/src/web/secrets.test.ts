@@ -4,7 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { OWNER_AGENT_ID } from '@buddi/core';
-import { isUnused, secretUsers, secretsAct } from './secrets.js';
+import { isUnused, listSecrets, readSecretUsers, secretUsers, secretsAct } from './secrets.js';
 
 describe('secretsAct', () => {
   it('invokes the write tool as the owner', async () => {
@@ -65,5 +65,42 @@ describe('what holds a secret, and what nothing holds any more', () => {
     // A mailbox the old `.env` named still falls back to the legacy password.
     expect(users.get('GMAIL_APP_PASSWORD')).toEqual([expect.objectContaining({ kind: 'mailbox', address: 'old@example.com' })]);
     expect(users.get('PROVIDER_ACCOUNT_1')).toEqual([{ kind: 'model-account', id: 'a1', label: 'Claude', auth: 'api-key' }]);
+  });
+
+  it('a lookup that failed is not an answer: nothing it could hold is called unused', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('email.accounts')) return { rows: [] };
+      if (sql.includes('core.provider_accounts')) throw Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' });
+      throw Object.assign(new Error('relation "mcp.connections" does not exist'), { code: '42P01' });
+    });
+    const read = await readSecretUsers({ query } as never);
+    // A table that is not installed is a confirmed absence; a timeout is not.
+    expect(read.complete).toBe(false);
+    expect(isUnused({ name: 'PROVIDER_ACCOUNT_5d0c7a4e_1b2c', bindings: [] }, [], registered, false)).toBe(false);
+    expect(isUnused({ name: 'PROVIDER_ACCOUNT_5d0c7a4e_1b2c', bindings: [] }, [], registered, true)).toBe(true);
+  });
+
+  it('the page says "couldn\u2019t check" instead of offering Remove when a lookup failed', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('core.provider_accounts')) throw new Error('Connection terminated due to connection timeout');
+      return { rows: [] };
+    });
+    const deps = {
+      pool: { query } as never,
+      registry: {} as never,
+      ctx: {} as never,
+    };
+    const { SECRETS_QUERIES } = await import('@buddi/core');
+    const produce = vi.spyOn(SECRETS_QUERIES[0]!, 'produce').mockResolvedValue({
+      secrets: [{ name: 'PROVIDER_ACCOUNT_5d0c7a4e_1b2c', bindings: [{ kind: 'accounts.provider', target: 'a1' }] }],
+      destinations: [{ kind: 'accounts.provider' }],
+    } as never);
+    try {
+      const reply = (await listSecrets(deps as never)) as { status: number; body: { secrets: Array<Record<string, unknown>> } };
+      expect(reply.status).toBe(200);
+      expect(reply.body.secrets[0]).toMatchObject({ unused: false, usageUnknown: true });
+    } finally {
+      produce.mockRestore();
+    }
   });
 });
