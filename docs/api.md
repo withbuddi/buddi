@@ -588,13 +588,13 @@ curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/widgets"
 Save Home's widget layout.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ placed: Array<{ id, widget, size: 'small'|'medium', settings? }> }`
+- **Body:** `{ placements: Array<{ key?, widget, size: 'small'|'medium', settings? }> }`
 - **Answer:** `the widgets view`
 - **Errors:** 400 an unknown widget or a bad setting
 - **Since:** 0.1.0-pre.29
 
 ```sh
-curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"placed":[]}' "$BUDDI_URL/api/widgets/home"
+curl -X PUT -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"placements":[]}' "$BUDDI_URL/api/widgets/home"
 ```
 
 #### `PUT /api/widgets/lock`

@@ -34,6 +34,7 @@ What changes in buddi from one release to the next, newest first.
 - The weather widget's hourly strip shows the moon at night (a crescent on a clear night, the crescent over a cloud when partly cloudy) instead of the sun, and writes its hours your way ("6 PM", "12 AM" on a 12-hour clock); it has a Times setting of its own. The Weather page's hours, sunrise and sunset follow your Profile too.
 - The calendar's "Next meeting" line on Home writes the time your way ("at 9:30 AM" on a 12-hour clock).
 - After plugin updates, the "is installed — Restart to load it" notice comes from what buddi is actually running: it lists every plugin waiting for the restart and is gone once they are loaded, instead of staying after the restart. A plugin waiting for the restart says "loads at restart" on its row rather than "did not load".
+- docs/api.md: saving Home's or the lock screen's widgets takes `{ placements: [{ key?, widget, size, settings? }] }`, as the gateway always did; the page said `placed`.
 
 ## 0.1.0-pre.29 — 2026-10-01
 

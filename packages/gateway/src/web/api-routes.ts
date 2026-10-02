@@ -204,7 +204,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'PUT', path: '/api/widgets/home', area: 'home', summary: "Save Home's widget layout.",
-    body: "{ placed: Array<{ id, widget, size: 'small'|'medium', settings? }> }", answer: 'the widgets view', errors: '400 an unknown widget or a bad setting',
+    body: "{ placements: Array<{ key?, widget, size: 'small'|'medium', settings? }> }", answer: 'the widgets view', errors: '400 an unknown widget or a bad setting',
   },
   {
     method: 'PUT', path: '/api/widgets/lock', area: 'home', summary: "Save the lock screen's widgets (up to four).",
