@@ -4,7 +4,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { api, chatApi, type NotificationRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { useSlashToComposer } from '../shell/slash';
@@ -29,6 +29,7 @@ vi.mock('../api', async (importOriginal) => {
       owner: empty({}),
       version: vi.fn(),
       notifications: vi.fn(async () => ({ notifications: [] })),
+      notificationsNeedingYou: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
       homeDismiss: vi.fn(async () => ({ dismissed: {} })),
       currentTip: vi.fn(async () => ({ tip: null, enabled: true })),
@@ -186,13 +187,14 @@ function note(over: Partial<NotificationRow>): NotificationRow {
   return {
     id: 'n1', kind: 'watcher', urgency: 'now', title: 'A mail from the bank', text: null, link: '#/chat/finance',
     agentId: null, pluginId: null, actionId: null, state: 'shown', dueAt: null, channel: 'dashboard',
-    createdAt: '2026-09-21T08:50:00Z', sentAt: null, seenAt: null, actedAt: null, error: null, ...over,
+    createdAt: '2026-09-21T08:50:00Z', sentAt: null, seenAt: null, actedAt: null, error: null,
+    action: 'Check it', needsOwner: true, ...over,
   };
 }
 
 describe('what buddi kept for you, under "Needs you"', () => {
-  it('lists a watcher row but never a quiet one held for today, counts it in the greeting, and opening it marks it seen', async () => {
-    vi.mocked(api.notifications).mockResolvedValue({
+  it('lists a row that asks for something, counts it in the greeting, and opening it marks it seen', async () => {
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({
       notifications: [
         note({}),
         note({ id: 'n2', kind: 'recap', urgency: 'today', state: 'held', title: 'The weekly recap', seenAt: '2026-09-21T08:55:00Z', link: null }),
@@ -203,7 +205,9 @@ describe('what buddi kept for you, under "Needs you"', () => {
     const navigate = vi.fn();
     window.localStorage.setItem('buddi.needsYouView', 'list');
     await home(null, navigate);
-    expect(screen.getByRole('button', { name: '1 message' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1 request' })).toBeInTheDocument();
+    // Its ask is said under the title, after who sent it.
+    expect(screen.getByRole('link', { name: /A mail from the bank/ })).toHaveTextContent('Check it');
     expect(screen.getByText('Needs you')).toBeInTheDocument();
     expect(screen.queryByText('The weekly recap')).not.toBeInTheDocument();
     expect(screen.queryByText('Send the invoice?')).not.toBeInTheDocument();
@@ -213,26 +217,55 @@ describe('what buddi kept for you, under "Needs you"', () => {
     expect(navigate).toHaveBeenCalledWith('#/chat/finance');
   });
 
-  it('is decisions only: a line held for today or kept for the recap is never here, seen or not', () => {
+  it('is actionable only: a mission report, a plain notify, a learned line or the recap is never here; a notify with an action is', () => {
     const rows = [
-      note({ id: 'learned', kind: 'plugin', pluginId: 'email', urgency: 'today', state: 'held', title: 'buddi learned 1 rule: quieted 1 newsletter — review' }),
+      note({ id: 'report', kind: 'recap', title: 'Morning brief: 3 meetings', action: null, needsOwner: false }),
+      note({ id: 'info-1', kind: 'agent', agentId: 'concierge', title: '@concierge: The parcel was delivered', action: null, needsOwner: false }),
+      note({ id: 'info-2', kind: 'agent', agentId: 'concierge', title: '@concierge: Rain after 4', action: null, needsOwner: false, link: '#/weather' }),
+      note({ id: 'learned', kind: 'plugin', pluginId: 'email', urgency: 'today', state: 'held', title: 'buddi learned 1 rule', action: null, needsOwner: false }),
       note({ id: 'recap', kind: 'recap', urgency: 'digest', state: 'stored' }),
-      note({ id: 'lowered', urgency: 'today', state: 'held' }),
-      note({ id: 'now' }),
+      note({ id: 'ask', kind: 'agent', agentId: 'concierge', title: '@concierge: Charged twice at Monoprix', action: 'Confirm with the bank?' }),
+      note({ id: 'older-gateway' , needsOwner: undefined }),
     ];
-    expect(homeNotifications(rows, []).map((row) => row.id)).toEqual(['now']);
+    expect(homeNotifications(rows, []).map((row) => row.id)).toEqual(['ask']);
+  });
+
+  it('lists an agent holding a question, counts it, and opens its conversation', async () => {
+    const navigate = vi.fn();
+    const attention = new Map([['concierge', { agentId: 'concierge', approvals: 0, oldestApprovalAt: null, question: { at: '2026-09-21T08:58:00Z', conversationId: 'c9' } }]]);
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={navigate} agents={[DESK]} attention={attention} />);
+    });
+    expect(screen.getByRole('button', { name: '1 question' })).toBeInTheDocument();
+    const row = within(document.getElementById('home-needs')!).getByRole('link', { name: /Asked you a question/ });
+    expect(row).toHaveTextContent('Concierge · waiting for your answer');
+    fireEvent.click(row);
+    expect(navigate).toHaveBeenCalledWith('#/chat/concierge/c9');
+  });
+
+  it("counts by the gateway's one rule when it answers: the rail's and the lock screen's numbers", async () => {
+    vi.mocked(api.overview).mockResolvedValue({
+      ...OVERVIEW,
+      needsYou: { approvals: 1, questions: 1, urgent: 2, failed: 0, proposals: 0, asks: 1, agentsToSetUp: 0, signIns: 0, recovery: 0, total: 5 },
+    } as never);
+    await home(null);
+    expect(screen.getByRole('button', { name: '1 approval' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1 question' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '2 urgent alerts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1 request' })).toBeInTheDocument();
+    expect(screen.queryByText(/message/)).not.toBeInTheDocument();
   });
 
   it('Done is kept by the server: once it says seen, the row does not come back on reload', async () => {
     const row = note({ id: 'n7', title: 'Your parcel is at the door' });
-    vi.mocked(api.notifications).mockResolvedValue({ notifications: [row] });
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: [row] });
     await home(null);
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(api.notificationSeen).toHaveBeenCalledWith('n7');
     cleanup();
     // The reload: the server now says it was seen. An update to a quiet line
     // keeps it seen (core), so nothing brings it back.
-    vi.mocked(api.notifications).mockResolvedValue({ notifications: [{ ...row, seenAt: '2026-09-21T09:01:00Z' }] });
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: [{ ...row, seenAt: '2026-09-21T09:01:00Z' }] });
     await home(null);
     expect(screen.queryByText('Your parcel is at the door')).not.toBeInTheDocument();
     expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
@@ -335,11 +368,11 @@ describe("Home's composer", () => {
 });
 
 const BANK = note({ id: 'n1', title: 'A mail from the bank', text: 'Your card ending 4242 was charged twice.\nThe second charge is pending.', agentId: 'concierge' });
-const RECAP = note({ id: 'n2', kind: 'recap', title: 'The weekly recap', link: '#/activity' });
+const PASSPORT = note({ id: 'n2', kind: 'reminder', title: 'Your passport runs out in May', link: '#/activity', action: 'Book an appointment' });
 const PLUGIN = note({ id: 'n3', kind: 'plugin', title: 'A plugin wants a key', link: null, pluginId: 'github' });
 
 async function deck(rows: NotificationRow[], navigate = vi.fn()): Promise<void> {
-  vi.mocked(api.notifications).mockResolvedValue({ notifications: rows });
+  vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: rows });
   await act(async () => {
     render(<Home timezone="UTC" navigate={navigate} agents={[DESK]} attention={new Map()} />);
   });
@@ -347,7 +380,7 @@ async function deck(rows: NotificationRow[], navigate = vi.fn()): Promise<void> 
 
 describe('"Needs you" as a deck', () => {
   it('shows the first message in full, with its sender and the counter, and moves with the arrows', async () => {
-    await deck([BANK, RECAP, PLUGIN]);
+    await deck([BANK, PASSPORT, PLUGIN]);
     const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
     expect(region).toHaveTextContent('Concierge');
     expect(region).toHaveTextContent('A mail from the bank');
@@ -355,7 +388,7 @@ describe('"Needs you" as a deck', () => {
     expect(region).toHaveTextContent('1 of 3');
     expect(region).toHaveAttribute('data-depth', '2');
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(region).toHaveTextContent('The weekly recap');
+    expect(region).toHaveTextContent('Your passport runs out in May');
     expect(region).toHaveTextContent('2 of 3');
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
     expect(region).toHaveTextContent('1 of 3');
@@ -370,12 +403,12 @@ describe('"Needs you" as a deck', () => {
 
   it('Done marks it seen as the row did and brings the next one; d does the same', async () => {
     const navigate = vi.fn();
-    await deck([BANK, RECAP, PLUGIN], navigate);
+    await deck([BANK, PASSPORT, PLUGIN], navigate);
     const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(api.notificationSeen).toHaveBeenCalledWith('n1');
     expect(navigate).not.toHaveBeenCalled();
-    expect(region).toHaveTextContent('The weekly recap');
+    expect(region).toHaveTextContent('Your passport runs out in May');
     expect(region).toHaveTextContent('1 of 2');
     expect(region).toHaveAttribute('data-depth', '1');
     fireEvent.keyDown(region, { key: 'd' });
@@ -390,7 +423,7 @@ describe('"Needs you" as a deck', () => {
 
   it('Open and Enter go where the row went, and mark it seen', async () => {
     const navigate = vi.fn();
-    await deck([BANK, RECAP], navigate);
+    await deck([BANK, PASSPORT], navigate);
     fireEvent.click(screen.getByRole('button', { name: 'Open' }));
     expect(api.notificationSeen).toHaveBeenCalledWith('n1');
     expect(navigate).toHaveBeenCalledWith('#/chat/finance');
@@ -400,9 +433,17 @@ describe('"Needs you" as a deck', () => {
     expect(navigate).toHaveBeenCalledWith('#/activity');
   });
 
+  it('an ask with no link opens its agent\'s conversation', async () => {
+    const navigate = vi.fn();
+    await deck([note({ id: 'n8', kind: 'agent', agentId: 'concierge', title: '@concierge: Charged twice', link: null, action: 'Confirm with the bank?' })], navigate);
+    expect(screen.getByRole('region', { name: 'Needs you, one at a time' })).toHaveTextContent('Confirm with the bank?');
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    expect(navigate).toHaveBeenCalledWith('#/chat/concierge');
+  });
+
   it('names the other agents a folded row came from, on the deck and in the list', async () => {
     const MAIL = { ...DESK, id: 'mail', handle: 'mail', name: 'Mail Triage' } as ChatAgent;
-    vi.mocked(api.notifications).mockResolvedValue({ notifications: [{ ...BANK, alsoFrom: ['mail'] }] });
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: [{ ...BANK, alsoFrom: ['mail'] }] });
     await act(async () => {
       render(<Home timezone="UTC" navigate={vi.fn()} agents={[DESK, MAIL]} attention={new Map()} />);
     });
@@ -425,12 +466,12 @@ describe('"Needs you" as a deck', () => {
   });
 
   it('switches to the list and remembers it', async () => {
-    await deck([BANK, RECAP]);
+    await deck([BANK, PASSPORT]);
     expect(screen.getByRole('radio', { name: 'Deck' })).toHaveAttribute('aria-checked', 'true');
     fireEvent.click(screen.getByRole('radio', { name: 'List' }));
     expect(screen.queryByRole('region', { name: 'Needs you, one at a time' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /A mail from the bank/ })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /The weekly recap/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Your passport runs out in May/ })).toBeInTheDocument();
     expect(window.localStorage.getItem('buddi.needsYouView')).toBe('list');
   });
 });
@@ -438,7 +479,7 @@ describe('"Needs you" as a deck', () => {
 describe('a plugin\'s card names the plugin by its page', () => {
   it('says "Mail" for the email plugin, from its rail page, not "email"', async () => {
     const LEARNED = note({ id: 'm1', kind: 'plugin', pluginId: 'email', title: 'A sender wants a reply', link: null });
-    vi.mocked(api.notifications).mockResolvedValue({ notifications: [LEARNED] });
+    vi.mocked(api.notificationsNeedingYou).mockResolvedValue({ notifications: [LEARNED] });
     const pages = { all: [{ plugin: 'email', id: 'mail', title: 'Mail', place: 'rail', body: [] }], rail: [], settings: [], find: () => undefined } as unknown as PluginPages;
     await act(async () => {
       render(<Home timezone="UTC" navigate={vi.fn()} agents={[DESK]} attention={new Map()} pluginPages={pages} />);

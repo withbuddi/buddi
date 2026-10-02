@@ -81,6 +81,7 @@ already says; every agent that holds it is told so.
 | `text` | Optional, at most 1,000 characters, plain text. |
 | `urgency` | `now` (the default) or `today`. |
 | `link` | Optional: a dashboard route (`#/…`). An outside address is refused; it may appear in `text` as text. |
+| `action` | Optional, at most 80 characters: what you are asked to do — a step or a question ("Confirm with the bank?"). See "Needs you", below. |
 | `key` | Optional: the agent's own dedupe key, kept as `agent:<id>:<key>`, so a retry sends once. |
 
 It is a kind like any other, `agent`, and your routing applies to it
@@ -115,6 +116,36 @@ rate rule on a key, and your channel. What is its own:
 The front desk and the first assistant hold it, as do the starter agents;
 another agent is given it on its Tools tab.
 
+## Needs you
+
+Only what you can act on needs you. A message needs you when it is an
+approval or a question, or when it carries an `action`: a step to take or a
+question to answer, in a few words. Everything else is information — a
+mission's report, an agent's plain `owner.notify`, a reminder that fired, the
+recap, a learned line. A `link` alone does not make a message actionable: it
+is a place to read more.
+
+- **Information** is routed and delivered exactly as before (Telegram, the
+  card at the top right, the end of the day), and listed in Settings →
+  Notifications → Recent. It is never in Home's Needs you and never on a
+  count.
+- **An action** puts the message in Home's Needs you, its ask under the
+  title, until you open it or mark it Done, and it counts on every badge. On
+  Telegram the ask is the message's last line ("→ Confirm with the bank?").
+  Opening it goes to its link, or to the agent's conversation when it has none.
+
+The rule is one function in core (`needsOwner`, and `openForOwner` for "not
+dealt with yet", with its SQL twin), and every count reads it through the
+gateway's one answer (`needsYou` on `GET /api/overview`): Home's counts line,
+the badge on Home in the rail and the lock screen. Besides messages it counts
+pending approvals, held questions, the watchers' urgent decisions, failed jobs
+still asking, open proposals, connections to check, agents a plugin needs and
+a restore's checklist.
+
+An agent is told to set `action` only when you have something to do; a
+plugin's `owner.notify` carries none yet, so a plugin's message is information
+(its setup and its agents have their own rows).
+
 ## On the dashboard
 
 - **A card at the top right** for each `now` message kept for the dashboard:
@@ -123,10 +154,10 @@ another agent is given it on its Tools tab.
   later. Three at most; the rest wait under "and N more". Dismissing one is
   the same as seeing it. The page checks for new ones every 30 seconds while
   you are there, and when you come back to it.
-- **Home, under "Needs you"**: watcher finds, reminders, failures, reports
-  and plugin messages not seen yet, and whatever is held for the end of the
-  day, one line each with the agent. Approvals keep their own cards and are
-  not listed twice. The greeting counts them.
+- **Home, under "Needs you"**: messages that carry an action, not seen yet,
+  one line each with the agent and the ask. Approvals keep their own cards
+  and held questions their own rows, so neither is listed twice. Reports and
+  plain messages are not here (above). The greeting counts them as requests.
 - **Settings → Notifications**: the default channel with a "Send a test"
   button for each, a channel or Off per kind (approvals and questions cannot
   be off), the focus schedules and the end of the day, and the last twenty
@@ -248,7 +279,7 @@ answers `{ id }`, `'refused'` or `{ refused: reason }`, or throws.
 `also_from` (the other agents folded into it), `held_for` (the focus mode
 that held it), `state`,
 `due_at`, `channel`, `created_at`, `sent_at`, `seen_at`, `acted_at`,
-`error`.
+`error`, `action` (what it asks you to do; null for information).
 
 | State | Means |
 | --- | --- |
@@ -287,6 +318,8 @@ listDigestNotifications(pool, since)
 presenceTouch(pool, surface, now, 'active' | 'away'), ownerPresent(pool, now)
 registerChannel(channel), listChannels(), deliverTo(kind, message)
 ```
+
+`notifyOwner` takes `action?` too: a message with one needs the owner (above).
 
 For a plugin, `ctx.buddi.owner.notify({ urgency, title, text?, link?,
 dedupeKey?, agentId? })`, declared as `owner:notify`

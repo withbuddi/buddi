@@ -299,7 +299,9 @@ export const TOOLS: McpTool[] = [
         })),
         approvals: approvals.pending.map((a) => ({ id: a.id, tool: a.tool, preview: a.preview })),
         proposals: proposals.open.map((p) => ({ id: p.id, kind: p.kind, agent: p.agent, title: p.title })),
-        needsYou: attention,
+        // What needs the owner by the dashboard's one rule (Home, the rail, the lock screen), and which agents are waiting.
+        needsYou: overview.needsYou ?? null,
+        waiting: attention,
         overview: includeSensitive ? overview : withoutSensitive(overview),
       };
     },

@@ -99,7 +99,9 @@ needs me, what is my team up to, what is coming.
 - **The glance** at the top: the date (with plugins' one-line glances and the
   Tips bulb), a large greeting, and what needs you as one line of counts, each
   a link to its list (failed jobs and urgent alerts to Activity, proposals to
-  Settings; approvals, messages and agents to set up scroll to Needs you). On
+  Settings; approvals, questions, requests, connections to check, agents to
+  set up and a restore to finish scroll to Needs you). The counts, the rail's
+  badge on Home and the lock screen all count by one rule (below). On
   the right, the Blob. When the front desk's face is the Blob, it breathes
   there, as it does on the first-run page; with reduced motion set on your
   computer, it stays a still picture. On a phone it stacks. A glance whose
@@ -108,14 +110,22 @@ needs me, what is my team up to, what is coming.
   one line that grows as you type, with files and voice like the chat; sending opens the new conversation
   where the answer arrives, and its last three conversations sit below as
   "Continue" links.
-- **Needs you**: approval cards you decide in place, messages kept for the
-  dashboard (a watcher's find, a reminder, a report, an agent's own message —
-  shown without its "@handle:", since the agent is named beside it; a plugin's
-  by its page's name, "Mail"), failed jobs, urgent alerts, an agent a plugin
-  needs, and proposals to keep or discard. Decisions only: a quiet line held
-  for the evening or kept for the recap (such as "buddi learned 1 rule") stays
-  in Settings → Notifications → Recent. Done is kept by buddi, so a message
-  does not come back on reload, and a quiet line that says more later stays read.
+- **Needs you**: only what you can act on. Approval cards you decide in place;
+  the watchers' urgent decisions; an agent holding its turn for your answer
+  ("Asked you a question", opening its conversation); a message that carries
+  an action, with the ask under its title ("Ledger · Confirm with the bank?" —
+  an agent's own message without its "@handle:", a plugin's by its page's name,
+  "Mail"); failed jobs (Retry · Dismiss); proposals to keep or discard; a
+  connection whose sign-in ran out or whose tools need review (× until it
+  says something new); an agent a plugin needs; a restore's checklist. Not
+  here: a mission's report, an agent's plain message, a reminder that fired,
+  the recap and learned lines. They still reach you on your channel and are
+  listed in Settings → Notifications → Recent ("All notifications", the
+  section's link), but they are not something to do, so they never sit here
+  and never count. A watcher or a source that failed says so above, closable.
+  Done is kept by buddi, so a message does not come back on reload. The
+  counts line, the badge on Home in the rail and the lock screen read the
+  same count from the gateway (`needsYou` on `GET /api/overview`).
 - **Widgets**: small live panels the plugins export — the weather at home,
   what is coming up, who is waiting on your reply, the World clock buddi
   itself provides (Digital, or Analog: a face per place, yours first, light by
@@ -419,8 +429,9 @@ A list of sections in four groups.
 A privacy screen over the dashboard, opened with a PIN, drawn like a phone's
 lock screen: its own clock — the date and the time large, in your timezone,
 your Profile's way unless you pick otherwise, and a second clock if you want
-one; how many approvals and notifications are waiting (counts, never what they
-are — tap one and the dashboard opens on that list once unlocked); the focus
+one; how many approvals and other things need you — by the same rule as Home's
+Needs you, so a report or a plain message is never counted (counts, never what
+they are — tap one and the dashboard opens on Needs you once unlocked); the focus
 while one is on; up to four widgets of its own, compact and never a sensitive
 one (a sentence such as "Free for the rest of today." takes one column, and a
 widget with nothing to show stays off); and the PIN field, with one line saying why it locked ("Locked by you at 14:02",
@@ -495,8 +506,10 @@ person at your screen, not someone already on your computer.
 
 A `now` message that arrives while you are on the dashboard shows as a card at
 the top right, three at most. Seeing it there means it is not sent to your
-phone ten minutes later. What you have not seen yet is listed on Home under
-Needs you. See [Notifications](notifications.md).
+phone ten minutes later. One that asks you for something (an approval, a
+question, a message with an action) is also listed on Home under Needs you
+until you open it or mark it done; plain information is listed in Settings →
+Notifications → Recent. See [Notifications](notifications.md).
 
 ## Keyboard
 

@@ -13,10 +13,11 @@
  * offers one, at the foot.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
+import { api, type ApprovalRow, type ConnectionSignal, type NeedsYouCounts, type NotificationRow, type ConversationSummary, type DigestRow, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
-import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, NEEDS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
+import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, BACKUP_ROUTE, NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE, settingsRoute, transcriptRoute } from '../routes';
+import { RECOVERY_BANNER } from './Recovery';
 import type { AgentAttention } from '../shell/roster';
 import { orderAgents, waitingText } from '../shell/roster';
 import { accentAttrs, accentOf } from '../shell/accent';
@@ -87,7 +88,8 @@ export function Home({
   const proposals = useAsync(() => api.proposals(), [], 60_000);
   const agentOffers = useAsync(() => api.agentOffers(), [], 60_000);
   const owner = useAsync(() => api.owner(), []);
-  const notifications = useAsync(() => api.notifications(20), [], 30_000);
+  // Only the messages that ask the owner for something: a plain report is information (Notifications → Recent).
+  const notifications = useAsync(() => api.notificationsNeedingYou(), [], 30_000);
   // The same order as the rail and the Agents page: front desk first, the maker last.
   const team = useMemo(() => orderAgents(agents, defaultAgentId ?? null), [agents, defaultAgentId]);
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
@@ -117,7 +119,9 @@ export function Home({
   };
   const openRow = (row: NotificationRow): void => {
     seeRow(row);
-    if (row.link) navigate(row.link);
+    // An ask with no link of its own is answered where its agent is.
+    const to = row.link ?? (row.agentId ? chatRoute(row.agentId) : null);
+    if (to) navigate(to);
   };
   const fromOf = (row: NotificationRow): string =>
     fromWithAlso(row.agentId ? nameOf(row.agentId) : row.pluginId ? pluginTitle(row.pluginId, pluginPages?.all) : KIND_WORDS[row.kind], row, nameOf);
@@ -126,7 +130,13 @@ export function Home({
   const closed = useHomeClosed(data?.dismissed, () => overview.reload());
   const sentinelErrors = (data?.sentinels?.errors ?? []).filter((err) => !closed.is(`watcher-error:${err.sentinelId}`, err.error));
   const sourceErrors = (data?.mail ?? []).filter((m) => m.lastError && !closed.is(`source-error:${m.sourceId}`, m.lastError));
-  const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
+  // Agents holding a turn for the owner's answer: the rail's faces read the same.
+  const questions = heldQuestions(attention);
+  const signIns = connectionSignals.filter((signal) => !closed.is(`connection:${signal.id}`, signal.sentence));
+  const recovering = (data?.needsYou?.recovery ?? 0) > 0;
+  const needs =
+    pending.length + questions.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (proposed > 0 ? 1 : 0) +
+    toSetUp.length + told.length + signIns.length + (recovering ? 1 : 0);
 
   // The footer's approvals land here: Home, scrolled to "Needs you".
   useEffect(() => {
@@ -146,9 +156,11 @@ export function Home({
   // A glance whose id is a widget on Home stays off the date line: the widget says it.
   const widgets = useWidgets();
   const placed = useMemo(() => placedIds(widgets.answer), [widgets.answer]);
-  const counts = glanceCounts({
-    approvals: pending.length, failed: failedJobs, urgent, paused: data?.paused ?? false, proposals: proposed, agentsToSetUp: toSetUp.length, messages: told.length,
-  });
+  // The gateway's one count (web/needs-you.ts), the rail's badge and the lock screen's; this page's own lists until it answers.
+  const counts = glanceCounts(data?.needsYou ?? {
+    approvals: pending.length, questions: questions.length, failed: failedJobs, urgent, proposals: proposed, agentsToSetUp: toSetUp.length,
+    asks: told.length, signIns: signIns.length, recovery: recovering ? 1 : 0,
+  }, data?.paused ?? false);
 
   return (
     <>
@@ -188,12 +200,16 @@ export function Home({
         </Notice>
       ) : null}
 
-      {connectionSignals.filter((signal) => !closed.is(`connection:${signal.id}`, signal.sentence)).map((signal) => (
-        <Notice key={signal.id} tone="accent" action={<CloseButton label="Not now — tell me if it changes" onClick={() => closed.close(`connection:${signal.id}`, signal.sentence)} />}>
-          <p>
-            {signal.sentence}{' '}
-            <a href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Settings → Connections.</a>
-          </p>
+      {/* A watcher or a source that failed says so here, closable: there is no
+          step on Home that fixes it, so it is not in Needs you. */}
+      {sentinelErrors.map((err) => (
+        <Notice key={err.sentinelId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`watcher-error:${err.sentinelId}`, err.error)} />}>
+          Watcher {err.sentinelId} failed: {err.error}
+        </Notice>
+      ))}
+      {sourceErrors.map((source) => (
+        <Notice key={source.sourceId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`source-error:${source.sourceId}`, source.lastError!)} />}>
+          Source {source.sourceId}: {source.lastError}
         </Notice>
       ))}
 
@@ -204,6 +220,7 @@ export function Home({
         <div id={NEEDS_ID} className="home-needs">
         <Section
           title="Needs you"
+          aside={<a href={NOTIFICATIONS_RECENT_ROUTE} onClick={go(NOTIFICATIONS_RECENT_ROUTE)}>All notifications</a>}
           actions={told.length > 0 ? (
             <Segment<NeedsYouView>
               label="Show what needs you as"
@@ -218,35 +235,6 @@ export function Home({
             {pending.map((action) => (
               <ApprovalCard key={action.id} action={action} timezone={timezone} busy={busy === action.id} onDecide={decide} agentName={nameOf(action.agentId)} />
             ))}
-            {/* What buddi kept for the dashboard: a watcher's find, a reminder,
-                a report, held for today or not seen yet. Opening one is seeing it. */}
-            {told.length > 0 && needsView === 'deck' ? (
-              <NeedsYouDeck rows={unseen} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
-            ) : null}
-            {told.length > 0 && needsView === 'list' ? (
-              <Panel flush>
-                <List>
-                  {unseen.map((row) => (
-                    <ListRow
-                      key={row.id}
-                      href={row.link ?? undefined}
-                      onClick={() => openRow(row)}
-                      lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
-                      title={notificationTitle(row)}
-                      sub={fromOf(row)}
-                      side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
-                    />
-                  ))}
-                </List>
-              </Panel>
-            ) : null}
-            {failedJobs > 0 ? (
-              <Notice tone="critical">
-                <a href={`${ACTIVITY_ROUTE}/jobs?state=failed`} onClick={go(`${ACTIVITY_ROUTE}/jobs?state=failed`)}>
-                  {failedJobs} failed job{failedJobs === 1 ? '' : 's'}. See why, then retry or cancel them, one by one or all at once.
-                </a>
-              </Notice>
-            ) : null}
             {/* The watchers' decisions, in their owner lines — the Alerts page's
                 rule: urgent only, a group once; what waits for the recap is not here. */}
             {urgent > 0 ? (
@@ -256,6 +244,64 @@ export function Home({
                 </a>
               </Notice>
             ) : null}
+            {/* An agent holding its turn for the owner's answer, then the
+                messages that carry an action (the ask under the title), in one
+                list. Opening one is seeing it; a report without an action is
+                never here. As a deck, the messages are the deck and the
+                questions stay rows above it. */}
+            {questions.length > 0 || (told.length > 0 && needsView === 'list') ? (
+              <Panel flush>
+                <List>
+                  {questions.map((q) => (
+                    <ListRow
+                      key={q.agentId}
+                      href={q.route}
+                      onClick={() => navigate(q.route)}
+                      lead={<AgentAvatar agents={agents} id={q.agentId} size="sm" />}
+                      title="Asked you a question"
+                      sub={`${nameOf(q.agentId)} · waiting for your answer`}
+                      side={fmtRelative(q.at)}
+                    />
+                  ))}
+                  {needsView === 'list' ? unseen.map((row) => (
+                    <ListRow
+                      key={row.id}
+                      href={row.link ?? undefined}
+                      onClick={() => openRow(row)}
+                      lead={row.agentId ? <AgentAvatar agents={agents} id={row.agentId} size="sm" /> : undefined}
+                      title={notificationTitle(row)}
+                      sub={row.action ? `${fromOf(row)} · ${row.action}` : fromOf(row)}
+                      side={row.state === 'held' ? 'today' : fmtRelative(row.createdAt)}
+                    />
+                  )) : null}
+                </List>
+              </Panel>
+            ) : null}
+            {told.length > 0 && needsView === 'deck' ? (
+              <NeedsYouDeck rows={unseen} agents={agents} label={fromOf} onOpen={openRow} onDone={seeRow} />
+            ) : null}
+            {failedJobs > 0 ? (
+              <Notice tone="critical">
+                <a href={`${ACTIVITY_ROUTE}/jobs?state=failed`} onClick={go(`${ACTIVITY_ROUTE}/jobs?state=failed`)}>
+                  {failedJobs} failed job{failedJobs === 1 ? '' : 's'}. See why, then retry or dismiss {failedJobs === 1 ? 'it' : 'them'}.
+                </a>
+              </Notice>
+            ) : null}
+            {proposed > 0 ? (
+              <Notice tone="accent">
+                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
+                  {proposed} proposal{proposed === 1 ? '' : 's'} from your agents to keep or discard.
+                </a>
+              </Notice>
+            ) : null}
+            {signIns.map((signal) => (
+              <Notice key={signal.id} tone="accent" action={<CloseButton label="Not now — tell me if it changes" onClick={() => closed.close(`connection:${signal.id}`, signal.sentence)} />}>
+                <p>
+                  {signal.sentence}{' '}
+                  <a href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Settings → Connections.</a>
+                </p>
+              </Notice>
+            ))}
             {/* An agent a plugin needs and nobody has yet: the plugin's line,
                 the same accept the Plugins page runs, and a way to say no. */}
             {toSetUp.map((offer) => (
@@ -270,23 +316,11 @@ export function Home({
                 />
               </Panel>
             ))}
-            {proposed > 0 ? (
-              <Notice tone="accent">
-                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
-                  {proposed} proposal{proposed === 1 ? '' : 's'} from your agents to keep or discard.
-                </a>
+            {recovering ? (
+              <Notice tone="warning">
+                <p>{RECOVERY_BANNER} <a href={BACKUP_ROUTE} onClick={go(BACKUP_ROUTE)}>Open the checklist.</a></p>
               </Notice>
             ) : null}
-            {sentinelErrors.map((err) => (
-              <Notice key={err.sentinelId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`watcher-error:${err.sentinelId}`, err.error)} />}>
-                Watcher {err.sentinelId} failed: {err.error}
-              </Notice>
-            ))}
-            {sourceErrors.map((source) => (
-              <Notice key={source.sourceId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`source-error:${source.sourceId}`, source.lastError!)} />}>
-                Source {source.sourceId}: {source.lastError}
-              </Notice>
-            ))}
           </Stack>
         </Section>
         </div>
@@ -428,33 +462,45 @@ export function Home({
   );
 }
 
-/** The kinds Home lists from the notifications; approvals and questions have their own cards. */
-const HOME_KINDS: ReadonlySet<NotificationRow['kind']> = new Set(['watcher', 'reminder', 'failure', 'recap', 'plugin', 'agent']);
-
 const KIND_WORDS: Record<NotificationRow['kind'], string> = {
   approval: 'Approval', question: 'Question', watcher: 'Watcher', reminder: 'Reminder', failure: 'Failure', recap: 'Report', plugin: 'Plugin', agent: 'Message',
 };
 
 /**
- * The notifications Home lists under "Needs you": the kinds that have no card
- * of their own, sent as something for the owner now, not dealt with and not
- * seen yet. A quiet line — held for the end of the day (`today`) or kept for
- * the recap (`digest`) — is information, not a decision: it stays on
- * Settings → Notifications → Recent and in the evening's message, never here.
- * Seen is the server's: Done marks it, so it does not come back on reload. A
- * row about an approval already drawn as a card is left out.
+ * The messages Home lists under "Needs you": only those the gateway marks as
+ * asking the owner for something (`needsOwner`, core's one rule — a message
+ * that carries an action), not dealt with and not seen yet. A report, a
+ * reminder that fired or an agent's plain message is information: it reached
+ * the owner on their channel and stays in Settings → Notifications → Recent,
+ * never here and never on a count. Approvals and questions have their own
+ * rows (the cards, the held questions), so their messages are left out. Seen
+ * is the server's: Done marks it, so it does not come back on reload.
  */
 export function homeNotifications(rows: readonly NotificationRow[], pending: readonly Pick<ApprovalRow, 'id'>[]): NotificationRow[] {
   const cards = new Set(pending.map((action) => action.id));
   return rows.filter(
     (row) =>
-      HOME_KINDS.has(row.kind) &&
-      row.urgency === 'now' &&
+      row.needsOwner === true &&
+      row.kind !== 'approval' &&
+      row.kind !== 'question' &&
       row.actedAt === null &&
       row.state !== 'stored' &&
       row.seenAt === null &&
       !(row.actionId && cards.has(row.actionId)),
   );
+}
+
+/** An agent holding its turn for the owner's answer, and where to answer it. */
+export interface HeldQuestion { agentId: string; at: string; route: string }
+
+/** The held questions, oldest first: the same state the rail's faces show. */
+export function heldQuestions(attention: ReadonlyMap<string, AgentAttention>): HeldQuestion[] {
+  const out: HeldQuestion[] = [];
+  for (const entry of attention.values()) {
+    if (!entry.question) continue;
+    out.push({ agentId: entry.agentId, at: entry.question.at, route: chatRoute(entry.agentId, entry.question.conversationId) });
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 /** Home's slot for the weekly digest; its token is the digest's `at`. */
@@ -704,20 +750,25 @@ const NEEDS_ID = 'home-needs';
 export interface GlanceCount { key: string; count: number | null; label: string; tone?: 'critical'; route?: string }
 
 /**
- * The counts under the greeting, each a door to its list: failed jobs and
- * urgent alerts to Activity, a paused queue to the jobs, proposals to Settings,
- * and what Home lists itself (approvals, agents to set up, messages) to "Needs you".
+ * The counts under the greeting, each a door to its list: only what the owner
+ * can act on, as the gateway counts it for the rail's badge and the lock
+ * screen too. Failed jobs and urgent alerts go to Activity, a paused queue to
+ * the jobs, proposals to Settings, and what Home lists itself (approvals,
+ * questions, requests, sign-ins, agents to set up, the restore) to "Needs you".
  */
-export function glanceCounts(c: { approvals: number; failed: number; urgent: number; paused: boolean; proposals: number; agentsToSetUp: number; messages: number }): GlanceCount[] {
+export function glanceCounts(c: Omit<NeedsYouCounts, 'total'>, paused = false): GlanceCount[] {
   const plural = (n: number, one: string, many = `${one}s`): string => (n === 1 ? one : many);
   const items: GlanceCount[] = [];
   if (c.approvals > 0) items.push({ key: 'approvals', count: c.approvals, label: plural(c.approvals, 'approval') });
-  if (c.failed > 0) items.push({ key: 'failed', count: c.failed, label: plural(c.failed, 'failed job'), tone: 'critical', route: `${ACTIVITY_ROUTE}/jobs?state=failed` });
+  if (c.questions > 0) items.push({ key: 'questions', count: c.questions, label: plural(c.questions, 'question') });
   if (c.urgent > 0) items.push({ key: 'urgent', count: c.urgent, label: plural(c.urgent, 'urgent alert'), tone: 'critical', route: `${ACTIVITY_ROUTE}/alerts` });
-  if (c.paused) items.push({ key: 'paused', count: null, label: 'Paused', route: `${ACTIVITY_ROUTE}/jobs` });
+  if (c.failed > 0) items.push({ key: 'failed', count: c.failed, label: plural(c.failed, 'failed job'), tone: 'critical', route: `${ACTIVITY_ROUTE}/jobs?state=failed` });
+  if (paused) items.push({ key: 'paused', count: null, label: 'Paused', route: `${ACTIVITY_ROUTE}/jobs` });
   if (c.proposals > 0) items.push({ key: 'proposals', count: c.proposals, label: plural(c.proposals, 'proposal'), route: settingsRoute('proposals') });
+  if (c.asks > 0) items.push({ key: 'asks', count: c.asks, label: plural(c.asks, 'request') });
+  if (c.signIns > 0) items.push({ key: 'signins', count: c.signIns, label: plural(c.signIns, 'connection to check', 'connections to check') });
   if (c.agentsToSetUp > 0) items.push({ key: 'agents', count: c.agentsToSetUp, label: plural(c.agentsToSetUp, 'agent to set up', 'agents to set up') });
-  if (c.messages > 0) items.push({ key: 'messages', count: c.messages, label: plural(c.messages, 'message') });
+  if (c.recovery > 0) items.push({ key: 'recovery', count: null, label: 'Restore to finish' });
   return items;
 }
 

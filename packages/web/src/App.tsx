@@ -124,7 +124,7 @@ const reportedPages = new Map<string, string>();
 export function App(): JSX.Element {
   const [hash, navigate] = useHash();
   const [timezone, setTimezone] = useState('UTC');
-  const [badges, setBadges] = useState<{ approvals: number; failed: number; paused: boolean; running: number }>({ approvals: 0, failed: 0, paused: false, running: 0 });
+  const [badges, setBadges] = useState<{ approvals: number; failed: number; paused: boolean; running: number; needs: number }>({ approvals: 0, failed: 0, paused: false, running: 0, needs: 0 });
   const [theme, setTheme] = useThemeChoice();
   const narrow = useMediaQuery(NARROW_QUERY);
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -367,7 +367,14 @@ export function App(): JSX.Element {
       api
         .overview()
         .then((overview) =>
-          setBadges({ approvals: overview.approvals.pending, failed: overview.jobs.failed ?? 0, paused: overview.paused, running: overview.running ?? 0 }),
+          setBadges({
+            approvals: overview.approvals.pending,
+            failed: overview.jobs.failed ?? 0,
+            paused: overview.paused,
+            running: overview.running ?? 0,
+            // The rail's badge is everything that needs the owner, by the gateway's one rule.
+            needs: overview.needsYou?.total ?? overview.approvals.pending + (overview.jobs.failed ?? 0),
+          }),
         )
         .catch(() => {});
     };
@@ -500,7 +507,7 @@ export function App(): JSX.Element {
         <BannerSlot banners={banners} onNavigate={navigate} />
         <div className="wb">
           <Rail
-            attention={badges.approvals + badges.failed}
+            attention={badges.needs}
             place={place}
             onNavigate={navigate}
             theme={theme}

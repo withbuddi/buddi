@@ -63,6 +63,7 @@ import {
   type LockSettings,
   type Queryable,
 } from '@buddi/core';
+import type { NeedsYou } from './needs-you.js';
 import type { LockImage } from './lock-image.js';
 import type { LockReason, Session, SessionClient, SessionStore } from './sessions.js';
 import { hourOf, LOCK_WIDGETS_MAX, type HourCycle, type WidgetsService } from './widgets.js';
@@ -123,7 +124,8 @@ export interface LockScreenView extends LockStateView {
   timezone: string;
   owner: string | null;
   approvals: number;
-  unread: number;
+  /** Everything else that needs the owner (web/needs-you.ts), counted by the same rule as Home and the rail. */
+  needs: number;
   focus: unknown;
   widgets: Array<{ key: string; id: string; title: string; size: string; view: unknown }>;
   /** The clock with the Profile applied. */
@@ -144,6 +146,8 @@ export interface LockDeps {
   now: () => Date;
   timezone: string;
   widgets?: WidgetsService;
+  /** What needs the owner (web/needs-you.ts); absent, the lock screen counts approvals alone. */
+  needsYou?: () => Promise<NeedsYou>;
   log?: (line: string) => void;
 }
 
@@ -299,9 +303,9 @@ export function createLock(deps: LockDeps) {
     const profile = await getOwnerProfile(deps.pool as never).catch(() => null);
     // One format for every time on the screen: the big clock's, which its widgets read as their Profile.
     const clockView = await lockClockView(deps.pool, state.settings.clock, profile, hour);
-    const [pending, unread, focus, widgets] = await Promise.all([
+    const [pending, needsYou, focus, widgets] = await Promise.all([
       listPendingActions(deps.pool, { now }).catch(() => []),
-      unreadCount(deps.pool),
+      deps.needsYou ? deps.needsYou().catch(() => null) : Promise.resolve(null),
       readFocusState(deps.pool, { now: deps.now, timezone: deps.timezone }).catch(() => null),
       lockWidgets(deps.widgets, hour, clockView.time),
     ]);
@@ -311,8 +315,8 @@ export function createLock(deps: LockDeps) {
       now: now.toISOString(),
       timezone: deps.timezone,
       owner,
-      approvals: pending.length,
-      unread,
+      approvals: needsYou?.approvals ?? pending.length,
+      needs: needsYou ? needsYou.total - needsYou.approvals : 0,
       focus,
       widgets,
       clockView,
@@ -490,19 +494,6 @@ async function imageVersion(pool: Queryable): Promise<string | null> {
 async function readImage(pool: Queryable): Promise<{ jpeg: Buffer; sha256: string } | null> {
   const { rows } = await pool.query('select jpeg, sha256 from core.lock_background where id = 1');
   return rows[0] ? { jpeg: rows[0].jpeg as Buffer, sha256: String(rows[0].sha256) } : null;
-}
-
-/** Notifications the owner has not seen, from the last week: a count, never what they say. */
-async function unreadCount(pool: Queryable): Promise<number> {
-  try {
-    const { rows } = await pool.query(
-      `select count(*)::int as n from core.owner_notifications
-        where seen_at is null and created_at > now() - interval '7 days'`,
-    );
-    return Number(rows[0]?.n ?? 0);
-  } catch {
-    return 0;
-  }
 }
 
 /**

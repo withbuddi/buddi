@@ -36,6 +36,14 @@ export interface OwnerMessage {
   /** Core only: the approval this message asks about, drawn as a card where a channel can. */
   actionId?: string;
   /**
+   * What the owner is asked to do, in a few words: a step to take or a
+   * question to answer ("Confirm with the bank?"). A message with one is
+   * actionable — it sits in Home's Needs you and counts on every badge
+   * (`needsOwner`); one without is information, delivered as ever and kept in
+   * Notifications → Recent. A link alone does not make a message actionable.
+   */
+  action?: string;
+  /**
    * Skip the on-dashboard hold: a `now` message goes to the channel at once
    * even while the owner is on the dashboard. Set only by `owner.notify` in
    * an interactive turn, where the owner just asked to be told there.
@@ -65,6 +73,8 @@ export interface OwnerNotification {
   agentId: string | null;
   pluginId: string | null;
   actionId: string | null;
+  /** What it asks the owner to do; null for information (`OwnerMessage.action`). */
+  action: string | null;
   state: NotificationState;
   dueAt: string | null;
   channel: string | null;

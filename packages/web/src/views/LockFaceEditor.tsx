@@ -334,7 +334,7 @@ export function LockFaceEditor({ clock: saved, onClock, version }: {
           </div>
           <p className="lke-note">
             <Icon name="moon" size={13} />
-            <span>Your focus shows at the top only while one is on. Approvals and notifications show as counts when there are some, never what they say.</span>
+            <span>Your focus shows at the top only while one is on. Approvals and what else needs you show as counts when there are some, never what they say.</span>
           </p>
         </div>
       </div>

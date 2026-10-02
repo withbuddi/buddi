@@ -78,7 +78,7 @@ export function NeedsYouDeck({
     if (target.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (event.key === 'ArrowRight' && many) { event.preventDefault(); move(1); }
     else if (event.key === 'ArrowLeft' && many) { event.preventDefault(); move(-1); }
-    else if (event.key === 'Enter' && !target.closest('button, a')) { event.preventDefault(); if (row.link) open(); }
+    else if (event.key === 'Enter' && !target.closest('button, a')) { event.preventDefault(); if (row.link || row.agentId) open(); }
     else if ((event.key === 'd' || event.key === 'Delete') && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); done(); }
   };
 
@@ -117,13 +117,15 @@ export function NeedsYouDeck({
         foot={
           <Toolbar align="end">
             <Button onClick={done}>Done</Button>
-            {row.link ? <Button variant="accent" onClick={open}>Open</Button> : null}
+            {/* An ask with no link opens its agent's conversation (Home's openRow). */}
+            {row.link || row.agentId ? <Button variant="accent" onClick={open}>Open</Button> : null}
           </Toolbar>
         }
       >
         <div className="home-deck-body">
           <p className="home-deck-title">{notificationTitle(row)}</p>
           {row.text ? <p className="home-deck-text">{row.text}</p> : null}
+          {row.action ? <p className="home-deck-text"><strong>{row.action}</strong></p> : null}
         </div>
       </Card>
     </div>

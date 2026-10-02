@@ -31,6 +31,7 @@ import {
   getOnboarding,
   getOwnerProfile,
   isKnownTimezone,
+  AGENT_ACTION_MAX,
   AGENT_TEXT_MAX,
   AGENT_TITLE_MAX,
   checkAgentLink,
@@ -208,6 +209,17 @@ const notifyInput = z
       .string()
       .optional()
       .describe('A dashboard route to open, like "#/chat/<agent>/<conversation>". Never an outside address.'),
+    action: z
+      .string()
+      .trim()
+      .min(1)
+      .max(AGENT_ACTION_MAX)
+      .optional()
+      .describe(
+        'Only when the owner has to do something: the step or the question, in a few words ("Confirm with the bank?", ' +
+          '"Pick a time for Thursday"). With it the message waits in Needs you on their dashboard until they deal with it. ' +
+          'Leave it out for news: plain information is delivered the same way but does not ask for them.',
+      ),
     key: z
       .string()
       .trim()
@@ -429,6 +441,7 @@ export function createOwnerManifest(registry: ToolRegistry): PluginManifest {
         ...(input.text ? { text: input.text } : {}),
         urgency: input.urgency ?? 'now',
         ...(input.link ? { link: input.link } : {}),
+        ...(input.action ? { action: input.action } : {}),
         ...(input.key ? { key: input.key } : {}),
         interactive: interactiveTurn(ctx),
       });

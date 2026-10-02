@@ -14,7 +14,8 @@ import { createPool, migrateCore } from '../db.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 import { AGENT_MESSAGES_PER_DAY, AGENT_NOW_PER_HOUR, notifyFromAgent } from './agent.js';
 import { clearChannels, registerChannel } from './channels.js';
-import { notificationsTick } from './notify.js';
+import { countOpenAsks, listOpenAsks, needsOwner, openForOwner } from './needs.js';
+import { notificationsTick, notifyOwner } from './notify.js';
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   listNotifications,
@@ -238,5 +239,33 @@ suite('an agent tells the owner', () => {
     await notifyFromAgent(pool, deps, { agentId: 'scout', title: 'Visa card payment due Friday 40 EUR' });
     await notifyFromAgent(pool, deps, { agentId: 'planner', title: 'Visa card payment due Friday 40 EUR' });
     expect(await listNotifications(pool)).toHaveLength(2);
+  });
+
+  it('plain information is delivered as ever but never needs the owner; one with an action does, until seen', async () => {
+    fakeChannel();
+    // A mission's report and two plain owner.notify messages: information.
+    await notifyOwner(pool, deps, { kind: 'recap', urgency: 'now', title: 'Morning brief: three meetings', link: { route: '#/chat/brief/c1' } });
+    await notifyFromAgent(pool, deps, { agentId: 'scout', title: 'The parcel was delivered' });
+    await notifyFromAgent(pool, deps, { agentId: 'tempo', title: 'Rain after four', link: '#/chat/tempo' });
+    // One that asks for something.
+    const ask = await notifyFromAgent(pool, deps, { agentId: 'ledger', title: 'Charged twice at Monoprix', action: '  Confirm with the bank?  ' });
+    expect(sent.map((m) => m.title)).toEqual([
+      'Morning brief: three meetings', '@scout: The parcel was delivered', '@tempo: Rain after four', '@ledger: Charged twice at Monoprix',
+    ]);
+    expect(sent[3]).toMatchObject({ action: 'Confirm with the bank?' });
+    expect(sent[0]?.action).toBeUndefined();
+
+    const rows = await listNotifications(pool);
+    expect(rows.every((r) => r.state === 'sent')).toBe(true);
+    expect(rows.filter(needsOwner).map((r) => r.id)).toEqual([ask.id]);
+    expect(rows.filter(openForOwner).map((r) => r.id)).toEqual([ask.id]);
+    expect(needsOwner({ kind: 'approval', action: null })).toBe(true);
+    expect(needsOwner({ kind: 'question', action: null })).toBe(true);
+    expect(needsOwner({ kind: 'agent', action: '   ' })).toBe(false);
+    expect(await countOpenAsks(pool, clock)).toBe(1);
+    expect((await listOpenAsks(pool, clock)).map((r) => r.action)).toEqual(['Confirm with the bank?']);
+
+    await pool.query('update core.owner_notifications set seen_at = $2 where id = $1', [ask.id, clock]);
+    expect(await countOpenAsks(pool, clock)).toBe(0);
   });
 });

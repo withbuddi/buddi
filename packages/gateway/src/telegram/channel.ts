@@ -22,10 +22,12 @@ export function unlinkSignatures(text: string): string {
   return text.replace(/(^|\n|- )@(?=[A-Za-z0-9_-]+: )/g, '$1@\u2060');
 }
 
-/** The one message text a channel with no title field sends. */
-export function ownerMessageText(message: { title: string; text?: string }): string {
+/** The one message text a channel with no title field sends; what it asks of the owner, if anything, last. */
+export function ownerMessageText(message: { title: string; text?: string; action?: string }): string {
   const text = message.text?.trim();
-  return text ? `${message.title}\n\n${text}` : message.title;
+  const body = text ? `${message.title}\n\n${text}` : message.title;
+  const action = message.action?.trim();
+  return action ? `${body}\n\n→ ${action}` : body;
 }
 
 export interface TelegramChannelOptions {

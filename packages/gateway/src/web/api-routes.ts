@@ -110,7 +110,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/lock/screen', area: 'session', whileLocked: true,
-    summary: 'What the lock screen draws: the time, counts waiting, the focus line, its widgets.',
+    summary: 'What the lock screen draws: the time, counts waiting (approvals, and everything else that needs the owner as `needs`), the focus line, its widgets.',
     query: 'hour?: number',
   },
   {
@@ -184,7 +184,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   {
     method: 'GET', path: '/api/overview', area: 'home',
     summary: "Home's whole first read: plugin blocks and glances, and counts of approvals, jobs, missions, reminders, watchers.",
-    answer: '{ now, timezone, paused, home: HomeBlock[], glances, approvals: { pending, oldestPendingAt }, jobs: Record<state, number>, missions, reminders, sentinels, mail, running }',
+    answer: '{ now, timezone, paused, home: HomeBlock[], glances, approvals: { pending, oldestPendingAt }, jobs: Record<state, number>, missions, reminders, sentinels, mail, running, needsYou: { approvals, questions, urgent, failed, proposals, asks, agentsToSetUp, signIns, recovery, total } }',
   },
   { method: 'GET', path: '/api/tips', area: 'home', summary: 'Every tip and its state.', answer: '{ tips: Tip[], enabled: boolean }' },
   {
@@ -478,7 +478,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
 
   /* ---------------- notifications ---------------- */
-  { method: 'GET', path: '/api/notifications', area: 'notifications', summary: 'The notifications buddi sent, newest first.', query: 'limit?: number' },
+  { method: 'GET', path: '/api/notifications', area: 'notifications', summary: 'The notifications buddi sent, newest first, each with needsOwner; with needs=1 the open ones that ask the owner for something.', query: 'limit?: number, needs?: 1' },
   { method: 'POST', path: '/api/notifications/:id/seen', area: 'notifications', summary: 'Mark a notification seen.', errors: '404' },
   { method: 'GET', path: '/api/notifications/settings', area: 'notifications', summary: 'Where and when buddi reaches the owner.', answer: '{ settings, channels }' },
   { method: 'PUT', path: '/api/notifications/settings', area: 'notifications', summary: 'Change the notification settings.', body: 'the settings object', answer: '{ settings, channels }', errors: '400' },

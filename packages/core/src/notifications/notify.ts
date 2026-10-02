@@ -141,6 +141,7 @@ function toDeliverable(row: OwnerNotification): DeliverableMessage {
     ...(row.agentId ? { agentId: row.agentId } : {}),
     ...(row.pluginId ? { pluginId: row.pluginId } : {}),
     ...(row.actionId ? { actionId: row.actionId } : {}),
+    ...(row.action ? { action: row.action } : {}),
   };
 }
 
@@ -195,6 +196,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   // What leaves the machine on a push channel is scrubbed like everything else.
   const baseTitle = scrubText(message.title.trim().replace(/\s*\n\s*/g, ' '));
   const text = message.text?.trim() ? scrubText(message.text.trim()) : null;
+  const action = message.action?.trim() ? scrubText(message.action.trim().replace(/\s*\n\s*/g, ' ')) : null;
 
   // The unsent row this key already has, if any: it is updated, not repeated.
   let existing: OwnerNotification | null = null;
@@ -220,7 +222,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
   // Approvals and questions carry their own action and are never folded.
   const topic = always || message.kind === 'agent' ? null : notificationTopic({ title: baseTitle, text, agentId: message.agentId ?? null }) || null;
   // An agent's own message is never folded: it says it is from that agent.
-  if (!existing && topic && message.kind !== 'agent') {
+  if (!existing && topic && message.kind !== 'agent' && action === null) {
     const folded = await foldIntoTopic(db, { ...message, title: baseTitle, text, dedupeKey, topic }, now);
     if (folded) return folded;
   }
@@ -261,7 +263,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
               topic = coalesce($15, topic), plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
               channel = $12, fired_count = fired_count + 1, lowered = $13,
               seen_at = case when $17 then null else seen_at end, error = null, updated_at = $14,
-              held_for = $16
+              held_for = $16, action = $18
         where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
@@ -269,7 +271,7 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
         // Only something that asks for the owner now comes back unseen. A
         // quiet line (today, digest) that says more is updated where it is:
         // the owner already read it, and reading it again is not news.
-        urgency === 'now'],
+        urgency === 'now', action],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.
@@ -278,11 +280,11 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
     const { rows } = await db.query(
       `insert into core.owner_notifications
          (kind, urgency, title, text, link, offers, dedupe_key, agent_id, plugin_id, action_id, state, due_at, channel,
-          lowered, created_at, updated_at, topic, held_for)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16, $17)
+          lowered, created_at, updated_at, topic, held_for, action)
+       values ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::uuid, $11, $12, $13, $14, $15, $15, $16, $17, $18)
        returning ${NOTIFICATION_COLUMNS}`,
       [message.kind, urgency, title, text, message.link?.route ?? null, offers, dedupeKey, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor, action],
     );
     row = toNotification(rows[0]);
   }

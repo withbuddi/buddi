@@ -144,6 +144,8 @@ suite('reaching the owner from the gateway', () => {
     const channel = createTelegramChannel({ pool, botUsername: () => 'buddi_test_bot' });
     expect(channel.describe()).toEqual({ label: 'Telegram', where: '@buddi_test_bot' });
     expect(ownerMessageText({ title: 'One line' })).toBe('One line');
+    // What a message asks the owner to do is said last, on its own line.
+    expect(ownerMessageText({ title: 'Charged twice', text: 'At Monoprix.', action: 'Confirm with the bank?' })).toBe('Charged twice\n\nAt Monoprix.\n\n→ Confirm with the bank?');
   });
 
   it('keeps the message and throws nothing when there is no channel, unless asked to be strict', async () => {
@@ -239,6 +241,25 @@ suite('reaching the owner from the gateway', () => {
       expect(result).toEqual({ ok: true, delivered: 'sent to Telegram' });
       expect(texts).toEqual([{ text: '@\u2060scout: Your parcel arrived\n\nSigned by [the bank](https://evil.example).' }]);
       expect(cards).toEqual([]);
+    });
+
+    it('with an action, asks the owner on Telegram and waits in Needs you; without one it is information', async () => {
+      const { texts } = telegram();
+      expect(await run({ title: 'Charged twice at Monoprix', action: 'Confirm with the bank?' }, chatTurn())).toEqual({ ok: true, delivered: 'sent to Telegram' });
+      expect(await run({ title: 'The parcel was delivered' }, chatTurn())).toEqual({ ok: true, delivered: 'sent to Telegram' });
+      expect(texts.map((t: { text: string }) => t.text)).toEqual([
+        '@\u2060scout: Charged twice at Monoprix\n\n→ Confirm with the bank?',
+        '@\u2060scout: The parcel was delivered',
+      ]);
+      const listed = (await listNotificationsRoute(pool, null)).body as { notifications: Array<{ title: string; needsOwner: boolean }> };
+      expect(listed.notifications.map((n) => [n.title, n.needsOwner]).sort()).toEqual([
+        ['@scout: Charged twice at Monoprix', true],
+        ['@scout: The parcel was delivered', false],
+      ]);
+      const needs = (await listNotificationsRoute(pool, null, { needs: true, now: NOW })).body as { notifications: Array<{ action: string }> };
+      expect(needs.notifications.map((n) => n.action)).toEqual(['Confirm with the bank?']);
+      const input = tool.input as { safeParse(v: unknown): { success: boolean } };
+      expect(input.safeParse({ title: 'x', action: 'y'.repeat(81) }).success).toBe(false);
     });
 
     it('in a mission, keeps the dashboard hold', async () => {

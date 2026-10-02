@@ -1,7 +1,7 @@
 ---
 title: "The HTTP API"
 status: reference
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 
 # The HTTP API
@@ -184,7 +184,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 | GET | `/api/session` | Who is signed in, the CSRF value writes must echo, and facts every page formats with. | yes |
 | GET | `/api/lock` | The lock screen state: whether a PIN is set and this session is locked. | yes |
 | POST | `/api/lock` | Lock this session now. | no |
-| GET | `/api/lock/screen` | What the lock screen draws: the time, counts waiting, the focus line, its widgets. | yes |
+| GET | `/api/lock/screen` | What the lock screen draws: the time, counts waiting (approvals, and everything else that needs the owner as `needs`), the focus line, its widgets. | yes |
 | POST | `/api/lock/unlock` | Unlock with the PIN. | no |
 | POST | `/api/lock/activity` | The page saying the owner is using it, which pushes back the idle lock. | no |
 | PUT | `/api/lock/pin` | Set or change the PIN. | no |
@@ -236,7 +236,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 
 #### `GET /api/lock/screen`
 
-What the lock screen draws: the time, counts waiting, the focus line, its widgets.
+What the lock screen draws: the time, counts waiting (approvals, and everything else that needs the owner as `needs`), the focus line, its widgets.
 
 - **Auth:** Session or API token; answered while locked.
 - **Query:** `hour?: number`
@@ -461,7 +461,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 Home's whole first read: plugin blocks and glances, and counts of approvals, jobs, missions, reminders, watchers.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ now, timezone, paused, home: HomeBlock[], glances, approvals: { pending, oldestPendingAt }, jobs: Record<state, number>, missions, reminders, sentinels, mail, running }`
+- **Answer:** `{ now, timezone, paused, home: HomeBlock[], glances, approvals: { pending, oldestPendingAt }, jobs: Record<state, number>, missions, reminders, sentinels, mail, running, needsYou: { approvals, questions, urgent, failed, proposals, asks, agentsToSetUp, signIns, recovery, total } }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -1863,7 +1863,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
-| GET | `/api/notifications` | The notifications buddi sent, newest first. | yes |
+| GET | `/api/notifications` | The notifications buddi sent, newest first, each with needsOwner; with needs=1 the open ones that ask the owner for something. | yes |
 | POST | `/api/notifications/:id/seen` | Mark a notification seen. | yes |
 | GET | `/api/notifications/settings` | Where and when buddi reaches the owner. | yes |
 | PUT | `/api/notifications/settings` | Change the notification settings. | yes |
@@ -1875,10 +1875,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/notifications`
 
-The notifications buddi sent, newest first.
+The notifications buddi sent, newest first, each with needsOwner; with needs=1 the open ones that ask the owner for something.
 
 - **Auth:** Session or API token.
-- **Query:** `limit?: number`
+- **Query:** `limit?: number, needs?: 1`
 - **Answer:** JSON
 - **Since:** 0.1.0-pre.18
 

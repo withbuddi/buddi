@@ -8,7 +8,8 @@
  * zone, their way unless picked for the lock screen, and a second zone if one
  * was — its own widgets (compact, at most four, never a sensitive one; a
  * sentence takes one column so an empty day never stretches into a hollow
- * card), how many approvals and notifications are waiting — counts, never
+ * card), how many approvals and other things need the owner (the one
+ * actionable rule Home and the rail count by) — counts, never
  * what they are; each a button that opens its list once unlocked — and the
  * focus while one is on. `LockFace` draws all but the unlock, and the lock
  * screen editor draws the same face as its preview.
@@ -28,7 +29,7 @@ import { CLOCK_WIDGET, useOnTheMinute } from '../views/parts/HomeWidgets';
 import { Button, Icon, Mark, Modal } from '../ui';
 import { FOCUS_LABELS, focusUntilLabel } from './Rail';
 import { fmtClock, fmtDate, fmtMoment, underFormats } from '../format';
-import { NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE } from '../routes';
+import { NEEDS_ROUTE } from '../routes';
 
 /**
  * What the lock screen is drawn on: the owner's pick, Earth (the default)
@@ -155,13 +156,14 @@ function Forgot({ onClose }: { onClose: () => void }): JSX.Element {
   );
 }
 
-export type LockAfter = 'approvals' | 'unread';
+export type LockAfter = 'approvals' | 'needs';
 
 /** Counts only: what is waiting, never what it is. Tapped, the dashboard opens on that list once unlocked. */
-function Badges({ approvals, unread, after, onPick }: { approvals: number; unread: number; after?: LockAfter | null; onPick?: (next: LockAfter | null) => void }): JSX.Element | null {
+function Badges({ approvals, needs, after, onPick }: { approvals: number; needs: number; after?: LockAfter | null; onPick?: (next: LockAfter | null) => void }): JSX.Element | null {
   const items: Array<{ key: LockAfter; n: number; text: string }> = [];
   if (approvals > 0) items.push({ key: 'approvals', n: approvals, text: approvals === 1 ? 'approval waiting' : 'approvals waiting' });
-  if (unread > 0) items.push({ key: 'unread', n: unread, text: unread === 1 ? 'notification' : 'notifications' });
+  // Only what the owner can act on: an informational message is never counted here.
+  if (needs > 0) items.push({ key: 'needs', n: needs, text: approvals > 0 ? (needs === 1 ? 'more needs you' : 'more need you') : needs === 1 ? 'thing needs you' : 'things need you' });
   if (items.length === 0) return null;
   return (
     <ul className="lk-badges" aria-label="Waiting for you">
@@ -173,7 +175,7 @@ function Badges({ approvals, unread, after, onPick }: { approvals: number; unrea
             data-kind={b.key}
             aria-pressed={after === b.key}
             disabled={!onPick}
-            title={onPick ? (b.key === 'unread' ? 'Open your notifications once unlocked' : 'Open your approvals once unlocked') : undefined}
+            title={onPick ? (b.key === 'needs' ? 'Open Needs you once unlocked' : 'Open your approvals once unlocked') : undefined}
             onClick={() => onPick?.(after === b.key ? null : b.key)}
           >
             <span className="ui-badge" aria-hidden="true">{b.n > 99 ? '99+' : b.n}</span>
@@ -276,7 +278,7 @@ export interface LockFaceData {
   image: string | null;
   focus: FocusState | null;
   approvals: number;
-  unread: number;
+  needs: number;
   widgets: LockScreenData['widgets'];
   clockView?: LockClockView;
 }
@@ -328,7 +330,7 @@ export function LockFace({ data, now, phone, pad = false, after, onPick }: { dat
             {clock.zone.offset ? <span className="lk-zone-off">{clock.zone.offset}</span> : null}
           </p>
         ) : null}
-        {pad || !data ? null : <Badges approvals={data.approvals} unread={data.unread} after={after ?? null} {...(onPick ? { onPick } : {})} />}
+        {pad || !data ? null : <Badges approvals={data.approvals} needs={data.needs ?? 0} after={after ?? null} {...(onPick ? { onPick } : {})} />}
         {pad || !data ? null : <Widgets widgets={data.widgets} phone={phone} />}
       </div>
     </>
@@ -371,7 +373,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
   afterRef.current = after;
   // Unlocked: open where a tapped count asked, then hand back.
   done.current = (next: LockState) => {
-    if (afterRef.current) window.location.hash = afterRef.current === 'unread' ? NOTIFICATIONS_RECENT_ROUTE : NEEDS_ROUTE;
+    if (afterRef.current) window.location.hash = NEEDS_ROUTE;
     onUnlocked(next);
   };
   const pick = (next: LockAfter | null): void => {
@@ -450,7 +452,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
       : wrong
         ? { tone: 'critical' as const, text: wrong }
         : after
-          ? { tone: undefined, text: after === 'unread' ? 'Unlock to open your notifications.' : 'Unlock to open your approvals.' }
+          ? { tone: undefined, text: after === 'needs' ? 'Unlock to open what needs you.' : 'Unlock to open your approvals.' }
           : { tone: undefined, text: state ? lockedLine(state, timezone, now, data?.clockView) : 'Locked' };
   const digits = (v: string): string => v.replace(/\D/g, '').slice(0, 8);
   const who = (
@@ -536,5 +538,5 @@ function capital(text: string): string {
 
 /** The face before the first answer: the state's ground, nothing else yet. */
 function emptyFace(state: LockState): LockFaceData {
-  return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, background: state.background, image: state.image, focus: null, approvals: 0, unread: 0, widgets: [] };
+  return { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, background: state.background, image: state.image, focus: null, approvals: 0, needs: 0, widgets: [] };
 }

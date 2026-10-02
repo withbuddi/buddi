@@ -9,7 +9,8 @@
  * Skipped unless DATABASE_URL is set.
  */
 import { request } from 'node:http';
-import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, ToolRegistry, createPool, ensureOwner, migrate, removeLockPin, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, ToolRegistry, appendEvent, createAction, createPool, ensureOwner, migrate, removeLockPin, type AgentCatalog, type CoreToolContext } from '@buddi/core';
+import { QUESTION_ASKED } from './attention.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
 import pngjs from 'pngjs';
 import type { Pool } from 'pg';
@@ -165,7 +166,7 @@ suite('the lock screen', () => {
     const screen = await b.get('/api/lock/screen');
     expect(screen.status).toBe(200);
     expect(screen.body).toMatchObject({ locked: true, timezone: 'Europe/Paris', owner: 'owner', approvals: 0, widgets: [] });
-    expect(typeof screen.body!.unread).toBe('number');
+    expect(typeof screen.body!.needs).toBe('number');
 
     const open = await b.post('/api/lock/unlock', { pin: '2468' });
     expect(open.status).toBe(200);
@@ -173,19 +174,49 @@ suite('the lock screen', () => {
     expect((await b.get('/api/overview')).status).toBe(200);
   });
 
-  it('counts unread notifications for the lock screen, never what they say', async () => {
+  it('counts only what the owner can act on, as Home and the rail do, never what it says', async () => {
     const b = await browser();
     await pool.query('delete from core.owner_notifications');
+    // The demo: an approval, an urgent decision, an agent's question, a mission report and two plain notify messages.
+    await createAction(pool, { tool: 'demo.send', toolVersion: '1', agentId: 'postie', canonicalArgs: { to: 'ana' }, envelope: {}, preview: 'Send to ana', now: clock });
     await pool.query(
-      `insert into core.owner_notifications (kind, urgency, title, state, seen_at)
-       values ('plugin', 'now', 'a secret title', 'shown', null), ('plugin', 'now', 'another', 'shown', null),
-              ('plugin', 'now', 'read already', 'shown', now())`,
+      `insert into core.sentinel_findings (key, sentinel_id, severity, title, detail, owner_line, agent_id)
+       values ('lock.test:1', 'test.watcher', 'urgent', 'A payment to an unknown payee', 'brief', 'A payment of 1240 EUR is waiting', 'ledger')`,
     );
+    await appendEvent(pool, QUESTION_ASKED, { agentId: 'tempo' });
+    await pool.query(
+      `insert into core.owner_notifications (kind, urgency, title, state, seen_at, action, created_at)
+       values ('recap', 'now', 'a secret mission report', 'sent', null, null, $1),
+              ('agent', 'now', '@scout: the parcel was delivered', 'sent', null, null, $1),
+              ('agent', 'now', '@tempo: rain after four', 'shown', null, null, $1)`,
+      [clock],
+    );
+    const overview = await b.get('/api/overview');
+    expect(overview.body!.needsYou).toMatchObject({ approvals: 1, questions: 1, urgent: 1, asks: 0, total: 3 });
+    expect((await b.get('/api/notifications?needs=1')).body!.notifications).toEqual([]);
+
+    // A notify that carries an action is in Needs you, and on every count.
+    await pool.query(
+      `insert into core.owner_notifications (kind, urgency, title, state, action, created_at)
+       values ('agent', 'now', '@ledger: charged twice', 'sent', 'Confirm with the bank?', $1)`,
+      [clock],
+    );
+    const again = await b.get('/api/overview');
+    expect(again.body!.needsYou).toMatchObject({ asks: 1, total: 4 });
+    const listed = await b.get('/api/notifications?needs=1');
+    expect(listed.body!.notifications.map((n: { title: string; needsOwner: boolean }) => [n.title, n.needsOwner])).toEqual([['@ledger: charged twice', true]]);
+    const all = (await b.get('/api/notifications')).body!.notifications as Array<{ kind: string; needsOwner: boolean }>;
+    expect(all.filter((n) => n.needsOwner)).toHaveLength(1);
+
     await b.put('/api/lock/pin', { pin: '2468' });
     await b.post('/api/lock');
     const screen = await b.get('/api/lock/screen');
-    expect(screen.body!.unread).toBe(2);
+    expect(screen.body).toMatchObject({ approvals: 1, needs: 3 });
+    expect(screen.body!.approvals + screen.body!.needs).toBe(again.body!.needsYou.total);
     expect(JSON.stringify(screen.body)).not.toContain('secret');
+    await b.post('/api/lock/unlock', { pin: '2468' });
+    await pool.query("delete from core.sentinel_findings where key = 'lock.test:1'");
+    await pool.query('update core.approvals set state = \'rejected\'');
   });
 
   it('limits tries for the installation: five wrong, then a wait that doubles', async () => {

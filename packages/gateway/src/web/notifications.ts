@@ -21,6 +21,8 @@ import {
   deliverTo,
   listChannels,
   listNotifications,
+  listOpenAsks,
+  needsOwner,
   markSeen,
   parseNotificationSettings,
   presenceTouch,
@@ -41,9 +43,17 @@ export interface NotificationsRouteReply {
 /** The surface name the dashboard's presence is kept under. */
 export const WEB_PRESENCE_SURFACE = 'web';
 
-export async function listNotificationsRoute(pool: Queryable, limit: string | null): Promise<NotificationsRouteReply> {
+/**
+ * The newest notifications, each with `needsOwner` (core's one rule), or with
+ * `needs` the open actionable ones alone — what Home lists under Needs you and
+ * the counts count.
+ */
+export async function listNotificationsRoute(pool: Queryable, limit: string | null, opts: { needs?: boolean; now?: Date } = {}): Promise<NotificationsRouteReply> {
   const n = limit === null ? 20 : Number(limit);
-  return { status: 200, body: { notifications: await listNotifications(pool, { limit: Number.isFinite(n) ? n : 20 }) } };
+  const rows = opts.needs
+    ? await listOpenAsks(pool, opts.now ?? new Date())
+    : await listNotifications(pool, { limit: Number.isFinite(n) ? n : 20 });
+  return { status: 200, body: { notifications: rows.map((row) => ({ ...row, needsOwner: needsOwner(row) })) } };
 }
 
 export async function markSeenRoute(pool: Queryable, id: string, now: Date): Promise<NotificationsRouteReply> {

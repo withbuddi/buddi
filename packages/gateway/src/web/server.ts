@@ -251,6 +251,7 @@ import {
   type VersionDeps,
 } from './version.js';
 import { leaveRecoveryMode, readRecoveryView } from './recovery.js';
+import { readNeedsYou, type NeedsYou } from './needs-you.js';
 import { readRail, setRailPageHidden } from './rail.js';
 import { BUILD_MISSING, serveAsset, serveShellAtRoot } from './static.js';
 import { StreamBudget, frame, resumeCursor, streamConversation } from './stream.js';
@@ -585,7 +586,26 @@ export function createWebApp(deps: WebServerDeps): Server {
    * stream are asked again, so one left idle past the delay is locked and cut
    * off even if its page never says a word.
    */
-  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, log });
+  /*
+   * What needs the owner, counted once (web/needs-you.ts): Home's counts, the
+   * rail's badge and the lock screen all read this, so they agree.
+   */
+  const needsYou = (): Promise<NeedsYou> =>
+    readNeedsYou({
+      pool: deps.pool,
+      registry: deps.registry,
+      now: deps.now(),
+      agentOffers: async () =>
+        (await readAgentOffers({
+          registry: deps.registry, ctx: deps.ctx, now: deps.now, log, pool: deps.pool, agentIds: () => deps.catalog.list().map((a) => a.id),
+        })).offers,
+      signals: async () => {
+        const service = deps.connections ?? connectionsOf(deps.registry.manifests());
+        return service ? service.signals() : [];
+      },
+      recoveryActive: () => inRecovery(deps.pool),
+    });
+  const lock = createLock({ pool: deps.pool, sessions, now: deps.now, get timezone() { return deps.timezone; }, widgets, needsYou, log });
   const openStreams = new Map<string, { session: Session; responses: Set<ServerResponse> }>();
   /*
    * This process's boot: answered by `/_buddi/ready`, so a page that watches a
@@ -1620,6 +1640,8 @@ export function createWebApp(deps: WebServerDeps): Server {
               // Every surface's runs (Telegram, the queue, the terminal), not only
               // this dashboard's; a chat send still being set up counts too.
               running: Math.max(runningAgentRuns(), chat?.runningCount ?? 0),
+              // What needs the owner, by the one rule: Home's counts and the rail's badge.
+              needsYou: await needsYou(),
             },
           );
         case '/api/events':
@@ -1688,7 +1710,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             },
           });
         case '/api/notifications':
-          return reply(res, await listNotificationsRoute(deps.pool, q.get('limit')));
+          return reply(res, await listNotificationsRoute(deps.pool, q.get('limit'), { needs: q.get('needs') === '1', now }));
         case '/api/notifications/settings':
           return reply(res, await notificationSettingsRoute(deps.pool, 'GET'));
         case '/api/notifications/focus':

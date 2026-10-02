@@ -410,6 +410,21 @@ export interface WidgetSettingsSheet {
   timeFormat: '12h' | '24h' | null;
 }
 
+/** Only what the owner can act on; `total` is the rail's badge. */
+export interface NeedsYouCounts {
+  approvals: number;
+  questions: number;
+  urgent: number;
+  failed: number;
+  proposals: number;
+  /** Messages that carry an action (an agent's `owner.notify` with one). */
+  asks: number;
+  agentsToSetUp: number;
+  signIns: number;
+  recovery: number;
+  total: number;
+}
+
 export interface Overview {
   now: string;
   timezone: string;
@@ -435,6 +450,11 @@ export interface Overview {
   /** What the owner closed on Home, slot → the version closed. Absent from an older gateway. */
   dismissed?: Record<string, string>;
   /** Agent runs in progress in the dashboard's conversations right now. Absent from an older gateway. */
+  /**
+   * What needs the owner, counted once by the gateway (web/needs-you.ts):
+   * Home's counts line and the rail's badge read it. Absent from an older gateway.
+   */
+  needsYou?: NeedsYouCounts;
   running?: number;
 }
 
@@ -950,6 +970,10 @@ export interface NotificationRow {
   agentId: string | null;
   pluginId: string | null;
   actionId: string | null;
+  /** What it asks the owner to do; null for information. */
+  action?: string | null;
+  /** The gateway's one rule: an approval, a question, or a message with an action. Absent from an older gateway. */
+  needsOwner?: boolean;
   state: 'shown' | 'held' | 'stored' | 'sending' | 'sent' | 'failed';
   dueAt: string | null;
   /** The channel kind it went to, `dashboard` when shown there, else null. */
@@ -1048,7 +1072,8 @@ export interface LockScreenData extends LockState {
   timezone: string;
   owner: string | null;
   approvals: number;
-  unread: number;
+  /** Everything else that needs the owner, by the same rule as Home's counts and the rail's badge. */
+  needs: number;
   focus: FocusState | null;
   widgets: Array<{ key: string; id: string; title: string; size: WidgetSize; view: { state: 'ok' | 'stale'; body: WidgetBody } }>;
   clockView?: LockClockView;
@@ -2376,6 +2401,8 @@ export const api = {
   unpairTelegramDevice: (id: string) => del<null>(`/telegram/devices/${encodeURIComponent(id)}`),
   /* ---- notifications, and whether the owner is here ---- */
   notifications: (limit = 20) => get<{ notifications: NotificationRow[] }>('/notifications', { limit }),
+  /** The open messages that ask the owner for something: Home's Needs you. */
+  notificationsNeedingYou: () => get<{ notifications: NotificationRow[] }>('/notifications', { needs: 1 }),
   notificationSeen: (id: string) => post<{ ok: true }>(`/notifications/${encodeURIComponent(id)}/seen`),
   notificationSettings: () => get<NotificationSettingsView>('/notifications/settings'),
   saveNotificationSettings: (settings: NotificationSettings) => put<NotificationSettingsView>('/notifications/settings', settings),

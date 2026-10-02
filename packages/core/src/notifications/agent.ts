@@ -22,6 +22,7 @@ export const AGENT_MESSAGES_PER_DAY = 20;
 
 export const AGENT_TITLE_MAX = 80;
 export const AGENT_TEXT_MAX = 1000;
+export const AGENT_ACTION_MAX = 80;
 
 export interface AgentMessage {
   agentId: string;
@@ -32,6 +33,12 @@ export interface AgentMessage {
   urgency?: 'now' | 'today';
   /** A dashboard route (`#/…`). */
   link?: string;
+  /**
+   * What the owner is asked to do, in a few words ("Confirm with the bank?").
+   * With it the message sits in Needs you until the owner deals with it;
+   * without it the message is information (`needsOwner`).
+   */
+  action?: string;
   /** The agent's own dedupe key; stored as `agent:<id>:<key>`. */
   key?: string;
   /** The owner is in the conversation that asked: a `now` message skips the on-dashboard hold. */
@@ -137,6 +144,7 @@ export async function notifyFromAgent(db: Queryable, deps: NotifyDeps, message: 
     title: message.title,
     ...(message.text?.trim() ? { text: message.text } : {}),
     ...(message.link ? { link: { route: message.link.trim() } } : {}),
+    ...(message.action?.trim() ? { action: message.action.trim() } : {}),
     ...(key ? { dedupeKey: agentDedupeKey(agentId, key) } : {}),
     agentId,
     agentHandle: handle,

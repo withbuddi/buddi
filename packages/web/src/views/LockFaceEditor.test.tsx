@@ -28,7 +28,7 @@ const answer = (lock: WidgetPlacement[]): WidgetsAnswer => ({
 });
 const face: LockScreenData = {
   pin: true, locked: false, lockedAt: null, reason: null, delayMinutes: 5, background: 'sea', image: null, waitUntil: null, triesLeft: null,
-  now: '2026-10-01T12:32:00Z', timezone: 'Europe/Paris', owner: 'Sam', approvals: 2, unread: 0, focus: null,
+  now: '2026-10-01T12:32:00Z', timezone: 'Europe/Paris', owner: 'Sam', approvals: 2, needs: 0, focus: null,
   widgets: [{ key: 'l1', id: 'weather.now', title: 'Weather', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: '19°C' } } }],
   clockView: { time: '24h', date: 'long', zone: null },
 };

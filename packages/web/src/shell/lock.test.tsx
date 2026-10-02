@@ -22,7 +22,7 @@ const screenData = (over: Partial<LockScreenData> = {}): LockScreenData => ({
   timezone: 'Europe/Paris',
   owner: 'Sam',
   approvals: 2,
-  unread: 3,
+  needs: 3,
   focus: null,
   widgets: [{ key: 'l1', id: 'demo.now', title: 'Weather at home', size: 'small', view: { state: 'ok', body: { kind: 'stat', value: '19°C', caption: 'Partly cloudy' } as never } }],
   ...over,
@@ -146,7 +146,7 @@ describe('the lock screen', () => {
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
     render(<LockScreen initial={locked} onUnlocked={() => {}} />);
     expect(await screen.findByLabelText('Waiting for you')).toHaveTextContent('2 approvals waiting');
-    expect(screen.getByLabelText('Waiting for you')).toHaveTextContent('3 notifications');
+    expect(screen.getByLabelText('Waiting for you')).toHaveTextContent('3 more need you');
     expect(screen.getByRole('group', { name: 'Weather at home' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Locked by you at 14:02');
     expect(screen.getByLabelText('PIN')).toHaveFocus();
@@ -195,20 +195,20 @@ describe('the lock screen', () => {
     expect(tile.closest('.lk-grid')).toHaveAttribute('data-cols', '1');
   });
 
-  it('opens Notifications once unlocked when its count was tapped', async () => {
+  it('opens Needs you once unlocked when its count was tapped', async () => {
     vi.spyOn(api, 'lockScreen').mockResolvedValue(screenData());
     vi.spyOn(api, 'unlock').mockResolvedValue(open);
     window.location.hash = '#/';
     const done = vi.fn();
     render(<LockScreen initial={locked} onUnlocked={done} />);
     const u = user();
-    await u.click(await screen.findByRole('button', { name: /3 notifications/ }));
-    expect(screen.getByRole('button', { name: /3 notifications/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('status')).toHaveTextContent('Unlock to open your notifications.');
+    await u.click(await screen.findByRole('button', { name: /3 more need you/ }));
+    expect(screen.getByRole('button', { name: /3 more need you/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('Unlock to open what needs you.');
     expect(screen.getByLabelText('PIN')).toHaveFocus();
     await u.type(screen.getByLabelText('PIN'), '2468{Enter}');
     await waitFor(() => expect(done).toHaveBeenCalledWith(open));
-    expect(window.location.hash).toBe('#/settings/notifications/recent');
+    expect(window.location.hash).toBe('#/needs');
     window.location.hash = '';
   });
 

@@ -30,7 +30,7 @@ describe('which background the lock screen is drawn on', () => {
 });
 
 describe('the Earth photo', () => {
-  const face = (background: LockFaceData['background']): LockFaceData => ({ timezone: 'UTC', background, image: null, focus: null, approvals: 0, unread: 0, widgets: [] });
+  const face = (background: LockFaceData['background']): LockFaceData => ({ timezone: 'UTC', background, image: null, focus: null, approvals: 0, needs: 0, widgets: [] });
 
   it('gives a phone its portrait crop and a desk the whole frame, under the scrim', () => {
     const now = new Date('2026-10-01T12:00:00Z');

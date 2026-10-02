@@ -79,17 +79,19 @@ describe('the shell', () => {
 });
 
 describe('home', () => {
-  it('counts what needs a human, each count a door to its list', () => {
-    const none = { approvals: 0, failed: 0, urgent: 0, paused: false, proposals: 0, agentsToSetUp: 0, messages: 0 };
+  it('counts only what the owner can act on, each count a door to its list', () => {
+    const none = { approvals: 0, questions: 0, failed: 0, urgent: 0, proposals: 0, asks: 0, agentsToSetUp: 0, signIns: 0, recovery: 0 };
     expect(glanceCounts(none)).toEqual([]);
     expect(glanceCounts({ ...none, approvals: 2 })).toEqual([{ key: 'approvals', count: 2, label: 'approvals' }]);
-    expect(glanceCounts({ ...none, failed: 7, urgent: 1, proposals: 21, messages: 8 })).toEqual([
-      { key: 'failed', count: 7, label: 'failed jobs', tone: 'critical', route: '#/activity/jobs?state=failed' },
+    expect(glanceCounts({ ...none, questions: 1, failed: 7, urgent: 1, proposals: 21, asks: 8, signIns: 1 })).toEqual([
+      { key: 'questions', count: 1, label: 'question' },
       { key: 'urgent', count: 1, label: 'urgent alert', tone: 'critical', route: '#/activity/alerts' },
+      { key: 'failed', count: 7, label: 'failed jobs', tone: 'critical', route: '#/activity/jobs?state=failed' },
       { key: 'proposals', count: 21, label: 'proposals', route: '#/settings/proposals' },
-      { key: 'messages', count: 8, label: 'messages' },
+      { key: 'asks', count: 8, label: 'requests' },
+      { key: 'signins', count: 1, label: 'connection to check' },
     ]);
-    expect(glanceCounts({ ...none, paused: true, agentsToSetUp: 1 }).map((c) => [c.count, c.label])).toEqual([[null, 'Paused'], [1, 'agent to set up']]);
+    expect(glanceCounts({ ...none, agentsToSetUp: 1, recovery: 1 }, true).map((c) => [c.count, c.label])).toEqual([[null, 'Paused'], [1, 'agent to set up'], [null, 'Restore to finish']]);
   });
 
   it('greets by the hour in the owner\'s time zone', () => {
