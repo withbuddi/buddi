@@ -28,9 +28,14 @@ class FakeDb {
   messages: { conversation_id: string; role: string; content: unknown }[] = [];
   events: { kind: string; conversation_id: string | null; payload: any }[] = [];
   delivered: string[] = [];
+  /** Finding keys a mute the owner set covers now. */
+  muted = new Set<string>();
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
+    if (text.includes('core.sentinel_mutes') && text.includes('core.sentinel_findings')) {
+      return { rows: (params[0] as string[]).filter((k) => this.muted.has(k)).map((key) => ({ key })) };
+    }
     if (text.startsWith('insert into core.conversations')) {
       const id = `conv-${this.conversations.length + 1}`;
       this.conversations.push({ id, agent_id: params[0] });
@@ -639,6 +644,41 @@ describe('a sentinel wake', () => {
     expect(db.delivered).toEqual(['finance.floor-breach:2026-10-02', 'finance.due:card-2']);
     expect(contexts[0]).not.toHaveProperty('dedupeKey');
     expect(db.events.find((e) => e.kind === 'mission.delivered')?.payload).toMatchObject({ findingKeys: ['finance.floor-breach:2026-10-02', 'finance.due:card-2'] });
+  });
+
+  it('drops a wake whose finding the owner muted after it was enqueued, and tells nobody', async () => {
+    const { db, deps: d } = deps();
+    const delivered: string[] = [];
+    const calls: string[] = [];
+    const execute = createMissionExecutor({
+      ...d,
+      provider: fakeProvider('should not run', calls),
+      deliver: async (text) => { delivered.push(text); return 'chat-42'; },
+    });
+    db.muted.add('finance.floor-breach:2026-10-02');
+    const result = await execute(wakeOccurrence, wakeMission);
+    expect(result).toMatchObject({ delivered: false, decision: 'silent', reason: 'muted' });
+    expect(calls).toHaveLength(0);
+    expect(db.conversations).toHaveLength(0);
+    expect(delivered).toHaveLength(0);
+    expect(db.events.find((e) => e.kind === 'mission.silent')?.payload).toMatchObject({ reason: 'muted', findingKey: 'finance.floor-breach:2026-10-02' });
+  });
+
+  it('hands a coalesced burst over without the findings muted since', async () => {
+    const { db, deps: d } = deps();
+    const execute = createMissionExecutor({
+      ...d,
+      provider: decidingProvider('mission.report', { urgency: 'urgent', text: 'Card 2 is due.' }),
+      deliver: async () => 'chat-42',
+    });
+    const first = (wakeOccurrence.payload as { finding: Record<string, unknown> }).finding;
+    const second = { ...first, key: 'finance.due:card-2', title: 'Card 2 is due on Friday' };
+    db.muted.add('finance.floor-breach:2026-10-02');
+    await execute({ ...wakeOccurrence, id: 'occ-burst-muted', payload: { finding: first, findings: [first, second] } }, wakeMission);
+    const text = (db.messages[0]?.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('Card 2 is due on Friday');
+    expect(text).not.toContain('Safety floor breaks in 19 days');
+    expect(db.delivered).toEqual(['finance.due:card-2']);
   });
 
   it('hands the finding to the agent as part of the prompt', async () => {

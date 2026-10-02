@@ -21,6 +21,7 @@ import {
   appendEvent,
   getAction,
   markFindingDelivered,
+  mutedFindingKeys,
   offerActions,
   SCHEDULED_SURFACE,
   ToolRegistry,
@@ -278,7 +279,28 @@ export function createMissionExecutor(
     // install does not carry is a configuration problem, not a fallback.
     // A coalesced wake carries several findings for the same agent; the first
     // is the one a `prepare` and the notification's identity go by.
-    const findings = findingsOf(occurrence.payload);
+    let findings = findingsOf(occurrence.payload);
+    // A mute set after the wake was enqueued still silences it: what it now
+    // covers leaves the run, and a run left with nothing does not happen. A
+    // resumed run is the owner's own decision on an approval and goes on.
+    if (findings.length > 0 && !control?.resume) {
+      const muted = await mutedFindingKeys(deps.pool, findings.map((f) => f.key));
+      if (muted.size > 0) {
+        const dropped = findings.filter((f) => muted.has(f.key));
+        findings = findings.filter((f) => !muted.has(f.key));
+        if (findings.length === 0) {
+          log(`mission ${mission.id}: occurrence ${occurrence.id} dropped — every finding it carried is muted now`);
+          await appendEvent(deps.pool, 'mission.silent', {
+            missionId: mission.id,
+            occurrenceId: occurrence.id,
+            reason: 'muted',
+            findingKey: dropped[0]!.key,
+            ...(dropped.length > 1 ? { findingKeys: dropped.map((f) => f.key) } : {}),
+          });
+          return { conversationId: '', text: '', delivered: false, decision: 'silent', reason: 'muted' };
+        }
+      }
+    }
     const finding = findings[0] ?? null;
     const agentId = finding?.agentId || mission.agentId;
     const selectedAgent = catalog.resolve(agentId);
@@ -405,6 +427,20 @@ export function createMissionExecutor(
     // exist whatever the transport then does. A stored offer nobody ever taps
     // is inert; a button bound to an id that was never written is not.
     const offers = await storeOffers(deps, decision, mission.agentId, conversationId);
+
+    // Muted while the agent worked: a report about nothing but muted findings
+    // is not delivered. (One that also covers a live finding still goes.)
+    if (findings.length > 0) {
+      const mutedNow = await mutedFindingKeys(deps.pool, findings.map((f) => f.key));
+      if (mutedNow.size > 0) {
+        findings = findings.filter((f) => !mutedNow.has(f.key));
+        if (findings.length === 0) {
+          log(`mission ${mission.id}: occurrence ${occurrence.id} not delivered — muted while it ran`);
+          await appendEvent(deps.pool, 'mission.silent', { missionId: mission.id, occurrenceId: occurrence.id, conversationId, reason: 'muted', ...(finding ? { findingKey: finding.key } : {}) }, conversationId);
+          return { conversationId, text, delivered: false, decision: 'silent', reason: 'muted', ...(offers.length > 0 ? { offers } : {}) };
+        }
+      }
+    }
 
     let chatId: string | undefined;
     try {

@@ -650,6 +650,9 @@ What happens to a finding is core's decision, in `runSentinels`
   `core.sentinel_mutes` — a subject of a watcher's kind, or the whole kind. A
   finding a mute covers is still recorded and still resolves, but never fires,
   never reaches the digest and is not listed (`packages/core/src/sentinels/mutes.ts`).
+  A wake already enqueued is checked again when it runs and before it
+  delivers (`mutedFindingKeys`): muted findings leave the run, and a run left
+  with none is dropped (`mission.silent`, reason `muted`).
 - **Only decisions are listed.** The Alerts page and Home read
   `packages/gateway/src/web/alerts.ts`: urgent findings, not snoozed or
   silenced, one row per watcher and kind; `info` ones are counted in one recap

@@ -63,6 +63,28 @@ export function isMuted(
 }
 
 /**
+ * Of these finding keys, the ones a mute covers now — read off the stored
+ * findings' kind and subject. A wake enqueued before the owner said "Stop
+ * telling me this" is checked against this when it runs and again before it
+ * delivers, so a mute silences what was already on its way.
+ */
+export async function mutedFindingKeys(pool: Pick<Pool, 'query'>, keys: readonly string[]): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  const { rows } = await pool.query<{ key: string }>(
+    `select f.key from core.sentinel_findings f
+      where f.key = any($1::text[])
+        and exists (
+          select 1 from core.sentinel_mutes m
+           where m.sentinel_id = f.sentinel_id
+             and (m.kind = '' or m.kind = f.kind)
+             and (m.subject_id = '' or m.subject_id = f.subject->>'id')
+        )`,
+    [[...keys]],
+  );
+  return new Set(rows.map((r) => String(r.key)));
+}
+
+/**
  * Silence a subject, or a whole kind (`subjectId` ''). Idempotent: muting the
  * same thing twice keeps the first row. What it covers that was waiting for
  * the recap is taken out of the queue in the same transaction — the owner
