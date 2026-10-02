@@ -3,6 +3,7 @@
  * takes has a row, every row parses, and the help drawn from it says what the
  * table says.
  */
+import { CATALOGUE_ACTIONS, parseCatalogueArgs } from './agents-catalogue-cmd.js';
 import {
   parseAgentsArgs,
   parseChatArgs,
@@ -45,7 +46,8 @@ function parseFully(argv: string[], json = false): Command {
   const command = parseArgs(argv);
   const delegated = 'argv' in command ? (json ? [...command.argv, '--json'] : command.argv) : [];
   if (command.kind === 'chat-cli') {
-    if (delegated[0] === 'agents') parseAgentsArgs(delegated.slice(1));
+    if (delegated[0] === 'agents' && (CATALOGUE_ACTIONS as readonly string[]).includes(delegated[1] ?? '')) parseCatalogueArgs(delegated.slice(1));
+    else if (delegated[0] === 'agents') parseAgentsArgs(delegated.slice(1));
     else parseChatArgs(delegated);
   } else if (command.kind === 'missions') parseMissionsArgs(delegated);
   else if (command.kind === 'accounts') parseAccountsArgs(delegated);
@@ -189,6 +191,7 @@ describe('the command table', () => {
       'accounts',
       'accounts show',
       'agents models',
+      'agents catalogue',
       'missions list',
       'reminders',
       'plugins list',

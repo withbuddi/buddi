@@ -113,7 +113,7 @@ rate rule on a key, and your channel. What is its own:
   not disturb"; "not sent: messages from agents are off"; "refused: the owner
   has muted messages from @x"; "refused: you already sent 20 messages today".
 
-The front desk and the first assistant hold it, as do the starter agents;
+The front desk and the first assistant hold it, as do most catalogue agents;
 another agent is given it on its Tools tab.
 
 ## Needs you

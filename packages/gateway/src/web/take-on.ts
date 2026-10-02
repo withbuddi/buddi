@@ -16,10 +16,10 @@
  * exactly as a click would have left it. The one difference is who approves;
  * see `installOne`.
  *
- * Teammates are not created here. A tile's teammate (Planner for My days,
- * Ledger for My money, Illustrator for Pictures) stays the *offer* it already
- * is — the starter team on "Add a teammate", a plugin's proposal on Home — and
- * the handover card says it is ready to be introduced.
+ * Teammates are not created here. A tile's teammate (Ledger for My money,
+ * Illustrator for Pictures) stays the *offer* it already is — a plugin's
+ * proposal on Home — and the handover card says it is ready to be introduced.
+ * buddi's own ready-made agents are the catalogue's (`GET /api/catalogue`).
  */
 import type { Pool } from 'pg';
 import { beginOnboarding, getOnboarding, markStepDone, setOnboardingDetails, type Queryable } from '@buddi/core';
@@ -48,7 +48,6 @@ export const TILE_PLUGINS: Readonly<Record<TakeOnTile, readonly string[]>> = {
 
 /** The teammate an outcome suggests, as an offer; `plugin` is who proposes it. */
 export const TILE_TEAMMATES: Readonly<Partial<Record<TakeOnTile, { agent: string; name: string; plugin: string }>>> = {
-  days: { agent: 'planner', name: 'Planner', plugin: 'buddi' },
   mail: { agent: 'mail-triage', name: 'Mail Triage', plugin: 'email' },
   money: { agent: 'ledger', name: 'Ledger', plugin: 'finance' },
   pictures: { agent: 'illustrator', name: 'Illustrator', plugin: 'image' },
@@ -239,63 +238,86 @@ export function autoApprovalRefusal(listing: MarketEntry | undefined): string | 
   return null;
 }
 
-async function installOne(deps: TakeOnDeps, plugin: string, listing: MarketEntry | undefined, job: StageJob): Promise<void> {
+/** How one listed plugin's install ended. */
+export type ListedInstallOutcome =
+  | { ok: true; name: string; stagedId: string; wakesOnRestart: boolean }
+  | { ok: false; reason: string; stagedId?: string };
+
+export interface ListedInstallHooks {
+  /** Each step as it starts: fetching and reading the package, then installing it. */
+  onState?: (state: 'fetching' | 'reading' | 'installing', phase?: StagePhase) => void;
+  onStaged?: (stagedId: string) => void;
+  /**
+   * What arrived does not hash to what the listing names: leave its staged
+   * card for the owner to read (the catalogue's rule, agent-catalogue.md §5)
+   * rather than throw it away (first run's).
+   */
+  keepMismatch?: boolean;
+}
+
+/**
+ * Install one By-buddi listing on the owner's behalf, the one way buddi does:
+ * staged as any install is, approved only when what arrived hashes to exactly
+ * the integrity the listing names, then loaded live through the Plugins
+ * page's own enable path. Shared by first run's chapter 3 and the catalogue.
+ */
+export async function installListedPlugin(
+  deps: Pick<TakeOnDeps, 'pool' | 'env' | 'log' | 'engine' | 'registry'>,
+  listing: MarketEntry | undefined,
+  hooks: ListedInstallHooks = {},
+): Promise<ListedInstallOutcome> {
   const api: TakeOnEngine = deps.engine ?? engine;
   const refused = autoApprovalRefusal(listing);
-  if (refused !== null || !listing) {
-    fail(deps, plugin, job, refused ?? 'withbuddi.com does not list it');
-    return;
-  }
-  set(plugin, { title: listing.title });
+  if (refused !== null || !listing) return { ok: false, reason: refused ?? 'withbuddi.com does not list it' };
   const listed = String((listing as { integrity?: unknown }).integrity).trim();
-
-  const onPhase = (phase: StagePhase): void => {
-    if (job.finishedAt === undefined) job.phase = phase;
-    set(plugin, { state: phase === 'reading' ? 'reading' : 'fetching' });
-  };
-  const staged = await api.stagePlugin(`${listing.npm}@${listing.version}`, { env: deps.env, onPhase });
-  job.stagedId = staged.id;
+  hooks.onState?.('fetching');
+  const staged = await api.stagePlugin(`${listing.npm}@${listing.version}`, {
+    env: deps.env,
+    onPhase: (phase: StagePhase) => hooks.onState?.(phase === 'reading' ? 'reading' : 'fetching', phase),
+  });
+  hooks.onStaged?.(staged.id);
 
   /*
-   * The one place an approval is not the owner's click.
+   * The one place an approval is not the owner's click on the plugin's card.
    *
    * Everywhere else, approving a staged plugin is the owner reading its card
-   * and sending back the integrity they were shown. Here the owner ticked "My
-   * days" on first run, before there is a dashboard to read a card on, and
-   * asked buddi to take it on. buddi approves on their behalf only what it
-   * made itself: a listing marked By-buddi, whose integrity and npm provenance
-   * withbuddi.com checked when it published the index, and only when the
-   * tarball that arrived hashes to exactly the integrity that listing names.
-   * Anything else — another author, a listing without a hash, bytes that do
-   * not match — is refused here and waits on its card like any install. The
-   * staged card and its approval are still written, so Settings → Plugins
-   * shows the plugin installed with its hash, and the second approval (the
-   * package's prose disagreeing with its manifest) is never given for them.
+   * and sending back the integrity they were shown. Here the owner asked buddi
+   * to take something on (a first-run tile, a catalogue agent that needs the
+   * plugin) and buddi approves on their behalf only what it made itself: a
+   * listing marked By-buddi, whose integrity and npm provenance withbuddi.com
+   * checked when it published the index, and only when the tarball that
+   * arrived hashes to exactly the integrity that listing names. Anything else
+   * — another author, a listing without a hash, bytes that do not match — is
+   * refused here and waits on its card like any install. The staged card and
+   * its approval are still written, so Settings → Plugins shows the plugin
+   * installed with its hash, and the second approval (the package's prose
+   * disagreeing with its manifest) is never given for them.
    */
   if (staged.integrity.trim() === '' || staged.integrity.trim() !== listed) {
-    try {
-      api.rejectStaged(staged.id, deps.env);
-    } catch {
-      /* The stage is swept later either way. */
+    if (hooks.keepMismatch !== true) {
+      try {
+        api.rejectStaged(staged.id, deps.env);
+      } catch {
+        /* The stage is swept later either way. */
+      }
     }
-    fail(deps, plugin, job, `what arrived for ${listing.title} is not what withbuddi.com lists, so it was not installed`);
-    return;
+    return {
+      ok: false,
+      stagedId: staged.id,
+      reason: hooks.keepMismatch === true
+        ? `what arrived for ${listing.title} is not what withbuddi.com lists, so it waits for you in Settings → Plugins`
+        : `what arrived for ${listing.title} is not what withbuddi.com lists, so it was not installed`,
+    };
   }
-  set(plugin, { state: 'installing' });
-  const outcome = await api.approveStaged(staged.id, {
-    integrity: staged.integrity,
-    env: deps.env,
-    ...(deps.pool && typeof (deps.pool as Pool).connect === 'function' ? { pool: deps.pool as Pool } : {}),
-  });
+  hooks.onState?.('installing');
+  const pool = deps.pool && typeof (deps.pool as Pool).connect === 'function' ? { pool: deps.pool as Pool } : {};
+  const outcome = await api.approveStaged(staged.id, { integrity: staged.integrity, env: deps.env, ...pool });
   if (outcome.kind === 'drift') {
-    fail(deps, plugin, job, `${listing.title} says something its code does not match, so it waits for you in Settings → Plugins`);
-    return;
+    return { ok: false, stagedId: staged.id, reason: `${listing.title} says something its code does not match, so it waits for you in Settings → Plugins` };
   }
-  job.phase = 'done';
-  job.finishedAt = new Date().toISOString();
 
   // Live, through the same path the Plugins page's enable switch takes, so the
-  // hello can already use it. Anything short of that is said, not hidden.
+  // agent waiting for it can already use it. Anything short of that is said.
   let wakesOnRestart = true;
   if (api.setPluginEnabled && deps.registry) {
     try {
@@ -303,14 +325,34 @@ async function installOne(deps: TakeOnDeps, plugin: string, listing: MarketEntry
         env: deps.env,
         log: deps.log,
         registry: deps.registry,
-        ...(deps.pool && typeof (deps.pool as Pool).connect === 'function' ? { pool: deps.pool as Pool } : {}),
+        ...pool,
       });
       wakesOnRestart = toggled.restartNeeded || toggled.loadProblem !== undefined;
     } catch (err) {
-      deps.log(`first run: ${plugin} is installed but did not load live: ${err instanceof Error ? err.message : String(err)}`);
+      deps.log(`plugins: ${listing.name} is installed but did not load live: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  set(plugin, { state: 'ready', ...(wakesOnRestart ? { wakesOnRestart: true } : {}) });
+  return { ok: true, name: outcome.record.name, stagedId: staged.id, wakesOnRestart };
+}
+
+async function installOne(deps: TakeOnDeps, plugin: string, listing: MarketEntry | undefined, job: StageJob): Promise<void> {
+  if (listing) set(plugin, { title: listing.title });
+  const outcome = await installListedPlugin(deps, listing, {
+    onState: (state, phase) => {
+      if (phase !== undefined && job.finishedAt === undefined) job.phase = phase;
+      set(plugin, { state });
+    },
+    onStaged: (id) => {
+      job.stagedId = id;
+    },
+  });
+  if (!outcome.ok) {
+    fail(deps, plugin, job, outcome.reason);
+    return;
+  }
+  job.phase = 'done';
+  job.finishedAt = new Date().toISOString();
+  set(plugin, { state: 'ready', ...(outcome.wakesOnRestart ? { wakesOnRestart: true } : {}) });
 }
 
 /** `GET /api/onboarding/take-on`: the choice, the progress, and what is still waiting. */
@@ -356,7 +398,7 @@ async function waitingFor(deps: TakeOnDeps, tiles: readonly string[], plugins: r
     if (!mate || !tiles.includes(tile) || present.has(mate.agent)) continue;
     // Mail Triage waits for a mailbox first; a plugin's teammate waits for its plugin.
     if (tile === 'mail' && !mailbox) continue;
-    if (mate.plugin !== 'buddi' && mate.plugin !== 'email' && state(mate.plugin)?.state !== 'ready') continue;
+    if (mate.plugin !== 'email' && state(mate.plugin)?.state !== 'ready') continue;
     waiting.push(`${mate.name} is ready to be introduced`);
   }
   return waiting;

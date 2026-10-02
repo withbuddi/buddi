@@ -62,6 +62,12 @@ export const USAGE = `buddi agents — which engine each agent runs on
   buddi agents migrate [--dry-run]   move agents/ and skills/ out of the repository
                                      and into your private directory (never committed)
 
+The catalogue (through the running service):
+  buddi agents catalogue [--json]    ready-made agents from withbuddi.com, and where each stands
+  buddi agents add <name> [--fill pick=answer]... [--mission id]... [--yes]
+  buddi agents update <handle> [--replace] [--yes]
+  buddi agents remove <handle> [--yes]
+
 A change to an agent file is picked up by the next CLI run immediately; the
 running service keeps the catalog it loaded, so run \`buddi service restart\`.`;
 

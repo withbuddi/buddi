@@ -77,7 +77,7 @@ Under `packages/`:
   plugin contract. It never imports a tool.
 - `runtime`: the agent loop and the provider adapters.
 - `gateway`: the surfaces (dashboard server, Telegram, terminal), the
-  scheduler, the starter agents.
+  scheduler, the agent catalogue.
 - `web`: the dashboard, React and Vite, built to static files.
 - `cli`: the `buddi` binary for a checkout.
 - `install`: the packaged launcher, the supervisor and the bundled Postgres.
@@ -147,7 +147,7 @@ An agent is a folder with an `agent.md` and, optionally, `skills/` beside it.
 Owners' agents live in their data directory; Agent Father writes them there
 after an approval. The shipped ones are in `examples/agents` and
 `packages/gateway/src/agents/starter`. Grants, step budgets, rollover and the
-starter team are in [docs/agents.md](docs/agents.md); providers and models in
+catalogue are in [docs/agents.md](docs/agents.md); providers and models in
 [docs/providers.md](docs/providers.md).
 
 ## Writing plugins

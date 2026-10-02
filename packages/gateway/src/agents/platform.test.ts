@@ -160,6 +160,22 @@ function refusalOf(h: Harness, tool: string, input: unknown): string {
   throw new Error(`${tool} did not refuse`);
 }
 
+/** The same, for a describe that reads the database first (delete: the missions it pauses). */
+async function describedAsync<E>(h: Harness, tool: string, input: unknown): Promise<{ envelope: E; preview: string }> {
+  const definition = h.tool(tool);
+  if (!definition.describe) throw new Error(`${tool} has no describe`);
+  return (await definition.describe(input, h.ctx)) as { envelope: E; preview: string };
+}
+
+async function refusalOfAsync(h: Harness, tool: string, input: unknown): Promise<string> {
+  try {
+    await describedAsync(h, tool, input);
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  throw new Error(`${tool} did not refuse`);
+}
+
 const baseCreate = {
   id: 'bookkeeper',
   handle: 'bookkeeper',
@@ -267,8 +283,8 @@ describe('validation happens before the action exists', () => {
     expect(message).toContain('one of the examples this repository ships');
   });
 
-  it('refuses to delete a shipped example', () => {
-    const message = refusalOf(h, 'platform.delete_agent', { id: 'concierge' });
+  it('refuses to delete a shipped example', async () => {
+    const message = await refusalOfAsync(h, 'platform.delete_agent', { id: 'concierge' });
     expect(message).toContain('shipped example');
   });
 
@@ -707,8 +723,8 @@ describe('the default claim moves in one approval', () => {
     expect(result.message).toContain('default agent now');
   });
 
-  it('points at the move rather than refusing the delete and stopping there', () => {
-    const message = refusalOf(h, 'platform.delete_agent', { id: 'concierge' });
+  it('points at the move rather than refusing the delete and stopping there', async () => {
+    const message = await refusalOfAsync(h, 'platform.delete_agent', { id: 'concierge' });
     expect(message).toContain('platform.update_agent');
     expect(message).toContain('default: true');
   });
@@ -730,8 +746,8 @@ describe('delete moves, it does not destroy', () => {
     expect(h.catalog.get('scout')).toBeUndefined();
   });
 
-  it('describes the move before it happens', () => {
-    const { envelope, preview } = described<DeleteAgentEnvelope>(h, 'platform.delete_agent', { id: 'scout' });
+  it('describes the move before it happens', async () => {
+    const { envelope, preview } = await describedAsync<DeleteAgentEnvelope>(h, 'platform.delete_agent', { id: 'scout' });
     expect(envelope.directory).toBe(path.join(h.agentsDir, 'scout'));
     expect(envelope.trashDirectory).toContain('.trash');
     expect(preview).toContain('Nothing is destroyed');

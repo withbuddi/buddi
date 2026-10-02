@@ -234,6 +234,19 @@ import {
   type PluginsEngine,
 } from './plugins.js';
 import { marketAssetRoute, marketRoute } from './market.js';
+import {
+  catalogueRoute,
+  installRoute as catalogueInstallRoute,
+  jobRoute as catalogueJobRoute,
+  planRoute as cataloguePlanRoute,
+  removePreviewRoute,
+  removeRoute as removeAgentRoute,
+  updatePlanRoute as catalogueUpdatePlanRoute,
+  updateRoute as catalogueUpdateRoute,
+  type CatalogueDeps,
+} from './catalogue.js';
+import { createCatalogueService } from './catalogue-source.js';
+import { catalogueBindingOf } from '../agents/platform.js';
 import { pluginFoldersRoute } from './folders.js';
 import { tipsRoute } from '../tips/route.js';
 import { createWidgets, widgetsRoute } from './widgets.js';
@@ -1238,6 +1251,28 @@ export function createWebApp(deps: WebServerDeps): Server {
       requirements,
       ...(deps.plugins ? { engine: deps.plugins } : {}),
     });
+    /**
+     * The agent catalogue (catalogue.ts): the service the platform tools are
+     * bound to when there is one, so the routes and Agent Father read the same
+     * list; else one built here over the same market cache.
+     */
+    const catalogueDeps = (): CatalogueDeps => {
+      const live = deps.registry as unknown as Partial<LiveRegistryShape>;
+      const bound = catalogueBindingOf(deps.registry);
+      const env = deps.env ?? process.env;
+      const agentsDir = bound?.agentsDir ?? agentSearchPath(env).owner.dir;
+      return {
+        ...pagesDeps(),
+        env,
+        log,
+        pool: deps.pool,
+        service: bound?.service ?? createCatalogueService({ env, log, registry: deps.registry, ctx: deps.ctx, now: deps.now }),
+        binding: bound ?? { catalog: deps.catalog as never, agentsDir, trashRoot: path_.join(path_.dirname(path_.resolve(agentsDir)), '.trash') },
+        approve: (actionId) => decideApprovalFromWeb(writeDeps, actionId, 'approved'),
+        ...(deps.plugins ? { engine: deps.plugins } : {}),
+        ...(live.register && live.unregister && live.manifests ? { liveRegistry: deps.registry as never } : {}),
+      };
+    };
     /** Is a mailbox connected? The email plugin's own read, the one Home's offer asks. */
     const mailboxSet = async (): Promise<boolean> => {
       const answer = await runPageQuery(pagesDeps(), 'email', 'triage_offer', new URLSearchParams()).catch(() => null);
@@ -1747,9 +1782,15 @@ export function createWebApp(deps: WebServerDeps): Server {
           // is the Plugins page's own accept route, below.
           return sendJson(res, 200, await readAgentOffers(agentOffersDeps()));
         case '/api/teammates':
-          // "Add a teammate": the starter team and the plugin teammates, each
-          // added, addable, or greyed with why. Adding is the accept route below.
+          // The old "Add a teammate": the plugin teammates, each added,
+          // addable, or greyed with why. The catalogue replaces it.
           return sendJson(res, 200, await readTeammates(agentOffersDeps()));
+        /*
+         * The agent catalogue: buddi's ready-made agents from withbuddi.com,
+         * each with where it stands here. Fetched when stale, the copy offline.
+         */
+        case '/api/catalogue':
+          return reply(res, await catalogueRoute(catalogueDeps(), url));
         case '/api/chat/views':
           // How the installed plugins want their tool output drawn. The page
           // owns the renderers and learns the domain mapping from here, so an
@@ -1935,6 +1976,11 @@ export function createWebApp(deps: WebServerDeps): Server {
       const backupJob = /^\/api\/backups\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (backupJob) return reply(res, await backupJobRoute(backupDeps(), backupJob[1] as string));
 
+      const catalogueJob = /^\/api\/catalogue\/jobs\/([0-9a-f-]{36})$/i.exec(path);
+      if (catalogueJob) return reply(res, catalogueJobRoute(catalogueJob[1] as string));
+      // What removing an agent does, before the owner says so: nothing changes.
+      const removePreview = /^\/api\/agents\/([^/]+)\/remove$/.exec(path);
+      if (removePreview) return reply(res, await removePreviewRoute(catalogueDeps(), decodeURIComponent(removePreview[1] as string)));
       const pluginJob = /^\/api\/plugins\/jobs\/([0-9a-f-]{36})$/i.exec(path);
       if (pluginJob) return reply(res, pluginJobRoute(pluginDeps(), pluginJob[1] as string));
 
@@ -2819,6 +2865,23 @@ export function createWebApp(deps: WebServerDeps): Server {
         decodeURIComponent(offerDismissed[2] as string),
       ));
     }
+    /*
+     * The agent catalogue's writes: a plan writes nothing; install answers a
+     * job; update and remove are the owner's click as the approval, like the
+     * accept route below.
+     */
+    const catalogueWrite = /^\/api\/catalogue\/([a-z][a-z0-9-]{0,39})\/(plan|install|update\/plan|update)$/.exec(path);
+    if (catalogueWrite) {
+      const name = catalogueWrite[1] as string;
+      const verb = catalogueWrite[2] as string;
+      const input = (body ?? {}) as Record<string, unknown>;
+      if (verb === 'plan') return reply(res, await cataloguePlanRoute(catalogueDeps(), name, input));
+      if (verb === 'install') return reply(res, await catalogueInstallRoute(catalogueDeps(), name, input));
+      if (verb === 'update/plan') return reply(res, await catalogueUpdatePlanRoute(catalogueDeps(), name, input));
+      return reply(res, await catalogueUpdateRoute(catalogueDeps(), name, input));
+    }
+    const removeAgent = /^\/api\/agents\/([^/]+)\/remove$/.exec(path);
+    if (removeAgent) return reply(res, await removeAgentRoute(catalogueDeps(), decodeURIComponent(removeAgent[1] as string)));
     const acceptAgent = /^\/api\/plugins\/([^/]+)\/agents\/([^/]+)\/accept$/.exec(path);
     if (acceptAgent) {
       return reply(res, await acceptAgentRoute(

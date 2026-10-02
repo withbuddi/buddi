@@ -50,7 +50,7 @@ conversation opens with a carried-over note written from the old one
 chose ("sent to Telegram"), within limits and settings the owner controls:
 6 urgent messages an hour, 20 a day, a switch for all of them, and a mute per
 agent on its Tools tab. It is shown as "@handle: title", plain text. The
-front desk, the first assistant and the starter agents hold it; give it to
+front desk, the first assistant and most catalogue agents hold it; give it to
 another agent on its Tools tab. See [notifications.md](notifications.md),
 "Messages from your agents".
 
@@ -76,43 +76,92 @@ It is the only placeholder. Anything else between double braces, `{{date}}` or
 `{{owner}}`, stays in the persona as written, so the agent sees the braces
 rather than a value.
 
-## Starter team
+## The catalogue
 
-A fresh install has two agents: the front desk and Agent Father. To show what
-another agent adds, which is its own memory, its own tools and work that runs
-on a schedule, buddi ships a starter team you add in one tap.
+A fresh install has two agents: the front desk and Agent Father. Everything
+else is picked from the catalogue: ready-made agents buddi publishes on
+withbuddi.com beside the plugins, each tested against the plugins it uses.
 
-| Agent | What it does | Needs | Arrives with |
-|---|---|---|---|
-| Scout | Reads the web, gives a second opinion, watches pages you name. | a brain | — |
-| Planner | Keeps your day: reminders, follow-ups it remembers, a brief every morning. Better with the Weather and Calendar plugins. | a brain | Morning brief, 08:00 in your timezone |
-| Keeper | Remembers one domain's history you choose: the car, the house, a project. | a brain | — |
+| Category | Agents (first lineup) |
+|---|---|
+| Work | Chief of Staff, Researcher, Writer, Illustrator |
+| Money | CFO |
+| Home | Chef, Home Manager |
+| Health | Coach |
+| Learning | Tutor |
+| Life | Travel Planner |
 
-Their grants stay inside what a brain alone allows: Scout holds `memory.*`,
-`reminder.*`, `owner.notify`, `web.*` and `browser.status`; Planner `memory.*`, `reminder.*`,
-`schedule.*` and `owner.notify`, plus `weather.*?` and `calendar.*?`, which hold only when
-those plugins are installed; Keeper `memory.*`, `reminder.*` and `owner.notify`. None of them reaches
-mail, money, this computer's shell or the browser's controls. Keeper asks, in
-its first message, which domain it keeps, and remembers the answer; its name
-on the roster stays Keeper.
+An agent from the catalogue is configuration, never code: a persona, a few
+text skills, the tools it asks for, missions, the picks it asks you, and
+three example asks. Nothing in it runs. buddi reads each listing strictly (an
+unknown field is refused, and so is a model, a provider, an account or a
+delegate) and recomputes its integrity before using it: a listing that does
+not hash to what withbuddi.com published is left out. Only listings made by
+buddi are offered for now.
 
-The cards appear under "Add a teammate" on the Agents page and under Home's
-"Your team" while the team is only the front desk and Agent Father. After
-that, the Agents page keeps them behind its "Add a teammate" button. Beside
-them are the agents plugins propose: Mail Triage (needs a mailbox), Ledger
-(from the finance plugin) and Illustrator (needs the image plugin and an
-account that draws). Until their plugin or requirement is there, they are
-greyed with the reason and a link to the page that fixes it.
+**Adding one** is one approval. The plan says what will happen: the plugins it
+installs on the way, the picks (a mailbox, the calendars to read, a place, a
+mission's hour, a line of text) filled with defaults, the handle (a free one
+beside the package's when it is taken: `chef-2`), every tool with its tier,
+and its missions. A missing plugin is installed only when it is a by-buddi
+listing whose package hashes to exactly what withbuddi.com lists, and loaded
+before the agent is written; anything else waits on its card in Settings →
+Plugins and the agent is not made. Then the agent file is written: the persona
+verbatim, then a short "## For this owner" section from the picks, nothing
+else. Your name, language, timezone and places are never written into it,
+because every agent is told them on every turn (above). Missions arrive off
+unless you turned them on. Its picture comes from the listing, checked
+against its hash and re-encoded like an upload. The file is yours from then
+on.
 
-Add is the same accept every agent offer uses: the owner's click approves the
-gated `platform.accept_plugin_agent`, whose preview names the whole grant and,
-for Planner, the mission. The new agent's file is yours from then on; buddi
-never rewrites it. Planner's morning brief reads today's weather and meetings
-when those plugins are there and leaves those lines out when they are not; a
-Planner added before this gains them with one line in its file: `tools:
-[memory.*, reminder.*, schedule.*, weather.*?, calendar.*?]`. The × on a card dismisses it for good. Agent Father sees
-the same catalogue under the source `buddi` (`platform.plugin_agents`) and
-can add one when you ask it to.
+Beside the file, `plugin.json` records where it came from: `source:
+"market"`, the package and version, the package integrity you approved, the
+hash of the file as written, and the picks. That is how buddi tells an
+untouched agent from one you edited.
 
-The files ship in `packages/gateway/src/agents/starter/<id>/`: an `agent.md`
-and its skills, each an ordinary agent you can read before adding it.
+**Updates** are offered, never written on their own. When a newer version is
+listed and you have not touched the file, Update shows what changed: the
+version's one line, the persona diff, tools added and removed, new missions.
+Approving it writes the file again from the new package with the same picks;
+a grant that gains tools says so loudly and names them. When you edited the
+file, nothing is touched, ever: the card says a new version is out, with
+"See what changed" and "Replace my changes" (your file goes to the trash
+first). Missions are your rows: an update adds new suggested ones off and
+never changes or turns on one you have.
+
+**Removing** an agent moves its directory to the trash beside your agents and
+pauses its missions in the same approval. Plugins stay; the preview names the
+ones no other agent uses.
+
+**Older agents.** Planner, Scout and Keeper (the starter team before the
+catalogue) and Ledger and Illustrator (proposed by the finance and image
+plugins) keep working with their handles, files and data. Each maps to its
+package (Chief of Staff, Researcher, Home Manager, CFO, Illustrator) through
+the package's `replaces`, so the catalogue shows it as added, and offers the
+update only while its file is untouched; an update keeps its id and handle,
+so @planner and @ledger stay. A new install of CFO is @cfo.
+
+**From chat**, Agent Father reads the catalogue (`platform.catalogue`) and adds
+one with `platform.install_agent` (gated, the same plan and preview), asking
+the picks in a sentence each. It cannot install a missing plugin; the
+dashboard can. Agents an installed plugin proposes (Mail Triage, a third-party
+plugin's advisor) are listed beside the catalogue as "from <plugin>" and
+added with `platform.accept_plugin_agent`.
+
+**From the terminal**, through the running service: `buddi agents catalogue`,
+`buddi agents add <name> [--fill pick=answer]… [--mission id]… [--yes]`,
+`buddi agents update <handle> [--replace]` and `buddi agents remove <handle>`
+([cli.md](cli.md)). The routes are `/api/catalogue…` ([api.md](api.md)).
+
+What a package may not ask for, whatever it says: the tools that write agents
+(`platform.*` writes), `host.*`, `secret.*`, `developer.*`, connection tools
+(`mcp.*`), `agent.delegate`, `owner.set_profile`, `email.send` and the
+mailbox account tools, and anything owner-only. You can give any of them to an
+agent by hand afterwards.
+
+The integrity is `sha256-<base64>` of one canonical JSON document (keys sorted
+at every depth, no whitespace): `{ "agent.json": <agent.json without integrity
+and claims>, "persona.md": <text>, "skills": { "<file>.md": <text> },
+"avatar.png": "sha256-<base64>" | null }`, the same computation as the
+market's check (`withbuddi/buddi-market`, `scripts/agents.mjs`).
+

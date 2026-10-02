@@ -288,6 +288,10 @@ Your agents, what they have scheduled, and the plugins they use.
 - [`buddi agents models`](#buddi-agents-models): List the models this build knows, and which of them this machine can reach.
 - [`buddi agents test`](#buddi-agents-test): Run one cheap live turn on an agent's provider, to prove it answers.
 - [`buddi agents migrate`](#buddi-agents-migrate): Move agents/ and skills/ out of the checkout and into your private directory. Source checkout only.
+- [`buddi agents catalogue`](#buddi-agents-catalogue): List the agent catalogue from withbuddi.com: each ready-made agent, and whether it is ready to add, needs something, or is already on your team.
+- [`buddi agents add`](#buddi-agents-add): Add an agent from the catalogue: prints what it would install, its picks, its tools and its missions (off), then adds it on your yes. A missing by-buddi plugin is installed on the way.
+- [`buddi agents update`](#buddi-agents-update): Update an agent added from the catalogue to the version listed now: prints the changes, the persona diff and any new tools, then updates it on your yes. An agent you edited is left alone unless you pass --replace.
+- [`buddi agents remove`](#buddi-agents-remove): Remove an agent from your team: its directory goes to the trash and its missions are paused. Plugins stay installed.
 - [`buddi missions list`](#buddi-missions-list): List every scheduled mission, its schedule, its next run and its last one.
 - [`buddi missions add-defaults`](#buddi-missions-add-defaults): Register every mission the installed plugins suggest.
 - [`buddi missions add-recap`](#buddi-missions-add-recap): Register the recap mission, or refresh it.
@@ -345,7 +349,7 @@ buddi agents
 - `1`: It failed; the message says why.
 - `2`: The command was not typed right.
 
-**See also**: [`buddi agents show`](#buddi-agents-show), [`buddi agents set`](#buddi-agents-set), [`buddi agents models`](#buddi-agents-models), [`buddi agents test`](#buddi-agents-test), [`buddi agents migrate`](#buddi-agents-migrate)
+**See also**: [`buddi agents show`](#buddi-agents-show), [`buddi agents set`](#buddi-agents-set), [`buddi agents models`](#buddi-agents-models), [`buddi agents test`](#buddi-agents-test), [`buddi agents migrate`](#buddi-agents-migrate), [`buddi agents catalogue`](#buddi-agents-catalogue), [`buddi agents add`](#buddi-agents-add), [`buddi agents update`](#buddi-agents-update), [`buddi agents remove`](#buddi-agents-remove)
 
 ### buddi agents show
 
@@ -545,6 +549,115 @@ buddi agents migrate --dry-run
 - `0`: Done.
 - `1`: It failed; the message says why.
 - `2`: The command was not typed right.
+
+### buddi agents catalogue
+
+List the agent catalogue from withbuddi.com: each ready-made agent, and whether it is ready to add, needs something, or is already on your team.
+
+```sh
+buddi agents catalogue [--refresh] [--json]
+```
+
+**Flags**
+
+- `--refresh`: Ask withbuddi.com again instead of the copy kept for an hour.
+- `--json`: Print JSON instead of text. BUDDI_JSON=1 does the same.
+
+**Example**
+
+```sh
+buddi agents catalogue
+```
+
+**Then**: Add one: `buddi agents add <name>`.
+
+**JSON**: { fetchedAt, stale?, agents: [{ name, version, handle, title, pitch, category, state, addable, missing?, installed?: { agentId, handle, version, drift, via? }, tools, missions, fills, examples, … }], fromPlugins: [{ plugin, agent, handle, name, state }], delisted, unavailable? }
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: buddi is not running, or the catalogue could not be fetched and no copy was kept.
+
+### buddi agents add
+
+Add an agent from the catalogue: prints what it would install, its picks, its tools and its missions (off), then adds it on your yes. A missing by-buddi plugin is installed on the way.
+
+```sh
+buddi agents add <name> [--fill <pick>=<answer>]... [--mission <id>]... [--handle <handle>] [--yes]
+```
+
+**Flags**
+
+- `--fill <pick>=<answer>`: Answer one of its picks (a mailbox, calendars, a place, a mission hour as HH:MM, or a line of text). Each pick left out takes its default.
+- `--mission <id>`: Turn this mission on from the start. Every other mission arrives off.
+- `--handle <handle>`: Another handle than the package's own (a free one beside it is picked when that is taken).
+- `--yes`: Approve it without asking. Without a terminal and without --yes, the plan is printed and nothing changes.
+
+**Example**
+
+```sh
+buddi agents add chef --fill "diet=no pork" --yes
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: Something it needs is missing, or the install failed; the reason is printed.
+- `2`: The command was not typed right.
+- `3`: buddi is not running, or the catalogue lists no agent of that name.
+
+### buddi agents update
+
+Update an agent added from the catalogue to the version listed now: prints the changes, the persona diff and any new tools, then updates it on your yes. An agent you edited is left alone unless you pass --replace.
+
+```sh
+buddi agents update <handle> [--replace] [--yes]
+```
+
+**Flags**
+
+- `--replace`: You changed its file: replace your changes with the catalogue's. Your file goes to the trash first.
+- `--yes`: Approve it without asking.
+
+**Example**
+
+```sh
+buddi agents update chef
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It is already up to date, or the update was refused; the reason is printed.
+- `2`: The command was not typed right.
+- `3`: buddi is not running, or that agent did not come from the catalogue.
+
+### buddi agents remove
+
+Remove an agent from your team: its directory goes to the trash and its missions are paused. Plugins stay installed.
+
+```sh
+buddi agents remove <handle> [--yes]
+```
+
+**Flags**
+
+- `--yes`: Approve it without asking.
+
+**Example**
+
+```sh
+buddi agents remove chef
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It was refused (the default agent, a shipped example); the reason is printed.
+- `2`: The command was not typed right.
+- `3`: buddi is not running.
 
 ### buddi missions list
 

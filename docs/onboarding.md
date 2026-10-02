@@ -136,8 +136,8 @@ under the tiles and "Installing, 1 of 2 ready" under the map's row; a fetch
 that fails is one line there and in the handover card, and never blocks a
 chapter.
 
-Teammates are not created by a tick: Planner (My days) stays an offer under
-"Add a teammate", Ledger (My money) and Illustrator (Pictures) the offers
+Teammates are not created by a tick: Chief of Staff (My days) is in the
+catalogue, Ledger (My money) and Illustrator (Pictures) the offers
 their plugins make on Home, exactly as before.
 
 **4. Reach me** — "How do we reach each other?"
@@ -247,9 +247,8 @@ another brain** reopens chapter 2.
 - Block on something slow. Installs run behind the chapters; a failure is a
   line, never a gate.
 
-After the first run, the Agents page and Home offer a starter team under
-"Add a teammate": Scout, Planner and Keeper, each added in one tap, and the
-plugin agents greyed with what they need ([agents](agents.md#starter-team)).
+After the first run, more agents come from the catalogue: ready-made agents
+from withbuddi.com, each added with one approval ([agents](agents.md#the-catalogue)).
 
 ## 4. Resume and "change"
 

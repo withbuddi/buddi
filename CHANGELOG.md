@@ -4,6 +4,18 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- The agent catalogue: ready-made agents from withbuddi.com (Chief of Staff, Researcher, CFO, Chef and more), each added with one approval. A missing by-buddi plugin is installed on the way, only when its package matches what withbuddi.com lists; the picks you answer (a mailbox, a mission's hour, a line about you) are written after the persona, and its missions arrive off unless you turn them on. Routes `/api/catalogue…`; the dashboard pages come next.
+- Updates from the catalogue are offered, never written on their own: an untouched agent is rewritten from the new version with the same picks after you approve the diff, and an agent you edited is left alone unless you replace your changes (your file goes to the trash).
+- Agent Father reads the catalogue and adds an agent from chat (`platform.catalogue`, `platform.install_agent`), asking the picks in words; the approval is the same one the dashboard makes.
+- `buddi agents catalogue`, `buddi agents add <name>`, `buddi agents update <handle>` and `buddi agents remove <handle>`, through the running service.
+
+### Changed
+
+- Removing an agent also pauses its missions, in the same approval, and names the plugins no other agent uses (they stay installed).
+- The starter team (Scout, Planner, Keeper) is gone from buddi: Researcher, Chief of Staff and Home Manager replace them in the catalogue. A Scout, Planner or Keeper you added keeps working with its handle and its data, and is offered its catalogue version while you have not edited it; the same goes for Ledger (CFO) and Illustrator. First run no longer says Planner is ready to be introduced.
+
 ## 0.1.0-pre.31 — 2026-10-02
 
 ### Added

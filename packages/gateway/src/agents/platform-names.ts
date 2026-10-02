@@ -33,6 +33,8 @@ export const PLATFORM_WRITE_TOOLS: readonly string[] = [
   // never reachable through a delegation corridor.
   'platform.accept_plugin_agent',
   'platform.accept_plugin_skill',
+  // Adding or updating an agent from the catalogue creates or rewrites a principal.
+  'platform.install_agent',
 ];
 
 /** The tools that only look. Safe to grant to anybody. */
@@ -43,6 +45,7 @@ export const PLATFORM_READ_TOOLS: readonly string[] = [
   'platform.read_agent',
   'platform.list_skills',
   'platform.plugin_agents',
+  'platform.catalogue',
 ];
 
 /** Does this grant include any tool that can write the installation? */

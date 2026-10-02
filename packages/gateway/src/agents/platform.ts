@@ -80,6 +80,8 @@ import {
   parseCron,
   setSchedule,
   upsertMission,
+  listMissions,
+  setMissionEnabled,
   type MisfirePolicy,
   DELEGATE_EVERYONE,
   IDLE_ROLLOVERS,
@@ -91,8 +93,16 @@ import { DELEGATES_FILE, readDelegates } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
 import { storeBundledMascot } from './mascots.js';
-import { starterMission, starterProposals } from './starter-team.js';
-import { agentMissionId, describeCadence, slugify } from '../missions/reminders.js';
+import {
+  createCatalogueTools,
+  planInstall,
+  type CatalogueBinding,
+  type CatalogueHelpers,
+  type CatalogueService,
+  type InstallAgentEnvelope,
+  type InstallAgentInput,
+} from './platform-catalogue.js';
+import { agentMissionId, describeCadence } from '../missions/reminders.js';
 import {
   composeAgentFile,
   composeSkillFile,
@@ -170,6 +180,13 @@ export interface PlatformBinding {
    * is refused rather than silently doing nothing.
    */
   setDefaultAgent?: (agentId: string) => Promise<void>;
+  /**
+   * The agent catalogue (agent-catalogue.md §5): the listings from
+   * withbuddi.com, the picks' choices and the pictures. Read at call time.
+   * Absent in a process with no network wiring, where `platform.catalogue`
+   * says so and `platform.install_agent` refuses.
+   */
+  catalogue?: () => CatalogueService | undefined;
 }
 
 /** One named account, as the platform tools see it. */
@@ -190,8 +207,9 @@ export interface PlatformAccounts {
 }
 
 interface ResolvedBinding
-  extends Required<Omit<PlatformBinding, 'reload' | 'catalog' | 'accounts' | 'setDefaultAgent'>> {
+  extends Required<Omit<PlatformBinding, 'reload' | 'catalog' | 'accounts' | 'setDefaultAgent' | 'catalogue'>> {
   catalog: ReloadableAgentCatalog;
+  catalogue: CatalogueService | undefined;
   accounts: PlatformAccounts | undefined;
   setDefaultAgent: ((agentId: string) => Promise<void>) | undefined;
   reload: () => void;
@@ -253,6 +271,7 @@ function resolved(registry: ToolRegistry, env: NodeJS.ProcessEnv = process.env):
     reload: binding.reload,
     accounts: binding.accounts?.(),
     setDefaultAgent: binding.setDefaultAgent,
+    catalogue: binding.catalogue?.(),
     agentsDir,
     skillsDir: binding.skillsDir ?? search.owner.skillsDir,
     examplesDir: binding.examplesDir ?? EXAMPLES_AGENTS_DIR,
@@ -577,6 +596,14 @@ export interface DeleteAgentEnvelope {
   tools: string[];
   /** Agents whose allowlist names this one, and which would lose a colleague. */
   delegatedToBy: string[];
+  /**
+   * Its own missions that are on (`agent:<id>:*`, and any it runs), paused by
+   * the same approval. Only when there are some, so an envelope approved
+   * before this existed hashes the same.
+   */
+  pausesMissions?: Array<{ id: string; name: string }>;
+  /** Installed plugins whose tools only this agent was granted. They stay installed. */
+  unusedPlugins?: string[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -705,6 +732,18 @@ export function renderDeletePreview(envelope: DeleteAgentEnvelope): string {
     `To:   ${envelope.trashDirectory}/${envelope.id}-<timestamp>`,
     '',
     `It loses ${envelope.tools.length} tools and stops answering @${envelope.handle} immediately.`,
+    ...(envelope.pausesMissions === undefined || envelope.pausesMissions.length === 0
+      ? []
+      : [
+          `Its ${envelope.pausesMissions.length === 1 ? 'mission is' : `${envelope.pausesMissions.length} missions are`} paused, ` +
+            `not deleted: ${envelope.pausesMissions.map((m) => m.name).join(', ')}.`,
+        ]),
+    ...(envelope.unusedPlugins === undefined || envelope.unusedPlugins.length === 0
+      ? []
+      : [
+          `No other agent uses ${envelope.unusedPlugins.join(', ')}; ${envelope.unusedPlugins.length === 1 ? 'it stays' : 'they stay'} ` +
+            'installed, and Settings → Plugins removes one.',
+        ]),
     ...(envelope.delegatedToBy.length === 0
       ? []
       : [
@@ -810,7 +849,8 @@ const createInput = z
 type CreateInput = z.infer<typeof createInput>;
 
 function buildCreateEnvelope(
-  input: CreateInput,
+  // `starters` is not the tool's to take: only a catalogue package brings its example asks.
+  input: CreateInput & { starters?: string[] },
   deps: { binding: ResolvedBinding; registry: ToolRegistry; proposedBy: string },
 ): CreateAgentEnvelope {
   const { binding, registry } = deps;
@@ -882,6 +922,7 @@ function buildCreateEnvelope(
     ...(input.maxTurns === undefined ? {} : { maxTurns: input.maxTurns }),
     ...(input.language === undefined ? {} : { language: input.language }),
     ...(input.idleRollover === undefined ? {} : { idleRollover: input.idleRollover }),
+    ...(input.starters === undefined || input.starters.length === 0 ? {} : { starters: input.starters }),
     ...(input.avatar === undefined ? {} : { avatar: checkAvatar(input.avatar) }),
     ...(input.accent === undefined ? {} : { accent: input.accent.toLowerCase() }),
     // Replacing the example that declares `default: true` must not leave the
@@ -1346,6 +1387,48 @@ function buildDeleteEnvelope(
   };
 }
 
+/** The plugins the record says are installed, when the catalogue service can read it. */
+function installedPluginNames(binding: ResolvedBinding): string[] {
+  try {
+    return binding.catalogue?.plugins().map((p) => p.name) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * What removing an agent also does, read before the approval: the missions
+ * it runs that are on (paused by the same approval), and the installed
+ * plugins nobody else is granted (named, never removed).
+ */
+async function withRemoveExtras(
+  envelope: DeleteAgentEnvelope,
+  deps: { binding: ResolvedBinding; registry: ToolRegistry; db: CoreToolContext['db'] | undefined; installed: readonly string[] },
+): Promise<DeleteAgentEnvelope> {
+  const missions = deps.db
+    ? (await listMissions(deps.db as never).catch(() => []))
+        .filter((m) => m.enabled && (m.agentId === envelope.id || m.id.startsWith(`agent:${envelope.id}:`)))
+        .map((m) => ({ id: m.id, name: m.name }))
+    : [];
+  const pluginOf = new Map<string, string>();
+  for (const manifest of deps.registry.manifests()) {
+    if (!deps.installed.includes(manifest.name)) continue;
+    for (const tool of manifest.tools) pluginOf.set(tool.name, manifest.name);
+  }
+  const mine = new Set(envelope.tools.map((t) => pluginOf.get(t)).filter((p): p is string => p !== undefined));
+  for (const other of deps.binding.catalog.list()) {
+    if (other.id === envelope.id) continue;
+    for (const tool of deps.binding.catalog.get(other.id)?.tools ?? []) {
+      const plugin = pluginOf.get(tool);
+      if (plugin) mine.delete(plugin);
+    }
+  }
+  return {
+    ...envelope,
+    ...(missions.length === 0 ? {} : { pausesMissions: missions }),
+    ...(mine.size === 0 ? {} : { unusedPlugins: [...mine].sort() }),
+  };
+}
 
 /* ------------------------------------------------------------------ *
  * Agents a plugin proposes
@@ -1368,14 +1451,11 @@ export interface PluginAgentProposal {
 }
 
 export function pluginAgentProposals(registry: ToolRegistry): PluginAgentProposal[] {
-  return [
-    ...registry.manifests().flatMap((m) =>
-      (m.agents ?? []).map((agent) => ({ plugin: m.name, pluginVersion: m.version, agent })),
-    ),
-    // The starter team (starter-team.ts): buddi's own proposals, under the
-    // built-in source `buddi`, accepted through the very same gated tool.
-    ...starterProposals(),
-  ];
+  // buddi's own ready-made agents are no longer proposals: they are packages
+  // in the catalogue (platform-catalogue.ts), added through platform.install_agent.
+  return registry.manifests().flatMap((m) =>
+    (m.agents ?? []).map((agent) => ({ plugin: m.name, pluginVersion: m.version, agent })),
+  );
 }
 
 export function pluginSkillProposals(
@@ -1418,9 +1498,9 @@ export interface AcceptPluginAgentEnvelope extends Omit<CreateAgentEnvelope, 'to
    */
   inheritedFrom: string | null;
   /**
-   * The mission a starter agent arrives with (Planner's morning brief), run as
-   * the new agent in the owner's timezone. Created by the same approval, and
-   * named in its preview. Absent for every plugin proposal.
+   * The mission a starter agent arrived with (Planner's morning brief), before
+   * the starter team became catalogue packages. Never set now; kept so the
+   * shape of an envelope approved then still reads.
    */
   mission?: { id: string; name: string; cron: string; timezone: string; prompt: string };
   /**
@@ -1444,7 +1524,7 @@ export interface AcceptedMission {
   misfirePolicy?: MisfirePolicy;
 }
 
-/** Every mission an accept creates: the starter's one, then the plugin's. */
+/** Every mission an accept creates. */
 function acceptedMissions(envelope: AcceptPluginAgentEnvelope): AcceptedMission[] {
   return [...(envelope.mission ? [envelope.mission] : []), ...(envelope.missions ?? [])];
 }
@@ -1559,7 +1639,6 @@ function buildAcceptAgentEnvelope(
       content,
     };
   });
-  const mission = starterMission(proposal.plugin, suggestion.id);
   const missions = (suggestion.missions ?? []).map((m): AcceptedMission => {
     const slug = m.id.trim();
     if (!KEBAB.test(slug)) {
@@ -1602,17 +1681,6 @@ function buildAcceptAgentEnvelope(
     proposalChecksum: proposalChecksum(suggestion),
     skills,
     inheritedFrom: base.account === null ? null : (speaks?.from ?? null),
-    ...(mission === null
-      ? {}
-      : {
-          mission: {
-            id: agentMissionId(base.id, slugify(mission.name)),
-            name: mission.name,
-            cron: mission.cron,
-            timezone: deps.timezone,
-            prompt: mission.prompt,
-          },
-        }),
     ...(missions.length === 0 ? {} : { missions }),
   };
 }
@@ -1875,6 +1943,46 @@ export function reloadResult(binding: ResolvedBinding): { reloaded: boolean; mes
 }
 
 /* ------------------------------------------------------------------ *
+ * The agent catalogue (platform-catalogue.ts), built from the same pieces
+ * ------------------------------------------------------------------ */
+
+const CATALOGUE_HELPERS: CatalogueHelpers = {
+  resolved: (r) => resolved(r),
+  service: (r) => resolved(r).catalogue,
+  buildCreate: (input, deps) =>
+    buildCreateEnvelope(input as CreateInput & { starters?: string[] }, {
+      binding: resolved(deps.registry),
+      registry: deps.registry,
+      proposedBy: deps.proposedBy,
+    }),
+  speakingAccount: (r, agentId) => speakingAccount(resolved(r), agentId),
+  checkTools,
+  renderCreatePreview,
+  reload: (r) => reloadResult(resolved(r)),
+  assignAccount: (r, agentId, account) => assignAccount(resolved(r), agentId, account),
+  proposals: (r) => pluginAgentProposals(r),
+};
+/**
+ * What adding (or updating) a package would do, writing nothing: the envelope
+ * and the preview `platform.install_agent` would carry. For the dashboard's
+ * install sheet and update sheet, and `buddi agents add` without `--yes`.
+ */
+export function planCatalogueInstall(
+  registry: ToolRegistry,
+  input: InstallAgentInput,
+  ctx: Pick<CoreToolContext, 'timezone' | 'db'> & { agentId?: string },
+): Promise<{ envelope: InstallAgentEnvelope; preview: string }> {
+  return planInstall(registry, CATALOGUE_HELPERS, input, ctx);
+}
+
+/** The catalogue service and the agents directory the platform tools are bound to, or undefined when unbound. */
+export function catalogueBindingOf(registry: ToolRegistry): (CatalogueBinding & { service: CatalogueService | undefined }) | undefined {
+  if (!bindings.get(registry)) return undefined;
+  const binding = resolved(registry);
+  return { catalog: binding.catalog, agentsDir: binding.agentsDir, trashRoot: binding.trashRoot, service: binding.catalogue };
+}
+
+/* ------------------------------------------------------------------ *
  * The manifest
  * ------------------------------------------------------------------ */
 
@@ -1936,6 +2044,8 @@ export function renderGroupUpdate(
 }
 
 export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
+  const [catalogueTool, installAgent] = createCatalogueTools(registry, CATALOGUE_HELPERS);
+
   /* ---- groups: a team of agents in one conversation (docs/groups.md) ---- */
 
   const listGroups: ToolDefinition<Record<string, never>, unknown> = {
@@ -2553,9 +2663,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       // leaves the initials, never an unfinished approval.
       const suggestion = findProposal(registry, input.plugin, input.agent).agent;
       const pictured = ctx.db ? await storeBundledMascot(ctx.db, envelope.id, suggestion.avatar) : false;
-      // A starter agent's first mission, approved with it: run as the new
-      // agent, so it is its own (`schedule.list_mine`) and it can stop it.
-      // A plugin's declared missions (Ledger's) are created the same way.
+      // A plugin's declared missions (Ledger's), approved with it: run as the
+      // new agent, so they are its own (`schedule.list_mine`) and it can stop them.
       const missions = ctx.db ? acceptedMissions(envelope) : [];
       for (const mission of missions) {
         await upsertMission(ctx.db!, {
@@ -2647,24 +2756,31 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       CONDUCT,
     tier: 'gated',
     input: deleteInput,
-    describe(input, ctx: CoreToolContext) {
+    async describe(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
-      return describing(
-        (i: z.infer<typeof deleteInput>) =>
-          buildDeleteEnvelope(i, { binding, proposedBy: ctx.agentId ?? 'unknown' }),
-        renderDeletePreview,
-      )(input);
+      const envelope = await withRemoveExtras(buildDeleteEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' }), {
+        binding, registry, db: ctx.db, installed: installedPluginNames(binding),
+      });
+      return { envelope, preview: renderDeletePreview(envelope) };
     },
     async execute(input, ctx: CoreToolContext) {
       const binding = resolved(registry);
-      const envelope = buildDeleteEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' });
+      const envelope = await withRemoveExtras(buildDeleteEnvelope(input, { binding, proposedBy: ctx.agentId ?? 'unknown' }), {
+        binding, registry, db: ctx.db, installed: installedPluginNames(binding),
+      });
       assertApprovedEffect(ctx, envelope);
       const movedTo = moveAgentAside(envelope.directory, binding.trashRoot, trashStamp(ctx.now()));
       const reload = reloadResult(binding);
+      const paused: string[] = [];
+      for (const mission of envelope.pausesMissions ?? []) {
+        if (ctx.db && (await setMissionEnabled(ctx.db as never, mission.id, false).catch(() => null))) paused.push(mission.id);
+      }
       return {
         ok: true,
         id: envelope.id,
         movedTo,
+        ...(paused.length === 0 ? {} : { pausedMissions: paused }),
+        ...(envelope.unusedPlugins ? { unusedPlugins: envelope.unusedPlugins } : {}),
         live: reload.reloaded,
         message:
           `@${envelope.handle} is gone from the catalog. Its files were not deleted — they are at ` +
@@ -2697,6 +2813,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
       deleteAgent,
       acceptPluginAgent,
       acceptPluginSkill,
+      catalogueTool,
+      installAgent,
     ],
   };
 }

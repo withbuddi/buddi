@@ -71,6 +71,7 @@ import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
+import { CATALOGUE_ACTIONS, parseCatalogueArgs } from './agents-catalogue-cmd.js';
 import { jobsCancel, jobsDismiss, jobsDismissAll, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
 import { DATA_DIR, loadEnv, loadEnvironment, REPO_ROOT } from './paths.js';
 import { runMcp } from './mcp/server.js';
@@ -179,6 +180,14 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
       await loadEnvironment();
       return status(json, env);
     case 'chat-cli': {
+      // The agent catalogue lives in the running gateway: like `buddi
+      // connections`, only `.env` (the dashboard's host and port) is needed.
+      if (command.argv[0] === 'agents' && isCatalogueAction(command.argv[1])) {
+        loadEnv();
+        const { runAgentsCatalogue, parseCatalogueArgs } = await import('./agents-catalogue-cmd.js');
+        const { gatewayFromEnvironment } = await import('./mcp/gateway-client.js');
+        return runAgentsCatalogue(parseCatalogueArgs(withJson(command.argv.slice(1), json)), { gateway: gatewayFromEnvironment(process.env) });
+      }
       await loadEnvironment();
       // `buddi agents` reads files and edits files: it is the one command in
       // this group that must still work with the database down — that is often
@@ -373,7 +382,8 @@ function checkDelegated(command: Command, json: boolean): void {
   const argv = 'argv' in command ? withJson(command.argv, json) : [];
   try {
     if (command.kind === 'chat-cli') {
-      if (argv[0] === 'agents') parseAgentsArgs(argv.slice(1));
+      if (argv[0] === 'agents' && isCatalogueAction(argv[1])) parseCatalogueArgs(argv.slice(1));
+      else if (argv[0] === 'agents') parseAgentsArgs(argv.slice(1));
       else parseChatArgs(argv);
     } else if (command.kind === 'missions') parseMissionsArgs(argv);
     else if (command.kind === 'accounts') parseAccountsArgs(argv);
@@ -383,6 +393,10 @@ function checkDelegated(command: Command, json: boolean): void {
   } catch (err) {
     throw new UsageError(err instanceof Error ? err.message : String(err));
   }
+}
+
+function isCatalogueAction(word: string | undefined): boolean {
+  return word !== undefined && (CATALOGUE_ACTIONS as readonly string[]).includes(word);
 }
 
 /** A usage error, said with the nearest command when the words were wrong. */

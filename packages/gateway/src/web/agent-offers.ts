@@ -23,7 +23,9 @@ import {
 } from '@buddi/core';
 import { pluginAgentProposals } from '../agents/platform.js';
 import { runPageQuery, type PagesDeps } from './pages.js';
-import { PLUGIN_TEAMMATES, STARTER_PLUGIN, starterAgents, type TeammateFix } from '../agents/starter-team.js';
+
+/** Where the owner goes to lift a teammate's greying. */
+export type TeammateFix = 'plugins' | 'mailbox' | 'accounts';
 
 /** The `core.web_settings` key the owner's dismissals are kept under. */
 export const AGENT_OFFERS_KEY = 'agent-offers';
@@ -104,9 +106,6 @@ export async function readAgentOffers(deps: AgentOffersDeps): Promise<{ offers: 
   const dismissed = await dismissedSet(deps.pool);
   const offers: AgentOfferView[] = [];
   for (const { plugin, agent } of pluginAgentProposals(deps.registry)) {
-    // The starter team is drawn as its own cards ("Add a teammate",
-    // `readTeammates`), not as something that needs the owner on Home.
-    if (plugin === STARTER_PLUGIN) continue;
     const offer = agent.offer;
     if (!offer || typeof offer.text !== 'string' || offer.text.trim() === '') continue;
     if (present.has(agent.id) || dismissed.has(keyOf(plugin, agent.id))) continue;
@@ -129,13 +128,9 @@ export async function dismissAgentOffer(
   plugin: string,
   agent: string,
 ): Promise<{ status: number; body: unknown }> {
-  const known =
-    pluginAgentProposals(deps.registry).some(
-      (p) => p.plugin === plugin && p.agent.id === agent && p.agent.offer !== undefined,
-    ) ||
-    // A plugin teammate the catalogue draws greyed can be dismissed too, even
-    // while its plugin is not there to propose it.
-    PLUGIN_TEAMMATES.some((t) => t.plugin === plugin && t.agent === agent);
+  const known = pluginAgentProposals(deps.registry).some(
+    (p) => p.plugin === plugin && p.agent.id === agent && p.agent.offer !== undefined,
+  );
   if (!known) return { status: 404, body: { error: `No plugin offers an agent "${agent}" under "${plugin}".` } };
   await remember(deps.pool, 'dismissed', keyOf(plugin, agent));
   return { status: 200, body: { dismissed: true } };
@@ -225,52 +220,33 @@ export interface TeammateView {
 }
 
 /**
- * The starter team, then the plugin teammates, as "Add a teammate" draws them.
+ * The plugin teammates, as the old "Add a teammate" draws them: every agent an
+ * installed plugin proposes with an offer line. buddi's own ready-made agents
+ * are the catalogue now (`GET /api/catalogue`), which replaces this list.
  *
  * A dismissed card is left out. A card whose agent the roster holds says
- * "added". A plugin teammate is addable exactly when its plugin proposes it
- * and, when the plugin names an offer query, says it is wanted now — the same
- * test `readAgentOffers` uses — and greyed with the reason otherwise.
+ * "added". One is addable when its plugin, naming an offer query, says it is
+ * wanted now — the same test `readAgentOffers` uses — and greyed otherwise.
  */
 export async function readTeammates(deps: AgentOffersDeps): Promise<{ teammates: TeammateView[] }> {
   const present = new Set(deps.agentIds().map((id) => id.toLowerCase()));
   const dismissed = await dismissedSet(deps.pool);
-  const proposals = pluginAgentProposals(deps.registry);
   const teammates: TeammateView[] = [];
-  for (const agent of starterAgents()) {
-    if (dismissed.has(keyOf(STARTER_PLUGIN, agent.id))) continue;
-    teammates.push({
-      plugin: STARTER_PLUGIN,
+  for (const { plugin, agent } of pluginAgentProposals(deps.registry)) {
+    const offer = agent.offer;
+    if (!offer || typeof offer.text !== 'string' || offer.text.trim() === '') continue;
+    if (dismissed.has(keyOf(plugin, agent.id))) continue;
+    const card = {
+      plugin,
       agent: agent.id,
       handle: agent.handle,
       name: agent.name,
-      text: agent.offer?.text ?? agent.description,
-      needs: agent.needs ?? 'Needs a brain',
-      state: present.has(agent.id) ? 'added' : 'available',
-    });
-  }
-  for (const entry of PLUGIN_TEAMMATES) {
-    if (dismissed.has(keyOf(entry.plugin, entry.agent))) continue;
-    const proposal = proposals.find((p) => p.plugin === entry.plugin && p.agent.id === entry.agent);
-    const card = {
-      plugin: entry.plugin,
-      agent: entry.agent,
-      handle: proposal?.agent.handle ?? entry.handle,
-      name: entry.name,
-      text: entry.text,
-      needs: entry.needs,
+      text: offer.text.trim(),
+      needs: `From the ${plugin} plugin`,
     };
-    if (present.has(entry.agent)) {
-      teammates.push({ ...card, state: 'added' });
-    } else if (proposal && (await wanted(deps, entry.plugin, proposal.agent.offer?.query))) {
-      teammates.push({ ...card, state: 'available' });
-    } else if (proposal && entry.covered) {
-      // The plugin is there and says the agent is not wanted now: an agent of
-      // the owner's own already holds the role. Say that, not "from the plugin".
-      teammates.push({ ...card, state: 'unavailable', reason: entry.covered, fix: entry.fix });
-    } else {
-      teammates.push({ ...card, state: 'unavailable', reason: entry.reason, fix: entry.fix });
-    }
+    if (present.has(agent.id.toLowerCase())) teammates.push({ ...card, state: 'added' });
+    else if (await wanted(deps, plugin, offer.query)) teammates.push({ ...card, state: 'available' });
+    else teammates.push({ ...card, state: 'unavailable', reason: 'Not wanted yet', fix: plugin === 'email' ? 'mailbox' : 'plugins' });
   }
   return { teammates };
 }

@@ -49,6 +49,15 @@ export interface AgentProvenance {
   proposal: string;
   /** sha256 of `agent.md` as it was written — what an owner edit is measured against. */
   file: string;
+  /**
+   * `market` for an agent added from the catalogue (agent-catalogue.md §5):
+   * then `plugin` is `market`, `agent` and `package` are the package's name,
+   * `version` its version, `proposal` its integrity, and `fills` the picks it
+   * was written with, so an update writes it again with the same answers.
+   */
+  source?: 'market';
+  package?: string;
+  fills?: Record<string, string>;
 }
 
 function sha256(text: string): string {
@@ -98,6 +107,11 @@ export function readProvenance(agentDir: string): AgentProvenance | undefined {
       acceptedAt: raw.acceptedAt ?? 'unknown',
       proposal: raw.proposal ?? '',
       file: raw.file ?? '',
+      ...(raw.source === 'market' ? { source: 'market' as const } : {}),
+      ...(typeof raw.package === 'string' ? { package: raw.package } : {}),
+      ...(raw.fills !== null && typeof raw.fills === 'object' && !Array.isArray(raw.fills)
+        ? { fills: Object.fromEntries(Object.entries(raw.fills).filter((e): e is [string, string] => typeof e[1] === 'string')) }
+        : {}),
     };
   } catch {
     // A sidecar nobody can read is a missing sidecar: it records provenance,
@@ -114,14 +128,20 @@ export function composeProvenance(input: {
   acceptedAt: Date;
   proposal: string;
   file: string;
+  source?: 'market';
+  package?: string;
+  fills?: Record<string, string>;
 }): string {
   const record: AgentProvenance = {
+    ...(input.source === undefined ? {} : { source: input.source }),
     plugin: input.plugin,
+    ...(input.package === undefined ? {} : { package: input.package }),
     version: input.version,
     agent: input.agent,
     acceptedAt: input.acceptedAt.toISOString(),
     proposal: input.proposal,
     file: sha256(input.file),
+    ...(input.fills === undefined ? {} : { fills: input.fills }),
   };
   return `${JSON.stringify(record, null, 2)}\n`;
 }

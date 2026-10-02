@@ -57,6 +57,8 @@ import { bindDelegation } from './agents/delegation.js';
 import { protectedWritePaths } from './agents/learned-skills.js';
 import { bindOwnerTools } from './agents/owner-tools.js';
 import { bindPlatformTools } from './agents/platform.js';
+import type { CatalogueService } from './agents/platform-catalogue.js';
+import { createCatalogueService } from './web/catalogue-source.js';
 import { loadDefaultAgentRecord, writeDefaultAgentRecord } from './agents/default-agent.js';
 import { describeDatabaseError, probeDatabase } from './db-ready.js';
 import { loadPluginsOnce } from './plugins/load.js';
@@ -495,6 +497,7 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
     dataDir: resolveDataDir(env),
     env,
   });
+  let catalogueService: CatalogueService | undefined;
   bindPlatformTools(registry, {
     catalog,
     reload: () => catalog.reload(),
@@ -515,8 +518,18 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
         assign: (agentId, accountId, model) => service.assign(agentId, { accountId, model }),
       };
     },
+    // The agent catalogue (agent-catalogue.md §5): the market list this
+    // installation keeps, read when a tool asks; built once, on first use.
+    catalogue: () =>
+      (catalogueService ??= createCatalogueService({
+        env,
+        log: (line) => console.error(line),
+        registry,
+        ctx: wiring.ctx,
+        now,
+      })),
   });
-  return {
+  const wiring: Wiring = {
     pool,
     registry,
     catalog,
@@ -570,4 +583,5 @@ export function createWiring(env: NodeJS.ProcessEnv = process.env): Wiring {
         return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined;
       } },
   };
+  return wiring;
 }

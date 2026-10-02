@@ -277,10 +277,9 @@ describe('what is still waiting', () => {
     expect(view.waiting).toEqual([
       'Mail Triage is waiting for a mailbox',
       'Calendar wants your calendar’s private link',
-      'Planner is ready to be introduced',
       'Ledger is ready to be introduced',
     ]);
-    // A mailbox, and a Planner that exists: those two lines go.
+    // A mailbox: that line goes. (Planner is a catalogue package now, not a tile's teammate.)
     const later = await readTakeOn(deps(pool, { mailboxSet: async () => true, agentIds: () => ['planner'] }));
     expect(later.waiting).toEqual([
       'Calendar wants your calendar’s private link',
