@@ -1,14 +1,18 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadAgentCatalog, ToolRegistry, type CoreToolContext } from '@buddi/core';
 import { DELEGATE_TOOL } from '@buddi/runtime';
 import { AGENTS_DIR, createToolRegistry, loadGatewayCatalog } from './catalog.js';
 import {
   bindDelegation,
   createDelegationManifest,
+  delegateAllowlist,
   readDelegates,
+  readDelegatesFile,
+  resolveAllowlist,
+  stripDelegate,
 } from './delegation.js';
 
 function agentsDirWith(files: Record<string, string>): string {
@@ -56,17 +60,19 @@ describe('readDelegates', () => {
     expect(() => readDelegates('c', dir)).toThrow(/JSON array of agent ids/);
   });
 
-  it('reads the installed allowlists as ids of installed agents, whatever they are', () => {
+  it('resolves the installed allowlists to ids of installed agents, whatever they are', () => {
     // Not a copy of this owner's allowlist: `private/` is gitignored, a fresh
     // clone has none of it, and an owner who makes an agent must not break the
     // platform's suite. What holds for any installation, including one with no
     // private agents at all: every allowlist next to an installed agent parses,
-    // and every id in one names an agent this catalog knows.
+    // and every id delegation applies names an agent this catalog knows. The
+    // raw file may still name a removed agent; the resolved list never does.
     const catalog = loadGatewayCatalog({ env: {} });
     const known = new Set(catalog.list().map((a) => a.id));
     for (const summary of catalog.list()) {
       const agentsDir = path.dirname(path.dirname(catalog.resolve(summary.id).file));
-      for (const target of readDelegates(summary.id, agentsDir)) {
+      readDelegates(summary.id, agentsDir);
+      for (const target of delegateAllowlist(summary.id, catalog, agentsDir)) {
         expect(known, `${summary.id} -> ${target}`).toContain(target);
       }
     }
@@ -107,8 +113,8 @@ describe('the agent plugin', () => {
     );
     bindDelegation(registry, {
       catalog: {
-        get: () => undefined,
-        list: () => [{ id: 'concierge' }],
+        get: (id: string) => (id === 'credit-coach' ? ({ id, handle: id, name: 'Credit Coach', definition: () => ({ tools: [] }) } as never) : undefined),
+        list: () => [{ id: 'concierge' }, { id: 'credit-coach' }],
       },
       provider: { complete: async () => { throw new Error('never called'); } },
     });
@@ -229,5 +235,65 @@ describe('the delegate roster in an agent\'s context', () => {
   it('says nothing at all to an agent that was never granted the tool', () => {
     const prompt = loadGatewayCatalog({ env: {}, dir: dir() }).get('ledger')!.systemPromptTemplate;
     expect(prompt).not.toContain('Colleagues you may ask');
+  });
+});
+
+describe('an allowlist naming an agent that is gone', () => {
+  const catalogOf = (ids: string[]) => ({
+    get: (id: string) => (ids.includes(id) ? { definition: () => ({ tools: [] as string[] }) } : undefined),
+    list: () => ids.map((id) => ({ id })),
+  });
+
+  it('ignores the dangling id, logging it once, instead of failing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const catalog = catalogOf(['desk-x', 'ledger']);
+      expect(resolveAllowlist('desk-x', catalog, ['gone-a', 'ledger', 'gone-b'])).toEqual(['ledger']);
+      expect(resolveAllowlist('desk-x', catalog, ['gone-a', 'ledger', 'gone-b'])).toEqual(['ledger']);
+      const lines = warn.mock.calls.map((c) => String(c[0]));
+      expect(lines.filter((l) => l.includes('"gone-a"'))).toHaveLength(1);
+      expect(lines.filter((l) => l.includes('"gone-b"'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still loads the catalog and leaves the dangling id out of the prompt', () => {
+    const dir = agentsDirWith({
+      'asker/agent.md': agentFile('asker', { tools: 'agent.delegate' }),
+      'asker/delegates.json': '["scout", "ledger"]',
+      'ledger/agent.md': agentFile('ledger', { description: 'Keeps the books' }),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const catalog = loadGatewayCatalog({ env: {}, dir });
+      const prompt = catalog.get('asker')!.systemPromptTemplate;
+      expect(prompt).toContain('`ledger` (@ledger)');
+      expect(prompt).not.toContain('scout');
+      expect(delegateAllowlist('asker', catalog, dir)).toEqual(['ledger']);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('stripDelegate', () => {
+  it('takes the removed id off every list that names it, and leaves the rest alone', () => {
+    const dir = agentsDirWith({
+      'concierge/delegates.json': '["scout", "ledger", "garage"]',
+      'ledger/delegates.json': '["concierge"]',
+      'open/delegates.json': '["*", "scout"]',
+      'broken/delegates.json': 'not json',
+    });
+    const agents = ['concierge', 'ledger', 'open', 'broken', 'nofile'].map((id) => ({ id, agentsDir: dir }));
+    expect(stripDelegate('scout', agents)).toEqual(['concierge', 'open']);
+    expect(readFileSync(path.join(dir, 'concierge/delegates.json'), 'utf8')).toBe('[\n  "ledger",\n  "garage"\n]\n');
+    expect(readDelegatesFile('open', dir)).toEqual(['*']);
+    expect(readFileSync(path.join(dir, 'ledger/delegates.json'), 'utf8')).toBe('["concierge"]');
+    expect(readFileSync(path.join(dir, 'broken/delegates.json'), 'utf8')).toBe('not json');
+    // The last one out leaves an empty list, not no file: a narrowed front desk stays narrowed.
+    expect(stripDelegate('ledger', agents)).toEqual(['concierge']);
+    expect(stripDelegate('garage', agents)).toEqual(['concierge']);
+    expect(readDelegatesFile('concierge', dir)).toEqual([]);
   });
 });

@@ -468,7 +468,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   },
   {
     method: 'GET', path: '/api/agents/:id/remove', area: 'agents', summary: 'What removing this agent does: its missions paused, the plugins no other agent uses. Nothing changes.',
-    answer: '{ id, handle, name, pausesMissions: [{ id, name }], unusedPlugins: string[], preview }', errors: '400',
+    answer: '{ id, handle, name, pausesMissions: [{ id, name }], unusedPlugins: string[], handedWorkBy: string[], preview }', errors: '400',
   },
   {
     method: 'POST', path: '/api/agents/:id/remove', area: 'agents', token: 'decides', summary: 'Remove from team: the directory goes to the trash and its missions are paused. The click is the approval.',

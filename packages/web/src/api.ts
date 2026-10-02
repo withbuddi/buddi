@@ -829,6 +829,8 @@ export interface AgentRemovePreview {
   name: string;
   pausesMissions: Array<string | { id?: string; name?: string }>;
   unusedPlugins: string[];
+  /** Handles of the agents whose delegate list names it; removal takes it off them. Absent from an older gateway. */
+  handedWorkBy?: string[];
   preview: string | null;
 }
 

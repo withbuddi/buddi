@@ -103,6 +103,7 @@ export function RemoveFromTeam({ agentId, name, navigate }: { agentId: string; n
   };
   const missions = preview?.pausesMissions.map(missionWords) ?? [];
   const plugins = preview?.unusedPlugins ?? [];
+  const handedBy = (preview?.handedWorkBy ?? []).map((h) => `@${h}`);
   return (
     <Panel>
       <Toolbar>
@@ -128,6 +129,7 @@ export function RemoveFromTeam({ agentId, name, navigate }: { agentId: string; n
             <div className="ui-stack" data-testid="remove-preview">
               <p>@{preview.handle}’s folder moves to the trash folder, so it can be brought back by hand.</p>
               {missions.length > 0 ? <p>Its {missions.length === 1 ? 'mission' : 'missions'} {and(missions)} {missions.length === 1 ? 'is' : 'are'} paused.</p> : null}
+              {handedBy.length > 0 ? <p>{and(handedBy)} will stop handing work to it.</p> : null}
               {plugins.length > 0 ? (
                 <p>
                   No other agent uses {and(plugins.map(pluginTitle))}; it stays installed.{' '}

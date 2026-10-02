@@ -89,7 +89,7 @@ import {
 import { z } from 'zod';
 import { composeProvenance, driftFor, proposalChecksum, PROVENANCE_FILE } from '../plugins/provenance.js';
 import { agentSearchPath, EXAMPLES_AGENTS_DIR, type ReloadableAgentCatalog } from './catalog.js';
-import { DELEGATES_FILE, readDelegates } from './delegation.js';
+import { DELEGATES_FILE, readDelegates, stripDelegate } from './delegation.js';
 import { insideExamples } from './owner-tools.js';
 import { withCoreTools } from './core-tools.js';
 import { storeBundledMascot } from './mascots.js';
@@ -597,6 +597,11 @@ export interface DeleteAgentEnvelope {
   /** Agents whose allowlist names this one, and which would lose a colleague. */
   delegatedToBy: string[];
   /**
+   * The same agents by handle, for the preview: removal strips the id from
+   * their lists. Only when there are some, so older envelopes hash the same.
+   */
+  delegatedToByHandles?: string[];
+  /**
    * Its own missions that are on (`agent:<id>:*`, and any it runs), paused by
    * the same approval. Only when there are some, so an envelope approved
    * before this existed hashes the same.
@@ -747,8 +752,8 @@ export function renderDeletePreview(envelope: DeleteAgentEnvelope): string {
     ...(envelope.delegatedToBy.length === 0
       ? []
       : [
-          `${envelope.delegatedToBy.join(', ')} name it in their delegate allowlist and will no ` +
-            'longer be able to hand it work.',
+          `${(envelope.delegatedToByHandles ?? envelope.delegatedToBy).map((h) => `@${h}`).join(', ')} will stop handing work to it; ` +
+            `it comes off ${envelope.delegatedToBy.length === 1 ? 'that delegate list' : 'their delegate lists'}.`,
         ]),
     `Proposed by ${envelope.proposedBy}.`,
   ].join('\n');
@@ -1369,10 +1374,18 @@ function buildDeleteEnvelope(
   if (!existsSync(directory) || !statSync(directory).isDirectory()) {
     refuse('missing-directory', `${directory} is not on disk any more; there is nothing to move`);
   }
-  const delegatedToBy = binding.catalog
-    .list()
-    .filter((other) => other.id !== agent.id && readDelegates(other.id, binding.agentsDir).includes(agent.id))
-    .map((other) => other.id);
+  // Read from each agent's own directory, and tolerant: a malformed list
+  // elsewhere must not stand between the owner and removing this one.
+  const delegatedToBy = ownerAllowlistHolders(binding, agent.id)
+    .filter(({ id, agentsDir }) => {
+      try {
+        return readDelegates(id, agentsDir).includes(agent.id);
+      } catch {
+        return false;
+      }
+    })
+    .map(({ id }) => id);
+  const delegatedToByHandles = delegatedToBy.map((id) => binding.catalog.get(id)?.handle ?? id);
 
   return {
     tool: 'platform.delete_agent',
@@ -1384,7 +1397,22 @@ function buildDeleteEnvelope(
     trashDirectory: path.join(binding.trashRoot, 'agents'),
     tools: [...agent.tools],
     delegatedToBy,
+    ...(delegatedToByHandles.length === 0 ? {} : { delegatedToByHandles }),
   };
+}
+
+/**
+ * The other agents whose `delegates.json` is the owner's to change, with the
+ * directory each one's file sits in. A shipped example's list belongs to the
+ * platform and is never rewritten; a dangling id in it is ignored at load.
+ */
+function ownerAllowlistHolders(binding: ResolvedBinding, removedId: string): Array<{ id: string; agentsDir: string }> {
+  return binding.catalog.list().flatMap((summary) => {
+    if (summary.id === removedId) return [];
+    const other = binding.catalog.get(summary.id);
+    if (!other || isExample(other, binding)) return [];
+    return [{ id: other.id, agentsDir: path.dirname(path.dirname(other.file)) }];
+  });
 }
 
 /** The plugins the record says are installed, when the catalogue service can read it. */
@@ -2770,7 +2798,12 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         binding, registry, db: ctx.db, installed: installedPluginNames(binding),
       });
       assertApprovedEffect(ctx, envelope);
+      const holders = ownerAllowlistHolders(binding, envelope.id);
       const movedTo = moveAgentAside(envelope.directory, binding.trashRoot, trashStamp(ctx.now()));
+      // Its id comes off every other allowlist, so no list keeps naming an
+      // agent that is gone (and a later agent reusing the id is not silently
+      // granted what the old one had).
+      stripDelegate(envelope.id, holders);
       const reload = reloadResult(binding);
       const paused: string[] = [];
       for (const mission of envelope.pausesMissions ?? []) {

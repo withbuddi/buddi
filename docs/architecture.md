@@ -215,7 +215,12 @@ Around the contract:
   write tools; its Team tab says "Can ask: everyone, as the front desk" (or
   "as the maker"), and **Limit to…** turns it into the explicit picker, whose
   list then narrows it. Every other agent asks only its list, and new teammates
-  must be added to it there. A call to anyone else is refused
+  must be added to it there. Removing an agent takes its id off every other
+  owner allowlist (the remove preview names who stops handing it work); an id
+  naming an agent that is not installed is ignored with one log line. An agent
+  added later in a removed one's place (a catalogue `researcher` after a
+  removed `scout`) is not put back on anyone's list: the owner adds it on the
+  Team tab. A call to anyone else is refused
   with the list: "@buddi may delegate to @dev, @ledger; @art is not on its
   list. The owner adds it on @buddi's Team tab." An allowed colleague's
   handle is taken for its id. The files the colleague makes belong to the

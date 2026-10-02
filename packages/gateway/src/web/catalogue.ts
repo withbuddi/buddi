@@ -822,14 +822,14 @@ export async function updateRoute(deps: CatalogueDeps, name: string, body: Recor
 /**
  * `GET /api/agents/:id/remove` — what removing it does: the preview
  * `platform.delete_agent` carries (its missions paused, the plugins no other
- * agent uses named). Nothing changes.
+ * agent uses named, the agents that will stop handing it work). Nothing changes.
  */
 export async function removePreviewRoute(deps: CatalogueDeps, agentId: string): Promise<RouteReply> {
   const tool = deps.registry.lookup('platform.delete_agent');
   if (!tool?.describe) return { status: 404, body: { error: 'Removing agents is not available here.' } };
   try {
     const described = await tool.describe({ id: agentId }, { ...deps.ctx, agentId: OWNER_AGENT_ID, now: deps.now });
-    const envelope = described.envelope as { id: string; handle: string; name: string; pausesMissions?: unknown[]; unusedPlugins?: string[] };
+    const envelope = described.envelope as { id: string; handle: string; name: string; pausesMissions?: unknown[]; unusedPlugins?: string[]; delegatedToByHandles?: string[] };
     return {
       status: 200,
       body: {
@@ -838,6 +838,8 @@ export async function removePreviewRoute(deps: CatalogueDeps, agentId: string): 
         name: envelope.name,
         pausesMissions: envelope.pausesMissions ?? [],
         unusedPlugins: envelope.unusedPlugins ?? [],
+        // Handles of the agents that hand it work; removal takes it off their lists.
+        handedWorkBy: envelope.delegatedToByHandles ?? [],
         preview: described.preview,
       },
     };

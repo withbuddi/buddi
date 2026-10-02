@@ -746,6 +746,18 @@ describe('delete moves, it does not destroy', () => {
     expect(h.catalog.get('scout')).toBeUndefined();
   });
 
+  it('takes the removed agent off every other allowlist, and the preview says who stops handing it work', async () => {
+    mkdirSync(path.join(h.agentsDir, 'desk'), { recursive: true });
+    writeFileSync(path.join(h.agentsDir, 'desk', 'agent.md'), SCOUT.replace(/scout/g, 'desk').replace('Scout', 'Desk'), 'utf8');
+    writeFileSync(path.join(h.agentsDir, 'desk', 'delegates.json'), '["scout", "ghost"]', 'utf8');
+    h.catalog.reload();
+    const { envelope, preview } = await describedAsync<DeleteAgentEnvelope>(h, 'platform.delete_agent', { id: 'scout' });
+    expect(envelope.delegatedToBy).toEqual(['desk']);
+    expect(preview).toContain('@desk will stop handing work to it');
+    await h.tool('platform.delete_agent').execute({ id: 'scout' }, h.ctx);
+    expect(JSON.parse(readFileSync(path.join(h.agentsDir, 'desk', 'delegates.json'), 'utf8'))).toEqual(['ghost']);
+  });
+
   it('describes the move before it happens', async () => {
     const { envelope, preview } = await describedAsync<DeleteAgentEnvelope>(h, 'platform.delete_agent', { id: 'scout' });
     expect(envelope.directory).toBe(path.join(h.agentsDir, 'scout'));

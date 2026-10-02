@@ -1561,7 +1561,7 @@ curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H 
 What removing this agent does: its missions paused, the plugins no other agent uses. Nothing changes.
 
 - **Auth:** Session or API token.
-- **Answer:** `{ id, handle, name, pausesMissions: [{ id, name }], unusedPlugins: string[], preview }`
+- **Answer:** `{ id, handle, name, pausesMissions: [{ id, name }], unusedPlugins: string[], handedWorkBy: string[], preview }`
 - **Errors:** 400
 - **Since:** 0.1.0-pre.32
 

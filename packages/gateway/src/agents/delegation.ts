@@ -32,6 +32,7 @@ import {
 } from '@buddi/runtime';
 import { AGENTS_DIR } from './catalog.js';
 import { delegateToWriterRefusal, writeToolsIn } from './platform-names.js';
+import { writeFilesAtomic } from './platform-files.js';
 
 /** Plugin family name for the agent-to-agent tools. */
 export const AGENT_PLUGIN = 'agent';
@@ -152,11 +153,55 @@ function writesHeldBy(catalog: AllowlistCatalog, id: string): string[] {
   return writeToolsIn(catalog.get(id)?.definition(new Date()).tools ?? []);
 }
 
+/** Each dangling `agent -> target` pair is logged once per process, not on every turn. */
+const danglingNoted = new Set<string>();
+
+/**
+ * An allowlist can name an agent that is no longer installed: one removed
+ * before removal cleaned the lists, a file restored from a backup, a hand
+ * edit. That id grants nothing (there is nobody to reach), so it is ignored
+ * rather than failing the load or the call, and said once in the log.
+ */
+function noteDangling(agentId: string, targetId: string): void {
+  const key = `${agentId}\u0000${targetId}`;
+  if (danglingNoted.has(key)) return;
+  danglingNoted.add(key);
+  console.warn(`${agentId}/${DELEGATES_FILE} names "${targetId}", which is not installed; ignoring it.`);
+}
+
+/**
+ * Strip one id from the allowlists in the given agent directories, after that
+ * agent was removed. Each changed file is rewritten atomically as a plain JSON
+ * array; a missing or unreadable file is left alone (the loader tolerates the
+ * dangling id). Returns the agents whose list changed.
+ */
+export function stripDelegate(
+  removedId: string,
+  agents: ReadonlyArray<{ id: string; agentsDir: string }>,
+): string[] {
+  const changed: string[] = [];
+  for (const { id, agentsDir } of agents) {
+    if (id === removedId) continue;
+    let stored: string[] | undefined;
+    try {
+      stored = readDelegatesFile(id, agentsDir);
+    } catch {
+      continue;
+    }
+    if (stored === undefined || !stored.includes(removedId)) continue;
+    const next = stored.filter((target) => target !== removedId);
+    writeFilesAtomic([{ path: path.join(agentsDir, id, DELEGATES_FILE), content: `${JSON.stringify(next, null, 2)}\n` }]);
+    changed.push(id);
+  }
+  return changed;
+}
+
 /**
  * The allowlist as delegation applies it, from the stored file (`undefined`:
  * none). An open list ("everyone", by role or by `"*"`) is every other agent
  * in the catalog that does not write the installation — a writer is simply not
- * in "everyone". An explicit list that names a writer is refused, loudly.
+ * in "everyone". An explicit list that names a writer is refused, loudly; one
+ * that names an agent not installed has that id ignored (`noteDangling`).
  */
 export function resolveAllowlist(
   agentId: string,
@@ -169,6 +214,10 @@ export function resolveAllowlist(
     return resolveDelegates(agent, stored, everyone);
   }
   return resolveDelegates(agent, stored, []).filter((targetId) => {
+    if (catalog.get(targetId) === undefined) {
+      noteDangling(agentId, targetId);
+      return false;
+    }
     const held = writesHeldBy(catalog, targetId);
     if (held.length === 0) return true;
     throw new Error(delegateToWriterRefusal(agentId, targetId, held));

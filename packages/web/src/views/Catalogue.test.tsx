@@ -514,7 +514,7 @@ describe('suggestions', () => {
 
 describe('remove from team', () => {
   it('shows what removing does before it does it, and the click is the approval', async () => {
-    vi.mocked(api.agentRemovePreview).mockResolvedValue({ id: 'chef', handle: 'chef', name: 'Chef', pausesMissions: [{ id: 'agent:chef:sunday', name: 'Sunday meal plan' }], unusedPlugins: ['weather'], preview: '…' });
+    vi.mocked(api.agentRemovePreview).mockResolvedValue({ id: 'chef', handle: 'chef', name: 'Chef', pausesMissions: [{ id: 'agent:chef:sunday', name: 'Sunday meal plan' }], unusedPlugins: ['weather'], handedWorkBy: ['concierge'], preview: '…' });
     vi.mocked(api.removeAgent).mockResolvedValue({ approvalId: 'a3', result: null });
     const navigate = vi.fn();
     render(<RemoveFromTeam agentId="chef" name="Chef" navigate={navigate} />);
@@ -522,6 +522,7 @@ describe('remove from team', () => {
     const preview = await screen.findByTestId('remove-preview');
     expect(preview).toHaveTextContent('Its mission Sunday meal plan is paused.');
     expect(preview).toHaveTextContent('No other agent uses Weather; it stays installed.');
+    expect(preview).toHaveTextContent('@concierge will stop handing work to it.');
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Remove from team' })); });
     expect(api.removeAgent).toHaveBeenCalledWith('chef');
     expect(navigate).toHaveBeenCalledWith('#/agents');
