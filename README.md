@@ -333,7 +333,7 @@ builds the tarball, puts it in a Docker image and starts it on a fresh volume.
 - `web`: the dashboard, React and Vite, built to static files.
 - `cli`: the `buddi` binary for a checkout.
 - `install`: the packaged launcher, the supervisor and the bundled Postgres.
-- `extension`: the Chrome extension for the "Your browser" mode.
+- `extension`: the Chrome extension for the "Your browser" mode ([Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)).
 - `tools/*`: the built-in plugins (artifacts, browser, email, host, memory,
   web).
 

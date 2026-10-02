@@ -3,15 +3,21 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, type BrowserStatus } from '../api';
 import { useAsync } from '../ui';
-import { Browser, BrowserPanel } from './Browser';
+import { Browser, BrowserPanel, installTarget, STORE_URL } from './Browser';
 
 vi.mock('../api', () => ({ api: { session: vi.fn(), browser: vi.fn(), browserControl: vi.fn(), browserSettings: vi.fn(), computerPermissions: vi.fn(), browserInstall: vi.fn(), installedApps: vi.fn(), browserProfiles: vi.fn(), extension: vi.fn(), pairExtension: vi.fn(), forgetExtension: vi.fn() }, ApiError: class extends Error {} }));
 const status: BrowserStatus = { state: 'running', enabled: true, busy: false, hasScreenshot: true,
   session: { id: 's1', agentId: 'concierge', conversationId: 'c1', requestId: 'r1', task: 'Book a fixture appointment', expiresAt: new Date().toISOString(), steps: 3, maxSteps: 80 },
   page: { id: 'o1', url: '/fixture', title: 'Appointment', capturedAt: new Date().toISOString(), tabs: [] } };
 const settings = { mode: 'computer' as const, browserApp: 'com.google.Chrome', allowedApps: ['com.google.Chrome'] };
+const CHROME_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+const FIREFOX_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:131.0) Gecko/20100101 Firefox/131.0';
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+const useAgent = (ua: string) => vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua);
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  useAgent(CHROME_MAC);
   vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'darwin' });
   vi.mocked(api.browser).mockResolvedValue(status); vi.mocked(api.browserControl).mockResolvedValue(status);
   vi.mocked(api.browserProfiles).mockResolvedValue({ profiles: [{ directory: 'Default', name: 'Amen' }, { directory: 'Profile 2', name: 'Work' }] });
@@ -106,6 +112,44 @@ describe('your own browser', () => {
     expect(await screen.findByText(/Load unpacked/)).toBeInTheDocument();
     expect(await screen.findByRole('radio', { name: /Your browser/ })).toHaveAttribute('aria-checked', 'true');
   });
+  it('leads with Add to Chrome, the store opening in a new tab, the unpacked folder under Developer install', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+    render(<Browser />);
+    const add = await screen.findByRole('link', { name: 'Add to Chrome' });
+    expect(add).toHaveAttribute('href', STORE_URL);
+    expect(STORE_URL).toBe('https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah');
+    expect(add).toHaveAttribute('target', '_blank');
+    expect(add).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    const dev = screen.getByText('Developer install').closest('details');
+    expect(dev).not.toHaveAttribute('open');
+    expect(dev).toHaveTextContent('Load unpacked');
+  });
+  it('in Firefox or Safari says which browsers take it, and offers no install', async () => {
+    useAgent(FIREFOX_MAC);
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+    render(<Browser />);
+    expect(await screen.findByText(/needs Chrome, Edge, Brave or Arc/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Add to Chrome' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Developer install')).not.toBeInTheDocument();
+  });
+  it('on a phone hides the install and points to a computer', async () => {
+    useAgent(IPHONE);
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
+    render(<Browser />);
+    expect(await screen.findByText(/install and pair it from there/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Add to Chrome' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Developer install')).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs Chrome, Edge/)).not.toBeInTheDocument();
+  });
+  it('tells desktop Chromium browsers from the rest and from phones', () => {
+    expect(installTarget({ userAgent: CHROME_MAC })).toBe('chromium');
+    expect(installTarget({ userAgent: `${CHROME_MAC} Edg/141.0.0.0` })).toBe('chromium');
+    expect(installTarget({ userAgent: 'x', userAgentData: { mobile: false, brands: [{ brand: 'Chromium' }, { brand: 'Brave' }] } })).toBe('chromium');
+    expect(installTarget({ userAgent: FIREFOX_MAC })).toBe('other');
+    expect(installTarget({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15' })).toBe('other');
+    expect(installTarget({ userAgent: IPHONE })).toBe('phone');
+    expect(installTarget({ userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36' })).toBe('phone');
+  });
   it('says it is not connected, prints the unpacked folder and the four words', async () => {
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'extension', session: undefined, settings: chosen });
     render(<Browser />);
@@ -140,10 +184,10 @@ describe('your own browser', () => {
  */
 describe('finding the extension from the dashboard', () => {
   const chosen = { ...settings, mode: 'extension' as const };
-  const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
+  const EXTENSION_IDS = ['kmbckpnnjfggeffkkbmkggojnolkdokb', 'pbfpjefkiijjgefblpnlnlpmeaddfbah'];
   const answers = (answer: unknown) => {
     const sendMessage = vi.fn(async (id: string, message: unknown) => {
-      expect(id).toBe(EXTENSION_ID);
+      expect(EXTENSION_IDS).toContain(id);
       expect(message).toEqual({ type: 'buddi.status' });
       if (answer instanceof Error) throw answer;
       return answer;
@@ -162,6 +206,17 @@ describe('finding the extension from the dashboard', () => {
     render(<Browser />);
     expect(await screen.findByText(/The browser you are reading this in has no buddi extension/)).toBeInTheDocument();
     expect(screen.getByText(/chrome:\/\/extensions/)).toHaveTextContent('Load unpacked');
+  });
+
+  it('finds the store-installed extension under its own id', async () => {
+    const sendMessage = vi.fn(async (id: string) => {
+      if (id !== 'pbfpjefkiijjgefblpnlnlpmeaddfbah') throw new Error('Could not establish connection.');
+      return { installed: true, version: '0.1.0.30', state: 'paired', gateway: here() };
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    render(<Browser />);
+    expect(await screen.findByText(/has the extension, version 0\.1\.0\.30/)).toBeInTheDocument();
+    expect(sendMessage).toHaveBeenCalledWith('pbfpjefkiijjgefblpnlnlpmeaddfbah', { type: 'buddi.status' });
   });
 
   it('says so in a browser that has no extensions at all', async () => {

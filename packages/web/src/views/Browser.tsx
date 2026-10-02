@@ -11,7 +11,7 @@ import { api, csrfToken, type BrowserStatus, type ControlSettings } from '../api
 import { fmtClock, fmtTime } from '../format';
 import { chatRoute } from '../routes';
 import { InstallProgress } from './parts/InstallProgress';
-import { Avatar, Button, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
+import { Avatar, Button, ButtonLink, Code, Details, Empty, ErrorBanner, Field, Notice, PageFrame, Pill, Section, Sheet, Spacer, Stack, Toolbar, useAsync } from '../ui';
 import { RemoteHand } from './RemoteHand';
 import { useThisMachine } from '../useThisMachine';
 
@@ -214,11 +214,13 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
  */
 const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
 /**
- * The Chrome Web Store's id for the same extension, once the listing exists
- * (mirrors `STORE_EXTENSION_ID` in `packages/extension/src/id.ts`). The store
- * build carries no key, so its id differs; the page asks both.
+ * The Chrome Web Store's id for the same extension (mirrors
+ * `STORE_EXTENSION_ID` in `packages/extension/src/id.ts`). The store build
+ * carries no key, so its id differs; the page asks both.
  */
-const STORE_EXTENSION_ID = '';
+const STORE_EXTENSION_ID = 'pbfpjefkiijjgefblpnlnlpmeaddfbah';
+/** Where the owner installs it: the store's listing. */
+export const STORE_URL = `https://chromewebstore.google.com/detail/${STORE_EXTENSION_ID}`;
 const EXTENSION_IDS = [EXTENSION_ID, STORE_EXTENSION_ID].filter(Boolean);
 
 /**
@@ -265,6 +267,22 @@ async function askExtension(): Promise<ExtensionProbe | null> {
   } catch { return null; }
 }
 
+/**
+ * Can the browser reading this page take the extension?
+ *
+ * `chromium` is a desktop Chrome, Edge, Brave or Arc (all of them install from
+ * the Chrome Web Store), `phone` is any phone or tablet, where no browser runs
+ * extensions of this kind, and `other` is a desktop Firefox or Safari. Read from
+ * the browser itself rather than the window's width: a narrow desktop window
+ * can still install it.
+ */
+export function installTarget(nav: Pick<Navigator, 'userAgent'> & { userAgentData?: { mobile?: boolean; brands?: Array<{ brand: string }> } } = navigator): 'chromium' | 'other' | 'phone' {
+  const ua = nav.userAgent ?? '';
+  if (nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(ua)) return 'phone';
+  if (nav.userAgentData?.brands?.some((b) => /Chromium/i.test(b.brand))) return 'chromium';
+  return /Chrome\/|Chromium\/|Edg\//.test(ua) && !/Firefox\/|OPR\//.test(ua) ? 'chromium' : 'other';
+}
+
 /** The same buddi, seen from two sides: the popup's address against this page's. */
 function sameGateway(gateway: string): boolean {
   try { return new URL(gateway).origin === window.location.origin; } catch { return false; }
@@ -296,11 +314,24 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
   };
   const disabled = busy || working;
   const zone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const install = (
-    <div className="ui-prose muted">
-      <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder.</p>
-      <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
-    </div>
+  const target = installTarget();
+  // The store first; the unpacked folder stays for a developer, folded away.
+  const install = target === 'phone' ? null : target === 'other' ? (
+    <p className="muted">The buddi extension needs Chrome, Edge, Brave or Arc on a computer. Open this page in one of them to install it.</p>
+  ) : (
+    <Stack>
+      <Toolbar>
+        <span className="muted">Install the buddi extension from the Chrome Web Store, then pair it here.</span>
+        <Spacer />
+        <ButtonLink variant="accent" href={STORE_URL} target="_blank" rel="noopener noreferrer">Add to Chrome</ButtonLink>
+      </Toolbar>
+      <Details summary="Developer install">
+        <div className="ui-prose muted">
+          <p>Open chrome://extensions, turn on Developer mode, choose Load unpacked, and pick this folder.</p>
+          <Code label="The unpacked extension">{data?.path ?? '…'}</Code>
+        </div>
+      </Details>
+    </Stack>
   );
   return (
     <Stack divided>
@@ -317,6 +348,7 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
       <Stack>
         <p className="muted">
           {probe ? `The browser you are reading this in has the extension, version ${probe.version}.`
+            : target === 'phone' ? 'The extension runs in Chrome, Edge, Brave or Arc on a computer: install and pair it from there.'
             : data?.connected ? 'The browser you are reading this in has no buddi extension. You only need it here to pair this browser instead.'
             : 'The browser you are reading this in has no buddi extension yet.'}
           {probe?.state === 'paired' ? ' It is already paired with a buddi.' : ''}
@@ -338,7 +370,7 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
           <Button variant="accent" disabled={disabled || code.replace(/[^0-9]/g, '').length !== 6} onClick={() => void run(async () => { await api.pairExtension(code); setCode(''); })}>Pair</Button>
         </Toolbar>
       ) : null}
-      {data?.connected ? <Details summary="Pair a different browser">{install}</Details> : install}
+      {!install ? null : data?.connected ? <Details summary="Pair a different browser">{install}</Details> : install}
       <Toolbar align="end">
         <Button variant="danger" disabled={disabled || !data?.pairedAt} onClick={() => void run(() => api.forgetExtension())}>Forget this browser</Button>
       </Toolbar>

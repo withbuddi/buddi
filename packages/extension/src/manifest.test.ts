@@ -14,7 +14,7 @@ import { inflateRawSync } from 'node:zlib';
 import { BUNDLES, STATIC, buildExtension, buddiVersion } from '../scripts/build.mjs';
 import { chromeVersion, stampManifest } from '../scripts/version.mjs';
 import { storeZip } from '../scripts/zip.mjs';
-import { EXTENSION_ID } from './id.js';
+import { EXTENSION_ID, STORE_EXTENSION_ID } from './id.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
@@ -64,6 +64,14 @@ describe('the built extension', () => {
     expect(derived).toBe(EXTENSION_ID);
     // The private half signs a .crx for the Web Store; it is not in this repo.
     expect(JSON.stringify(manifest)).not.toMatch(/PRIVATE KEY/);
+  });
+
+  it('has the dashboard asking both ids, the pinned one and the store one', async () => {
+    expect(STORE_EXTENSION_ID).toMatch(/^[a-p]{32}$/);
+    expect(STORE_EXTENSION_ID).not.toBe(EXTENSION_ID);
+    const view = await readFile(path.join(root, '..', 'web', 'src', 'views', 'Browser.tsx'), 'utf8');
+    expect(view).toContain(`const EXTENSION_ID = '${EXTENSION_ID}';`);
+    expect(view).toContain(`const STORE_EXTENSION_ID = '${STORE_EXTENSION_ID}';`);
   });
 
   it('lets only a buddi dashboard on this machine speak to it, on any port', () => {

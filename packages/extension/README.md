@@ -16,11 +16,12 @@ coordinate clicking, no passwords.
 
 ## Loading it
 
-**From the Chrome Web Store** (once the listing is live): install it, and it
-updates itself. The store gives it an id of its own (see below), which the
-dashboard also asks for.
+**From the [Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)**:
+press Add to Chrome, and it updates itself. The store gives it an id of its own,
+`pbfpjefkiijjgefblpnlnlpmeaddfbah` (see below), which the dashboard also asks
+for. The dashboard's **Add to Chrome** opens the same listing.
 
-**Unpacked**, from your installation:
+**Unpacked** (developer install), from your installation:
 
 1. Open `chrome://extensions`.
 2. Turn on **Developer mode** (top right).
@@ -93,9 +94,9 @@ kmbckpnnjfggeffkkbmkggojnolkdokb
 
 **The private half is not in this repository and is not needed.** Loading
 the folder unpacked uses the public key only, and the store build carries no
-key at all: the store assigns its own id, which goes into
-`STORE_EXTENSION_ID` (`src/id.ts`, mirrored in the dashboard) once the listing
-exists. Nothing here is weakened by its absence, and nothing is gained by
+key at all: the store assigned its own id, `pbfpjefkiijjgefblpnlnlpmeaddfbah`,
+which is `STORE_EXTENSION_ID` (`src/id.ts`, mirrored in the dashboard; the
+manifest test checks the two agree). Nothing here is weakened by its absence, and nothing is gained by
 keeping it around.
 
 The fixed id is what lets the dashboard find the extension. `manifest.json`

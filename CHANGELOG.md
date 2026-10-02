@@ -4,6 +4,10 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- The buddi extension is on the Chrome Web Store. Computer & browser → Your browser now leads with Add to Chrome (the store listing, in a new tab) and folds the load-unpacked folder under Developer install; Firefox and Safari are told it needs Chrome, Edge, Brave or Arc, and a phone leaves the install out. The dashboard finds and pairs a store-installed extension exactly like the unpacked one.
+
 ### Fixed
 
 - Home: Done on a Needs you card now sticks. A line held for the end of the day (like "buddi learned 1 rule: quieted 1 newsletter") showed in Needs you even after Done and came back on every reload; Needs you now lists only what asks for you now, quiet lines stay in Notifications → Recent and the evening message, and a quiet line that says more later stays read instead of coming back unread.

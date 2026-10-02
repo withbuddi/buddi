@@ -423,10 +423,12 @@ Chromium in Playwright's own cache keeps using it until `buddi browser install`
 runs again. On a Linux server with no display the browser runs headless (see
 [browser.md](browser.md)).
 
-**Your browser** is Chrome on every platform: the package carries the unpacked
-extension at `<root>/extension`; you load it through `chrome://extensions` →
-Developer mode → Load unpacked, and pair it with a six-digit code in Computer &
-browser. Nothing about it is macOS-only.
+**Your browser** is Chrome (or Edge, Brave, Arc) on every platform: install
+the extension from the **[Chrome Web Store](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah)** — **Add to
+Chrome** in Computer & browser opens it — and pair it with a six-digit code
+there. The package also carries the unpacked extension at `<root>/extension`
+for a developer install (`chrome://extensions` → Developer mode → Load
+unpacked). Nothing about it is macOS-only.
 
 - **macOS** is the reference platform, and the one supported today.
   Everything on this page works there. Computer control (the browser plugin's

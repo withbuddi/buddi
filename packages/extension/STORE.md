@@ -1,5 +1,9 @@
 # The Chrome Web Store listing
 
+**Live** since October 2026: [https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah](https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah),
+item id `pbfpjefkiijjgefblpnlnlpmeaddfbah`. Each release's
+`buddi-extension-<version>.zip` is uploaded as a new version of that item.
+
 What the store's forms ask for, written once. The upload is
 `buddi-extension-<version>.zip`, attached to every GitHub release (see the
 README's "From the Chrome Web Store").

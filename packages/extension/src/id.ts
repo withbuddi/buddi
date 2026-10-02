@@ -16,17 +16,18 @@
 export const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
 
 /*
- * The Chrome Web Store id, once the store has assigned it.
+ * The Chrome Web Store id, which the store assigned to the public listing:
+ * https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah
  *
  * The store build drops the manifest's `key` (the store refuses an upload that
  * pins one) and gives the extension an id of its own, so a store install will
  * NOT be `EXTENSION_ID`. The unpacked folder the tarball ships keeps the key
- * and keeps that id. Once the listing exists, fill this in and mirror it in
- * `packages/web/src/views/Browser.tsx`: the dashboard asks both ids and takes
+ * and keeps that id. It is mirrored in `packages/web/src/views/Browser.tsx`
+ * (change both together): the dashboard asks both ids and takes
  * whichever answers. The gateway already accepts either, since a pairing binds
  * whichever id completed it.
  */
-export const STORE_EXTENSION_ID = '';
+export const STORE_EXTENSION_ID = 'pbfpjefkiijjgefblpnlnlpmeaddfbah';
 
 /** Every id this extension may be running under, empty ones left out. */
 export const EXTENSION_IDS: readonly string[] = [EXTENSION_ID, STORE_EXTENSION_ID].filter(Boolean);
