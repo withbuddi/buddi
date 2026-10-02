@@ -18,7 +18,7 @@ const targets = (over: Partial<HandoffTargets> = {}): HandoffTargets => ({
 
 async function call(sink: OfferSink, input: Record<string, unknown>, t = targets()): Promise<unknown> {
   const tool = createHandoffManifest(sink, t).tools.find((x) => x.name === HANDOFF_TOOL)!;
-  return tool.execute(tool.input.parse(input) as never, {} as never);
+  return tool.execute(tool.input!.parse(input) as never, {} as never);
 }
 
 describe('conversation.hand_off', () => {
@@ -58,7 +58,7 @@ describe('what conversation.offer cannot do', () => {
   it('cannot make a handoff: its input has no such field, and a smuggled one is dropped', async () => {
     const sink: OfferSink = {};
     const tool = createOfferManifest(sink).tools.find((x) => x.name === OFFER_TOOL)!;
-    const parsed = tool.input.parse({ actions: [{ label: 'Go', prompt: 'go', handoff: { kind: 'maker', agentId: 'agent-father' } }] });
+    const parsed = tool.input!.parse({ actions: [{ label: 'Go', prompt: 'go', handoff: { kind: 'maker', agentId: 'agent-father' } }] });
     await tool.execute(parsed as never, {} as never);
     expect(sink.offered).toEqual([{ label: 'Go', prompt: 'go' }]);
   });

@@ -229,7 +229,7 @@ suite('the first lineup, from a copy of the market index', () => {
       // The grant is what the plan showed, tool for tool, and every `?` tool whose plugin is here holds.
       catalog.reload();
       const agent = catalog.get(name);
-      expect(agent, `${name} did not load: ${JSON.stringify(catalog.refused())}`).toBeDefined();
+      expect(agent, `${name} did not load: ${JSON.stringify(catalog.refused?.())}`).toBeDefined();
       expect([...agent!.tools].sort()).toEqual(planned.tools.map((t) => t.name).sort());
       for (const claim of entry.claims.tools as Array<{ name: string; plugin: string; optional: boolean }>) {
         const here = claim.plugin === 'core' || registry.manifests().some((m) => m.name === claim.plugin);
