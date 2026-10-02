@@ -128,6 +128,20 @@ export function offerTurnLabel(speaker: string | null | undefined): string | nul
   return label === '' ? null : label;
 }
 
+/**
+ * How the server stamps a turn whose words were an agent-only brief (Alerts'
+ * Ask): `brief:<label>`. The server already replaced its words with the
+ * label; there is nothing behind it to show.
+ */
+export const BRIEF_TURN_SPEAKER_PREFIX = 'brief:';
+
+/** The label behind a brief turn's stamp, or null for any other turn. */
+export function briefTurnLabel(speaker: string | null | undefined): string | null {
+  if (typeof speaker !== 'string' || !speaker.startsWith(BRIEF_TURN_SPEAKER_PREFIX)) return null;
+  const label = speaker.slice(BRIEF_TURN_SPEAKER_PREFIX.length).trim();
+  return label === '' ? null : label;
+}
+
 /** A group of agents that share one conversation (docs/groups.md). */
 export interface GroupView {
   id: string;

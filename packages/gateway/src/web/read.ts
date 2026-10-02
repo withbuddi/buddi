@@ -53,6 +53,7 @@ import { listFailureGroups, type FailureGroup, type JobCounts } from '@buddi/cor
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
+import { briefTurnLabel } from '../surfaces/offered-actions.js';
 import { pictureUrl } from '../agents/avatars.js';
 import { readAlertDecisions, readAlerts, type AlertsView } from './alerts.js';
 
@@ -361,7 +362,10 @@ export async function readConversation(
       id: String(m.id),
       role: m.role,
       createdAt: new Date(m.created_at).toISOString(),
-      blocks: toBlocks(m.content),
+      // A brief turn's words never leave the gateway: see `visibleTurnBlocks`.
+      blocks: m.role === 'user' && briefTurnLabel(m.speaker) !== null
+        ? [{ type: 'text', text: briefTurnLabel(m.speaker) as string }]
+        : toBlocks(m.content),
       ...(typeof m.speaker === 'string' && m.speaker !== '' ? { speaker: m.speaker } : {}),
     })),
     runs,

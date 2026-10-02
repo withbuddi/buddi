@@ -2604,7 +2604,7 @@ export function createWebApp(deps: WebServerDeps): Server {
       const agentId = findings.find((f) => f.agentId !== null && deps.catalog.get(f.agentId) !== undefined)?.agentId ?? wake?.agentId ?? null;
       if (agentId === null) return sendJson(res, 409, { error: 'No agent answers for this alert yet.' });
       const { label, prompt } = askPrompt(findings);
-      const sent = await chat.send({ agentId, text: prompt, offer: { id: `alert:${findings[0]!.key}`.slice(0, 200), label } });
+      const sent = await chat.send({ agentId, text: prompt, offer: { id: `alert:${findings[0]!.key}`.slice(0, 200), label, brief: true } });
       if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
       return sendJson(res, 200, { agentId, conversationId: sent.conversationId, runId: sent.runId });
     }

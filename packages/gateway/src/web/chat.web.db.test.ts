@@ -1109,6 +1109,35 @@ suite('the dashboard chat API', () => {
       expect(await offersOf(client, conversationId)).toHaveLength(0);
     });
 
+    it('asks an alert\'s agent with the brief, and never returns the brief to the page', async () => {
+      const client = await signedIn();
+      provider.script = [say('Checked: it is the invoice from last week.')];
+      const key = `test.alert:${Date.now()}`;
+      await pool.query(
+        `insert into core.sentinel_findings (key, sentinel_id, severity, title, detail, owner_line, agent_id)
+         values ($1, 'test.watcher', 'urgent', 'Invoice overdue', 'BRIEF-ONLY detail for the agent', 'Ana wants the invoice', $2)`,
+        [key, AGENT_ID],
+      );
+      const res = await client.post('/api/alerts/ask', { keys: [key] });
+      expect(res.status).toBe(200);
+      const { conversationId } = (await res.json()) as any;
+      await settled(conversationId);
+
+      // The model was given the brief…
+      const given = JSON.stringify(provider.seen.at(-1)?.messages ?? []);
+      expect(given).toContain('BRIEF-ONLY detail for the agent');
+
+      // …the page only the owner line, in the chat transcript and in Activity alike.
+      for (const path of [`/api/chat/conversations/${conversationId}`, `/api/conversations/${conversationId}`]) {
+        const raw = await (await client.get(path)).text();
+        expect(raw, path).not.toContain('BRIEF-ONLY');
+        expect(raw, path).not.toContain('pressed');
+        const view = JSON.parse(raw);
+        const turn = (view.messages as any[]).find((m: any) => m.role === 'user');
+        expect(turn.blocks).toEqual([{ type: 'text', text: 'About: Ana wants the invoice' }]);
+      }
+    });
+
     it('takes a chip in the open thread as a turn of it, and queues nothing', async () => {
       const client = await signedIn();
       provider.script = [

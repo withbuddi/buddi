@@ -11,6 +11,7 @@
  */
 import { OPENING_TURN_SPEAKER, type Queryable } from '@buddi/core';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
+import { briefTurnLabel } from '../surfaces/offered-actions.js';
 
 export interface ConversationLine {
   id: string;
@@ -67,7 +68,7 @@ export async function listRecentConversations(
             c.created_at,
             (select max(m.created_at) from core.messages m where m.conversation_id = c.id) as last_at,
             (select count(*) from core.messages m where m.conversation_id = c.id) as message_count,
-            (select m.content from core.messages m
+            (select jsonb_build_object('content', m.content, 'speaker', m.speaker) from core.messages m
                where m.conversation_id = c.id and m.role = 'user'
                  and m.speaker is distinct from $3
                  and m.speaker is distinct from $4
@@ -84,6 +85,13 @@ export async function listRecentConversations(
     createdAt: r.created_at ? new Date(r.created_at) : null,
     lastMessageAt: r.last_at ? new Date(r.last_at) : null,
     messages: Number(r.message_count ?? 0),
-    preview: previewOf(r.first_user),
+    // A brief turn previews as its label: see `visibleTurnBlocks`.
+    preview: previewOf(
+      r.first_user
+        ? briefTurnLabel(r.first_user.speaker) !== null
+          ? [{ type: 'text', text: briefTurnLabel(r.first_user.speaker) }]
+          : r.first_user.content
+        : null,
+    ),
   }));
 }

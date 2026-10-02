@@ -118,4 +118,21 @@ describe('the turn a chip started', () => {
     expect(turn.querySelector('.wb-bubble-offer')).toHaveAttribute('title', 'send the reply I drafted to Dorothée');
     expect(screen.getByText('Sent.')).toBeInTheDocument();
   });
+
+  it('draws an Ask turn as its line alone, with no tooltip', () => {
+    render(
+      <Tooltip.Provider>
+        <MessageList
+          messages={[{ id: 'm1', role: 'user', at: '', speaker: 'brief:About: Ana wants the invoice', blocks: [{ type: 'text', text: 'About: Ana wants the invoice' }] }]}
+          live={[]}
+          now={0}
+          onOpen={() => {}}
+          emptyHint=""
+        />
+      </Tooltip.Provider>,
+    );
+    const turn = screen.getByTestId('offer-turn');
+    expect(turn).toHaveTextContent('About: Ana wants the invoice');
+    expect(turn.querySelector('.wb-bubble-offer')).not.toHaveAttribute('title');
+  });
 });

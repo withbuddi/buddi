@@ -203,6 +203,36 @@ export function offerTurnLabel(speaker: string | null | undefined): string | nul
   return label === '' ? null : label;
 }
 
+/**
+ * The speaker on a turn whose words are an agent-only brief: Alerts' "Ask"
+ * hands the agent the finding's full brief, while the owner only pressed a
+ * button about one line. Unlike a chip's sentence, which is the owner's to
+ * read, the brief never leaves the gateway — every transcript reader replaces
+ * the turn's words with the label (`visibleTurnBlocks`), so no web or MCP
+ * payload carries it. The model's own history is untouched.
+ */
+export const BRIEF_TURN_SPEAKER_PREFIX = 'brief:';
+
+export function briefTurnSpeaker(label: string): string {
+  return `${BRIEF_TURN_SPEAKER_PREFIX}${label.trim()}`;
+}
+
+/** The label behind a brief turn's stamp, or null for any other turn. */
+export function briefTurnLabel(speaker: string | null | undefined): string | null {
+  if (typeof speaker !== 'string' || !speaker.startsWith(BRIEF_TURN_SPEAKER_PREFIX)) return null;
+  const label = speaker.slice(BRIEF_TURN_SPEAKER_PREFIX.length).trim();
+  return label === '' ? null : label;
+}
+
+/**
+ * What a reader may show of a stored turn: its blocks, except a brief turn's,
+ * which become the one line the owner pressed.
+ */
+export function visibleTurnBlocks(speaker: string | null | undefined, blocks: Array<Record<string, any>>): Array<Record<string, any>> {
+  const label = briefTurnLabel(speaker);
+  return label === null ? blocks : [{ type: 'text', text: label }];
+}
+
 /* ------------------------------------------------------------------ *
  * What a surface does with it
  * ------------------------------------------------------------------ */

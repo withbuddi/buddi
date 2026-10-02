@@ -26,7 +26,7 @@ import { ReplyActions } from './ReplyActions';
 import { gistFor } from './gist';
 import { toolBodyFor, type ToolBody } from './tool-body';
 import { Markdown, MarkdownAgents } from './markdown';
-import { addedWhileWorking, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun, type MessageFeedback } from '../chat/types';
+import { addedWhileWorking, briefTurnLabel, offerTurnLabel, type ChatAgent, type ChatBlock, type ChatMessage, type ChatRun, type MessageFeedback } from '../chat/types';
 import { Avatar, Blob, Button, Icon } from '../ui';
 import { useIsBlobStill } from '../ui/Blob';
 
@@ -230,6 +230,16 @@ export function MessageList({
         // one quiet line above it saying when it went in — so a correction
         // that arrived mid-run does not read as the question that started it.
         const interjected = message.role === 'user' && addedWhileWorking(speaker);
+        // An Ask from Alerts: the line the owner pressed, and nothing behind it
+        // — the agent's brief never reaches the page.
+        const briefLabel = message.role === 'user' ? briefTurnLabel(speaker) : null;
+        if (briefLabel) {
+          return (
+            <div key={message.id} className="wb-msg" data-role="user" data-testid="offer-turn">
+              <div className="wb-bubble wb-bubble-offer">{briefLabel}</div>
+            </div>
+          );
+        }
         const offerLabel = message.role === 'user' ? offerTurnLabel(speaker) : null;
         if (offerLabel) {
           const asked = (message.blocks ?? [])

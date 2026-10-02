@@ -113,6 +113,8 @@ import {
   storeTurnOffers,
   withdrawTurnOffers,
   offerTurnSpeaker,
+  briefTurnSpeaker,
+  visibleTurnBlocks,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
 import {
@@ -552,7 +554,8 @@ export async function readChatTranscript(
     id: String(m.id),
     role: String(m.role),
     at: new Date(m.created_at).toISOString(),
-    raw: rawBlocks(m.content),
+    // A brief turn's words never leave the gateway: see `visibleTurnBlocks`.
+    raw: m.role === 'user' ? visibleTurnBlocks(m.speaker, rawBlocks(m.content)) : rawBlocks(m.content),
     speaker: typeof m.speaker === 'string' ? m.speaker : null,
   }));
 
@@ -1136,8 +1139,11 @@ interface RunTurn {
   group?: RoomTurn;
   /** First run's opening turn: sent on the owner's behalf, never shown as theirs. */
   opening?: boolean;
-  /** The chip the owner clicked, when this turn is a taken offer. */
-  offer?: { id: string; label: string };
+  /**
+   * The chip the owner clicked, when this turn is a taken offer. `brief`:
+   * the text is an agent-only brief (Alerts' Ask) that readers never return.
+   */
+  offer?: { id: string; label: string; brief?: boolean };
   /**
    * The owner's words are already a row in `core.messages`: they were typed
    * during the previous run, stored at once, and never picked up by it. The
@@ -1262,7 +1268,7 @@ export interface SendRequest {
    * take route sets it, from a row it has just claimed; nothing a browser posts
    * reaches this field.
    */
-  offer?: { id: string; label: string } | undefined;
+  offer?: { id: string; label: string; brief?: boolean } | undefined;
   /**
    * The MCP client this turn came through (`buddi.ask`), by the name it gave
    * in its handshake. Recorded as an `mcp.ask` event on the conversation, so
@@ -2197,7 +2203,7 @@ export class WebChat {
         // A taken chip is the owner's turn, stamped with the label they clicked
         // so the thread shows "Send it" instead of the sentence behind it.
         : turn.offer
-          ? { openingSpeaker: offerTurnSpeaker(turn.offer.label) }
+          ? { openingSpeaker: turn.offer.brief ? briefTurnSpeaker(turn.offer.label) : offerTurnSpeaker(turn.offer.label) }
           : {}),
       systemSuffix: delegated ? systemSuffix : [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
