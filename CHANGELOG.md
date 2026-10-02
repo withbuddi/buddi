@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.30 — 2026-10-01
+
 ### Added
 
 - Alerts: every row has a primary action and ways out — Not now (back in a week), Stop telling me this (silences that account or sender, or the whole kind; taken back under Silenced in Settings → Watchers) and Clear all with Undo. Stale balances open one quick form listing every account with its last value; an unsent draft offers Open draft, Send (still approved by you) and Discard; files never used offer Review and Not needed; Ask hands the agent the watcher's brief and the thread shows only what you asked about.

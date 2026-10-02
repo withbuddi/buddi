@@ -1634,7 +1634,7 @@ Failed jobs grouped by cause, each group with a plain reason and whether a retry
 
 - **Auth:** Session or API token.
 - **Answer:** `{ open: FailureGroupView[], dismissed: FailureGroupView[] }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/jobs/failures"
@@ -1648,7 +1648,7 @@ Dismiss failed jobs: kept on record, out of the footer count and the default vie
 - **Body:** `{ ids?: string[], group?: string, all?: true }`
 - **Answer:** `{ ids: string[] }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/jobs/dismiss"
@@ -1662,7 +1662,7 @@ Take a dismissal back (Undo).
 - **Body:** `{ ids: string[] }`
 - **Answer:** `{ ids: string[] }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"ids":[]}' "$BUDDI_URL/api/jobs/undismiss"
@@ -1676,7 +1676,7 @@ Retry failed jobs now, by ids, by cause group, or every one still asking.
 - **Body:** `{ ids?: string[], group?: string, dismissed?: boolean, all?: true }`
 - **Answer:** `{ jobs: JobView[] }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/jobs/retry"
@@ -1783,7 +1783,7 @@ Snooze several alerts at once (Clear all), or wake them (its Undo).
 - **Body:** `{ keys: string[], snoozed: boolean, days?: number }`
 - **Answer:** `{ keys: string[] }  // the ones that were open`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"keys":[],"snoozed":true}' "$BUDDI_URL/api/alerts/snooze"
@@ -1797,7 +1797,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 - **Body:** `{ key: string, scope?: 'subject'|'kind', label?: string }`
 - **Answer:** `{ id, label }`
 - **Errors:** 404 no open alert with that key
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"key":"…"}' "$BUDDI_URL/api/alerts/mute"
@@ -1810,7 +1810,7 @@ Take a "Stop telling me this" back.
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `{ removed: true }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/alerts/mutes/<id>/remove"
@@ -1824,7 +1824,7 @@ Run what an alert declared (a run, or a fill with the typed value), as the owner
 - **Body:** `{ entries: Array<{ key: string, action: number, value?: string|number }> }`
 - **Answer:** `{ results: Array<{ key, result? , approvalId?, error? }> }`
 - **Errors:** 400; 429
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"entries":[]}' "$BUDDI_URL/api/alerts/act"
@@ -1838,7 +1838,7 @@ Ask the agent that answers for these alerts, handing it their briefs. The thread
 - **Body:** `{ keys: string[] }`
 - **Answer:** `{ agentId, conversationId, runId }`
 - **Errors:** 404; 409 no agent answers; 503 chat is not running
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.30
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"keys":[]}' "$BUDDI_URL/api/alerts/ask"
