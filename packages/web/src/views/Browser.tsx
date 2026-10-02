@@ -220,7 +220,7 @@ const EXTENSION_ID = 'kmbckpnnjfggeffkkbmkggojnolkdokb';
  */
 const STORE_EXTENSION_ID = 'pbfpjefkiijjgefblpnlnlpmeaddfbah';
 /** Where the owner installs it: the store's listing. */
-export const STORE_URL = `https://chromewebstore.google.com/detail/${STORE_EXTENSION_ID}`;
+export const STORE_URL = 'https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah';
 const EXTENSION_IDS = [EXTENSION_ID, STORE_EXTENSION_ID].filter(Boolean);
 
 /**

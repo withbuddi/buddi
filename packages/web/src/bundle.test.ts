@@ -48,6 +48,8 @@ const ALLOWED_LITERALS = [
   'https://en.wikipedia.org', 'https://*.wikimedia.org', 'https://auth.wikimedia.org',
   // The Earth photo's credit: links the owner may follow, never fetched (the photo itself is in the bundle).
   'https://unsplash.com/@actionvance', 'https://unsplash.com/photos/outer-space-photography-of-earth-',
+  // The extension's Chrome Web Store page: a link the owner follows, never fetched.
+  'https://chromewebstore.google.com/detail/pbfpjefkiijjgefblpnlnlpmeaddfbah',
 ];
 
 function externalUrls(text: string): string[] {
