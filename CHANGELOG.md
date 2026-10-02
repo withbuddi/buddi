@@ -19,6 +19,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Gemini 3 models no longer fail with "Function call is missing a thought_signature" on the turn after a tool call: the signature Google returns with each call is kept with it in the conversation and sent back to Google's endpoint only. A conversation from before this fix carries on too.
 - Mail no longer says "Waiting on you" on every conversation. A conversation waits on you only when someone you've written to before wrote last, or triage judged the message to need a reply — never a no-reply address, a newsletter or mailing list, a muted thread or a sender you ignore, and nothing older than 30 days. Notifications and messages nobody expects an answer to carry no pill; the conversation's State says which it is and why ("Notification — no reply expected: a no-reply sender"). The Mail page, the Waiting on you widget, the waiting watcher and the agents' tools now count the same conversations.
 - The lock screen reads every time one way: the line under the PIN ("Locked by you at …"), the second clock, the focus and the widgets left on Profile now follow the big clock — 12-hour or 24-hour as picked in Settings → Lock screen, else your Profile, else your browser — instead of the line using another format than the clock (a page that opened locked showed "18:59" over "Locked by you at 6:59 PM").
 - Time format choices say what Profile means now — "Profile (12-hour)" in Settings → Lock screen and in a widget's settings — instead of a sample time.

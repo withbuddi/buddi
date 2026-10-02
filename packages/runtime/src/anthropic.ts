@@ -74,8 +74,13 @@ export type ContentBlock =
    * `truncated` marks a call the provider stopped writing at the length limit:
    * its arguments never finished, so `input` is not what the model meant. The
    * loop answers it with an error instead of dispatching it. See `markCutOff`.
+   *
+   * `thoughtSignature` is Gemini's opaque proof of the thinking behind the
+   * call, as Google's OpenAI-compatible endpoint returns it. Persisted with the
+   * call and echoed back verbatim to that endpoint only (see `isGemini` in
+   * `openai.ts`); every other wire leaves it out.
    */
-  | { type: 'tool_use'; id: string; name: string; input: unknown; truncated?: true }
+  | { type: 'tool_use'; id: string; name: string; input: unknown; truncated?: true; thoughtSignature?: string }
   | {
       type: 'tool_result';
       tool_use_id: string;

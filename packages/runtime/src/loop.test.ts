@@ -11,6 +11,7 @@ import type {
 } from './anthropic.js';
 import { ProviderError } from './anthropic.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
+import { createOpenAiProvider } from './openai.js';
 import {
   InterjectionQueue,
   MAX_TOKENS_NOTICE,
@@ -2463,5 +2464,63 @@ describe('prompt caching', () => {
     expect(result.usage).toMatchObject({ input: 3, output: 1, cacheRead: 100, cacheWrite: 20 });
     const finished = db.events.find((e) => e.kind === 'run.finished')!.payload as any;
     expect(finished.usage).toMatchObject({ cacheRead: 100, cacheWrite: 20 });
+  });
+});
+
+describe('Gemini thought signatures through the loop', () => {
+  /** Google's compatible endpoint, recorded shapes: a signed call per step, then an answer. */
+  function geminiFetch(script: unknown[]) {
+    const bodies: any[] = [];
+    let i = 0;
+    const fetch = vi.fn(async (_url: unknown, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify(script[Math.min(i++, script.length - 1)]), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    return { fetch, bodies };
+  }
+  const call = (id: string, n: number, signature?: string) => ({
+    ...(signature ? { extra_content: { google: { thought_signature: signature } } } : {}),
+    function: { arguments: JSON.stringify({ n }), name: 'demo_double' }, id, type: 'function',
+  });
+  const step = (calls: unknown[]) => ({ model: 'gemini-3-flash-preview', choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: calls } }], usage: { prompt_tokens: 5, completion_tokens: 2 } });
+  const answer = { model: 'gemini-3-flash-preview', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } };
+  const geminiAgent: AgentDefinition = { ...agent, maxTurns: 6, provider: { kind: 'openai', credential: { kind: 'api-key', env: 'K' }, model: 'gemini-3-flash-preview' } };
+  const target = (baseUrl: string) => ({ kind: 'openai' as const, compatible: true as const, credentialKind: 'api-key' as const, secret: 'test-key', baseUrl, model: 'gemini-3-flash-preview' });
+
+  it('round-trips each signature through a multi-step tool loop, persistence and the next run', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, agent.id);
+    const { fetch, bodies } = geminiFetch([
+      step([call('c1', 1, 'sigA'), call('c2', 2)]),
+      step([call('c3', 3, 'sigB')]),
+      answer,
+    ]);
+    const provider = createOpenAiProvider(target('https://generativelanguage.googleapis.com/v1beta/openai/'), { fetch: fetch as never, sleep: async () => {} });
+    await runAgent({ agent: geminiAgent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: 'double twice' });
+
+    const extras = (body: any) => body.messages.filter((m: any) => m.role === 'assistant' && m.tool_calls)
+      .map((m: any) => m.tool_calls.map((c: any) => c.extra_content?.google?.thought_signature ?? null));
+    expect(bodies).toHaveLength(3);
+    expect(extras(bodies[1])).toEqual([['sigA', null]]);
+    expect(extras(bodies[2])).toEqual([['sigA', null], ['sigB']]);
+
+    // Stored with the call, so a reload sends the same thing.
+    const stored = db.messages.filter((m) => m.role === 'assistant').map((m) => (m.content as any[]).filter((b) => b.type === 'tool_use').map((b) => b.thoughtSignature ?? null));
+    expect(stored).toEqual([['sigA', null], ['sigB'], []]);
+
+    const next = geminiFetch([answer]);
+    const again = createOpenAiProvider(target('https://generativelanguage.googleapis.com/v1beta/openai/'), { fetch: next.fetch as never, sleep: async () => {} });
+    await runAgent({ agent: geminiAgent, provider: again, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: 'and again' });
+    expect(extras(next.bodies[0])).toEqual([['sigA', null], ['sigB']]);
+  });
+
+  it('keeps the signature out of a request to another compatible server', async () => {
+    const db = new FakeDb();
+    const conversationId = await createConversation(db, agent.id);
+    const { fetch, bodies } = geminiFetch([step([call('c1', 1, 'sigA')]), answer]);
+    const provider = createOpenAiProvider(target('http://127.0.0.1:1060/v1'), { fetch: fetch as never, sleep: async () => {} });
+    await runAgent({ agent: geminiAgent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: 'double' });
+    expect(JSON.stringify(bodies[1])).not.toContain('extra_content');
+    expect(JSON.stringify(bodies[1])).not.toContain('sigA');
   });
 });

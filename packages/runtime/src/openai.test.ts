@@ -696,3 +696,77 @@ describe('createOpenAiProvider — prompt caching', () => {
     expect(res.usage).toEqual({ input: 976, output: 2, cacheRead: 1_024 });
   });
 });
+
+describe('createOpenAiProvider — Gemini thought signatures', () => {
+  const gemini = () => ({ ...resolved(), compatible: true as const, baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3-pro-preview' });
+  // The shape Google's compatible endpoint returns for parallel calls: the
+  // signature on the first call only.
+  const parallel = okBody({
+    model: 'gemini-3-pro-preview',
+    choices: [{
+      finish_reason: 'tool_calls',
+      message: {
+        role: 'assistant',
+        tool_calls: [
+          { extra_content: { google: { thought_signature: 'CiQBSIG-A==' } }, function: { arguments: '{"horizonDays":30}', name: 'finance_project_cashflow' }, id: 'function-call-1', type: 'function' },
+          { function: { arguments: '{"horizonDays":60}', name: 'finance_project_cashflow' }, id: 'function-call-2', type: 'function' },
+        ],
+      },
+    }],
+  });
+  const history = (content: CompletionRequest['messages'][number]['content']): CompletionRequest['messages'] => [
+    { role: 'user', content: [{ type: 'text', text: 'project it' }] },
+    { role: 'assistant', content },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'function-call-1', content: '{}' }, { type: 'tool_result', tool_use_id: 'function-call-2', content: '{}' }] },
+  ];
+  const signed: CompletionRequest['messages'][number]['content'] = [
+    { type: 'tool_use', id: 'function-call-1', name: 'finance.project_cashflow', input: { horizonDays: 30 }, thoughtSignature: 'CiQBSIG-A==' },
+    { type: 'tool_use', id: 'function-call-2', name: 'finance.project_cashflow', input: { horizonDays: 60 } },
+  ];
+
+  async function sendTo(target: ReturnType<typeof resolved>, req: CompletionRequest, body: unknown = okBody()) {
+    const fetchMock = vi.fn(async () => jsonResponse(200, body));
+    const res = await createOpenAiProvider(target, { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep }).complete(req);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    return { res, sent: JSON.parse(init.body as string) };
+  }
+
+  it('keeps the signature on the call it came with, and only there', async () => {
+    const { res } = await sendTo(gemini(), { ...request, tools }, parallel);
+    expect(res.content).toEqual(signed);
+  });
+
+  it('reads the signature from a streamed tool call', async () => {
+    const chunks = [
+      { model: 'gemini-3-pro-preview', choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ extra_content: { google: { thought_signature: 'CiQBSIG-A==' } }, function: { arguments: '{"horizonDays":30}', name: 'finance_project_cashflow' }, id: 'function-call-1', index: 0, type: 'function' }] } }] },
+      { choices: [{ index: 0, delta: { tool_calls: [{ function: { arguments: '{"horizonDays":60}', name: 'finance_project_cashflow' }, id: 'function-call-2', index: 1, type: 'function' }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 9, completion_tokens: 4 } },
+    ];
+    const wire = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('')}data: [DONE]\n\n`;
+    const fetchMock = vi.fn(async (_url: unknown, init: any) => { init.onChunk(wire, 200); return new Response(wire, { status: 200 }); });
+    const res = await createOpenAiProvider(gemini(), { fetch: fetchMock as unknown as typeof fetch }).complete({ ...request, tools, onDelta: () => {} });
+    expect(res.content).toEqual(signed);
+  });
+
+  it('echoes each signature back exactly to Gemini', async () => {
+    const { sent } = await sendTo(gemini(), { ...request, tools, messages: history(signed) });
+    expect(sent.messages[2].tool_calls).toEqual([
+      { id: 'function-call-1', type: 'function', function: { name: 'finance_project_cashflow', arguments: '{"horizonDays":30}' }, extra_content: { google: { thought_signature: 'CiQBSIG-A==' } } },
+      { id: 'function-call-2', type: 'function', function: { name: 'finance_project_cashflow', arguments: '{"horizonDays":60}' } },
+    ]);
+  });
+
+  it('never sends the field to any other endpoint', async () => {
+    for (const target of [resolved(), { ...resolved(), compatible: true as const, baseUrl: 'http://localhost:11434/v1' }, { ...resolved(), compatible: true as const, baseUrl: 'https://openrouter.ai/api/v1' }]) {
+      const { sent } = await sendTo(target, { ...request, tools, messages: history(signed) });
+      expect(JSON.stringify(sent)).not.toContain('extra_content');
+      expect(JSON.stringify(sent)).not.toContain('CiQBSIG');
+    }
+  });
+
+  it('vouches for an unsigned turn with Google\'s placeholder, on its first call', async () => {
+    const unsigned = signed.map((b) => (b.type === 'tool_use' ? { type: 'tool_use' as const, id: b.id, name: b.name, input: b.input } : b));
+    const { sent } = await sendTo(gemini(), { ...request, tools, messages: history(unsigned) });
+    expect(sent.messages[2].tool_calls[0].extra_content).toEqual({ google: { thought_signature: 'skip_thought_signature_validator' } });
+    expect(sent.messages[2].tool_calls[1]).not.toHaveProperty('extra_content');
+  });
+});

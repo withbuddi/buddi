@@ -108,7 +108,12 @@ type WireToolCall = {
   id: string;
   type: 'function';
   function: { name: string; arguments: string };
+  /** Gemini only: the thought signature it returned with this call. See `isGemini`. */
+  extra_content?: { google: { thought_signature: string } };
 };
+
+/** Where Google's compatible endpoint puts a call's thought signature. */
+type WireExtraContent = { google?: { thought_signature?: unknown } | null } | null;
 
 type WireMessage =
   | { role: 'system'; content: string }
@@ -158,7 +163,7 @@ type WireResponse = {
       /** What the model thought first, on hosts that return it (Ollama). */
       reasoning?: string | null;
       reasoning_content?: string | null;
-      tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+      tool_calls?: { id?: string; function?: { name?: string; arguments?: string }; extra_content?: WireExtraContent }[];
     };
   }[];
   usage?: WireUsage;
@@ -211,22 +216,34 @@ export function toWireMessages(
   message: NeutralMessage,
   names: Map<string, string>,
   provider: string,
+  options: { gemini?: boolean } = {},
 ): WireMessage[] {
   if (message.role === 'assistant') {
     const text = message.content
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
-    const toolCalls: WireToolCall[] = message.content
-      .filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use')
-      .map((b) => ({
+    const calls = message.content
+      .filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+    // Gemini refuses a call from the current turn without its signature. A
+    // turn that has none at all — written before signatures were kept, or by
+    // another model — has its first call vouched for with Google's documented
+    // placeholder, so the conversation can go on instead of failing for good.
+    const unsigned = options.gemini === true && !calls.some((b) => typeof b.thoughtSignature === 'string' && b.thoughtSignature !== '');
+    const toolCalls: WireToolCall[] = calls.map((b, i) => {
+      const signature = options.gemini !== true ? undefined
+        : typeof b.thoughtSignature === 'string' && b.thoughtSignature !== '' ? b.thoughtSignature
+          : unsigned && i === 0 ? GEMINI_SKIP_SIGNATURE : undefined;
+      return {
         id: b.id,
         type: 'function' as const,
         function: {
           name: wireToolName(names, b.name),
           arguments: JSON.stringify(b.input ?? {}),
         },
-      }));
+        ...(signature !== undefined ? { extra_content: { google: { thought_signature: signature } } } : {}),
+      };
+    });
     const wire: WireMessage = {
       role: 'assistant',
       content: text === '' ? null : text,
@@ -400,6 +417,42 @@ export function splitThought(content: string): { thought: string; text: string }
   return { thought: content.slice(0, closed.index).trim(), text: content.slice(closed.index + closed[0].length).replace(/^\s+/, '') };
 }
 
+/**
+ * Is this endpoint Google's — Gemini through its OpenAI-compatible route?
+ *
+ * Gemini 3 returns a thought signature with each tool call it makes
+ * (`tool_calls[].extra_content.google.thought_signature`, on the first call
+ * only when it makes several at once) and refuses the next request with a 400
+ * unless each comes back on the call it arrived with. That field is Google's
+ * own; another compatible server may refuse an unknown one, so it is sent
+ * nowhere else. Asked of the address, like `isOllama`.
+ */
+export function isGemini(baseUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  return host === 'generativelanguage.googleapis.com' || host === 'aiplatform.googleapis.com' || host.endsWith('-aiplatform.googleapis.com');
+}
+
+/**
+ * Google's documented stand-in for a signature it never issued, for a call in
+ * a turn whose signatures were not kept. It skips validation for that call.
+ */
+export const GEMINI_SKIP_SIGNATURE = 'skip_thought_signature_validator';
+
+/** A call's thought signature, if the response carried one. */
+export function thoughtSignatureOf(extra: unknown): string | undefined {
+  if (extra === null || typeof extra !== 'object') return undefined;
+  const google = (extra as { google?: unknown }).google;
+  if (google === null || typeof google !== 'object') return undefined;
+  const signature = (google as { thought_signature?: unknown }).thought_signature;
+  return typeof signature === 'string' && signature !== '' ? signature : undefined;
+}
+
 export function fromWireChoice(
   json: WireResponse,
   names: Map<string, string>,
@@ -417,6 +470,7 @@ export function fromWireChoice(
   for (const call of choice?.message?.tool_calls ?? []) {
     const name = call?.function?.name;
     if (typeof name !== 'string' || name === '') continue;
+    const signature = thoughtSignatureOf(call.extra_content);
     out.push({
       type: 'tool_use',
       // A host that omits the id leaves nothing to key the answer by; an empty
@@ -424,6 +478,7 @@ export function fromWireChoice(
       id: typeof call.id === 'string' && call.id !== '' ? call.id : `call_${out.length}`,
       name: names.get(name) ?? name,
       input: parseToolArguments(call?.function?.arguments),
+      ...(signature !== undefined ? { thoughtSignature: signature } : {}),
     });
   }
   let stopReason = mapFinishReason(choice?.finish_reason);
@@ -458,6 +513,7 @@ export function createOpenAiProvider(
   const defaultMaxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const url = `${resolved.baseUrl.replace(/\/+$/, '')}${CHAT_COMPLETIONS_PATH}`;
   const capabilities = providerCapabilities('openai');
+  const gemini = isGemini(resolved.baseUrl);
 
   /**
    * Where this attempt goes and with which headers. A device-key account signs
@@ -486,7 +542,7 @@ export function createOpenAiProvider(
     // identity line, which belongs to one vendor's subscription and nowhere else.
     if (req.system.trim() !== '') messages.push({ role: 'system', content: req.system });
     for (const message of req.messages) {
-      messages.push(...toWireMessages(message, names, 'openai'));
+      messages.push(...toWireMessages(message, names, 'openai', { gemini }));
     }
     const wire: WireRequest = {
       model: resolved.model,
@@ -643,7 +699,7 @@ export function createOpenAiProvider(
  */
 class OpenAiStreamAssembly {
   readonly #parser = new SseParser();
-  readonly #calls = new Map<number, { id?: string; function: { name?: string; arguments: string } }>();
+  readonly #calls = new Map<number, { id?: string; function: { name?: string; arguments: string }; extra_content?: WireExtraContent }>();
   #content = '';
   #reasoning = '';
   /** How much of the split content each channel has already been handed. */
@@ -701,6 +757,9 @@ class OpenAiStreamAssembly {
         const fn = (piece.function ?? {}) as Record<string, unknown>;
         if (typeof fn.name === 'string' && fn.name !== '') call.function.name = fn.name;
         if (typeof fn.arguments === 'string') call.function.arguments += fn.arguments;
+        // Gemini sends the signature whole, on one of the call's chunks.
+        const signature = thoughtSignatureOf(piece.extra_content);
+        if (signature !== undefined) call.extra_content = { google: { thought_signature: signature } };
         this.#calls.set(index, call);
       }
     }
