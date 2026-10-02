@@ -628,12 +628,12 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
           title="Your browser isn’t connected."
           action={(
             <Toolbar align="end">
-              {data?.settings ? <Button size="sm" disabled={busy} onClick={() => void switchToOwnBrowser()}>Use buddi’s browser instead</Button> : null}
+              {data?.settings ? <Button size="sm" disabled={busy} onClick={() => void switchToOwnBrowser()}>Switch to buddi’s browser</Button> : null}
               <Button size="sm" variant="accent" disabled={busy} onClick={() => void control('takeover')}>Try again</Button>
             </Toolbar>
           )}
         >
-          {`There is no Chrome tab to show or drive. Open Chrome on ${machine}: the buddi extension reconnects by itself, then try again. Or let the agent carry on in buddi’s own browser.`}
+          {`There is no Chrome tab to show or drive. Open Chrome on ${machine}: the buddi extension reconnects by itself, then try again. Or switch every agent to buddi’s own browser (it doesn’t have your Chrome sign-ins; switch back on this page).`}
         </Notice>
       ) : null}
       {data?.message && !hand && !(offline && yours) ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
