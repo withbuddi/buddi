@@ -14,7 +14,8 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CORE_MIGRATIONS_DIR, CORE_SCHEMA, createPool, migrate } from '../db.js';
 import { isPaused, setPaused } from './flags.js';
-import { listDeadJobs, retryJobs } from './jobs.js';
+import { dismissJobs, listDeadJobs, retryJobs, undismissJobs } from './jobs.js';
+import { listFailureGroups } from './failures.js';
 import {
   cancelJob,
   claimJob,
@@ -338,6 +339,76 @@ suite('queue (postgres)', () => {
       const counts = await countJobsByState(pool);
       expect(counts.pending).toBe(1);
       expect(counts.cancelled).toBe(1);
+    });
+  });
+
+  describe('dismissing failed jobs', () => {
+    /** Enqueue, claim and fail for good. */
+    const dead = async (key: string, error: string): Promise<string> => {
+      const job = await enqueue(pool, { kind: 'k', dedupKey: key, payload: { agentId: 'ledger' } });
+      const claimed = await claimJob(pool, { worker: 'w', now: at(0), leaseMs: LEASE_MS });
+      expect(claimed?.id).toBe(job.id);
+      await failJob(pool, job.id, 'w', error, { retry: false });
+      return job.id;
+    };
+
+    it('takes dismissed and 14-day-old failures out of the count, keeps them listed, and a new failure asks again', async () => {
+      const a = await dead('a', 'boom');
+      const b = await dead('b', 'boom');
+      const old = await dead('old', 'boom');
+      await pool.query(`update core.jobs set updated_at = now() - interval '15 days' where id = $1`, [old]);
+
+      let counts = await countJobsByState(pool);
+      expect(counts.failed).toBe(2);
+      expect(counts.dismissed).toBe(1);
+      const quiet = await getJob(pool, old);
+      expect(quiet?.acknowledgedBy).toBe('auto');
+      expect(quiet?.acknowledgedAt).toBeInstanceOf(Date);
+
+      const done = await dismissJobs(pool, { ids: [a] });
+      expect(done.map((j) => [j.id, j.acknowledgedBy])).toEqual([[a, 'owner']]);
+      // Dismissing twice changes nothing and says so.
+      expect(await dismissJobs(pool, { ids: [a] })).toEqual([]);
+      counts = await countJobsByState(pool);
+      expect(counts.failed).toBe(1);
+      expect(counts.dismissed).toBe(2);
+      expect((await listJobs(pool, { state: 'failed' })).map((j) => j.id).sort()).toEqual([a, b, old].sort());
+      expect((await listJobs(pool, { state: 'failed', failed: 'open' })).map((j) => j.id)).toEqual([b]);
+      expect((await listJobs(pool, { hideDismissed: true })).map((j) => j.id)).toEqual([b]);
+      expect((await events('job.dismissed'))[0]).toMatchObject({ jobIds: [a], by: 'owner' });
+
+      expect((await undismissJobs(pool, [a])).map((j) => j.id)).toEqual([a]);
+      expect((await countJobsByState(pool)).failed).toBe(2);
+
+      expect((await dismissJobs(pool, { all: true })).map((j) => j.id).sort()).toEqual([a, b].sort());
+      expect((await countJobsByState(pool)).failed).toBe(0);
+
+      // A retry clears the dismissal; failing again asks again.
+      const [again] = await retryJobs(pool, { ids: [a] });
+      expect(again?.acknowledgedAt).toBeNull();
+      const claimed = await claimJob(pool, { worker: 'w', now: at(1000), leaseMs: LEASE_MS });
+      expect(claimed?.id).toBe(a);
+      await failJob(pool, a, 'w', 'boom again', { retry: false });
+      expect((await getJob(pool, a))?.acknowledgedAt).toBeNull();
+      expect((await countJobsByState(pool)).failed).toBe(1);
+    });
+
+    it('retry --all leaves dismissed jobs alone', async () => {
+      const a = await dead('a', 'boom');
+      const b = await dead('b', 'boom');
+      await dismissJobs(pool, { ids: [b] });
+      expect((await retryJobs(pool, { state: 'failed', failed: 'open' })).map((j) => j.id)).toEqual([a]);
+      expect((await getJob(pool, b))?.state).toBe('failed');
+    });
+
+    it('groups failures by cause, with the agent and the reason the policy recorded', async () => {
+      await dead('q1', 'You exceeded your current quota. https://ai.google.dev/gemini-api/docs/rate-limits');
+      await dead('q2', 'You exceeded your current quota. https://ai.google.dev/gemini-api/docs/rate-limits');
+      await dead('s', 'Function call is missing a thought_signature in functionCall parts.');
+      const groups = await listFailureGroups(pool, { which: 'open', now: new Date() });
+      expect(groups.map((g) => [g.key, g.count]).sort()).toEqual([['gemini-quota', 2], ['gemini-thought-signature', 1]]);
+      expect(groups.every((g) => g.agentIds.join() === 'ledger')).toBe(true);
+      expect(await listFailureGroups(pool, { which: 'dismissed', now: new Date() })).toEqual([]);
     });
   });
 

@@ -71,7 +71,7 @@ import { runDb } from './db-cmd.js';
 import { collectChecks, exitCodeFor, renderTable, summarize } from './doctor.js';
 import { createProbes } from './doctor-probes.js';
 import { runInit } from './init.js';
-import { jobsCancel, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
+import { jobsCancel, jobsDismiss, jobsDismissAll, jobsList, jobsRetry, jobsRetryAll, pause, resume } from './jobs-cmd.js';
 import { DATA_DIR, loadEnv, loadEnvironment, REPO_ROOT } from './paths.js';
 import { runMcp } from './mcp/server.js';
 import { toggleInGateway } from './plugins-toggle.js';
@@ -349,6 +349,10 @@ export async function dispatch(command: Command, opts: DispatchOptions = {}): Pr
           });
         case 'cancel':
           return jobsCancel(command.jobId);
+        case 'dismiss':
+          return jobsDismiss(command.jobId);
+        case 'dismiss-all':
+          return jobsDismissAll();
         default:
           return jobsList({
             ...(command.state ? { state: command.state } : {}),

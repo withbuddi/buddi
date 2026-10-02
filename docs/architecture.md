@@ -745,6 +745,25 @@ tool.
 loops stay off until the owner has been through a checklist, so it does not act
 on the queue of the day the backup was taken ([operations.md](operations.md)).
 
+### Failed jobs are decisions
+
+A failed job waits for the owner, so it is counted in the footer ("Queue
+running · 3 failed"), on Home and by `buddi doctor`. Each has three answers:
+retry, cancel, or **dismiss** — kept on record with its error, out of every
+count that asks for something (`core.jobs.acknowledged_at`). A retry or a new
+failure clears the dismissal. A failed job older than 14 days counts as
+dismissed without a write (`AUTO_QUIET_DAYS`), so an old outage cannot hold the
+footer red for ever.
+
+Activity → Jobs groups the failed jobs by cause
+(`packages/core/src/queue/failures.ts`): a known family (a provider's quota, a
+refused key, a lost connection, a known defect) by family and provider, and
+anything else by HTTP status and the error's first line with ids, numbers and
+quoted values taken out. Each group says why in plain words and whether the
+cause has plausibly passed (a daily quota a day later, a fixed defect), which
+makes Retry its primary action; Retry is always offered. Dismiss works per job,
+per group and for all, with Undo; what was dismissed stays listed apart.
+
 ### The dead-letter watch
 
 Silence means nothing needs the owner, and a dead job breaks that: a network
@@ -760,7 +779,8 @@ an unattended kind that reaches `failed` is watched.
   again.
 - The message is plain and grouped by what was lost ("Mail is not being
   read"), says nothing more is sent about this outage, and gives the two
-  commands: `buddi jobs --state failed` and `buddi jobs retry --all`.
+  commands: `buddi jobs --state failed` and `buddi jobs retry --all`
+  (`buddi jobs dismiss --all` stops counting them instead).
 - **Dead jobs are never retried on restart**, because a restart is unrelated to
   the outage clearing. Re-running them is the owner's verb, and it lifts the old
   attempt cap.

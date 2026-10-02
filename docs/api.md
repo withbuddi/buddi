@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-260 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+264 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1557,7 +1557,11 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/missions` | Every mission, its schedule, next run and recent occurrences. | yes |
 | POST | `/api/missions/:id/enabled` | Switch a mission on or off. | yes |
 | POST | `/api/missions/:id/schedule` | Change a mission’s schedule (a new revision). | yes |
-| GET | `/api/jobs` | The job queue, paged. | yes |
+| GET | `/api/jobs` | The job queue, paged. `counts.failed` is the failed jobs still asking for the owner; `counts.dismissed` the ones dismissed or quiet after 14 days. | yes |
+| GET | `/api/jobs/failures` | Failed jobs grouped by cause, each group with a plain reason and whether a retry is likely to work; the dismissed ones apart. | yes |
+| POST | `/api/jobs/dismiss` | Dismiss failed jobs: kept on record, out of the footer count and the default view. | yes |
+| POST | `/api/jobs/undismiss` | Take a dismissal back (Undo). | yes |
+| POST | `/api/jobs/retry` | Retry failed jobs now, by ids, by cause group, or every one still asking. | yes |
 | POST | `/api/jobs/:id/retry` | Retry a failed job. | yes |
 | POST | `/api/jobs/:id/cancel` | Cancel a queued or failed job. | yes |
 | GET | `/api/reminders` | Reminders agents set, pending and past. | yes |
@@ -1613,15 +1617,69 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/jobs`
 
-The job queue, paged.
+The job queue, paged. `counts.failed` is the failed jobs still asking for the owner; `counts.dismissed` the ones dismissed or quiet after 14 days.
 
 - **Auth:** Session or API token.
-- **Query:** `state?, kind?, limit?, offset?`
-- **Answer:** `{ jobs: JobView[], total, counts }`
+- **Query:** `state?, kind?, limit?, offset?, failed?: 'open'|'dismissed', dismissed?: '0' (leave dismissed failed jobs out)`
+- **Answer:** `{ jobs: JobView[], counts, paused }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/jobs"
+```
+
+#### `GET /api/jobs/failures`
+
+Failed jobs grouped by cause, each group with a plain reason and whether a retry is likely to work; the dismissed ones apart.
+
+- **Auth:** Session or API token.
+- **Answer:** `{ open: FailureGroupView[], dismissed: FailureGroupView[] }`
+- **Since:** unreleased
+
+```sh
+curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/jobs/failures"
+```
+
+#### `POST /api/jobs/dismiss`
+
+Dismiss failed jobs: kept on record, out of the footer count and the default view.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ ids?: string[], group?: string, all?: true }`
+- **Answer:** `{ ids: string[] }`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/jobs/dismiss"
+```
+
+#### `POST /api/jobs/undismiss`
+
+Take a dismissal back (Undo).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ ids: string[] }`
+- **Answer:** `{ ids: string[] }`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"ids":[]}' "$BUDDI_URL/api/jobs/undismiss"
+```
+
+#### `POST /api/jobs/retry`
+
+Retry failed jobs now, by ids, by cause group, or every one still asking.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ ids?: string[], group?: string, dismissed?: boolean, all?: true }`
+- **Answer:** `{ jobs: JobView[] }`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/jobs/retry"
 ```
 
 #### `POST /api/jobs/:id/retry`

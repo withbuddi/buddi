@@ -426,8 +426,21 @@ export const API_ROUTES: readonly ApiRoute[] = [
     body: "{ cron?: string, timezone?: string, misfirePolicy?: 'skip'|'run-once', deadlineMinutes?: number|null }", errors: '400; 404',
   },
   {
-    method: 'GET', path: '/api/jobs', area: 'work', summary: 'The job queue, paged.',
-    query: 'state?, kind?, limit?, offset?', answer: '{ jobs: JobView[], total, counts }',
+    method: 'GET', path: '/api/jobs', area: 'work', summary: 'The job queue, paged. `counts.failed` is the failed jobs still asking for the owner; `counts.dismissed` the ones dismissed or quiet after 14 days.',
+    query: "state?, kind?, limit?, offset?, failed?: 'open'|'dismissed', dismissed?: '0' (leave dismissed failed jobs out)", answer: '{ jobs: JobView[], counts, paused }',
+  },
+  {
+    method: 'GET', path: '/api/jobs/failures', area: 'work', summary: 'Failed jobs grouped by cause, each group with a plain reason and whether a retry is likely to work; the dismissed ones apart.',
+    answer: '{ open: FailureGroupView[], dismissed: FailureGroupView[] }',
+  },
+  {
+    method: 'POST', path: '/api/jobs/dismiss', area: 'work', summary: 'Dismiss failed jobs: kept on record, out of the footer count and the default view.',
+    body: '{ ids?: string[], group?: string, all?: true }', answer: '{ ids: string[] }', errors: '400',
+  },
+  { method: 'POST', path: '/api/jobs/undismiss', area: 'work', summary: 'Take a dismissal back (Undo).', body: '{ ids: string[] }', answer: '{ ids: string[] }', errors: '400' },
+  {
+    method: 'POST', path: '/api/jobs/retry', area: 'work', summary: 'Retry failed jobs now, by ids, by cause group, or every one still asking.',
+    body: '{ ids?: string[], group?: string, dismissed?: boolean, all?: true }', answer: '{ jobs: JobView[] }', errors: '400',
   },
   { method: 'POST', path: '/api/jobs/:id/retry', area: 'work', summary: 'Retry a failed job.', errors: '404; 409 not failed' },
   { method: 'POST', path: '/api/jobs/:id/cancel', area: 'work', summary: 'Cancel a queued or failed job.', errors: '404; 409' },

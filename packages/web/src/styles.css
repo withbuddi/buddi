@@ -3014,6 +3014,11 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .al-item-who { color: var(--text); font-weight: var(--weight-medium); }
 .al-item-note { color: var(--text-muted); }
 
+/* Activity → Jobs: failed jobs as decisions (kit Jobs.jsx). Rows are the Alerts rows (.al-*). */
+.jb-item { align-items: baseline; }
+.jb-item-acts { display: inline-flex; align-items: baseline; gap: var(--space-2); margin-left: auto; }
+.jb-quiet { margin: 0 0 var(--space-3); }
+
 /* ---- who may ask whom ---- */
 .delegate-list .ui-list-row { gap: var(--space-3); }
 .delegate-list label { cursor: pointer; }

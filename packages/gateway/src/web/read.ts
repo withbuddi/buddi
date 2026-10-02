@@ -49,6 +49,7 @@ import {
   writeWebSetting,
 } from '@buddi/core';
 import type { OwnerChoice } from '@buddi/core';
+import { listFailureGroups, type FailureGroup, type JobCounts } from '@buddi/core';
 import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
@@ -510,6 +511,9 @@ export interface JobView {
   conversationId: string | null;
   dedupKey: string | null;
   suspendedReason: string | null;
+  /** A failed job that stopped asking for the owner: when, and `owner` or `auto` (by age). */
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -530,6 +534,8 @@ export function toJobView(job: Job): JobView {
     conversationId: job.conversationId,
     dedupKey: job.dedupKey,
     suspendedReason: job.suspendedReason,
+    acknowledgedAt: job.acknowledgedAt ? job.acknowledgedAt.toISOString() : null,
+    acknowledgedBy: job.acknowledgedBy,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
   };
@@ -537,11 +543,13 @@ export function toJobView(job: Job): JobView {
 
 export async function readJobs(
   pool: Pool,
-  opts: { state?: JobState | undefined; kind?: string | undefined; limit?: number; offset?: number } = {},
-): Promise<{ jobs: JobView[]; counts: Record<JobState, number>; paused: boolean }> {
+  opts: { state?: JobState | undefined; kind?: string | undefined; limit?: number; offset?: number; failed?: 'open' | 'dismissed' | undefined; hideDismissed?: boolean } = {},
+): Promise<{ jobs: JobView[]; counts: JobCounts; paused: boolean }> {
   const jobs = await listJobs(pool, {
     ...(opts.state ? { state: opts.state } : {}),
     ...(opts.kind ? { kind: opts.kind } : {}),
+    ...(opts.failed ? { failed: opts.failed } : {}),
+    ...(opts.hideDismissed ? { hideDismissed: true } : {}),
     limit: opts.limit ?? DEFAULT_LIMIT,
     ...(opts.offset ? { offset: opts.offset } : {}),
   });
@@ -549,6 +557,67 @@ export async function readJobs(
     jobs: jobs.map(toJobView),
     counts: await countJobsByState(pool),
     paused: await isPaused(pool),
+  };
+}
+
+/** One job in a failure group, with who it ran for. */
+export interface FailedJobView {
+  job: JobView;
+  agentId: string | null;
+  agentName: string | null;
+  missionId: string | null;
+  missionName: string | null;
+}
+
+/** Failed jobs that broke the same way (core/src/queue/failures.ts). */
+export interface FailureGroupView {
+  key: string;
+  label: string;
+  reason: string;
+  likelyFixed: boolean;
+  count: number;
+  firstAt: string;
+  lastAt: string;
+  agents: Array<{ id: string; name: string | null }>;
+  jobs: FailedJobView[];
+}
+
+function toFailureGroupView(g: FailureGroup, nameOf: (id: string) => string | null): FailureGroupView {
+  return {
+    key: g.key,
+    label: g.label,
+    reason: g.reason,
+    likelyFixed: g.likelyFixed,
+    count: g.count,
+    firstAt: g.firstAt.toISOString(),
+    lastAt: g.lastAt.toISOString(),
+    agents: g.agentIds.map((id) => ({ id, name: nameOf(id) })),
+    jobs: g.jobs.map((j) => ({
+      job: toJobView(j.job),
+      agentId: j.agentId,
+      agentName: j.agentId ? nameOf(j.agentId) : null,
+      missionId: j.missionId,
+      missionName: j.missionName,
+    })),
+  };
+}
+
+/**
+ * Activity → Jobs' decisions: the failed jobs still asking for the owner,
+ * grouped by cause, and the dismissed ones (by him, or quiet by age) apart.
+ */
+export async function readJobFailures(
+  pool: Pool,
+  now: Date,
+  nameOf: (agentId: string) => string | null = () => null,
+): Promise<{ open: FailureGroupView[]; dismissed: FailureGroupView[] }> {
+  const [open, dismissed] = await Promise.all([
+    listFailureGroups(pool, { which: 'open', now }),
+    listFailureGroups(pool, { which: 'dismissed', now, limit: 200 }),
+  ]);
+  return {
+    open: open.map((g) => toFailureGroupView(g, nameOf)),
+    dismissed: dismissed.map((g) => toFailureGroupView(g, nameOf)),
   };
 }
 

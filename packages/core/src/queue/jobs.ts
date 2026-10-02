@@ -22,7 +22,9 @@ import {
   type FailureClass,
 } from './retry-policy.js';
 import {
+  ACKNOWLEDGED_FAILED_SQL,
   JOB_COLUMNS,
+  UNACKNOWLEDGED_FAILED_SQL,
   RETRY_BASE_MS,
   RETRY_FACTOR,
   toJob,
@@ -226,6 +228,8 @@ export async function failJob(
            else run_after end,
          lease_owner = null,
          lease_until = null,
+         acknowledged_at = null,
+         acknowledged_by = null,
          updated_at = now()
      where id = $1::uuid and state = 'leased' and lease_owner = $2
      returning ${JOB_COLUMNS}`,
@@ -419,6 +423,8 @@ export async function retryJob(pool: Pool, jobId: string): Promise<Job | null> {
          lease_owner = null,
          lease_until = null,
          suspended_reason = null,
+         acknowledged_at = null,
+         acknowledged_by = null,
          updated_at = now()
      where id = $1::uuid and state in ('failed', 'cancelled', 'suspended')
      returning ${JOB_COLUMNS}`,
@@ -451,14 +457,32 @@ export async function getJobByDedupKey(pool: Pool, dedupKey: string): Promise<Jo
   return rows.length > 0 ? toJob(rows[0] as JobRow) : null;
 }
 
-export type ListJobsInput = { state?: JobState; kind?: string; limit?: number; /** Skip this many, for the next page. */ offset?: number };
+export type ListJobsInput = {
+  state?: JobState;
+  kind?: string;
+  limit?: number;
+  /** Skip this many, for the next page. */
+  offset?: number;
+  /**
+   * Failed jobs only: `open` is the ones still asking for the owner (the
+   * footer's count), `dismissed` the ones he dismissed or that went quiet by
+   * age. Omitted: both.
+   */
+  failed?: 'open' | 'dismissed';
+  /** Leave out the dismissed failed jobs — the default view, which asks nothing of them. */
+  hideDismissed?: boolean;
+};
 
 /** The inspection path: newest first, bounded. */
 export async function listJobs(pool: Pool, input: ListJobsInput = {}): Promise<Job[]> {
+  const failed = input.failed === 'open' ? UNACKNOWLEDGED_FAILED_SQL
+    : input.failed === 'dismissed' ? ACKNOWLEDGED_FAILED_SQL
+    : input.hideDismissed ? `not ${ACKNOWLEDGED_FAILED_SQL}` : 'true';
   const { rows } = await pool.query<JobRow>(
     `select ${JOB_COLUMNS} from core.jobs
      where ($1::text is null or state = $1)
        and ($2::text is null or kind = $2)
+       and ${failed}
      order by created_at desc, id
      limit $3 offset $4`,
     [input.state ?? null, input.kind ?? null, Math.max(1, Math.min(input.limit ?? 50, 500)), Math.max(0, input.offset ?? 0)],
@@ -524,8 +548,17 @@ export async function listDeadJobs(pool: Pool, input: ListDeadJobsInput): Promis
  */
 export async function retryJobs(
   pool: Pool,
-  input: { state?: JobState; kind?: string; limit?: number } = {},
+  input: {
+    state?: JobState;
+    kind?: string;
+    limit?: number;
+    /** Only these jobs (still only failed, cancelled or suspended ones). */
+    ids?: readonly string[];
+    /** Failed jobs only: the ones still asking, or the dismissed ones. Omitted: both. */
+    failed?: 'open' | 'dismissed';
+  } = {},
 ): Promise<Job[]> {
+  const failed = input.failed === 'open' ? UNACKNOWLEDGED_FAILED_SQL : input.failed === 'dismissed' ? ACKNOWLEDGED_FAILED_SQL : 'true';
   const { rows } = await pool.query<JobRow>(
     `update core.jobs
      set state = 'pending',
@@ -536,12 +569,16 @@ export async function retryJobs(
          lease_owner = null,
          lease_until = null,
          suspended_reason = null,
+         acknowledged_at = null,
+         acknowledged_by = null,
          updated_at = now()
      where id in (
        select id from core.jobs
-       where state = coalesce($1::text, 'failed')
+       where ($6::uuid[] is not null or state = coalesce($1::text, 'failed'))
+         and ($6::uuid[] is null or id = any($6::uuid[]))
          and ($2::text is null or kind = $2::text)
          and state in ('failed', 'cancelled', 'suspended')
+         and ${failed}
        order by updated_at
        limit $5
      )
@@ -552,6 +589,7 @@ export async function retryJobs(
       [...UNATTENDED_JOB_KINDS],
       UNATTENDED_RETRY_PROFILE.maxAttempts,
       Math.max(1, Math.min(input.limit ?? 500, 1000)),
+      input.ids ? [...input.ids] : null,
     ],
   );
   const jobs = rows.map(toJob);
@@ -566,19 +604,72 @@ export async function retryJobs(
   return jobs;
 }
 
-/** How many jobs sit in each state — `buddi doctor` prints exactly this. */
-export async function countJobsByState(pool: Pool): Promise<Record<JobState, number>> {
-  const { rows } = await pool.query<{ state: JobState; n: string }>(
-    `select state, count(*)::text as n from core.jobs group by state`,
+/**
+ * How many jobs sit in each state — `buddi doctor` prints exactly this.
+ *
+ * `failed` is the failed jobs still asking for the owner: the footer's count,
+ * Home's, the doctor's. The ones he dismissed, or that went quiet by age, are
+ * `dismissed` — still failed, still listed under history, asking nothing.
+ */
+export type JobCounts = Record<JobState, number> & { dismissed: number };
+
+export async function countJobsByState(pool: Pool): Promise<JobCounts> {
+  const { rows } = await pool.query<{ state: string; n: string }>(
+    `select case when ${ACKNOWLEDGED_FAILED_SQL} then 'dismissed' else state end as state,
+            count(*)::text as n
+       from core.jobs group by 1`,
   );
-  const counts = {
+  const counts: JobCounts = {
     pending: 0,
     leased: 0,
     succeeded: 0,
     failed: 0,
     suspended: 0,
     cancelled: 0,
-  } as Record<JobState, number>;
-  for (const row of rows) counts[row.state] = Number(row.n);
+    dismissed: 0,
+  };
+  for (const row of rows) counts[row.state as keyof JobCounts] = Number(row.n);
   return counts;
+}
+
+/**
+ * Dismiss failed jobs: they stop asking for the owner and stay on record.
+ *
+ * By ids, or every failed job still asking (`all`). Only failed jobs move;
+ * one already dismissed keeps the moment it was dismissed. Returns the jobs
+ * this call dismissed, so a surface can offer Undo for exactly those.
+ */
+export async function dismissJobs(
+  pool: Pool,
+  input: { ids?: readonly string[]; all?: boolean; by?: string },
+): Promise<Job[]> {
+  if (!input.all && (!input.ids || input.ids.length === 0)) return [];
+  const { rows } = await pool.query<JobRow>(
+    `update core.jobs
+        set acknowledged_at = now(), acknowledged_by = $2
+      where ${UNACKNOWLEDGED_FAILED_SQL}
+        and ($1::uuid[] is null or id = any($1::uuid[]))
+      returning ${JOB_COLUMNS}`,
+    [input.all ? null : [...(input.ids ?? [])], input.by ?? 'owner'],
+  );
+  const jobs = rows.map(toJob);
+  if (jobs.length > 0) {
+    await appendEvent(pool, 'job.dismissed', { jobIds: jobs.map((j) => j.id), by: input.by ?? 'owner' });
+  }
+  return jobs;
+}
+
+/** Take a dismissal back (Undo): the jobs ask for the owner again. */
+export async function undismissJobs(pool: Pool, ids: readonly string[]): Promise<Job[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query<JobRow>(
+    `update core.jobs
+        set acknowledged_at = null, acknowledged_by = null
+      where state = 'failed' and acknowledged_at is not null and id = any($1::uuid[])
+      returning ${JOB_COLUMNS}`,
+    [[...ids]],
+  );
+  const jobs = rows.map(toJob);
+  if (jobs.length > 0) await appendEvent(pool, 'job.undismissed', { jobIds: jobs.map((j) => j.id) });
+  return jobs;
 }

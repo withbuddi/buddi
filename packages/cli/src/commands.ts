@@ -925,7 +925,7 @@ export const COMMANDS: readonly CommandEntry[] = [
   {
     name: 'jobs',
     group: 'Operate',
-    summary: 'List the work queue: what is waiting, running and failed.',
+    summary: 'List the work queue: what is waiting, running and failed. Failed jobs say whether they were dismissed; `--state failed` also groups them by cause.',
     usage: 'buddi jobs [--state <state>] [--kind <kind>] [--limit <n>] [--json]',
     flags: [
       { flag: '--state <state>', meaning: 'Only pending, leased, succeeded, failed, suspended or cancelled jobs.' },
@@ -937,8 +937,8 @@ export const COMMANDS: readonly CommandEntry[] = [
     exitCodes: [NEEDS_DATABASE],
     applies: 'both',
     json:
-      '{ paused, counts: { pending, leased, succeeded, failed, suspended, cancelled }, ' +
-      'jobs: [{ id, state, kind, attempts, maxAttempts, createdAt, runAfter, leaseOwner, suspendedReason, lastError }] }',
+      '{ paused, counts: { pending, leased, succeeded, failed, suspended, cancelled, dismissed }, ' +
+      'jobs: [{ id, state, kind, attempts, maxAttempts, createdAt, runAfter, leaseOwner, suspendedReason, lastError, acknowledgedAt, acknowledgedBy }] }',
   },
   {
     name: 'jobs retry',
@@ -950,6 +950,16 @@ export const COMMANDS: readonly CommandEntry[] = [
       { flag: '--kind <kind>', meaning: 'With --all: only jobs of this kind.' },
     ],
     example: 'buddi jobs retry --all --kind mission-run',
+    exitCodes: [NEEDS_DATABASE],
+    applies: 'both',
+  },
+  {
+    name: 'jobs dismiss',
+    group: 'Operate',
+    summary: 'Dismiss a failed job, or every failed job with --all: it stays on record but leaves the "failed" count. Failed jobs older than 14 days are dismissed on their own.',
+    usage: 'buddi jobs dismiss <id> | --all',
+    flags: [{ flag: '--all', meaning: 'Every failed job still counted, not one.' }],
+    example: 'buddi jobs dismiss --all',
     exitCodes: [NEEDS_DATABASE],
     applies: 'both',
   },

@@ -3,3 +3,4 @@ export * from './flags.js';
 export * from './retry-policy.js';
 export * from './jobs.js';
 export * from './worker.js';
+export * from './failures.js';

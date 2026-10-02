@@ -127,6 +127,13 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['jobs', 'retry'])).toThrow(/needs a job id/);
   });
 
+  it('dismisses one failed job, or all of them', () => {
+    expect(parseArgs(['jobs', 'dismiss', 'abc123'])).toEqual({ kind: 'jobs', action: 'dismiss', jobId: 'abc123' });
+    expect(parseArgs(['jobs', 'dismiss', '--all'])).toEqual({ kind: 'jobs', action: 'dismiss-all' });
+    expect(() => parseArgs(['jobs', 'dismiss'])).toThrow(/needs a job id/);
+    expect(() => parseArgs(['jobs', 'dismiss', '--all', 'extra'])).toThrow(/unexpected argument/);
+  });
+
   it('retries a whole wave, because an outage does not kill one job', () => {
     expect(parseArgs(['jobs', 'retry', '--all'])).toEqual({ kind: 'jobs', action: 'retry-all' });
     expect(parseArgs(['jobs', 'retry', '--all', '--kind', 'agent-run'])).toEqual({

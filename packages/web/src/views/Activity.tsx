@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { PlaceProps } from '../App';
-import { api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
+import { STATUS_CHANGED, api, type ConversationSummary, type Transcript, type TranscriptBlock } from '../api';
 import { Markdown } from '../chat/markdown';
 import { fmtCached, fmtInOut, fmtNumber, fmtRelative, fmtTime, json, short, truncate } from '../format';
 import { ACTIVITY_ROUTE, chatRoute, transcriptRoute } from '../routes';
@@ -320,7 +320,12 @@ function PauseAll(): JSX.Element | null {
 
 /** The kit's figures over the tabs, from the queue's own counts. */
 function QueueStats(): JSX.Element | null {
-  const { data } = useAsync(() => api.overview(), [], 10_000);
+  const { data, reload } = useAsync(() => api.overview(), [], 10_000);
+  // A dismiss or a retry on the Jobs tab moves these figures; read them again at once.
+  useEffect(() => {
+    window.addEventListener(STATUS_CHANGED, reload);
+    return () => window.removeEventListener(STATUS_CHANGED, reload);
+  }, [reload]);
   if (!data) return null;
   const count = (state: string): number => data.jobs[state] ?? 0;
   const running = count('leased');

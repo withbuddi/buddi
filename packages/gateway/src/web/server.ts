@@ -188,6 +188,7 @@ import {
   readEventKinds,
   readEvents,
   readJobs,
+  readJobFailures,
   readMissions,
   readOverview,
   setGlanceHidden,
@@ -263,6 +264,9 @@ import {
   cancelReminderFromWeb,
   decideApprovalFromWeb,
   retryJobFromWeb,
+  retryJobsFromWeb,
+  dismissJobsFromWeb,
+  undismissJobsFromWeb,
   setMissionEnabledFromWeb,
   setPausedFromWeb,
   setScheduleFromWeb,
@@ -1647,8 +1651,16 @@ export function createWebApp(deps: WebServerDeps): Server {
               kind: q.get('kind') ?? undefined,
               limit: boundedLimit(q.get('limit')),
               offset: Math.max(0, Math.min(Number(q.get('offset') ?? 0) || 0, 100_000)),
+              failed: q.get('failed') === 'open' || q.get('failed') === 'dismissed' ? (q.get('failed') as 'open' | 'dismissed') : undefined,
+              hideDismissed: q.get('dismissed') === '0',
             }),
           );
+        }
+        // Failed jobs grouped by what broke them: the ones still asking, and
+        // the dismissed ones (by the owner, or quiet after 14 days) apart.
+        case '/api/jobs/failures': {
+          const names = new Map(deps.catalog.list().map((a) => [a.id, a.name]));
+          return sendJson(res, 200, await readJobFailures(deps.pool, now, (id) => names.get(id) ?? null));
         }
         case '/api/approvals': {
           const approvals = await readApprovals(deps.pool, now, boundedLimit(q.get('limit'), 50));
@@ -3371,6 +3383,12 @@ export function createWebApp(deps: WebServerDeps): Server {
         ),
       );
     }
+
+    // Failed jobs in bulk — by ids, by cause group, or every one still asking.
+    // Dismiss keeps them on record and out of the footer's count.
+    if (path === '/api/jobs/dismiss') return finish(res, await dismissJobsFromWeb(writeDeps, body));
+    if (path === '/api/jobs/undismiss') return finish(res, await undismissJobsFromWeb(writeDeps, body));
+    if (path === '/api/jobs/retry') return finish(res, await retryJobsFromWeb(writeDeps, body));
 
     const job = /^\/api\/jobs\/([^/]+)\/(retry|cancel)$/.exec(path);
     if (job) {

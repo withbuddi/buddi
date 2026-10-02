@@ -35,6 +35,10 @@ import {
   releaseOffer,
   resumeJobForAction,
   retryJob,
+  retryJobs,
+  dismissJobs,
+  undismissJobs,
+  listFailureGroups,
   takeOffer,
   setMissionEnabled,
   setPaused,
@@ -306,6 +310,67 @@ export async function cancelJobFromWeb(
   const job = await cancelJob(deps.pool, jobId);
   if (!job) return fail(409, 'only a pending, running, suspended or failed job can be cancelled');
   return { ok: true, status: 200, body: { job: toJobView(job) } };
+}
+
+/**
+ * Which failed jobs a bulk write is about: explicit ids, a cause group (its
+ * key, from GET /api/jobs/failures, read again here so the page cannot name
+ * jobs the group does not hold), or every failed job still asking.
+ */
+export type JobSelection = { ids?: unknown; group?: unknown; all?: unknown; dismissed?: unknown };
+
+async function selectFailedJobs(
+  deps: WriteDeps,
+  body: JobSelection,
+): Promise<{ ids: string[] | null; all: boolean } | string> {
+  const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string' && UUID.test(id)) : null;
+  if (Array.isArray(body.ids) && ids!.length !== body.ids.length) return 'ids must be job ids';
+  if (ids && ids.length > 1000) return 'at most 1000 ids at once';
+  if (typeof body.group === 'string' && body.group !== '') {
+    const which = body.dismissed === true ? 'dismissed' : 'open';
+    const groups = await listFailureGroups(deps.pool, { which, now: deps.now() });
+    const group = groups.find((g) => g.key === body.group);
+    return { ids: group ? group.jobs.map((j) => j.job.id) : [], all: false };
+  }
+  if (body.all === true) return { ids: null, all: true };
+  if (ids) return { ids, all: false };
+  return 'say which jobs: ids, group or all';
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Dismiss failed jobs: out of the footer's count, kept on record. */
+export async function dismissJobsFromWeb(
+  deps: WriteDeps,
+  body: JobSelection,
+): Promise<WriteResult<{ ids: string[] }>> {
+  const picked = await selectFailedJobs(deps, body);
+  if (typeof picked === 'string') return fail(400, picked);
+  const jobs = await dismissJobs(deps.pool, picked.all ? { all: true } : { ids: picked.ids ?? [] });
+  return { ok: true, status: 200, body: { ids: jobs.map((j) => j.id) } };
+}
+
+/** Undo a dismissal: the jobs ask for the owner again. */
+export async function undismissJobsFromWeb(
+  deps: WriteDeps,
+  body: JobSelection,
+): Promise<WriteResult<{ ids: string[] }>> {
+  const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string' && UUID.test(id)) : [];
+  if (!Array.isArray(body.ids) || ids.length !== body.ids.length || ids.length === 0) return fail(400, 'ids must be job ids');
+  const jobs = await undismissJobs(deps.pool, ids);
+  return { ok: true, status: 200, body: { ids: jobs.map((j) => j.id) } };
+}
+
+/** Retry failed jobs now, by ids, by cause group, or all still asking. */
+export async function retryJobsFromWeb(
+  deps: WriteDeps,
+  body: JobSelection,
+): Promise<WriteResult<{ jobs: JobView[] }>> {
+  const picked = await selectFailedJobs(deps, body);
+  if (typeof picked === 'string') return fail(400, picked);
+  if (!picked.all && (picked.ids ?? []).length === 0) return { ok: true, status: 200, body: { jobs: [] } };
+  const jobs = await retryJobs(deps.pool, picked.all ? { state: 'failed', failed: 'open' } : { ids: picked.ids ?? [], limit: 1000 });
+  return { ok: true, status: 200, body: { jobs: jobs.map(toJobView) } };
 }
 
 /* ------------------------------------------------------------------ *

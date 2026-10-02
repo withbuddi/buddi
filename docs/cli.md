@@ -1372,8 +1372,9 @@ Keeping buddi running: the service, upgrades, backups, secrets and the work queu
 - [`buddi browser install`](#buddi-browser-install): Download Chromium for the agents' own browser, about 150 MB.
 - [`buddi speech`](#buddi-speech): Say which local speech models are downloaded, and their size.
 - [`buddi speech install`](#buddi-speech-install): Download Whisper (252 MB) and Kokoro (92 MB), or one of them, so listening and speaking run on this computer.
-- [`buddi jobs`](#buddi-jobs): List the work queue: what is waiting, running and failed.
+- [`buddi jobs`](#buddi-jobs): List the work queue: what is waiting, running and failed. Failed jobs say whether they were dismissed; `--state failed` also groups them by cause.
 - [`buddi jobs retry`](#buddi-jobs-retry): Run a failed job again, or every failed job with --all.
+- [`buddi jobs dismiss`](#buddi-jobs-dismiss): Dismiss a failed job, or every failed job with --all: it stays on record but leaves the "failed" count. Failed jobs older than 14 days are dismissed on their own.
 - [`buddi jobs cancel`](#buddi-jobs-cancel): Cancel a job that has not run yet.
 - [`buddi api-token create`](#buddi-api-token-create): Make an owner API token, for calling the HTTP API from a script or another program. Printed once.
 - [`buddi api-token list`](#buddi-api-token-list): List the API tokens: id, name, last four characters, when made and last used. Never the token.
@@ -1942,7 +1943,7 @@ buddi speech install kokoro
 
 ### buddi jobs
 
-List the work queue: what is waiting, running and failed.
+List the work queue: what is waiting, running and failed. Failed jobs say whether they were dismissed; `--state failed` also groups them by cause.
 
 ```sh
 buddi jobs [--state <state>] [--kind <kind>] [--limit <n>] [--json]
@@ -1961,7 +1962,7 @@ buddi jobs [--state <state>] [--kind <kind>] [--limit <n>] [--json]
 buddi jobs --state failed
 ```
 
-**JSON**: { paused, counts: { pending, leased, succeeded, failed, suspended, cancelled }, jobs: [{ id, state, kind, attempts, maxAttempts, createdAt, runAfter, leaseOwner, suspendedReason, lastError }] }
+**JSON**: { paused, counts: { pending, leased, succeeded, failed, suspended, cancelled, dismissed }, jobs: [{ id, state, kind, attempts, maxAttempts, createdAt, runAfter, leaseOwner, suspendedReason, lastError, acknowledgedAt, acknowledgedBy }] }
 
 **Exit codes**
 
@@ -1970,7 +1971,7 @@ buddi jobs --state failed
 - `2`: The command was not typed right.
 - `3`: The database is not reachable, or not configured.
 
-**See also**: [`buddi jobs retry`](#buddi-jobs-retry), [`buddi jobs cancel`](#buddi-jobs-cancel)
+**See also**: [`buddi jobs retry`](#buddi-jobs-retry), [`buddi jobs dismiss`](#buddi-jobs-dismiss), [`buddi jobs cancel`](#buddi-jobs-cancel)
 
 ### buddi jobs retry
 
@@ -1989,6 +1990,31 @@ buddi jobs retry <id> | --all [--kind <kind>] [--state <state>] [--limit <n>]
 
 ```sh
 buddi jobs retry --all --kind mission-run
+```
+
+**Exit codes**
+
+- `0`: Done.
+- `1`: It failed; the message says why.
+- `2`: The command was not typed right.
+- `3`: The database is not reachable, or not configured.
+
+### buddi jobs dismiss
+
+Dismiss a failed job, or every failed job with --all: it stays on record but leaves the "failed" count. Failed jobs older than 14 days are dismissed on their own.
+
+```sh
+buddi jobs dismiss <id> | --all
+```
+
+**Flags**
+
+- `--all`: Every failed job still counted, not one.
+
+**Example**
+
+```sh
+buddi jobs dismiss --all
 ```
 
 **Exit codes**

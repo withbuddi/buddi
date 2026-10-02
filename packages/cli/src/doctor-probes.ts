@@ -633,7 +633,8 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
             status: 'warn',
             detail:
               `${summary} — ${counts.failed} piece(s) of work gave up and did nothing; ` +
-              '`buddi jobs --state failed` to see them, `buddi jobs retry --all` to run them again',
+              '`buddi jobs --state failed` to see them, `buddi jobs retry --all` to run them again, ' +
+              '`buddi jobs dismiss --all` to stop counting them',
           };
         }
         return { status: 'ok', detail: `running — ${summary}` };

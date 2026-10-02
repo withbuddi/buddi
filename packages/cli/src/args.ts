@@ -119,7 +119,9 @@ export type Command =
   | { kind: 'pause' }
   | { kind: 'resume' }
   | { kind: 'jobs'; action: 'list'; state?: JobStateName; kind_?: string; limit?: number }
-  | { kind: 'jobs'; action: 'retry' | 'cancel'; jobId: string }
+  | { kind: 'jobs'; action: 'retry' | 'cancel' | 'dismiss'; jobId: string }
+  /** `buddi jobs dismiss --all` — every failed job still asking, out of the footer's count. */
+  | { kind: 'jobs'; action: 'dismiss-all' }
   /**
    * `buddi jobs retry --all` — the answer to a wave. An outage kills jobs in
    * bulk and retyping twelve ids is not an inspection path.
@@ -510,7 +512,7 @@ export function parseArgs(argv: string[]): Command {
 }
 
 /**
- * `buddi jobs` — a listing by default, or one of the two verbs that take an id.
+ * `buddi jobs` — a listing by default, or one of the verbs that take an id.
  * Ids may be abbreviated to the prefix the listing prints.
  */
 function parseJobs(rest: string[]): Command {
@@ -550,7 +552,12 @@ function parseJobs(rest: string[]): Command {
     return command;
   }
 
-  if (verb === 'retry' || verb === 'cancel') {
+  if (verb === 'dismiss' && args[0] === '--all') {
+    if (args.length > 1) throw new UsageError(`unexpected argument: ${args[1]}`);
+    return { kind: 'jobs', action: 'dismiss-all' };
+  }
+
+  if (verb === 'retry' || verb === 'cancel' || verb === 'dismiss') {
     const jobId = args[0];
     if (!jobId) throw new UsageError(`buddi jobs ${verb} needs a job id`);
     if (args.length > 1) throw new UsageError(`unexpected argument: ${args[1]}`);

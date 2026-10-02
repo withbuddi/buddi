@@ -21,6 +21,7 @@ import {
   CORE_SCHEMA,
   claimJob,
   createPool,
+  failJob,
   enqueue,
   ensureOwner,
   migrate,
@@ -771,6 +772,74 @@ suite('the dashboard API', () => {
     const retried = await client.post(`/api/jobs/${job.id}/retry`);
     expect(retried.status).toBe(200);
     expect(((await retried.json()) as any).job.state).toBe('pending');
+  });
+
+  /** A job that has given up: enqueued, claimed, failed for good. */
+  const deadJob = async (key: string, error: string, reason?: string): Promise<string> => {
+    const job = await enqueue(pool, { kind: 'demo', payload: { agentId: 'demo-agent' }, dedupKey: key, runAfter: new Date(Date.now() - 60_000) });
+    const claimed = await claimJob(pool, { worker: 'w', kinds: ['demo'], now: new Date(), leaseMs: 60_000 });
+    expect(claimed?.id).toBe(job.id);
+    await failJob(pool, job.id, 'w', error, {
+      retry: false,
+      ...(reason ? { classification: { class: 'permanent' as const, reason } } : {}),
+    });
+    return job.id;
+  };
+
+  it('groups failed jobs by cause, dismisses and retries them, and the footer counts only what still asks', async () => {
+    const client = await signedIn();
+    const q1 = await deadJob('q1', 'You exceeded your current quota, please check your plan and billing details. https://ai.google.dev/gemini-api/docs/rate-limits', 'the provider answered 429 and will again');
+    const q2 = await deadJob('q2', 'You exceeded your current quota, please check your plan and billing details. https://ai.google.dev/gemini-api/docs/rate-limits', 'the provider answered 429 and will again');
+    const sig = await deadJob('s1', 'Function call is missing a thought_signature in functionCall parts.', 'the provider answered 400 and will again');
+    const old = await deadJob('old', 'something odd happened');
+    // Twenty days ago: quiet by age, still on record.
+    await pool.query(`update core.jobs set updated_at = now() - interval '20 days' where id = $1`, [old]);
+
+    const failures = await client.json<any>('/api/jobs/failures');
+    expect(failures.open.map((g: any) => [g.label, g.count])).toEqual(
+      expect.arrayContaining([['Gemini quota (429)', 2], ['Gemini thought_signature (400)', 1]]),
+    );
+    expect(failures.open).toHaveLength(2);
+    const quota = failures.open.find((g: any) => g.key === 'gemini-quota');
+    expect(quota.reason).toMatch(/allowance|quota/);
+    expect(quota.agents).toEqual([{ id: 'demo-agent', name: expect.anything() }]);
+    expect(failures.dismissed).toHaveLength(1);
+    expect(failures.dismissed[0].jobs[0].job.acknowledgedBy).toBe('auto');
+    expect((await client.json<any>('/api/overview')).jobs.failed).toBe(3);
+
+    // Writes are the owner's: no session, no csrf, no write.
+    expect((await fetch(`${closedBase}/api/jobs/dismiss`, { method: 'POST', headers: { origin: closedBase, 'content-type': 'application/json', 'x-buddi-csrf': 'x' }, body: JSON.stringify({ all: true }) })).status).toBe(401);
+    expect((await client.post('/api/jobs/dismiss', { all: true }, { csrf: null })).status).toBe(403);
+    expect((await client.post('/api/jobs/dismiss', {})).status).toBe(400);
+    expect((await client.post('/api/jobs/dismiss', { ids: ['not-a-uuid'] })).status).toBe(400);
+
+    // Dismiss a group: kept, listed as dismissed, out of the count.
+    const dismissed = await client.post('/api/jobs/dismiss', { group: 'gemini-quota' });
+    expect(dismissed.status).toBe(200);
+    expect(((await dismissed.json()) as any).ids.sort()).toEqual([q1, q2].sort());
+    expect((await client.json<any>('/api/overview')).jobs.failed).toBe(1);
+    const jobs = await client.json<any>('/api/jobs?state=failed');
+    expect(jobs.jobs).toHaveLength(4);
+    expect(jobs.counts.failed).toBe(1);
+    expect(jobs.counts.dismissed).toBe(3);
+    expect((await client.json<any>('/api/jobs?dismissed=0')).jobs.map((j: any) => j.id)).toEqual([sig]);
+
+    // Undo brings them back.
+    expect((await client.post('/api/jobs/undismiss', { ids: [q1, q2] })).status).toBe(200);
+    expect((await client.json<any>('/api/overview')).jobs.failed).toBe(3);
+
+    // Retry by ids: pending again, attempts reset, no longer failed.
+    const retried = await client.post('/api/jobs/retry', { ids: [sig] });
+    expect(retried.status).toBe(200);
+    expect(((await retried.json()) as any).jobs.map((j: any) => [j.id, j.state, j.attempts])).toEqual([[sig, 'pending', 0]]);
+    expect((await client.json<any>('/api/overview')).jobs.failed).toBe(2);
+
+    // Dismiss all, then retry a dismissed one: it asks nothing until it fails again.
+    const all = await client.post('/api/jobs/dismiss', { all: true });
+    expect(((await all.json()) as any).ids.sort()).toEqual([q1, q2].sort());
+    expect((await client.json<any>('/api/overview')).jobs.failed).toBe(0);
+    const back = await client.post('/api/jobs/retry', { ids: [q1] });
+    expect(((await back.json()) as any).jobs[0].acknowledgedAt).toBeNull();
   });
 
   it('enables, disables and re-schedules a mission', async () => {

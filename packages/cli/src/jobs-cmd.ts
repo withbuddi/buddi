@@ -13,8 +13,10 @@ import {
   cancelJob,
   countJobsByState,
   createPool,
+  dismissJobs,
   getJob,
   isPaused,
+  listFailureGroups,
   listJobs,
   retryJob,
   retryJobs,
@@ -87,6 +89,9 @@ export function formatJobLine(job: Job, now: Date): string {
   }
   if (job.state === 'leased' && job.leaseOwner) bits.push(`held by ${job.leaseOwner}`);
   if (job.state === 'suspended' && job.suspendedReason) bits.push(`— ${job.suspendedReason}`);
+  if (job.state === 'failed' && job.acknowledgedAt) {
+    bits.push(job.acknowledgedBy === 'auto' ? '[dismissed: over 14 days old]' : `[dismissed ${stamp(job.acknowledgedAt)}]`);
+  }
   if ((job.state === 'failed' || job.state === 'pending') && job.lastError) {
     bits.push(`— ${job.lastError.split('\n')[0]}`);
   }
@@ -114,6 +119,8 @@ export function jobJson(job: Job): Record<string, unknown> {
     leaseOwner: job.leaseOwner ?? null,
     suspendedReason: job.suspendedReason ?? null,
     lastError: job.lastError ?? null,
+    acknowledgedAt: job.acknowledgedAt ? job.acknowledgedAt.toISOString() : null,
+    acknowledgedBy: job.acknowledgedBy ?? null,
   };
 }
 
@@ -145,14 +152,25 @@ export async function jobsList(opts: ListJobsOptions = {}): Promise<number> {
           'nothing was done for them.',
       );
     }
+    if (opts.state === 'failed') {
+      // What broke them, one line per cause: the decision is per cause, not per row.
+      const groups = await listFailureGroups(pool, { which: 'open', now: new Date() });
+      for (const g of groups) {
+        console.log(`  ${g.label} · ${g.count}${g.likelyFixed ? '' : '   (fix the cause before retrying)'}`);
+        console.log(`    ${g.reason}`);
+      }
+    }
     if (jobs.length === 0) {
       console.log(opts.state ? `  no ${opts.state} jobs` : '  no jobs');
       return 0;
     }
     const now = new Date();
     for (const job of jobs) console.log(formatJobLine(job, now));
-    console.log('\n  buddi jobs retry <id> | buddi jobs cancel <id>');
-    if (counts.failed > 0) console.log('  buddi jobs retry --all   run every dead job again');
+    console.log('\n  buddi jobs retry <id> | buddi jobs dismiss <id> | buddi jobs cancel <id>');
+    if (counts.failed > 0) {
+      console.log('  buddi jobs retry --all     run every failed job again');
+      console.log('  buddi jobs dismiss --all   keep them on record, stop counting them');
+    }
     return 0;
   }, 3);
 }
@@ -229,6 +247,8 @@ export async function jobsRetryAll(opts: RetryAllOptions = {}): Promise<number> 
   return withPool(async (pool) => {
     const jobs = await retryJobs(pool, {
       state: opts.state ?? 'failed',
+      // A dismissed job is one the owner already said no to.
+      ...((opts.state ?? 'failed') === 'failed' ? { failed: 'open' as const } : {}),
       ...(opts.kind ? { kind: opts.kind } : {}),
       ...(opts.limit ? { limit: opts.limit } : {}),
     });
@@ -244,6 +264,41 @@ export async function jobsRetryAll(opts: RetryAllOptions = {}): Promise<number> 
         .join(', ')}.`,
     );
     console.log('  they run as soon as a worker picks them up — `buddi jobs` to watch.');
+    return 0;
+  }, 3);
+}
+
+/** `buddi jobs dismiss <id>` — on record, out of the count. */
+export async function jobsDismiss(idOrPrefix: string): Promise<number> {
+  return withPool(async (pool) => {
+    const id = await resolveId(pool, idOrPrefix);
+    if (!id) return 1;
+    const [job] = await dismissJobs(pool, { ids: [id] });
+    if (!job) {
+      const current = await getJob(pool, id);
+      console.error(
+        !current
+          ? `no job ${id}`
+          : current.state === 'failed'
+            ? `job ${id} is already dismissed`
+            : `job ${id} is ${current.state} — only a failed job can be dismissed`,
+      );
+      return 1;
+    }
+    console.log(`job ${job.id} (${job.kind}) dismissed. It stays in \`buddi jobs --state failed\`; \`buddi jobs retry ${job.id.slice(0, 8)}\` runs it again.`);
+    return 0;
+  }, 3);
+}
+
+/** `buddi jobs dismiss --all` — every failed job still counted. */
+export async function jobsDismissAll(): Promise<number> {
+  return withPool(async (pool) => {
+    const jobs = await dismissJobs(pool, { all: true });
+    if (jobs.length === 0) {
+      console.log('no failed jobs to dismiss.');
+      return 0;
+    }
+    console.log(`${jobs.length} failed job(s) dismissed. They stay in \`buddi jobs --state failed\`.`);
     return 0;
   }, 3);
 }

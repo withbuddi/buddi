@@ -533,9 +533,30 @@ export interface JobRow {
   conversationId: string | null;
   dedupKey: string | null;
   suspendedReason: string | null;
+  /** A failed job that stopped asking: when, and `owner` or `auto` (quiet after 14 days). Absent from an older gateway. */
+  acknowledgedAt?: string | null;
+  acknowledgedBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Failed jobs that broke the same way (GET /api/jobs/failures). */
+export interface FailureGroup {
+  key: string;
+  label: string;
+  /** Why, in plain words for the owner. */
+  reason: string;
+  /** The cause has plausibly gone away: Retry is the primary action. */
+  likelyFixed: boolean;
+  count: number;
+  firstAt: string;
+  lastAt: string;
+  agents: Array<{ id: string; name: string | null }>;
+  jobs: Array<{ job: JobRow; agentId: string | null; agentName: string | null; missionId: string | null; missionName: string | null }>;
+}
+
+/** Which failed jobs a bulk write is about. */
+export type JobPick = { ids: string[] } | { group: string; dismissed?: boolean } | { all: true };
 
 /** One control the tool offered the owner on this approval. */
 export interface OwnerChoiceRow {
@@ -2608,6 +2629,11 @@ export const api = {
     }),
   retryJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/retry`),
   cancelJob: (id: string) => post<{ job: JobRow }>(`/jobs/${encodeURIComponent(id)}/cancel`),
+  jobFailures: () => get<{ open: FailureGroup[]; dismissed: FailureGroup[] }>('/jobs/failures'),
+  // The footer's "N failed" re-reads at once rather than on its next poll.
+  dismissJobs: (pick: JobPick) => post<{ ids: string[] }>('/jobs/dismiss', pick).then(statusChanged),
+  undismissJobs: (ids: string[]) => post<{ ids: string[] }>('/jobs/undismiss', { ids }).then(statusChanged),
+  retryJobs: (pick: JobPick) => post<{ jobs: JobRow[] }>('/jobs/retry', pick).then(statusChanged),
   setDefaultAgent: (agentId: string) =>
     post<DefaultAgentView & { note: string }>('/agents/default', { agentId }),
   agentTools: (id: string) => get<ToolPickerView>(`/agents/${encodeURIComponent(id)}/tools`),
