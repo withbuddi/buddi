@@ -41,8 +41,10 @@ describe('You', () => {
     vi.mocked(api.owner).mockResolvedValue(owner());
     vi.mocked(api.setOwner).mockResolvedValue(owner({ timeFormat: '12h', dateFormat: 'short' }));
     render(<You />);
-    fireEvent.change(await screen.findByLabelText('Time'), { target: { value: '12h' } });
+    expect(await screen.findByDisplayValue('Amen')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '12h' } });
     fireEvent.change(screen.getByLabelText(/^Dates/), { target: { value: 'short' } });
+    expect(screen.getByLabelText('Time')).toHaveValue('12h');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.setOwner).toHaveBeenCalledWith(expect.objectContaining({ timeFormat: '12h', dateFormat: 'short' })));
     await waitFor(() => expect(displayFormats()).toEqual({ time: '12h', date: 'short' }));

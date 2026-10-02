@@ -14,6 +14,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Profile: a reload of the same profile no longer wipes Time or Dates you were changing.
 - Home: Done on a Needs you card now sticks. A line held for the end of the day (like "buddi learned 1 rule: quieted 1 newsletter") showed in Needs you even after Done and came back on every reload; Needs you now lists only what asks for you now, quiet lines stay in Notifications → Recent and the evening message, and a quiet line that says more later stays read instead of coming back unread.
 - Needs you: a message updated with a new or changed request comes back unseen even when it is not urgent, instead of staying marked as read; the same request sent again stays read.
 - Telegram: the end-of-day message and the one after Do not disturb now say what each item asks of you ("→ Charged twice: Confirm with the bank?"), not just its title.

@@ -80,7 +80,10 @@ function Form({ initial, onSaved }: { initial: OwnerView; onSaved: () => void })
     setDate(initial.dateFormat ?? '');
     setLanguage(initial.language ?? '');
     setAbout(initial.about ?? '');
-  }, [initial]);
+    // Keyed on the saved values, not the object: a reload that brings the same
+    // profile must not wipe what the owner is typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial.preferredName, initial.timezone, initial.timeFormat, initial.dateFormat, initial.language, initial.about]);
 
   const dirty =
     name.trim() !== (initial.preferredName ?? '') ||
