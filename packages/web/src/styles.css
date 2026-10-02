@@ -2969,10 +2969,50 @@ body:has(.ui-sheet-overlay) .wb-ask-fab { opacity: 0; pointer-events: none; }
 .app-role { margin-left: var(--space-2); }
 
 /* ---- alerts: a detail that can run long ---- */
-.alert-detail { position: relative; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 72ch; }
-.alert-detail[data-clamp='true'] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.alert-more { display: block; margin-top: 2px; }
-.alert-detail[data-clamp='true'] .alert-more { position: absolute; right: 0; bottom: 0; padding-left: 24px; background: linear-gradient(to right, transparent, var(--surface) 40%); }
+/* ---- Activity → Alerts: decisions, not chores ---- */
+.al-list { list-style: none; margin: 0; padding: 0; }
+.al-row { position: relative; display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4); }
+.al-row + .al-row { border-top: 1px solid var(--line); }
+/* Urgent is a quiet mark at the start, not a pill: the rare row that is. */
+.al-row[data-urgent='true']::before { content: ''; position: absolute; left: 0; top: var(--space-4); bottom: var(--space-4); width: 3px; border-radius: 0 3px 3px 0; background: var(--warning); }
+.al-main { flex: 1 1 auto; min-width: 0; }
+.al-title { margin: 0; font-weight: var(--weight-medium); color: var(--text); overflow-wrap: anywhere; }
+.al-line { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--text-sm); }
+.al-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: var(--space-1) 0 0; color: var(--text-faint); font-size: var(--text-sm); }
+.al-toggle { font-size: var(--text-sm); }
+.al-items { list-style: none; margin: var(--space-3) 0 0; padding: 0 0 0 var(--space-3); border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: var(--space-2); }
+.al-item { font-size: var(--text-sm); color: var(--text-muted); overflow-wrap: anywhere; }
+.al-actions { flex: none; display: flex; align-items: center; gap: var(--space-2); }
+.al-actions .pl-more, .al-actions .al-more { position: relative; }
+.al-recap { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); color: var(--text-muted); font-size: var(--text-sm); }
+.al-quiet { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: var(--space-3) 0 0; color: var(--text-faint); font-size: var(--text-sm); }
+.al-empty { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-5) var(--space-4); color: var(--good); }
+.al-empty-title { margin: 0; font-weight: var(--weight-medium); color: var(--text); }
+.al-empty-line { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--text-sm); }
+.al-list-sheet { margin-top: var(--space-3); border-top: 1px solid var(--line); }
+.al-list-sheet .al-row { padding-left: 0; padding-right: 0; }
+.al-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.al-form-note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+.al-form-rows { display: flex; flex-direction: column; }
+.al-form-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 11rem); align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+.al-form-row:first-child { border-top: 1px solid var(--line); }
+.al-form-label { display: flex; flex-direction: column; min-width: 0; }
+.al-form-hint { color: var(--text-faint); font-size: var(--text-xs); }
+.al-form-row input { text-align: right; font-variant-numeric: tabular-nums; }
+.al-form-error { color: var(--critical); font-size: var(--text-xs); grid-column: 1 / -1; }
+.al-form-foot { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-2); }
+.al-silenced-label { overflow-wrap: anywhere; }
+/* A phone: the actions go under the line, the primary first. */
+@media (max-width: 720px) {
+  .al-row { flex-direction: column; gap: var(--space-3); }
+  .al-actions { flex-wrap: wrap; }
+  .al-main { padding-right: var(--space-6); }
+  .al-actions .al-more { position: absolute; top: var(--space-3); right: var(--space-3); }
+  .al-form-row { grid-template-columns: minmax(0, 1fr) minmax(0, 8rem); }
+}
+.al-item { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+.al-item-who { color: var(--text); font-weight: var(--weight-medium); }
+.al-item-note { color: var(--text-muted); }
 
 /* ---- who may ask whom ---- */
 .delegate-list .ui-list-row { gap: var(--space-3); }

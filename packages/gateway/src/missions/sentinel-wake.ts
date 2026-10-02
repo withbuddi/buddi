@@ -23,6 +23,9 @@ export interface FindingPayload {
   sentinelId: string;
   severity: Severity;
   title: string;
+  /** The owner's line (host API 1.23): how the watcher would put it to him. */
+  ownerLine?: string;
+  /** The agent brief: what to check and do. */
   detail: string;
   agentId?: string | null;
   data?: unknown;
@@ -54,6 +57,7 @@ export function findingOf(payload: unknown): FindingPayload | null {
     sentinelId: typeof f.sentinelId === 'string' ? f.sentinelId : 'unknown',
     severity: f.severity === 'info' ? 'info' : 'urgent',
     title: f.title,
+    ...(typeof f.ownerLine === 'string' && f.ownerLine.trim() !== '' ? { ownerLine: f.ownerLine.slice(0, 400) } : {}),
     detail: typeof f.detail === 'string' ? f.detail : '',
     agentId: typeof f.agentId === 'string' ? f.agentId : null,
     data: f.data ?? null,
@@ -123,7 +127,8 @@ function findingLines(finding: FindingPayload): string {
     `Watcher: ${finding.sentinelId} (severity ${finding.severity})`,
     `Finding: ${finding.title}`,
   ];
-  if (finding.detail.trim() !== '') lines.push(`Detail: ${finding.detail}`);
+  if (finding.ownerLine) lines.push(`How the owner reads it: ${finding.ownerLine}`);
+  if (finding.detail.trim() !== '') lines.push(`Brief: ${finding.detail}`);
   if (finding.data !== null && finding.data !== undefined) {
     lines.push(`Data: ${JSON.stringify(finding.data)}`);
   }

@@ -26,7 +26,6 @@ import {
   isPaused,
   nextAfter,
   OPENING_TURN_SPEAKER,
-  pendingDigestItems,
   sentinelIsEnabled,
   sentinelSwitches,
   toActionRecord,
@@ -54,6 +53,7 @@ import type { Pool } from 'pg';
 import { lastNotification } from '../missions-cli.js';
 import { CARRIED_OVER_SPEAKER } from '../surfaces/browser-handoff.js';
 import { pictureUrl } from '../agents/avatars.js';
+import { readAlertDecisions, readAlerts, type AlertsView } from './alerts.js';
 
 /** How many rows a listing returns when the caller names no limit. */
 export const DEFAULT_LIMIT = 100;
@@ -724,37 +724,17 @@ export interface SentinelsView {
     enabled: boolean;
   }>;
   runs: Array<{ sentinelId: string; lastRunAt: string; lastError: string | null }>;
-  open: SentinelFindingView[];
-  resolved: SentinelFindingView[];
-  digest: Array<{
-    id: string;
-    findingKey: string;
-    severity: string;
-    title: string;
-    detail: string;
-    createdAt: string;
-  }>;
-}
-
-export interface SentinelFindingView {
-  key: string;
-  sentinelId: string;
-  severity: string;
-  title: string;
-  detail: string;
-  data: unknown;
-  firstSeenAt: string;
-  lastSeenAt: string;
-  cooldownUntil: string | null;
-  deliveredAt: string | null;
-  resolvedAt: string | null;
-  snoozedAt: string | null;
+  /**
+   * What they found, shaped for the owner (alerts.ts): decisions grouped, the
+   * recap's notes counted, owner lines only — a finding's brief is never sent.
+   */
+  alerts: AlertsView;
 }
 
 export async function readSentinels(
   pool: Pool,
   registry: ToolRegistry,
-  limit = 50,
+  now: Date = new Date(),
 ): Promise<SentinelsView> {
   // The owner's switches. Absent means on, so a fresh installation shows every
   // watcher on with no rows behind it.
@@ -772,32 +752,6 @@ export async function readSentinels(
   const { rows: runs } = await pool.query(
     `select sentinel_id, last_run_at, last_error from core.sentinel_runs order by sentinel_id`,
   );
-  const { rows: findings } = await pool.query(
-    `select key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at,
-            cooldown_until, delivered_at, resolved_at, snoozed_at
-       from core.sentinel_findings
-      order by (resolved_at is null) desc, last_seen_at desc
-      limit $1`,
-    [limit * 2],
-  );
-  const digest = await pendingDigestItems(pool, limit);
-
-  const views = findings.map(
-    (r): SentinelFindingView => ({
-      key: r.key,
-      sentinelId: r.sentinel_id,
-      severity: r.severity,
-      title: r.title,
-      detail: r.detail,
-      data: r.data ?? null,
-      firstSeenAt: new Date(r.first_seen_at).toISOString(),
-      lastSeenAt: new Date(r.last_seen_at).toISOString(),
-      cooldownUntil: r.cooldown_until ? new Date(r.cooldown_until).toISOString() : null,
-      deliveredAt: r.delivered_at ? new Date(r.delivered_at).toISOString() : null,
-      resolvedAt: r.resolved_at ? new Date(r.resolved_at).toISOString() : null,
-      snoozedAt: r.snoozed_at ? new Date(r.snoozed_at).toISOString() : null,
-    }),
-  );
 
   return {
     installed,
@@ -806,16 +760,7 @@ export async function readSentinels(
       lastRunAt: new Date(r.last_run_at).toISOString(),
       lastError: r.last_error ?? null,
     })),
-    open: views.filter((f) => f.resolvedAt === null),
-    resolved: views.filter((f) => f.resolvedAt !== null).slice(0, limit),
-    digest: digest.map((d) => ({
-      id: d.id,
-      findingKey: d.findingKey,
-      severity: d.severity,
-      title: d.title,
-      detail: d.detail,
-      createdAt: d.createdAt.toISOString(),
-    })),
+    alerts: await readAlerts(pool, registry, now),
   };
 }
 
@@ -949,8 +894,11 @@ export interface Overview {
   reminders: { pending: number; nextDueAt: string | null };
   sentinels: {
     lastRunAt: string | null;
+    /** Decisions waiting: urgent rows on the Alerts page, a group counted once. */
     openUrgent: number;
     openInfo: number;
+    /** The first few decisions in the owner's words, for Home's Needs you. */
+    decisions: Array<{ id: string; title: string; count: number }>;
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
@@ -994,10 +942,11 @@ export async function readOverview(deps: {
     `select
        (select max(last_run_at) from core.sentinel_runs) as last_run_at,
        (select count(*)::int from core.sentinel_findings
-         where resolved_at is null and snoozed_at is null and severity = 'urgent') as open_urgent,
-       (select count(*)::int from core.sentinel_findings
          where resolved_at is null and snoozed_at is null and severity = 'info') as open_info`,
   );
+  // The same decisions the Alerts page lists: urgent, not snoozed, not
+  // silenced, a group once. Info findings wait for the recap and are not here.
+  const decisions = await readAlertDecisions(pool, deps.registry, now);
   const { rows: sentinelErrors } = await pool.query(
     `select sentinel_id, last_error from core.sentinel_runs where last_error is not null`,
   );
@@ -1029,8 +978,9 @@ export async function readOverview(deps: {
       lastRunAt: sentinelRows[0]?.last_run_at
         ? new Date(sentinelRows[0].last_run_at).toISOString()
         : null,
-      openUrgent: Number(sentinelRows[0]?.open_urgent ?? 0),
+      openUrgent: decisions.length,
       openInfo: Number(sentinelRows[0]?.open_info ?? 0),
+      decisions: decisions.slice(0, 3).map((d) => ({ id: d.id, title: d.title, count: d.keys.length })),
       errors: sentinelErrors.map((r) => ({
         sentinelId: r.sentinel_id,
         error: String(r.last_error),

@@ -237,10 +237,12 @@ export function Home({
                 </a>
               </Notice>
             ) : null}
+            {/* The watchers' decisions, in their owner lines — the Alerts page's
+                rule: urgent only, a group once; what waits for the recap is not here. */}
             {urgent > 0 ? (
-              <Notice tone="critical">
+              <Notice tone="warning">
                 <a href={`${ACTIVITY_ROUTE}/alerts`} onClick={go(`${ACTIVITY_ROUTE}/alerts`)}>
-                  {urgent} urgent alert{urgent === 1 ? '' : 's'} from your watchers.
+                  {alertsNeedYou(urgent, data?.sentinels?.decisions ?? [])}
                 </a>
               </Notice>
             ) : null}
@@ -616,6 +618,16 @@ export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route:
       </Panel>
     </Section>
   );
+}
+
+/**
+ * Home's line for the watchers' decisions: the first one's owner line, and
+ * how many more wait on the Alerts page. Never a brief: the gateway sends none.
+ */
+export function alertsNeedYou(count: number, decisions: Array<{ title: string; count: number }>): string {
+  const first = decisions[0];
+  if (!first) return `${count} alert${count === 1 ? '' : 's'} from your watchers need${count === 1 ? 's' : ''} a decision.`;
+  return count > 1 ? `${first.title} And ${count - 1} more to decide on.` : first.title;
 }
 
 /** Where Home's "Needs you" starts: the counts listed on Home scroll to it. */

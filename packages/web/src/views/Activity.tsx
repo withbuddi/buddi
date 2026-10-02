@@ -56,7 +56,7 @@ export function Activity({ hash, timezone, navigate, agents }: PlaceProps): JSX.
       {tab === 'conversations' ? <Conversations timezone={timezone} navigate={navigate} nameOf={nameOf} agents={agents} /> : null}
       {tab === 'jobs' ? <Jobs key={wantedState ?? ''} timezone={timezone} embedded initialState={wantedState} /> : null}
       {tab === 'approvals' ? <ApprovalHistory timezone={timezone} nameOf={nameOf} /> : null}
-      {tab === 'alerts' ? <Alerts timezone={timezone} embedded /> : null}
+      {tab === 'alerts' ? <Alerts timezone={timezone} embedded agents={agents} navigate={navigate} /> : null}
       {tab === 'events' ? <Events timezone={timezone} embedded /> : null}
     </div>
   );

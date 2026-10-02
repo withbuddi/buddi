@@ -271,6 +271,26 @@ the same work seen from the queue, the decisions and the log.
 
 Try it: open Jobs, see why one failed, and retry it.
 
+### Alerts
+
+Decisions, not chores. **Needs a decision** lists only what the watchers
+found urgent, each in one plain line written for you — never the instructions
+a watcher hands an agent — and repeats of one kind as one row ("9 balances not
+updated in 2+ weeks", the accounts inside on **Show the 9**). A row has its
+primary action (Open draft, Update them, Review, I paid it…), one more, **Not
+now** (back in a week) and ⋯ with **Ask <agent>** and **Stop telling me
+this**, which silences that subject — an account, a sender — or the whole kind,
+and is taken back under **Silenced** in Settings → Watchers. **Clear all** puts
+everything listed off for a week, with Undo. A quick form (Update them) lists
+every account with its last value; what you leave blank stays as it is. A run
+that needs approval (Send) waits for you in Needs you.
+
+What the watchers notice in passing is not listed: one line says how many
+notes are saved for the recap ("12 notes saved for Friday's recap"), and
+**Preview** lists them by group, each with the same actions. Snoozed and
+resolved rows sit behind a quiet line under the panel. Home's Needs you says
+the first decision in the same words.
+
 ## Files
 
 Every file an agent made and every file you sent, across all conversations,
@@ -338,7 +358,7 @@ A list of sections in four groups.
   characters and when it was last used. Make a token shows it once, with
   Copy; Revoke ends it at the next request. What a token may and may not
   call is in [the HTTP API](api.md).
-- **Watchers**: the checks plugins run on a schedule, with a switch each.
+- **Watchers**: the checks plugins run on a schedule, with a switch each, and **Silenced**: every "Stop telling me this", each with Tell me again.
 - **Backup**: nightly backups, one now, a check, the passphrase, and restore.
 - **System**: the version and upgrade, pausing the queue, this host.
 - **All plugins**: a page of its own under Settings (the title reads

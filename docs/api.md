@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-255 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+260 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1562,9 +1562,14 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | POST | `/api/jobs/:id/cancel` | Cancel a queued or failed job. | yes |
 | GET | `/api/reminders` | Reminders agents set, pending and past. | yes |
 | POST | `/api/reminders/:id/cancel` | Cancel a pending reminder. | yes |
-| GET | `/api/sentinels` | Watchers: each one, whether it is on, its last run and open findings. | yes |
+| GET | `/api/sentinels` | Watchers: each one, whether it is on, its last run, and what they found as the owner reads it — decisions grouped, the recap counted, what he silenced. | yes |
 | POST | `/api/sentinels/:id/enabled` | Switch a watcher off or on. | yes |
 | POST | `/api/alerts/:key/snooze` | Snooze an open alert, or wake it. | yes |
+| POST | `/api/alerts/snooze` | Snooze several alerts at once (Clear all), or wake them (its Undo). | yes |
+| POST | `/api/alerts/mute` | "Stop telling me this": silence the alert's subject, or its whole kind. Reversible from Settings → Watchers. | yes |
+| POST | `/api/alerts/mutes/:id/remove` | Take a "Stop telling me this" back. | yes |
+| POST | `/api/alerts/act` | Run what an alert declared (a run, or a fill with the typed value), as the owner. Named by key and action index, never by tool; a gated tool answers its approval. | yes |
+| POST | `/api/alerts/ask` | Ask the agent that answers for these alerts, handing it their briefs. The thread shows what was asked about. | yes |
 
 #### `GET /api/missions`
 
@@ -1674,11 +1679,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/sentinels`
 
-Watchers: each one, whether it is on, its last run and open findings.
+Watchers: each one, whether it is on, its last run, and what they found as the owner reads it — decisions grouped, the recap counted, what he silenced.
 
 - **Auth:** Session or API token.
-- **Query:** `limit?: number (50)`
-- **Answer:** JSON
+- **Answer:** `{ installed, runs, alerts: { open, snoozed, resolved, recap: { count, missionId, nextAt, groups }, mutes } }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -1704,13 +1708,82 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 Snooze an open alert, or wake it.
 
 - **Auth:** Session or API token (a session adds CSRF + Origin).
-- **Body:** `{ snoozed: boolean }`
-- **Answer:** `{ key, snoozedAt: string|null }`
+- **Body:** `{ snoozed: boolean, days?: number }  // days: "Not now", quiet that long; none: until the fact changes`
+- **Answer:** `{ key, snoozedAt: string|null, snoozedUntil: string|null }`
 - **Errors:** 404 no open alert with that key
 - **Since:** 0.1.0-pre.15
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"snoozed":true}' "$BUDDI_URL/api/alerts/<key>/snooze"
+```
+
+#### `POST /api/alerts/snooze`
+
+Snooze several alerts at once (Clear all), or wake them (its Undo).
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ keys: string[], snoozed: boolean, days?: number }`
+- **Answer:** `{ keys: string[] }  // the ones that were open`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"keys":[],"snoozed":true}' "$BUDDI_URL/api/alerts/snooze"
+```
+
+#### `POST /api/alerts/mute`
+
+"Stop telling me this": silence the alert's subject, or its whole kind. Reversible from Settings → Watchers.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ key: string, scope?: 'subject'|'kind', label?: string }`
+- **Answer:** `{ id, label }`
+- **Errors:** 404 no open alert with that key
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"key":"…"}' "$BUDDI_URL/api/alerts/mute"
+```
+
+#### `POST /api/alerts/mutes/:id/remove`
+
+Take a "Stop telling me this" back.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Answer:** `{ removed: true }`
+- **Errors:** 404
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/alerts/mutes/<id>/remove"
+```
+
+#### `POST /api/alerts/act`
+
+Run what an alert declared (a run, or a fill with the typed value), as the owner. Named by key and action index, never by tool; a gated tool answers its approval.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ entries: Array<{ key: string, action: number, value?: string|number }> }`
+- **Answer:** `{ results: Array<{ key, result? , approvalId?, error? }> }`
+- **Errors:** 400; 429
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"entries":[]}' "$BUDDI_URL/api/alerts/act"
+```
+
+#### `POST /api/alerts/ask`
+
+Ask the agent that answers for these alerts, handing it their briefs. The thread shows what was asked about.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ keys: string[] }`
+- **Answer:** `{ agentId, conversationId, runId }`
+- **Errors:** 404; 409 no agent answers; 503 chat is not running
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"keys":[]}' "$BUDDI_URL/api/alerts/ask"
 ```
 
 ### Notifications

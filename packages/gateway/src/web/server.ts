@@ -87,6 +87,7 @@ import {
   PAGE_ROUTE,
   sendPageFile,
   actOnPage,
+  actRateLimited,
   listPageDescriptors,
   runPageQuery,
   type PagesDeps,
@@ -96,7 +97,8 @@ import { sayRoute, transcribeRoute, type SpeechRouteDeps } from './speech.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { AgentCatalog, JobControl, JobState, CoreToolContext, ToolRegistry } from '@buddi/core';
-import { getAction, idleRolloverMs, inRecovery, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, type ActionRecord } from '@buddi/core';
+import { getAction, idleRolloverMs, inRecovery, listMissions, listPendingActions, isJobState, parseAgentFile, setSentinelEnabled, snoozeFinding, snoozeFindings, unmuteFindings, type ActionRecord } from '@buddi/core';
+import { actOnAlerts, askPrompt, findingsForAsk, muteAlert } from './alerts.js';
 import type { Pool } from 'pg';
 import type { BrowserController } from '@buddi/tool-browser';
 import { connectionsOf, type ConnectionsService } from '@buddi/tool-mcp';
@@ -1686,7 +1688,7 @@ export function createWebApp(deps: WebServerDeps): Server {
           return sendJson(
             res,
             200,
-            await readSentinels(deps.pool, deps.registry, boundedLimit(q.get('limit'), 50)),
+            await readSentinels(deps.pool, deps.registry, deps.now()),
           );
         case '/api/chat/agents':
           return sendJson(res, 200, readChatAgents(deps.catalog, await avatarVersions(deps.pool)));
@@ -2544,12 +2546,55 @@ export function createWebApp(deps: WebServerDeps): Server {
       return sendJson(res, 200, { stopped: host.stop(deps.ctx.ownerId, body.agentId, body.conversationId) });
     }
 
+    /*
+     * Alerts (alerts.ts): the owner's verbs on what the watchers found. Snooze
+     * one ("Not now" for a week with `days`, "Not needed" without), several at
+     * once (Clear all, and its Undo), silence a subject or a kind, run what a
+     * finding declared, or ask the agent that answers for it.
+     */
     const alert = /^\/api\/alerts\/([^/]+)\/snooze$/.exec(path);
     if (alert) {
       if (typeof body.snoozed !== 'boolean') return sendJson(res, 400, { error: '`snoozed` must be true or false' });
-      const finding = await snoozeFinding(deps.pool, decodeURIComponent(alert[1]!), body.snoozed, deps.now());
+      const days = typeof body.days === 'number' && Number.isFinite(body.days) && body.days > 0 && body.days <= 90 ? body.days : null;
+      const until = body.snoozed && days !== null ? new Date(deps.now().getTime() + days * 86_400_000) : null;
+      const finding = await snoozeFinding(deps.pool, decodeURIComponent(alert[1]!), body.snoozed, deps.now(), until);
       if (!finding) return sendJson(res, 404, { error: 'No open alert has that key.' });
-      return sendJson(res, 200, { key: finding.key, snoozedAt: finding.snoozedAt ? finding.snoozedAt.toISOString() : null });
+      return sendJson(res, 200, {
+        key: finding.key,
+        snoozedAt: finding.snoozedAt ? finding.snoozedAt.toISOString() : null,
+        snoozedUntil: finding.snoozedUntil ? finding.snoozedUntil.toISOString() : null,
+      });
+    }
+    if (path === '/api/alerts/snooze') {
+      const keys = Array.isArray(body.keys) ? body.keys.filter((k: unknown): k is string => typeof k === 'string').slice(0, 500) : null;
+      if (keys === null || typeof body.snoozed !== 'boolean') return sendJson(res, 400, { error: 'Send `{ keys: string[], snoozed: boolean, days? }`.' });
+      const days = typeof body.days === 'number' && Number.isFinite(body.days) && body.days > 0 && body.days <= 90 ? body.days : null;
+      const until = body.snoozed && days !== null ? new Date(deps.now().getTime() + days * 86_400_000) : null;
+      return sendJson(res, 200, { keys: await snoozeFindings(deps.pool, keys, body.snoozed, deps.now(), until) });
+    }
+    if (path === '/api/alerts/mute') return reply(res, await muteAlert(deps.pool, body, deps.now()));
+    const unmute = /^\/api\/alerts\/mutes\/([^/]+)\/remove$/.exec(path);
+    if (unmute) {
+      const removed = await unmuteFindings(deps.pool, decodeURIComponent(unmute[1]!));
+      return removed ? sendJson(res, 200, { removed: true }) : sendJson(res, 404, { error: 'Nothing is silenced under that id.' });
+    }
+    if (path === '/api/alerts/act') {
+      if (actRateLimited(session.id, deps.now().getTime())) return sendJson(res, 429, { error: 'Too many writes from this page. Wait a moment and try again.' });
+      return reply(res, await actOnAlerts({ pool: deps.pool, registry: deps.registry, ctx: deps.ctx, now: deps.now }, body, session));
+    }
+    if (path === '/api/alerts/ask') {
+      const keys = Array.isArray(body.keys) ? body.keys.filter((k: unknown): k is string => typeof k === 'string') : [];
+      const findings = await findingsForAsk(deps.pool, keys);
+      if (findings.length === 0) return sendJson(res, 404, { error: 'No alert has those keys.' });
+      if (!chat) return sendJson(res, 503, { error: 'Chat is not running in this process.' });
+      // The agent that answers for them, else whoever runs the wake mission.
+      const wake = (await listMissions(deps.pool)).find((m) => m.id === 'sentinel-wake');
+      const agentId = findings.find((f) => f.agentId !== null && deps.catalog.get(f.agentId) !== undefined)?.agentId ?? wake?.agentId ?? null;
+      if (agentId === null) return sendJson(res, 409, { error: 'No agent answers for this alert yet.' });
+      const { label, prompt } = askPrompt(findings);
+      const sent = await chat.send({ agentId, text: prompt, offer: { id: `alert:${findings[0]!.key}`.slice(0, 200), label } });
+      if (!sent.ok) return sendJson(res, sent.status, { error: sent.error });
+      return sendJson(res, 200, { agentId, conversationId: sent.conversationId, runId: sent.runId });
     }
 
     /*

@@ -424,8 +424,11 @@ export interface Overview {
   reminders: { pending: number; nextDueAt: string | null };
   sentinels: {
     lastRunAt: string | null;
+    /** Decisions waiting: rows on the Alerts page, a group counted once. */
     openUrgent: number;
     openInfo: number;
+    /** The first few decisions in the owner's words. Absent from an older gateway. */
+    decisions?: Array<{ id: string; title: string; count: number }>;
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
@@ -764,24 +767,55 @@ export interface SentinelsView {
     enabled: boolean;
   }>;
   runs: Array<{ sentinelId: string; lastRunAt: string; lastError: string | null }>;
-  open: SentinelFinding[];
-  resolved: SentinelFinding[];
-  digest: Array<{ id: string; findingKey: string; severity: string; title: string; detail: string; createdAt: string }>;
+  /** What they found, as the owner reads it (gateway web/alerts.ts). Never a brief. */
+  alerts: AlertsView;
 }
 
-export interface SentinelFinding {
+export interface AlertItem {
   key: string;
-  sentinelId: string;
-  severity: string;
-  title: string;
-  detail: string;
-  data: unknown;
+  line: string;
+  subject: { id: string; label: string } | null;
+  note: string;
   firstSeenAt: string;
-  lastSeenAt: string;
-  cooldownUntil: string | null;
-  deliveredAt: string | null;
+}
+
+export type AlertAction =
+  | { kind: 'open'; label: string; plugin: string | null; page?: string; item?: string; place?: 'files' }
+  | { kind: 'run'; label: string; key: string; index: number; confirm?: string; tone?: 'danger' }
+  | {
+      kind: 'fill';
+      label: string;
+      title: string;
+      fields: Array<{ key: string; index: number; label: string; type: 'number' | 'text' | 'date'; value: string | number | null; hint: string | null }>;
+    }
+  | { kind: 'ask'; label: string | null }
+  | { kind: 'dismiss'; label: string };
+
+/** One row of the Alerts page: a finding, or several of one kind. */
+export interface AlertGroup {
+  id: string;
+  sentinelId: string;
+  plugin: string | null;
+  kind: string;
+  title: string;
+  line: string | null;
+  urgent: boolean;
+  since: string;
+  agentId: string | null;
+  keys: string[];
+  items: AlertItem[];
+  actions: AlertAction[];
+  stop: { scope: 'subject' | 'kind'; label: string };
+  snoozedUntil: string | null;
   resolvedAt: string | null;
-  snoozedAt: string | null;
+}
+
+export interface AlertsView {
+  open: AlertGroup[];
+  snoozed: AlertGroup[];
+  resolved: AlertGroup[];
+  recap: { count: number; missionId: string | null; nextAt: string | null; groups: AlertGroup[] };
+  mutes: Array<{ id: string; sentinelId: string; label: string; createdAt: string }>;
 }
 
 /**
@@ -2209,7 +2243,17 @@ export const api = {
       `/rail/pages/${encodeURIComponent(plugin)}/${encodeURIComponent(page)}/hidden`,
       { hidden },
     ),
-  snoozeAlert: (key: string, snoozed: boolean) => post<{ key: string; snoozedAt: string | null }>(`/alerts/${encodeURIComponent(key)}/snooze`, { snoozed }),
+  /** Snooze alerts ("Not now": `days`; "Not needed": none), or wake them (Clear all's Undo). */
+  snoozeAlerts: (keys: string[], snoozed: boolean, days?: number) =>
+    post<{ keys: string[] }>('/alerts/snooze', { keys, snoozed, ...(days !== undefined ? { days } : {}) }),
+  /** "Stop telling me this": the alert's subject, or its whole kind. */
+  muteAlert: (key: string, scope: 'subject' | 'kind') => post<{ id: string; label: string }>('/alerts/mute', { key, scope }),
+  unmuteAlert: (id: string) => post<{ removed: true }>(`/alerts/mutes/${encodeURIComponent(id)}/remove`, {}),
+  /** Run what alerts declared: a run, or a fill with the typed value. */
+  actOnAlerts: (entries: Array<{ key: string; action: number; value?: string | number }>) =>
+    post<{ results: Array<{ key: string; result?: unknown; approvalId?: string; error?: string }> }>('/alerts/act', { entries }),
+  /** Ask the agent that answers for these alerts; answers the conversation it started. */
+  askAboutAlerts: (keys: string[]) => post<{ agentId: string; conversationId: string; runId: string }>('/alerts/ask', { keys }),
   agents: () => get<AgentsView>('/agents'),
   /**
    * What one agent is: its grant with every tool's tier, its engine, its

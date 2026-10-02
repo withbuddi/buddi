@@ -434,13 +434,30 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { method: 'GET', path: '/api/reminders', area: 'work', summary: 'Reminders agents set, pending and past.', query: 'limit?: number', answer: '{ reminders }' },
   { method: 'POST', path: '/api/reminders/:id/cancel', area: 'work', summary: 'Cancel a pending reminder.', body: '{ reason?: string }', errors: '404; 409' },
   {
-    method: 'GET', path: '/api/sentinels', area: 'work', summary: 'Watchers: each one, whether it is on, its last run and open findings.',
-    query: 'limit?: number (50)',
+    method: 'GET', path: '/api/sentinels', area: 'work', summary: 'Watchers: each one, whether it is on, its last run, and what they found as the owner reads it — decisions grouped, the recap counted, what he silenced.',
+    answer: '{ installed, runs, alerts: { open, snoozed, resolved, recap: { count, missionId, nextAt, groups }, mutes } }',
   },
   { method: 'POST', path: '/api/sentinels/:id/enabled', area: 'work', summary: 'Switch a watcher off or on.', body: '{ enabled: boolean }', answer: '{ sentinelId, enabled }', errors: '400 no watcher with that id' },
   {
     method: 'POST', path: '/api/alerts/:key/snooze', area: 'work', summary: 'Snooze an open alert, or wake it.',
-    body: '{ snoozed: boolean }', answer: '{ key, snoozedAt: string|null }', errors: '404 no open alert with that key',
+    body: '{ snoozed: boolean, days?: number }  // days: "Not now", quiet that long; none: until the fact changes', answer: '{ key, snoozedAt: string|null, snoozedUntil: string|null }', errors: '404 no open alert with that key',
+  },
+  {
+    method: 'POST', path: '/api/alerts/snooze', area: 'work', summary: 'Snooze several alerts at once (Clear all), or wake them (its Undo).',
+    body: '{ keys: string[], snoozed: boolean, days?: number }', answer: '{ keys: string[] }  // the ones that were open', errors: '400',
+  },
+  {
+    method: 'POST', path: '/api/alerts/mute', area: 'work', summary: '"Stop telling me this": silence the alert\'s subject, or its whole kind. Reversible from Settings → Watchers.',
+    body: "{ key: string, scope?: 'subject'|'kind', label?: string }", answer: '{ id, label }', errors: '404 no open alert with that key',
+  },
+  { method: 'POST', path: '/api/alerts/mutes/:id/remove', area: 'work', summary: 'Take a "Stop telling me this" back.', answer: '{ removed: true }', errors: '404' },
+  {
+    method: 'POST', path: '/api/alerts/act', area: 'work', summary: "Run what an alert declared (a run, or a fill with the typed value), as the owner. Named by key and action index, never by tool; a gated tool answers its approval.",
+    body: '{ entries: Array<{ key: string, action: number, value?: string|number }> }', answer: '{ results: Array<{ key, result? , approvalId?, error? }> }', errors: '400; 429',
+  },
+  {
+    method: 'POST', path: '/api/alerts/ask', area: 'work', summary: 'Ask the agent that answers for these alerts, handing it their briefs. The thread shows what was asked about.',
+    body: '{ keys: string[] }', answer: '{ agentId, conversationId, runId }', errors: '404; 409 no agent answers; 503 chat is not running',
   },
 
   /* ---------------- notifications ---------------- */

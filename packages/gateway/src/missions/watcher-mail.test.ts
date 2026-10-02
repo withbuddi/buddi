@@ -259,6 +259,7 @@ describe('a hostile subject, where a model reads it', () => {
         severity: raised.severity,
         title: raised.title,
         detail: raised.detail,
+        ownerLine: (raised as { ownerLine?: string }).ownerLine ?? null,
         createdAt: new Date('2026-09-21T12:00:00Z'),
         consumedAt: null,
       },

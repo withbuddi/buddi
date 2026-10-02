@@ -16,7 +16,7 @@ vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
   return {
     ...real,
-    api: { sentinels: vi.fn(), setSentinelEnabled: vi.fn() },
+    api: { sentinels: vi.fn(), setSentinelEnabled: vi.fn(), unmuteAlert: vi.fn() },
   };
 });
 
@@ -40,9 +40,7 @@ function view(over: Partial<SentinelsView> = {}): SentinelsView {
     runs: [
       { sentinelId: 'email.waiting-on-me', lastRunAt: '2026-09-21T09:00:00Z', lastError: null },
     ],
-    open: [],
-    resolved: [],
-    digest: [],
+    alerts: { open: [], snoozed: [], resolved: [], recap: { count: 0, missionId: null, nextAt: null, groups: [] }, mutes: [] },
     ...over,
   };
 }
@@ -131,5 +129,13 @@ describe('everyText', () => {
     expect(everyText(86_400)).toBe('day');
     expect(everyText(2 * 86_400)).toBe('2 days');
     expect(everyText(300)).toBe('5 minutes');
+  });
+  it('lists what the owner silenced, each with Tell me again', async () => {
+    vi.mocked(api.sentinels).mockResolvedValue(view({ alerts: { ...view().alerts, mutes: [{ id: 'm1', sentinelId: 'finance.stale-balance', label: 'Checking: Checking hasn’t been updated in 17 days.', createdAt: '2026-09-30T09:00:00Z' }] } }));
+    vi.mocked(api.unmuteAlert).mockResolvedValue({ removed: true });
+    render(<Watchers timezone="UTC" />);
+    expect(await screen.findByText('Checking: Checking hasn’t been updated in 17 days.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tell me again' }));
+    await waitFor(() => expect(api.unmuteAlert).toHaveBeenCalledWith('m1'));
   });
 });

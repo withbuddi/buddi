@@ -518,10 +518,10 @@ suite('the dashboard API', () => {
     expect(sentinels).toMatchObject({
       installed: expect.any(Array),
       runs: expect.any(Array),
-      open: expect.any(Array),
-      resolved: expect.any(Array),
-      digest: expect.any(Array),
+      alerts: { open: expect.any(Array), snoozed: expect.any(Array), resolved: expect.any(Array), recap: expect.objectContaining({ count: expect.any(Number) }), mutes: expect.any(Array) },
     });
+    // The brief never leaves the gateway.
+    expect(JSON.stringify(sentinels)).not.toContain('"detail"');
 
     const agents = await client.json<any>('/api/agents');
     expect(agents.agents[0]).toMatchObject({

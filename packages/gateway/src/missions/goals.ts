@@ -1833,6 +1833,27 @@ export function staleWindow(since: Date, now: Date, cadence: GoalCadence, timezo
  * and a settled goal is no longer open, so every key under it stops being
  * returned on the next tick and resolves. The wake it raised has already gone.
  */
+/**
+ * The owner's half of a goal finding (host API 1.23): the title and the
+ * finding's first sentence, which are already his words ("Off track: Save for
+ * the trip. The latest check projects 3,100 by the deadline."), the goal as
+ * the subject, and the Goals page beside Ask. The brief — the whole history
+ * table the agent reads — stays in `detail`.
+ */
+export function goalOwnerFacing(finding: Finding, goals: ReadonlyArray<{ id: string; title: string }>): Finding {
+  const id = /^goal\.([^.]+)\./.exec(finding.key)?.[1];
+  const goal = goals.find((g) => g.id === id);
+  const lead = finding.detail.split('\n\n')[0]?.trim() ?? '';
+  const kind = finding.key.slice(`goal.${id ?? ''}.`.length).replace(/\..*$/, '');
+  return {
+    ...finding,
+    ownerLine: lead === '' ? finding.title : `${finding.title}. ${lead}`,
+    kind,
+    ...(goal ? { subject: { id: goal.id, label: goal.title } } : {}),
+    actions: [{ kind: 'open', label: 'Open goals', page: 'goals' }, { kind: 'ask' }],
+  };
+}
+
 export function createGoalsSentinel(base: MetricSource): Sentinel {
   const source = asOwnerSource(base);
 
@@ -2278,7 +2299,7 @@ export function createGoalsSentinel(base: MetricSource): Sentinel {
           });
         }
       }
-      return findings;
+      return findings.map((finding) => goalOwnerFacing(finding, goals));
     },
   };
 }

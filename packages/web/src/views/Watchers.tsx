@@ -12,6 +12,7 @@ import { useState } from 'react';
 import { api, ApiError } from '../api';
 import { fmtRelative, fmtTime } from '../format';
 import { ACTIVITY_ROUTE } from '../routes';
+import { SilencedList } from './Alerts';
 import { Button, Empty, ErrorBanner, List, ListRow, Notice, PageFrame, Pill, Section, useAsync, EmptyState } from '../ui';
 
 export function Watchers({ timezone, embedded }: { timezone: string; embedded?: boolean }): JSX.Element {
@@ -89,6 +90,8 @@ export function Watchers({ timezone, embedded }: { timezone: string; embedded?: 
           </List>
         )}
       </Section>
+      {/* "Stop telling me this", from the Alerts page: each one taken back here. */}
+      <SilencedList mutes={data?.alerts?.mutes ?? []} onChanged={reload} />
     </PageFrame>
   );
 }
