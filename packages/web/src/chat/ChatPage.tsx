@@ -19,7 +19,7 @@ import { effectiveProviderKind, thinkingIsHonoured } from '../shell/thinking';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
 import { Canvas } from '../canvas/Canvas';
-import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom } from '../canvas/renderables';
+import { awaitingPreviews, inspectToolCall, previewKey, renderablesFrom, sourcesHolding, type SourcesPanelProps } from '../canvas/renderables';
 import { useServedPreviews } from '../canvas/served';
 import { FILES_TAB_ID, filesRenderable, useAgentWorkspace, workspaceChanges } from '../canvas/files';
 import { profileRenderable, profileTabId } from './properties';
@@ -28,6 +28,7 @@ import { BrowserView } from '../canvas/views/BrowserView';
 import { HostControls } from '../views/HostControls';
 import { ErrorBanner, Notice } from '../ui';
 import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor } from './browser';
+import { WEB_SOURCE_TOOLS } from './sources';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
 import { agentRoute, catalogueInstallRoute, chatRoute, settingsRoute } from '../routes';
@@ -555,9 +556,14 @@ export function ChatPage({
       // one of those calls. Without a session there is no panel, and they fall
       // back to a tab each, exactly as an old conversation has always shown.
       ...(browserTab ? { folded: BROWSER_TOOLS } : {}),
+      // A turn's web reads and searches share one Sources tab.
+      gathered: WEB_SOURCE_TOOLS,
     });
     const items = fromTranscript.filter(item => item.source === 'approval' || !dismissed.includes(item.id));
-    if (activeTab && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
+    // A web call clicked in the conversation opens its turn's Sources tab on that call.
+    const holder = activeTab ? sourcesHolding(items, activeTab) : null;
+    if (holder) holder.props = { ...(holder.props as SourcesPanelProps), focus: activeTab };
+    if (activeTab && !holder && !dismissed.includes(activeTab) && !items.some(item => item.id === activeTab)) {
       const inspection = inspectToolCall(conversation?.messages ?? [], activeTab, { redactInputOf: BROWSER_TOOLS });
       // A browser call is never inspected as raw arguments: what was typed on
       // the owner's screen belongs on the panel as a step, not in a JSON tree
@@ -1077,7 +1083,7 @@ export function ChatPage({
   const canvas = (
     <Canvas
       renderables={renderables}
-      activeId={activeTab}
+      activeId={(activeTab ? sourcesHolding(renderables, activeTab)?.id : null) ?? activeTab}
       onActivate={setActiveTab}
       onClose={(id) => {
         if (profile && id === profileTabId(profile.id)) setProfile(null);

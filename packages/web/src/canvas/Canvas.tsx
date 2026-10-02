@@ -32,6 +32,8 @@ import { ArtifactView, type ArtifactViewProps } from './views/ArtifactView';
 import { DelegateView, type DelegateViewProps } from './views/DelegateView';
 import { FilesView, type FilesViewProps } from './views/FilesView';
 import { NotifyView, type NotifyViewProps } from './views/NotifyView';
+import { SourcesView, sourcesSummary } from './views/SourcesView';
+import type { SourcesPanelProps } from './renderables';
 import type { ChatAgent } from '../chat/types';
 import { Icon } from '../ui/Icon';
 import { fmtClock, fmtTime } from '../format';
@@ -150,6 +152,7 @@ export function Canvas({
                   <span className="wb-tab-dot" data-tone={item.tone} aria-hidden="true" />
                 ) : null}
                 <span className="wb-tab-text">{item.title}</span>
+                {item.count ? <span className="wb-tab-count">{item.count}</span> : null}
               </Tabs.Trigger>
               {onClose && closeable(item) ? <button className="wb-tab-close" aria-label={`Close ${item.title} tab`} title="Dismiss panel; keep conversation history" onClick={() => onClose(item.id)}>×</button> : null}
               </div>
@@ -168,7 +171,7 @@ export function Canvas({
             <section className="ui-panel" data-flush={item.source === 'descriptor' && item.renderer === 'preview' ? 'true' : undefined}>
               {item.source !== 'browser' && item.source !== 'files' && !(item.source === 'descriptor' && item.renderer === 'preview') ? <header className="ui-panel-head">
                 <h2 className="ui-panel-title">{item.title}</h2>
-                <span className="ui-panel-tool mono">{item.tool}</span>
+                <span className="ui-panel-tool mono">{item.source === 'sources' ? sourcesSummary(item.props as SourcesPanelProps) : item.tool}</span>
               </header> : null}
               {item.tone === 'critical' ? <p className="muted">Recorded tool failure{item.at ? ` · ${fmtTime(item.at, Intl.DateTimeFormat().resolvedOptions().timeZone)}` : ''}. This is history, not live session status.</p> : null}
               {/*
@@ -187,6 +190,8 @@ export function Canvas({
                 <ArtifactView {...(item.props as ArtifactViewProps)} />
               ) : item.source === 'files' ? (
                 <FilesView {...(item.props as FilesViewProps)} />
+              ) : item.source === 'sources' ? (
+                <SourcesView {...(item.props as SourcesPanelProps)} timezone={timezone} />
               ) : item.source === 'notify' ? (
                 <NotifyView {...(item.props as NotifyViewProps)} />
               ) : item.source === 'delegate' ? (

@@ -379,7 +379,7 @@ export interface StructuredProps {
  * tab — what may be pushed into the overflow, what is allowed to take the
  * screen — can tell it apart from something a run produced.
  */
-export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser' | 'artifact' | 'delegate' | 'files' | 'notify';
+export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback' | 'profile' | 'browser' | 'artifact' | 'delegate' | 'files' | 'notify' | 'sources';
 
 /**
  * What draws a panel.
@@ -394,7 +394,7 @@ export type RenderableSource = 'canvas' | 'descriptor' | 'approval' | 'fallback'
  * read from the server by id, and an agent must not be able to conjure one.
  * So is `files`: the owner's view of the agent's workspace, added by the page.
  */
-export type PanelName = RendererName | 'profile' | 'browser' | 'artifact' | 'delegate' | 'files' | 'notify';
+export type PanelName = RendererName | 'profile' | 'browser' | 'artifact' | 'delegate' | 'files' | 'notify' | 'sources';
 
 /** One thing the canvas can show: a tab and a panel. */
 export interface Renderable {
@@ -420,4 +420,9 @@ export interface Renderable {
    * take the canvas away from what is already on it.
    */
   substantial: boolean;
+  /**
+   * A number drawn beside the title on the tab: how many calls a gathered tab
+   * (Sources) holds. Absent on every other tab.
+   */
+  count?: number;
 }

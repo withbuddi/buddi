@@ -266,6 +266,17 @@ agent's workspace files, and a **Browser** tab while an agent drives a browser
 (see [Computer and browser control](browser.md)). A decision waiting to be made
 stays on the tab strip. On a small screen, the **Canvas** button opens it.
 
+Every web page an agent reads and every web search it runs in one turn share a
+single **Sources** tab, with the number of calls beside its name, instead of a
+tab each. Pages come first: a letter tile for the site (the dashboard never
+loads a site's icon), the title linked out in a new tab, the site, when it was
+read and how long it is; a row opens on the text the agent took, with **Show
+more**. A page that could not be read says why in words — blocked, turned away,
+not found, timed out, too large. Each search shows its query and the first
+results, with **Show all**; the ones the agent went on to read are marked
+**Read**. Every call keeps a quiet **Raw JSON** link. The tab fills in while the
+turn runs, and clicking a web call in the conversation opens it on that call.
+
 Try it: drop a bank statement on the chat and ask what changed since last month.
 
 ## Agents

@@ -216,11 +216,23 @@ describe('the canvas knows no domain', () => {
      */
     const BROWSER_SURFACE = path.join('src', 'chat', 'browser.ts');
     const BROWSER_LITERALS = new Set(["'browser.act'", "'browser.status'"]);
+    /*
+     * And one file the web reader's: the canvas gathers a turn's reads and
+     * searches into one Sources tab, so the page has to say which calls those
+     * are. The panel itself reads shapes; the names live in `chat/sources.ts`.
+     */
+    const SOURCES_SURFACE = path.join('src', 'chat', 'sources.ts');
+    const SOURCES_LITERALS = new Set(["'web.read'", "'web.search'"]);
     for (const file of NEW_SURFACE.filter((candidate) => !/\.test\.tsx?$/.test(candidate))) {
       const text = readFileSync(file, 'utf8');
       if (path.relative(PACKAGE, file) === BROWSER_SURFACE) {
         const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
         expect(literals.filter((literal) => !BROWSER_LITERALS.has(literal))).toEqual([]);
+        continue;
+      }
+      if (path.relative(PACKAGE, file) === SOURCES_SURFACE) {
+        const literals = text.match(/'[a-z][a-z0-9]*\.[a-z][a-z0-9_]*'/g) ?? [];
+        expect(literals.filter((literal) => !SOURCES_LITERALS.has(literal))).toEqual([]);
         continue;
       }
       const relative = path.relative(PACKAGE, file);

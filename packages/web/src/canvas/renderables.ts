@@ -128,6 +128,42 @@ export interface RenderableInput {
    * (`awaiting`) draws its tab once its key is here, and not before.
    */
   served?: ReadonlySet<string>;
+  /**
+   * Tools whose calls are gathered, per turn, into one Sources tab instead of
+   * a tab each — by name, from the page (`chat/sources.ts`), which knows which
+   * tools read the web; this file still knows none. A turn runs from one thing
+   * the owner said to the next, so the tab fills in while the run streams: a
+   * call joins it the moment it is made, and its result lands in place.
+   */
+  gathered?: ReadonlySet<string>;
+}
+
+/** One gathered call: what was asked, and how it came back (null while out). */
+export interface SourceEntry {
+  id: string;
+  tool: string;
+  input: unknown;
+  output: unknown;
+  /** Null while the call is still out. */
+  ok: boolean | null;
+  error?: unknown;
+  at: string | null;
+}
+
+export interface SourcesPanelProps {
+  entries: SourceEntry[];
+  /** A call the owner clicked in the conversation: opened and scrolled to. */
+  focus?: string | null;
+}
+
+/** The id a turn's Sources tab is known by: its first call's, prefixed. */
+export function sourcesTabId(firstCallId: string): string {
+  return `sources:${firstCallId}`;
+}
+
+/** Did the owner speak in this message? That is where a new turn begins. */
+function opensTurn(message: ChatMessage): boolean {
+  return message.role === 'user' && (message.blocks ?? []).some((block) => block.type === 'text' && block.text.trim() !== '');
 }
 
 /** The key a preview is known by: `<plugin>/<name>`. */
@@ -177,16 +213,43 @@ export function awaitingPreviews({
  * The canvas contents for a conversation, oldest first, capped at the last
  * few. `canvas.clear` empties what came before it and nothing after.
  */
-export function renderablesFrom({ messages, descriptors, awaiting, folded, served }: RenderableInput): Renderable[] {
+export function renderablesFrom({ messages, descriptors, awaiting, folded, served, gathered }: RenderableInput): Renderable[] {
   const byTool = new Map(descriptors.map((descriptor) => [descriptor.tool, descriptor]));
   const uses = new Map<string, { name: string; input: unknown; at: string | null }>();
   let collected: Renderable[] = [];
   let changes = 0;
+  /** This turn's Sources tab, once a gathered call has been made in it. */
+  let sources: Renderable | null = null;
+  const gather = (entry: SourceEntry): void => {
+    if (!sources) {
+      sources = {
+        id: sourcesTabId(entry.id), tool: entry.tool, title: 'Sources', renderer: 'sources', source: 'sources',
+        props: { entries: [] } satisfies SourcesPanelProps, at: entry.at, substantial: false, count: 0,
+      };
+      collected.push(sources);
+    }
+    const props = sources.props as SourcesPanelProps;
+    const entries = props.entries.some((item) => item.id === entry.id)
+      ? props.entries.map((item) => (item.id === entry.id ? { ...entry, input: entry.input ?? item.input } : item))
+      : [...props.entries, entry];
+    const tools = [...new Set(entries.map((item) => item.tool))];
+    sources.props = { entries } satisfies SourcesPanelProps;
+    sources.tool = tools.join(' · ');
+    sources.count = entries.length;
+    // Something read is worth turning to; a row of failures keeps its tab quietly.
+    sources.substantial = entries.some((item) => item.ok === true);
+    sources.tone = entries.every((item) => item.ok === false) ? 'critical' : undefined;
+  };
 
   for (const message of messages) {
+    if (opensTurn(message)) sources = null;
     for (const block of message.blocks ?? []) {
       if (block.type === 'tool_use') {
         uses.set(block.id, { name: block.name, input: block.input, at: message.at ?? null });
+        if (gathered?.has(block.name)) {
+          gather({ id: block.id, tool: block.name, input: block.input, output: null, ok: null, at: message.at ?? null });
+          continue;
+        }
 
         // `canvas.show` is drawn from the call, not the result: the agent has
         // already said what it wants shown, and the result only confirms it.
@@ -194,7 +257,7 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
           const shown = fromCanvasShow(block.id, block.input, message.at ?? null);
           if (shown) collected.push(shown);
         }
-        if (block.name === CANVAS_CLEAR) collected = [];
+        if (block.name === CANVAS_CLEAR) { collected = []; sources = null; }
         // A delegation draws the colleague's run, from the call: the ids are
         // on it long before the answer is.
         if (block.name === DELEGATE_TOOL) {
@@ -271,6 +334,15 @@ export function renderablesFrom({ messages, descriptors, awaiting, folded, serve
       // A live panel already draws this call, success or failure alike: its
       // step list is where the action and its reason are read.
       if (folded?.has(tool)) continue;
+
+      // A web read or search lands in its turn's Sources tab, failure or not.
+      if (gathered?.has(tool)) {
+        gather({
+          id: block.toolUseId, tool, input: use?.input ?? null, output: forOwner(block.output) ?? null,
+          ok: block.ok !== false, ...(block.error === undefined ? {} : { error: block.error }), at,
+        });
+        continue;
+      }
 
       // A message an agent sent the owner: drawn as the message, with where it went.
       if (tool === NOTIFY_TOOL) {
@@ -580,4 +652,10 @@ export function labelFor(tool: string): string {
   const parts = tool.split('.');
   if (parts.length === 1) return humanise(tool);
   return parts.map((part) => humanise(part)).join(' · ');
+}
+
+/** The Sources tab that gathered this call, when one did. */
+export function sourcesHolding(items: readonly Renderable[], callId: string): Renderable | null {
+  return items.find((item) => item.source === 'sources'
+    && (item.props as SourcesPanelProps).entries.some((entry) => entry.id === callId)) ?? null;
 }
