@@ -260,4 +260,29 @@ suite('needs you: the one rule (postgres)', () => {
       expect([address, isNotificationAddress(address)]).toEqual([address, expected]);
     }
   });
+
+  // Last: it adds conversations the counts above do not expect.
+  it('honours a thread ignore rule, by the conversation\'s id, for the sender recorded with it', async () => {
+    const reasonOf = async (id: string): Promise<string | undefined> => {
+      const thread = await findThread(pool, id);
+      return (await attentionReasons(pool, [thread!], NOW)).get(id);
+    };
+    // A stranger asking something: needs a reply, until the owner ignores the thread.
+    const asking = await write({ from: 'pushy@sales.test', key: '<ignored-thread>', at: daysBefore(2) });
+    await verdict(asking.messageId, 'reply-needed', 1, daysBefore(2));
+    expect(await reasonOf(asking.threadId)).toBe('asked');
+    await pool.query(
+      `insert into email.policies (account_id, scope, matcher, action, params, origin, proposed)
+       values ($1, 'thread', $2, 'ignore', $3::jsonb, 'owner', false)`,
+      [accountId, asking.threadId, JSON.stringify({ sender: 'pushy@sales.test' })],
+    );
+    expect(await reasonOf(asking.threadId)).toBe('ignored');
+
+    // Somebody else's message threaded into it (References are the sender's to
+    // write) is not silenced by that rule — the gate's own corroboration.
+    const other = await write({ from: 'someone.else@other.test', key: '<ignored-thread>', at: daysBefore(1) });
+    expect(other.threadId).toBe(asking.threadId);
+    await verdict(other.messageId, 'reply-needed', 1, daysBefore(1));
+    expect(await reasonOf(asking.threadId)).toBe('asked');
+  });
 });
