@@ -271,13 +271,14 @@ Try it: drop a bank statement on the chat and ask what changed since last month.
 ## Agents
 
 Your team, and one page per agent. **Add a teammate**, on the right of the
-head, opens the catalogue. The index has four tabs:
+head, opens the catalogue. The index has five tabs:
 
 - **Team**: every agent with its face and whether it can run, a **Talk**
   button, and the choice of default agent (the "front desk").
 - **Missions**: what the team runs on a schedule.
 - **Offers**: next steps the agents have suggested, and agents plugins need.
 - **Reminders**: what the agents have put on the clock.
+- **Skills**: the short texts agents follow (below).
 
 An agent's own page has the same things for that agent, plus Conversations,
 Memory, Skills and **Setup**. Setup has three parts: **Identity** (name,
@@ -295,6 +296,35 @@ folder, its missions are paused, and the plugins no other agent uses are named
 are not removed from here.
 
 Try it: move an agent to another model under Setup → Brain.
+
+### Skills
+
+Agents → **Skills** (`#/agents?tab=skills`) lists every skill on this
+computer in one panel, grouped: **Yours** (written or uploaded), **Learned**
+(an agent proposed it and you kept it), **From plugins** and **From the
+catalogue**; an empty group is left out. A row is the title, when it's used,
+and one quiet line of who uses it and where it came from. Untrusted text — an
+uploaded file, or a page that was in view when an agent proposed it — says so
+in one warning line with **Mark as mine**; a skill nobody uses has **Choose
+agents**. ⋯ holds Choose agents…, Edit text, Download and Delete… (a plugin's
+skill: Open, no Delete).
+
+A row opens its sheet: when it's used, **Used by** (Take away per agent;
+Change… opens the picker — tick agents or Every agent, saved in each agent's
+file), and the text (Read · Source). **Edit text** edits the file in place: a
+learned skill is saved as its next version, a catalogue one's next update asks
+before replacing your change. A plugin's skill reads only. Delete asks once,
+naming who stops using it and where the file goes. A skill in an agent's own
+folder always stays with that agent and is given to others one by one.
+
+On this tab the head's actions are **Upload a .md** and **Write a skill**; both
+open the same form (name, when it's used, the text, who uses it). An upload is
+untrusted unless you tick Mark as mine; a file that isn't `.md` is refused
+with Pick another file. Bundles with scripts are not taken yet.
+
+An agent's own **Skills** tab lists the skills it uses, with **Choose
+skills…** (the same picker the other way round) and **All skills** into this
+page. `#/agents?tab=skills&skill=<id>` opens one skill's sheet.
 
 ### The catalogue
 

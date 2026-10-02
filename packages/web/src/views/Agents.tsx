@@ -23,6 +23,8 @@ import { CatalogueLine, RemoveFromTeam, useCatalogueEntryFor } from './parts/Age
 import { FRONT_DESK_ROLE } from '../shell/roles';
 import { Memory } from './Memory';
 import { AgentSkills } from './parts/AgentSkills';
+import { SkillsTab, type SkillsCommand } from './Skills';
+import { parseSkillParam } from './parts/skills-data';
 import { Reminders } from './Reminders';
 import { AgentSetup } from './parts/AgentSetup';
 import { accentAttrs, accentOf } from '../shell/accent';
@@ -32,6 +34,7 @@ const INDEX_TABS = [
   { id: 'missions', label: 'Missions' },
   { id: 'offers', label: 'Offers' },
   { id: 'reminders', label: 'Reminders' },
+  { id: 'skills', label: 'Skills' },
 ] as const;
 
 const AGENT_TABS = [
@@ -62,14 +65,23 @@ function Team({ hash, timezone, navigate, agents, attention, defaultAgentId: she
   const agentOffers = useAgentOffers();
   const offerCount = (offers.data?.offers.length ?? 0) + agentOffers.offers.length;
   const defaultAgentId = team.data?.default?.defaultAgentId ?? shellDefault ?? null;
+  // On the Skills tab the head's action is the tab's own: Upload a .md · Write a skill.
+  const [skillCommand, setSkillCommand] = useState<SkillsCommand | null>(null);
   // A new teammate is picked from the catalogue; one it does not list is Agent
   // Father's to make, from the catalogue's "Ask Agent Father".
   return (
     <div className="ui-page">
       <PageHeader
         title="Agents"
-        lede={`Your team. Each one is a file on ${thisMachine} — what it can reach is listed on its page.`}
-        actions={<ButtonLink variant="accent" href={catalogueRoute()} onClick={go(catalogueRoute())}>Add a teammate</ButtonLink>}
+        lede={tab === 'skills'
+          ? `Skills are short texts an agent follows for one kind of task. Each is a file on ${thisMachine}.`
+          : `Your team. Each one is a file on ${thisMachine} — what it can reach is listed on its page.`}
+        actions={tab === 'skills' ? (
+          <>
+            <Button onClick={() => setSkillCommand({ kind: 'upload', at: Date.now() })}>Upload a .md</Button>
+            <Button variant="accent" onClick={() => setSkillCommand({ kind: 'write', at: Date.now() })}>Write a skill</Button>
+          </>
+        ) : <ButtonLink variant="accent" href={catalogueRoute()} onClick={go(catalogueRoute())}>Add a teammate</ButtonLink>}
       />
       <Tabs>
         {INDEX_TABS.map((t) => (
@@ -82,6 +94,7 @@ function Team({ hash, timezone, navigate, agents, attention, defaultAgentId: she
       {tab === 'offers' ? <PluginAgentOffers offers={agentOffers.offers} reload={agentOffers.reload} /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
+      {tab === 'skills' ? <SkillsTab faces={agents} navigate={navigate} command={skillCommand} openSkill={parseSkillParam(hash)} /> : null}
       {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
@@ -288,7 +301,7 @@ function AgentPage({
       {tab === 'offers' ? <Offers embedded agentId={agentId} agentName={name} /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded agentId={agentId} /> : null}
       {tab === 'memory' ? <Memory embedded agents={agents} timezone={timezone} agentId={agentId} /> : null}
-      {tab === 'skills' ? <AgentSkills agentId={agentId} agentName={name} /> : null}
+      {tab === 'skills' ? <AgentSkills agentId={agentId} agentName={name} faces={agents} navigate={navigate} /> : null}
       {tab === 'setup' ? <AgentSetup agentId={agentId} section={section} navigate={navigate} /> : null}
       {tab === 'setup' && removable ? <RemoveFromTeam agentId={agentId} name={name} navigate={navigate} /> : null}
     </div>

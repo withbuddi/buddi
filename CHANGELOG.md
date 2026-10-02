@@ -15,6 +15,7 @@ What changes in buddi from one release to the next, newest first.
 - `buddi agents catalogue`, `buddi agents add <name>`, `buddi agents update <handle>` and `buddi agents remove <handle>`, through the running service.
 - Skills, server side of the Skills page: every skill listed in four groups (yours, learned, from plugins, from the catalogue) with the agents that use it; write a new one, save one from a single `.md`, edit its text (a learned one becomes its next version; a plugin's reads only), give it to every agent or to some, mark an upload as yours, download, delete. Who uses a skill is written in each agent's file (`skills:`), and another agent's own skill is given as `<agent>/<skill>`. Routes `/api/skills…`; the dashboard page comes next. `buddi skills list` prints it.
 - An uploaded skill is untrusted until you mark it as yours: its text reaches the agents fenced as outside text, never as instructions.
+- The Skills page on the dashboard: Agents → **Skills** lists every skill grouped yours / learned / from plugins / from the catalogue, with who uses each; a sheet per skill (who uses it with Take away and a picker, the text as Read · Source, edit in place, Download, Delete that says what it stops); **Write a skill** and **Upload a .md** (untrusted until marked as yours). An agent's Skills tab now lists the skills it uses with **Choose skills…** and **All skills**.
 
 ### Changed
 

@@ -1,87 +1,123 @@
 /**
- * The agent sheet's Skills tab: learned skills with their version, provenance
- * and the untrusted mark, a Remove that calls the gateway, and the skills
- * that came from files and plugins shown read-only.
+ * The agent page's Skills tab: the skills this agent uses from the one
+ * Skills list, All skills into Agents → Skills, Choose skills… writing a
+ * grant per changed skill, a row opening the shared sheet, and Mark as mine.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { api, type AgentSkillRow } from '../api';
+import { skillsApi, type SkillRow, type SkillsView } from './parts/skills-data';
 import { AgentSkills } from './parts/AgentSkills';
 
-vi.mock('../api', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../api')>();
-  return { ...original, api: { ...original.api, agentSkills: vi.fn(), removeSkill: vi.fn() } };
+vi.mock('./parts/skills-data', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./parts/skills-data')>();
+  return {
+    ...original,
+    skillsApi: { ...original.skillsApi, list: vi.fn(), detail: vi.fn(), grant: vi.fn(), trust: vi.fn() },
+  };
 });
 
-const LEARNED: AgentSkillRow = {
-  name: 'check-a-bank-balance-in-the-browser',
-  description: 'When the owner asks for a balance.',
-  scope: 'private',
-  provenance: 'agent',
-  source: 'learning proposal p-2',
-  file: '/owner/agents/advisor/skills/check-a-bank-balance-in-the-browser.md',
-  body: 'When: When the owner asks for a balance.\n\n1. Open the bank.',
-  learned: {
-    title: 'Check a bank balance in the browser',
-    agent: 'advisor',
-    conversation: 'c-1',
-    runId: 'run-1',
-    turn: 3,
-    sources: ['web page bank balance page (page.read)'],
-    untrusted: true,
-    proposal: 'p-2',
-    keptAt: '2026-09-23T12:00:00Z',
-    version: 2,
-    edited: true,
-    versions: [1, 2],
-    versionsDir: '/owner/agents/advisor/skills/versions/check-a-bank-balance-in-the-browser',
-  },
-};
-
-const PLUGIN: AgentSkillRow = {
-  name: 'working-in-a-workspace',
-  description: 'The loop a developer agent works in.',
-  scope: 'private',
-  provenance: 'imported',
-  source: 'developer@0.1.0',
-  file: '/owner/agents/advisor/skills/working-in-a-workspace.md',
-  body: '# Working in a workspace',
+const row = (over: Partial<SkillRow> & Pick<SkillRow, 'id' | 'title' | 'group' | 'holders'>): SkillRow => ({
+  name: over.id,
+  description: `When ${over.title}.`,
+  file: `/owner/skills/${over.id}.md`,
+  home: null,
+  every: false,
+  untrusted: null,
+  provenance: 'owner',
+  source: null,
+  created: null,
+  updatedAt: null,
   learned: null,
+  from: null,
+  editable: true,
+  deletable: true,
+  shareable: true,
+  ...over,
+});
+
+const VOICE = row({ id: 'my-voice', title: 'Write in my voice', group: 'mine', every: true, holders: [{ agent: 'dev', how: 'every' }, { agent: 'ledger', how: 'every' }] });
+const OPEN = row({
+  id: 'dev/open-project',
+  title: 'Open a project',
+  group: 'learned',
+  home: 'dev',
+  shareable: false,
+  holders: [{ agent: 'dev', how: 'home' }],
+  untrusted: 'page',
+  learned: { by: 'dev', version: 1, edited: false, keptAt: new Date().toISOString() },
+});
+const RECAP = row({ id: 'weekly-recap', title: 'Weekly money recap', group: 'mine', holders: [{ agent: 'ledger', how: 'granted' }] });
+const VIEW: SkillsView = {
+  skills: [VOICE, OPEN, RECAP],
+  agents: [
+    { id: 'dev', handle: 'dev', name: 'Dev', writable: true },
+    { id: 'ledger', handle: 'ledger', name: 'Ledger', writable: true },
+  ],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.agentSkills).mockResolvedValue({ agent: 'advisor', writable: true, skills: [LEARNED, PLUGIN] });
-  vi.mocked(api.removeSkill).mockResolvedValue({ ok: true, name: LEARNED.name, version: 2, proposal: 'p-2' });
+  vi.mocked(skillsApi.list).mockResolvedValue(VIEW);
+  vi.mocked(skillsApi.grant).mockResolvedValue({ skill: RECAP });
+  vi.mocked(skillsApi.trust).mockResolvedValue({ skill: OPEN });
+  vi.mocked(skillsApi.detail).mockImplementation(async (id) => {
+    const skill = VIEW.skills.find((s) => s.id === id)!;
+    return { skill, body: '# x', text: '# x', onDelete: { stops: [], every: false, then: 'trash' } };
+  });
 });
 
-describe('the Skills tab', () => {
-  it('shows a learned skill with its version, provenance, the untrusted mark and a link back to the proposal', async () => {
-    await act(async () => { render(<AgentSkills agentId="advisor" agentName="Advisor" />); });
-    const learned = screen.getByRole('heading', { name: 'Learned' }).closest('section')!;
-    expect(within(learned).getByText('Check a bank balance in the browser')).toBeInTheDocument();
-    expect(within(learned).getByText('v2 · your correction')).toBeInTheDocument();
-    expect(within(learned).getByText('untrusted text in view')).toBeInTheDocument();
-    expect(within(learned).getByRole('link', { name: 'conversation, turn 3' })).toHaveAttribute('href', '#/activity/conversations/c-1');
-    expect(within(learned).getByRole('link', { name: 'the proposal' })).toHaveAttribute('href', '#/settings/proposals');
-    expect(within(learned).getByText('web page bank balance page (page.read)')).toBeInTheDocument();
+const show = async () => {
+  const navigate = vi.fn();
+  render(<AgentSkills agentId="dev" agentName="Dev" navigate={navigate} />);
+  await screen.findByText('Open a project');
+  return navigate;
+};
+
+describe('the agent page’s Skills', { timeout: 180_000 }, () => {
+  it('lists the skills this agent uses, with where each sits', async () => {
+    await show();
+    expect(screen.getByText('Write in my voice')).toBeInTheDocument();
+    expect(screen.getByText('Yours · every agent uses it')).toBeInTheDocument();
+    expect(screen.getByText(/^Learned · v1 · kept/)).toBeInTheDocument();
+    expect(screen.queryByText('Weekly money recap')).not.toBeInTheDocument();
   });
 
-  it('lists the skills from files and plugins read-only', async () => {
-    await act(async () => { render(<AgentSkills agentId="advisor" agentName="Advisor" />); });
-    const others = screen.getByRole('heading', { name: 'From files and plugins' }).closest('section')!;
-    expect(within(others).getByText('working-in-a-workspace')).toBeInTheDocument();
-    expect(within(others).getByText('from developer@0.1.0')).toBeInTheDocument();
-    expect(within(others).queryByRole('button')).not.toBeInTheDocument();
+  it('links to every skill on the Skills page', async () => {
+    const navigate = await show();
+    const link = screen.getByRole('link', { name: 'All skills' });
+    expect(link).toHaveAttribute('href', '#/agents?tab=skills');
+    fireEvent.click(link);
+    expect(navigate).toHaveBeenCalledWith('#/agents?tab=skills');
   });
 
-  it('removes a learned skill and says what stays', async () => {
-    await act(async () => { render(<AgentSkills agentId="advisor" agentName="Advisor" />); });
-    vi.mocked(api.agentSkills).mockResolvedValue({ agent: 'advisor', writable: true, skills: [PLUGIN] });
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Remove' })); });
-    expect(api.removeSkill).toHaveBeenCalledWith('advisor', LEARNED.name);
-    expect(await screen.findByText(/Its versions are kept, and Advisor will not propose it again for 90 days/)).toBeInTheDocument();
-    expect(screen.queryByText('Check a bank balance in the browser')).not.toBeInTheDocument();
+  it('marks an untrusted skill as mine from its row', async () => {
+    await show();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mark as mine' })); });
+    expect(skillsApi.trust).toHaveBeenCalledWith('dev/open-project');
+  });
+
+  it('opens the shared sheet from a row', async () => {
+    await show();
+    fireEvent.click(screen.getByLabelText('Open a project: details'));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('When it’s used');
+  });
+
+  it('chooses skills: one every agent uses and its own are fixed, a change is one grant', async () => {
+    await show();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose skills…' }));
+    const picker = await screen.findByRole('alertdialog');
+    expect(within(picker).getByRole('checkbox', { name: /Write in my voice/ })).toBeDisabled();
+    expect(within(picker).getByRole('checkbox', { name: /Open a project/ })).toBeDisabled();
+    fireEvent.click(within(picker).getByRole('checkbox', { name: /Weekly money recap/ }));
+    await act(async () => { fireEvent.click(within(picker).getByRole('button', { name: 'Save' })); });
+    expect(skillsApi.grant).toHaveBeenCalledTimes(1);
+    expect(skillsApi.grant).toHaveBeenCalledWith('weekly-recap', { agents: ['ledger', 'dev'] });
+  });
+
+  it('says so when the agent uses no skills', async () => {
+    vi.mocked(skillsApi.list).mockResolvedValue({ ...VIEW, skills: [RECAP] });
+    render(<AgentSkills agentId="dev" agentName="Dev" navigate={vi.fn()} />);
+    expect(await screen.findByText('Dev uses no skills yet. Choose some, or write one on the Skills page.')).toBeInTheDocument();
   });
 });
