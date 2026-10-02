@@ -23,3 +23,40 @@ export async function writeWebSetting(db: Queryable, key: string, value: unknown
     [key, JSON.stringify(value)],
   );
 }
+
+/** A pool that hands out a client for a transaction. */
+export interface ConnectableQueryable extends Queryable {
+  connect(): Promise<Queryable & { release(): void }>;
+}
+
+/**
+ * Read, change and write the value under `key` as one step: the row is
+ * created if missing and locked (`for update`) for the transaction, so two
+ * writers changing different parts of one value cannot lose each other's
+ * change. `change` gets the stored value (null when none) and returns the new one.
+ */
+export async function updateWebSetting<T = unknown>(
+  pool: ConnectableQueryable,
+  key: string,
+  change: (current: T | null) => unknown,
+): Promise<unknown> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query(
+      `insert into core.web_settings (key, value, updated_at) values ($1, 'null'::jsonb, now())
+       on conflict (key) do nothing`,
+      [key],
+    );
+    const { rows } = await client.query('select value from core.web_settings where key = $1 for update', [key]);
+    const next = change((rows[0]?.value as T | undefined) ?? null);
+    await client.query('update core.web_settings set value = $2::jsonb, updated_at = now() where key = $1', [key, JSON.stringify(next)]);
+    await client.query('commit');
+    return next;
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}

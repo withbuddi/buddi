@@ -3,20 +3,29 @@ import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type HomeContribution, type PageDescriptor } from '@buddi/core';
 import { HOME_DISMISSED_MAX, cardOf, readGlances, readHome, readHomeDismissed, setGlanceHidden, setHomeDismissed } from './read.js';
 
-/** `core.web_settings` as a map, answering the two statements the settings use. */
+/** `core.web_settings` as a map, answering the statements the settings use (a read, and the locked update). */
 function fakePool() {
   const rows = new Map<string, unknown>();
-  return {
+  const pool = {
     rows,
     async query(sql: string, params: unknown[] = []) {
-      if (sql.startsWith('select value')) {
+      const q = sql.trim();
+      if (q.startsWith('select value')) {
         const value = rows.get(params[0] as string);
         return { rows: value === undefined ? [] : [{ value }] };
       }
-      rows.set(params[0] as string, JSON.parse(params[1] as string));
+      if (q.startsWith('insert')) {
+        if (!rows.has(params[0] as string)) rows.set(params[0] as string, null);
+        return { rows: [] };
+      }
+      if (q.startsWith('update')) rows.set(params[0] as string, JSON.parse(params[1] as string));
       return { rows: [] };
     },
+    async connect() {
+      return { query: pool.query, release() {} };
+    },
   };
+  return pool;
 }
 
 const settingsPage = { id: 'settings', title: 'Weather', place: 'settings', body: [{ kind: 'notice', text: 'x' }] } as unknown as PageDescriptor;

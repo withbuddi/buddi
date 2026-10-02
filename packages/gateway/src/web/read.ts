@@ -46,7 +46,7 @@ import {
   HOME_GLANCE_MAX,
   TILE_ICONS,
   readWebSetting,
-  writeWebSetting,
+  updateWebSetting,
 } from '@buddi/core';
 import type { OwnerChoice } from '@buddi/core';
 import { listFailureGroups, type FailureGroup, type JobCounts } from '@buddi/core';
@@ -1139,7 +1139,7 @@ export async function readHomeDismissed(pool: Pick<Pool, 'query'>): Promise<Reco
  * again (`token` null). The answer is the whole closed map.
  */
 export async function setHomeDismissed(
-  pool: Pick<Pool, 'query'>,
+  pool: Pick<Pool, 'query' | 'connect'>,
   slot: unknown,
   token: unknown,
 ): Promise<{ status: number; body: unknown }> {
@@ -1147,13 +1147,17 @@ export async function setHomeDismissed(
   if (token !== null && (typeof token !== 'string' || token.trim() === '' || token.length > 2000)) {
     return { status: 400, body: { error: '`token` must be the version of what was closed, or null to show it again' } };
   }
-  const settings = await readHomeSettings(pool);
-  const dismissed = dismissedOf(settings);
-  delete dismissed[slot];
-  if (token !== null) dismissed[slot] = token;
-  const kept = Object.entries(dismissed).slice(-HOME_DISMISSED_MAX);
-  await writeWebSetting(pool as never, HOME_SETTINGS_KEY, { ...settings, dismissed: Object.fromEntries(kept) });
-  return { status: 200, body: { dismissed: Object.fromEntries(kept) } };
+  let kept: Record<string, string> = {};
+  // One locked read-change-write: a dismissal racing another, or a glance
+  // being hidden, cannot overwrite what the other saved.
+  await updateHomeSettings(pool, (settings) => {
+    const dismissed = dismissedOf(settings);
+    delete dismissed[slot];
+    if (token !== null) dismissed[slot] = token;
+    kept = Object.fromEntries(Object.entries(dismissed).slice(-HOME_DISMISSED_MAX));
+    return { ...settings, dismissed: kept };
+  });
+  return { status: 200, body: { dismissed: kept } };
 }
 
 /** One glance, as Home and Settings draw it. The link is resolved here, where the pages are known. */
@@ -1218,6 +1222,16 @@ async function readHomeSettings(pool: Pick<Pool, 'query'>): Promise<HomeSettings
   }
 }
 
+/** Change the Home setting in one locked step (`updateWebSetting`), first row included. */
+async function updateHomeSettings(
+  pool: Pick<Pool, 'query' | 'connect'>,
+  change: (settings: HomeSettings) => HomeSettings,
+): Promise<void> {
+  await updateWebSetting<HomeSettings>(pool as never, HOME_SETTINGS_KEY, (value) =>
+    change(value && typeof value === 'object' && !Array.isArray(value) ? value : {}),
+  );
+}
+
 function hiddenOf(settings: HomeSettings): Set<string> {
   const list = settings.hiddenGlances;
   return new Set(Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : []);
@@ -1271,16 +1285,17 @@ export async function readGlances(deps: {
 
 /** Hide or show one glance. The id must name a glance an installed plugin contributes. */
 export async function setGlanceHidden(
-  deps: { pool: Pick<Pool, 'query'>; registry: ToolRegistry },
+  deps: { pool: Pick<Pool, 'query' | 'connect'>; registry: ToolRegistry },
   id: string,
   hide: boolean,
 ): Promise<{ status: number; body: unknown }> {
   const known = deps.registry.home().some((c) => c.placement === 'glance' && c.id === id);
   if (!known) return { status: 404, body: { error: `no glance is installed with the id ${id}` } };
-  const settings = await readHomeSettings(deps.pool);
-  const hidden = hiddenOf(settings);
-  if (hide) hidden.add(id);
-  else hidden.delete(id);
-  await writeWebSetting(deps.pool as never, HOME_SETTINGS_KEY, { ...settings, hiddenGlances: [...hidden] });
+  await updateHomeSettings(deps.pool, (settings) => {
+    const hidden = hiddenOf(settings);
+    if (hide) hidden.add(id);
+    else hidden.delete(id);
+    return { ...settings, hiddenGlances: [...hidden] };
+  });
   return { status: 200, body: { id, hidden: hide } };
 }
