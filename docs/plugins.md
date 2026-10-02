@@ -929,7 +929,10 @@ type FindingAction =
 A `run` or `fill` runs one of **your own** tools as the owner — the page names
 the finding and the action's index, never a tool, and a gated tool raises its
 approval exactly as from your page. A group's `fill`s that name the same tool
-become one quick form, a field per subject ("Update them"). Core adds the
+become one quick form, a field per subject ("Update them"); a `run` is about
+one finding, so in a group each finding keeps its own on its row when the
+group is expanded (two drafts: a Send and a Discard each), with its own `open`
+when the items differ. Core adds the
 ways out itself: **Not now** (a week), **Stop telling me this** (silences the
 `subject`, or the whole `kind` for a group or a finding without one; taken back
 in Settings → Watchers) and **Clear all**. An older buddi ignores all five

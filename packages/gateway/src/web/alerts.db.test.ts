@@ -216,4 +216,33 @@ suite('alerts: decisions, not chores', () => {
     const [row] = groupFindings([{ ...base, key: 'a', ownerLine: 'One thing.' }, { ...base, key: 'b', ownerLine: 'Another.' }], new Map());
     expect(row?.title).toBe('One thing. — and 1 more like it');
   });
+
+  it('keeps each finding\'s own Send and Discard on its row inside a group', () => {
+    const base = { sentinelId: 'email.drafts', severity: 'urgent' as const, title: 't', detail: '', data: null, firstSeenAt: T0, lastSeenAt: T0, cooldownUntil: null, deliveredAt: null, resolvedAt: null, snoozedAt: null, snoozedUntil: null, kind: 'draft', subject: null, group: null, agentId: null };
+    const actions = (id: string) => [
+      { kind: 'open' as const, label: 'Open draft', page: 'mail', item: id },
+      { kind: 'run' as const, label: 'Send', tool: 'email.send_draft', args: { id } },
+      { kind: 'run' as const, label: 'Discard', tool: 'email.discard_draft', args: { id }, tone: 'danger' as const },
+    ];
+    const [row] = groupFindings([
+      { ...base, key: 'd1', ownerLine: 'Reply to Ana.', actions: actions('1') },
+      { ...base, key: 'd2', ownerLine: 'Reply to Bo.', actions: actions('2') },
+    ] as never, new Map([['email.drafts', 'email']]));
+    // Nothing that is about one draft is offered for both…
+    expect(row!.actions.some((a) => a.kind === 'run')).toBe(false);
+    expect(row!.actions.some((a) => a.kind === 'open' && a.item !== undefined)).toBe(false);
+    // …and each draft keeps its own, by its own key and index.
+    expect(row!.items.map((i) => i.actions)).toEqual([
+      [
+        { kind: 'open', label: 'Open draft', plugin: 'email', page: 'mail', item: '1' },
+        { kind: 'run', label: 'Send', key: 'd1', index: 1 },
+        { kind: 'run', label: 'Discard', key: 'd1', index: 2, tone: 'danger' },
+      ],
+      [
+        { kind: 'open', label: 'Open draft', plugin: 'email', page: 'mail', item: '2' },
+        { kind: 'run', label: 'Send', key: 'd2', index: 1 },
+        { kind: 'run', label: 'Discard', key: 'd2', index: 2, tone: 'danger' },
+      ],
+    ]);
+  });
 });

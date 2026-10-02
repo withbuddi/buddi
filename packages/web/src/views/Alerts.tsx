@@ -276,6 +276,16 @@ export function AlertRow({
               <li key={item.key} className="al-item">
                 {item.subject ? <span className="al-item-who">{item.subject.label}</span> : null}
                 <span className="al-item-note">{item.subject ? item.note : item.line}</span>
+                {/* What is about this one alone — its Send, its Discard — stays on its row. */}
+                {item.actions && item.actions.length > 0 ? (
+                  <span className="al-item-actions">
+                    {item.actions.map((a, i) => (
+                      <Button key={i} size="sm" variant={a.kind === 'run' && a.tone === 'danger' ? 'danger-ghost' : 'ghost'} onClick={() => onAct(group, a)}>
+                        {actionLabel(a, agentName)}
+                      </Button>
+                    ))}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>

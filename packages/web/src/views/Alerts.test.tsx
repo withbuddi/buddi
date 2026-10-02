@@ -197,6 +197,32 @@ describe('Alerts', { timeout: 180_000 }, () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/chat/postie/c1'));
   });
 
+  it('keeps each draft\'s Send and Discard on its own row inside a group', async () => {
+    const own = (n: string) => [
+      { kind: 'open' as const, label: 'Open draft', plugin: 'email', page: 'mail', item: `t-${n}` },
+      { kind: 'run' as const, label: 'Send', key: `draft:${n}`, index: 1 },
+      { kind: 'run' as const, label: 'Discard', key: `draft:${n}`, index: 2, tone: 'danger' as const, confirm: 'Discard this draft?' },
+    ];
+    const drafts = group({
+      id: 'email.drafts:draft',
+      plugin: 'email',
+      title: '2 drafts waiting',
+      keys: ['draft:1', 'draft:2'],
+      items: ['1', '2'].map((n) => ({ key: `draft:${n}`, line: `Draft ${n}.`, subject: { id: n, label: `Person ${n}` }, note: `Draft ${n}.`, firstSeenAt: new Date().toISOString(), actions: own(n) })),
+      actions: [{ kind: 'ask', label: null }],
+    });
+    vi.mocked(api.sentinels).mockResolvedValue(view({ open: [drafts] }));
+    vi.mocked(api.actOnAlerts).mockResolvedValue({ results: [{ key: 'draft:2', approvalId: 'a2' }] });
+    const u = user();
+    page();
+    await u.click(await screen.findByRole('button', { name: 'Show the 2' }));
+    const second = screen.getByText('Person 2').closest('li') as HTMLElement;
+    expect(within(second).getByRole('button', { name: 'Open draft' })).toBeInTheDocument();
+    expect(within(second).getByRole('button', { name: 'Discard' })).toBeInTheDocument();
+    await u.click(within(second).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.actOnAlerts).toHaveBeenCalledWith([{ key: 'draft:2', action: 1 }]));
+  });
+
   it('says nothing needs a decision when nothing does', async () => {
     vi.mocked(api.sentinels).mockResolvedValue(view({ open: [] }));
     page();

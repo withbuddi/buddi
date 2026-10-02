@@ -54,6 +54,13 @@ export interface AlertItemView {
   /** Beside the subject inside a group: its last value ("2,340.00 USD on 2026-09-14"), else its line. */
   note: string;
   firstSeenAt: string;
+  /**
+   * Inside a group of many: what this one finding offers that the group
+   * cannot offer for all — its own `run` actions (Send, Discard) and its own
+   * `open` when the group's items differ. Absent on a row of one, whose
+   * actions are the group's.
+   */
+  actions?: AlertActionView[];
 }
 
 export type AlertActionView =
@@ -159,7 +166,8 @@ function actionView(f: SentinelFinding, a: FindingAction, index: number, plugin:
  * once. A `fill` gathers a field from every finding that offers the same tool
  * — one quick form for nine balances. An `open` stays when every finding opens
  * the same page (without an item when the items differ). A `run` is about one
- * thing, so a group drops it; each finding's own is a row inside the group.
+ * thing, so a group never offers it; each finding keeps its own on its row
+ * inside the group (`itemActions`).
  */
 function groupActions(findings: SentinelFinding[], plugin: string | null): AlertActionView[] {
   const first = findings[0] as SentinelFinding;
@@ -193,6 +201,23 @@ function groupActions(findings: SentinelFinding[], plugin: string | null): Alert
   return out.length > 0 ? out : [{ kind: 'ask', label: null }];
 }
 
+/**
+ * One finding's own actions inside a group of many: every `run`, by its own
+ * key and index, and an `open` that names its own item when the group's
+ * opens could not (`groupActions` drops the item when they differ).
+ */
+function itemActions(f: SentinelFinding, group: readonly AlertActionView[], plugin: string | null): AlertActionView[] {
+  const out: AlertActionView[] = [];
+  f.actions.forEach((a, index) => {
+    if (a.kind === 'run') out.push(actionView(f, a, index, plugin));
+    if (a.kind === 'open' && a.item) {
+      const covered = group.some((g) => g.kind === 'open' && g.page === a.page && g.place === a.place && g.item === a.item);
+      if (!covered) out.push(actionView(f, a, index, plugin));
+    }
+  });
+  return out;
+}
+
 /** One row per watcher and kind; a fact on its own is a row of one. */
 export function groupFindings(findings: readonly SentinelFinding[], plugins: ReadonlyMap<string, string>): AlertGroupView[] {
   const buckets = new Map<string, SentinelFinding[]>();
@@ -216,6 +241,7 @@ export function groupFindings(findings: readonly SentinelFinding[], plugins: Rea
         : `${plainLine(first)} — and ${list.length - 1} more like it`;
     const line = many && spec?.ownerLine ? fill(spec.ownerLine, list.length) : null;
     const subject = !many ? first.subject : null;
+    const actions = groupActions(list, plugin);
     groups.push({
       id: many ? groupKey(first) : first.key,
       sentinelId: first.sentinelId,
@@ -230,15 +256,17 @@ export function groupFindings(findings: readonly SentinelFinding[], plugins: Rea
       items: list.map((f) => {
         const fillAction = f.actions.find((a) => a.kind === 'fill');
         const hint = fillAction?.kind === 'fill' ? fillAction.field.hint : undefined;
+        const own = many ? itemActions(f, actions, plugin) : [];
         return {
           key: f.key,
           line: plainLine(f),
           subject: f.subject ? { id: f.subject.id, label: unfenced(f.subject.label) } : null,
           note: hint ?? plainLine(f),
           firstSeenAt: f.firstSeenAt.toISOString(),
+          ...(own.length > 0 ? { actions: own } : {}),
         };
       }),
-      actions: groupActions(list, plugin),
+      actions,
       stop: subject
         ? { scope: 'subject', label: `${unfenced(subject.label)}: ${plainLine(first)}` }
         : { scope: 'kind', label: title },

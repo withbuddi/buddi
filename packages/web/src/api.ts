@@ -798,6 +798,8 @@ export interface AlertItem {
   subject: { id: string; label: string } | null;
   note: string;
   firstSeenAt: string;
+  /** Inside a group of many: this finding's own actions (Send, Discard, its own Open). */
+  actions?: AlertAction[];
 }
 
 export type AlertAction =
