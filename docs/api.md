@@ -674,7 +674,7 @@ Close one thing on Home until it changes, or show it again.
 - **Body:** `{ slot: string, token: string | null }`
 - **Answer:** `{ dismissed: Record<slot, token> }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.31
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"slot":"…","token":"…"}' "$BUDDI_URL/api/home/dismiss"

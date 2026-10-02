@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.31 — 2026-10-02
+
 ### Added
 
 - The buddi extension is on the Chrome Web Store. Computer & browser → Your browser now leads with Add to Chrome (the store listing, in a new tab) and folds the load-unpacked folder under Developer install; Firefox and Safari are told it needs Chrome, Edge, Brave or Arc, and a phone leaves the install out. The dashboard finds and pairs a store-installed extension exactly like the unpacked one.
