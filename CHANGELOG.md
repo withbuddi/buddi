@@ -6,6 +6,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Added
 
+- Plugin host API 1.23: a watcher's finding carries an owner line (what the owner reads) apart from its brief for the agent, a kind and a subject that group repeats into one row, a group title, and the actions the owner can take from the row — open a page, run one of the plugin's own tools (gated ones still ask), a quick form, ask the agent, or set it aside.
 - Plugin host API 1.22: the tile icon `moon-cloud`, a partly cloudy night; and a page's tab bar may hold one tab with a pick, drawn as the pick alone — a filter over one view.
 - Mail: a Show filter over the conversations — All, Needs a reply, Notifications. Needs a reply is exactly what the Waiting on you widget on Home counts. `email.list_threads` and `email.select_messages` take `needsReply`, and each conversation an agent reads says whether it needs you and why.
 

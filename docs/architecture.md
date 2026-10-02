@@ -615,7 +615,11 @@ notice cannot travel in the tool result, so a system-prompt paragraph stands in;
 
 A **sentinel** is code that runs on a period, reads its own plugin's schema,
 and returns findings: no model, no prompt. A finding is a key, a severity
-(`urgent` or `info`), a title, a detail and optional evidence.
+(`urgent` or `info`), a title, an **owner line** (what the owner reads: the
+only text any surface shows), a **brief** (`detail`: what the agent that picks
+it up should do; never shown), optional evidence, and since host API 1.23 a
+kind, a subject, a group title and the actions the owner can take
+(docs/plugins.md §2.3).
 
 What happens to a finding is core's decision, in `runSentinels`
 (`packages/core/src/sentinels/`). No plugin can decide to interrupt the owner.
@@ -640,7 +644,17 @@ What happens to a finding is core's decision, in `runSentinels`
   finding speaks when it is new, when it resolved and came back, when its
   cooldown ran out, or when it escalated from `info` to `urgent`. A key the
   sentinel stops returning is resolved, which clears its cooldown. A snoozed
-  finding never fires.
+  finding never fires: "Not now" (`snoozed_until`, a week) or "Not needed"
+  (until the fact changes).
+- **What the owner silenced stays silent.** "Stop telling me this" writes
+  `core.sentinel_mutes` — a subject of a watcher's kind, or the whole kind. A
+  finding a mute covers is still recorded and still resolves, but never fires,
+  never reaches the digest and is not listed (`packages/core/src/sentinels/mutes.ts`).
+- **Only decisions are listed.** The Alerts page and Home read
+  `packages/gateway/src/web/alerts.ts`: urgent findings, not snoozed or
+  silenced, one row per watcher and kind; `info` ones are counted in one recap
+  line. Its actions run only what a finding declared, and only tools of the
+  plugin that ships the watcher.
 
 Sentinels run on their own 30-second loop. Like sources, the period is a
 ledger (`core.sentinel_runs`), not a timer, so a machine that slept finds
@@ -929,7 +943,7 @@ What core owns, in the `core` schema (`packages/core/migrations/`):
 | Event log | `events` (append-only) |
 | Scheduling | `missions`, `schedule_specs`, `occurrences`, `last_materialized`, `reminders`, `goals`, `goal_checks` |
 | Queue | `jobs` (lease, attempts, unique `dedup_key`, failure class), `system_flags` (pause, dead-letter state), `recovery` |
-| Watchers | `sentinel_runs`, `sentinel_findings`, `sentinel_switches`, `digest_items`, `source_runs` |
+| Watchers | `sentinel_runs`, `sentinel_findings`, `sentinel_switches`, `sentinel_mutes`, `digest_items`, `source_runs` |
 | Files | `artifacts`, `artifact_uses`, `surface_attachments`, `surface_last_attachment`, `plugin_files` |
 | Authorization | `actions` (immutable), `approvals` (state machine), `effect_attempts` (ledger), `tool_permissions` (standing grants) |
 | Owner state | `onboarding`, `proposals`, `agent_avatars`, `web_settings` |

@@ -11,7 +11,8 @@ import { runScheduler } from '../scheduler/runner.js';
 import { upsertMission } from '../scheduler/missions.js';
 import type { PluginManifest } from '../tools.js';
 import { consumeDigestItems, pendingDigestItems, renderDigest } from './digest.js';
-import { getFinding, openFindings, runSentinels, snoozeFinding } from './run.js';
+import { getFinding, openFindings, runSentinels, snoozeFinding, snoozeFindings } from './run.js';
+import { muteFindings, sentinelMutes, unmuteFindings } from './mutes.js';
 import { sentinelIsEnabled, sentinelSwitches, setSentinelEnabled } from './switches.js';
 import {
   INFO_COOLDOWN_MS,
@@ -21,6 +22,8 @@ import {
   type CoreSentinelContext,
   type Sentinel,
   type SentinelResult,
+  isSnoozed,
+  ownerLineOf,
 } from './types.js';
 import { testDatabaseUrl } from '../testing/database-url.js';
 
@@ -101,7 +104,7 @@ suite('sentinels (postgres)', () => {
 
   beforeEach(async () => {
     await pool.query(
-      'truncate core.sentinel_findings, core.sentinel_runs, core.sentinel_switches, core.digest_items cascade',
+      'truncate core.sentinel_findings, core.sentinel_runs, core.sentinel_switches, core.digest_items, core.sentinel_mutes cascade',
     );
     await pool.query(
       'truncate core.occurrences, core.last_materialized, core.schedule_specs, core.missions cascade',
@@ -644,6 +647,76 @@ suite('sentinels (postgres)', () => {
 
       const [outcome] = await runSentinels(pool, manifests, at(120_000), 'UTC');
       expect(outcome).toMatchObject({ ran: true, findings: 1, fired: 1 });
+    });
+  });
+
+  describe('two texts, and the owner\'s ways out (host API 1.23)', () => {
+    const stale = (account: string): Finding => ({
+      key: `stale:${account}`,
+      severity: 'info',
+      title: `${account} balance is 17 days old`,
+      detail: `BRIEF: ask the owner for ${account}'s balance with finance.set_balance.`,
+      ownerLine: `${account} hasn't been updated in 17 days.`,
+      kind: 'stale-balance',
+      subject: { id: account, label: account },
+      group: { title: '{count} balances not updated in 2+ weeks' },
+      actions: [
+        { kind: 'fill', label: 'Update', groupLabel: 'Update them', tool: 'finance.set_balance', args: { account }, field: { name: 'balance', label: account, type: 'number', value: 10 } },
+        { kind: 'ask' },
+        // Of a shape core does not know: dropped, not trusted.
+        { kind: 'explode', label: 'Boom' } as never,
+      ],
+    });
+
+    it('stores the owner line, kind, subject, group and checked actions; the recap reads the owner line only', async () => {
+      await runSentinels(pool, pluginWith(scripted('finance.stale-balance', [[stale('Checking')]])), T0, 'UTC');
+      const f = await getFinding(pool, 'stale:Checking');
+      expect(f).toMatchObject({ ownerLine: "Checking hasn't been updated in 17 days.", kind: 'stale-balance', subject: { id: 'Checking', label: 'Checking' } });
+      expect(f?.group).toEqual({ title: '{count} balances not updated in 2+ weeks' });
+      expect(f?.actions.map((a) => a.kind)).toEqual(['fill', 'ask']);
+      const digest = renderDigest(await pendingDigestItems(pool));
+      expect(digest).toContain("Checking hasn't been updated in 17 days.");
+      expect(digest).not.toContain('BRIEF');
+    });
+
+    it('falls back to the title, never the brief, when there is no owner line', async () => {
+      expect(ownerLineOf({ ownerLine: null, title: 'Netflix went up' })).toBe('Netflix went up');
+      await runSentinels(pool, pluginWith(scripted('w', [[info]])), T0, 'UTC');
+      const digest = renderDigest(await pendingDigestItems(pool));
+      expect(digest).toContain(info.title);
+      expect(digest).not.toContain(info.detail);
+    });
+
+    it('a mute keeps the subject quiet — no wake, no recap — and taking it back lets it speak', async () => {
+      await wakeMission();
+      const loud: Finding = { ...stale('Savings'), severity: 'urgent' };
+      const mute = await muteFindings(pool, { sentinelId: 'w', kind: 'stale-balance', subjectId: 'Savings', label: 'Savings' }, T0);
+      const manifests = pluginWith(scripted('w', [[loud, stale('Checking')]]));
+      await runSentinels(pool, manifests, T0, 'UTC');
+      expect(await wakes()).toHaveLength(0);
+      expect((await pendingDigestItems(pool)).map((d) => d.findingKey)).toEqual(['stale:Checking']);
+      expect(await sentinelMutes(pool)).toHaveLength(1);
+      expect(await unmuteFindings(pool, mute.id)).toBe(true);
+      await runSentinels(pool, manifests, at(120_000), 'UTC');
+      expect(await wakes()).toHaveLength(1);
+    });
+
+    it('muting a kind takes what it covers out of the recap queue', async () => {
+      await runSentinels(pool, pluginWith(scripted('w', [[stale('A'), stale('B')]])), T0, 'UTC');
+      expect(await pendingDigestItems(pool)).toHaveLength(2);
+      await muteFindings(pool, { sentinelId: 'w', kind: 'stale-balance', subjectId: '', label: 'balances' }, T0);
+      expect(await pendingDigestItems(pool)).toHaveLength(0);
+    });
+
+    it('Not now is quiet until its day; Clear all and its Undo move several at once', async () => {
+      await runSentinels(pool, pluginWith(scripted('w', [[stale('A'), stale('B')]])), T0, 'UTC');
+      const week = at(7 * 86_400_000);
+      const f = await snoozeFinding(pool, 'stale:A', true, T0, week);
+      expect(f && isSnoozed(f, at(86_400_000))).toBe(true);
+      expect(f && isSnoozed(f, at(8 * 86_400_000))).toBe(false);
+      expect(await snoozeFindings(pool, ['stale:A', 'stale:B', 'nope'], true, T0, week)).toEqual(expect.arrayContaining(['stale:A', 'stale:B']));
+      expect(await snoozeFindings(pool, ['stale:A', 'stale:B'], false, T0)).toHaveLength(2);
+      expect((await getFinding(pool, 'stale:B'))?.snoozedAt).toBeNull();
     });
   });
 

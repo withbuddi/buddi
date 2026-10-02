@@ -393,7 +393,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.22`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.23`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -476,6 +476,14 @@ answers `cloud` before 1.22 (the weather plugin does). It is also the first that
 `tabs` with one tab and a `pick` — the bar drawn as the pick alone, a filter
 over one view (docs/plugin-pages.md); an older buddi refuses the descriptor,
 so a plugin that draws one asks for `^1.22`.
+
+1.23 adds no method either: it is the first buddi that reads a finding's
+owner-facing fields — `ownerLine` (what the owner reads; `detail` is now the
+agent brief and is never shown), `kind`, `subject`, `group` and `actions`
+(`open`, `run`, `fill`, `ask`, `dismiss`; docs/plugins.md §2.3) — and lists
+only urgent findings, grouped, with Not now, Stop telling me this and Clear
+all. An older buddi ignores the fields and shows the title, so a watcher that
+sets them need not ask for `^1.23`.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

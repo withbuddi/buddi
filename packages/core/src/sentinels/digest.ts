@@ -7,7 +7,7 @@
  * leaves the items pending rather than swallowing a week of observations.
  */
 import type { Pool } from 'pg';
-import { DIGEST_ITEM_COLUMNS, toDigestItem, type DigestItem } from './types.js';
+import { DIGEST_ITEM_COLUMNS, ownerLineOf, toDigestItem, type DigestItem } from './types.js';
 
 /** Everything noted since the last consumed digest, oldest first. */
 export async function pendingDigestItems(pool: Pool, limit = 50): Promise<DigestItem[]> {
@@ -49,10 +49,17 @@ export async function consumeDigestItems(
   return rows.length;
 }
 
-/** The digest as one plain-text block, or '' when there is nothing to say. */
+/**
+ * The digest as one plain-text block, or '' when there is nothing to say.
+ *
+ * One line per item, in the owner's words (`ownerLine`, else the title) — the
+ * recap is read to the owner, and the briefs are instructions for an agent
+ * holding one finding, not lines for a weekly summary. An agent that wants to
+ * know more asks its own tools, which the preamble says to do anyway.
+ */
 export function renderDigest(items: DigestItem[]): string {
   if (items.length === 0) return '';
-  const lines = items.map((item) => `- ${item.title}: ${item.detail}`);
+  const lines = items.map((item) => `- ${ownerLineOf(item)}`);
   return [
     'Items noted this week by the watchers. They are deterministic readings, ' +
       'not yet verified; check each one before repeating it, and mention only ' +

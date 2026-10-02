@@ -30,8 +30,47 @@ export interface Finding {
    */
   key: string;
   severity: Severity;
+  /** A short label for logs and the fallback owner line. Prefer `ownerLine` for what the owner reads. */
   title: string;
+  /**
+   * The **agent brief**: what the agent that picks the finding up — a wake,
+   * or the owner pressing "Ask" — should check and do. Written for a model
+   * ("read the draft with email.read_draft and tell the owner what it says").
+   * Never shown to the owner on any surface (host API 1.23).
+   */
   detail: string;
+  /**
+   * The **owner's line** (host API 1.23): plain and short, what happened and
+   * why it matters — "Your Checking balance hasn't been updated since 14 Sep,
+   * so the cash forecast starts from a guess." It is the only text the
+   * dashboard, Telegram, the recap and Home show. Unset falls back to `title`,
+   * never to the brief.
+   */
+  ownerLine?: string;
+  /**
+   * What sort of fact this is within its watcher (1.23), e.g. `stale-balance`.
+   * Open findings of the same watcher and kind are drawn as one row. Unset is
+   * the watcher's one kind, ''.
+   */
+  kind?: string;
+  /**
+   * What the finding is about (1.23): an account, a sender. `id` is stable and
+   * is what "Stop telling me this" silences; `label` names the row inside a
+   * group. Plain words, no untrusted markup beyond what `ownerLine` may carry.
+   */
+  subject?: { id: string; label: string };
+  /**
+   * How a group of this kind reads (1.23). `{count}` is replaced by the number
+   * of findings: `{ title: '{count} balances not updated in 2+ weeks' }`.
+   * Unset: the first finding's line "and N more like it".
+   */
+  group?: { title: string; ownerLine?: string };
+  /**
+   * What the owner can do about it (1.23), the first one primary. See
+   * `FindingAction`. Every row also gets Not now and Stop telling me this
+   * from core, so neither is declared here.
+   */
+  actions?: FindingAction[];
   /**
    * Which agent should speak about it: resolved by the plugin — normally with
    * `ctx.agentForRole` — or the wake mission's agent by default. A plugin that
@@ -75,6 +114,39 @@ export interface Finding {
   /** Structured evidence handed to that agent verbatim. */
   data?: unknown;
 }
+
+/**
+ * One thing the owner can do about a finding, from the row (host API 1.23).
+ *
+ *  - `open`: one of this plugin's pages (`page`, optionally an `item` in it),
+ *    or core's Files library (`place: 'files'`).
+ *  - `run`: one of this plugin's tools, run as the owner. A gated tool raises
+ *    its approval card exactly as from the plugin's own page; nothing here
+ *    gets around the gate. `confirm` asks first; `tone: 'danger'` for a
+ *    discard.
+ *  - `fill`: a one-field form — the entered value goes into
+ *    `args[field.name]` and the tool runs as with `run`. Findings of a group
+ *    whose `fill` names the same tool share one quick form, a field each;
+ *    `groupLabel` is the button then ("Update them").
+ *  - `ask`: asks the agent that answers for the finding, handing it the brief.
+ *    The label defaults to "Ask <agent>".
+ *  - `dismiss`: "Not needed" — quiet until the fact itself changes.
+ */
+export type FindingAction =
+  | { kind: 'open'; label: string; page?: string; item?: string; place?: 'files' }
+  | { kind: 'run'; label: string; tool: string; args?: Record<string, unknown>; confirm?: string; tone?: 'danger' }
+  | {
+      kind: 'fill';
+      label: string;
+      groupLabel?: string;
+      /** The quick form's title, e.g. "Update balances". */
+      title?: string;
+      tool: string;
+      args?: Record<string, unknown>;
+      field: { name: string; label: string; type: 'number' | 'text' | 'date'; value?: string | number | null; hint?: string };
+    }
+  | { kind: 'ask'; label?: string }
+  | { kind: 'dismiss'; label: string };
 
 export interface SentinelContext {
   /** The host, bound to the plugin this sentinel belongs to. See `ToolContext.buddi`. */
@@ -187,6 +259,15 @@ export type SentinelFinding = {
   resolvedAt: Date | null;
   /** Set by the owner: heard, living with it. Cleared when the fact resolves. */
   snoozedAt: Date | null;
+  /** "Not now": quiet until then. Null with `snoozedAt` set is quiet until the fact changes. */
+  snoozedUntil: Date | null;
+  /** The owner's line, or null when the watcher gave none (the title stands in). */
+  ownerLine: string | null;
+  kind: string;
+  subject: { id: string; label: string } | null;
+  group: { title: string; ownerLine?: string } | null;
+  actions: FindingAction[];
+  agentId: string | null;
 };
 
 export type SentinelFindingRow = {
@@ -202,10 +283,17 @@ export type SentinelFindingRow = {
   delivered_at: Date | null;
   resolved_at: Date | null;
   snoozed_at: Date | null;
+  snoozed_until?: Date | null;
+  owner_line?: string | null;
+  kind?: string | null;
+  subject?: unknown;
+  group_spec?: unknown;
+  actions?: unknown;
+  agent_id?: string | null;
 };
 
 export const SENTINEL_FINDING_COLUMNS =
-  'key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at, cooldown_until, delivered_at, resolved_at, snoozed_at';
+  'key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at, cooldown_until, delivered_at, resolved_at, snoozed_at, snoozed_until, owner_line, kind, subject, group_spec, actions, agent_id';
 
 export function toSentinelFinding(row: SentinelFindingRow): SentinelFinding {
   return {
@@ -221,7 +309,124 @@ export function toSentinelFinding(row: SentinelFindingRow): SentinelFinding {
     deliveredAt: row.delivered_at,
     resolvedAt: row.resolved_at,
     snoozedAt: row.snoozed_at ?? null,
+    snoozedUntil: row.snoozed_until ?? null,
+    ownerLine: typeof row.owner_line === 'string' && row.owner_line.trim() !== '' ? row.owner_line : null,
+    kind: row.kind ?? '',
+    subject: subjectOf(row.subject),
+    group: groupOf(row.group_spec),
+    actions: actionsOf(row.actions),
+    agentId: row.agent_id ?? null,
   };
+}
+
+/** Is a finding quiet by the owner's snooze at `now`? */
+export function isSnoozed(f: { snoozedAt: Date | null; snoozedUntil: Date | null }, now: Date): boolean {
+  if (f.snoozedAt === null) return false;
+  return f.snoozedUntil === null || f.snoozedUntil.getTime() > now.getTime();
+}
+
+/** What the owner reads for a finding: its line, else its title — never the brief. */
+export function ownerLineOf(f: { ownerLine?: string | null; title: string }): string {
+  const line = typeof f.ownerLine === 'string' ? f.ownerLine.trim() : '';
+  return line !== '' ? line : f.title;
+}
+
+const MAX_TEXT = 400;
+
+function text(value: unknown, max = MAX_TEXT): string | null {
+  if (typeof value !== 'string') return null;
+  const t = value.trim();
+  return t === '' ? null : t.slice(0, max);
+}
+
+/** A subject as stored, or null for anything else. */
+export function subjectOf(value: unknown): { id: string; label: string } | null {
+  if (value === null || typeof value !== 'object') return null;
+  const v = value as { id?: unknown; label?: unknown };
+  const id = text(v.id, 200);
+  const label = text(v.label, 200);
+  return id !== null && label !== null ? { id, label } : null;
+}
+
+/** A group spec as stored, or null. */
+export function groupOf(value: unknown): { title: string; ownerLine?: string } | null {
+  if (value === null || typeof value !== 'object') return null;
+  const v = value as { title?: unknown; ownerLine?: unknown };
+  const title = text(v.title);
+  if (title === null) return null;
+  const ownerLine = text(v.ownerLine);
+  return ownerLine === null ? { title } : { title, ownerLine };
+}
+
+/** The most actions one finding keeps; a row has room for a few, not a menu of twenty. */
+export const MAX_FINDING_ACTIONS = 5;
+
+/**
+ * A finding's actions, checked: anything of a shape core does not know is
+ * dropped rather than trusted, so a plugin built against a newer host, or one
+ * that wrote nonsense, leaves the row with fewer buttons and nothing broken.
+ */
+export function actionsOf(value: unknown): FindingAction[] {
+  if (!Array.isArray(value)) return [];
+  const out: FindingAction[] = [];
+  for (const raw of value) {
+    if (out.length >= MAX_FINDING_ACTIONS) break;
+    if (raw === null || typeof raw !== 'object') continue;
+    const a = raw as Record<string, unknown>;
+    const label = text(a.label, 40);
+    const args = a.args !== null && typeof a.args === 'object' && !Array.isArray(a.args) ? (a.args as Record<string, unknown>) : undefined;
+    switch (a.kind) {
+      case 'open': {
+        if (label === null) continue;
+        const page = text(a.page, 80);
+        const item = text(a.item, 200);
+        if (a.place === 'files') out.push({ kind: 'open', label, place: 'files' });
+        else if (page !== null) out.push({ kind: 'open', label, page, ...(item !== null ? { item } : {}) });
+        break;
+      }
+      case 'run': {
+        const tool = text(a.tool, 120);
+        if (label === null || tool === null) continue;
+        const confirm = text(a.confirm, 300);
+        out.push({ kind: 'run', label, tool, ...(args ? { args } : {}), ...(confirm !== null ? { confirm } : {}), ...(a.tone === 'danger' ? { tone: 'danger' as const } : {}) });
+        break;
+      }
+      case 'fill': {
+        const tool = text(a.tool, 120);
+        const f = a.field !== null && typeof a.field === 'object' ? (a.field as Record<string, unknown>) : null;
+        const name = f ? text(f.name, 60) : null;
+        const fieldLabel = f ? text(f.label, 120) : null;
+        const type = f && (f.type === 'number' || f.type === 'text' || f.type === 'date') ? f.type : null;
+        if (label === null || tool === null || f === null || name === null || fieldLabel === null || type === null) continue;
+        const value = typeof f.value === 'number' && Number.isFinite(f.value) ? f.value : text(f.value, 200);
+        const hint = text(f.hint, 200);
+        const groupLabel = text(a.groupLabel, 40);
+        const title = text(a.title, 80);
+        out.push({
+          kind: 'fill',
+          label,
+          ...(groupLabel !== null ? { groupLabel } : {}),
+          ...(title !== null ? { title } : {}),
+          tool,
+          ...(args ? { args } : {}),
+          field: { name, label: fieldLabel, type, ...(value !== null ? { value } : {}), ...(hint !== null ? { hint } : {}) },
+        });
+        break;
+      }
+      case 'ask': {
+        out.push(label === null ? { kind: 'ask' } : { kind: 'ask', label });
+        break;
+      }
+      case 'dismiss': {
+        if (label === null) continue;
+        out.push({ kind: 'dismiss', label });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return out;
 }
 
 export type DigestItem = {
@@ -230,6 +435,8 @@ export type DigestItem = {
   severity: Severity;
   title: string;
   detail: string;
+  /** The owner's line when the watcher gave one. */
+  ownerLine: string | null;
   createdAt: Date;
   consumedAt: Date | null;
 };
@@ -240,12 +447,13 @@ export type DigestItemRow = {
   severity: Severity;
   title: string;
   detail: string;
+  owner_line?: string | null;
   created_at: Date;
   consumed_at: Date | null;
 };
 
 export const DIGEST_ITEM_COLUMNS =
-  'id, finding_key, severity, title, detail, created_at, consumed_at';
+  'id, finding_key, severity, title, detail, owner_line, created_at, consumed_at';
 
 export function toDigestItem(row: DigestItemRow): DigestItem {
   return {
@@ -254,6 +462,7 @@ export function toDigestItem(row: DigestItemRow): DigestItem {
     severity: row.severity,
     title: row.title,
     detail: row.detail,
+    ownerLine: typeof row.owner_line === 'string' && row.owner_line.trim() !== '' ? row.owner_line : null,
     createdAt: row.created_at,
     consumedAt: row.consumed_at,
   };

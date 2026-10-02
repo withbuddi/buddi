@@ -881,8 +881,13 @@ export interface Sentinel {
 export interface Finding {
   key: string;             // stable dedup key
   severity: 'urgent' | 'info';
-  title: string;
-  detail: string;
+  title: string;           // a short label; stands in when there is no ownerLine
+  detail: string;          // the AGENT BRIEF: what to check and do; never shown to the owner
+  ownerLine?: string;      // the owner's line: plain, short, what happened and why it matters (host API 1.23)
+  kind?: string;           // what sort of fact; one watcher's findings of a kind are one row (1.23)
+  subject?: { id: string; label: string }; // what it is about: an account, a sender (1.23)
+  group?: { title: string; ownerLine?: string }; // how a group reads, `{count}` replaced (1.23)
+  actions?: FindingAction[]; // what the owner can do, the first primary (1.23)
   agentId?: string;        // who should speak about it; resolve it by role
   wake?: boolean;          // an INFO finding that wakes once instead of waiting
   notify?: { urgency?: 'today'; dedupeKey?: string }; // the agent's line waits for the end of the day
@@ -894,6 +899,41 @@ export interface SentinelContext {
   buddi?: BuddiHost;       // db, owner (with agentForRole), clock, …
 }
 ```
+
+**Two texts, two readers** (host API 1.23). `ownerLine` is what the owner
+reads — the only words the Alerts page, Home, Telegram and the recap show —
+so write it for him: "Checking hasn't been updated in 17 days (last 2340.00
+USD), so the cash forecast starts from a guess." `detail` is the brief for the
+agent that picks the finding up, a wake or the owner pressing Ask: "Read the
+draft with email.read_draft and tell the owner what it says." It is never
+drawn. A finding without an `ownerLine` shows its `title`, never the brief.
+
+**Only decisions are listed.** An `urgent` finding is a row on the Alerts page
+and a line in Home's Needs you; an `info` one is never listed and waits for the
+recap, counted in one line ("12 notes saved for Friday's recap · Preview").
+Findings of the same watcher and `kind` are one row — "9 balances not updated
+in 2+ weeks", the subjects inside — titled by `group.title`.
+
+**Every row has a primary action and ways out.** `actions` is the first:
+
+```ts
+type FindingAction =
+  | { kind: 'open'; label: string; page?: string; item?: string; place?: 'files' } // this plugin's page, or Files
+  | { kind: 'run'; label: string; tool: string; args?: object; confirm?: string; tone?: 'danger' }
+  | { kind: 'fill'; label: string; groupLabel?: string; title?: string; tool: string; args?: object;
+      field: { name: string; label: string; type: 'number' | 'text' | 'date'; value?: string | number; hint?: string } }
+  | { kind: 'ask'; label?: string }        // asks the finding's agent, with the brief
+  | { kind: 'dismiss'; label: string };    // "Not needed": quiet until the fact changes
+```
+
+A `run` or `fill` runs one of **your own** tools as the owner — the page names
+the finding and the action's index, never a tool, and a gated tool raises its
+approval exactly as from your page. A group's `fill`s that name the same tool
+become one quick form, a field per subject ("Update them"). Core adds the
+ways out itself: **Not now** (a week), **Stop telling me this** (silences the
+`subject`, or the whole `kind` for a group or a finding without one; taken back
+in Settings → Watchers) and **Clear all**. An older buddi ignores all five
+fields.
 
 A sentinel is deterministic: SQL and TypeScript, no model, no prompt, no
 judgement call that needs a sentence to explain. It answers one question — is
@@ -3342,9 +3382,14 @@ closed when it is absent rather than guess.
 | Field | Type | Required | What it is |
 | --- | --- | --- | --- |
 | `key` | `string` | yes | The identity of a *fact*, stable across runs. Anchor it to the date or the row the condition rests on. |
-| `severity` | `Severity` | yes | `'urgent'` wakes the owner through the `sentinel-wake` mission, then stays quiet 24 h. `'info'` goes to the weekly digest, then stays quiet 7 days. |
-| `title` | `string` | yes | One line. |
-| `detail` | `string` | yes | The evidence, in prose the owner can act on. |
+| `severity` | `Severity` | yes | `'urgent'` wakes the owner through the `sentinel-wake` mission, then stays quiet 24 h, and is a row on the Alerts page. `'info'` goes to the weekly digest, then stays quiet 7 days, and is never listed — only counted in the recap line. |
+| `title` | `string` | yes | A short label; what surfaces show when there is no `ownerLine`. |
+| `detail` | `string` | yes | The **agent brief**: what the agent that picks it up (a wake, or the owner's Ask) should check and do. Never shown to the owner. |
+| `ownerLine` | `string` | no | The owner's line (host API 1.23): plain, short, what happened and why it matters. The only text the dashboard, Telegram, the recap and Home show. |
+| `kind` | `string` | no | What sort of fact this is within its watcher (1.23). Open findings of one watcher and kind are one row. |
+| `subject` | `{ id: string; label: string }` | no | What it is about — an account, a sender (1.23). Names the row inside a group; what "Stop telling me this" silences. |
+| `group` | `{ title: string; ownerLine?: string }` | no | How a group of this kind reads, `{count}` replaced (1.23): `'{count} balances not updated in 2+ weeks'`. |
+| `actions` | `FindingAction[]` | no | What the owner can do, the first primary (1.23): `open`, `run`, `fill`, `ask`, `dismiss` (§2.3). |
 | `agentId` | `string` | no | Who should speak about it: resolved by the plugin — normally `ctx.buddi.owner.agentForRole(role)` — or the wake mission's agent by default. Never an id hard-coded in the plugin. |
 | `wake` | `boolean` | no | An `info` finding that wakes its agent **once**, when it is first raised, instead of taking a digest line. For good news with a short shelf life — a milestone crossed, a target reached. Every later fire of that key behaves like any other `info`. Ignored on `urgent`, which already wakes. |
 | `notify` | `{ urgency?: 'today'; dedupeKey?: string }` | no | How the agent's line reaches the owner when the wake is not news for this minute. `urgency: 'today'` holds it for the end of the owner's day instead of sending it `now`; `dedupeKey` is the notification's "this thing, again" (default `finding:<key>`). It only ever lowers: there is no `now` here. Core's goal watcher uses it for "you have not told me your weight this week". |

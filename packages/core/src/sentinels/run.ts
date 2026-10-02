@@ -19,6 +19,7 @@ import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
 import { OWNER_ID } from '../owner.js';
 import { sentinelIsEnabled, sentinelSwitches } from './switches.js';
+import { isMuted, sentinelMutes, type SentinelMute } from './mutes.js';
 import type { PluginManifest } from '../tools.js';
 import { coalesceOptions, enqueueOccurrence, type CoalesceOptions } from '../scheduler/enqueue.js';
 import { createPluginHost, hostBindingOf, type HostBinding } from '../host/build.js';
@@ -27,7 +28,11 @@ import {
   SENTINEL_FINDING_COLUMNS,
   SENTINEL_WAKE_MISSION_ID,
   URGENT_COOLDOWN_MS,
+  actionsOf,
   findingsOf,
+  groupOf,
+  isSnoozed,
+  subjectOf,
   stillTrueKeys,
   toSentinelFinding,
   type Finding,
@@ -125,6 +130,8 @@ export async function runSentinels(
 
   // The owner's switches, read once per tick. Absent means on.
   const switches = await sentinelSwitches(pool);
+  // What the owner said "Stop telling me this" about, read once per tick.
+  const mutes = await sentinelMutes(pool);
 
   const { rows: ledger } = await pool.query<RunLedgerRow>(
     `select sentinel_id, last_run_at, last_error from core.sentinel_runs`,
@@ -155,7 +162,7 @@ export async function runSentinels(
       outcomes.push({ sentinelId: sentinel.id, ran: false, findings: 0, fired: 0, resolved: 0 });
       continue;
     }
-    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId, bindings.get(sentinel.id)));
+    outcomes.push(await runOne(pool, sentinel, now, timezone, agentForRole, ownerId, bindings.get(sentinel.id), mutes));
   }
   return outcomes;
 }
@@ -168,6 +175,7 @@ async function runOne(
   agentForRole: (role: string) => string | undefined,
   ownerId: string,
   binding: HostBinding | undefined,
+  mutes: readonly SentinelMute[] = [],
 ): Promise<SentinelOutcome> {
   let result: SentinelResult;
   try {
@@ -199,7 +207,8 @@ async function runOne(
     }
     if (raised.has(finding.key)) continue; // one fact, one row, whatever the sentinel repeats
     raised.add(finding.key);
-    if (await upsertAndMaybeFire(pool, sentinel.id, finding, now, sentinel.coalesce)) fired += 1;
+    const muted = isMuted(mutes, sentinel.id, finding.kind ?? '', finding.subject?.id ?? null);
+    if (await upsertAndMaybeFire(pool, sentinel.id, finding, now, sentinel.coalesce, muted)) fired += 1;
   }
 
   const resolved = await resolveMissing(pool, sentinel.id, trueKeys, now);
@@ -242,6 +251,8 @@ async function upsertAndMaybeFire(
   finding: Finding,
   now: Date,
   coalesce?: CoalesceOptions,
+  /** Covered by one of the owner's "Stop telling me this": kept true, never spoken. */
+  muted = false,
 ): Promise<boolean> {
   const existing = await getFinding(pool, finding.key);
   const isNew = existing === null;
@@ -256,13 +267,17 @@ async function upsertAndMaybeFire(
    * Downgrades are not news and do not fire.
    */
   const escalated = existing !== null && existing.severity === 'info' && finding.severity === 'urgent';
-  // A snoozed finding is touched and never fires: the owner has heard it.
-  const shouldFire = (isNew || cooldownPassed || escalated) && existing?.snoozedAt == null;
+  // A snoozed finding is touched and never fires: the owner has heard it. A
+  // muted one neither: he asked not to be told about this subject at all.
+  const snoozed = existing !== null && isSnoozed(existing, now);
+  const shouldFire = (isNew || cooldownPassed || escalated) && !snoozed && !muted;
 
+  const ownerLine = typeof finding.ownerLine === 'string' && finding.ownerLine.trim() !== '' ? finding.ownerLine.trim() : null;
   await pool.query(
     `insert into core.sentinel_findings
-       (key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at)
-     values ($1, $2, $3, $4, $5, $6::jsonb, $7, $7)
+       (key, sentinel_id, severity, title, detail, data, first_seen_at, last_seen_at,
+        owner_line, kind, subject, group_spec, actions, agent_id)
+     values ($1, $2, $3, $4, $5, $6::jsonb, $7, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13)
      on conflict (key) do update
        set sentinel_id = excluded.sentinel_id,
            severity = excluded.severity,
@@ -270,6 +285,12 @@ async function upsertAndMaybeFire(
            detail = excluded.detail,
            data = excluded.data,
            last_seen_at = excluded.last_seen_at,
+           owner_line = excluded.owner_line,
+           kind = excluded.kind,
+           subject = excluded.subject,
+           group_spec = excluded.group_spec,
+           actions = excluded.actions,
+           agent_id = excluded.agent_id,
            resolved_at = null`,
     [
       finding.key,
@@ -279,6 +300,12 @@ async function upsertAndMaybeFire(
       finding.detail,
       JSON.stringify(finding.data ?? null),
       now.toISOString(),
+      ownerLine,
+      typeof finding.kind === 'string' ? finding.kind.trim().slice(0, 80) : '',
+      JSON.stringify(subjectOf(finding.subject)),
+      JSON.stringify(groupOf(finding.group)),
+      JSON.stringify(actionsOf(finding.actions)),
+      finding.agentId ?? null,
     ],
   );
 
@@ -381,6 +408,7 @@ async function enqueueWake(
       sentinelId,
       severity: finding.severity,
       title: finding.title,
+      ...(typeof finding.ownerLine === 'string' && finding.ownerLine.trim() !== '' ? { ownerLine: finding.ownerLine.trim() } : {}),
       detail: finding.detail,
       agentId: finding.agentId ?? null,
       data: finding.data ?? null,
@@ -430,11 +458,11 @@ async function dropPendingDigestItem(pool: Pool, key: string): Promise<void> {
 /** An info finding waits for the weekly recap. One unconsumed item per key. */
 async function noteInDigest(pool: Pool, finding: Finding): Promise<Delivery> {
   const { rows } = await pool.query<{ id: string }>(
-    `insert into core.digest_items (finding_key, severity, title, detail)
-     values ($1, $2, $3, $4)
+    `insert into core.digest_items (finding_key, severity, title, detail, owner_line)
+     values ($1, $2, $3, $4, $5)
      on conflict (finding_key) where consumed_at is null do nothing
      returning id`,
-    [finding.key, finding.severity, finding.title, finding.detail],
+    [finding.key, finding.severity, finding.title, finding.detail, typeof finding.ownerLine === 'string' && finding.ownerLine.trim() !== '' ? finding.ownerLine.trim() : null],
   );
   // Already waiting in the digest: that is the dedup working, not a failure.
   return { ok: true, ...(rows[0] ? { digestItemId: String(rows[0].id) } : {}) };
@@ -468,7 +496,7 @@ async function resolveMissing(
       await client.query('begin');
       await client.query(
         `update core.sentinel_findings
-         set resolved_at = $2, cooldown_until = null, snoozed_at = null
+         set resolved_at = $2, cooldown_until = null, snoozed_at = null, snoozed_until = null
          where key = $1 and resolved_at is null`,
         [finding.key, now.toISOString()],
       );
@@ -494,19 +522,56 @@ async function resolveMissing(
   return resolved;
 }
 
+/** How long "Not now" keeps a finding quiet. */
+export const NOT_NOW_MS = 7 * 24 * 60 * 60_000;
+
 /**
- * The owner's one verb on a finding: snooze it, or take the snooze back. Only
- * an open finding can be snoozed; a resolved one is already quiet. Returns the
- * finding as it now stands, or null when the key names nothing open.
+ * The owner's snooze on a finding, or the snooze taken back. Only an open
+ * finding can be snoozed; a resolved one is already quiet. `until` is "Not
+ * now" — quiet until then, after which the row comes back; without it the
+ * finding stays quiet until the fact itself changes ("Not needed"). Returns
+ * the finding as it now stands, or null when the key names nothing open.
  */
-export async function snoozeFinding(pool: Pool, key: string, snoozed: boolean, now = new Date()): Promise<SentinelFinding | null> {
+export async function snoozeFinding(
+  pool: Pool,
+  key: string,
+  snoozed: boolean,
+  now = new Date(),
+  until: Date | null = null,
+): Promise<SentinelFinding | null> {
   const { rows } = await pool.query<SentinelFindingRow>(
-    `update core.sentinel_findings set snoozed_at = $2
+    `update core.sentinel_findings set snoozed_at = $2, snoozed_until = $3
       where key = $1 and resolved_at is null
       returning ${SENTINEL_FINDING_COLUMNS}`,
-    [key, snoozed ? now.toISOString() : null],
+    [key, snoozed ? now.toISOString() : null, snoozed && until ? until.toISOString() : null],
   );
   if (rows.length === 0) return null;
-  await appendEvent(pool, snoozed ? 'sentinel.snoozed' : 'sentinel.unsnoozed', { key });
+  await appendEvent(pool, snoozed ? 'sentinel.snoozed' : 'sentinel.unsnoozed', { key, ...(snoozed && until ? { until: until.toISOString() } : {}) });
   return toSentinelFinding(rows[0] as SentinelFindingRow);
+}
+
+/**
+ * Several at once — "Clear all", and its Undo. One statement, so a Clear all
+ * is all or nothing. Returns the keys it changed; a key that is not open (it
+ * resolved in between) is simply not among them.
+ */
+export async function snoozeFindings(
+  pool: Pool,
+  keys: readonly string[],
+  snoozed: boolean,
+  now = new Date(),
+  until: Date | null = null,
+): Promise<string[]> {
+  if (keys.length === 0) return [];
+  const { rows } = await pool.query<{ key: string }>(
+    `update core.sentinel_findings set snoozed_at = $2, snoozed_until = $3
+      where key = any($1::text[]) and resolved_at is null
+      returning key`,
+    [[...keys], snoozed ? now.toISOString() : null, snoozed && until ? until.toISOString() : null],
+  );
+  const changed = rows.map((r) => r.key);
+  if (changed.length > 0) {
+    await appendEvent(pool, snoozed ? 'sentinel.snoozed' : 'sentinel.unsnoozed', { keys: changed, ...(snoozed && until ? { until: until.toISOString() } : {}) });
+  }
+  return changed;
 }

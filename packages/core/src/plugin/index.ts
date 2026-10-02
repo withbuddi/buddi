@@ -72,6 +72,7 @@ export type { JSONSchema7 } from '../json-schema.js';
 export type { IdleRollover } from '../agents/idle-rollover.js';
 export type {
   Finding,
+  FindingAction,
   Sentinel,
   SentinelContext,
   SentinelReport,
