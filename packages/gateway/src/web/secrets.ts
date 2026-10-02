@@ -12,6 +12,9 @@
  */
 import type { Pool } from 'pg';
 import { OWNER_AGENT_ID, SECRETS_QUERIES, type ToolRegistry, type CoreToolContext } from '@buddi/core';
+import { listAccounts } from '@buddi/tool-email';
+import { LEGACY_PASSWORD_VAR } from '../owner-secrets.js';
+import { mailProvider } from './recovery.js';
 
 export interface SecretsDeps {
   pool: Pool;
@@ -55,10 +58,105 @@ async function invoke(deps: SecretsDeps, tool: string, args: unknown, session: s
 
 const SETTINGS_TOOLS = new Set(['secrets.put', 'secrets.rename', 'secrets.rebind', 'secrets.delete', 'secrets.scrub_history']);
 
-/** `GET /api/secrets` — the page's one read: secrets, destinations, buddi's own keys. */
+/**
+ * What holds a secret by name: the thing whose row says "my credential is the
+ * owner secret called this". The page names a secret by it (a mailbox's
+ * address, a model account's label, a connection's name) instead of the
+ * generated name, and a secret nothing holds any more is "not used by
+ * anything" — a suggestion to remove it, never a removal.
+ */
+export type SecretUser =
+  /** `loginFailedAt`: the mail server turned the password down at that time (the Email page's own record), until a login works again. */
+  | { kind: 'mailbox'; id: string; address: string; provider: string; auth: 'app-password' | 'xoauth2'; loginFailedAt: string | null }
+  | { kind: 'model-account'; id: string; label: string; auth: string }
+  | { kind: 'connection'; id: string; name: string; variable: string | null };
+
+/** The kinds whose target names the thing that holds the secret: the binding is alive only while that thing still points back. */
+const HELD_KINDS = new Set(['email.account', 'accounts.provider', 'mcp.env']);
+
+/** Every row that names an owner secret as its credential, by secret name. A table that is not installed holds nothing. */
+export async function secretUsers(pool: Pick<Pool, 'query'>): Promise<Map<string, SecretUser[]>> {
+  const users = new Map<string, SecretUser[]>();
+  const add = (name: string | null | undefined, user: SecretUser): void => {
+    if (!name) return;
+    users.set(name, [...(users.get(name) ?? []), user]);
+  };
+  try {
+    for (const account of await listAccounts(pool as Pool, { enabledOnly: false })) {
+      const user: SecretUser = { kind: 'mailbox', id: account.id, address: account.address, provider: mailProvider(account.imapHost), auth: account.authMode, loginFailedAt: account.loginFailedAt ?? null };
+      add(account.secretName, user);
+      // A mailbox the old `.env` named still falls back to `GMAIL_APP_PASSWORD`
+      // until its own password is set (`adoptEnvMailbox`, `missingMailboxes`).
+      if (account.addedVia === 'env' && account.secretName !== LEGACY_PASSWORD_VAR) add(LEGACY_PASSWORD_VAR, user);
+    }
+  } catch {
+    // No email schema: no mailboxes here.
+  }
+  try {
+    const { rows } = await pool.query<{ id: string; label: string; auth: string; secret_ref: string | null }>(
+      `select id, label, auth, secret_ref from core.provider_accounts where not deleting`,
+    );
+    for (const row of rows) add(row.secret_ref, { kind: 'model-account', id: row.id, label: row.label, auth: row.auth });
+  } catch {
+    // An installation that predates model accounts.
+  }
+  try {
+    const { rows } = await pool.query<{ id: string; name: string; vault_ref: string | null; env: unknown }>(
+      `select id::text as id, name, vault_ref, env from mcp.connections`,
+    );
+    for (const row of rows) {
+      add(row.vault_ref, { kind: 'connection', id: row.id, name: row.name, variable: null });
+      if (!Array.isArray(row.env)) continue;
+      for (const entry of row.env as Array<Record<string, unknown>>) {
+        if (typeof entry.secretRef === 'string') {
+          add(entry.secretRef, { kind: 'connection', id: row.id, name: row.name, variable: typeof entry.name === 'string' ? entry.name : null });
+        }
+      }
+    }
+  } catch {
+    // No connections table: nothing connected here.
+  }
+  return users;
+}
+
+interface ListedSecret {
+  name: string;
+  bindings: Array<{ kind: string; target: unknown }>;
+}
+
+/**
+ * Whether nothing can reach a secret any more: it has bindings, and every one
+ * of them is dead — a held kind whose mailbox, account or connection no longer
+ * names this secret, or a kind no installed plugin registers. A secret with no
+ * binding at all is unused only when it was never the owner's own: a name a
+ * mailbox, an account or a connection generated, or the old `.env` mailbox
+ * password. An owner's fresh secret with no binding is "not usable yet", a
+ * different sentence the page says itself.
+ */
+export function isUnused(secret: ListedSecret, users: readonly SecretUser[], registered: ReadonlySet<string>): boolean {
+  if (users.length > 0) return false;
+  if (secret.bindings.length === 0) return GENERATED_NAME.test(secret.name) || secret.name === LEGACY_PASSWORD_VAR;
+  return secret.bindings.every((binding) => HELD_KINDS.has(binding.kind) || !registered.has(binding.kind));
+}
+
+/** The names buddi itself generates for a credential it keeps for a row. */
+const GENERATED_NAME = /^(PROVIDER_ACCOUNT_|CODEX_ACCOUNT_|ANTHROPIC_ACCOUNT_|OLLAMA_DEVICE_|MCP_TOKEN_|MCP_ENV_|MCP_CONNECTION_|EMAIL_[A-Z0-9_]+_[0-9a-f]{8}$)/;
+
+/** `GET /api/secrets` — the page's one read: secrets, destinations, buddi's own keys, and what holds each secret. */
 export async function listSecrets(deps: SecretsDeps): Promise<RouteReply> {
-  const result = await SECRETS_QUERIES[0]!.produce({}, { ...deps.ctx, db: deps.pool, now: deps.now ?? (() => new Date()) } as CoreToolContext);
-  return reply(200, result);
+  const result = (await SECRETS_QUERIES[0]!.produce({}, { ...deps.ctx, db: deps.pool, now: deps.now ?? (() => new Date()) } as CoreToolContext)) as {
+    secrets: ListedSecret[];
+    destinations: Array<{ kind: string }>;
+  };
+  const users = await secretUsers(deps.pool);
+  const registered = new Set(result.destinations.map((d) => d.kind));
+  return reply(200, {
+    ...result,
+    secrets: result.secrets.map((secret) => {
+      const usedBy = users.get(secret.name) ?? [];
+      return { ...secret, usedBy, unused: isUnused(secret, usedBy, registered) };
+    }),
+  });
 }
 
 /** `GET /api/secrets/uses` — the use log, whole or one secret's. */

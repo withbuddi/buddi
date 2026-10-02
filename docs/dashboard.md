@@ -325,7 +325,12 @@ A list of sections in four groups.
 - **Model accounts**: the credentials the agents run on.
 - **Computer & browser**: whether agents may act on this Mac, which apps, and
   which browser.
-- **Keys and secrets**: your vault, and where each secret may be used.
+- **Keys and secrets**: your vault, in groups — your own secrets, mailbox
+  passwords, each plugin's (calendar links), model accounts and connections
+  (those two read-only, linked to where they are managed). Each row says in
+  plain words what it is, where it may go and when it was last used; a
+  problem is one sentence with its one fix, and a secret nothing uses any
+  more offers Remove. Details are in [owner secrets](owner-secrets.md#6-settings--keys-and-secrets).
 - **Lock screen**: the PIN, how long before the dashboard locks, the
   background (see [Lock screen](#lock-screen)).
 - **API tokens**: tokens for calling buddi's HTTP API from a script or

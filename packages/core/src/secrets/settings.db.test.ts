@@ -113,7 +113,8 @@ suite('Keys and secrets', () => {
     ]);
 
     const listed = (await produceList()) as { secrets: Array<{ name: string; totp: boolean }>; ownKeys: string[]; destinations: unknown[] };
-    expect(listed.secrets).toEqual([expect.objectContaining({ name: NAME, totp: false })]);
+    // The vault holds it (names only), and nothing has used it yet.
+    expect(listed.secrets).toEqual([expect.objectContaining({ name: NAME, totp: false, hasValue: true, lastUse: null })]);
     expect(JSON.stringify(listed)).not.toContain(VALUE);
     expect(listed.ownKeys).toContain('OPENAI_API_KEY');
     expect(listed.destinations).toContainEqual({ kind: 'http.header', plugin: 'http', maxRule: 'pre-approved' });
@@ -174,6 +175,18 @@ suite('Keys and secrets', () => {
     ).toEqual({ rebound: true });
     expect(await run('secrets.delete', { name: 'Two' })).toEqual({ deleted: true });
     await expect(run('secrets.delete', { name: 'Two' })).rejects.toThrow(/no secret named/i);
+  });
+
+  it('the list carries the last use’s recorded sentence, so the page can say what a refusal was', async () => {
+    await run('secrets.put', { name: NAME, value: VALUE, totp: false, bindings: [] });
+    await pool.query(
+      `insert into core.secret_uses (secret_id, secret_name, kind, target, plugin, outcome, detail, at)
+       values ((select id from core.secrets where name = $1), $1, 'http.header', '{"host":"x.test","header":"A"}'::jsonb, 'http', 'refused', $2, now())`,
+      [NAME, `"${NAME}" is not bound to x.test.`],
+    );
+    const listed = (await produceList()) as { secrets: Array<{ name: string; lastUse: { outcome: string; detail: string | null } | null }> };
+    expect(listed.secrets[0]?.lastUse).toEqual(expect.objectContaining({ outcome: 'refused', detail: `"${NAME}" is not bound to x.test.` }));
+    await run('secrets.delete', { name: NAME });
   });
 
   it('the uses log answers newest first with outcomes, never values', async () => {

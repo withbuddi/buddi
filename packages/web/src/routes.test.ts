@@ -5,6 +5,8 @@ import {
   parsePluginsInstall,
   parsePluginsTab,
   parseSecretRoute,
+  parseSecretsAdd,
+  SECRETS_ADD_ROUTE,
   secretRoute,
   pluginSettingsRoute,
   parsePluginSettingsRoute,
@@ -57,6 +59,9 @@ describe('the recovery checklist links', () => {
     expect(secretRoute('EMAIL_YOU_1a2b')).toBe('#/settings/secrets?secret=EMAIL_YOU_1a2b');
     expect(parseSecretRoute(secretRoute('EMAIL_YOU_1a2b'))).toBe('EMAIL_YOU_1a2b');
     expect(parseSecretRoute('#/settings/connections?secret=x')).toBeNull();
+    // The header's Add a secret opens the add form by its address.
+    expect(parseSecretsAdd(SECRETS_ADD_ROUTE)).toBe(true);
+    expect(parseSecretsAdd('#/settings/secrets')).toBe(false);
     expect(settingsSectionOf(secretRoute('x'))).toBe('secrets');
   });
 

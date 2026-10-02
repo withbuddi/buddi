@@ -257,6 +257,14 @@ export function parseSecretRoute(hash: string): string | null {
   return settingsParam(hash, 'secrets', 'secret');
 }
 
+/** Settings → Keys and secrets with the add form open: the page header's Add a secret. */
+export const SECRETS_ADD_ROUTE = `${settingsRoute('secrets')}?add=1`;
+
+/** Whether a secrets hash asks for the add form. */
+export function parseSecretsAdd(hash: string): boolean {
+  return settingsParam(hash, 'secrets', 'add') === '1';
+}
+
 /**
  * Settings → Plugins with one install staged, the way a market link stages it:
  * `#/settings/plugins?install=<npm>@<version>`.

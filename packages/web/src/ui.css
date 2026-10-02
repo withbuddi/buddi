@@ -779,6 +779,48 @@ fieldset:disabled { opacity: 0.6; }
 .ui-menu-note { font-size: var(--text-xs); color: var(--text-faint); }
 .ui-menu-empty { margin: 0; padding: 6px 9px 8px; font-size: var(--text-sm); color: var(--text-muted); }
 
+/* A row's ⋯ on a phone: the same items as a sheet from the bottom (ActionMenu's `sheet`). */
+.ui-action-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  background: var(--surface);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  box-shadow: var(--shadow-pop);
+  animation: ui-action-sheet-up var(--dur-slow) var(--ease);
+}
+.ui-action-sheet:focus { outline: none; }
+.ui-action-sheet::before { content: ''; align-self: center; flex: 0 0 auto; width: var(--space-10); height: var(--space-1); border-radius: var(--radius-pill); background: var(--line-strong); }
+.ui-action-sheet-head { display: flex; flex-direction: column; min-width: 0; padding: 0 var(--space-1); }
+.ui-action-sheet-title { margin: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text); }
+.ui-action-sheet-sub { font-size: var(--text-xs); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-action-sheet-list { min-width: 0; padding: 0; border: 0; box-shadow: none; background: transparent; display: flex; flex-direction: column; }
+.ui-action-sheet-list .ui-menu-item {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  min-height: var(--space-12);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.ui-action-sheet-list .ui-menu-item:hover, .ui-action-sheet-list .ui-menu-item:focus-visible { background: var(--accent-soft); }
+.ui-action-sheet-list .ui-menu-item[data-tone='critical']:hover, .ui-action-sheet-list .ui-menu-item[data-tone='critical']:focus-visible { background: var(--critical-soft); }
+.ui-action-sheet-cancel { justify-content: center; width: 100%; min-height: var(--control-h-lg); }
+@keyframes ui-action-sheet-up { from { transform: translateY(var(--space-6)); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ui-action-sheet { animation: none; } }
+
 .ui-tip {
   display: flex;
   flex-direction: column;

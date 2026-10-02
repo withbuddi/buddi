@@ -131,11 +131,33 @@ const list: PageQuery = {
   params: noParams,
   result: listResult,
   async produce(_params: unknown, ctx: CoreToolContext) {
-    const secrets = await listOwnerSecrets(ctx.db, {});
+    const listed = await listOwnerSecrets(ctx.db, {});
     const destinations = secretDestinations().map((d) => ({ kind: d.kind, plugin: d.plugin, maxRule: d.maxRule }));
     const vault = pluginHostVault();
-    const names = vault !== undefined ? await vault.list().catch(() => []) : [];
-    const ownKeys = names.filter((name) => !name.startsWith('owner-secret:'));
+    const names: string[] | null = vault !== undefined ? await vault.list().catch(() => null) : null;
+    const ownKeys = (names ?? []).filter((name) => !name.startsWith('owner-secret:'));
+    /*
+     * Two facts the page words a problem with, never a value: whether the
+     * vault holds an entry for the secret at all (names only, from `list`;
+     * null when the vault cannot say), and the sentence the last use was
+     * recorded with — a refusal's reason, a failed delivery's scrubbed error.
+     */
+    const { rows: facts } = await ctx.db.query(
+      `select s.name, s.id::text as id,
+              (select u.detail from core.secret_uses u where u.secret_id = s.id order by u.at desc, u.id desc limit 1) as detail
+         from core.secrets s`,
+    );
+    const held = names === null ? null : new Set(names);
+    const byName = new Map(facts.map((row: { name: string; id: string; detail: string | null }) => [row.name, row]));
+    const secrets = listed.map((secret) => {
+      const fact = byName.get(secret.name);
+      const hasValue = held === null || fact === undefined ? null : held.has(`owner-secret:${fact.id.toLowerCase()}`);
+      return {
+        ...secret,
+        hasValue,
+        lastUse: secret.lastUse === null ? null : { ...secret.lastUse, detail: fact?.detail ?? null },
+      };
+    });
     return listResult.parse({ secrets, destinations, ownKeys: [...new Set([...ownKeys, ...KNOWN_SECRETS])].sort() });
   },
 };

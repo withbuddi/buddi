@@ -201,11 +201,74 @@ Model accounts and Computer & browser. It sits there because it answers the
 same question as its neighbours, what agents may reach, and not You's, which
 is about the owner and what buddi learned about them.
 
-- **Add**: name, value (a password field), TOTP (off), and one or more
-  bindings, each a kind, a target and a rule, the kinds offered being those
-  the installed plugins register.
-- **Rename**, **rebind** and **delete**. Rebinding to a looser rule or a new
-  target is the owner's own action on the page, never a tool.
+The page is Plugins-shaped: "Settings ›", the title, one line, and **Add a
+secret** on the right. One panel holds the secrets in groups, each a short
+heading, hairlines between them; a group with nothing in it is not drawn.
+
+- **Your secrets** — the owner's own, the ones agents fill through
+  `secret.fill`.
+- **Mail** — mailbox passwords. A new one is set on the Email page (its row's
+  Set password form, `#/settings/p.email.settings?account=<id>&set=password`),
+  which tests the login before it keeps anything.
+- **One group per plugin** that keeps secrets — **Calendar links** for the
+  calendar plugin's private links (an `http.url` binding names its plugin).
+- **Model accounts** and **Connections** — read-only here; each row links to
+  where it is managed.
+
+What holds a secret is read by the gateway (`GET /api/secrets` answers
+`usedBy` per secret): the mailbox whose row names it, the model account whose
+`secret_ref` is it, the connection whose token or program variable it is.
+
+**A row** is a glyph for its kind, a human name — the mailbox's provider and
+"app password", the calendar's name, the model account's label with its
+provider beside it, the owner's own name — and one line on where it may go
+and when it was last used: "Used by the mailbox sam@gmail.com · Last used 5
+minutes ago", "Filled on pnc.com · asks you the first time", "Sent only to
+calendar.google.com". No stored name, id or binding kind is on the row; they
+sit under **Details** in the row's sheet, beside the usage history in words.
+A healthy row has no pill.
+
+**A problem** is one sentence and its one fix:
+
+- **"Held back 23 seconds ago: it was asked for at uploads.github.com, where
+  it may not go."** A refusal is buddi's own: the use was not bound to that
+  place (§4), the secret had no value, the vault was locked, or a TOTP secret
+  was asked for outside a browser field. buddi declined to hand the value
+  over; the value never left. Fix: Change where it may go (for the owner's
+  own secrets).
+- **"No value stored."** — the vault holds no entry for it (after a restore,
+  say). Fix: Set a value, or Set password for a mailbox.
+- **"Gmail turned it down at sign-in 12 minutes ago."** — the mail server
+  refused the password at login (the Email page's own record). Fix: Set
+  password.
+- **"Didn't go through …"** — buddi handed the value over and the destination
+  could not take it. **"Waiting for your approval …"** — a `first-time` or
+  `every-time` use waits on its card.
+- **"Can't be used anywhere until you choose where it may go."** — the
+  owner's secret has no binding yet.
+
+**Not used by anything.** A secret is unused when nothing holds it and nothing
+can reach it: every binding is a held kind (`email.account`,
+`accounts.provider`, `mcp.env`) whose mailbox, account or connection no longer
+names it, or a kind no installed plugin registers — or it has no binding and
+its name is one buddi generated for a row, or the old `.env` mailbox password
+`GMAIL_APP_PASSWORD` (a mailbox the old `.env` named still counts as using
+it). The row says so quietly and offers **Remove**; nothing is removed by
+itself. An owner's own secret with no binding is "not usable yet", not
+unused.
+
+**The ⋯ menu** (a sheet from the bottom on a phone): for the owner's own,
+**Replace value**, **Rename**, **Change where it may go**, **Usage history**,
+then **Delete**, which asks once and names what stops working. A mailbox's
+offers Set a new password and Usage history; a plugin's, Replace value and
+Usage history. A secret's name and places that a mailbox, account or plugin
+keeps are theirs to change.
+
+- **Add**: name, value (a password field), TOTP (off), and the places it may
+  go, each a kind of place, the place and when it asks you; a new place
+  starts at "the first time" where the kind allows it.
+- Changing where a value may go to a looser rule or a new place is the owner's
+  own action on the page, never a tool.
 - The value is **never shown again** after save. "Replace value" is the only
   way to change it.
 - **On save, buddi looks for the value where it may already be**: events,
@@ -215,11 +278,8 @@ is about the owner and what buddi learned about them.
   scrubbed when it is created, before it can become a skill). The files under
   a bound workspace are the developer plugin's to scan, and its
   `developer.write` and `developer.edit` refuse a stored value from then on.
-- buddi's own keys are listed at the bottom, read-only, by name and last
-  use, so the page shows everything the vault holds. They cannot be bound
-  or replaced from here.
-- Each row shows its bindings, **last use** (when, which agent, which
-  destination and target) and a link to its use log.
+- buddi's own keys are folded under the panel, read-only, by name. They
+  cannot be bound or replaced from here.
 - Every write is an `ownerOnly` tool: no model sees it, as with email's
   add-account.
 

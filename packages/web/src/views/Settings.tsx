@@ -13,17 +13,17 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PlaceProps } from '../App';
 import { ApiError, api, type TailscaleView, type UpgradeAttempt, type UpgradeJob } from '../api';
 import { fmtRelative, fmtTime } from '../format';
-import { SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parsePluginSettingsRoute, pluginRouteParams, settingsSectionOf } from '../routes';
+import { SECRETS_ADD_ROUTE, SETTINGS_ROUTE, parseAccountRoute, parseConnectionRoute, parseProposalsFilter, parseSecretRoute, parseSecretsAdd, parsePluginSettingsRoute, pluginRouteParams, settingsSectionOf } from '../routes';
 import { NARROW_QUERY, useMediaQuery } from '../useMediaQuery';
 import { PluginSettingsPage } from '../pages/PluginPage';
 import { usePluginPages } from '../pages/usePages';
 import { useAppearance, type Ground, type PageWidth } from '../appearance';
 import type { ThemeChoice } from '../theme';
-import { Breadcrumb, Button, Empty, ErrorBanner, Field, KV, Notice, PageHeader, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
+import { Breadcrumb, Button, ButtonLink, Empty, ErrorBanner, Field, KV, Notice, PageHeader, Pill, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 import { Backup } from './Backup';
 import { Browser } from './Browser';
 import { Providers } from './Providers';
-import { Secrets } from './Secrets';
+import { SECRETS_LEDE, Secrets } from './Secrets';
 import { CONNECTIONS_LEDE, Connections } from './Connections';
 import { Watchers } from './Watchers';
 import { LockSettings } from './LockSettings';
@@ -73,7 +73,19 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
       {narrow ? null : <SettingsNav {...list} />}
       <div className="settings-body">
         <div className="ui-page">
-          {section === 'plugins' || section === 'connections' ? (
+          {section === 'secrets' ? (
+            /* Keys and secrets as Plugins draws it: the way back, the title, one line, and Add a secret on the right. */
+            <PageHeader
+              before={<Breadcrumb inline items={[{ label: 'Settings', href: SETTINGS_ROUTE, onClick: () => navigate(SETTINGS_ROUTE) }]} />}
+              title="Keys and secrets"
+              lede={SECRETS_LEDE}
+              actions={
+                <ButtonLink variant="accent" size="sm" href={SECRETS_ADD_ROUTE} onClick={(event) => { event.preventDefault(); navigate(SECRETS_ADD_ROUTE); }}>
+                  Add a secret
+                </ButtonLink>
+              }
+            />
+          ) : section === 'plugins' || section === 'connections' ? (
             /* Plugins and Connections are pages of their own inside Settings, as
                the kit draws them: the way back to Settings, then their own title and lede. */
             <PageHeader
@@ -105,7 +117,9 @@ export function Settings({ hash, timezone, navigate, agents, pluginPages }: Plac
           {section === 'proposals' ? <Proposals embedded plugin={parseProposalsFilter(hash)} /> : null}
           {section === 'accounts' ? <Providers embedded account={parseAccountRoute(hash)} /> : null}
           {section === 'computer' ? <Browser embedded timezone={timezone} /> : null}
-          {section === 'secrets' ? <Secrets embedded timezone={timezone} secret={parseSecretRoute(hash)} /> : null}
+          {section === 'secrets' ? (
+            <Secrets embedded timezone={timezone} secret={parseSecretRoute(hash)} adding={parseSecretsAdd(hash)} navigate={navigate} />
+          ) : null}
           {section === 'connections' ? <Connections embedded timezone={timezone} connection={parseConnectionRoute(hash)} /> : null}
           {section === 'lock' ? <LockSettings navigate={navigate} /> : null}
           {section === 'api' ? <ApiTokens timezone={timezone} /> : null}

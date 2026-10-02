@@ -4325,3 +4325,35 @@ button.lk-chip:disabled { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .rs-track span { animation: none; width: 100%; opacity: 0.35; }
 }
+
+/* ---- Settings → Keys and secrets (views/Secrets.tsx; the kit's Secrets.jsx) ---- */
+.secrets-group + .secrets-group { border-top: 1px solid var(--line); }
+.secrets-group-head { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-4) var(--space-1); }
+.secrets-group-title { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text); }
+.secrets-group-aside { min-width: 0; font-size: var(--text-xs); color: var(--text-muted); }
+.secrets-group .ui-list-sub { display: flex; flex-direction: column; gap: var(--space-0); white-space: normal; }
+.secrets-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secrets-status { color: var(--text-faint); }
+.secrets-status[data-tone='warning'] { color: var(--warning); font-weight: var(--weight-medium); }
+.secrets-tag { margin-left: var(--space-2); font-size: var(--text-xs); font-weight: var(--weight-normal); color: var(--text-muted); }
+.secrets-side { display: inline-flex; align-items: center; gap: var(--space-2); }
+.secrets-managed { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); text-decoration: none; white-space: nowrap; }
+.secrets-managed:hover { color: var(--accent); }
+.secrets-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading); color: var(--text-muted); }
+.secrets-dialog-text { margin: 0; font-size: var(--text-md); line-height: var(--leading); color: var(--text-muted); }
+.secrets-sheet-head { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text); }
+.secrets-history[data-tone='warning'] { color: var(--warning); }
+.ui-list-title:has(.secrets-history) { white-space: normal; }
+.secrets-place-hint { grid-column: 1 / -1; margin: 0; }
+.secrets-mono { font-size: var(--text-xs); word-break: break-all; white-space: normal; }
+.secrets-place { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 0.8fr) auto; gap: var(--space-3); align-items: end; padding-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
+/* A phone: the name and its lines beside the glyph, ⋯ top right, the fix under the lines. */
+@media (max-width: 720px) {
+  .secrets-group-head { flex-direction: column; gap: var(--space-0); }
+  .secrets-group .ui-list-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: var(--space-3); row-gap: var(--space-2); align-items: start; }
+  .secrets-group .ui-list-side, .secrets-group .secrets-side { display: contents; }
+  .secrets-side > .ui-btn, .secrets-side > .secrets-managed { grid-column: 2 / 4; grid-row: 2; justify-self: start; }
+  .secrets-side > .ui-icon-btn { grid-column: 3; grid-row: 1; }
+  .secrets-line { white-space: normal; }
+  .secrets-place { grid-template-columns: minmax(0, 1fr); }
+}

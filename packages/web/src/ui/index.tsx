@@ -17,6 +17,7 @@ export { Icon, ICON_NAMES, type IconName } from './Icon';
 import { Icon, type IconName } from './Icon';
 export { Avatar, AgentAvatar, FaceMark, Mascot, MascotProvider } from '../views/parts/Avatar';
 import { Mascot } from '../views/parts/Avatar';
+import { useMediaQuery } from '../useMediaQuery';
 
 export type Tone = 'good' | 'warning' | 'critical' | 'accent' | 'muted';
 
@@ -788,6 +789,7 @@ export function ActionMenu({
   items,
   note,
   trigger,
+  sheet,
 }: {
   /** The button's name: "More for finance". */
   label: string;
@@ -796,6 +798,90 @@ export function ActionMenu({
   /** A quiet line over the items: where it comes from, when it was updated. */
   note?: ReactNode;
   /** A button of its own instead of ⋯: "Add a widget". It must take a ref (a plain button). */
+  trigger?: ReactNode;
+  /**
+   * On a phone, the same items as a sheet from the bottom, whose menu it is
+   * on top (`title`, one quiet `sub` line), rows a finger tall and Cancel
+   * under them — the chat head's menu, as a primitive.
+   */
+  sheet?: { title: ReactNode; sub?: ReactNode };
+}): JSX.Element {
+  const phone = useMediaQuery(PHONE_MENU_QUERY);
+  if (sheet && phone && !trigger) return <ActionSheet label={label} items={items} title={sheet.title} sub={sheet.sub} />;
+  return <ActionPopover label={label} items={items} note={note} trigger={trigger} />;
+}
+
+/** The width under which a row's ⋯ menu is a sheet from the bottom. */
+const PHONE_MENU_QUERY = '(max-width: 720px)';
+
+function ActionSheet({
+  label,
+  items,
+  title,
+  sub,
+}: {
+  label: string;
+  items: Array<MenuAction | { heading: ReactNode } | 'separator' | null | false | undefined>;
+  title: ReactNode;
+  sub?: ReactNode;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger asChild>
+        <button type="button" className="ui-icon-btn" data-size="sm" aria-label={label} title={label} onClick={(event) => event.stopPropagation()}>
+          <Icon name="more" />
+        </button>
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ui-sheet-overlay" onClick={(event) => event.stopPropagation()} />
+        <Dialog.Content className="ui-action-sheet" aria-describedby={undefined} onClick={(event) => event.stopPropagation()}>
+          <div className="ui-action-sheet-head">
+            <Dialog.Title className="ui-action-sheet-title">{title}</Dialog.Title>
+            {sub ? <span className="ui-action-sheet-sub">{sub}</span> : null}
+          </div>
+          <div className="ui-menu ui-action-sheet-list" role="menu">
+            {items.map((item, index) =>
+              !item ? null : item === 'separator' ? (
+                <div key={`sep-${index}`} className="ui-menu-sep" role="separator" />
+              ) : 'heading' in item ? (
+                <div key={`head-${index}`} className="ui-menu-label">{item.heading}</div>
+              ) : (
+                <button
+                  key={index}
+                  type="button"
+                  role="menuitem"
+                  className="ui-menu-item"
+                  data-tone={item.tone}
+                  onClick={() => {
+                    setOpen(false);
+                    item.onSelect();
+                  }}
+                >
+                  <span>{item.label}</span>
+                  {item.hint ? <span className="ui-menu-item-hint">{item.hint}</span> : null}
+                </button>
+              ),
+            )}
+          </div>
+          <Dialog.Close asChild>
+            <Button className="ui-action-sheet-cancel">Cancel</Button>
+          </Dialog.Close>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function ActionPopover({
+  label,
+  items,
+  note,
+  trigger,
+}: {
+  label: string;
+  items: Array<MenuAction | { heading: ReactNode } | 'separator' | null | false | undefined>;
+  note?: ReactNode;
   trigger?: ReactNode;
 }): JSX.Element {
   const stop = (event: { stopPropagation: () => void }): void => event.stopPropagation();

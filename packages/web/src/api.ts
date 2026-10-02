@@ -1956,12 +1956,26 @@ export interface SecretUseRow {
   detail: string | null;
 }
 
+/** A row elsewhere in buddi whose credential this secret is (`packages/gateway/src/web/secrets.ts`). */
+export type SecretUserView =
+  /** `loginFailedAt`: the mail server turned the password down then, until a login works again. */
+  | { kind: 'mailbox'; id: string; address: string; provider: string; auth: 'app-password' | 'xoauth2'; loginFailedAt: string | null }
+  | { kind: 'model-account'; id: string; label: string; auth: string }
+  | { kind: 'connection'; id: string; name: string; variable: string | null };
+
 /** One secret on the page, display-ready; never a value. */
 export interface SecretListingView {
   name: string;
   totp: boolean;
   bindings: SecretBindingView[];
-  lastUse: { at: string; kind: string; target: unknown; agentId: string | null; outcome: SecretUseOutcome } | null;
+  /** `detail`: the sentence the use was recorded with — a refusal's reason, a failed delivery's error. */
+  lastUse: { at: string; kind: string; target: unknown; agentId: string | null; outcome: SecretUseOutcome; detail?: string | null } | null;
+  /** Whether the vault holds a value for it; null when the vault cannot say. */
+  hasValue?: boolean | null;
+  /** What holds it: the mailbox, model account or connection whose credential it is. */
+  usedBy?: SecretUserView[];
+  /** Nothing can reach it any more: a suggestion to remove it, never a removal. */
+  unused?: boolean;
 }
 
 export interface SecretsView {
