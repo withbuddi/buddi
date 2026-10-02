@@ -46,11 +46,17 @@ describe('the World clock', () => {
   it('says where to start when there is no other zone', () => {
     expect(produceClock({ places: [], time: null }, 'small', { now: NOW, timezone: 'Europe/Paris', places: [places[0]!] })).toMatchObject({ kind: 'text', icon: 'clock' });
   });
-  it('in the Analog style answers zones and labels, the owner’s own zone first, as many as the size draws', () => {
-    const settings = { style: 'analog', places: [{ ...places[1]!, id: 'ben' }, tokyo, { ...tokyo, label: 'Mumbai', timezone: 'Asia/Kolkata' }], time: '12h' as const };
+  it('in the Analog style answers zones, labels and coordinates, the owner’s own zone first, as many as the size draws', () => {
+    const mumbai = { ...tokyo, label: 'Mumbai', latitude: 19.08, longitude: 72.88, timezone: 'Asia/Kolkata' };
+    const settings = { style: 'analog', places: [{ ...places[1]!, id: 'ben' }, tokyo, mumbai], time: '12h' as const };
     expect(produceClock(settings, 'medium', { now: NOW, timezone: 'Europe/Paris', places })).toEqual({
       kind: 'clocks', home: 'Europe/Paris', time: '12h',
-      clocks: [{ label: 'Lyon', zone: 'Europe/Paris' }, { label: 'Ben', zone: 'America/New_York' }, { label: 'Tokyo', zone: 'Asia/Tokyo' }, { label: 'Mumbai', zone: 'Asia/Kolkata' }],
+      clocks: [
+        { label: 'Lyon', zone: 'Europe/Paris', latitude: 45.76, longitude: 4.84 },
+        { label: 'Ben', zone: 'America/New_York', latitude: 40.65, longitude: -73.95 },
+        { label: 'Tokyo', zone: 'Asia/Tokyo', latitude: 35.68, longitude: 139.69 },
+        { label: 'Mumbai', zone: 'Asia/Kolkata', latitude: 19.08, longitude: 72.88 },
+      ],
     });
     expect(produceClock(settings, 'small', { now: NOW, timezone: 'Europe/Paris', places })).toMatchObject({
       clocks: [{ label: 'Lyon' }, { label: 'Ben' }],

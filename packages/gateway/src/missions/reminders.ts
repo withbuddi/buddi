@@ -482,7 +482,7 @@ const proposeInput = z.object({
   timezone: z
     .string()
     .optional()
-    .describe("An IANA timezone. Leave it out to use the owner's own, which is almost always right."),
+    .describe("An IANA timezone. Leave it out to use the owner's own, which is almost always right: the schedule then follows the owner when they move. Name one only when the time belongs to that place."),
   prompt: z
     .string()
     .min(1)
@@ -587,6 +587,8 @@ export function createScheduleManifest(): PluginManifest {
       const spec = await setSchedule(ctx.db, mission.id, {
         cron: input.cron.trim(),
         timezone,
+        // Named by the agent: kept. Left out: it follows the owner's zone.
+        timezoneExplicit: (input.timezone ?? '').trim() !== '',
         misfirePolicy: input.misfirePolicy ?? 'coalesce',
       });
       return {
@@ -620,6 +622,7 @@ export function createScheduleManifest(): PluginManifest {
           enabled: mission.enabled,
           cron: spec?.cron ?? null,
           timezone: spec?.timezone ?? null,
+          followsOwnerZone: spec ? !spec.timezoneExplicit : null,
           cadence: spec ? describeCadence(spec.cron, spec.timezone) : null,
           nextRun:
             spec && mission.enabled

@@ -83,7 +83,8 @@ export function zoneCity(zone: string): string {
 /**
  * The Analog style: the owner's own zone first — named by their place there,
  * Home before the others, or by the zone's city — then the places, as many as
- * the size draws. Zones and labels only; the page ticks the faces.
+ * the size draws. Zones, labels and where each is (so a face is light from
+ * sunrise to sunset there); the page ticks the faces.
  */
 function produceFaces(
   places: Array<WidgetPlace | OwnerPlace>,
@@ -92,9 +93,11 @@ function produceFaces(
   opts: { timezone: string; places: readonly OwnerPlace[] },
 ): WidgetClocks {
   const here = opts.places.filter((p) => p.timezone === opts.timezone).sort((a, b) => Number(b.id === 'home') - Number(a.id === 'home'))[0];
-  const own = { label: here ? town(here) : zoneCity(opts.timezone), zone: opts.timezone };
+  const where = (p: WidgetPlace | OwnerPlace): { latitude: number; longitude: number } | Record<string, never> =>
+    Number.isFinite(p.latitude) && Number.isFinite(p.longitude) ? { latitude: p.latitude, longitude: p.longitude } : {};
+  const own = { label: here ? town(here) : zoneCity(opts.timezone), zone: opts.timezone, ...(here ? where(here) : {}) };
   const others = places
-    .map((p) => ({ label: p.label, zone: p.timezone! }))
+    .map((p) => ({ label: p.label, zone: p.timezone!, ...where(p) }))
     .filter((c) => !(c.zone === own.zone && c.label === own.label))
     .slice(0, (size === 'medium' ? WIDGET_CLOCKS_MAX : 2) - 1);
   return { kind: 'clocks', home: opts.timezone, clocks: [own, ...others], ...(format ? { time: format } : {}) };

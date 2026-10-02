@@ -136,15 +136,6 @@ export const ARC_UNKNOWN: ArcRegistration = {
 };
 
 /**
- * The built-in missions whose schedule follows the owner's zone: every
- * plugin suggestion that names no zone of its own, and the first-run arc.
- * What the one-time alignment at start may move (`alignSchedulesToOwnerZone`).
- */
-export function ownerZoneMissionIds(manifests: readonly PluginManifest[] = installedManifests()): string[] {
-  return [...suggestedMissions(manifests).filter((s) => !s.timezone).map((s) => s.id), GETTING_STARTED_ID];
-}
-
-/**
  * Resolve every suggestion against the catalog. Pure: it decides *what* would
  * be registered and what cannot be, and touches no database.
  */
@@ -239,12 +230,15 @@ export async function registerDefault(
   if (!entry.cron) return { missionId: mission.id, schedule: 'none' };
 
   const zone = entry.timezone ?? timezone;
+  // A suggestion that names its zone keeps it; one that does not follows the owner's.
+  const explicit = entry.timezone !== undefined;
   const misfirePolicy = entry.misfirePolicy ?? 'coalesce';
   const existing = await getActiveSchedule(pool, mission.id);
   if (
     existing &&
     existing.cron === entry.cron &&
     existing.timezone === zone &&
+    existing.timezoneExplicit === explicit &&
     existing.misfirePolicy === misfirePolicy
   ) {
     return {
@@ -258,6 +252,7 @@ export async function registerDefault(
   const spec = await setSchedule(pool, mission.id, {
     cron: entry.cron,
     timezone: zone,
+    timezoneExplicit: explicit,
     misfirePolicy,
   });
   return {

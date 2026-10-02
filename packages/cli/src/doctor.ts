@@ -510,6 +510,38 @@ export function checkRecovery(facts: RecoveryFacts): ProbeResult {
 }
 
 /**
+ * Where the owner's zone comes from, the same sentence in a checkout's table
+ * and a packaged install's doctor: Settings → Profile wins; else `BUDDI_TZ`
+ * (the environment or the env file); else the built-in default, New York.
+ * The server never reads this machine's own zone, so when it differs from the
+ * one in use the row says so — the usual reason a time looks off by hours.
+ * `profile` is the zone Settings → Profile names, already checked as known
+ * (null: none, or the database could not be read).
+ */
+export function checkTimezone(facts: { profile: string | null; envZone: string | null; system?: string | null }): ProbeResult {
+  const DEFAULT = 'America/New_York';
+  const envZone = facts.envZone?.trim() || null;
+  const [zone, source] =
+    facts.profile !== null && facts.profile.trim() !== ''
+      ? [facts.profile.trim(), 'Settings → Profile']
+      : envZone !== null
+        ? [envZone, 'BUDDI_TZ — set one in Settings → Profile']
+        : [DEFAULT, 'default — set one in Settings → Profile'];
+  const system = facts.system?.trim() || null;
+  const machine = system !== null && system !== zone ? `; this machine is on ${system}` : '';
+  return { status: 'ok', detail: `${zone} (${source}${machine})` };
+}
+
+/** This machine's own zone, as the runtime reads it (TZ, else the system's); null when unknown. */
+export function systemTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Plugin data a restore kept, waiting for its plugin. A warning: the owner's
  * rows are safe on disk but not in buddi until the plugin is installed. `null`
  * when nothing waits, so the row is not printed.

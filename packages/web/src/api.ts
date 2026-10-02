@@ -334,7 +334,7 @@ export type WidgetBody =
   | { kind: 'progress'; value: string; caption?: string; ratio: number; foot?: string; tone?: 'accent' | 'good' | 'warning' | 'critical' }
   | { kind: 'text'; icon?: string; text: string; sub?: string }
   /** Analog faces the page ticks itself: the owner's zone, then up to four faces. */
-  | { kind: 'clocks'; home: string; clocks: Array<{ label: string; zone: string }>; time?: '12h' | '24h' };
+  | { kind: 'clocks'; home: string; clocks: Array<{ label: string; zone: string; latitude?: number; longitude?: number }>; time?: '12h' | '24h' };
 
 export type WidgetSurface = 'home' | 'lock';
 
@@ -525,6 +525,8 @@ export interface MissionRow {
   schedule: {
     cron: string;
     timezone: string;
+    /** False: it follows the owner's zone (Settings → Profile). Absent from an older gateway. */
+    timezoneExplicit?: boolean;
     revision: number;
     misfirePolicy: string;
     deadlineMinutes: number | null;

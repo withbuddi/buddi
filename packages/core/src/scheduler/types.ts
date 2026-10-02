@@ -53,6 +53,12 @@ export type ScheduleSpec = {
   revision: number;
   cron: string;
   timezone: string;
+  /**
+   * The zone was named on purpose and stays when the owner's zone changes.
+   * False: it follows the owner's zone (Settings → Profile). A schedule from
+   * before the flag reads true until the start that settles it.
+   */
+  timezoneExplicit: boolean;
   misfirePolicy: MisfirePolicy;
   deadlineMinutes: number | null;
   active: boolean;
@@ -95,6 +101,7 @@ export type ScheduleSpecRow = {
   revision: number;
   cron: string;
   timezone: string;
+  timezone_explicit?: boolean | null;
   misfire_policy: MisfirePolicy;
   deadline_minutes: number | null;
   active: boolean;
@@ -137,6 +144,7 @@ export function toScheduleSpec(row: ScheduleSpecRow): ScheduleSpec {
     revision: row.revision,
     cron: row.cron,
     timezone: row.timezone,
+    timezoneExplicit: row.timezone_explicit !== false,
     misfirePolicy: row.misfire_policy,
     deadlineMinutes: row.deadline_minutes,
     active: row.active,

@@ -3,8 +3,9 @@
  * style. The gateway sends zones and labels only; each face's time is read
  * here from the device's clock, so the faces tick without a new answer.
  *
- * A face is light while it is day there (6:00 to 18:00) and dark at night,
- * whatever the theme. Under it: the place, the day against the owner's
+ * A face is light while it is day there and dark at night, whatever the
+ * theme: from sunrise to sunset at the face's place when the body says where
+ * it is (`sun.ts`), else from 6:00 to 18:00 in its zone. Under it: the place, the day against the owner's
  * (Today / Tomorrow / Yesterday) and the offset ("+6 h", "−1 h 30"); a first
  * face in the owner's zone reads "Here". Reduced motion drops the second hand
  * and moves the minute hand once a minute.
@@ -12,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import type { WidgetBody, WidgetSize } from '../../api';
 import { fmtClock, underFormats } from '../../format';
+import { sunIsUp } from '../../sun';
 import { useMediaQuery } from '../../useMediaQuery';
 
 type ClocksBody = Extract<WidgetBody, { kind: 'clocks' }>;
@@ -67,7 +69,7 @@ export function offsetWords(diff: number): string {
 
 export interface FaceFacts extends ZoneTime {
   day: 'Today' | 'Tomorrow' | 'Yesterday';
-  /** 6:00 to 18:00 there. */
+  /** The sun is up there; 6:00 to 18:00 in its zone when the face has no place. */
   daytime: boolean;
   /** Under the face: "Here", "+6 h". */
   offsetText: string;
@@ -78,7 +80,7 @@ export interface FaceFacts extends ZoneTime {
 }
 
 /** One face's facts against the owner's zone. `own` is the owner's own face. */
-export function faceFacts(at: Date, face: { label: string; zone: string }, home: string, own: boolean, format?: '12h' | '24h'): FaceFacts {
+export function faceFacts(at: Date, face: { label: string; zone: string; latitude?: number; longitude?: number }, home: string, own: boolean, format?: '12h' | '24h'): FaceFacts {
   const there = zoneTime(at, face.zone);
   const mine = zoneTime(at, home);
   const day = there.date === mine.date ? 'Today' : there.date > mine.date ? 'Tomorrow' : 'Yesterday';
@@ -88,7 +90,10 @@ export function faceFacts(at: Date, face: { label: string; zone: string }, home:
   return {
     ...there,
     day,
-    daytime: there.h >= 6 && there.h < 18,
+    daytime:
+      typeof face.latitude === 'number' && typeof face.longitude === 'number'
+        ? sunIsUp(at, face.latitude, face.longitude)
+        : there.h >= 6 && there.h < 18,
     offsetText: own ? 'Here' : offsetLabel(diff),
     time,
     label: `${face.label}, ${time}${day === 'Today' ? '' : ` ${day.toLowerCase()}`}, ${relative}`,

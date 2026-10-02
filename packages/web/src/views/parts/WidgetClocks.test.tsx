@@ -62,6 +62,16 @@ describe('a face’s facts', () => {
     expect(at('2026-10-01T18:00:00Z')).toBe(false);
   });
 
+  it('follows sunrise and sunset at a face with coordinates, and 6:00 to 18:00 at one without', () => {
+    // 07:00 in Paris on 2 October: before sunrise (about 07:53), though after 6:00.
+    const dawn = new Date('2026-10-02T05:00:00Z');
+    const paris = { label: 'Paris', zone: 'Europe/Paris', latitude: 48.8566, longitude: 2.3522 };
+    expect(faceFacts(dawn, paris, 'Europe/Paris', true).daytime).toBe(false);
+    expect(faceFacts(dawn, { label: 'Paris', zone: 'Europe/Paris' }, 'Europe/Paris', true).daytime).toBe(true);
+    // 19:00 there: after 18:00, before sunset (about 19:36).
+    expect(faceFacts(new Date('2026-10-02T17:00:00Z'), paris, 'Europe/Paris', true).daytime).toBe(true);
+  });
+
   it('calls the owner’s own face Here and reads it as your time', () => {
     const f = faceFacts(NOON_UTC, { label: 'Lyon', zone: 'Europe/Paris' }, 'Europe/Paris', true, '12h');
     expect(f.offsetText).toBe('Here');
@@ -101,6 +111,12 @@ describe('the faces', () => {
     expect(faces.map((f) => f.getAttribute('data-night'))).toEqual([null, null, 'true', 'true']);
     expect(faces[1]!.textContent).toBe('BenToday−6 h');
     unmount();
+    // With coordinates the faces follow the sun: Tromsø at midsummer midnight is a day face.
+    vi.setSystemTime(new Date('2026-06-21T22:30:00Z'));
+    const polar = render(<WidgetBodyView body={{ ...body, clocks: [{ label: 'Tromsø', zone: 'Europe/Oslo', latitude: 69.6492, longitude: 18.9553 }, { label: 'Oslo', zone: 'Europe/Oslo' }] }} size="small" />);
+    expect(screen.getAllByRole('img').map((f) => f.getAttribute('data-night'))).toEqual([null, 'true']);
+    polar.unmount();
+    vi.setSystemTime(NOON_UTC);
     render(<WidgetBodyView body={body} size="small" />);
     expect(screen.getAllByRole('img')).toHaveLength(2);
   });

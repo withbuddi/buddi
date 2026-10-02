@@ -59,6 +59,7 @@ import {
   reminderDedupKey,
 } from './reminders.js';
 import { testDatabaseUrl } from '@buddi/core/testing';
+import { registerDefault } from './defaults.js';
 
 const databaseUrl = await testDatabaseUrl();
 const suite = databaseUrl ? describe : describe.skip;
@@ -302,7 +303,33 @@ suite('reminders and proposed schedules (postgres)', () => {
       alwaysDeliver: false,
     });
     const spec = await getActiveSchedule(pool, missionId);
-    expect(spec).toMatchObject({ cron: '0 8 * * MON', timezone: TZ, misfirePolicy: 'coalesce' });
+    // No zone named: it follows the owner's zone when the Profile changes.
+    expect(spec).toMatchObject({ cron: '0 8 * * MON', timezone: TZ, timezoneExplicit: false, misfirePolicy: 'coalesce' });
+  });
+
+  it('keeps a zone the agent named on purpose', async () => {
+    const registry = createToolRegistry();
+    const proposed = await registry.invoke(
+      'schedule.propose',
+      { name: 'Tokyo open', cron: '0 9 * * MON-FRI', timezone: 'Asia/Tokyo', prompt: 'Check the Tokyo open.' },
+      { ...ctx, agentId: 'finance-advisor' },
+    );
+    if (proposed.ok || proposed.reason !== 'approval-required') throw new Error('expected an approval');
+    await decideApproval(pool, { actionId: proposed.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    expect((await executeApproved(pool, { actionId: proposed.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
+    const spec = await getActiveSchedule(pool, agentMissionId('finance-advisor', 'tokyo-open'));
+    expect(spec).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true });
+  });
+
+  it('a built-in mission follows the owner zone unless its suggestion names one', async () => {
+    const base = { agentId: 'finance-advisor', prompt: 'p' };
+    await registerDefault(pool, { mission: { id: 'zone-follows', name: 'f', ...base }, cron: '0 8 * * *' }, 'Europe/Lisbon');
+    await registerDefault(pool, { mission: { id: 'zone-pinned', name: 'p', ...base }, cron: '0 8 * * *', timezone: 'Asia/Tokyo' }, 'Europe/Lisbon');
+    expect(await getActiveSchedule(pool, 'zone-follows')).toMatchObject({ timezone: 'Europe/Lisbon', timezoneExplicit: false });
+    expect(await getActiveSchedule(pool, 'zone-pinned')).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true });
+    // Registered again unchanged: up to date, no new revision.
+    const again = await registerDefault(pool, { mission: { id: 'zone-follows', name: 'f', ...base }, cron: '0 8 * * *' }, 'Europe/Lisbon');
+    expect(again).toMatchObject({ schedule: 'up-to-date', revision: 1 });
   });
 
   it('refuses a cron that would run more often than hourly, recording nothing', async () => {

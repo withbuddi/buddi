@@ -27,6 +27,13 @@ export type UpsertMissionInput = {
 export type SetScheduleInput = {
   cron: string;
   timezone: string;
+  /**
+   * Whether `timezone` was named on purpose (a tool's or CLI's zone, the
+   * owner's choice, a mission that declares one). False when it is just the
+   * owner's zone of the moment: the schedule then follows the owner's zone
+   * (`rezoneSchedules`). Default true.
+   */
+  timezoneExplicit?: boolean;
   misfirePolicy: MisfirePolicy;
   deadlineMinutes?: number | null;
 };
@@ -34,7 +41,7 @@ export type SetScheduleInput = {
 const MISSION_COLUMNS =
   'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, coalesce_window_seconds, coalesce_max_wait_seconds, created_at';
 const SPEC_COLUMNS =
-  'id, mission_id, revision, cron, timezone, misfire_policy, deadline_minutes, active, created_at';
+  'id, mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active, created_at';
 
 /** Create or update a mission definition. Schedules are set separately. */
 export async function upsertMission(pool: Pool, input: UpsertMissionInput): Promise<Mission> {
@@ -110,11 +117,11 @@ export async function setSchedule(
     );
     const { rows } = await client.query<ScheduleSpecRow>(
       `insert into core.schedule_specs
-         (mission_id, revision, cron, timezone, misfire_policy, deadline_minutes, active)
+         (mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active)
        values (
          $1,
          coalesce((select max(revision) from core.schedule_specs where mission_id = $1), 0) + 1,
-         $2, $3, $4, $5, true
+         $2, $3, $6, $4, $5, true
        )
        returning ${SPEC_COLUMNS}`,
       [
@@ -123,6 +130,7 @@ export async function setSchedule(
         input.timezone,
         input.misfirePolicy,
         input.deadlineMinutes ?? null,
+        input.timezoneExplicit ?? true,
       ],
     );
     await client.query('commit');
@@ -136,26 +144,19 @@ export async function setSchedule(
 }
 
 /**
- * Move every active schedule kept in `from` to `to`: a new revision each, same
- * cron, misfire policy and deadline. Used when the owner's zone changes, so a
- * mission set for "8 AM" in the owner's zone stays 8 AM where the owner now is.
- * A schedule in any other zone (a plugin that named its own) is left alone.
- * Returns the mission ids moved.
+ * Move every active schedule that follows the owner's zone (not named on
+ * purpose, `timezoneExplicit` false) and is not in `to` already: a new
+ * revision each, same cron, misfire policy and deadline, so its next run is
+ * computed in `to`. Used when the owner's zone changes and at start, so a
+ * mission set for "8 AM" stays 8 AM where the owner now is. A schedule whose
+ * zone was named on purpose is left alone. Returns the mission ids moved.
  */
-export async function rezoneSchedules(
-  pool: Pool,
-  from: string,
-  to: string,
-  /** Only these missions, when given. */
-  opts: { only?: readonly string[] } = {},
-): Promise<string[]> {
-  if (from === to) return [];
-  if (opts.only !== undefined && opts.only.length === 0) return [];
+export async function rezoneSchedules(pool: Pool, to: string): Promise<string[]> {
   const { rows } = await pool.query<ScheduleSpecRow>(
     `select ${SPEC_COLUMNS} from core.schedule_specs
-      where active and timezone = $1 and ($2::text[] is null or mission_id = any($2::text[]))
+      where active and timezone_explicit = false and timezone <> $1
       order by mission_id`,
-    [from, opts.only === undefined ? null : [...opts.only]],
+    [to],
   );
   const moved: string[] = [];
   for (const row of rows) {
@@ -163,12 +164,37 @@ export async function rezoneSchedules(
     await setSchedule(pool, spec.missionId, {
       cron: spec.cron,
       timezone: to,
+      timezoneExplicit: false,
       misfirePolicy: spec.misfirePolicy,
       deadlineMinutes: spec.deadlineMinutes,
     });
     moved.push(spec.missionId);
   }
   return moved;
+}
+
+/**
+ * Settle the schedules made before `timezone_explicit` existed (null): one
+ * in any of `following` — the zone that was the default when it was made, or
+ * the owner's zone now — follows the owner from now on; one in any other zone
+ * was named on purpose and keeps it. Returns how many were settled each way.
+ */
+export async function settleUnflaggedSchedules(
+  pool: Pool,
+  following: readonly string[],
+): Promise<{ following: number; explicit: number }> {
+  const { rows } = await pool.query<{ explicit: boolean; n: string }>(
+    `with settled as (
+       update core.schedule_specs
+          set timezone_explicit = not (timezone = any($1::text[]))
+        where timezone_explicit is null
+       returning active, timezone_explicit
+     )
+     select timezone_explicit as explicit, count(*)::text as n from settled where active group by timezone_explicit`,
+    [[...following]],
+  );
+  const count = (explicit: boolean): number => Number(rows.find((r) => r.explicit === explicit)?.n ?? 0);
+  return { following: count(false), explicit: count(true) };
 }
 
 /** All missions, oldest first. */

@@ -2569,6 +2569,8 @@ export function createPlatformManifest(registry: ToolRegistry): PluginManifest {
         await setSchedule(ctx.db!, mission.id, {
           cron: mission.cron,
           timezone: mission.timezone,
+          // Always the owner's zone of the moment (no proposal names one): it follows the owner.
+          timezoneExplicit: false,
           misfirePolicy: mission.misfirePolicy ?? 'coalesce',
         });
       }

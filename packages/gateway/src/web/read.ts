@@ -435,6 +435,8 @@ export interface MissionView {
   schedule: {
     cron: string;
     timezone: string;
+    /** False: it follows the owner's zone (Settings → Profile). */
+    timezoneExplicit: boolean;
     revision: number;
     misfirePolicy: string;
     deadlineMinutes: number | null;
@@ -471,6 +473,7 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
         ? {
             cron: spec.cron,
             timezone: spec.timezone,
+            timezoneExplicit: spec.timezoneExplicit,
             revision: spec.revision,
             misfirePolicy: spec.misfirePolicy,
             deadlineMinutes: spec.deadlineMinutes,

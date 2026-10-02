@@ -81,6 +81,7 @@ export async function ensureDigestMission(pool: Pool, timezone: string): Promise
     await setSchedule(pool, LEARNING_DIGEST_ID, {
       cron: digestCron(DEFAULT_DIGEST_DAY, DEFAULT_DIGEST_HOUR),
       timezone,
+      timezoneExplicit: false,
       misfirePolicy: 'coalesce',
     });
   }
@@ -116,8 +117,8 @@ export async function setDigestSchedule(
   await ensureDigestMission(pool, timezone);
   const spec = await getActiveSchedule(pool, LEARNING_DIGEST_ID);
   const cron = digestCron(input.day, input.hour);
-  if (spec && spec.cron === cron && spec.timezone === timezone) return;
-  await setSchedule(pool, LEARNING_DIGEST_ID, { cron, timezone, misfirePolicy: 'coalesce' });
+  if (spec && spec.cron === cron && spec.timezone === timezone && !spec.timezoneExplicit) return;
+  await setSchedule(pool, LEARNING_DIGEST_ID, { cron, timezone, timezoneExplicit: false, misfirePolicy: 'coalesce' });
 }
 
 /* ------------------------------------------------------------------ *

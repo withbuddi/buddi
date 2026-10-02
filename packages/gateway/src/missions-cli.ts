@@ -213,7 +213,7 @@ async function commandList(pool: Pool, now: Date, json = false): Promise<void> {
         alwaysDeliver: mission.alwaysDeliver,
         proposedBy: missionOwnerAgent(mission.id) ?? null,
         schedule: spec
-          ? { cron: spec.cron, timezone: spec.timezone, revision: spec.revision, misfirePolicy: spec.misfirePolicy }
+          ? { cron: spec.cron, timezone: spec.timezone, timezoneExplicit: spec.timezoneExplicit, revision: spec.revision, misfirePolicy: spec.misfirePolicy }
           : null,
         nextRunAt: next ? next.toISOString() : null,
         lastOccurrence: last
@@ -251,7 +251,7 @@ async function commandList(pool: Pool, now: Date, json = false): Promise<void> {
     if (spec) {
       const next = mission.enabled && mission.pausedReason === null ? nextAfter(spec.cron, now, spec.timezone) : null;
       console.log(
-        `  schedule: ${spec.cron} ${spec.timezone} (rev ${spec.revision}, misfire ${spec.misfirePolicy})`,
+        `  schedule: ${spec.cron} ${spec.timezone}${spec.timezoneExplicit ? '' : ', follows your timezone'} (rev ${spec.revision}, misfire ${spec.misfirePolicy})`,
       );
       console.log(
         `  next run: ${next ? next.toISOString() : !mission.enabled ? '(disabled)' : mission.pausedReason !== null ? '(paused)' : '(never)'}`,

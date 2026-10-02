@@ -19,6 +19,7 @@ import { environment, dashboardReady, launchAgentLabel, launchAgentPlist, reload
 import type { InstallContext } from './environment.js';
 import { supervise, supervisorSocket } from './supervisor.js';
 import { keptPluginDataLine, readKeptPluginData } from './kept-data.js';
+import { readProfileZone, timezoneLine } from './doctor-timezone.js';
 import { installedVersion, readUpgradeState, upgradeDoctorLines, versionView } from './upgrade.js';
 import type { UpgradeJob, VersionView } from './upgrade.js';
 import type { SupervisorStatus } from './supervisor.js';
@@ -489,6 +490,8 @@ async function run(): Promise<void> {
     // Restored plugin data still waiting, the row the checkout's doctor prints.
     const kept = await keptPluginDataLine(readKeptPluginData(ctx));
     if (kept !== null) console.log(kept);
+    // Which zone the clocks and schedules use, and where it comes from: the checkout's timezone row.
+    console.log(await timezoneLine(readProfileZone(ctx), ctx.env));
     console.log(JSON.stringify(await control(ctx), null, 2));
     /*
      * The upgrade row, read from disk rather than from the supervisor: the one

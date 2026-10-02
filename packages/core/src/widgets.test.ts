@@ -93,6 +93,32 @@ describe('a clocks body', () => {
     expect(widgetBodyOf({ kind: 'clocks', home: 'Nowhere/At_all', clocks: [{ label: 'Tokyo', zone: 'Asia/Tokyo' }] })).toMatchObject({ ok: false, reason: expect.stringMatching(/home/) });
     expect(widgetBodyOf({ kind: 'clocks', clocks: [{ label: 'Tokyo', zone: 'Asia/Tokyo' }] })).toMatchObject({ ok: false });
   });
+
+  it('keeps a face’s coordinates when both are sound, and drops them otherwise (the face stays)', () => {
+    const checked = widgetBodyOf({
+      kind: 'clocks',
+      home: 'Europe/Paris',
+      clocks: [
+        { label: 'Tokyo', zone: 'Asia/Tokyo', latitude: 35.68, longitude: 139.69 },
+        { label: 'Half', zone: 'Asia/Tokyo', latitude: 35.68 },
+        { label: 'Off', zone: 'Asia/Tokyo', latitude: 135, longitude: 10 },
+        { label: 'Text', zone: 'Asia/Tokyo', latitude: '35', longitude: '139' },
+      ],
+    });
+    expect(checked).toEqual({
+      ok: true,
+      body: {
+        kind: 'clocks',
+        home: 'Europe/Paris',
+        clocks: [
+          { label: 'Tokyo', zone: 'Asia/Tokyo', latitude: 35.68, longitude: 139.69 },
+          { label: 'Half', zone: 'Asia/Tokyo' },
+          { label: 'Off', zone: 'Asia/Tokyo' },
+          { label: 'Text', zone: 'Asia/Tokyo' },
+        ],
+      },
+    });
+  });
 });
 
 describe('the registry', () => {

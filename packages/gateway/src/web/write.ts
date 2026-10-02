@@ -254,6 +254,8 @@ export async function setScheduleFromWeb(
 
   const cron = (change.cron ?? active?.cron ?? '').trim();
   const timezone = (change.timezone ?? active?.timezone ?? '').trim();
+  // A zone the owner chose is kept; otherwise the schedule keeps following, or not, as it did.
+  const timezoneExplicit = change.timezone !== undefined ? true : (active?.timezoneExplicit ?? true);
   const policy = (change.misfirePolicy ?? active?.misfirePolicy ?? '') as MisfirePolicy;
 
   if (cron === '' || timezone === '') {
@@ -270,6 +272,7 @@ export async function setScheduleFromWeb(
     const spec = await setSchedule(deps.pool, missionId, {
       cron,
       timezone,
+      timezoneExplicit,
       misfirePolicy: policy,
       deadlineMinutes,
     });
@@ -280,6 +283,7 @@ export async function setScheduleFromWeb(
         missionId,
         cron: spec.cron,
         timezone: spec.timezone,
+        timezoneExplicit: spec.timezoneExplicit,
         revision: spec.revision,
         misfirePolicy: spec.misfirePolicy,
         deadlineMinutes: spec.deadlineMinutes,

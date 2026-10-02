@@ -853,6 +853,7 @@ suite('the dashboard API', () => {
     await setSchedule(pool, 'web-mission', {
       cron: '0 9 * * 5',
       timezone: 'UTC',
+      timezoneExplicit: false,
       misfirePolicy: 'coalesce',
     });
 
@@ -867,15 +868,21 @@ suite('the dashboard API', () => {
     const spec = (await rescheduled.json()) as any;
     // A new revision, with the cron carried over rather than reset.
     expect(spec).toMatchObject({ misfirePolicy: 'latest-only', cron: '0 9 * * 5', revision: 2 });
+    // The zone was not touched: it still follows the owner's.
+    expect(spec.timezoneExplicit).toBe(false);
 
     expect((await client.post('/api/missions/web-mission/schedule', { misfirePolicy: 'nonsense' })).status).toBe(400);
     expect((await client.post('/api/missions/nope/enabled', { enabled: true })).status).toBe(404);
 
     const missions = await client.json<any>('/api/missions');
     const mission = missions.missions.find((m: any) => m.id === 'web-mission');
-    expect(mission).toMatchObject({ enabled: false, schedule: { misfirePolicy: 'latest-only' } });
+    expect(mission).toMatchObject({ enabled: false, schedule: { misfirePolicy: 'latest-only', timezoneExplicit: false } });
     // Disabled: no next run is claimed.
     expect(mission.nextRun).toBeNull();
+
+    // A zone the owner chose is kept from then on.
+    const zoned = (await (await client.post('/api/missions/web-mission/schedule', { timezone: 'Asia/Tokyo' })).json()) as any;
+    expect(zoned).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true, revision: 3 });
   });
 
   it('cancels a pending reminder and refuses a decided one', async () => {

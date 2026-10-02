@@ -121,12 +121,24 @@ export interface WidgetText {
  * offset against `home`. Medium draws the first four, small the first two; a
  * first face in `home` reads as the owner's own ("Here").
  */
+/** One analog face: a label, an IANA zone and, when known, where it is. */
+export interface WidgetClockFace {
+  label: string;
+  zone: string;
+  latitude?: number;
+  longitude?: number;
+}
+
 export interface WidgetClocks {
   kind: 'clocks';
   /** The owner's zone, an IANA name: what days and offsets are counted from. */
   home: string;
-  /** One to `WIDGET_CLOCKS_MAX`; each label at most `WIDGET_CLOCK_LABEL_MAX` characters. */
-  clocks: Array<{ label: string; zone: string }>;
+  /**
+   * One to `WIDGET_CLOCKS_MAX`; each label at most `WIDGET_CLOCK_LABEL_MAX`
+   * characters. A face with coordinates (since 1.24) is light from sunrise to
+   * sunset there; one without, from 6:00 to 18:00 in its zone.
+   */
+  clocks: WidgetClockFace[];
   /** How a screen reader and the hover say each time; the device's way when left out. */
   time?: '12h' | '24h';
 }
@@ -370,13 +382,22 @@ export function widgetBodyOf(raw: unknown): { ok: true; body: WidgetBody } | { o
     case 'clocks': {
       if (!isZone(b.home)) return { ok: false, reason: 'clocks need home, the owner\'s zone as an IANA name' };
       const clocks = (Array.isArray(b.clocks) ? b.clocks : [])
-        .map((c): { label: string; zone: string } | null => {
+        .map((c): WidgetClockFace | null => {
           if (!c || typeof c !== 'object') return null;
           const face = c as Record<string, unknown>;
           const label = cutLine(face.label, WIDGET_CLOCK_LABEL_MAX);
-          return label && isZone(face.zone) ? { label, zone: face.zone as string } : null;
+          if (!label || !isZone(face.zone)) return null;
+          const lat = face.latitude;
+          const lon = face.longitude;
+          // Both or neither: a face without a place is day from 6:00 to 18:00.
+          const where =
+            typeof lat === 'number' && typeof lon === 'number' && Number.isFinite(lat) && Number.isFinite(lon) &&
+            Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+              ? { latitude: lat, longitude: lon }
+              : {};
+          return { label, zone: face.zone as string, ...where };
         })
-        .filter((c): c is { label: string; zone: string } => c !== null)
+        .filter((c): c is WidgetClockFace => c !== null)
         .slice(0, WIDGET_CLOCKS_MAX);
       if (clocks.length === 0) return { ok: false, reason: 'clocks need at least one face with a label and an IANA zone' };
       return { ok: true, body: { kind: 'clocks', home: b.home as string, clocks, ...(b.time === '12h' || b.time === '24h' ? { time: b.time } : {}) } };

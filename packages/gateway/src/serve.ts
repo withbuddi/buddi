@@ -70,7 +70,7 @@ import {
   POLL_TIMEOUT_VAR,
 } from '@buddi/tool-email';
 import { createWiringAsync, loadEnvironment } from './bootstrap.js';
-import { alignSchedulesToOwnerZone, scrubText } from '@buddi/core';
+import { scrubText, settleScheduleZones } from '@buddi/core';
 import { adoptEnvMailbox, adoptMailboxSecrets, adoptProviderAccountSecrets, clearFromEnvironment, mailboxSecretNames } from './owner-secrets.js';
 import { describeDatabaseError, waitForDatabase } from './db-ready.js';
 import { migrateAtStart } from './plugins/migrate.js';
@@ -90,7 +90,6 @@ import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
 import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
 import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './agents/learning-digest.js';
-import { ownerZoneMissionIds } from './missions/defaults.js';
 import { startLoop } from './loop.js';
 import { createRequirements } from './plugins/requires.js';
 import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
@@ -881,13 +880,12 @@ export async function main(): Promise<void> {
     if (!recovering) {
       await seedOwnerFromEnv(pool, process.env).catch((err) =>
         console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
-      // Built-in schedules made in the fallback zone before the profile drove
-      // the clock follow the profile's zone, once; afterwards a save moves them.
-      // Never a schedule an agent or the owner made, which may name its zone on purpose.
-      await alignSchedulesToOwnerZone(pool, process.env, {
-        missions: [...ownerZoneMissionIds(wiring.registry.manifests()), LEARNING_DIGEST_ID],
-      })
-        .then((moved) => { if (moved) console.log(`owner: schedules moved ${moved.from} → ${moved.to}: ${moved.missions.join(', ')}`); })
+      // Schedules from before buddi recorded whether a zone was named on
+      // purpose are settled (the default zone of the time, or the Profile's,
+      // follows the owner; any other stays), and every schedule that follows
+      // the owner moves to the owner's zone if it is elsewhere.
+      await settleScheduleZones(pool, process.env)
+        .then((r) => { if (r.missions.length > 0) console.log(`owner: schedules moved to ${r.to}: ${r.missions.join(', ')}`); })
         .catch((err) => console.error(`owner: schedules not moved to the profile's zone: ${err instanceof Error ? err.message : String(err)}`));
     }
 

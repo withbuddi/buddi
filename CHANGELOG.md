@@ -8,12 +8,16 @@ What changes in buddi from one release to the next, newest first.
 
 - The buddi extension is on the Chrome Web Store. Computer & browser → Your browser now leads with Add to Chrome (the store listing, in a new tab) and folds the load-unpacked folder under Developer install; Firefox and Safari are told it needs Chrome, Edge, Brave or Arc, and a phone leaves the install out. The dashboard finds and pairs a store-installed extension exactly like the unpacked one.
 - Plugins (host API 1.24): `owner.notify` takes an optional `action`, what the owner is asked to do in at most 80 characters, like an agent's. A plugin's message with one waits in Needs you and counts on every badge; without one it stays information.
+- Plugins (host API 1.24): a `clocks` widget body's faces take optional `latitude` and `longitude`; with them a face is light from sunrise to sunset there.
 
 ### Fixed
 
 - Home: Done on a Needs you card now sticks. A line held for the end of the day (like "buddi learned 1 rule: quieted 1 newsletter") showed in Needs you even after Done and came back on every reload; Needs you now lists only what asks for you now, quiet lines stay in Notifications → Recent and the evening message, and a quiet line that says more later stays read instead of coming back unread.
 - Home: a plugin's card is named by its page ("Mail"), not its id ("email").
 - Mail: a conversation you archive, label or delete in another mail app (or with a change you approved) no longer says "Waiting on you" — on the Mail page, the Waiting on you widget, the waiting watcher and `email.select_messages` alike. Moved back into the inbox, it waits on you again.
+- Schedules follow your timezone. A mission, a recurring reminder or an agent's schedule made without naming a zone now moves when you change the timezone in Settings → Profile, so its next run stays 8 AM where you are — including schedules made before 0.1.0-pre.29, which kept their old zone. One whose zone was named on purpose (by the agent, the plugin or you) keeps it. Missions say "follows your timezone" instead of the zone.
+- The World clock's analog faces are light from sunrise to sunset at each place, worked out from the place's coordinates, not from 6:00 to 18:00 — a face for a town without coordinates still uses 6 to 18.
+- `buddi doctor` in an installed buddi says which timezone is in use and where it comes from (Settings → Profile, `BUDDI_TZ` or the default), as the checkout's doctor does; both also name this machine's zone when it differs.
 
 ### Changed
 

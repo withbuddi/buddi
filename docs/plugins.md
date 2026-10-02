@@ -1369,7 +1369,7 @@ The six bodies, every value already formatted in your units:
 | `strip` | `items: { label, icon?, value }[]`, `icon?`, `value?`, `caption?` | a headline and a row of tiles: four on small, six on medium (eight kept) |
 | `progress` | `value`, `ratio` (0–1), `caption?`, `foot?`, `tone?` | a figure and a bar |
 | `text` | `text` (≤ 160), `icon?`, `sub?` | a glyph and a sentence: for "add a place first" as much as for news |
-| `clocks` | `home` (the owner's IANA zone), `clocks: { label, zone }[]` (1–4, labels ≤ 24), `time?: '12h' \| '24h'` | analog faces side by side, four on medium and two on small, that the page ticks itself from each zone — no new answer every minute; a light face while it is 6:00–18:00 there and a dark one at night; under each the label, Today / Tomorrow / Yesterday against `home` and the offset ("+6 h", "−1 h 30"); a first face in `home` reads "Here". Zones must be IANA names. Host API 1.21 |
+| `clocks` | `home` (the owner's IANA zone), `clocks: { label, zone, latitude?, longitude? }[]` (1–4, labels ≤ 24; coordinates since 1.24, both or neither), `time?: '12h' \| '24h'` | analog faces side by side, four on medium and two on small, that the page ticks itself from each zone — no new answer every minute; a light face from sunrise to sunset at the face's coordinates (6:00–18:00 in its zone for a face without them) and a dark one at night; under each the label, Today / Tomorrow / Yesterday against `home` and the offset ("+6 h", "−1 h 30"); a first face in `home` reads "Here". Zones must be IANA names. Host API 1.21 |
 
 Glyphs are the tile icons (`views.ts`); one outside the set is left off.
 Values are cut at 12 characters and lines at 40, with an ellipsis; a body

@@ -21,11 +21,24 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   reminders, digests and the dashboard's footer and lock clocks.
 - A change in Settings → Profile (or through `owner.set_profile`) applies at
   once, with no restart: the server keeps the profile's zone in memory, updates
-  it on every save and re-reads it every minute. Schedules kept in the old zone
-  (the recap, the learning digest, recurring reminders) move to the new one as
-  a new schedule revision; a schedule a plugin set in a zone of its own stays.
-  At start, schedules still in the fallback zone move to the profile's zone
-  when it names another (an installation from before the profile drove the clock).
+  it on every save and re-reads it every minute.
+- Every schedule records whether its zone was named on purpose
+  (`core.schedule_specs.timezone_explicit`). One made without a zone — the
+  recap, the learning digest, a plugin's mission that names none, an agent's
+  `schedule.propose` without `timezone` — follows the owner's zone: a Profile
+  change moves it as a new schedule revision, so its next run is 8 AM in the
+  new zone. One whose creator named a zone (the tool's `timezone`, a mission
+  that declares one, a zone chosen through `POST /api/missions/:id/schedule`)
+  keeps it. At every start, schedules that follow the owner and sit in another
+  zone move to it. Schedules from before the flag are settled once at start:
+  one in the zone that was the default when it was made (`BUDDI_TZ`, else New
+  York) or in the Profile's zone follows the owner; any other keeps its zone.
+  Missions on the dashboard say "follows your timezone" instead of the zone;
+  `buddi missions` adds it to the schedule line. A one-off reminder is an
+  instant and does not move.
+- `buddi doctor` (a checkout's table and a packaged install's Timezone line)
+  names the zone and where it comes from — Settings → Profile, `BUDDI_TZ`, or
+  the default — and this machine's own zone when it differs.
 - How the owner reads times and dates (Settings → Profile: 12-hour or 24-hour,
   "Thu, Oct 1", "Thursday, 1 October" or ISO) is one line under "About the
   owner" for every agent, so a reply writes "2:05 PM" to someone who reads

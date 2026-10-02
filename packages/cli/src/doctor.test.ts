@@ -10,6 +10,7 @@ import {
   checkPlugins,
   checkRecovery,
   checkTailscale,
+  checkTimezone,
   checkSubscriptionSignIns,
   checkVault,
   collectChecks,
@@ -786,5 +787,21 @@ describe('checkSubscriptionSignIns', () => {
     expect(result.detail).toBe(
       'Claude offered, ChatGPT hidden; BUDDI_CODEX_EXPERIMENT is an old variable, use BUDDI_SUBSCRIPTION_SIGNINS=off instead',
     );
+  });
+});
+
+describe('checkTimezone', () => {
+  it('says where the zone comes from: Settings → Profile, then BUDDI_TZ, then the default', () => {
+    expect(checkTimezone({ profile: 'Europe/Lisbon', envZone: 'America/Chicago' }).detail).toBe('Europe/Lisbon (Settings → Profile)');
+    expect(checkTimezone({ profile: null, envZone: ' America/Chicago ' }).detail).toBe('America/Chicago (BUDDI_TZ — set one in Settings → Profile)');
+    expect(checkTimezone({ profile: null, envZone: '' }).detail).toBe('America/New_York (default — set one in Settings → Profile)');
+    expect(checkTimezone({ profile: null, envZone: null }).status).toBe('ok');
+  });
+
+  it("names this machine's zone only when it differs from the one in use", () => {
+    expect(checkTimezone({ profile: null, envZone: null, system: 'Europe/Paris' }).detail).toBe(
+      'America/New_York (default — set one in Settings → Profile; this machine is on Europe/Paris)',
+    );
+    expect(checkTimezone({ profile: 'Europe/Paris', envZone: null, system: 'Europe/Paris' }).detail).toBe('Europe/Paris (Settings → Profile)');
   });
 });

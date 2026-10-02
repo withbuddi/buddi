@@ -128,8 +128,8 @@ needs me, what is my team up to, what is coming.
   same count from the gateway (`needsYou` on `GET /api/overview`).
 - **Widgets**: small live panels the plugins export — the weather at home,
   what is coming up, who is waiting on your reply, the World clock buddi
-  itself provides (Digital, or Analog: a face per place, yours first, light by
-  day and dark at night, ticking on the page) — in your order and size, under Needs you so what needs you
+  itself provides (Digital, or Analog: a face per place, yours first, light
+  from sunrise to sunset there and dark at night, ticking on the page) — in your order and size, under Needs you so what needs you
   stays first. Each card is one *placement*: a widget, a size and its own
   settings, so the same widget can sit twice ("Weather" and "Weather · Work"). A grid of cards on one row
   height: small takes one column, medium two, as many columns as the page

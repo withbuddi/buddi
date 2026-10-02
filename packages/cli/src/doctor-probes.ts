@@ -22,7 +22,6 @@ import {
   providerAuthHeaders,
   providerFromEnv,
   resolveProvider,
-  timezoneFromEnv,
   getOwnerProfile,
   isKnownTimezone,
   type AgentFrontmatter,
@@ -78,6 +77,8 @@ import {
   checkPairedDevices,
   checkRecovery,
   checkPendingPluginData,
+  checkTimezone,
+  systemTimezone,
   checkTailscale,
   checkSubscriptionSignIns,
   checkNodeVersion,
@@ -861,15 +862,8 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
     async timezone(): Promise<ProbeResult> {
       const pool = await connected().catch(() => null);
       const profile = pool === null ? null : await getOwnerProfile(pool).catch(() => null);
-      if (profile?.timezone && isKnownTimezone(profile.timezone)) {
-        return { status: 'ok', detail: `${profile.timezone.trim()} (Settings → Profile)` };
-      }
-      const tz = timezoneFromEnv(env);
-      const set = env.BUDDI_TZ && env.BUDDI_TZ.trim() !== '';
-      return {
-        status: 'ok',
-        detail: set ? `${tz} (BUDDI_TZ — set one in Settings → Profile)` : `${tz} (default — set one in Settings → Profile)`,
-      };
+      const named = profile?.timezone && isKnownTimezone(profile.timezone) ? profile.timezone : null;
+      return checkTimezone({ profile: named, envZone: env.BUDDI_TZ ?? null, system: systemTimezone() });
     },
 
     async close(): Promise<void> {

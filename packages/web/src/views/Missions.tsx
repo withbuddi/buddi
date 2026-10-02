@@ -84,7 +84,13 @@ function Mission({
       <p className="ui-card-meta">
         {mission.schedule ? (
           <>
-            <span className="mono">{mission.schedule.cron}</span> {mission.schedule.timezone} · rev{' '}
+            <span className="mono">{mission.schedule.cron}</span>{' '}
+            {mission.schedule.timezoneExplicit === false ? (
+              <span title={mission.schedule.timezone}>follows your timezone</span>
+            ) : (
+              mission.schedule.timezone
+            )}{' '}
+            · rev{' '}
             {mission.schedule.revision} · next{' '}
             {mission.nextRun ? `${fmtTime(mission.nextRun, timezone)} (${fmtRelative(mission.nextRun)})` : '—'}
           </>
