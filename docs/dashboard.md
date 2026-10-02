@@ -110,9 +110,12 @@ needs me, what is my team up to, what is coming.
   "Continue" links.
 - **Needs you**: approval cards you decide in place, messages kept for the
   dashboard (a watcher's find, a reminder, a report, an agent's own message —
-  shown without its "@handle:", since the agent is named beside it), failed
-  jobs, urgent alerts, an agent a plugin needs, and proposals to keep or
-  discard.
+  shown without its "@handle:", since the agent is named beside it; a plugin's
+  by its page's name, "Mail"), failed jobs, urgent alerts, an agent a plugin
+  needs, and proposals to keep or discard. Decisions only: a quiet line held
+  for the evening or kept for the recap (such as "buddi learned 1 rule") stays
+  in Settings → Notifications → Recent. Done is kept by buddi, so a message
+  does not come back on reload, and a quiet line that says more later stays read.
 - **Widgets**: small live panels the plugins export — the weather at home,
   what is coming up, who is waiting on your reply, the World clock buddi
   itself provides (Digital, or Analog: a face per place, yours first, light by
@@ -148,8 +151,14 @@ needs me, what is my team up to, what is coming.
   install buddi as an app.
 - **Coming up**: the next missions and reminders. **Lately**: the last five
   conversations.
-- Blocks plugins add, such as Goals, and "What buddi learned this week" when
-  there is a digest.
+- Blocks plugins add, such as Goals, each with × (Settings → Appearance →
+  Home sections shows one again), and "What buddi learned this week" for three
+  days after the digest runs: one line per kind in plain words ("Remembered 18
+  things · See memory", "Quieted 26 senders · See rules"), empty kinds left
+  out; × hides it until next week's.
+- Every notice has a way out: the upgrade notice until the next version, a
+  connection's until its sentence changes, a watcher's or source's error until
+  the error changes. What you close is kept by buddi, for every browser.
 
 **Tips.** When something in buddi has gone unused for a while, a second
 agent, a group, a mission, voice, the browser, a mailbox nobody reads, or no

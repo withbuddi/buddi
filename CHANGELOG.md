@@ -4,6 +4,16 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Fixed
+
+- Home: Done on a Needs you card now sticks. A line held for the end of the day (like "buddi learned 1 rule: quieted 1 newsletter") showed in Needs you even after Done and came back on every reload; Needs you now lists only what asks for you now, quiet lines stay in Notifications → Recent and the evening message, and a quiet line that says more later stays read instead of coming back unread.
+- Home: a plugin's card is named by its page ("Mail"), not its id ("email").
+
+### Changed
+
+- Home: "What buddi learned this week" reads like a person wrote it — one line per kind with one place to look ("Remembered 18 things · See memory", "Quieted 26 senders · See rules", "Kept 2 skills: …", "Your rules handled 436 emails") — with no raw rule lists, no cut-off notes and no empty sections. It shows for three days after the digest runs and × hides it until next week's. The Telegram digest says the same lines.
+- Home: every notice and section can be closed and stays closed across reloads and browsers — the upgrade notice until the next version, a connection's or a watcher's or source's error until it changes, a plugin's section until shown again in Settings → Appearance → Home sections. `POST /api/home/dismiss`.
+
 ## 0.1.0-pre.30 — 2026-10-01
 
 ### Added

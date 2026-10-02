@@ -182,7 +182,9 @@ function HomeGlancesPref(): JSX.Element | null {
   const overview = useAsync(() => api.overview(), []);
   const [busy, setBusy] = useState<string | null>(null);
   const glances = overview.data?.glances ?? [];
-  if (glances.length === 0) return null;
+  const blocks = overview.data?.home ?? [];
+  const dismissed = overview.data?.dismissed ?? {};
+  if (glances.length === 0 && blocks.length === 0) return null;
   const toggle = (id: string, shown: boolean): void => {
     setBusy(id);
     void api
@@ -190,21 +192,49 @@ function HomeGlancesPref(): JSX.Element | null {
       .then(() => overview.reload())
       .finally(() => setBusy(null));
   };
+  // A plugin's block hidden with its × on Home comes back from here.
+  const toggleBlock = (id: string, shown: boolean): void => {
+    setBusy(`block:${id}`);
+    void api
+      .homeDismiss(`block:${id}`, shown ? null : 'hidden')
+      .then(() => overview.reload())
+      .finally(() => setBusy(null));
+  };
   return (
-    <div className="pref-row ui-section">
-      <div className="pref-text">
-        <span className="pref-label">Home glances</span>
-        <span className="ui-field-hint">The lines beside the date on Home, at most three. Kept for every browser.</span>
-      </div>
-      <Stack gap="sm">
-        {glances.map((glance) => (
-          <label key={glance.id} className="backup-check">
-            <input type="checkbox" checked={!glance.hidden} disabled={busy === glance.id} onChange={(event) => toggle(glance.id, event.target.checked)} />
-            <span>{glance.title}</span>
-          </label>
-        ))}
-      </Stack>
-    </div>
+    <>
+      {glances.length > 0 ? (
+        <div className="pref-row ui-section">
+          <div className="pref-text">
+            <span className="pref-label">Home glances</span>
+            <span className="ui-field-hint">The lines beside the date on Home, at most three. Kept for every browser.</span>
+          </div>
+          <Stack gap="sm">
+            {glances.map((glance) => (
+              <label key={glance.id} className="backup-check">
+                <input type="checkbox" checked={!glance.hidden} disabled={busy === glance.id} onChange={(event) => toggle(glance.id, event.target.checked)} />
+                <span>{glance.title}</span>
+              </label>
+            ))}
+          </Stack>
+        </div>
+      ) : null}
+      {blocks.length > 0 ? (
+        <div className="pref-row ui-section">
+          <div className="pref-text">
+            <span className="pref-label">Home sections</span>
+            <span className="ui-field-hint">What the plugins put on Home. Kept for every browser.</span>
+          </div>
+          <Stack gap="sm">
+            {blocks.map((block) => (
+              <label key={block.id} className="backup-check">
+                <input type="checkbox" checked={dismissed[`block:${block.id}`] !== 'hidden'} disabled={busy === `block:${block.id}`} onChange={(event) => toggleBlock(block.id, event.target.checked)} />
+                <span>{block.title}</span>
+              </label>
+            ))}
+          </Stack>
+        </div>
+      ) : null}
+    </>
   );
 }
 

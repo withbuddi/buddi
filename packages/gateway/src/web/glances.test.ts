@@ -1,7 +1,7 @@
 /** Home glances: produced side by side, hidden ones marked, links resolved, failures and blanks left out. */
 import { describe, expect, it } from 'vitest';
 import { ToolRegistry, type HomeContribution, type PageDescriptor } from '@buddi/core';
-import { cardOf, readGlances, readHome, setGlanceHidden } from './read.js';
+import { HOME_DISMISSED_MAX, cardOf, readGlances, readHome, readHomeDismissed, setGlanceHidden, setHomeDismissed } from './read.js';
 
 /** `core.web_settings` as a map, answering the two statements the settings use. */
 function fakePool() {
@@ -78,5 +78,36 @@ describe('Home glances', () => {
     await setGlanceHidden({ pool: pool as never, registry }, 'weather.now', false);
     expect((await readGlances({ pool: pool as never, registry, ctx: {} as never }))[0]!.hidden).toBe(false);
     expect((await setGlanceHidden({ pool: pool as never, registry }, 'weather.block', true)).status).toBe(404);
+  });
+});
+
+describe('what the owner closed on Home', () => {
+  it('keeps one version per slot beside the hidden glances, shows it again on null, and refuses a bad slot or token', async () => {
+    const pool = fakePool();
+    const registry = registryWith(glances);
+    await setGlanceHidden({ pool: pool as never, registry }, 'weather.now', true);
+    expect((await setHomeDismissed(pool as never, 'digest', '2026-09-20T00:00:00Z')).status).toBe(200);
+    await setHomeDismissed(pool as never, 'watcher-error:mail-watch', 'IMAP timed out');
+    expect(pool.rows.get('home')).toEqual({
+      hiddenGlances: ['weather.now'],
+      dismissed: { digest: '2026-09-20T00:00:00Z', 'watcher-error:mail-watch': 'IMAP timed out' },
+    });
+    // The next week's digest is a new version: the slot moves on to it.
+    await setHomeDismissed(pool as never, 'digest', '2026-09-27T00:00:00Z');
+    expect((await readHomeDismissed(pool as never)).digest).toBe('2026-09-27T00:00:00Z');
+    await setHomeDismissed(pool as never, 'digest', null);
+    expect(await readHomeDismissed(pool as never)).toEqual({ 'watcher-error:mail-watch': 'IMAP timed out' });
+    expect((await setHomeDismissed(pool as never, 'Bad Slot', 'x')).status).toBe(400);
+    expect((await setHomeDismissed(pool as never, 'digest', '')).status).toBe(400);
+    expect((await setHomeDismissed(pool as never, 'digest', undefined)).status).toBe(400);
+  });
+
+  it('keeps at most the newest HOME_DISMISSED_MAX slots', async () => {
+    const pool = fakePool();
+    for (let i = 0; i <= HOME_DISMISSED_MAX; i += 1) await setHomeDismissed(pool as never, `connection:c${i}`, 'x');
+    const kept = await readHomeDismissed(pool as never);
+    expect(Object.keys(kept)).toHaveLength(HOME_DISMISSED_MAX);
+    expect(kept['connection:c0']).toBeUndefined();
+    expect(kept[`connection:c${HOME_DISMISSED_MAX}`]).toBe('x');
   });
 });

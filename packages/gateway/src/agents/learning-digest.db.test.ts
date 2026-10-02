@@ -24,6 +24,7 @@ import type { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LEARNING_DIGEST_ID,
+  digestSummary,
   digestText,
   ensureDigestMission,
   latestDigest,
@@ -102,7 +103,7 @@ suite('learning digest (postgres)', () => {
     await discardProposal(pool, { id: no.id, now: NOW });
   };
 
-  it('acceptance 5: arrives on Telegram as one message with counts, names and the link', async () => {
+  it('acceptance 5: arrives on Telegram as one message in plain words, with the link', async () => {
     await busyWeek();
     const sendMessage = vi.fn(async () => ({ message_id: 1 }));
     const result = await runLearningDigest({
@@ -117,17 +118,20 @@ suite('learning digest (postgres)', () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [chatId, text] = sendMessage.mock.calls[0] as unknown as [string, string];
     expect(chatId).toBe('4242');
-    expect(text).toContain('Learned: 4 memory notes (Pays rent on the 1st; Prefers short answers; Card closes on the 12th; …)');
-    expect(text).toContain('1 skill kept (Check a bank balance)');
-    expect(text).toContain('1 rule kept (mailer: ignore)');
+    expect(text).toContain('Remembered 4 things.');
+    expect(text).not.toContain('Pays rent');
+    expect(text).toContain('Kept 1 skill: Check a bank balance.');
+    expect(text).toContain('Quieted 1 sender.');
+    expect(text).not.toContain('mailer: ignore');
     expect(text).not.toContain('Old skill');
-    expect(text).toContain(`Proposes: 1 proposal waits for you to keep or discard: ${LINK}`);
-    // No installed plugin counts its rules here: said, not invented.
-    expect(text).toContain('Stopped doing: not measured yet.');
+    expect(text).toContain(`1 suggestion waits for you: ${LINK}`);
+    // No installed plugin counts its rules here: no line, never a made-up number.
+    expect(text).not.toMatch(/handled|stepped in|not measured/);
     expect(text.replace(LINK, '')).not.toMatch(/[*_`#]/);
 
     const latest = await latestDigest(pool);
-    expect(latest).toMatchObject({ delivered: true, open: 1, skills: { count: 1 }, rules: { count: 1 }, memory: { count: 4 } });
+    expect(latest).toMatchObject({ delivered: true, open: 1, skills: { count: 1 }, rules: { count: 1, actions: { ignore: 1 }, plugins: { mailer: 1 } }, memory: { count: 4 } });
+    expect(latest?.summary.map((l) => l.text)).toEqual(['Remembered 4 things', 'Quieted 1 sender', 'Kept 1 skill: Check a bank balance', '1 suggestion waits for you']);
   });
 
   it('counts what a plugin says its kept rules did, per plugin', async () => {
@@ -139,7 +143,7 @@ suite('learning digest (postgres)', () => {
     const deliver = vi.fn(async (_text: string) => undefined);
     const result = await runLearningDigest({ pool, now: NOW, manifests: [counting], proposalsUrl: LINK, deliver });
     expect(result.digest.stopped).toEqual({ total: 7, byPlugin: { mailer: 7 } });
-    expect(deliver.mock.calls[0]?.[0]).toContain('Stopped doing: rules you kept acted 7 times (mailer 7).');
+    expect(deliver.mock.calls[0]?.[0]).toContain('Your rules stepped in 7 times.');
   });
 
   it('sends nothing on a week with nothing learned and nothing open, and still records it for Home', async () => {
@@ -187,14 +191,47 @@ describe('digest text and cron', () => {
     expect(parseDigestCron('*/5 * * * *')).toBeNull();
   });
 
-  it('says nothing new, nothing waiting and no rule acting in plain words', () => {
+  it('leaves out every kind with nothing in it, rather than saying "nothing"', () => {
     const empty = { count: 0, names: [] };
     const text = digestText(
       { at: '', since: '', memory: empty, skills: empty, rules: empty, changes: { count: 1, names: ["advisor's tools"] }, open: 0, stopped: { total: 0, byPlugin: { mailer: 0 } } },
       LINK,
     );
-    expect(text).toBe(
-      "What buddi learned this week.\nLearned: 1 change to an agent kept (advisor's tools).\nProposes: nothing is waiting for you.\nStopped doing: no rule you kept acted this week.",
-    );
+    expect(text).toBe('What buddi learned this week.\nChanged how your agents work once.');
+    expect(digestText({ at: '', since: '', memory: empty, skills: empty, rules: empty, changes: empty, open: 0, stopped: null }, LINK))
+      .toBe('What buddi learned this week.\nNothing new this week.');
+  });
+
+  it('says the week for humans: counts with one place to look, never raw rule names or a cut note', () => {
+    const lines = digestSummary({
+      at: '', since: '',
+      memory: { count: 18, names: ['Loose ends from the 2026-09-27 weekly consolidation, for Fr…', 'Recurring charges billed to …'] },
+      skills: { count: 2, names: ['Open a project', 'Start Cour des Comptes locally'] },
+      rules: { count: 26, names: ['email: ignore', 'email: ignore', 'email: ignore'], actions: { ignore: 20, archive: 6 }, plugins: { email: 26 } },
+      changes: { count: 0, names: [] },
+      open: 0,
+      stopped: { total: 436, byPlugin: { email: 436 } },
+    });
+    expect(lines).toEqual([
+      { key: 'memory', text: 'Remembered 18 things', link: { label: 'See memory', route: '#/settings/memory' } },
+      { key: 'rules', text: 'Quieted 26 senders', link: { label: 'See rules', route: '#/settings/proposals?plugin=email' } },
+      { key: 'skills', text: 'Kept 2 skills: Open a project and Start Cour des Comptes locally' },
+      { key: 'handled', text: 'Your rules handled 436 emails' },
+    ]);
+    const said = JSON.stringify(lines);
+    expect(said).not.toContain('email: ignore');
+    expect(said).not.toContain('…');
+    expect(said).not.toMatch(/Nothing was waiting|Proposes|Stopped doing/);
+  });
+
+  it('calls rules that do more than quiet "new rules", and names the skills it could not list as "more"', () => {
+    const empty = { count: 0, names: [] };
+    const lines = digestSummary({
+      at: '', since: '', memory: empty, changes: empty, open: 3, stopped: null,
+      skills: { count: 5, names: ['A', 'B', 'C'] },
+      rules: { count: 2, names: [], actions: { ignore: 1, notify: 1 }, plugins: { email: 1, finance: 1 } },
+    });
+    expect(lines.map((l) => l.text)).toEqual(['Kept 2 new rules', 'Kept 5 skills: A, B, C and 2 more', '3 suggestions wait for you']);
+    expect(lines[0]?.link?.route).toBe('#/settings/proposals');
   });
 });

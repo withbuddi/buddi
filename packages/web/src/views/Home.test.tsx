@@ -4,11 +4,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { api, chatApi, type NotificationRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { useSlashToComposer } from '../shell/slash';
-import { Home, homeNotifications } from './Home';
+import { DIGEST_FRESH_MS, Home, LearnedThisWeek, homeNotifications } from './Home';
+import type { PluginPages } from '../pages/usePages';
 
 vi.mock('../api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../api')>();
@@ -29,6 +30,7 @@ vi.mock('../api', async (importOriginal) => {
       version: vi.fn(),
       notifications: vi.fn(async () => ({ notifications: [] })),
       notificationSeen: vi.fn(async () => ({ ok: true })),
+      homeDismiss: vi.fn(async () => ({ dismissed: {} })),
       currentTip: vi.fn(async () => ({ tip: null, enabled: true })),
       tips: vi.fn(async () => ({ tips: [], enabled: true })),
     },
@@ -77,7 +79,7 @@ describe('the upgrade notice', () => {
     // not three stacked rows of the notice.
     const line = screen.getByText(/A newer buddi is ready:/);
     expect(line.tagName).toBe('P');
-    expect(line.parentElement).toHaveClass('ui-notice');
+    expect(line.closest('.ui-notice')).not.toBeNull();
     expect(line.parentElement?.children).toHaveLength(1);
     expect(line.querySelector('.mono')).toHaveTextContent('0.1.1');
     const link = screen.getByRole('link', { name: 'Upgrade from Settings → Version.' });
@@ -87,6 +89,22 @@ describe('the upgrade notice', () => {
     expect(navigate).toHaveBeenCalledWith('#/settings/system');
     // The shell read the version; Home does not ask again.
     expect(api.version).not.toHaveBeenCalled();
+  });
+
+  it('closes with × until the next version, kept by the server', async () => {
+    await home(NEWER);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Not now — tell me at the next version/ })); });
+    expect(api.homeDismiss).toHaveBeenCalledWith('update', '0.1.1');
+    expect(screen.queryByText(/A newer buddi is ready/)).not.toBeInTheDocument();
+  });
+
+  it('stays closed on reload for that version, and shows again for the next one', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ ...OVERVIEW, dismissed: { update: '0.1.1' } } as never);
+    await home(NEWER);
+    expect(screen.queryByText(/A newer buddi is ready/)).not.toBeInTheDocument();
+    cleanup();
+    await home({ ...NEWER, latest: '0.1.2' });
+    expect(screen.getByText(/A newer buddi is ready/)).toBeInTheDocument();
   });
 
   it('says nothing when there is no newer version', async () => {
@@ -149,7 +167,7 @@ describe('connections that need the owner', () => {
     });
     const line = screen.getByText(/GitHub needs you to sign in again\./);
     expect(line.tagName).toBe('P');
-    expect(line.parentElement).toHaveClass('ui-notice');
+    expect(line.closest('.ui-notice')).not.toBeNull();
     expect(screen.getByText(/Notion changed its tools; review them\./)).toBeInTheDocument();
     const links = screen.getAllByRole('link', { name: 'Settings → Connections.' });
     expect(links).toHaveLength(2);
@@ -173,7 +191,7 @@ function note(over: Partial<NotificationRow>): NotificationRow {
 }
 
 describe('what buddi kept for you, under "Needs you"', () => {
-  it('lists a watcher row and a held one, counts them in the greeting, and opening one marks it seen', async () => {
+  it('lists a watcher row but never a quiet one held for today, counts it in the greeting, and opening it marks it seen', async () => {
     vi.mocked(api.notifications).mockResolvedValue({
       notifications: [
         note({}),
@@ -185,14 +203,39 @@ describe('what buddi kept for you, under "Needs you"', () => {
     const navigate = vi.fn();
     window.localStorage.setItem('buddi.needsYouView', 'list');
     await home(null, navigate);
-    expect(screen.getByRole('button', { name: '2 messages' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1 message' })).toBeInTheDocument();
     expect(screen.getByText('Needs you')).toBeInTheDocument();
-    expect(screen.getByText('The weekly recap')).toBeInTheDocument();
+    expect(screen.queryByText('The weekly recap')).not.toBeInTheDocument();
     expect(screen.queryByText('Send the invoice?')).not.toBeInTheDocument();
     expect(screen.queryByText('Seen already')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: /A mail from the bank/ }));
     expect(api.notificationSeen).toHaveBeenCalledWith('n1');
     expect(navigate).toHaveBeenCalledWith('#/chat/finance');
+  });
+
+  it('is decisions only: a line held for today or kept for the recap is never here, seen or not', () => {
+    const rows = [
+      note({ id: 'learned', kind: 'plugin', pluginId: 'email', urgency: 'today', state: 'held', title: 'buddi learned 1 rule: quieted 1 newsletter — review' }),
+      note({ id: 'recap', kind: 'recap', urgency: 'digest', state: 'stored' }),
+      note({ id: 'lowered', urgency: 'today', state: 'held' }),
+      note({ id: 'now' }),
+    ];
+    expect(homeNotifications(rows, []).map((row) => row.id)).toEqual(['now']);
+  });
+
+  it('Done is kept by the server: once it says seen, the row does not come back on reload', async () => {
+    const row = note({ id: 'n7', title: 'Your parcel is at the door' });
+    vi.mocked(api.notifications).mockResolvedValue({ notifications: [row] });
+    await home(null);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(api.notificationSeen).toHaveBeenCalledWith('n7');
+    cleanup();
+    // The reload: the server now says it was seen. An update to a quiet line
+    // keeps it seen (core), so nothing brings it back.
+    vi.mocked(api.notifications).mockResolvedValue({ notifications: [{ ...row, seenAt: '2026-09-21T09:01:00Z' }] });
+    await home(null);
+    expect(screen.queryByText('Your parcel is at the door')).not.toBeInTheDocument();
+    expect(screen.queryByText('Needs you')).not.toBeInTheDocument();
   });
 
   it('leaves out a row about an approval Home already draws as a card', () => {
@@ -318,7 +361,8 @@ describe('"Needs you" as a deck', () => {
     expect(region).toHaveTextContent('1 of 3');
     fireEvent.keyDown(region, { key: 'ArrowLeft' });
     expect(region).toHaveTextContent('3 of 3');
-    expect(region).toHaveTextContent('github');
+    // A plugin is named as the owner knows it, never by its raw id.
+    expect(region).toHaveTextContent('Github');
     expect(screen.queryByRole('button', { name: 'Open' })).not.toBeInTheDocument();
     fireEvent.keyDown(region, { key: 'ArrowRight' });
     expect(region).toHaveTextContent('1 of 3');
@@ -388,5 +432,107 @@ describe('"Needs you" as a deck', () => {
     expect(screen.getByRole('link', { name: /A mail from the bank/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /The weekly recap/ })).toBeInTheDocument();
     expect(window.localStorage.getItem('buddi.needsYouView')).toBe('list');
+  });
+});
+
+describe('a plugin\'s card names the plugin by its page', () => {
+  it('says "Mail" for the email plugin, from its rail page, not "email"', async () => {
+    const LEARNED = note({ id: 'm1', kind: 'plugin', pluginId: 'email', title: 'A sender wants a reply', link: null });
+    vi.mocked(api.notifications).mockResolvedValue({ notifications: [LEARNED] });
+    const pages = { all: [{ plugin: 'email', id: 'mail', title: 'Mail', place: 'rail', body: [] }], rail: [], settings: [], find: () => undefined } as unknown as PluginPages;
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={vi.fn()} agents={[DESK]} attention={new Map()} pluginPages={pages} />);
+    });
+    const region = screen.getByRole('region', { name: 'Needs you, one at a time' });
+    expect(region).toHaveTextContent('Mail');
+    expect(region).not.toHaveTextContent('email');
+  });
+});
+
+describe('what buddi learned this week', () => {
+  const AT = '2026-09-20T00:00:00Z';
+  const DIGEST = {
+    at: AT, since: '2026-09-13T00:00:00Z',
+    memory: { count: 18, names: ['Loose ends from the 2026-09-27 weekly consolidation, for Fr…'] },
+    skills: { count: 2, names: ['Open a project', 'Start Cour des Comptes locally'] },
+    rules: { count: 26, names: ['email: ignore', 'email: ignore', 'email: ignore'], actions: { ignore: 26 } },
+    changes: { count: 0, names: [] }, open: 0,
+    stopped: { total: 436, byPlugin: { email: 436 } }, delivered: true,
+    summary: [
+      { key: 'memory', text: 'Remembered 18 things', link: { label: 'See memory', route: '#/settings/memory' } },
+      { key: 'rules', text: 'Quieted 26 senders', link: { label: 'See rules', route: '#/settings/proposals?plugin=email' } },
+      { key: 'skills', text: 'Kept 2 skills: Open a project and Start Cour des Comptes locally' },
+      { key: 'handled', text: 'Your rules handled 436 emails' },
+    ],
+  };
+
+  async function withDigest(over: Record<string, unknown> = {}, now = '2026-09-21T09:00:00Z'): Promise<void> {
+    vi.mocked(api.overview).mockResolvedValue({ ...OVERVIEW, now, ...over } as never);
+    vi.mocked(api.proposals).mockResolvedValue({ open: [], closed: [], digest: { latest: DIGEST, schedule: null } } as never);
+    await home(null);
+  }
+
+  it('says the week in human lines with one place to look each, no raw rule names, no empty sections', async () => {
+    await withDigest();
+    const card = screen.getByText('What buddi learned this week').closest('section') ?? document.body;
+    expect(card).toHaveTextContent('Remembered 18 things · See memory');
+    expect(card).toHaveTextContent('Quieted 26 senders · See rules');
+    expect(card).toHaveTextContent('Kept 2 skills: Open a project and Start Cour des Comptes locally');
+    expect(card).toHaveTextContent('Your rules handled 436 emails');
+    expect(card).not.toHaveTextContent('email: ignore');
+    expect(card).not.toHaveTextContent('…');
+    expect(card).not.toHaveTextContent('Nothing was waiting');
+    expect(card).not.toHaveTextContent('Proposes');
+    expect(screen.getByRole('link', { name: 'See rules' })).toHaveAttribute('href', '#/settings/proposals?plugin=email');
+  });
+
+  it('× hides it until next week, kept by the server', async () => {
+    await withDigest();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hide until next week' })); });
+    expect(api.homeDismiss).toHaveBeenCalledWith('digest', AT);
+    expect(screen.queryByText('What buddi learned this week')).not.toBeInTheDocument();
+  });
+
+  it('stays hidden on reload for that week, and the next week\'s digest shows again', async () => {
+    await withDigest({ dismissed: { digest: AT } });
+    expect(screen.queryByText('What buddi learned this week')).not.toBeInTheDocument();
+    cleanup();
+    await withDigest({ dismissed: { digest: '2026-09-13T00:00:00Z' } });
+    expect(screen.getByText('What buddi learned this week')).toBeInTheDocument();
+  });
+
+  it('leaves Home on its own once it is three days old', async () => {
+    await withDigest({}, new Date(Date.parse(AT) + DIGEST_FRESH_MS + 60_000).toISOString());
+    expect(screen.queryByText('What buddi learned this week')).not.toBeInTheDocument();
+  });
+
+  it('draws nothing when the week had nothing in it', () => {
+    const { container } = render(<LearnedThisWeek digest={{ ...DIGEST, summary: [] } as never} go={() => () => {}} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('notices with a way out', () => {
+  it('a watcher error closes until its text changes', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ ...OVERVIEW, sentinels: { ...OVERVIEW.sentinels, errors: [{ sentinelId: 'mail-watch', error: 'IMAP timed out' }] } } as never);
+    await home(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hide until the error changes' })); });
+    expect(api.homeDismiss).toHaveBeenCalledWith('watcher-error:mail-watch', 'IMAP timed out');
+    expect(screen.queryByText(/IMAP timed out/)).not.toBeInTheDocument();
+    cleanup();
+    vi.mocked(api.overview).mockResolvedValue({
+      ...OVERVIEW, dismissed: { 'watcher-error:mail-watch': 'IMAP timed out' },
+      sentinels: { ...OVERVIEW.sentinels, errors: [{ sentinelId: 'mail-watch', error: 'Login refused' }] },
+    } as never);
+    await home(null);
+    expect(screen.getByText(/Login refused/)).toBeInTheDocument();
+  });
+
+  it('a plugin\'s Home section hides with its ×', async () => {
+    vi.mocked(api.overview).mockResolvedValue({ ...OVERVIEW, home: [{ id: 'finance.home', plugin: 'finance', title: 'Money', stats: [], rows: [] }] } as never);
+    await home(null);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hide Money from Home' })); });
+    expect(api.homeDismiss).toHaveBeenCalledWith('block:finance.home', 'hidden');
+    expect(screen.queryByText('Money')).not.toBeInTheDocument();
   });
 });

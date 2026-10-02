@@ -1,12 +1,11 @@
 /**
  * The weekly learning digest (docs/learning.md §5).
  *
- * Once a week, one message on Telegram and a card on Home: what buddi learned
- * (memory notes added, skills, rules and changes kept: counts and up to three
- * names each), what it proposes (the open count, with a link to Settings →
- * Proposals), and what it stopped doing (how many times a plugin's gate acted
- * on a rule the owner kept, from the plugins that record it; "not measured
- * yet" when none does, never a number made up here).
+ * Once a week, one message on Telegram and a card on Home, in the owner's
+ * words (`digestSummary`): what buddi remembered, the rules and skills kept
+ * (counts, with a place to look — never raw rule names), the suggestions
+ * waiting, and how often kept rules stepped in, from the plugins that count it.
+ * A kind with nothing in it is left out rather than said as "nothing".
  *
  * It rides the mission scheduler as the `learning-digest` mission, so the
  * owner's day and hour are an ordinary schedule revision, a missed Sunday
@@ -227,44 +226,98 @@ export async function composeDigest(
   };
 }
 
-function tallyPhrase(t: KeptTally, one: string, many: string): string | null {
-  if (t.count === 0) return null;
-  const names = t.names.length > 0 ? ` (${t.names.join('; ')}${t.count > t.names.length ? '; …' : ''})` : '';
-  return `${t.count} ${t.count === 1 ? one : many}${names}`;
+/** One line of the digest, in the owner's words, with at most one place to go. */
+export interface DigestLine {
+  /** Stable per kind: memory, rules, skills, changes, open, handled. */
+  key: string;
+  text: string;
+  link?: { label: string; route: string };
+}
+
+/** Where the Home card's links go: dashboard routes, never a plugin's own page. */
+export const DIGEST_ROUTES = {
+  memory: '#/settings/memory',
+  proposals: '#/settings/proposals',
+} as const;
+
+/** Actions that only make mail (or anything) quieter: "Quieted N senders". */
+const QUIET_ACTIONS = new Set(['ignore', 'archive', 'mute']);
+
+function counted(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "A, B and C", or "A, B and 4 more" when there were more than named. */
+function namesList(names: readonly string[], count: number): string {
+  const shown = names.map((n) => n.trim()).filter((n) => n !== '' && !n.endsWith('…'));
+  if (shown.length === 0) return '';
+  const more = count - shown.length;
+  if (more > 0) return `${shown.join(', ')} and ${more} more`;
+  if (shown.length === 1) return shown[0]!;
+  return `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
+/**
+ * The digest as a person would say it: one line per kind with a count and one
+ * place to look, never a list of raw rule names or a note cut mid-sentence.
+ * A kind with nothing in it has no line; "nothing was waiting" is not news.
+ */
+export function digestSummary(d: LearningDigest): DigestLine[] {
+  const lines: DigestLine[] = [];
+  if (d.memory.count > 0) {
+    lines.push({ key: 'memory', text: `Remembered ${counted(d.memory.count, 'thing')}`, link: { label: 'See memory', route: DIGEST_ROUTES.memory } });
+  }
+  if (d.rules.count > 0) {
+    const actions = d.rules.actions ?? {};
+    const plugins = Object.keys(d.rules.plugins ?? {});
+    const quiet = Object.keys(actions).length > 0 && Object.keys(actions).every((a) => QUIET_ACTIONS.has(a));
+    const route = plugins.length === 1 ? `${DIGEST_ROUTES.proposals}?plugin=${encodeURIComponent(plugins[0]!)}` : DIGEST_ROUTES.proposals;
+    lines.push({
+      key: 'rules',
+      text: quiet ? `Quieted ${counted(d.rules.count, 'sender')}` : `Kept ${counted(d.rules.count, 'new rule')}`,
+      link: { label: 'See rules', route },
+    });
+  }
+  if (d.skills.count > 0) {
+    const names = namesList(d.skills.names, d.skills.count);
+    lines.push({ key: 'skills', text: `Kept ${counted(d.skills.count, 'skill')}${names ? `: ${names}` : ''}` });
+  }
+  if (d.changes.count > 0) {
+    lines.push({
+      key: 'changes',
+      text: `Changed how your agents work ${d.changes.count === 1 ? 'once' : `${d.changes.count} times`}`,
+      link: { label: 'See what changed', route: DIGEST_ROUTES.proposals },
+    });
+  }
+  if (d.open > 0) {
+    lines.push({
+      key: 'open',
+      text: `${counted(d.open, 'suggestion')} ${d.open === 1 ? 'waits' : 'wait'} for you`,
+      link: { label: 'Review', route: DIGEST_ROUTES.proposals },
+    });
+  }
+  if (d.stopped && d.stopped.total > 0) {
+    const acting = Object.entries(d.stopped.byPlugin).filter(([, n]) => n > 0).map(([plugin]) => plugin);
+    const mailOnly = acting.length === 1 && acting[0] === 'email';
+    lines.push({
+      key: 'handled',
+      text: mailOnly ? `Your rules handled ${counted(d.stopped.total, 'email')}` : `Your rules stepped in ${d.stopped.total === 1 ? 'once' : `${d.stopped.total} times`}`,
+    });
+  }
+  return lines;
 }
 
 /**
  * The digest as one plain-text message: no markdown, since Telegram shows the
- * characters, and no question, since nobody answers a digest.
+ * characters, and no question, since nobody answers a digest. The same lines
+ * as the Home card, with the suggestions' link spelled out.
  */
 export function digestText(d: LearningDigest, proposalsUrl: string): string {
-  const learned = [
-    tallyPhrase(d.memory, 'memory note', 'memory notes'),
-    tallyPhrase(d.skills, 'skill kept', 'skills kept'),
-    tallyPhrase(d.rules, 'rule kept', 'rules kept'),
-    tallyPhrase(d.changes, 'change to an agent kept', 'changes to agents kept'),
-  ].filter((p): p is string => p !== null);
   const lines = ['What buddi learned this week.'];
-  lines.push(learned.length > 0 ? `Learned: ${learned.join(', ')}.` : 'Learned: nothing new.');
-  lines.push(
-    d.open > 0
-      ? `Proposes: ${d.open} ${d.open === 1 ? 'proposal waits' : 'proposals wait'} for you to keep or discard: ${proposalsUrl}`
-      : 'Proposes: nothing is waiting for you.',
-  );
-  if (d.stopped === null) {
-    lines.push('Stopped doing: not measured yet.');
-  } else {
-    const by = Object.entries(d.stopped.byPlugin)
-      .filter(([, n]) => n > 0)
-      .map(([plugin, n]) => `${plugin} ${n}`);
-    lines.push(
-      d.stopped.total > 0
-        ? `Stopped doing: rules you kept acted ${d.stopped.total} ${d.stopped.total === 1 ? 'time' : 'times'} (${by.join(', ')}).`
-        : 'Stopped doing: no rule you kept acted this week.',
-    );
-  }
-  const reactions = feedbackLines(d);
-  lines.push(...reactions);
+  const summary = digestSummary(d);
+  if (summary.length === 0) lines.push('Nothing new this week.');
+  for (const line of summary) lines.push(line.key === 'open' ? `${line.text}: ${proposalsUrl}` : `${line.text}.`);
+  lines.push(...feedbackLines(d));
   return lines.join('\n');
 }
 
@@ -329,11 +382,11 @@ export async function runLearningDigest(deps: {
 }
 
 /** The latest digest, for the Home card, or null before the first one. */
-export async function latestDigest(pool: Pool): Promise<(LearningDigest & { delivered: boolean }) | null> {
+export async function latestDigest(pool: Pool): Promise<(LearningDigest & { delivered: boolean; summary: DigestLine[] }) | null> {
   const { rows } = await pool.query(
     `select payload from core.events where kind = $1 order by created_at desc, id desc limit 1`,
     [LEARNING_DIGEST_EVENT],
   );
   const payload = rows[0]?.payload as (LearningDigest & { delivered?: boolean }) | undefined;
-  return payload ? { ...payload, delivered: payload.delivered === true } : null;
+  return payload ? { ...payload, delivered: payload.delivered === true, summary: digestSummary(payload) } : null;
 }

@@ -326,6 +326,13 @@ export async function takeUntoldDecisions(
 export interface KeptTally {
   count: number;
   names: string[];
+  /**
+   * Rules only: how many of each action were kept (`{ ignore: 26 }`), so the
+   * digest can say "Quieted 26 senders" instead of listing "email: ignore".
+   */
+  actions?: Record<string, number>;
+  /** Rules only: how many were kept per plugin. */
+  plugins?: Record<string, number>;
 }
 
 /** What the weekly digest reads from the proposals table. */
@@ -368,6 +375,12 @@ export async function readLearningWeek(db: Queryable, input: { since: Date }): P
     const tally = kept[p.kind];
     tally.count += 1;
     if (tally.names.length < 3) tally.names.push(shortName(p));
+    if (p.kind === 'policy') {
+      const action = String(p.payload.action ?? '') || 'other';
+      const plugin = String(p.payload.plugin ?? '') || 'other';
+      tally.actions = { ...tally.actions, [action]: (tally.actions?.[action] ?? 0) + 1 };
+      tally.plugins = { ...tally.plugins, [plugin]: (tally.plugins?.[plugin] ?? 0) + 1 };
+    }
   }
   return { kept, open: await countOpenProposals(db) };
 }

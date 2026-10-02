@@ -220,6 +220,10 @@ export const API_ROUTES: readonly ApiRoute[] = [
     method: 'POST', path: '/api/home/glances/:id/hidden', area: 'home', summary: 'Hide a Home glance or show it again.',
     body: '{ hidden: boolean }', errors: '404 no such glance',
   },
+  {
+    method: 'POST', path: '/api/home/dismiss', area: 'home', summary: 'Close one thing on Home until it changes, or show it again.',
+    body: '{ slot: string, token: string | null }', answer: '{ dismissed: Record<slot, token> }', errors: '400',
+  },
   { method: 'GET', path: '/api/rail', area: 'home', summary: 'Which plugin pages the owner hid from the rail.', answer: '{ hidden: Array<{ plugin, page }> }' },
   {
     method: 'POST', path: '/api/rail/pages/:plugin/:page/hidden', area: 'home', summary: 'Hide a plugin page from the rail or show it again.',

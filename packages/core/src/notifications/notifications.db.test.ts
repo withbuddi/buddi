@@ -176,6 +176,25 @@ suite('reaching the owner', () => {
     expect(sent.map((m) => m.title)).toEqual(['Balance lower']);
   });
 
+  it('updates a quiet line the owner already read without bringing it back unseen; a now one comes back', async () => {
+    fakeChannel();
+    const line = await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'email', urgency: 'today', title: 'buddi learned 1 rule', dedupeKey: 'learned' });
+    expect(await markSeen(pool, line.id, minutes(1))).toBe(true);
+    clock = minutes(2);
+    const again = await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'email', urgency: 'today', title: 'buddi learned 2 rules', dedupeKey: 'learned' });
+    expect(again).toMatchObject({ id: line.id, deduped: true });
+    const [row] = await listNotifications(pool);
+    expect(row).toMatchObject({ title: 'buddi learned 2 rules', state: 'held', seenAt: minutes(1).toISOString() });
+
+    await presenceTouch(pool, 'web', minutes(2));
+    const alert = await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Balance low', dedupeKey: 'balance' });
+    await markSeen(pool, alert.id, minutes(3));
+    clock = minutes(4);
+    await notifyOwner(pool, deps, { kind: 'watcher', urgency: 'now', title: 'Balance lower', dedupeKey: 'balance' });
+    const rows = await listNotifications(pool);
+    expect(rows.find((r) => r.id === alert.id)?.seenAt).toBeNull();
+  });
+
   it('lowers a key that fires more than three times in an hour to today, and says so once', async () => {
     fakeChannel();
     for (let i = 0; i < 3; i += 1) {

@@ -80,3 +80,16 @@ export function usePluginPages(skip = false): PluginPages {
     find: (plugin, page) => pages.find((p) => p.plugin === plugin && p.id === page),
   };
 }
+
+/**
+ * A plugin as the owner knows it: the title of its first rail page ("Mail"
+ * for `email`), else its first settings page, else its id with a capital —
+ * never the raw id on a card.
+ */
+export function pluginTitle(plugin: string, pages: readonly PluginPageDescriptor[] | undefined): string {
+  const own = (pages ?? []).filter((page) => page.plugin === plugin);
+  const first = orderPages(own, 'rail')[0] ?? orderPages(own, 'settings')[0];
+  if (first?.title.trim()) return first.title.trim();
+  const words = plugin.replace(/[-_]+/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : plugin;
+}

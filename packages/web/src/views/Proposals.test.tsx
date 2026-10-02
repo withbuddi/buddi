@@ -381,6 +381,11 @@ describe('the weekly digest', () => {
     open: 2,
     stopped: null,
     delivered: true,
+    summary: [
+      { key: 'memory', text: 'Remembered 4 things', link: { label: 'See memory', route: '#/settings/memory' } },
+      { key: 'skills', text: 'Kept 1 skill: Check a bank balance' },
+      { key: 'open', text: '2 suggestions wait for you', link: { label: 'Review', route: '#/settings/proposals' } },
+    ],
   };
 
   it('sets its day and hour on the Proposals page', async () => {
@@ -395,7 +400,7 @@ describe('the weekly digest', () => {
     expect(await screen.findByText('The digest now runs on Friday at 09:00.')).toBeInTheDocument();
   });
 
-  it('shows the latest digest on Home: counts with names, the open link, and "not measured yet"', async () => {
+  it('shows the latest digest on Home in the gateway\'s words, each line with its one link', async () => {
     vi.mocked(api.overview).mockResolvedValue({
       now: '2026-09-23T12:00:00Z', timezone: 'UTC', paused: false, home: [],
       approvals: { pending: 0, oldestPendingAt: null },
@@ -413,9 +418,10 @@ describe('the weekly digest', () => {
       render(<Home timezone="UTC" navigate={() => {}} agents={[]} attention={new Map()} />);
     });
     expect(await screen.findByText('What buddi learned this week')).toBeInTheDocument();
-    expect(screen.getByText('4 memory notes: Pays rent on the 1st; Prefers short answers; Card closes on the 12th; …')).toBeInTheDocument();
-    expect(screen.getByText('1 skill kept: Check a bank balance')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '2 proposals waiting for you to keep or discard.' })).toHaveAttribute('href', '#/settings/proposals');
-    expect(screen.getByText('Not measured yet.')).toBeInTheDocument();
+    expect(screen.getByText(/Remembered 4 things/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pays rent on the 1st/)).not.toBeInTheDocument();
+    expect(screen.getByText('Kept 1 skill: Check a bank balance')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review' })).toHaveAttribute('href', '#/settings/proposals');
+    expect(screen.queryByText(/Not measured yet/)).not.toBeInTheDocument();
   });
 });

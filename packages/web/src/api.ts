@@ -432,6 +432,8 @@ export interface Overview {
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
+  /** What the owner closed on Home, slot → the version closed. Absent from an older gateway. */
+  dismissed?: Record<string, string>;
   /** Agent runs in progress in the dashboard's conversations right now. Absent from an older gateway. */
   running?: number;
 }
@@ -715,6 +717,15 @@ export interface DigestRow {
   /** The agents the reactions name, by id, as the owner knows them. */
   agentNames?: Record<string, string>;
   delivered: boolean;
+  /** The week in the owner's words, one line per kind with something in it. Absent from an older gateway. */
+  summary?: DigestLine[];
+}
+
+/** One line of the digest: "Remembered 18 things", and where to look. */
+export interface DigestLine {
+  key: string;
+  text: string;
+  link?: { label: string; route: string };
 }
 
 /** When the digest runs: day 0 is Sunday. */
@@ -2259,6 +2270,9 @@ export const api = {
     post<{ view: WidgetView; label: string }>('/widgets/preview', { ...placement, ...hourCycle() }),
   refreshWidget: (key: string, surface: WidgetSurface = 'home') =>
     post<WidgetsAnswer>(`/widgets/${encodeURIComponent(key)}/refresh${surface === 'lock' ? '?surface=lock' : ''}`),
+  /** Close one thing on Home until it changes (`token` is the version closed), or show it again (null). */
+  homeDismiss: (slot: string, token: string | null) =>
+    post<{ dismissed: Record<string, string> }>('/home/dismiss', { slot, token }),
   setGlanceHidden: (id: string, hidden: boolean) =>
     post<{ id: string; hidden: boolean }>(`/home/glances/${encodeURIComponent(id)}/hidden`, { hidden }),
   /** The plugin rail pages the owner hid, as `<plugin>:<page>`. */

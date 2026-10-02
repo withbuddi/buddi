@@ -975,6 +975,8 @@ export interface Overview {
     errors: Array<{ sentinelId: string; error: string }>;
   };
   mail: Array<{ sourceId: string; lastRunAt: string; lastError: string | null }>;
+  /** What the owner closed on Home, slot → the version closed (`setHomeDismissed`). */
+  dismissed: Record<string, string>;
   /**
    * Agent runs in progress in the dashboard's conversations right now, for the
    * footer's "N agents working". Added by the web server, which owns the runs;
@@ -1064,6 +1066,7 @@ export async function readOverview(deps: {
       lastRunAt: new Date(r.last_run_at).toISOString(),
       lastError: r.last_error ?? null,
     })),
+    dismissed: await readHomeDismissed(pool),
   };
 }
 
@@ -1102,6 +1105,52 @@ export const HOME_SETTINGS_KEY = 'home';
 interface HomeSettings {
   /** Glance ids the owner hid. */
   hiddenGlances?: string[];
+  /**
+   * What the owner closed on Home, by slot, with the version of the thing
+   * closed (`{ digest: '<its at>', update: '0.1.0-pre.31' }`). A slot stays
+   * closed while its thing is the same one; a new digest, version or error
+   * text shows again.
+   */
+  dismissed?: Record<string, string>;
+}
+
+/** How many closed slots Home keeps; the oldest goes first past it. */
+export const HOME_DISMISSED_MAX = 100;
+
+/** A slot: a short word and an optional `:<id>` (`digest`, `watcher-error:mail-watch`). */
+const HOME_SLOT = /^[a-z][a-z0-9-]{0,40}(:[^\s]{1,200})?$/;
+
+function dismissedOf(settings: HomeSettings): Record<string, string> {
+  const d = settings.dismissed;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return {};
+  return Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+}
+
+/** What Home has closed, slot → the version closed. */
+export async function readHomeDismissed(pool: Pick<Pool, 'query'>): Promise<Record<string, string>> {
+  return dismissedOf(await readHomeSettings(pool));
+}
+
+/**
+ * Close one Home slot for the version of the thing it showed, or open it
+ * again (`token` null). The answer is the whole closed map.
+ */
+export async function setHomeDismissed(
+  pool: Pick<Pool, 'query'>,
+  slot: unknown,
+  token: unknown,
+): Promise<{ status: number; body: unknown }> {
+  if (typeof slot !== 'string' || !HOME_SLOT.test(slot)) return { status: 400, body: { error: '`slot` must be a Home slot, like digest' } };
+  if (token !== null && (typeof token !== 'string' || token.trim() === '' || token.length > 2000)) {
+    return { status: 400, body: { error: '`token` must be the version of what was closed, or null to show it again' } };
+  }
+  const settings = await readHomeSettings(pool);
+  const dismissed = dismissedOf(settings);
+  delete dismissed[slot];
+  if (token !== null) dismissed[slot] = token;
+  const kept = Object.entries(dismissed).slice(-HOME_DISMISSED_MAX);
+  await writeWebSetting(pool as never, HOME_SETTINGS_KEY, { ...settings, dismissed: Object.fromEntries(kept) });
+  return { status: 200, body: { dismissed: Object.fromEntries(kept) } };
 }
 
 /** One glance, as Home and Settings draw it. The link is resolved here, where the pages are known. */

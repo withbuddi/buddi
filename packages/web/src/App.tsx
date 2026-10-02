@@ -663,6 +663,6 @@ function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; p
     case FILES_ROUTE:
       return <Files {...props} />;
     default:
-      return <Home {...props} />;
+      return <Home {...withPages} />;
   }
 }

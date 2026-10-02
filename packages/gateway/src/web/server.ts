@@ -192,6 +192,7 @@ import {
   readMissions,
   readOverview,
   setGlanceHidden,
+  setHomeDismissed,
   readOffers,
   readReminders,
   readSentinels,
@@ -2634,6 +2635,12 @@ export function createWebApp(deps: WebServerDeps): Server {
       }
       const state = await setSentinelEnabled(deps.pool, sentinelId, body.enabled, deps.now());
       return sendJson(res, 200, { sentinelId: state.sentinelId, enabled: state.enabled });
+    }
+
+    /* One thing on Home closed until it changes (the digest's ×, a notice's Not now), or shown again. */
+    if (path === '/api/home/dismiss') {
+      const result = await setHomeDismissed(deps.pool, body.slot, body.token === undefined ? undefined : body.token);
+      return sendJson(res, result.status, result.body);
     }
 
     /* One Home glance, hidden or shown again (Home's ×, Settings → Appearance). */

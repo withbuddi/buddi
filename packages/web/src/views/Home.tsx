@@ -13,7 +13,7 @@
  * offers one, at the foot.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type DigestTally, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
+import { api, type ApprovalRow, type ConnectionSignal, type NotificationRow, type ConversationSummary, type DigestRow, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
 import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, NEEDS_ROUTE, settingsRoute, transcriptRoute } from '../routes';
@@ -26,6 +26,7 @@ import {
   Button,
   Empty,
   ErrorBanner,
+  Icon,
   List,
   ListRow,
   Mascot,
@@ -50,6 +51,7 @@ import { TipsButton, TipsSection, useTips } from './parts/TipsButton';
 import { HomeGlances, useGlanceHiding } from './parts/HomeGlances';
 import { HomeWidgets, placedIds, useWidgets } from './parts/HomeWidgets';
 import { NeedsYouDeck, fromWithAlso, readNeedsYouView, writeNeedsYouView, type NeedsYouView } from './parts/NeedsYouDeck';
+import { pluginTitle, type PluginPages } from '../pages/usePages';
 
 export function Home({
   timezone,
@@ -60,6 +62,7 @@ export function Home({
   update,
   connectionSignals = [],
   hash = '',
+  pluginPages,
 }: {
   timezone: string;
   /** The page's hash, for `#/?tip=<id>` previews. */
@@ -72,6 +75,8 @@ export function Home({
   update?: VersionView | null;
   /** Connections that need the owner (a sign-in ran out, the tools changed), as the shell read them. */
   connectionSignals?: ConnectionSignal[];
+  /** The plugins' pages, read once by the shell: a card names a plugin by its page's title ("Mail"). */
+  pluginPages?: PluginPages;
 }): JSX.Element {
   const overview = useAsync<Overview>(() => api.overview(), [], 15_000);
   const approvals = useAsync(() => api.approvals(), [], 10_000);
@@ -115,7 +120,12 @@ export function Home({
     if (row.link) navigate(row.link);
   };
   const fromOf = (row: NotificationRow): string =>
-    fromWithAlso(row.agentId ? nameOf(row.agentId) : row.pluginId ?? KIND_WORDS[row.kind], row, nameOf);
+    fromWithAlso(row.agentId ? nameOf(row.agentId) : row.pluginId ? pluginTitle(row.pluginId, pluginPages?.all) : KIND_WORDS[row.kind], row, nameOf);
+  // What the owner closed on Home, kept by the installation; closed here
+  // shows as closed at once, before the server answers.
+  const closed = useHomeClosed(data?.dismissed, () => overview.reload());
+  const sentinelErrors = (data?.sentinels?.errors ?? []).filter((err) => !closed.is(`watcher-error:${err.sentinelId}`, err.error));
+  const sourceErrors = (data?.mail ?? []).filter((m) => m.lastError && !closed.is(`source-error:${m.sourceId}`, m.lastError));
   const needs = pending.length + (failedJobs > 0 ? 1 : 0) + (urgent > 0 ? 1 : 0) + (proposed > 0 ? 1 : 0) + toSetUp.length + told.length;
 
   // The footer's approvals land here: Home, scrolled to "Needs you".
@@ -168,8 +178,8 @@ export function Home({
       {/* One quiet tip a day, when something in buddi has gone unused. */}
       <TipCard navigate={navigate} preview={previewTipOf(hash)} hidden={tips.open} />
 
-      {update && update.updateAvailable && !update.checkout && update.latest ? (
-        <Notice tone="accent">
+      {update && update.updateAvailable && !update.checkout && update.latest && !closed.is('update', update.latest) ? (
+        <Notice tone="accent" action={<CloseButton label="Not now — tell me at the next version" onClick={() => closed.close('update', update.latest!)} />}>
           {/* One paragraph: the notice stacks its children, and this is one sentence. */}
           <p>
             A newer buddi is ready: <span className="mono">{update.latest}</span>.{' '}
@@ -178,8 +188,8 @@ export function Home({
         </Notice>
       ) : null}
 
-      {connectionSignals.map((signal) => (
-        <Notice key={signal.id} tone="accent">
+      {connectionSignals.filter((signal) => !closed.is(`connection:${signal.id}`, signal.sentence)).map((signal) => (
+        <Notice key={signal.id} tone="accent" action={<CloseButton label="Not now — tell me if it changes" onClick={() => closed.close(`connection:${signal.id}`, signal.sentence)} />}>
           <p>
             {signal.sentence}{' '}
             <a href={settingsRoute('connections')} onClick={go(settingsRoute('connections'))}>Settings → Connections.</a>
@@ -267,11 +277,15 @@ export function Home({
                 </a>
               </Notice>
             ) : null}
-            {(data?.sentinels?.errors ?? []).map((err) => (
-              <Notice key={err.sentinelId} tone="warning">Watcher {err.sentinelId} failed: {err.error}</Notice>
+            {sentinelErrors.map((err) => (
+              <Notice key={err.sentinelId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`watcher-error:${err.sentinelId}`, err.error)} />}>
+                Watcher {err.sentinelId} failed: {err.error}
+              </Notice>
             ))}
-            {(data?.mail ?? []).filter((m) => m.lastError).map((source) => (
-              <Notice key={source.sourceId} tone="warning">Source {source.sourceId}: {source.lastError}</Notice>
+            {sourceErrors.map((source) => (
+              <Notice key={source.sourceId} tone="warning" action={<CloseButton label="Hide until the error changes" onClick={() => closed.close(`source-error:${source.sourceId}`, source.lastError!)} />}>
+                Source {source.sourceId}: {source.lastError}
+              </Notice>
             ))}
           </Stack>
         </Section>
@@ -345,8 +359,9 @@ export function Home({
       {/* The browser offered an install: one quiet line, until Not now. */}
       <KeepClose />
 
-      {proposals.data?.digest?.latest ? (
-        <LearnedThisWeek digest={proposals.data.digest.latest} go={go} />
+      {/* The week's digest while it is fresh, until the owner closes it; the next week's shows again. */}
+      {proposals.data?.digest?.latest && digestShown(proposals.data.digest.latest, data?.now, closed.is) ? (
+        <LearnedThisWeek digest={proposals.data.digest.latest} go={go} onClose={() => closed.close(DIGEST_SLOT, proposals.data!.digest!.latest!.at)} />
       ) : null}
 
       <div className="home-columns">
@@ -395,8 +410,8 @@ export function Home({
         </Section>
       </div>
 
-      {(data?.home ?? []).map((block) => (
-        <HomeBlockView key={block.id} block={block} />
+      {(data?.home ?? []).filter((block) => !closed.is(blockSlot(block.id), BLOCK_HIDDEN)).map((block) => (
+        <HomeBlockView key={block.id} block={block} onHide={() => closed.close(blockSlot(block.id), BLOCK_HIDDEN)} />
       ))}
 
       {data?.jobs && data.missions ? (
@@ -422,7 +437,11 @@ const KIND_WORDS: Record<NotificationRow['kind'], string> = {
 
 /**
  * The notifications Home lists under "Needs you": the kinds that have no card
- * of their own, not dealt with, and either not seen yet or held for today. A
+ * of their own, sent as something for the owner now, not dealt with and not
+ * seen yet. A quiet line — held for the end of the day (`today`) or kept for
+ * the recap (`digest`) — is information, not a decision: it stays on
+ * Settings → Notifications → Recent and in the evening's message, never here.
+ * Seen is the server's: Done marks it, so it does not come back on reload. A
  * row about an approval already drawn as a card is left out.
  */
 export function homeNotifications(rows: readonly NotificationRow[], pending: readonly Pick<ApprovalRow, 'id'>[]): NotificationRow[] {
@@ -430,10 +449,62 @@ export function homeNotifications(rows: readonly NotificationRow[], pending: rea
   return rows.filter(
     (row) =>
       HOME_KINDS.has(row.kind) &&
+      row.urgency === 'now' &&
       row.actedAt === null &&
       row.state !== 'stored' &&
-      (row.seenAt === null || row.state === 'held') &&
+      row.seenAt === null &&
       !(row.actionId && cards.has(row.actionId)),
+  );
+}
+
+/** Home's slot for the weekly digest; its token is the digest's `at`. */
+export const DIGEST_SLOT = 'digest';
+
+/** How long a digest stays on Home after it is made, unless closed sooner. */
+export const DIGEST_FRESH_MS = 3 * 86_400_000;
+
+/** A plugin's Home block, hidden from Home (`BLOCK_HIDDEN`); Settings → Appearance shows it again. */
+export function blockSlot(id: string): string {
+  return `block:${id}`;
+}
+export const BLOCK_HIDDEN = 'hidden';
+
+/** The digest is on Home in its first three days, unless the owner closed this one. */
+export function digestShown(digest: Pick<DigestRow, 'at'>, now: string | undefined, isClosed: (slot: string, token: string) => boolean): boolean {
+  if (isClosed(DIGEST_SLOT, digest.at)) return false;
+  const made = Date.parse(digest.at);
+  const at = now ? Date.parse(now) : Date.now();
+  return Number.isFinite(made) && at - made < DIGEST_FRESH_MS;
+}
+
+/**
+ * What the owner closed on Home: the server's map (`Overview.dismissed`) with
+ * what was closed here since, so a × takes effect at once. A slot is closed
+ * for one version of its thing — a digest's date, a version, an error's text
+ * — and shows again when that changes.
+ */
+export function useHomeClosed(server: Record<string, string> | undefined, changed: () => void): {
+  is: (slot: string, token: string) => boolean;
+  close: (slot: string, token: string) => void;
+} {
+  const [here, setHere] = useState<Record<string, string>>({});
+  const is = (slot: string, token: string): boolean => (here[slot] ?? server?.[slot]) === token;
+  const close = (slot: string, token: string): void => {
+    setHere((current) => ({ ...current, [slot]: token }));
+    void api.homeDismiss(slot, token).then(changed, () => {
+      // Not kept: show it again rather than pretend.
+      setHere((current) => { const next = { ...current }; delete next[slot]; return next; });
+    });
+  };
+  return { is, close };
+}
+
+/** The × on a Home notice or card: its label says how long it stays closed. */
+export function CloseButton({ label, onClick }: { label: string; onClick: () => void }): JSX.Element {
+  return (
+    <button type="button" className="ui-icon-btn" data-size="sm" aria-label={label} title={label} onClick={onClick}>
+      <Icon name="close" />
+    </button>
   );
 }
 
@@ -554,57 +625,53 @@ function fmtDay(iso: string | undefined, timezone: string): string {
   }
 }
 
-/** One kind's line on the digest card: the count, and up to three names. */
-export function tallyLine(t: DigestTally, one: string, many: string): string | null {
-  if (t.count === 0) return null;
-  return `${t.count} ${t.count === 1 ? one : many}${t.names.length > 0 ? `: ${t.names.join('; ')}${t.count > t.names.length ? '; …' : ''}` : ''}`;
-}
-
-/** The latest weekly digest, until the next one replaces it. */
-export function LearnedThisWeek({ digest, go }: { digest: DigestRow; go: (route: string) => (e: { preventDefault: () => void }) => void }): JSX.Element {
-  const learned = [
-    tallyLine(digest.memory, 'memory note', 'memory notes'),
-    tallyLine(digest.skills, 'skill kept', 'skills kept'),
-    tallyLine(digest.rules, 'rule kept', 'rules kept'),
-    tallyLine(digest.changes, 'change to an agent kept', 'changes to agents kept'),
-  ].filter((line): line is string => line !== null);
-  const stopped =
-    digest.stopped === null
-      ? 'Not measured yet.'
-      : digest.stopped.total > 0
-        ? `Rules you kept acted ${digest.stopped.total} time${digest.stopped.total === 1 ? '' : 's'} (${Object.entries(digest.stopped.byPlugin)
-            .filter(([, n]) => n > 0)
-            .map(([plugin, n]) => `${plugin} ${n}`)
-            .join(', ')}).`
-        : 'No rule you kept acted this week.';
+/**
+ * The latest weekly digest, in the owner's words: one line per kind with
+ * something in it (the gateway's `summary`), each with one place to look; the
+ * reactions as they were given. × closes it until next week's.
+ */
+export function LearnedThisWeek({
+  digest,
+  go,
+  onClose,
+}: {
+  digest: DigestRow;
+  go: (route: string) => (e: { preventDefault: () => void }) => void;
+  onClose?: () => void;
+}): JSX.Element | null {
+  const lines = digest.summary ?? [];
   const reactions = Object.entries(digest.feedback?.byAgent ?? {})
     .map(([agent, t]) => [agent, [t.up > 0 ? `${t.up} 👍` : '', t.down > 0 ? `${t.down} 👎` : '', t.neutral > 0 ? `${t.neutral} other` : ''].filter(Boolean).join(' ')] as const)
     .filter(([, counts]) => counts !== '')
     .map(([agent, counts]) => `${digest.agentNames?.[agent] ?? agent}: ${counts}`);
+  if (lines.length === 0 && reactions.length === 0) return null;
   return (
-    <Section title="What buddi learned this week" aside={<span className="muted">{fmtRelative(digest.at)}</span>}>
+    <Section
+      title="What buddi learned this week"
+      aside={
+        <span className="ui-row">
+          <span className="muted">{fmtRelative(digest.at)}</span>
+          {onClose ? <CloseButton label="Hide until next week" onClick={onClose} /> : null}
+        </span>
+      }
+    >
       <Panel>
         <Stack divided>
-          <div>
-            <p className="ui-card-meta">Learned</p>
-            {learned.length === 0 ? <p>Nothing new.</p> : <ul className="home-digest-list">{learned.map((line) => <li key={line}>{line}</li>)}</ul>}
-          </div>
-          <div>
-            <p className="ui-card-meta">Proposes</p>
-            <p>
-              {digest.open > 0 ? (
-                <a href={settingsRoute('proposals')} onClick={go(settingsRoute('proposals'))}>
-                  {digest.open} proposal{digest.open === 1 ? '' : 's'} waiting for you to keep or discard.
-                </a>
-              ) : (
-                'Nothing was waiting for you.'
-              )}
-            </p>
-          </div>
-          <div>
-            <p className="ui-card-meta">Stopped doing</p>
-            <p>{stopped}</p>
-          </div>
+          {lines.length > 0 ? (
+            <ul className="home-digest-list" data-plain="">
+              {lines.map((line) => (
+                <li key={line.key}>
+                  {line.text}
+                  {line.link ? (
+                    <>
+                      {' · '}
+                      <a href={line.link.route} onClick={go(line.link.route)}>{line.link.label}</a>
+                    </>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {reactions.length > 0 ? (
             <div data-testid="digest-reactions">
               <p className="ui-card-meta">Your reactions</p>
@@ -687,7 +754,7 @@ function capitalise(text: string): string {
  * tab only; leaving the window masks it again, so a screen left unattended
  * shows the shape of the block and none of its figures.
  */
-function HomeBlockView({ block }: { block: HomeBlock }): JSX.Element {
+function HomeBlockView({ block, onHide }: { block: HomeBlock; onHide: () => void }): JSX.Element {
   const [revealed, setRevealed] = useState(false);
   const masked = block.sensitive === true && !revealed;
   useEffect(() => {
@@ -706,6 +773,7 @@ function HomeBlockView({ block }: { block: HomeBlock }): JSX.Element {
           {masked ? 'Show' : 'Hide'}
         </Button>
       ) : null}
+      <CloseButton label={`Hide ${block.title} from Home`} onClick={onHide} />
     </span>
   );
 

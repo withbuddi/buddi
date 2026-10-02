@@ -259,12 +259,17 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
       `update core.owner_notifications
           set urgency = $2, title = $3, text = $4, link = $5, offers = $6::jsonb, agent_id = coalesce($7, agent_id),
               topic = coalesce($15, topic), plugin_id = coalesce($8, plugin_id), action_id = coalesce($9::uuid, action_id), state = $10, due_at = $11,
-              channel = $12, fired_count = fired_count + 1, lowered = $13, seen_at = null, error = null, updated_at = $14,
+              channel = $12, fired_count = fired_count + 1, lowered = $13,
+              seen_at = case when $17 then null else seen_at end, error = null, updated_at = $14,
               held_for = $16
         where id = $1 and sent_at is null and state in ('shown', 'held', 'stored', 'failed')
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
-        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor],
+        message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor,
+        // Only something that asks for the owner now comes back unseen. A
+        // quiet line (today, digest) that says more is updated where it is:
+        // the owner already read it, and reading it again is not news.
+        urgency === 'now'],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.

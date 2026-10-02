@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-264 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+265 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -449,6 +449,7 @@ curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "
 | POST | `/api/widgets/preview` | One widget’s body with settings not yet saved. | yes |
 | POST | `/api/widgets/:placement/refresh` | Produce one placed widget again, now. | yes |
 | POST | `/api/home/glances/:id/hidden` | Hide a Home glance or show it again. | yes |
+| POST | `/api/home/dismiss` | Close one thing on Home until it changes, or show it again. | yes |
 | GET | `/api/rail` | Which plugin pages the owner hid from the rail. | yes |
 | POST | `/api/rail/pages/:plugin/:page/hidden` | Hide a plugin page from the rail or show it again. | yes |
 | GET | `/api/events` | The event log, newest first, paged. | yes |
@@ -663,6 +664,20 @@ Hide a Home glance or show it again.
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"hidden":true}' "$BUDDI_URL/api/home/glances/<id>/hidden"
+```
+
+#### `POST /api/home/dismiss`
+
+Close one thing on Home until it changes, or show it again.
+
+- **Auth:** Session or API token (a session adds CSRF + Origin).
+- **Body:** `{ slot: string, token: string | null }`
+- **Answer:** `{ dismissed: Record<slot, token> }`
+- **Errors:** 400
+- **Since:** unreleased
+
+```sh
+curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{"slot":"…","token":"…"}' "$BUDDI_URL/api/home/dismiss"
 ```
 
 #### `GET /api/rail`
