@@ -30,7 +30,7 @@ import type {
   MoveResult,
   AccountRecord,
 } from '../ports.js';
-import { isBulkHeaders, normalizeMessageId, parseReferences } from '../mail.js';
+import { authenticatedDomain, isBulkHeaders, normalizeMessageId, parseReferences } from '../mail.js';
 import { isPartId, safeFilename } from '../attachments/safety.js';
 
 /** Only what this adapter uses. Keeps the port independent of imapflow's d.ts. */
@@ -302,7 +302,7 @@ class ImapFlowClient implements ImapWriter {
         flags: true,
         bodyStructure: true,
         internalDate: true,
-        headers: ['message-id', 'in-reply-to', 'references', 'list-id', 'list-unsubscribe', 'precedence'],
+        headers: ['message-id', 'in-reply-to', 'references', 'list-id', 'list-unsubscribe', 'precedence', 'authentication-results'],
       },
       { uid: true },
     )) {
@@ -340,6 +340,7 @@ class ImapFlowClient implements ImapWriter {
         references: parseReferences(headers['references']),
         listId: headers['list-id'] ?? null,
         bulk: isBulkHeaders(headers),
+        authDomain: authenticatedDomain(firstHeader(msg.headers, 'authentication-results'), addressList(envelope.from)[0] ?? ''),
         from: addressList(envelope.from)[0] ?? '(unknown)',
         to: addressList(envelope.to),
         cc: addressList(envelope.cc),
@@ -529,6 +530,30 @@ export function parseHeaders(raw: unknown): Record<string, string> {
     out[key] = (match[2] as string).trim();
   }
   return out;
+}
+
+/**
+ * The first occurrence of one header, unfolded — where `parseHeaders` keeps
+ * the last. For `Authentication-Results` the first is the owner's own server's
+ * verdict, written on top of whatever the message arrived with.
+ */
+export function firstHeader(raw: unknown, name: string): string | null {
+  if (!raw) return null;
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
+  const wanted = name.toLowerCase();
+  let value: string | null = null;
+  let inWanted = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s/.test(line)) {
+      if (inWanted && value !== null) value = `${value} ${line.trim()}`;
+      continue;
+    }
+    if (inWanted) return value;
+    const match = /^([A-Za-z0-9-]+):\s*(.*)$/.exec(line);
+    inWanted = match !== null && (match[1] as string).toLowerCase() === wanted;
+    if (inWanted) value = (match![2] as string).trim();
+  }
+  return value;
 }
 
 /** The factory the gateway installs in production. */

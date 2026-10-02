@@ -40,6 +40,7 @@ import {
 } from '../suspicions-store.js';
 import {
   SUSPICION_WINDOW_DAYS,
+  askWorthRaising,
   firstLineOf,
   suspiciousFinding,
   type Suspicion,
@@ -110,6 +111,8 @@ export function createSuspiciousSenderSentinel(): Sentinel {
         suspects.set(message.messageId, { ...shape(message), lookAlike: true });
       }
       for (const row of asks) {
+        // A genuine security notice is not a fraud: see `askWorthRaising`.
+        if (!askWorthRaising(row)) continue;
         const existing = suspects.get(row.messageId) ?? shape(row);
         // The phrase stays in `email.suspicions`: this finding quotes the
         // message exactly once, and that quote is the fenced first line.

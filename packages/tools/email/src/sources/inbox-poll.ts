@@ -438,9 +438,9 @@ async function commitBatch(
         `insert into email.messages
            (account_id, folder_id, uidvalidity, uid, message_id, thread_key, list_id, from_addr,
             to_addrs, cc, subject, date, internal_date, snippet, body_text, has_attachments,
-            attachments, flags, direction, triage_enqueued_at, bulk)
+            attachments, flags, direction, triage_enqueued_at, bulk, auth_domain)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15,
-                 $16, $17::jsonb, $18::jsonb, $19, $20, $21)
+                 $16, $17::jsonb, $18::jsonb, $19, $20, $21, $22)
          on conflict (account_id, folder_id, uidvalidity, uid) do nothing
          returning id`,
         [
@@ -466,6 +466,7 @@ async function commitBatch(
           // Sent mail is nobody's to triage; it is stamped as it lands.
           direction === 'out' ? now : null,
           message.bulk === true,
+          message.authDomain ?? null,
         ],
       );
       const id = rows[0]?.id;

@@ -14,9 +14,11 @@ import {
   snippetOf,
   threadKeyFor,
   triagePrompt,
+  alignedDomains,
+  authenticatedDomain,
 } from './mail.js';
 import { fakeMessage } from './imap/fake.js';
-import { collectAttachments, findTextPart, parseHeaders } from './imap/imapflow-client.js';
+import { collectAttachments, findTextPart, firstHeader, parseHeaders } from './imap/imapflow-client.js';
 import { renderPreview, sha256, type SendEnvelope } from './tools/send.js';
 
 describe('addresses', () => {
@@ -529,5 +531,34 @@ describe('who a reply goes to', () => {
       replyRecipients({ from: 'no-reply@service.test', to: [], owner: ['owner@x.test'] })
         .senderLooksUnreplyable,
     ).toBe(true);
+  });
+});
+
+describe('authenticatedDomain — what the owner\'s server vouched for', () => {
+  const google =
+    'mx.google.com; dkim=pass header.i=@accounts.google.com header.s=20230601 header.b=EF0N; ' +
+    'spf=pass (google.com: domain of 3abc@gaia.bounces.google.com designates 209.85.220.73 as permitted sender) ' +
+    'smtp.mailfrom=3abc@gaia.bounces.google.com; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=accounts.google.com';
+
+  it('takes the From domain when DMARC, an aligned DKIM or an aligned SPF passed', () => {
+    expect(authenticatedDomain(google, '"Google" <no-reply@accounts.google.com>')).toBe('accounts.google.com');
+    expect(authenticatedDomain('mx; dkim=pass header.d=bank.test', 'alerts@mail.bank.test')).toBe('mail.bank.test');
+    expect(authenticatedDomain('mx; spf=pass smtp.mailfrom=bounce@bank.test', 'alerts@bank.test')).toBe('bank.test');
+  });
+
+  it('is null for a fail, an unrelated relay, or a bare TLD', () => {
+    expect(authenticatedDomain('mx; dkim=fail header.d=bank.test; dmarc=fail header.from=bank.test', 'a@bank.test')).toBeNull();
+    expect(authenticatedDomain('mx; dkim=pass header.d=sendgrid.net; spf=pass smtp.mailfrom=x@sendgrid.net', 'a@bank.test')).toBeNull();
+    expect(authenticatedDomain('mx; dkim=pass header.d=test', 'a@bank.test')).toBeNull();
+    expect(authenticatedDomain(null, 'a@bank.test')).toBeNull();
+    expect(alignedDomains('google.com', 'evilgoogle.com')).toBe(false);
+  });
+});
+
+describe('firstHeader', () => {
+  it('reads the first occurrence, unfolded — the receiving server\'s, not a forged one below it', () => {
+    const raw = 'Authentication-Results: mx.example; dkim=fail\r\n header.d=bank.test\r\nSubject: hi\r\nAuthentication-Results: forged; dkim=pass header.d=bank.test\r\n';
+    expect(firstHeader(raw, 'authentication-results')).toBe('mx.example; dkim=fail header.d=bank.test');
+    expect(firstHeader(raw, 'x-none')).toBeNull();
   });
 });

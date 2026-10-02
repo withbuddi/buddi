@@ -584,6 +584,23 @@ visible and switchable on the Watchers page:
   for. Only a muted conversation does. The finding never quotes the body beyond
   a single fenced first line, and it tells the agent to describe the message and
   reply to nothing.
+  **Fewer false alarms** (`askWorthRaising` in `watchers.ts`): a credential
+  ask below 0.7 — named, not demanded, the vocabulary of every genuine
+  security notice ("2-Step Verification turned on") — is kept in
+  `email.suspicions` and raises nothing. A credential ask on mail the owner's
+  own server authenticated as coming from the sender's domain raises nothing
+  either when that domain is a well-known account provider (`google.com`,
+  `apple.com`, `microsoft.com`, `github.com`, `paypal.com`, subdomains
+  included; never a consumer mailbox domain) or one the owner writes to (his
+  bank, his agency). A wire or gift-card ask is spared only for the well-known
+  providers: a correspondent's real, hijacked mailbox asking for a transfer is
+  the fraud itself. "Authenticated" is `messages.auth_domain` (migration
+  `024`), read at ingest from the **first** `Authentication-Results` header —
+  the one the receiving server wrote on top — and kept only when DMARC passed
+  for the From domain or DKIM/SPF passed for a domain aligned with it; mail
+  stored before it is null, so only the confidence line protects it. Anything
+  else the owner trusts he silences from the row with **Stop telling me this**
+  (that sender's address).
   Its limits: (a) says nothing about a name the owner has never written to, one
   he last wrote to more than two years ago, one too generic to identify
   anybody, or a display name the impostor did not bother to copy — and,

@@ -35,6 +35,7 @@ import {
   severityForPromise,
   severityForSuspicion,
   suspiciousFinding,
+  askWorthRaising,
   ASK_URGENT_ABOVE,
   DEFAULT_NUDGE_DAYS,
   DEFAULT_PROMISED_DAYS,
@@ -497,5 +498,48 @@ describe('the five watcher settings', () => {
       receiptConfidence: 0.7,
       nudgeDays: 5,
     });
+  });
+});
+
+describe('every mail watcher speaks to the owner in an owner line (host API 1.23)', () => {
+  const findings = [
+    waitingFinding({ threadId: 't1', subject: 'Lease', from: '"Ana Ruiz" <ana@x.test>', lastInboundId: 'm1', ageDays: 3, firstLine: 'Hi' }),
+    dateFinding({ messageId: 'm2', threadId: 't2', subject: 'Contract', from: 'marc@x.test', date: '2026-10-09', phrase: 'by Oct 9', confidence: 0.8 }),
+    promisedFinding({ threadId: 't3', messageId: 'm3', subject: 'Quote', to: 'bob@x.test', phrase: "I'll get back to you", ageDays: 4 }),
+    promisedDraftFinding({ threadId: 't4', draftId: 'd4', subject: 'Lease', to: '"Ana Ruiz" <ana@x.test>', agent: 'Postie', ageDays: 9 }),
+    receiptFinding({ messageId: 'm5', threadId: 't5', subject: 'Your order', from: 'shop@x.test', confidence: 0.9, phrase: 'receipt', amount: 12, currency: 'EUR' }),
+    suspiciousFinding({ messageId: 'm6', threadId: 't6', subject: 'Limited', from: 'billing@paypa1.test', firstLine: 'Act now', lookAlike: false, ask: { kind: 'credentials', confidence: 0.9 } }),
+    nudgeFinding({ threadId: 't7', messageId: 'm7', subject: 'Survey', to: 'sue@x.test', phrase: 'Could you send it?', ageDays: 6 }),
+  ];
+
+  it('gives each finding an owner line apart from its brief, a kind and at least one action', () => {
+    for (const f of findings) {
+      expect(f.ownerLine.trim(), f.key).not.toBe('');
+      expect(f.ownerLine).not.toBe(f.detail);
+      expect(f.kind, f.key).not.toBe('');
+      expect(f.actions.length, f.key).toBeGreaterThan(0);
+    }
+  });
+
+  it('the unsent draft opens on its conversation, and Send and Discard run its own tools', () => {
+    const d = findings[3]!;
+    expect(d.ownerLine).not.toMatch(/email\.read_draft|nothing here may send/);
+    expect(d.actions).toEqual([
+      { kind: 'open', label: 'Open draft', page: 'mail', item: 't4' },
+      { kind: 'run', label: 'Send', tool: 'email.send', args: { draftId: 'd4' } },
+      expect.objectContaining({ kind: 'run', label: 'Discard', tool: 'email.discard_draft', tone: 'danger' }),
+    ]);
+    expect(d.subject).toEqual({ id: 'ana@x.test', label: 'Ana Ruiz' });
+  });
+});
+
+describe('askWorthRaising', () => {
+  it('leaves named credential vocabulary and authenticated account notices alone, never a hijacked transfer', () => {
+    expect(askWorthRaising({ kind: 'credentials', confidence: 0.6, authDomain: null, knownDomain: false })).toBe(false);
+    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: null, knownDomain: false })).toBe(true);
+    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'accounts.google.com', knownDomain: false })).toBe(false);
+    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'mybank.test', knownDomain: true })).toBe(false);
+    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'gmail.com', knownDomain: false })).toBe(true);
+    expect(askWorthRaising({ kind: 'wire', confidence: 0.9, authDomain: 'supplier.test', knownDomain: true })).toBe(true);
   });
 });

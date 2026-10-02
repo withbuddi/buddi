@@ -17,6 +17,7 @@
  */
 import type { BuddiHost } from '@buddi/core/testing';
 import type { Pool } from 'pg';
+import { classifyAsk } from '../phrases.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createPool,
@@ -990,9 +991,55 @@ suite('email watchers, step 6 (postgres)', () => {
         from: '"Accounts" <no-reply@bank.test>',
         body: 'You asked to reset your password. If this was not you, contact us immediately.',
       });
+      // Named, not demanded: below the credential line, so nothing is raised
+      // at all — not even the recap note it used to be.
       const findings = await raise(suspiciousSender, ctx());
-      expect(findings).toHaveLength(1);
-      expect(findings[0]!.severity).toBe('info');
+      expect(findings).toHaveLength(0);
+    });
+
+    const vouched = async (messageId: string, domain: string): Promise<void> => {
+      await pool.query(`update email.messages set auth_domain = $2 where id = $1::uuid`, [messageId, domain]);
+    };
+
+    it('does not call a genuine "2-Step Verification turned on" notice phishing', async () => {
+      // The notice the owner was shown at confidence 0.60 as "asking for something".
+      const body = [
+        '2-Step Verification turned on',
+        'sam@gmail.com',
+        'Your Google Account sam@gmail.com is now protected with 2-Step Verification.',
+        "If you didn't make this change, verify your identity and secure your account now.",
+        'You can also see security activity at https://myaccount.google.com/notifications',
+      ].join('\n');
+      expect(classifyAsk(body)).toMatchObject({ kind: 'credentials', confidence: 0.6 });
+      const { messageId } = await fromImpostor({ from: '"Google" <no-reply@accounts.google.com>', body });
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(0);
+      // Authenticated from Google's own domain it stays quiet too.
+      await vouched(messageId, 'accounts.google.com');
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(0);
+    });
+
+    it('still warns about a demanded password, unless the mail is authenticated from a sender the owner knows', async () => {
+      const { messageId } = await fromImpostor({
+        from: '"IT desk" <it@supplier.test>',
+        body: 'Please reply with your password immediately so we can keep your mailbox open.',
+      });
+      const raised = await raise(suspiciousSender, ctx());
+      expect(raised).toHaveLength(1);
+      expect(raised[0]).toMatchObject({ severity: 'urgent', kind: 'ask' });
+      // The owner writes to supplier.test, and its server vouched for it.
+      await knowsAna();
+      await vouched(messageId, 'supplier.test');
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(0);
+    });
+
+    it('still warns about a transfer from a known correspondent\'s real domain — the hijacked mailbox', async () => {
+      await knowsAna();
+      const { messageId } = await fromImpostor({
+        from: '"Billing" <billing@supplier.test>',
+        body: 'Please send the wire transfer to the new account today, it is urgent.',
+      });
+      await vouched(messageId, 'supplier.test');
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(1);
     });
   });
 

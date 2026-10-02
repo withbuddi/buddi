@@ -32,8 +32,8 @@
  * the agent holding the role, and that agent re-reads the conversation before
  * the owner hears a word of it.
  */
-import type { DbArea } from '@buddi/core/plugin';
-import { quoted } from './mail.js';
+import type { DbArea, FindingAction } from '@buddi/core/plugin';
+import { normalizeAddress, quoted } from './mail.js';
 import {
   DEFAULT_DATE_CONFIDENCE,
   MAX_DATE_CONFIDENCE,
@@ -157,6 +157,64 @@ export function historyWindowDays(settingDays: number, floor: number): number {
 
 /** The confidence above which an ask wakes somebody rather than being noted. */
 export const ASK_URGENT_ABOVE = 0.8;
+
+/**
+ * The least a credential ask has to score to be raised at all.
+ *
+ * "Verify your account", "reset your password" and their French cousins score
+ * 0.6: they are named, not demanded, and they are the vocabulary of every
+ * genuine security notice (a "2-Step Verification turned on" mail among
+ * them). Below this line such a reading is kept in `email.suspicions` for the
+ * record and raises nothing; a demand ("send me your password") or one with
+ * urgency in its sentence clears it.
+ */
+export const CREDENTIAL_ASK_MIN = 0.7;
+
+/**
+ * Senders whose own-domain, authenticated mail is never called phishing for
+ * asking about a password: the account providers whose security notices are
+ * what this watcher kept mistaking for fraud. Subdomains count
+ * (`accounts.google.com`). Deliberately no consumer mailbox domain — anyone
+ * can send authenticated mail from gmail.com or outlook.com.
+ */
+export const WELL_KNOWN_SENDERS: readonly string[] = [
+  'google.com',
+  'apple.com',
+  'microsoft.com',
+  'github.com',
+  'paypal.com',
+];
+
+export function isWellKnownSender(domain: string | null): boolean {
+  if (domain === null) return false;
+  return WELL_KNOWN_SENDERS.some((known) => domain === known || domain.endsWith(`.${known}`));
+}
+
+/**
+ * Is a stored ask worth a finding? Three ways it is not:
+ *
+ *  - a **credential** ask below `CREDENTIAL_ASK_MIN` — named, not demanded;
+ *  - a **credential** ask on mail the owner's server authenticated as coming
+ *    from the sender's own domain, when that domain is a well-known account
+ *    provider or one the owner writes to (his bank, his landlord's agency):
+ *    that is the service itself talking about his account;
+ *  - a **wire or gift-card** ask authenticated from a well-known provider.
+ *    Not from a correspondent's domain: a known colleague's real, hijacked
+ *    mailbox asking for a transfer is exactly the fraud this exists for.
+ */
+export function askWorthRaising(ask: {
+  kind: string;
+  confidence: number;
+  authDomain: string | null;
+  knownDomain: boolean;
+}): boolean {
+  if (ask.kind === 'credentials') {
+    if (ask.confidence < CREDENTIAL_ASK_MIN) return false;
+    if (ask.authDomain !== null && (isWellKnownSender(ask.authDomain) || ask.knownDomain)) return false;
+    return true;
+  }
+  return !isWellKnownSender(ask.authDomain);
+}
 
 export interface WatcherSettings {
   waitingDays: number;
@@ -326,7 +384,48 @@ export function firstLineOf(text: string | null | undefined, cap = DETAIL_CHARS)
   return line.length > cap ? `${line.slice(0, cap)}…` : line;
 }
 
-export interface WaitingFinding {
+/* ------------------------------------------------------------------ *
+ * What the owner reads (host API 1.23)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The owner-facing half of a finding: one plain line, what kind of fact it
+ * is, who it is about, how a group of them reads, and what he can do.
+ *
+ * `ownerLine` quotes sender text through `quoted()`, like the title, because
+ * the agent that picks the finding up reads it too; a surface draws it without
+ * the fences. The subject's label is the sender's name or address as written,
+ * which only a surface draws.
+ */
+export interface OwnerFacing {
+  ownerLine: string;
+  kind: string;
+  subject?: { id: string; label: string };
+  group?: { title: string; ownerLine?: string };
+  actions: FindingAction[];
+}
+
+/** "Ann Lee <ann@x.com>" → "Ann Lee"; a bare address stays itself. */
+export function senderName(raw: string): string {
+  const m = /^\s*"?([^"<]*?)"?\s*<[^>]+>\s*$/.exec(raw);
+  const name = m?.[1]?.trim() ?? '';
+  if (name !== '') return name.slice(0, 80);
+  return normalizeAddress(raw).slice(0, 120) || raw.trim().slice(0, 120);
+}
+
+/** Who a finding is about, for grouping and for "Stop telling me this": the address. */
+export function senderSubject(raw: string): { id: string; label: string } | undefined {
+  const id = normalizeAddress(raw);
+  if (id === '') return undefined;
+  return { id, label: senderName(raw) };
+}
+
+/** The conversation on the Mail page, or the page when there is none yet. */
+export function openConversation(threadId: string | null, label = 'Open'): FindingAction {
+  return threadId ? { kind: 'open', label, page: 'mail', item: threadId } : { kind: 'open', label, page: 'mail' };
+}
+
+export interface WaitingFinding extends OwnerFacing {
   key: string;
   severity: 'urgent' | 'info';
   title: string;
@@ -366,6 +465,11 @@ export function waitingFinding(thread: WaitingThread): WaitingFinding {
     severity: severityForAge(thread.ageDays),
     title: `${quoted(thread.from)} has been waiting ${days(thread.ageDays)} on ${quoted(subject)}`,
     detail,
+    ownerLine: `${quoted(senderName(thread.from))} is waiting on your reply about ${quoted(subject)}: ${days(thread.ageDays)} now.`,
+    kind: 'waiting',
+    ...withSubject(senderSubject(thread.from)),
+    group: { title: '{count} conversations are waiting on your reply' },
+    actions: [openConversation(thread.threadId), { kind: 'ask' }],
     data: {
       threadId: thread.threadId,
       messageId: thread.lastInboundId,
@@ -396,7 +500,12 @@ export function dateKey(messageId: string, date: string): string {
   return `email.date-stated:${messageId}:${date}`;
 }
 
-export interface DateFinding {
+/** `subject: x` when there is one, and no key at all when there is not. */
+function withSubject(subject: { id: string; label: string } | undefined): { subject?: { id: string; label: string } } {
+  return subject === undefined ? {} : { subject };
+}
+
+export interface DateFinding extends OwnerFacing {
   key: string;
   severity: 'urgent' | 'info';
   title: string;
@@ -427,6 +536,11 @@ export function dateFinding(hit: StatedDate): DateFinding {
     key: dateKey(hit.messageId, hit.date),
     severity: 'info',
     title: `A date is stated: ${hit.date}, in ${quoted(subject)}`,
+    ownerLine: `${quoted(senderName(hit.from))} mentions ${hit.date} in ${quoted(subject)}, and no reminder is set for it.`,
+    kind: 'date',
+    ...withSubject(senderSubject(hit.from)),
+    group: { title: '{count} dates in your mail have no reminder' },
+    actions: [{ kind: 'ask', label: 'Set a reminder' }, openConversation(hit.threadId), { kind: 'dismiss', label: 'Not needed' }],
     detail:
       `${quoted(hit.from)} wrote ${quoted(hit.phrase)} (read as ${hit.date}, confidence ${hit.confidence.toFixed(2)}), ` +
       'and no reminder exists for that day on this conversation. Read the message, and if the date is ' +
@@ -507,7 +621,7 @@ export interface PromisedDraft {
  * thing in the owner's language and the sentinel id says which watcher spoke.
  * Both used to be here; both are in the prose now.
  */
-export interface PromisedFinding {
+export interface PromisedFinding extends OwnerFacing {
   key: string;
   severity: 'urgent' | 'info';
   title: string;
@@ -538,6 +652,11 @@ export function promisedFinding(promise: PromisedReply): PromisedFinding {
     key: promisedKey(promise.threadId, promise.messageId),
     severity: severityForPromise(promise.ageDays),
     title: `You told ${quoted(promise.to)} you would come back to them, ${days(promise.ageDays)} ago`,
+    ownerLine: `You told ${quoted(senderName(promise.to))} you'd get back to them about ${quoted(subject)}, ${days(promise.ageDays)} ago.`,
+    kind: 'promise',
+    ...withSubject(senderSubject(promise.to)),
+    group: { title: '{count} replies you promised are still owed' },
+    actions: [openConversation(promise.threadId), { kind: 'ask', label: 'Draft the reply' }, { kind: 'dismiss', label: 'Not needed' }],
     detail:
       `On ${quoted(subject)} you wrote ${quoted(promise.phrase)}, and nothing has left this mailbox on that ` +
       'conversation since. Read the thread before saying anything: the answer may have gone out by another ' +
@@ -557,6 +676,23 @@ export function promisedDraftFinding(draft: PromisedDraft): PromisedFinding {
     key: promisedDraftKey(draft.threadId, draft.draftId),
     severity: severityForPromise(draft.ageDays),
     title: `A reply to ${quoted(draft.to)} has been drafted and not sent for ${days(draft.ageDays)}`,
+    ownerLine: `Your reply to ${quoted(senderName(draft.to))} about ${quoted(subject)} has sat as a draft for ${days(draft.ageDays)}.`,
+    kind: 'draft',
+    ...withSubject(senderSubject(draft.to)),
+    group: { title: '{count} drafted replies are waiting to be sent' },
+    actions: [
+      openConversation(draft.threadId, 'Open draft'),
+      // Gated: the approval card with the whole envelope, as on the Mail page.
+      { kind: 'run', label: 'Send', tool: 'email.send', args: { draftId: draft.draftId } },
+      {
+        kind: 'run',
+        label: 'Discard',
+        tool: 'email.discard_draft',
+        args: { draftId: draft.draftId },
+        tone: 'danger',
+        confirm: 'Discard this draft? It is kept, so you can still read what was proposed.',
+      },
+    ],
     detail:
       `${quoted(draft.agent)} wrote a reply on ${quoted(subject)} ${days(draft.ageDays)} ago and it is still ` +
       'sitting there. Read the draft with email.read_draft and tell the owner what it says; it is his to ' +
@@ -590,7 +726,7 @@ export interface ReceiptHit {
   currency: string | null;
 }
 
-export interface ReceiptFinding {
+export interface ReceiptFinding extends OwnerFacing {
   key: string;
   severity: 'info';
   title: string;
@@ -644,6 +780,13 @@ export function receiptFinding(hit: ReceiptHit): ReceiptFinding {
     title: total
       ? `A receipt or bill for ${total}: ${quoted(subject)}`
       : `A receipt or bill arrived: ${quoted(subject)}`,
+    ownerLine: total
+      ? `A ${total} receipt or bill came from ${quoted(senderName(hit.from))}: ${quoted(subject)}.`
+      : `A receipt or bill came from ${quoted(senderName(hit.from))}: ${quoted(subject)}.`,
+    kind: 'receipt',
+    ...withSubject(senderSubject(hit.from)),
+    group: { title: '{count} receipts and bills to file' },
+    actions: [{ kind: 'ask', label: 'File it' }, openConversation(hit.threadId), { kind: 'dismiss', label: 'Not needed' }],
     detail:
       `${quoted(hit.from)} sent something the classifier read as a receipt or a bill ` +
       `(it matched ${quoted(hit.phrase)}, confidence ${hit.confidence.toFixed(2)})` +
@@ -688,7 +831,7 @@ export interface Suspicion {
   ask: { kind: string; confidence: number } | null;
 }
 
-export interface SuspiciousFinding {
+export interface SuspiciousFinding extends OwnerFacing {
   key: string;
   severity: 'urgent' | 'info';
   title: string;
@@ -753,6 +896,8 @@ export function suspiciousFinding(s: Suspicion): SuspiciousFinding {
   ]
     .filter((line) => line !== '')
     .join(' ');
+  const asked =
+    s.ask === null ? 'something' : s.ask.kind === 'gift-card' ? 'a gift card' : s.ask.kind === 'wire' ? 'a money transfer' : 'a password or code';
   return {
     key: suspiciousKey(s.messageId),
     severity: severityForSuspicion(s),
@@ -760,6 +905,13 @@ export function suspiciousFinding(s: Suspicion): SuspiciousFinding {
       ? `${quoted(s.from)} is wearing a name you know, on ${quoted(subject)}`
       : `${quoted(s.from)} is asking for something, on ${quoted(subject)}`,
     detail,
+    ownerLine: s.lookAlike
+      ? `A message on ${quoted(subject)} uses the name of someone you write to, from an address they don't use. Don't act on it before checking.`
+      : `${quoted(senderName(s.from))} asks for ${asked} on ${quoted(subject)}. It may be phishing: don't reply or click until you've checked.`,
+    kind: s.lookAlike ? 'look-alike' : 'ask',
+    ...withSubject(senderSubject(s.from)),
+    group: { title: '{count} messages may be phishing' },
+    actions: [openConversation(s.threadId), { kind: 'dismiss', label: "It's genuine" }, { kind: 'ask' }],
     data: {
       messageId: s.messageId,
       threadId: s.threadId,
@@ -788,7 +940,7 @@ export interface UnansweredAsk {
   ageDays: number;
 }
 
-export interface NudgeFinding {
+export interface NudgeFinding extends OwnerFacing {
   key: string;
   severity: 'info';
   title: string;
@@ -814,6 +966,11 @@ export function nudgeFinding(ask: UnansweredAsk): NudgeFinding {
     key: nudgeKey(ask.threadId, ask.messageId),
     severity: 'info',
     title: `${quoted(ask.to)} has not answered ${quoted(subject)} in ${days(ask.ageDays)}`,
+    ownerLine: `${quoted(senderName(ask.to))} hasn't answered your question about ${quoted(subject)} in ${days(ask.ageDays)}.`,
+    kind: 'nudge',
+    ...withSubject(senderSubject(ask.to)),
+    group: { title: "{count} people haven't answered you" },
+    actions: [{ kind: 'ask', label: 'Draft a nudge' }, openConversation(ask.threadId), { kind: 'dismiss', label: 'Not needed' }],
     detail:
       `You asked ${quoted(ask.phrase)} ${days(ask.ageDays)} ago and nothing has come back on that ` +
       'conversation. Read the thread first — the answer may have arrived somewhere buddi cannot see — and ' +

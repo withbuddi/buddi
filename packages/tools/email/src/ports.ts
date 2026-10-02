@@ -61,6 +61,13 @@ export interface FetchedMessage {
    * (docs/email.md §5). Absent is false.
    */
   bulk?: boolean;
+  /**
+   * The From domain when the receiving server vouched for it in the first
+   * `Authentication-Results` header (`authenticatedDomain`), else null or
+   * absent. Stored as `messages.auth_domain`; the suspicious-sender watcher
+   * reads it.
+   */
+  authDomain?: string | null;
   from: Address;
   to: Address[];
   cc: Address[];

@@ -7,6 +7,7 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - Plugin host API 1.23: a watcher's finding carries an owner line (what the owner reads) apart from its brief for the agent, a kind and a subject that group repeats into one row, a group title, and the actions the owner can take from the row — open a page, run one of the plugin's own tools (gated ones still ask), a quick form, ask the agent, or set it aside.
+- Plugin host API 1.23: a watcher's finding carries an owner line (what the owner reads) apart from its brief for the agent, a kind and a subject that group repeats into one row, a group title, and the actions the owner can take from the row — open a page, run one of the plugin's own tools (gated ones still ask), a quick form, ask the agent, or set it aside.
 - Plugin host API 1.22: the tile icon `moon-cloud`, a partly cloudy night; and a page's tab bar may hold one tab with a pick, drawn as the pick alone — a filter over one view.
 - Mail: a Show filter over the conversations — All, Needs a reply, Notifications. Needs a reply is exactly what the Waiting on you widget on Home counts. `email.list_threads` and `email.select_messages` take `needsReply`, and each conversation an agent reads says whether it needs you and why.
 
@@ -20,6 +21,7 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- Mail: a genuine security notice ("2-Step Verification turned on") is no longer called phishing. A credential ask that only names a password is not raised at all, and one authenticated (DKIM/SPF/DMARC, read from the receiving server's own header) as coming from a well-known account provider or a domain you write to stays quiet; a transfer asked for from a correspondent's real domain still warns.
 - Gemini 3 models no longer fail with "Function call is missing a thought_signature" on the turn after a tool call: the signature Google returns with each call is kept with it in the conversation and sent back to Google's endpoint only. A conversation from before this fix carries on too.
 - Mail no longer says "Waiting on you" on every conversation. A conversation waits on you only when someone you've written to before wrote last, or triage judged the message to need a reply — never a no-reply address, a newsletter or mailing list, a muted thread or a sender you ignore, and nothing older than 30 days. Notifications and messages nobody expects an answer to carry no pill; the conversation's State says which it is and why ("Notification — no reply expected: a no-reply sender"). The Mail page, the Waiting on you widget, the waiting watcher and the agents' tools now count the same conversations.
 - The lock screen reads every time one way: the line under the PIN ("Locked by you at …"), the second clock, the focus and the widgets left on Profile now follow the big clock — 12-hour or 24-hour as picked in Settings → Lock screen, else your Profile, else your browser — instead of the line using another format than the clock (a page that opened locked showed "18:59" over "Locked by you at 6:59 PM").

@@ -644,6 +644,54 @@ export function clampFutureDate(date: Date | null, now: Date): Date | null {
   return date.getTime() > limit ? new Date(limit) : date;
 }
 
+/** The domain of an address, lowercased; '' when there is none. */
+export function domainOf(raw: string): string {
+  const address = normalizeAddress(raw);
+  const at = address.lastIndexOf('@');
+  return at < 0 ? '' : address.slice(at + 1).replace(/\.$/, '');
+}
+
+/** Same organisation, relaxed: one is the other or a subdomain of it, and neither is a bare TLD. */
+export function alignedDomains(a: string, b: string): boolean {
+  if (a === '' || b === '' || !a.includes('.') || !b.includes('.')) return false;
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
+ * The From domain, when the receiving server's `Authentication-Results` says
+ * the message really came from it — or null.
+ *
+ * Passes, in order of strength: DMARC for the From domain itself; DKIM signed
+ * by a domain aligned with it (`header.d`, or `header.i`'s domain); SPF for an
+ * envelope sender aligned with it (`smtp.mailfrom`). Alignment is relaxed
+ * (`accounts.google.com` and `google.com` are one organisation). Anything
+ * else — a fail, a neutral, a pass for some unrelated relay's domain — is
+ * null. The header passed in must be the **first** one (`firstHeader`): the
+ * owner's server writes its verdict on top, and a sender can write any number
+ * of forged ones underneath.
+ */
+export function authenticatedDomain(authResults: string | null | undefined, from: string): string | null {
+  const fromDomain = domainOf(from);
+  if (!authResults || fromDomain === '') return null;
+  const text = authResults.toLowerCase();
+  const results = [...text.matchAll(/\b(dkim|spf|dmarc)\s*=\s*([a-z]+)([^;]*)/g)];
+  for (const [, method, verdict, rest] of results) {
+    if (verdict !== 'pass') continue;
+    const prop = (name: string): string => {
+      const m = new RegExp(`\\b${name.replace('.', '\\.')}\\s*=\\s*"?([^\\s;"]+)`).exec(rest ?? '');
+      return m?.[1] ?? '';
+    };
+    const domain =
+      method === 'dmarc'
+        ? prop('header.from')
+        : method === 'dkim'
+          ? prop('header.d') || prop('header.i').replace(/^.*@/, '')
+          : prop('smtp.mailfrom').replace(/^.*@/, '');
+    if (alignedDomains(domain.replace(/\.$/, ''), fromDomain)) return fromDomain;
+  }
+  return null;
+}
+
 /** A message as ingest stores it, derived once from what the port returned. */
 export interface IngestedMessage extends FetchedMessage {
   threadKey: string | null;

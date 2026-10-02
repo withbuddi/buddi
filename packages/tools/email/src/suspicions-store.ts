@@ -161,6 +161,10 @@ export interface AskRow extends SuspectMessage {
   confidence: number;
   phrase: string;
   urgent: boolean;
+  /** The From domain when the owner's mail server vouched for it (`messages.auth_domain`). */
+  authDomain: string | null;
+  /** The owner has written to someone at that domain, from this mailbox. */
+  knownDomain: boolean;
 }
 
 const MESSAGE_COLUMNS = `m.id as message_id, m.thread_id, m.subject, m.from_addr,
@@ -263,7 +267,13 @@ export async function lookAlikesSince(
 /** Test (b): stored asks on mail since `since`. Mute is the only silence. */
 export async function asksSince(db: Db, since: Date): Promise<AskRow[]> {
   const { rows } = await db.query(
-    `select ${MESSAGE_COLUMNS}, s.kind, s.confidence, s.phrase, s.urgent
+    `select ${MESSAGE_COLUMNS}, s.kind, s.confidence, s.phrase, s.urgent, m.auth_domain,
+            (m.auth_domain is not null and exists (
+              select 1 from email.messages o
+               cross join lateral jsonb_array_elements_text(o.to_addrs) as a(addr)
+               where o.account_id = m.account_id and o.direction = 'out'
+                 and split_part(email.address_of(a.addr), '@', 2) = m.auth_domain
+            )) as known_domain
        from email.suspicions s
        join email.messages m on m.id = s.message_id
        left join email.threads t on t.id = m.thread_id
@@ -279,5 +289,7 @@ export async function asksSince(db: Db, since: Date): Promise<AskRow[]> {
     confidence: Number(row.confidence),
     phrase: row.phrase ?? '',
     urgent: row.urgent === true,
+    authDomain: typeof row.auth_domain === 'string' && row.auth_domain !== '' ? row.auth_domain : null,
+    knownDomain: row.known_domain === true,
   }));
 }
