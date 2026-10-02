@@ -195,6 +195,28 @@ suite('reaching the owner', () => {
     expect(rows.find((r) => r.id === alert.id)?.seenAt).toBeNull();
   });
 
+  it('reopens a seen held row when its action is new or changed, whatever the urgency; an unchanged retry stays seen', async () => {
+    fakeChannel();
+    const first = await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Charged twice', dedupeKey: 'charge' });
+    expect(await markSeen(pool, first.id, minutes(1))).toBe(true);
+    clock = minutes(2);
+    // The same key, now with an action: a new request, back unseen.
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Charged twice', dedupeKey: 'charge', action: 'Confirm with the bank?' });
+    let [row] = await listNotifications(pool);
+    expect(row).toMatchObject({ id: first.id, state: 'held', action: 'Confirm with the bank?', seenAt: null });
+    // Seen; the same action again is a retry: it stays seen.
+    await markSeen(pool, first.id, minutes(3));
+    clock = minutes(4);
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Charged twice', dedupeKey: 'charge', action: 'Confirm with the bank?' });
+    [row] = await listNotifications(pool);
+    expect(row?.seenAt).toBe(minutes(3).toISOString());
+    // A changed action reopens it.
+    clock = minutes(5);
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Charged twice', dedupeKey: 'charge', action: 'Call the bank today?' });
+    [row] = await listNotifications(pool);
+    expect(row).toMatchObject({ action: 'Call the bank today?', seenAt: null });
+  });
+
   it('lowers a key that fires more than three times in an hour to today, and says so once', async () => {
     fakeChannel();
     for (let i = 0; i < 3; i += 1) {

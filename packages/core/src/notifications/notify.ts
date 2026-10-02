@@ -268,10 +268,12 @@ export async function notifyOwner(db: Queryable, deps: NotifyDeps, message: Owne
         returning ${NOTIFICATION_COLUMNS}`,
       [existing.id, urgency, title, text, message.link?.route ?? null, offers, message.agentId ?? null,
         message.pluginId ?? null, message.actionId ?? null, state, dueAt, channel, lowered, now, topic, heldFor,
-        // Only something that asks for the owner now comes back unseen. A
-        // quiet line (today, digest) that says more is updated where it is:
-        // the owner already read it, and reading it again is not news.
-        urgency === 'now', action],
+        // Something that asks for the owner now comes back unseen, and so
+        // does a new or changed action whatever its urgency: a request the
+        // owner has not seen yet is not settled by having read an earlier
+        // one. A quiet line (today, digest) that says more, or a retry with
+        // the same action, is updated where it is: reading it again is not news.
+        urgency === 'now' || (action !== null && action !== (existing.action ?? null)), action],
     );
     if (rows[0]) row = toNotification(rows[0]);
     else existing = null; // Sent between the read and the write: this is a new message after all.
