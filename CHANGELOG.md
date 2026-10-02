@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.32 — 2026-10-02
+
 ### Added
 
 - The agent catalogue: ready-made agents from withbuddi.com (Chief of Staff, Researcher, CFO, Chef and more), each added with one approval. A missing by-buddi plugin is installed on the way, only when its package matches what withbuddi.com lists; the picks you answer (a mailbox, a mission's hour, a line about you) are written after the persona, and its missions arrive off unless you turn them on. Routes `/api/catalogue…`.

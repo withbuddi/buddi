@@ -1235,7 +1235,7 @@ The Skills page: every skill on this computer, grouped yours / learned / from pl
 
 - **Auth:** Session or API token.
 - **Answer:** `{ skills: SkillRow[], agents: [{ id, handle, name, writable }] } where SkillRow is { id (name, or agent/name for one in an agent's folder), name, title, description, group: mine|learned|plugin|catalogue, file, home: agent id | null, every, holders: [{ agent, how: home|every|filter|granted }], untrusted: upload|page|null, provenance, source, created, updatedAt, learned: { by, version, edited, keptAt } | null, from: { kind: plugin, plugin, version, installed } | { kind: catalogue, package, version, agent } | { kind: upload, filename } | null, editable, deletable, shareable }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills"
@@ -1249,7 +1249,7 @@ Write a new skill, or save one taken from a single .md (read in the browser): it
 - **Body:** `{ title, description, body, every?: boolean, agents?: agent id[], upload?: { filename: string (.md), mine?: boolean } }`
 - **Answer:** `201 { skill: SkillRow }`
 - **Errors:** 400 a field missing or the loader's sentence; 409 an agent that ships with buddi, or the catalog refused the result (nothing written); 413 over 50 KB; 415 not .md
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/skills"
@@ -1262,7 +1262,7 @@ One skill whole: its row, its text, the file as written, a learned one's version
 - **Auth:** Session or API token.
 - **Answer:** `{ skill: SkillRow, body, text, versions?: number[], onDelete: { stops: agent id[], every, then: trash|versions-kept|catalogue-asks }, agents }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>"
@@ -1276,7 +1276,7 @@ The skill as its .md file, as an attachment.
 - **Kind:** bytes, not JSON
 - **Answer:** `text/markdown`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/skills/<id>/download" -o out
@@ -1290,7 +1290,7 @@ Edit the text. A learned skill is saved as its next version, marked as the owner
 - **Body:** `{ text: the whole file as the Source view shows it } | { body, description?, title? }`
 - **Answer:** `{ skill: SkillRow, version?: number, ignored?: string[] }`
 - **Errors:** 400; 404; 409 a plugin's skill, or the catalog refused the result (nothing written)
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"text":"…"}' "$BUDDI_URL/api/skills/<id>/text"
@@ -1304,7 +1304,7 @@ Who uses it: every agent, or the ones named, written in each agent's file (skill
 - **Body:** `{ every?: boolean, agents: agent id[] }`
 - **Answer:** `{ skill: SkillRow }`
 - **Errors:** 400 an unknown agent; 404; 409 an agent that ships with buddi, a name the agent already has, or the catalog refused the result
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"agents":[]}' "$BUDDI_URL/api/skills/<id>/grants"
@@ -1317,7 +1317,7 @@ Mark as mine: an uploaded skill stops being read as outside text (a learned one 
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
 - **Answer:** `{ skill: SkillRow }`
 - **Errors:** 404; 409
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/<id>/trust"
@@ -1330,7 +1330,7 @@ Delete a skill. The agents that asked for it stop (their skills: line loses it).
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It changes the instructions an agent follows: a skill's text, who holds it, or whether it is read as the owner's.
 - **Answer:** `{ deleted, stopped: agent id[], movedTo?: string, versionsKept?: string }`
 - **Errors:** 404; 409 a plugin's skill while the plugin is installed, or a shipped agent's file needs it; 503 the database, for a learned one
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X DELETE -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/skills/<id>"
@@ -1467,7 +1467,7 @@ The agent catalogue from withbuddi.com, each package with where it stands here; 
 - **Auth:** Session or API token.
 - **Query:** `refresh?: 1`
 - **Answer:** `{ fetchedAt, stale?, agents: [{ name, version, handle, title, pitch, description, about, category, trust, author, requires, optional, needs, tools, missions: [{ id, name, cron, when, prompt }], fills: [{ id, kind, label, optional, default }], examples, skills: [{ name, description, text }], changes, replaces, avatar, page, claims?, state: ready|needs|installed|unavailable, missing?: [{ kind: plugin, name, range, fix, title, listed, byBuddi } | { kind: need, name, fix }], installed?: { agentId, handle, version, drift: current|update|edited|edited-update, via? }, reason?, addable }], fromPlugins: [{ plugin, agent, handle, name, text, state }], delisted: [{ agentId, handle, name, package, version }], mailbox, problems?, unavailable? }`
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/catalogue"
@@ -1481,7 +1481,7 @@ What adding this agent would do, writing nothing: plugins installed on the way, 
 - **Body:** `{ fills?: { [id]: string }, handle?, missionsOn?: string[] }`
 - **Answer:** `{ name, version, title, plugins: [{ name, title, version, byBuddi, fix }], blocked, plan?, id?, handle, fills: [{ id, kind, label, optional?, mission?, value, choices? }], tools: [{ name, tier, description }], missions: [{ id, name, cron, enabled, prompt }], account?, preview: string | null, note? } — plan: the fingerprint of exactly this plan (absent while a plugin is missing); tools: the package's own list while one is`
 - **Errors:** 400 a pick or handle refused; 404; 409 already added or unavailable; 503 offline
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/catalogue/<name>/plan"
@@ -1495,7 +1495,7 @@ Add this agent: missing by-buddi plugins are installed on the way, then the agen
 - **Body:** `{ version, fills?, handle?, missionsOn?: string[], account?, plan?, tools?: string[] }`
 - **Answer:** `202 { jobId }`
 - **Errors:** 400; 404; 409 already added, the version moved, or something it needs is not here (blocked); 503 offline
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/catalogue/<name>/install"
@@ -1508,7 +1508,7 @@ An install job's progress.
 - **Auth:** Session or API token.
 - **Answer:** `{ id, name, version, title, state: running|confirm|done|failed, steps: [{ kind: plugin|agent, name, title, state, reason? }], agent?: { id, handle, name }, approvalId?, confirm?: { tools: [{ name, tier, description }], unshown: string[], preview }, error?, startedAt, finishedAt? }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/catalogue/jobs/<id>"
@@ -1522,7 +1522,7 @@ Answer a job stopped at confirm (the grant that resolved is not the one shown): 
 - **Body:** `{ approve: boolean }`
 - **Answer:** `the job`
 - **Errors:** 400; 404; 409 not waiting
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{"approve":true}' "$BUDDI_URL/api/catalogue/jobs/<id>/confirm"
@@ -1536,7 +1536,7 @@ The update sheet for an agent added from this package: changes, persona diff, to
 - **Body:** `{ agentId }`
 - **Answer:** `{ plan, agentId, handle, name, title, fromVersion, version, changes, via, edited, replacesOwn: string[], retires: string[], widened, added: [{ name, tier, description }], removed, personaDiff: string[], missionsAdded, preview }`
 - **Errors:** 400; 409 already up to date
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/catalogue/<name>/update/plan"
@@ -1550,7 +1550,7 @@ Update an agent from its package with the same picks; an edited file only with r
 - **Body:** `{ agentId, plan, replace?: true }`
 - **Answer:** `{ approvalId, result }`
 - **Errors:** 400 no plan; 409 edited without replace, up to date, or the plan moved (code plan-moved)
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/catalogue/<name>/update"
@@ -1563,7 +1563,7 @@ What removing this agent does: its missions paused, the plugins no other agent u
 - **Auth:** Session or API token.
 - **Answer:** `{ id, handle, name, pausesMissions: [{ id, name }], unusedPlugins: string[], preview }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/remove"
@@ -1576,7 +1576,7 @@ Remove from team: the directory goes to the trash and its missions are paused. T
 - **Auth:** Dashboard session only (a session adds CSRF + Origin). It decides an approval, or the click is the approval. A token never decides for the owner.
 - **Answer:** `{ approvalId, result: { id, movedTo, pausedMissions?, unusedPlugins? } }`
 - **Errors:** 400
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" "$BUDDI_URL/api/agents/<id>/remove"
@@ -1857,7 +1857,7 @@ Keep an agent’s quiet watch after “Still useful?”: its count of silent run
 - **Auth:** Session or API token (a session adds CSRF + Origin).
 - **Answer:** `{ id, enabled }`
 - **Errors:** 404
-- **Since:** unreleased
+- **Since:** 0.1.0-pre.32
 
 ```sh
 curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/missions/<id>/keep"
