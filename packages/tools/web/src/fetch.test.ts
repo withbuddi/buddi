@@ -16,6 +16,7 @@
  * by the address rule, which is the thing under test. The shipped policy's own
  * refusals are proved in `guard.test.ts`, against `DEFAULT_POLICY` itself.
  */
+import zlib from 'node:zlib';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHttpArea, type LookupAll } from '@buddi/core/testing';
@@ -343,5 +344,131 @@ describe('what a page turns out to be', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('forbidden');
+  });
+});
+
+describe('bytes to text', () => {
+  const html = '<html><head><title>Café prices</title></head><body><p>Un café coûte 3 € à Paris, déjà servi.</p></body></html>';
+
+  it('asks only for encodings it can unpack', async () => {
+    let asked = '';
+    route('/enc', (req, res) => {
+      asked = String(req.headers['accept-encoding'] ?? '');
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(html);
+    });
+    await fetcher().page({ url: fixture('/enc') });
+    expect(asked.split(', ')).toEqual(expect.arrayContaining(['gzip', 'deflate', 'br']));
+  });
+
+  const packers: Array<[string, (b: Buffer) => Buffer]> = [
+    ['gzip', (b) => zlib.gzipSync(b)],
+    ['deflate', (b) => zlib.deflateSync(b)],
+    ['br', (b) => zlib.brotliCompressSync(b)],
+  ];
+  const zstd = (zlib as unknown as { zstdCompressSync?: (b: Buffer) => Buffer }).zstdCompressSync;
+  if (zstd) packers.push(['zstd', (b) => zstd(b)]);
+  it.each(packers)('unpacks a %s body', async (coding, pack) => {
+    route(`/packed-${coding}`, (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-encoding': coding });
+      res.end(pack(Buffer.from(html, 'utf8')));
+    });
+    const result = await fetcher().page({ url: fixture(`/packed-${coding}`) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.title).toBe('Café prices');
+    expect(result.text).toContain('Un café coûte 3 € à Paris');
+  });
+
+  it('unpacks a gzip body sent without a content-encoding header', async () => {
+    route('/sneaky-gzip', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(zlib.gzipSync(Buffer.from(html, 'utf8')));
+    });
+    const result = await fetcher().page({ url: fixture('/sneaky-gzip') });
+    expect(result.ok && result.text).toContain('coûte');
+  });
+
+  it('refuses a body that unpacks past the ceiling as too large', async () => {
+    route('/bomb', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
+      res.end(zlib.gzipSync(Buffer.alloc(17 * 1024 * 1024, 0x61)));
+    });
+    const result = await fetcher().page({ url: fixture('/bomb') });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('too-large');
+  });
+
+  it('honours a latin-1 charset from the header, and from the page’s own meta', async () => {
+    const latin = Buffer.from(html, 'latin1');
+    route('/latin-header', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=ISO-8859-1' });
+      res.end(latin);
+    });
+    route('/latin-meta', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(Buffer.from(html.replace('<head>', '<head><meta charset="windows-1252">'), 'latin1'));
+    });
+    for (const path of ['/latin-header', '/latin-meta']) {
+      const result = await fetcher().page({ url: fixture(path) });
+      expect(result.ok && result.text).toContain('Un café coûte');
+    }
+  });
+
+  it('refuses binary data served as a page as unreadable, not as text', async () => {
+    route('/binary', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html;charset=UTF-8' });
+      res.end(Buffer.from(Array.from({ length: 4000 }, (_, i) => (i * 131 + 7) % 256)));
+    });
+    const result = await fetcher().page({ url: fixture('/binary') });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('unreadable');
+    expect(result.message).toMatch(/isn’t a readable page/);
+  });
+
+  it('refuses an encoding it cannot unpack as unreadable', async () => {
+    route('/compress', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'x-compress' });
+      res.end('\x1f\x9d\x90garbage');
+    });
+    const result = await fetcher().page({ url: fixture('/compress') });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('unreadable');
+  });
+
+  const amazonRobot =
+    '<!doctype html><html><head><title dir="ltr">Amazon.com</title></head><body>' +
+    '<h4>Enter the characters you see below</h4><p class="a-last">Sorry, we just need to make sure you\'re not a robot. ' +
+    'For best results, please make sure your browser is accepting cookies.</p>' +
+    '<p>To discuss automated access to Amazon data please contact api-services-support@amazon.com.</p></body></html>';
+
+  it('says an Amazon robot check turned the reader away, at 200 or 503', async () => {
+    route('/robot-200', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
+      res.end(zlib.gzipSync(Buffer.from(amazonRobot)));
+    });
+    route('/robot-503', (_req, res) => {
+      res.writeHead(503, { 'content-type': 'text/html' });
+      res.end(amazonRobot);
+    });
+    for (const path of ['/robot-200', '/robot-503']) {
+      const result = await fetcher().page({ url: fixture(path) });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe('turned-away');
+      expect(result.message).toMatch(/robot check/);
+    }
+  });
+
+  it('still reads an article that merely mentions captchas', async () => {
+    route('/about-captchas', (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<html><title>On captchas</title><body><p>${'Captchas annoy people. '.repeat(4000)}</p></body></html>`);
+    });
+    const result = await fetcher().page({ url: fixture('/about-captchas') });
+    expect(result.ok).toBe(true);
   });
 });

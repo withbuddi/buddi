@@ -161,6 +161,18 @@ describe('errors in plain words', () => {
       .toBe('The read failed: tool timed out');
   });
 
+  it('shows a read whose text came back as binary garbage as a failure, not the garbage', () => {
+    const garbage = '��t��j�@ E��\u0001�\u0002k�� ��x�\u0007 ����'.repeat(20);
+    const entry: SourceEntry = { id: 'g', tool: 'lens.fetch', input: { url: 'https://www.amazon.com/dp/B0' }, ok: true, at: AT,
+      output: page('https://www.amazon.com/dp/B0', 'Amazon', garbage) };
+    expect(sourceOf(entry)).toMatchObject({ state: 'failed', text: null, why: 'The page came back unreadable.' });
+    render(<SourcesView entries={[entry]} />);
+    expect(screen.getByText('Couldn’t read amazon.com')).toBeDefined();
+    expect(screen.queryByText(/��/)).toBeNull();
+    // Ordinary prose, accents and all, is left alone.
+    expect(sourceOf({ ...entry, output: page('https://a.test/p', 'Café', 'Le café coûte 3 € — très bon, déjà servi à Paris.') }).state).toBe('ok');
+  });
+
   it('heads a failed page with the site it could not read', () => {
     render(<SourcesView entries={entriesOf()} />);
     expect(screen.getByText('Couldn’t read wired.com')).toBeDefined();

@@ -13,6 +13,9 @@ What changes in buddi from one release to the next, newest first.
 - A conversation with Claude no longer dies after a long tool-using turn with "`thinking` or `redacted_thinking` blocks … cannot be modified": Claude's encrypted (redacted) thinking is now kept with the turn, so every thinking block goes back exactly where it was; and when Claude still refuses the thinking it is handed back, buddi retries that request once without the earlier turns' thinking (then without thinking at all) instead of failing every turn from then on. Conversations already stuck this way work again.
 - Thinking that came from another provider is no longer sent to Claude as an empty text block, which Claude refuses.
 - Gemini: a tool call that comes back without its thought signature in first place (two steps of a turn merged into one) is vouched for with Google's placeholder, so the request is not refused. The mission failures with "missing a thought_signature" seen before 0.1.0-pre.30 were runs from before that fix.
+- `web.read` no longer hands back a compressed page as garbage text (Amazon sends gzip even unasked): the reader unpacks gzip, deflate, Brotli and zstd (asking only for those), reads the page in its own charset (header, then `<meta>`), refuses whatever is still binary as "unreadable", and reports a robot check or captcha page as "turned away" instead of reading it.
+- The Sources tab shows a read that came back as unreadable characters (from before this fix) as "Couldn’t read amazon.com — The page came back unreadable." instead of the garbage.
+- Claude answers with citations no longer break mid-sentence onto separate lines (". It has" / "Intel Iris Xe graphics" / "."): the pieces Claude splits a cited answer into are joined into one passage, and messages already stored that way read as one.
 
 ## 0.1.0-pre.33 — 2026-10-02
 

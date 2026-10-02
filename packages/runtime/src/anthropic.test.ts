@@ -212,6 +212,34 @@ describe('createAnthropicProvider — responses and errors', () => {
     ]);
   });
 
+  it('joins a cited answer\'s adjacent text blocks into one passage, with no separator', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse(
+        200,
+        okBody({
+          content: [
+            { type: 'thinking', thinking: '', signature: 'sig-1' },
+            { type: 'text', text: 'One version is the IT13. ' },
+            { type: 'text', text: 'Its title lists an i9', citations: [{ type: 'web_search_result_location', url: 'https://a.example' }] },
+            { type: 'text', text: '. It has ' },
+            { type: 'text', text: 'Intel Iris Xe graphics', citations: [] },
+            { type: 'text', text: '.' },
+            { type: 'tool_use', id: 'tu_1', name: 'finance.balance', input: {} },
+            { type: 'text', text: 'after' },
+          ],
+        }),
+      ),
+    );
+    const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const res = await provider.complete(request);
+    expect(res.content).toEqual([
+      { type: 'thinking', text: '', signature: 'sig-1' },
+      { type: 'text', text: 'One version is the IT13. Its title lists an i9. It has Intel Iris Xe graphics.' },
+      { type: 'tool_use', id: 'tu_1', name: 'finance.balance', input: {} },
+      { type: 'text', text: 'after' },
+    ]);
+  });
+
   it('picks the thinking shape each model takes', () => {
     const cases: Array<[string, 'on' | 'off', ReturnType<typeof thinkingShape>]> = [
       ['claude-sonnet-5-5', 'on', 'adaptive'],

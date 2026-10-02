@@ -32,7 +32,25 @@ export const READ_PROBLEMS: Record<string, string> = {
   'server-error': 'The site had a problem of its own.',
   'too-many-redirects': 'The link kept redirecting, so the reader gave up.',
   network: 'Couldn’t reach the site.',
+  unreadable: 'The page came back unreadable.',
+  'turned-away': 'The site turned the reader away with a robot check.',
 };
+
+/**
+ * Text that is mostly replacement characters or control bytes: a compressed or
+ * binary body decoded as if it were a page. Reads stored before the reader
+ * learned to refuse these still carry it, and showing it helps nobody.
+ */
+export function looksUnreadable(text: string): boolean {
+  const sample = text.slice(0, 4000);
+  if (sample.length < 20) return false;
+  let bad = 0;
+  for (const ch of sample) {
+    const code = ch.codePointAt(0)!;
+    if (code === 0xfffd || (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || (code >= 0x7f && code < 0xa0)) bad += 1;
+  }
+  return bad / sample.length > 0.1;
+}
 
 /** The host a citation names, without `www.`; the input itself when it is no URL. */
 export function hostOf(url: string): string {
@@ -129,15 +147,16 @@ export function sourceOf(entry: SourceEntry): Source {
   }
 
   const url = str(output['url']) ?? str(input['url']) ?? '';
-  const failed = failedCall || output['ok'] === false;
-  const problem = str(output['problem']);
+  const garbled = !failedCall && output['ok'] !== false && looksUnreadable(str(output['text']) ?? '');
+  const failed = failedCall || output['ok'] === false || garbled;
+  const problem = garbled ? 'unreadable' : str(output['problem']);
   const message = str(output['message']);
   return {
     kind: 'page', id: entry.id, url, raw,
     host: str(output['source']) ?? hostOf(url),
     state: entry.ok === null ? 'pending' : failed ? 'failed' : 'ok',
     title: str(output['title']),
-    text: str(output['text']),
+    text: garbled ? null : str(output['text']),
     truncated: output['truncated'] === true,
     retrievedAt: str(output['retrievedAt']) ?? entry.at,
     why: !failed ? null

@@ -48,7 +48,7 @@ export interface ReadOutput {
   title?: string | null;
   text?: string;
   truncated?: boolean;
-  /** Present on a failure: `not-found`, `blocked`, `unsupported-content`, … */
+  /** Present on a failure: `not-found`, `blocked`, `unsupported-content`, `unreadable`, `turned-away`, … */
   problem?: string;
   /** One sentence to say out loud. */
   message?: string;

@@ -142,7 +142,7 @@ export function MessageList({
 
   const writing = partial && !partial.settled && (partial.text !== '' || partial.thinking !== '');
 
-  const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible));
+  const shown = messages.filter((message) => (message.blocks ?? []).some(isVisible)).map(joinAdjacentText);
   const stops = budgetStops(shown, runs ?? []);
 
   // The face beside a name: the member in a room, else the thread's agent.
@@ -574,9 +574,41 @@ function askedFor(message: ChatMessage): { handle: string; request: string } | n
   return { handle: match[1]!, request: match[2]!.trim() };
 }
 
+/**
+ * An agent's adjacent text blocks as one: a cited Claude answer was stored as a
+ * run of blocks split at each citation (". It has " / "Intel Iris Xe graphics"),
+ * and each drawn as its own bubble broke sentences apart. A split mid-flow is
+ * joined with no separator; two blocks that each stand whole (another
+ * provider's separate output items) keep a paragraph between them. The owner's
+ * own messages are left as they are.
+ */
+export function joinAdjacentText(message: ChatMessage): ChatMessage {
+  const blocks = message.blocks ?? [];
+  if (message.role !== 'assistant' || blocks.length < 2) return message;
+  const out: ChatBlock[] = [];
+  let joined = false;
+  for (const block of blocks) {
+    const last = out[out.length - 1];
+    if (block.type === 'text' && last?.type === 'text') {
+      out[out.length - 1] = { ...last, text: last.text + seam(last.text, block.text) + block.text };
+      joined = true;
+    } else {
+      out.push(block);
+    }
+  }
+  return joined ? { ...message, blocks: out } : message;
+}
+
+/** Nothing where a sentence carries on across the split; a paragraph where both sides stand whole. */
+function seam(before: string, after: string): string {
+  if (before === '' || after === '' || /\s$/.test(before) || /^\s/.test(after)) return '';
+  if (/^[.,;:!?)\]}»”’'"]/.test(after)) return '';
+  return /[.!?:…)"”»]$/.test(before) ? '\n\n' : '';
+}
+
 /** What an agent's message said, as plain text: its text blocks, in order. */
 export function replyText(message: ChatMessage): string {
-  return (message.blocks ?? [])
+  return (joinAdjacentText(message).blocks ?? [])
     .filter((b): b is Extract<ChatBlock, { type: 'text' }> => b.type === 'text')
     .map((b) => b.text.trim())
     .filter((t) => t !== '')

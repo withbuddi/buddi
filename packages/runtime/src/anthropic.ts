@@ -739,7 +739,13 @@ function fromWireBlocks(
     if (typeof item !== 'object' || item === null) continue;
     const b = item as Record<string, unknown>;
     if (b.type === 'text' && typeof b.text === 'string') {
-      out.push({ type: 'text', text: b.text });
+      // A cited answer arrives as a run of text blocks, split at every
+      // citation boundary (". It has " / "Intel Iris Xe graphics" / "."). They
+      // are one passage of prose: joined directly, with no separator, so the
+      // page and the chat never break a sentence where a citation began.
+      const last = out[out.length - 1];
+      if (last?.type === 'text') out[out.length - 1] = { type: 'text', text: last.text + b.text };
+      else out.push({ type: 'text', text: b.text });
     } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
       out.push({
         type: 'thinking',

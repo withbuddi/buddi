@@ -31,6 +31,7 @@
  * that is told "that is a PDF" says so.
  */
 import type { HttpArea } from '@buddi/core/plugin';
+import { ACCEPT_ENCODING, decodeText, looksTurnedAway, looksUnreadable, unpack } from './decode.js';
 import { extractTitle, htmlToText, plainToText } from './extract.js';
 import {
   BlockedError,
@@ -51,6 +52,8 @@ export const MAX_REDIRECTS = 3;
 /** The most characters of extracted text handed back by default. */
 export const DEFAULT_MAX_CHARS = 20_000;
 export const MAX_MAX_CHARS = 60_000;
+/** The most a compressed page may unpack to. 16 MiB: text compresses well, bombs better. */
+export const MAX_UNPACKED_BYTES = 16 * 1024 * 1024;
 
 /**
  * A user agent that says what this is.
@@ -97,6 +100,10 @@ export type FetchFailure =
   | { reason: 'timeout' }
   | { reason: 'too-many-redirects' }
   | { reason: 'unsupported-content' }
+  /** Bytes that are not a readable page: binary, or compressed in a way nobody can undo. */
+  | { reason: 'unreadable' }
+  /** A robot check or captcha where the page should be. */
+  | { reason: 'turned-away' }
   | { reason: 'network' };
 
 export type FetchOutcome =
@@ -232,6 +239,9 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
             'user-agent': USER_AGENT,
             accept: request.raw === true ? 'application/json' : 'text/html,text/plain;q=0.9,*/*;q=0.1',
             'accept-language': 'en,fr;q=0.8',
+            // Only what `decode.ts` can unpack. Some sites compress regardless,
+            // which is why the body is unpacked by its header, asked or not.
+            'accept-encoding': ACCEPT_ENCODING,
             ...(request.headers ?? {}),
           },
           ...(request.body === undefined ? {} : { body: request.body }),
@@ -274,8 +284,13 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
       }
 
       const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
-      const body = await response.text();
-      const bytes = Buffer.byteLength(body, 'utf8');
+      const raw = Buffer.from(await response.arrayBuffer());
+      const bytes = raw.length;
+      const unpacked = unpack(raw, response.headers.get('content-encoding'), MAX_UNPACKED_BYTES);
+      if (!unpacked.ok) {
+        return { ok: false, reason: unpacked.reason, url: checked.url.toString(), status, message: unpacked.message, chain };
+      }
+      const body = decodeText(unpacked.body, contentType);
 
       if (!response.ok) {
         return {
@@ -325,6 +340,28 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
           chain: result.chain,
         };
       }
+      if (looksUnreadable(result.body)) {
+        return {
+          ok: false,
+          reason: 'unreadable',
+          url: result.url,
+          source: hostOf(result.url),
+          status: result.status,
+          message: 'the site sent data that isn’t a readable page, so I could not read it',
+          chain: result.chain,
+        };
+      }
+      if (looksTurnedAway(result.body)) {
+        return {
+          ok: false,
+          reason: 'turned-away',
+          url: result.url,
+          source: hostOf(result.url),
+          status: result.status,
+          message: TURNED_AWAY,
+          chain: result.chain,
+        };
+      }
       const isHtml = mime === 'text/html' || mime === 'application/xhtml+xml' || mime === '';
       const limit = Math.min(request.maxChars ?? DEFAULT_MAX_CHARS, MAX_MAX_CHARS);
       const extracted = isHtml ? htmlToText(result.body, limit) : plainToText(result.body, limit);
@@ -344,6 +381,9 @@ export function createFetcher(options: FetcherOptions = {}): Fetcher {
   };
 }
 
+const TURNED_AWAY =
+  'that site turned the reader away with a robot check (a captcha) instead of the page — I did not get the content';
+
 /** The host a citation names. Never throws — it is used in error paths. */
 export function hostOf(url: string): string {
   try {
@@ -360,6 +400,9 @@ function statusFailure(
   body: string,
 ): FetchFailure & { ok: false; url: string; status: number; message: string } {
   const base = { ok: false as const, url, status };
+  if ((status === 403 || status === 429 || status === 503) && contentType.startsWith('text/') && looksTurnedAway(body)) {
+    return { ...base, reason: 'turned-away', message: TURNED_AWAY };
+  }
   if (status === 404 || status === 410) {
     return { ...base, reason: 'not-found', message: `that page does not exist (HTTP ${status})` };
   }
