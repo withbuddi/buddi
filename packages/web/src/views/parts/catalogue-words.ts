@@ -71,10 +71,14 @@ export function missingFix(m: CatalogueMissing): { label: string; route: string 
 }
 
 /** The plugins and needs a package uses that are here, in muted words; missing ones are the chip's. */
-export function usesWords(entry: CatalogueAgent, loaded: ReadonlySet<string>): string[] {
+export function usesWords(entry: CatalogueAgent, loaded: ReadonlySet<string>, mailbox?: boolean): string[] {
   const missing = new Set((entry.missing ?? []).map((m) => m.name));
   const plugins = [...Object.keys(entry.requires), ...Object.keys(entry.optional)].filter((name) => !missing.has(name) && loaded.has(name));
-  return plugins.map(pluginTitle);
+  const words = plugins.map(pluginTitle);
+  // A mailbox it reads (needed, or better with one) that is connected here.
+  const readsMail = entry.needs.includes('mailbox') || entry.needs.includes('mailbox?');
+  if (mailbox === true && readsMail && !missing.has('mailbox')) words.push('your mailbox');
+  return words;
 }
 
 /** The skill file's name as a title: "writing-the-morning-brief.md" → "Writing the morning brief". */

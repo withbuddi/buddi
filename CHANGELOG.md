@@ -16,14 +16,22 @@ What changes in buddi from one release to the next, newest first.
 - Skills, server side of the Skills page: every skill listed in four groups (yours, learned, from plugins, from the catalogue) with the agents that use it; write a new one, save one from a single `.md`, edit its text (a learned one becomes its next version; a plugin's reads only), give it to every agent or to some, mark an upload as yours, download, delete. Who uses a skill is written in each agent's file (`skills:`), and another agent's own skill is given as `<agent>/<skill>`. Routes `/api/skills…`; the dashboard page comes next. `buddi skills list` prints it.
 - An uploaded skill is untrusted until you mark it as yours: its text reaches the agents fenced as outside text, never as instructions.
 - The Skills page on the dashboard: Agents → **Skills** lists every skill grouped yours / learned / from plugins / from the catalogue, with who uses each; a sheet per skill (who uses it with Take away and a picker, the text as Read · Source, edit in place, Download, Delete that says what it stops); **Write a skill** and **Upload a .md** (untrusted until marked as yours). An agent's Skills tab now lists the skills it uses with **Choose skills…** and **All skills**.
+- Asked for a new agent, the front desk checks the catalogue first and offers the match as a button ("Add Chef") that opens its install sheet; when nothing fits it offers "Continue with Agent Father", which moves the conversation to Agent Father with your request. On Telegram both are buttons too (Add Chef is a link to the dashboard when it has an address the phone can open). The front desk still cannot ask Agent Father itself: only your tap starts it. Installs pick up the new front desk with the upgrade; a private copy of the concierge keeps its own wording (docs/agents.md).
+- A catalogue agent's page titles each of its skills with its description, and each opens to its text; a card that reads mail says "Uses your mailbox" once one is connected; an agent the catalogue no longer lists shows under "No longer in the catalogue" and its own page says it keeps working with no updates coming.
+- `GET /api/agents` says which agents came from the catalogue (`catalogue`: package, version, the listed version, drift, delisted), read from the kept list without fetching, so an agent's page no longer loads the catalogue; `/api/catalogue` cards carry each skill's name, description and text, and a `mailbox` flag.
 
 ### Changed
 
 - Editing or deleting a skill that came with a catalogue agent counts as editing that agent: its next update asks before replacing your change, and Replace my changes puts your version of the skill in the trash too.
+- Giving a catalogue agent a skill, or taking one away, no longer counts as editing it: its updates stay one click, and an update keeps the skills you gave it. Changing its persona or tools still counts.
 - Removing an agent also pauses its missions, in the same approval, and names the plugins no other agent uses (they stay installed).
 - The old Add a teammate cards (the starter team) are gone from Home and the Agents page; the catalogue replaces them. Agents → Add an agent became Add a teammate; a teammate the catalogue does not have is one Ask Agent Father away.
 - First run no longer says Ledger or Illustrator is ready to be introduced, and its chapter 3 tiles no longer name a teammate; the handover suggests catalogue teammates instead.
 - The starter team (Scout, Planner, Keeper) is gone from buddi: Researcher, Chief of Staff and Home Manager replace them in the catalogue. A Scout, Planner or Keeper you added keeps working with its handle and its data, and is offered its catalogue version while you have not edited it; the same goes for Ledger (CFO) and Illustrator. First run no longer says Planner is ready to be introduced.
+
+### Removed
+
+- `GET /api/teammates`, the old Add a teammate list; the catalogue replaced it.
 
 ## 0.1.0-pre.31 — 2026-10-02
 

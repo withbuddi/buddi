@@ -34,6 +34,7 @@ import {
   setActiveAgent,
   setSurfaceCursor,
   takeOffer,
+  getOffer,
   answerQuestion,
   getQuestion,
   TELEGRAM_SURFACE,
@@ -1113,12 +1114,35 @@ export function parseOfferCallback(data: string | undefined): string | undefined
  * "Remind me tomorrow") and Telegram shrinks side-by-side buttons until they
  * elide. Three of them is the cap, so the column is never long.
  */
-export function offersKeyboard(offers: readonly Offer[]): InlineKeyboardMarkup {
+export function offersKeyboard(
+  offers: readonly Offer[],
+  /** Where the dashboard opens a package's install sheet, when a phone can reach it. */
+  installUrl?: (pkg: string) => string | undefined,
+): InlineKeyboardMarkup {
   return {
-    inline_keyboard: offers.map((offer) => [
-      { text: offer.label, callback_data: offerCallbackData(offer.id) },
-    ]),
+    inline_keyboard: offers.map((offer) => {
+      // The front desk's "Add Chef" is a link to the install sheet: adding is
+      // the sheet's own approval, so nothing is claimed by the tap.
+      const url = offer.handoff?.kind === 'install' ? installUrl?.(offer.handoff.package) : undefined;
+      return [url ? { text: offer.label, url } : { text: offer.label, callback_data: offerCallbackData(offer.id) }];
+    }),
   };
+}
+
+/** The dashboard route that opens a catalogue package with its install sheet. */
+export function catalogueInstallUrl(origin: string | undefined, pkg: string): string | undefined {
+  if (!origin) return undefined;
+  return `${origin.replace(/\/$/, '')}/#/agents/catalogue/${encodeURIComponent(pkg)}?add=1`;
+}
+
+/** What a tap on "Add Chef" says when the phone has no dashboard address to open. */
+export function installWhereText(title: string): string {
+  return `Add ${title} on the dashboard: Agents → Add a teammate → ${title}. It shows what it can reach before anything is added.`;
+}
+
+/** What the chat is told when a tap hands the conversation to the maker. */
+export function handedOffText(name: string): string {
+  return `You are now talking to ${name}. Your request went with you.`;
 }
 
 export const QUESTION_CALLBACK_PREFIX = 'q';
@@ -2773,6 +2797,16 @@ export class TelegramSurface {
       return;
     }
 
+    // "Add Chef" without a dashboard address the phone can open: say where, claim nothing.
+    const peek = await getOffer(pool, offerId).catch(() => null);
+    if (peek?.handoff?.kind === 'install') {
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      await api.sendMessage(chatId, installWhereText(peek.handoff.title)).catch((err) => {
+        this.#log(`telegram: saying where to add ${peek.handoff?.kind === 'install' ? peek.handoff.package : ''} failed: ${message(err)}`);
+      });
+      return;
+    }
+
     const taken = await takeOffer(pool, { id: offerId, via: SURFACE, now: new Date(this.#now()) });
     if (!taken.ok) {
       await api.answerCallbackQuery(query.id, taken.message).catch(() => {});
@@ -2781,6 +2815,31 @@ export class TelegramSurface {
           this.#log(`telegram: durable refusal for offer ${offerId} failed: ${message(err)}`);
         });
       }
+      return;
+    }
+
+    /*
+     * "Continue with Agent Father": the owner's tap switches this chat to the
+     * maker and sends the request as their turn — the front desk only wrote
+     * the button. Exactly what `/use @father` and then typing it would do.
+     */
+    if (taken.offer.handoff?.kind === 'maker') {
+      const maker = this.#opts.catalog.get(taken.offer.handoff.agentId);
+      if (!maker) {
+        await api.answerCallbackQuery(query.id, UNKNOWN_AGENT_TEXT).catch(() => {});
+        return;
+      }
+      await api.answerCallbackQuery(query.id).catch(() => {});
+      if (messageId !== undefined) {
+        await api.editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] }).catch((err) => {
+          this.#log(`telegram: clearing the handoff button failed: ${message(err)}`);
+        });
+      }
+      await setActiveAgent(pool, SURFACE, chatId, maker.id);
+      await this.#republishMenu(chatId, maker);
+      await api.sendMessage(chatId, handedOffText(maker.name)).catch(() => {});
+      this.#pending.clear(chatId);
+      await this.#runFor(chatId, maker, taken.offer.prompt);
       return;
     }
 
@@ -2971,7 +3030,7 @@ export class TelegramSurface {
       await progress.settle();
       const offered = drawn.question && drawn.question.options.length > 0
         ? questionKeyboard(drawn.question)
-        : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls);
+        : drawn.controls.length === 0 ? undefined : offersKeyboard(drawn.controls, (pkg) => catalogueInstallUrl(this.#opts.publicOrigin, pkg));
       // A run that spent its step budget ends on a Continue button, under
       // whatever else the answer offers.
       const keyboard = drawn.continueAgentId === undefined

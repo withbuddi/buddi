@@ -129,6 +129,19 @@ A fresh install has two agents: the front desk and Agent Father. Everything
 else is picked from the catalogue: ready-made agents buddi publishes on
 withbuddi.com beside the plugins, each tested against the plugins it uses.
 
+Ask the front desk for a new agent and it looks in the catalogue first. A
+match comes back as a button under its reply (**Add Chef**) that opens the
+agent's install sheet; when nothing fits, **Continue with Agent Father** moves
+the conversation to Agent Father with your request already sent. On Telegram
+both are inline buttons (Add Chef is a link to the dashboard when the phone has
+its address). The front desk cannot ask Agent Father itself: only your tap
+starts that. The behaviour comes from the shipped
+`examples/agents/concierge/agent.md`, which every install reads from the
+package, so an upgrade brings it; a private copy of the concierge in your
+agents directory replaces the shipped one and keeps its old wording until you
+add `platform.catalogue` to its tools and the handoff section to its persona
+(or delete the copy).
+
 | Category | Agents (first lineup) |
 |---|---|
 | Work | Chief of Staff, Researcher, Writer, Illustrator |

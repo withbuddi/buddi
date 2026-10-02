@@ -33,6 +33,7 @@ const offer = (label: string, id = label): Offer => ({
   dismissedAt: null,
   lapsedAt: null,
   lapseReason: null,
+  handoff: null,
 });
 
 describe('normalizeOffers', () => {

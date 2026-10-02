@@ -55,6 +55,7 @@ import {
   getAction,
   getArtifact,
   listOpenOffers,
+  type OfferHandoff,
   openQuestion,
   askQuestion,
   answerQuestion,
@@ -117,6 +118,7 @@ import {
   visibleTurnBlocks,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
+import { createHandoffManifest, handoffTargets, HANDOFF_POLICY_SUFFIX, HANDOFF_TOOLS, isFrontDesk } from '../surfaces/handoff.js';
 import {
   ASK_POLICY_SUFFIX,
   ASK_TOOLS,
@@ -432,6 +434,8 @@ export interface ChatOfferView {
   label: string;
   prompt: string;
   expiresAt: string;
+  /** The front desk's handoff: the install sheet to open, or the maker to continue with. */
+  handoff?: OfferHandoff;
 }
 
 /**
@@ -618,6 +622,7 @@ export async function readChatTranscript(
       label: offer.label,
       prompt: offer.prompt,
       expiresAt: offer.expiresAt,
+      ...(offer.handoff ? { handoff: offer.handoff } : {}),
     })),
     question,
     ...(carriedOver ? { carriedOver } : {}),
@@ -2137,6 +2142,9 @@ export class WebChat {
     for (const manifest of deps.registry.manifests()) registry.register(manifest);
     registry.register(createOfferManifest(offers));
     registry.register(createAskManifest(ask));
+    // The front desk's handoff: a button to a catalogue agent or to the maker, never a call to either.
+    const handsOff = !turn.delegated && !room && isFrontDesk(agent);
+    if (handsOff) registry.register(createHandoffManifest(offers, handoffTargets(deps.registry, deps.catalog)));
     if (room?.askTool) registry.register({ name: 'group', version: '0.1.0', schema: 'group', migrationsDir: '', tools: [room.askTool] });
 
     // An offer belongs to the turn that made it; this turn retires the last
@@ -2176,6 +2184,7 @@ export class WebChat {
         tools: delegated ? base.tools : [
           ...(room ? base.tools.filter((t) => t !== DELEGATE_TOOL) : base.tools),
           ...OFFER_TOOLS,
+          ...(handsOff ? HANDOFF_TOOLS : []),
           ...(turn.opening ? [] : ASK_TOOLS),
           ...(room?.askTool ? [GROUP_ASK_TOOL] : []),
         ],
@@ -2205,7 +2214,7 @@ export class WebChat {
         : turn.offer
           ? { openingSpeaker: turn.offer.brief ? briefTurnSpeaker(turn.offer.label) : offerTurnSpeaker(turn.offer.label) }
           : {}),
-      systemSuffix: delegated ? systemSuffix : [OFFER_POLICY_SUFFIX, ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
+      systemSuffix: delegated ? systemSuffix : [OFFER_POLICY_SUFFIX, ...(handsOff ? [HANDOFF_POLICY_SUFFIX] : []), ASK_POLICY_SUFFIX, ...(systemSuffix ? [systemSuffix] : []), ...(room ? [room.policy] : [])].join(
         '\n\n',
       ),
       ...(attachments.length > 0 ? { attachments } : {}),

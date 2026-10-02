@@ -223,6 +223,7 @@ describe('how one set of offers reaches two different surfaces', () => {
       dismissedAt: null,
       lapsedAt: null,
       lapseReason: null,
+      handoff: null,
     },
   ];
 

@@ -46,6 +46,7 @@ interface OfferRow {
   dismissed_at: Date | null;
   lapsed_at: Date | null;
   lapse_reason: string | null;
+  handoff?: unknown;
 }
 
 function offerRow(over: Partial<OfferRow> = {}): OfferRow {
@@ -131,7 +132,7 @@ describe('taking an offer from the dashboard', () => {
     const sent: Parameters<SendOfferTurn>[0][] = [];
     const send: SendOfferTurn = async (input) => {
       sent.push(input);
-      return { ok: true, conversationId: input.conversationId, runId: 'run-1' };
+      return { ok: true, conversationId: input.conversationId ?? 'new', runId: 'run-1' };
     };
 
     const result = await takeOfferFromWeb(deps(pool), 'off-1', { conversationId: CONVERSATION, send });
@@ -230,6 +231,38 @@ describe('taking an offer from the dashboard', () => {
  * page did not have: the owner could take an offer or wait a week, and on an
  * installation with 65 of them that is not a choice.
  */
+describe("taking the front desk's handoff", () => {
+  it('"Continue with Agent Father" sends the request to the maker as the owner\'s turn, in a new conversation, once', async () => {
+    const { pool } = stubPool([offerRow({ agent_id: 'concierge', label: 'Continue with Agent Father', prompt: 'I want an agent that tracks my plants', handoff: { kind: 'maker', agentId: 'agent-father' } })]);
+    const sent: Parameters<SendOfferTurn>[0][] = [];
+    const send: SendOfferTurn = async (input) => {
+      sent.push(input);
+      return { ok: true, conversationId: 'father-1', runId: 'run-f' };
+    };
+    const result = await takeOfferFromWeb(deps(pool), 'off-1', { conversationId: CONVERSATION, send });
+    expect(result.ok).toBe(true);
+    // Not the front desk again, and not its conversation: the maker, fresh.
+    expect(sent).toEqual([{ agentId: 'agent-father', prompt: 'I want an agent that tracks my plants', offer: { id: 'off-1', label: 'Continue with Agent Father' } }]);
+    expect((result as { body: Record<string, unknown> }).body).toMatchObject({ agentId: 'agent-father', conversationId: 'father-1', runId: 'run-f', jobId: null });
+    const again = await takeOfferFromWeb(deps(pool), 'off-1', { conversationId: CONVERSATION, send });
+    expect(again.status).toBe(409);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('"Add Chef" is not taken here: it opens the install sheet on the page, and nothing is claimed', async () => {
+    const { pool, rows } = stubPool([offerRow({ agent_id: 'concierge', label: 'Add Chef', prompt: "Open Chef's install sheet.", handoff: { kind: 'install', package: 'chef', title: 'Chef' } })]);
+    let called = 0;
+    const send: SendOfferTurn = async () => {
+      called += 1;
+      return { ok: true, conversationId: CONVERSATION, runId: 'r' };
+    };
+    const result = await takeOfferFromWeb(deps(pool), 'off-1', { conversationId: CONVERSATION, send });
+    expect(result.status).toBe(409);
+    expect(called).toBe(0);
+    expect(rows[0]?.taken_at).toBeNull();
+  });
+});
+
 describe('dismissing an offer from the dashboard', () => {
   it('records the refusal, starts nothing, and is idempotent', async () => {
     const { pool, rows, statements } = stubPool([offerRow()]);

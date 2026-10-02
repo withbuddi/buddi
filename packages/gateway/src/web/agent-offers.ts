@@ -24,9 +24,6 @@ import {
 import { pluginAgentProposals } from '../agents/platform.js';
 import { runPageQuery, type PagesDeps } from './pages.js';
 
-/** Where the owner goes to lift a teammate's greying. */
-export type TeammateFix = 'plugins' | 'mailbox' | 'accounts';
-
 /** The `core.web_settings` key the owner's dismissals are kept under. */
 export const AGENT_OFFERS_KEY = 'agent-offers';
 
@@ -198,55 +195,4 @@ export async function raiseAgentOffers(deps: RaiseAgentOffersDeps, plugin: strin
     }
   }
   return raisedIds;
-}
-
-/** One card under "Add a teammate". */
-export interface TeammateView {
-  plugin: string;
-  agent: string;
-  handle: string;
-  name: string;
-  /** The card's one line. */
-  text: string;
-  /** What it needs, in the card's muted line. */
-  needs: string;
-  /**
-   * `available`: Add creates it through the plugin accept route.
-   * `added`: the roster holds it. `unavailable`: greyed, with `reason` and `fix`.
-   */
-  state: 'available' | 'added' | 'unavailable';
-  reason?: string;
-  fix?: TeammateFix;
-}
-
-/**
- * The plugin teammates, as the old "Add a teammate" draws them: every agent an
- * installed plugin proposes with an offer line. buddi's own ready-made agents
- * are the catalogue now (`GET /api/catalogue`), which replaces this list.
- *
- * A dismissed card is left out. A card whose agent the roster holds says
- * "added". One is addable when its plugin, naming an offer query, says it is
- * wanted now — the same test `readAgentOffers` uses — and greyed otherwise.
- */
-export async function readTeammates(deps: AgentOffersDeps): Promise<{ teammates: TeammateView[] }> {
-  const present = new Set(deps.agentIds().map((id) => id.toLowerCase()));
-  const dismissed = await dismissedSet(deps.pool);
-  const teammates: TeammateView[] = [];
-  for (const { plugin, agent } of pluginAgentProposals(deps.registry)) {
-    const offer = agent.offer;
-    if (!offer || typeof offer.text !== 'string' || offer.text.trim() === '') continue;
-    if (dismissed.has(keyOf(plugin, agent.id))) continue;
-    const card = {
-      plugin,
-      agent: agent.id,
-      handle: agent.handle,
-      name: agent.name,
-      text: offer.text.trim(),
-      needs: `From the ${plugin} plugin`,
-    };
-    if (present.has(agent.id.toLowerCase())) teammates.push({ ...card, state: 'added' });
-    else if (await wanted(deps, plugin, offer.query)) teammates.push({ ...card, state: 'available' });
-    else teammates.push({ ...card, state: 'unavailable', reason: 'Not wanted yet', fix: plugin === 'email' ? 'mailbox' : 'plugins' });
-  }
-  return { teammates };
 }

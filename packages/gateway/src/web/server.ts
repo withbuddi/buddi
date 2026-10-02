@@ -247,6 +247,7 @@ import {
 import { marketAssetRoute, marketRoute } from './market.js';
 import {
   catalogueRoute,
+  agentsCatalogue,
   installRoute as catalogueInstallRoute,
   jobRoute as catalogueJobRoute,
   planRoute as cataloguePlanRoute,
@@ -265,7 +266,7 @@ import { createRequirements, type Requirements } from '../plugins/requires.js';
 import { placesList, placesRoute } from './places.js';
 import { OWNER_DATE_FORMATS, OWNER_TIME_FORMATS, type HttpArea } from '@buddi/core';
 import { readFacts, webSettingsStore } from '../tips/facts.js';
-import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, readTeammates, type AgentOffersDeps } from './agent-offers.js';
+import { dismissAgentOffer, isPendingAccept, raiseAgentOffers, readAgentOffers, type AgentOffersDeps } from './agent-offers.js';
 import {
   currentVersion,
   upgradeJobRoute,
@@ -1807,10 +1808,6 @@ export function createWebApp(deps: WebServerDeps): Server {
           // Agents a plugin offers on Home while nobody has them. Accepting
           // is the Plugins page's own accept route, below.
           return sendJson(res, 200, await readAgentOffers(agentOffersDeps()));
-        case '/api/teammates':
-          // The old "Add a teammate": the plugin teammates, each added,
-          // addable, or greyed with why. The catalogue replaces it.
-          return sendJson(res, 200, await readTeammates(agentOffersDeps()));
         /*
          * The agent catalogue: buddi's ready-made agents from withbuddi.com,
          * each with where it stands here. Fetched when stale, the copy offline.
@@ -1834,6 +1831,9 @@ export function createWebApp(deps: WebServerDeps): Server {
             // Which agent a chat that names nobody lands on, and whether the
             // files disagree about it. An installation fact, not a file flag.
             default: readDefaultAgent(deps.catalog),
+            // Which agents came from the catalogue, with their drift against the
+            // kept list, so an agent's page needs no catalogue fetch. Never fetches.
+            catalogue: await agentsCatalogue(catalogueDeps()).catch(() => ({})),
           });
         case '/api/groups':
           // The list is read every few seconds, so it is also where a delete whose minute has passed is made final.
@@ -3579,7 +3579,7 @@ export function createWebApp(deps: WebServerDeps): Server {
                 send: (input) =>
                   chat.send({
                     agentId: input.agentId,
-                    conversationId: input.conversationId,
+                    ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
                     text: input.prompt,
                     offer: input.offer,
                   }),

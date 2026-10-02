@@ -684,8 +684,8 @@ export interface CatalogueAgent {
   missions: Array<{ id: string; name: string; cron: string; when: string; prompt: string }>;
   fills: Array<{ id: string; kind: string; label: string; optional: boolean; default: string }>;
   examples: string[];
-  /** Its text skills, by file name. */
-  skills: string[];
+  /** Its text skills: the file name (no `.md`), its description, and its text to open. */
+  skills: CatalogueSkill[];
   changes: string;
   replaces: string[];
   /** The picture on withbuddi.com, shown through `api.marketAssetUrl`. */
@@ -698,6 +698,13 @@ export interface CatalogueAgent {
   reason?: string;
   /** Add works now: nothing missing, or only By-buddi plugins it installs on the way. */
   addable: boolean;
+}
+
+/** One skill a package carries. */
+export interface CatalogueSkill {
+  name: string;
+  description: string;
+  text: string;
 }
 
 /** An agent an installed plugin proposes, shown "From <plugin>"; added through the plugin's own accept. */
@@ -718,7 +725,10 @@ export interface CatalogueView {
   stale?: boolean;
   agents: CatalogueAgent[];
   fromPlugins: CataloguePluginAgent[];
-  delisted: Array<{ agentId: string; handle: string; package: string; version?: string }>;
+  /** Agents added from the catalogue that it no longer lists: they keep working. */
+  delisted: Array<{ agentId: string; handle: string; name?: string; package: string; version?: string }>;
+  /** A mailbox is connected here, so a card that reads mail can say "Uses your mailbox". */
+  mailbox?: boolean;
   /** No list and no copy: the sentence to show. */
   unavailable?: string;
   problems?: string[];
@@ -1382,6 +1392,23 @@ export interface AgentsView {
   engines: AgentEngine[];
   providers: ProviderModels[];
   default?: DefaultAgentView;
+  /** The agents that came from the catalogue, by id, with drift against the kept list. */
+  catalogue?: Record<string, AgentCatalogueProvenance>;
+}
+
+/** Where an agent from the catalogue stands (`GET /api/agents` → `catalogue`): no catalogue fetch needed. */
+export interface AgentCatalogueProvenance {
+  source: 'market';
+  package: string;
+  title: string;
+  /** The version written (with `via`, the older agent's own). */
+  version: string;
+  /** The version the kept list has; null with no copy, or delisted. */
+  latest: string | null;
+  drift: CatalogueDrift;
+  /** No longer in the catalogue: it keeps working, no update will come. */
+  delisted: boolean;
+  via?: string;
 }
 
 /** The front matter the runtime reads, as the agent's page edits it. */
@@ -2862,7 +2889,7 @@ export const api = {
    * anything else goes on the queue exactly as it did.
    */
   takeOffer: (id: string, conversationId?: string) =>
-    post<{ id: string; label: string; jobId: string | null; conversationId?: string; runId?: string }>(
+    post<{ id: string; label: string; jobId: string | null; conversationId?: string; runId?: string; agentId?: string }>(
       `/offers/${encodeURIComponent(id)}/take`,
       conversationId ? { conversationId } : {},
     ),

@@ -14,7 +14,7 @@ import type { ChatAgent } from '../chat/types';
 import { DRAFT_KEY } from '../chat/draft';
 import { NEEDS_ROUTE } from '../routes';
 import { Catalogue, cardState } from './Catalogue';
-import { RemoveFromTeam } from './parts/AgentCatalogueBits';
+import { CatalogueLine, RemoveFromTeam } from './parts/AgentCatalogueBits';
 import { HandoverTeam, suggestFrom, suggestNames, teamIsNew } from './parts/CatalogueSuggest';
 import { UpdateSheet } from './parts/CatalogueSheets';
 import { reachRows } from './parts/catalogue-words';
@@ -37,6 +37,7 @@ vi.mock('../api', async (load) => {
       plugins: vi.fn(),
       market: vi.fn(),
       acceptPluginAgent: vi.fn(),
+      agents: vi.fn(),
     },
   };
 });
@@ -72,7 +73,10 @@ function pkg(name: string, over: Partial<CatalogueAgent> = {}): CatalogueAgent {
   };
 }
 
-const CHIEF = pkg('chief-of-staff', { optional: { calendar: '>=0.1.0', weather: '>=0.1.0' }, needs: ['mailbox?'], skills: ['morning-brief.md', 'draft-a-reply.md'],
+const CHIEF = pkg('chief-of-staff', { optional: { calendar: '>=0.1.0', weather: '>=0.1.0' }, needs: ['mailbox?'], skills: [
+  { name: 'morning-brief', description: 'How the morning brief is written.', text: 'Lead with what needs you today.' },
+  { name: 'draft-a-reply', description: 'Replies in your voice.', text: 'Keep it short.' },
+],
   missions: [{ id: 'morning-brief', name: 'Morning brief', cron: '0 8 * * *', when: 'Every day at 08:00', prompt: '…' }],
   tools: ['email.search', 'email.read', 'email.draft', 'calendar.events?', 'memory.*', 'owner.notify'] });
 const RESEARCHER = pkg('researcher', { state: 'installed', installed: { agentId: 'researcher', handle: 'researcher', version: '1.0.0', drift: 'current' } });
@@ -196,6 +200,58 @@ describe('the catalogue page', () => {
   });
 });
 
+describe('the catalogue gaps', () => {
+  it('says "Uses your mailbox" on a card that reads mail once a mailbox is connected', async () => {
+    vi.mocked(api.catalogue).mockResolvedValue({ ...VIEW, mailbox: true });
+    render(<Harness />);
+    await screen.findByTestId('cat-grid');
+    expect(within(card('chief-of-staff')).getByText('Uses Calendar, Weather and your mailbox')).toBeInTheDocument();
+    expect(within(card('chef')).getByText('Uses Weather')).toBeInTheDocument();
+  });
+
+  it('lists the delisted agents: they keep working, no updates will come', async () => {
+    vi.mocked(api.catalogue).mockResolvedValue({ ...VIEW, delisted: [{ agentId: 'gardener', handle: 'garden', name: 'Gardener', package: 'gardener', version: '1.0.0' }] });
+    render(<Harness />);
+    const list = await screen.findByTestId('cat-delisted');
+    expect(within(list).getByText('Gardener')).toBeInTheDocument();
+    expect(within(list).getByText('@garden keeps working as it is; no updates will come.')).toBeInTheDocument();
+    fireEvent.click(within(list).getByText('Gardener'));
+    expect(visited).toEqual(['#/agents/gardener']);
+  });
+
+  it('?add=1 opens the install sheet over the detail page (the front desk\'s "Add Chef")', async () => {
+    vi.mocked(api.cataloguePlan).mockResolvedValue(PLAN);
+    window.location.hash = '#/agents/catalogue/cfo?add=1';
+    try {
+      render(<Harness name="cfo" />);
+      expect(await screen.findByRole('heading', { level: 1, name: 'CFO' })).toBeInTheDocument();
+      await waitFor(() => expect(api.cataloguePlan).toHaveBeenCalled());
+      expect(vi.mocked(api.cataloguePlan).mock.calls[0]?.[0]).toBe('cfo');
+    } finally {
+      window.location.hash = '';
+    }
+  });
+
+  it("an agent's page draws its catalogue line from /api/agents, and fetches the list only for the update sheet", async () => {
+    const navigate = vi.fn();
+    const { unmount } = render(
+      <CatalogueLine entry={{ agentId: 'writer', source: 'market', package: 'writer', title: 'Writer', version: '1.0.0', latest: '1.1.0', drift: 'update', delisted: false }} navigate={navigate} onUpdated={() => {}} />,
+    );
+    expect(screen.getByText('From the catalogue')).toBeInTheDocument();
+    expect(api.catalogue).not.toHaveBeenCalled();
+    vi.mocked(api.catalogueUpdatePlan).mockReturnValue(new Promise(() => {}));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update to 1.1' })); });
+    expect(api.catalogue).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.catalogueUpdatePlan).toHaveBeenCalledWith('writer', 'writer'));
+    unmount();
+    render(
+      <CatalogueLine entry={{ agentId: 'gardener', source: 'market', package: 'gardener', title: 'Gardener', version: '1.0.0', latest: null, drift: 'current', delisted: true }} navigate={navigate} onUpdated={() => {}} />,
+    );
+    expect(screen.getByText('No longer in the catalogue')).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+});
+
 describe('the detail page', () => {
   it('shows the sections: what it does, ask it (off until added), skills read-only, reach, missions off, plugins', async () => {
     render(<Harness name="chief-of-staff" />);
@@ -205,8 +261,13 @@ describe('the detail page', () => {
     expect(screen.getByText('Once it’s on your team, a tap opens a chat with it.')).toBeInTheDocument();
     const skills = screen.getByTestId('cat-skills');
     expect(within(skills).getByText('Morning brief')).toBeInTheDocument();
+    expect(within(skills).getByText('How the morning brief is written.')).toBeInTheDocument();
     expect(within(skills).getByText('Draft a reply')).toBeInTheDocument();
     expect(within(skills).queryByRole('button')).not.toBeInTheDocument();
+    // Each opens to its text, read-only.
+    expect(within(skills).getByText('Lead with what needs you today.')).not.toBeVisible();
+    fireEvent.click(within(skills).getAllByText('Read it')[0]!);
+    expect(within(skills).getByText('Lead with what needs you today.')).toBeVisible();
     expect(screen.getByText('Reads and searches your mail. Writes drafts; you send them.')).toBeInTheDocument();
     expect(screen.getByText('Every day at 08:00')).toBeInTheDocument();
     expect(screen.getByText('off until you turn it on')).toBeInTheDocument();

@@ -73,12 +73,16 @@ function rows(value: unknown): Array<Record<string, unknown>> {
 
 export function createCatalogueService(deps: CatalogueSourceDeps): CatalogueService {
   const market: MarketDeps = { env: deps.env, log: deps.log, now: deps.now, ...(deps.fetch ? { fetch: deps.fetch } : {}) };
+  let read: { fetchedAt: string; index: unknown; packages: AgentPackage[]; problems: string[] } | undefined;
   return {
     async load(opts = {}): Promise<LoadedCatalogue> {
-      const loaded = await loadMarketIndex(market, opts.refresh === true ? { refresh: true } : {});
+      const loaded = await loadMarketIndex(market, opts.refresh === true ? { refresh: true } : opts.cachedOnly === true ? { cachedOnly: true } : {});
       if ('unavailable' in loaded) return { unavailable: loaded.unavailable };
-      const { packages, problems } = readPackages(loaded.index as unknown as Record<string, unknown>, deps.log);
-      return { fetchedAt: loaded.fetchedAt, stale: loaded.stale, packages, problems };
+      // Read once per copy: an agent's page asks on every load, and each read hashes every package.
+      if (read?.fetchedAt !== loaded.fetchedAt || read.index !== loaded.index) {
+        read = { fetchedAt: loaded.fetchedAt, index: loaded.index, ...readPackages(loaded.index as unknown as Record<string, unknown>, deps.log) };
+      }
+      return { fetchedAt: loaded.fetchedAt, stale: loaded.stale, packages: read.packages, problems: read.problems };
     },
     async choices(): Promise<FillChoices> {
       const mail = await queryData(deps, 'email', 'accounts');

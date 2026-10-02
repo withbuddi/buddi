@@ -289,7 +289,9 @@ any other agent only the colleagues ticked there).
 
 An agent that came from the catalogue says so under its name ("From the
 catalogue · Chef 1.0"), with **Update to 1.1** when a newer version is out, or
-**See what changed** when you edited its file. **Remove from team**, at the foot
+**See what changed** when you edited its file; giving it a skill or taking one
+away is not an edit. One the catalogue no longer lists says "No longer in the
+catalogue": it keeps working, and no update will come. **Remove from team**, at the foot
 of Setup, shows what it does before it does it: the folder goes to the trash
 folder, its missions are paused, and the plugins no other agent uses are named
 (they stay installed); the click is the approval. The front desk and the maker
@@ -340,14 +342,16 @@ No match says "No teammate for that yet" with **Show all** and **Ask Agent
 Father**, which opens the maker's chat with your words in the composer.
 Loading draws quiet cards; with no connection and no saved copy the page says
 the catalogue needs withbuddi.com, with **Try again**; a copy kept from before
-says so in the quiet line.
+says so in the quiet line. A card that reads mail says "Uses your mailbox" once
+one is connected. Agents you added that the catalogue no longer lists sit under
+**No longer in the catalogue**; they keep working.
 
 A card opens its page, `#/agents/catalogue/<name>` (the link withbuddi.com's
 "Add in buddi" opens): the picture, pitch, by buddi, category and version, and
 **Add <name>** on the right (**Open chat** once added). Then: What it does; Ask
 it (the three examples; once added a tap opens a chat with the ask in the
-composer); Skills (its text skills, read-only, editable on its Skills tab once
-added); What it can reach, family by family in words; Missions ("off until you
+composer); Skills (each titled with what it is for, **Read it** opening its
+text; editable on its Skills tab once added); What it can reach, family by family in words; Missions ("off until you
 turn it on"); Plugins (needed or better-with, each with its state or its one
 fix); Version.
 

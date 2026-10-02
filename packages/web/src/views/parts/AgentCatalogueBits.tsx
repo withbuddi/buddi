@@ -5,36 +5,65 @@
  * team at the foot of Setup, which shows what removing does before it does it.
  */
 import { useState } from 'react';
-import { api, AGENTS_CHANGED, ApiError, type AgentRemovePreview, type CatalogueAgent } from '../../api';
+import { api, AGENTS_CHANGED, ApiError, type AgentCatalogueProvenance, type AgentRemovePreview, type CatalogueAgent } from '../../api';
 import { AGENTS_ROUTE, catalogueRoute, settingsRoute } from '../../routes';
 import { Button, ErrorBanner, Modal, Panel, Toolbar, useAsync } from '../../ui';
-import { cardState } from '../Catalogue';
 import { UpdateSheet } from './CatalogueSheets';
 import { and, pluginTitle, shortVersion } from './catalogue-words';
 
-/** The package an agent came from, when the catalogue lists one for it. */
-export function useCatalogueEntryFor(agentId: string): { entry: CatalogueAgent | undefined; reload: () => void } {
-  const read = useAsync(() => api.catalogue(), [agentId]);
-  return { entry: read.data?.agents.find((a) => a.installed?.agentId === agentId), reload: read.reload };
+/** Where an agent from the catalogue stands, from `GET /api/agents`: no catalogue fetch. */
+export type AgentFromCatalogue = AgentCatalogueProvenance & { agentId: string };
+
+/** The package an agent came from, when it came from the catalogue. */
+export function useCatalogueEntryFor(agentId: string): { entry: AgentFromCatalogue | undefined; reload: () => void } {
+  const read = useAsync(() => api.agents(), [agentId]);
+  const found = read.data?.catalogue?.[agentId];
+  return { entry: found ? { ...found, agentId } : undefined, reload: read.reload };
 }
 
-/** "From the catalogue · Chef 1.0.0", and Update or See what changed when a newer version is out. */
-export function CatalogueLine({ entry, navigate, onUpdated }: { entry: CatalogueAgent; navigate: (route: string) => void; onUpdated: () => void }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const state = cardState(entry);
-  const installed = entry.installed!;
+/**
+ * "From the catalogue · Chef 1.0.0", and Update or See what changed when a
+ * newer version is out; "No longer in the catalogue" when it was delisted. The
+ * listing is fetched only when the owner opens the update sheet.
+ */
+export function CatalogueLine({ entry, navigate, onUpdated }: { entry: AgentFromCatalogue; navigate: (route: string) => void; onUpdated: () => void }): JSX.Element {
+  const [listing, setListing] = useState<CatalogueAgent | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const offered = entry.delisted ? null : entry.drift === 'update' ? 'update' : entry.drift === 'edited-update' && !entry.via ? 'edited' : null;
+  const open = (): void => {
+    setOpening(true);
+    setFailure(null);
+    api
+      .catalogue()
+      .then((view) => {
+        const found = view.agents.find((a) => a.name === entry.package);
+        if (found) setListing(found);
+        else setFailure(view.unavailable ?? `The catalogue no longer lists ${entry.title}.`);
+      })
+      .catch((err: unknown) => setFailure(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setOpening(false));
+  };
   return (
-    <p className="agent-catalogue-line" data-testid="agent-catalogue-line">
-      <a href={catalogueRoute(entry.name)} onClick={(e) => { e.preventDefault(); navigate(catalogueRoute(entry.name)); }}>From the catalogue</a>
+    <>
+    <p className="agent-catalogue-line" data-testid="agent-catalogue-line" data-delisted={entry.delisted ? 'true' : undefined}>
+      {entry.delisted ? (
+        <span>No longer in the catalogue</span>
+      ) : (
+        <a href={catalogueRoute(entry.package)} onClick={(e) => { e.preventDefault(); navigate(catalogueRoute(entry.package)); }}>From the catalogue</a>
+      )}
       <span aria-hidden="true"> · </span>
-      <span>{entry.title} {installed.via ? `(was @${installed.handle})` : shortVersion(installed.version)}</span>
-      {state === 'update' || state === 'edited' ? (
-        <Button size="sm" variant={state === 'update' ? 'accent' : undefined} onClick={() => setOpen(true)}>
-          {state === 'update' ? `Update to ${shortVersion(entry.version)}` : 'See what changed'}
+      <span>{entry.title} {entry.via ? `(was ${entry.via.split('/')[1] ?? entry.via})` : shortVersion(entry.version)}</span>
+      {entry.delisted ? <span className="muted"> · it keeps working; no updates will come</span> : null}
+      {offered ? (
+        <Button size="sm" variant={offered === 'update' ? 'accent' : undefined} disabled={opening} onClick={open}>
+          {offered === 'update' && entry.latest ? `Update to ${shortVersion(entry.latest)}` : offered === 'update' ? 'Update' : 'See what changed'}
         </Button>
       ) : null}
-      {open ? <UpdateSheet entry={entry} agentId={installed.agentId} onClose={() => setOpen(false)} onUpdated={onUpdated} /> : null}
     </p>
+    {failure ? <ErrorBanner message={failure} /> : null}
+    {listing ? <UpdateSheet entry={listing} agentId={entry.agentId} onClose={() => setListing(null)} onUpdated={onUpdated} /> : null}
+    </>
   );
 }
 

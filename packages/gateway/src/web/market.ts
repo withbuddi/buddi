@@ -356,13 +356,18 @@ export type LoadedMarket =
  * that fails with a copy on hand answers the copy, marked `stale`; with none,
  * the sentence. Browse and first run's chapter 3 both read it here.
  */
-export async function loadMarketIndex(deps: MarketDeps, opts: { refresh?: boolean } = {}): Promise<LoadedMarket> {
+export async function loadMarketIndex(deps: MarketDeps, opts: { refresh?: boolean; cachedOnly?: boolean } = {}): Promise<LoadedMarket> {
   const now = deps.now ?? ((): Date => new Date());
   const file = marketFile(deps.env);
   let cached = memory.get(file) ?? readDisk(file);
   if (cached !== undefined) memory.set(file, cached);
   const fresh =
     cached !== undefined && now().getTime() - Date.parse(cached.fetchedAt) < MARKET_TTL_MS;
+  // A read that must not reach withbuddi.com (an agent's page): the kept copy, however old, or nothing.
+  if (opts.cachedOnly === true) {
+    if (cached === undefined) return { unavailable: 'no copy of the list is kept yet' };
+    return { fetchedAt: cached.fetchedAt, stale: !fresh, index: cached.index };
+  }
   let stale = false;
   if (opts.refresh === true || !fresh) {
     try {

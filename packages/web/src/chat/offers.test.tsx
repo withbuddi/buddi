@@ -29,7 +29,7 @@ const props: ChatPageProps = {
 const later = (): string => new Date(Date.now() + 3_600_000).toISOString();
 const earlier = (): string => new Date(Date.now() - 1_000).toISOString();
 
-const conversation = (offers: { id: string; label: string; prompt: string; expiresAt: string }[]) => ({
+const conversation = (offers: { id: string; label: string; prompt: string; expiresAt: string; handoff?: { kind: 'install'; package: string; title: string } | { kind: 'maker'; agentId: string } }[]) => ({
   conversationId: 'c2',
   agentId: 'keeper',
   messages: [{ id: 'm1', role: 'assistant', at: '', blocks: [{ type: 'text' as const, text: "The draft is ready." }] }],
@@ -92,6 +92,32 @@ describe('taking a chip', () => {
     render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
     expect(await screen.findByRole('button', { name: 'Edit the draft' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Send it' })).not.toBeInTheDocument();
+  });
+});
+
+describe("the front desk's handoff", () => {
+  afterEach(() => { window.location.hash = ''; });
+
+  it('"Add Chef" opens the install sheet and claims nothing', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(
+      conversation([{ id: 'off-1', label: 'Add Chef', prompt: "Open Chef's install sheet.", expiresAt: later(), handoff: { kind: 'install', package: 'chef', title: 'Chef' } }]),
+    );
+    const take = vi.spyOn(api, 'takeOffer');
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add Chef' }));
+    expect(window.location.hash).toBe('#/agents/catalogue/chef?add=1');
+    expect(take).not.toHaveBeenCalled();
+  });
+
+  it('"Continue with Agent Father" takes it once and follows the request to the maker', async () => {
+    vi.spyOn(chatApi, 'conversation').mockResolvedValue(
+      conversation([{ id: 'off-2', label: 'Continue with Agent Father', prompt: 'I want an agent that tracks my plants', expiresAt: later(), handoff: { kind: 'maker', agentId: 'agent-father' } }]),
+    );
+    const take = vi.spyOn(api, 'takeOffer').mockResolvedValue({ id: 'off-2', label: 'Continue with Agent Father', jobId: null, agentId: 'agent-father', conversationId: 'f1', runId: 'r1' });
+    render(<Tooltip.Provider><ChatPage {...props} /></Tooltip.Provider>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue with Agent Father' }));
+    expect(take).toHaveBeenCalledWith('off-2', 'c2');
+    await waitFor(() => expect(window.location.hash).toBe('#/chat/agent-father/f1'));
   });
 });
 

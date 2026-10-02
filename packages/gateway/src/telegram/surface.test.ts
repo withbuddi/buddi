@@ -462,6 +462,18 @@ class FakeDb implements Queryable {
       for (const offer of withdrawn) offer.expires_at = params[1];
       return { rows: withdrawn.map((o) => ({ id: o.id })) };
     }
+    // The claim-once take, and one offer by id (getOffer).
+    if (text.startsWith('update core.offers set taken_at')) {
+      const row = this.offers.find((o) => o.id === params[0] && o.taken_at === null && o.lapsed_at == null && o.dismissed_at == null);
+      if (!row) return { rows: [] };
+      row.taken_at = params[1];
+      row.taken_via = params[2];
+      return { rows: [row] };
+    }
+    if (text.startsWith('select id, agent_id, conversation_id, label, prompt') && text.includes('where id = $1')) {
+      const row = this.offers.find((o) => o.id === params[0]);
+      return { rows: row ? [row] : [] };
+    }
     if (text.startsWith('update core.offers')) return { rows: [] };
     throw new Error(`FakeDb: unexpected sql: ${text}`);
   }
@@ -4009,5 +4021,89 @@ describe('voice on Telegram', () => {
     await surface.drain();
     expect(speech.said).toEqual([]);
     expect(sent.some((s) => s.method === 'sendVoice')).toBe(false);
+  });
+});
+
+/*
+ * The front desk's handoff (surfaces/handoff.ts): "Add Chef" is a link to the
+ * install sheet; "Continue with Agent Father" switches the chat to the maker
+ * and sends the request as the owner's turn, once, and only on the owner's tap.
+ */
+describe("the front desk's handoff buttons", () => {
+  const MAKER_OFFER = '33333333-3333-4333-8333-333333333333';
+  const INSTALL_OFFER = '44444444-4444-4444-8444-444444444444';
+  const row = (id: string, label: string, prompt: string, handoff: unknown) => ({
+    id, agent_id: 'concierge', conversation_id: 'conv-1', label, prompt,
+    created_at: new Date(), expires_at: new Date(Date.now() + 3_600_000),
+    taken_at: null, taken_via: null, taken_job_id: null, dismissed_at: null, lapsed_at: null, lapse_reason: null,
+    handoff,
+  });
+  const tapOffer = (id: string, fromId = OWNER, updateId = 800): TelegramUpdate => ({
+    update_id: updateId,
+    callback_query: {
+      id: `cb-${updateId}`,
+      from: { id: fromId },
+      data: telegramSurface.offerCallbackData(id),
+      message: { message_id: 88, chat: { id: OWNER, type: 'private' } },
+    },
+  } as unknown as TelegramUpdate);
+
+  it('draws "Add Chef" as a link to its install sheet when the phone can reach the dashboard, else as a tap', () => {
+    const offers = [{
+      id: INSTALL_OFFER, agentId: 'concierge', conversationId: 'conv-1', label: 'Add Chef', prompt: "Open Chef's install sheet.",
+      createdAt: '', expiresAt: '', takenAt: null, takenVia: null, takenJobId: null, dismissedAt: null, lapsedAt: null, lapseReason: null,
+      handoff: { kind: 'install' as const, package: 'chef', title: 'Chef' },
+    }];
+    const url = (pkg: string) => telegramSurface.catalogueInstallUrl('https://box.tailnet.ts.net:9443', pkg);
+    expect(telegramSurface.offersKeyboard(offers, url).inline_keyboard).toEqual([
+      [{ text: 'Add Chef', url: 'https://box.tailnet.ts.net:9443/#/agents/catalogue/chef?add=1' }],
+    ]);
+    expect(telegramSurface.offersKeyboard(offers, () => undefined).inline_keyboard).toEqual([
+      [{ text: 'Add Chef', callback_data: `off:${INSTALL_OFFER}` }],
+    ]);
+  });
+
+  it('a tap on "Add Chef" without a link says where to add it, and claims and runs nothing', async () => {
+    const db = withOwner(new FakeDb());
+    db.offers.push(row(INSTALL_OFFER, 'Add Chef', "Open Chef's install sheet.", { kind: 'install', package: 'chef', title: 'Chef' }));
+    const run = vi.fn(async (_req?: any) => 'reply');
+    const { surface, sent } = surfaceWith(db, run);
+    await surface.processUpdates([tapOffer(INSTALL_OFFER)]);
+    await surface.drain();
+    expect(run).not.toHaveBeenCalled();
+    expect(db.offers[0].taken_at).toBeNull();
+    expect(lastText(sent)).toBe(telegramSurface.installWhereText('Chef'));
+  });
+
+  it('"Continue with Agent Father" switches the chat to the maker and sends the request once', async () => {
+    const db = withOwner(new FakeDb());
+    db.offers.push(row(MAKER_OFFER, 'Continue with Agent Father', 'I want an agent that tracks my plants', { kind: 'maker', agentId: 'agent-father' }));
+    const menus: string[] = [];
+    const run = vi.fn(async (_req?: any) => 'What should it remind you about?');
+    const { surface, sent } = surfaceWith(db, run, {
+      catalog: fakeCatalog([FINANCE, CONCIERGE, FATHER]),
+      setChatMenu: async (_chatId, agent) => { menus.push(agent.id); },
+    });
+    await surface.processUpdates([tapOffer(MAKER_OFFER, OWNER, 810), tapOffer(MAKER_OFFER, OWNER, 811)]);
+    await surface.drain();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0].agent.id).toBe('agent-father');
+    expect(run.mock.calls[0]?.[0].text).toBe('I want an agent that tracks my plants');
+    expect(db.activeAgents.get(String(OWNER))).toBe('agent-father');
+    expect(menus).toEqual(['agent-father']);
+    expect(sent.some((s) => s.method === 'sendMessage' && s.body.text === telegramSurface.handedOffText('Agent Father'))).toBe(true);
+    expect(sent.find((s) => s.method === 'editMessageReplyMarkup')?.body).toMatchObject({ message_id: 88, reply_markup: { inline_keyboard: [] } });
+  });
+
+  it("refuses a stranger's tap on it, and switches and runs nothing", async () => {
+    const db = withOwner(new FakeDb());
+    db.offers.push(row(MAKER_OFFER, 'Continue with Agent Father', 'I want an agent that tracks my plants', { kind: 'maker', agentId: 'agent-father' }));
+    const run = vi.fn(async (_req?: any) => 'reply');
+    const { surface } = surfaceWith(db, run, { catalog: fakeCatalog([FINANCE, CONCIERGE, FATHER]) });
+    await surface.processUpdates([tapOffer(MAKER_OFFER, 5150, 820)]);
+    await surface.drain();
+    expect(run).not.toHaveBeenCalled();
+    expect(db.activeAgents.get(String(OWNER))).toBeUndefined();
+    expect(db.offers[0].taken_at).toBeNull();
   });
 });

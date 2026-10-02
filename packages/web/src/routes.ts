@@ -127,6 +127,17 @@ export function catalogueRoute(name?: string | null): string {
   return name ? `${CATALOGUE_ROUTE}/${encodeURIComponent(name)}` : CATALOGUE_ROUTE;
 }
 
+/** A package's page with its install sheet open (the front desk's "Add Chef", Telegram's link). */
+export function catalogueInstallRoute(name: string): string {
+  return `${catalogueRoute(name)}?add=1`;
+}
+
+/** Does this hash ask for this package's install sheet open (`?add=1`)? */
+export function catalogueAddRequested(hash: string, name: string): boolean {
+  const match = /^#\/agents\/catalogue\/([a-z0-9-]+)\?(?:.*&)?add=1(?:&|$)/.exec(hash);
+  return match?.[1] === name;
+}
+
 export function parseCatalogueRoute(hash: string): { name?: string } | null {
   const match = /^#\/agents\/catalogue(?:\/([a-z0-9-]+))?(?:\?.*)?$/.exec(hash);
   if (!match) return null;

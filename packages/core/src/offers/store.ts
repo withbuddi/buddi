@@ -68,7 +68,7 @@ export function normalizeOffers(
     const key = label.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ label, prompt });
+    out.push({ label, prompt, ...(action.handoff ? { handoff: action.handoff } : {}) });
     if (out.length >= MAX_OFFERS) break;
   }
   return out;
@@ -108,10 +108,10 @@ export async function offerActions(
   const stored: Offer[] = [];
   for (const action of actions) {
     const { rows } = await pool.query(
-      `insert into core.offers (agent_id, conversation_id, label, prompt, created_at, expires_at)
-       values ($1, $2, $3, $4, $5, $6)
+      `insert into core.offers (agent_id, conversation_id, label, prompt, created_at, expires_at, handoff)
+       values ($1, $2, $3, $4, $5, $6, $7)
        returning ${OFFER_COLUMNS}`,
-      [agentId, input.conversationId ?? null, action.label, action.prompt, input.now, expiresAt],
+      [agentId, input.conversationId ?? null, action.label, action.prompt, input.now, expiresAt, action.handoff ? JSON.stringify(action.handoff) : null],
     );
     const row = rows[0];
     if (!row) throw new Error('offerActions: insert returned no row');
@@ -145,6 +145,10 @@ export async function listOpenOffers(
   if (opts.conversationId) {
     params.push(opts.conversationId);
     where.push(`conversation_id = $${params.length}`);
+  } else {
+    // A handoff ("Add Chef", "Continue with Agent Father") belongs under the
+    // turn that made it; out of its thread it is not a thing to take.
+    where.push('handoff is null');
   }
   params.push(Math.min(Math.max(1, Math.trunc(opts.limit ?? 20)), 100));
   const { rows } = await pool.query(

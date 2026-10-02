@@ -16,6 +16,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import pngjs from 'pngjs';
 import {
+  applyFrontmatterPatch,
   CORE_MIGRATIONS_DIR,
   CORE_SCHEMA,
   createPool,
@@ -38,6 +39,7 @@ import { createToolRegistry, EXAMPLES_AGENTS_DIR, EXAMPLES_SKILLS_DIR, reloadabl
 import { bindPlatformTools, planCatalogueInstall } from '../agents/platform.js';
 import { composeProvenance } from '../plugins/provenance.js';
 import {
+  agentsCatalogue,
   catalogueJobSettled,
   catalogueRoute,
   installRoute,
@@ -245,7 +247,10 @@ suite('the agent catalogue', () => {
     ]);
     const body = await view();
     expect(body.agents.map((a: { name: string }) => a.name).sort()).toEqual(['gardener', 'painter', 'researcher']);
-    expect(await card('researcher')).toMatchObject({ state: 'ready', addable: true, skills: ['answering-with-sources'] });
+    expect(await card('researcher')).toMatchObject({ state: 'ready', addable: true, skills: [{ name: 'answering-with-sources', description: expect.any(String), text: expect.stringContaining('') }] });
+    expect((await card('researcher')).skills[0].text.length).toBeGreaterThan(0);
+    // No mailbox here, so no card says "Uses your mailbox".
+    expect(body.mailbox).toBe(false);
     expect(await card('gardener')).toMatchObject({
       state: 'needs',
       addable: true,
@@ -370,6 +375,47 @@ suite('the agent catalogue', () => {
     expect(file).toContain('handle: researcher-2');
     expect(JSON.parse(readFileSync(path.join(agentsDir, 'researcher', 'plugin.json'), 'utf8'))).toMatchObject({ version: '1.1.0' });
     expect(await card('researcher')).toMatchObject({ installed: { drift: 'current', version: '1.1.0' } });
+  });
+
+  it("a skill granted on the Skills page is not an owner edit: drift stays, an update keeps the grant", async () => {
+    const file = path.join(agentsDir, 'researcher', 'agent.md');
+    // What the Skills page writes: the `skills:` line, and nothing else.
+    writeFileSync(file, applyFrontmatterPatch(readFileSync(file, 'utf8'), { skills: ['writing-for-the-surface'] }, file));
+    catalog.reload();
+    expect(await card('researcher')).toMatchObject({ installed: { drift: 'current', version: '1.1.0' } });
+    expect((await agentsCatalogue(deps)).researcher).toMatchObject({ source: 'market', package: 'researcher', version: '1.1.0', latest: '1.1.0', drift: 'current', delisted: false });
+
+    publish([
+      agentEntry('researcher', {
+        persona: `${RESEARCHER_PERSONA}\n- Say what would change your mind.\n- Date every source.`,
+        skills: [{ file: 'answering-with-sources.md', text: RESEARCHER_SKILL }],
+        manifest: { version: '1.2.0', changes: 'Dates its sources.', tools: ['memory.*', 'reminder.*', 'owner.notify', 'schedule.*'] },
+      }),
+    ]);
+    // An update, not "you changed it": the grant is the owner's, not an edit of the package.
+    expect(await card('researcher')).toMatchObject({ installed: { drift: 'update' } });
+    expect((await updatePlanRoute(deps, 'researcher', { agentId: 'researcher' })).body).toMatchObject({ edited: false });
+    const done = await updateRoute(deps, 'researcher', { agentId: 'researcher' });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    const after = readFileSync(file, 'utf8');
+    expect(after).toContain('Date every source.');
+    expect(after).toMatch(/^skills: \[writing-for-the-surface\]$/m);
+    expect(await card('researcher')).toMatchObject({ installed: { drift: 'current', version: '1.2.0' } });
+
+    // Taking the grant away is not an edit either; changing the persona still is.
+    writeFileSync(file, applyFrontmatterPatch(readFileSync(file, 'utf8'), { skills: null }, file));
+    expect(await card('researcher')).toMatchObject({ installed: { drift: 'current' } });
+    writeFileSync(file, readFileSync(file, 'utf8').replace('Date every source.', 'Date every source, always.'));
+    expect((await agentsCatalogue(deps)).researcher).toMatchObject({ drift: 'edited' });
+    writeFileSync(file, readFileSync(file, 'utf8').replace('Date every source, always.', 'Date every source.'));
+  });
+
+  it('says an agent the catalogue no longer lists is delisted, on the list and on its own page', async () => {
+    publish([gardener()]);
+    const body = await view();
+    expect(body.delisted).toEqual(expect.arrayContaining([expect.objectContaining({ agentId: 'researcher', package: 'researcher', version: '1.2.0', name: expect.any(String) })]));
+    expect((await agentsCatalogue(deps)).researcher).toMatchObject({ delisted: true, latest: null, version: '1.2.0' });
+    expect((await agentsCatalogue(deps)).gardener).toMatchObject({ delisted: false, latest: '1.0.0' });
   });
 
   it('never touches a file the owner edited, unless they replace their changes (their file goes to the trash)', async () => {

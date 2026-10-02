@@ -30,7 +30,7 @@ import { ErrorBanner, Notice } from '../ui';
 import { BROWSER_TOOLS, browserSteps, conversationBrowser, endedBrowser, stepFor } from './browser';
 import { ConversationHistory } from './ConversationHistory';
 import { readDismissedTabs, storeDismissedTabs } from './dismissed-tabs';
-import { agentRoute, settingsRoute } from '../routes';
+import { agentRoute, catalogueInstallRoute, chatRoute, settingsRoute } from '../routes';
 import type { PreviewProps, Renderable, ViewDescriptor } from '../canvas/types';
 import { AgentRail } from '../shell/AgentRail';
 import { AgentAvatar, FaceMark, GradientField, Icon } from '../ui';
@@ -860,12 +860,24 @@ export function ChatPage({
    * shortened — an effect still comes back as the approval it always was.
    */
   const takeOffer = (id: string): void => {
+    const offer = openOffers.find((o) => o.id === id);
+    // The front desk's "Add Chef": the catalogue's install sheet, where adding is its own approval.
+    if (offer?.handoff?.kind === 'install') {
+      window.location.hash = catalogueInstallRoute(offer.handoff.package);
+      return;
+    }
     setError(null);
     setTakingOffer(id);
     setTakenOffers((taken) => [...taken, id]);
     api
       .takeOffer(id, conversationId ?? undefined)
       .then((result) => {
+        // "Continue with Agent Father": the request went to the maker as the
+        // owner's turn in a new conversation, so the page follows it there.
+        if (result.agentId && result.agentId !== agent?.id) {
+          window.location.hash = chatRoute(result.agentId, result.conversationId ?? null);
+          return;
+        }
         // Taken in this thread: it is a turn like any other, so the page waits
         // for it the way it waits for something typed — the label appears as
         // the owner's message and the answer streams in under it.
@@ -1368,7 +1380,8 @@ export function ChatPage({
                 key={offer.id}
                 className="ui-btn"
                 disabled={takingOffer !== null}
-                title={offer.prompt}
+                title={offer.handoff?.kind === 'install' ? `Opens ${offer.handoff.title}'s install sheet` : offer.prompt}
+                data-handoff={offer.handoff?.kind}
                 onClick={() => takeOffer(offer.id)}
               >
                 {offer.label}

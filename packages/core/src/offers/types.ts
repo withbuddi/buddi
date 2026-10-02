@@ -61,16 +61,31 @@ export const OFFER_FOLD_MS = 7 * 24 * 60 * 60_000;
  */
 export type LapseReason = 'owner-moved-on' | 'rolled-over' | 'agent-removed';
 
+/**
+ * Where a handoff offer takes the owner instead of asking its agent again
+ * (the front desk's "Add Chef" and "Continue with Agent Father"):
+ *
+ *  - `install`: the catalogue package's install sheet on the dashboard. Opening
+ *    it claims nothing; adding is the sheet's own approval.
+ *  - `maker`: the chat switches to that agent and the offer's `prompt` (the
+ *    owner's request) is sent as the owner's turn, once — only a tap does it.
+ */
+export type OfferHandoff =
+  | { kind: 'install'; package: string; title: string }
+  | { kind: 'maker'; agentId: string };
+
 /** What an agent offers, before it is stored. */
 export interface OfferedAction {
   /** What the owner reads: "Draft a reply", "Remind me tomorrow". */
   label: string;
   /** What the agent is asked when the owner takes it, in the owner's voice. */
   prompt: string;
+  /** Set only by the surface's handoff tool, never by `conversation.offer`. */
+  handoff?: OfferHandoff;
 }
 
 /** A stored offer: an `OfferedAction` with an id a surface can bind a tap to. */
-export interface Offer extends OfferedAction {
+export interface Offer extends Omit<OfferedAction, 'handoff'> {
   id: string;
   agentId: string;
   conversationId: string | null;
@@ -85,6 +100,8 @@ export interface Offer extends OfferedAction {
   lapsedAt: string | null;
   /** Which condition lapsed it, when one did. */
   lapseReason: LapseReason | null;
+  /** Where taking it goes instead of asking its agent; null for an ordinary offer. */
+  handoff: OfferHandoff | null;
 }
 
 /** Still on the table: nobody took it, refused it, or let it go stale. */
@@ -99,7 +116,26 @@ export function isOfferLive(offer: Offer, now: Date): boolean {
 
 export const OFFER_COLUMNS =
   'id, agent_id, conversation_id, label, prompt, created_at, expires_at, taken_at, ' +
-  'taken_via, taken_job_id, dismissed_at, lapsed_at, lapse_reason';
+  'taken_via, taken_job_id, dismissed_at, lapsed_at, lapse_reason, handoff';
+
+/** A stored handoff, read strictly: anything malformed is an ordinary offer's null. */
+export function toHandoff(value: unknown): OfferHandoff | null {
+  let raw = value;
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (raw === null || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (r.kind === 'install' && typeof r.package === 'string' && typeof r.title === 'string') {
+    return { kind: 'install', package: r.package, title: r.title };
+  }
+  if (r.kind === 'maker' && typeof r.agentId === 'string') return { kind: 'maker', agentId: r.agentId };
+  return null;
+}
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -125,6 +161,7 @@ export function toOffer(row: Record<string, any>): Offer {
     dismissedAt: iso(row.dismissed_at),
     lapsedAt: iso(row.lapsed_at),
     lapseReason: (row.lapse_reason ?? null) as LapseReason | null,
+    handoff: toHandoff(row.handoff),
   };
 }
 

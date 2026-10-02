@@ -48,6 +48,7 @@ import { agentSearchPath, builtInManifests } from '../agents/catalog.js';
 import { createMissionManifest } from '../missions/report.js';
 import { createAskManifest } from '../surfaces/pending-question.js';
 import { createOfferManifest } from '../surfaces/offered-actions.js';
+import { createHandoffManifest } from '../surfaces/handoff.js';
 
 /**
  * The families that are *not* in the base registry: they are registered onto a
@@ -66,7 +67,12 @@ export function perRunManifests(): PluginManifest[] {
   // writes its decision into, and nothing here ever calls `execute`. What is
   // wanted is the shape — the family name and the tool names — from the same
   // factories the runs use, so this cannot fall behind them either.
-  return [createMissionManifest({}), createAskManifest({}), createOfferManifest({})];
+  return [
+    createMissionManifest({}),
+    createAskManifest({}),
+    createOfferManifest({}),
+    createHandoffManifest({}, { maker: () => undefined, listed: async () => undefined }),
+  ];
 }
 
 /** Memoised per `env` object, like the search path: building a registry is real work. */

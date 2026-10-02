@@ -58,6 +58,7 @@ function offer(id: string, label: string, prompt: string): Offer {
     dismissedAt: null,
     lapsedAt: null,
     lapseReason: null,
+    handoff: null,
   };
 }
 

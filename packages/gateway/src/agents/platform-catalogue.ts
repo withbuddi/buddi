@@ -27,6 +27,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import {
   AGENT_FILE,
+  applyFrontmatterPatch,
   assertApprovedEffect,
   getMission,
   HANDLE_MAX,
@@ -59,7 +60,7 @@ import {
   type FilledPick,
   type PackageNeed,
 } from './catalogue-package.js';
-import { composeProvenance, readProvenance, PROVENANCE_FILE, type AgentProvenance } from '../plugins/provenance.js';
+import { composeProvenance, fileEdited, packageOwnedText, readProvenance, PROVENANCE_FILE, type AgentProvenance } from '../plugins/provenance.js';
 import { composeAgentFile, composeSkillFile, createAgentDirAtomic, trashStamp, writeFilesAtomic } from './platform-files.js';
 import { diffGrant, grantChangeBlock } from './platform-grant.js';
 import { agentMissionId, describeCadence } from '../missions/reminders.js';
@@ -86,8 +87,11 @@ export type LoadedCatalogue =
   | { unavailable: string };
 
 export interface CatalogueService {
-  /** The listed packages, each read strictly; listings refused are in `problems`. */
-  load(opts?: { refresh?: boolean }): Promise<LoadedCatalogue>;
+  /**
+   * The listed packages, each read strictly; listings refused are in `problems`.
+   * `cachedOnly`: the kept copy however old, never a fetch (an agent's page).
+   */
+  load(opts?: { refresh?: boolean; cachedOnly?: boolean }): Promise<LoadedCatalogue>;
   choices(): Promise<FillChoices>;
   /** Which requirements that are not plugins are met here. */
   needs(): Promise<Record<PackageNeed, boolean>>;
@@ -187,7 +191,8 @@ export function addedAgents(agentsDir: string): AddedAgent[] {
     if (!provenance) continue;
     let edited = true;
     try {
-      edited = provenance.file === '' || provenance.file !== fileHash(readFileSync(file, 'utf8')) || editedSkills(dir, provenance).length > 0;
+      // The `skills:` grants are the owner's, not the package's: they never count here.
+      edited = fileEdited(provenance.file, readFileSync(file, 'utf8')) || editedSkills(dir, provenance).length > 0;
     } catch {
       edited = true;
     }
@@ -781,7 +786,7 @@ async function buildUpdate(
   const declared = [...m.tools];
   const tools = helpers.checkTools(declared, registry, agent.id);
   checkDenied(pkg, tools);
-  const content = composeAgentFile({
+  const composed = composeAgentFile({
     id: agent.id,
     handle: agent.handle,
     name: m.title,
@@ -793,6 +798,9 @@ async function buildUpdate(
     ...(m.roles === undefined || m.roles.length === 0 ? {} : { roles: [...m.roles] }),
     persona,
   });
+  // The skills the owner granted it are theirs, not the package's: an update keeps them.
+  const granted = before.frontmatter.skills ?? [];
+  const content = granted.length === 0 ? composed : applyFrontmatterPatch(composed, { skills: [...granted] }, agent.file);
   try {
     parseAgentFile(content, { dirName: agent.id });
   } catch (err) {
@@ -1117,7 +1125,8 @@ export function createCatalogueTools(
         agent: envelope.package.name,
         acceptedAt: ctx.now(),
         proposal: envelope.package.integrity,
-        file: envelope.content,
+        // Hashed without the owner's `skills:` grants, which an update carries over.
+        file: packageOwnedText(envelope.content),
         fills: pickRecord(envelope.picks),
         skills: Object.fromEntries(envelope.skills.map((skill) => [skill.name, skill.content])),
       });

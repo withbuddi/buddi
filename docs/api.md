@@ -150,7 +150,7 @@ curl -N -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/chat/conversatio
 
 ## Routes
 
-281 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
+280 routes in 22 areas. Paths are under the dashboard's address; `:name` is a path parameter.
 **Token** says whether an API token may call the route; where it may not, the example uses a dashboard session.
 **Since** is the first release with the route; 0.1.0-pre.15 is the earliest release in the public history, so it also stands for earlier.
 
@@ -1130,7 +1130,7 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 | Method | Path | What it does | Token |
 | --- | --- | --- | --- |
-| GET | `/api/agents` | Every agent, their engines, the model accounts and which agent is the default. | yes |
+| GET | `/api/agents` | Every agent, their engines, the model accounts, which agent is the default, and which came from the catalogue (package, version, the listed version, drift, delisted; read from the kept list, never fetched). | yes |
 | POST | `/api/agents/default` | Make an agent the default (where a chat that names nobody lands). | yes |
 | GET | `/api/agents/:id/profile` | One agent whole: its grant with every tool's tier, engine, skills, delegates. | yes |
 | GET | `/api/agents/:id/skills` | Every skill the agent loads; learned ones with their versions. | yes |
@@ -1152,7 +1152,6 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 | GET | `/api/agents/:id/avatar` | The agent's picture (PNG, or the file its front matter names). | yes |
 | POST | `/api/agents/:id/avatar` | Upload a picture: PNG, GIF or SVG, at most 1 MB, made square. | yes |
 | DELETE | `/api/agents/:id/avatar` | Remove the uploaded picture; the agent's icon is drawn again. | yes |
-| GET | `/api/teammates` | The agents installed plugins propose with an offer line, each added, addable, or why not. The catalogue replaces it. | yes |
 | GET | `/api/catalogue` | The agent catalogue from withbuddi.com, each package with where it stands here; fetched when stale, the kept copy offline. | yes |
 | POST | `/api/catalogue/:name/plan` | What adding this agent would do, writing nothing: plugins installed on the way, picks with defaults and choices, the handle, tools with tiers, missions, the approval preview. | yes |
 | POST | `/api/catalogue/:name/install` | Add this agent: missing by-buddi plugins are installed on the way, then the agent; the click is the approval. | no |
@@ -1166,10 +1165,10 @@ curl -X POST -H "Authorization: Bearer $BUDDI_TOKEN" -H "Content-Type: applicati
 
 #### `GET /api/agents`
 
-Every agent, their engines, the model accounts and which agent is the default.
+Every agent, their engines, the model accounts, which agent is the default, and which came from the catalogue (package, version, the listed version, drift, delisted; read from the kept list, never fetched).
 
 - **Auth:** Session or API token.
-- **Answer:** `{ agents: AgentView[], engines, providers, providerAccounts, default }`
+- **Answer:** `{ agents: AgentView[], engines, providers, providerAccounts, default, catalogue: { [agentId]: { source, package, title, version, latest, drift, delisted, via? } } }`
 - **Since:** 0.1.0-pre.15
 
 ```sh
@@ -1460,25 +1459,13 @@ Remove the uploaded picture; the agent's icon is drawn again.
 curl -X DELETE -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/agents/<id>/avatar"
 ```
 
-#### `GET /api/teammates`
-
-The agents installed plugins propose with an offer line, each added, addable, or why not. The catalogue replaces it.
-
-- **Auth:** Session or API token.
-- **Answer:** JSON
-- **Since:** 0.1.0-pre.22
-
-```sh
-curl -H "Authorization: Bearer $BUDDI_TOKEN" "$BUDDI_URL/api/teammates"
-```
-
 #### `GET /api/catalogue`
 
 The agent catalogue from withbuddi.com, each package with where it stands here; fetched when stale, the kept copy offline.
 
 - **Auth:** Session or API token.
 - **Query:** `refresh?: 1`
-- **Answer:** `{ fetchedAt, stale?, agents: [{ name, version, handle, title, pitch, description, about, category, trust, author, requires, optional, needs, tools, missions: [{ id, name, cron, when, prompt }], fills: [{ id, kind, label, optional, default }], examples, skills, changes, replaces, avatar, page, claims?, state: ready|needs|installed|unavailable, missing?: [{ kind: plugin, name, range, fix, title, listed, byBuddi } | { kind: need, name, fix }], installed?: { agentId, handle, version, drift: current|update|edited|edited-update, via? }, reason?, addable }], fromPlugins: [{ plugin, agent, handle, name, text, state }], delisted: [{ agentId, handle, package, version }], problems?, unavailable? }`
+- **Answer:** `{ fetchedAt, stale?, agents: [{ name, version, handle, title, pitch, description, about, category, trust, author, requires, optional, needs, tools, missions: [{ id, name, cron, when, prompt }], fills: [{ id, kind, label, optional, default }], examples, skills: [{ name, description, text }], changes, replaces, avatar, page, claims?, state: ready|needs|installed|unavailable, missing?: [{ kind: plugin, name, range, fix, title, listed, byBuddi } | { kind: need, name, fix }], installed?: { agentId, handle, version, drift: current|update|edited|edited-update, via? }, reason?, addable }], fromPlugins: [{ plugin, agent, handle, name, text, state }], delisted: [{ agentId, handle, name, package, version }], mailbox, problems?, unavailable? }`
 - **Since:** unreleased
 
 ```sh

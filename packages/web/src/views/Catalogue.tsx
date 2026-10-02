@@ -11,13 +11,13 @@
  * What leaves this computer: opening the page asks the gateway for the list,
  * and the gateway fetches it from withbuddi.com when its copy is a day old.
  */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, AGENTS_CHANGED, type CatalogueAgent, type CatalogueView, type CataloguePluginAgent } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { leaveDraft } from '../chat/draft';
-import { AGENTS_ROUTE, agentRoute, catalogueRoute, chatRoute } from '../routes';
+import { AGENTS_ROUTE, agentRoute, catalogueAddRequested, catalogueRoute, chatRoute } from '../routes';
 import { ROLE_MAKER } from '../shell/roster';
-import { Avatar, Breadcrumb, Button, Card, Empty, ErrorBanner, FilterChips, Icon, Notice, Page, PageHeader, Panel, Pill, SearchField, Spacer, useAsync } from '../ui';
+import { Avatar, Breadcrumb, Button, Card, Code, Details, Empty, ErrorBanner, FilterChips, Icon, Notice, Page, PageHeader, Panel, Pill, SearchField, Spacer, useAsync } from '../ui';
 import { useAcceptPluginAgent } from './parts/AgentOffer';
 import { pluginTitle as pagesTitle, type PluginPages } from '../pages/usePages';
 import { CatFace } from './parts/CatFace';
@@ -78,7 +78,7 @@ function CheckGlyph(): JSX.Element {
 }
 
 /** Under a card: what is missing as one warning chip ("Needs Finance"), else what it uses, in muted words. */
-export function CatChips({ entry, loaded }: { entry: CatalogueAgent; loaded: ReadonlySet<string> }): JSX.Element | null {
+export function CatChips({ entry, loaded, mailbox }: { entry: CatalogueAgent; loaded: ReadonlySet<string>; mailbox?: boolean | undefined }): JSX.Element | null {
   const state = cardState(entry);
   if (state === 'unavailable') return <span className="cat-chips"><span className="cat-chip" data-need="true">Needs a newer buddi</span></span>;
   const missing = entry.missing ?? [];
@@ -90,7 +90,7 @@ export function CatChips({ entry, loaded }: { entry: CatalogueAgent; loaded: Rea
     );
   }
   if (state !== 'ready') return null;
-  const uses = usesWords(entry, loaded);
+  const uses = usesWords(entry, loaded, mailbox);
   if (uses.length === 0) return null;
   const words = `Uses ${and(uses)}`;
   return <span className="cat-uses" title={words}>{words}</span>;
@@ -122,12 +122,15 @@ function CatNote({ entry }: { entry: CatalogueAgent }): JSX.Element | null {
 export function CatCard({
   entry,
   loaded,
+  mailbox,
   onOpen,
   onAdd,
   onUpdate,
 }: {
   entry: CatalogueAgent;
   loaded: ReadonlySet<string>;
+  /** A mailbox is connected: a card that reads mail says "Uses your mailbox". */
+  mailbox?: boolean | undefined;
   onOpen: () => void;
   onAdd: () => void;
   onUpdate: () => void;
@@ -145,7 +148,7 @@ export function CatCard({
         <p className="cat-pitch">{entry.pitch}</p>
         <CatNote entry={entry} />
         <div className="cat-card-foot">
-          <CatChips entry={entry} loaded={loaded} />
+          <CatChips entry={entry} loaded={loaded} mailbox={mailbox} />
           <Spacer />
           <CatAction entry={entry} onAdd={onAdd} onUpdate={onUpdate} />
         </div>
@@ -284,6 +287,13 @@ export function Catalogue({
   const sheets = <CatalogueSheet sheet={sheet} view={view} navigate={navigate} onClose={() => setSheet(null)} onChanged={changed} />;
 
   const detail = name ? view?.agents.find((a) => a.name === name) : undefined;
+  // `?add=1` (the front desk's "Add Chef", Telegram's link): the install sheet opens once, over the detail page.
+  const addAsked = useRef(false);
+  useEffect(() => {
+    if (addAsked.current || !detail || !catalogueAddRequested(window.location.hash, detail.name)) return;
+    addAsked.current = true;
+    if (cardState(detail) === 'ready') setSheet({ kind: 'install', name: detail.name });
+  }, [detail]);
   if (name && view && !view.unavailable) {
     if (detail) {
       return (
@@ -355,6 +365,7 @@ export function Catalogue({
               key={a.name}
               entry={a}
               loaded={loaded}
+              mailbox={view.mailbox}
               onOpen={() => navigate(catalogueRoute(a.name))}
               onAdd={() => setSheet({ kind: 'install', name: a.name })}
               onUpdate={() => setSheet({ kind: 'update', name: a.name })}
@@ -376,6 +387,21 @@ export function Catalogue({
           {q ? <>Nothing in the catalogue does “{query.trim()}”. Agent Father can make one for you; your words go with you.</> : 'Nothing in this category yet.'}
         </Empty>
       )}
+      {view && !view.unavailable && view.delisted.length > 0 ? (
+        <Panel title="No longer in the catalogue">
+          <ul className="cat-plugins" data-testid="cat-delisted">
+            {view.delisted.map((d) => (
+              <li key={d.agentId}>
+                <Avatar id={d.agentId} name={d.name ?? d.handle} size="sm" />
+                <span className="cat-plugin-text">
+                  <a className="cat-plugin-name" href={agentRoute(d.agentId)} onClick={(e) => { e.preventDefault(); navigate(agentRoute(d.agentId)); }}>{d.name ?? `@${d.handle}`}</a>
+                  <span className="cat-small">@{d.handle} keeps working as it is; no updates will come.</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
       {sheets}
     </Page>
   );
@@ -537,12 +563,15 @@ export function AgentDetail({
             ) : (
               <>
                 <ul className="cat-plugins" data-testid="cat-skills">
-                  {entry.skills.map((file) => (
-                    <li key={file}>
+                  {entry.skills.map((skill) => (
+                    <li key={skill.name}>
                       <span className="ui-app-icon" aria-hidden="true"><Icon name="files" size={14} /></span>
                       <span className="cat-plugin-text">
-                        <span className="cat-plugin-name">{skillTitle(file)}</span>
-                        <span className="cat-small mono">skills/{file}</span>
+                        <span className="cat-plugin-name">{skillTitle(skill.name)}</span>
+                        {skill.description ? <span className="cat-small">{skill.description}</span> : null}
+                        <Details summary="Read it">
+                          <Code label={`${skillTitle(skill.name)}: the skill's text`}>{skill.text}</Code>
+                        </Details>
                       </span>
                     </li>
                   ))}

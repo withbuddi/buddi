@@ -20,6 +20,8 @@ import { randomUUID } from 'node:crypto';
 import { OWNER_AGENT_ID, type ToolRegistry } from '@buddi/core';
 import {
   addedAgents,
+  installedAsFor,
+  matchesPackage,
   CATALOGUE_OFFLINE,
   entryView,
   packageState,
@@ -28,6 +30,7 @@ import {
   type CatalogueBinding,
   type CatalogueEntryView,
   type CatalogueService,
+  type Drift,
   type FillChoices,
   type InstallAgentEnvelope,
   type MissingNeed,
@@ -62,8 +65,18 @@ export type MissingView =
   | (MissingPlugin & { title: string; listed: boolean; byBuddi: boolean; version?: string })
   | MissingNeed;
 
-export interface CatalogueCard extends Omit<CatalogueEntryView, 'missing'> {
+/** One of a package's skills as the detail page titles and opens it. */
+export interface CatalogueSkillView {
+  /** The file name without `.md`. */
+  name: string;
+  description: string;
+  /** The skill's text as the package carries it (no front matter). */
+  text: string;
+}
+
+export interface CatalogueCard extends Omit<CatalogueEntryView, 'missing' | 'skills'> {
   missing?: MissingView[];
+  skills: CatalogueSkillView[];
   /** Add works now: nothing is missing, or only By-buddi plugins it installs on the way. */
   addable: boolean;
 }
@@ -110,13 +123,24 @@ export async function catalogueRoute(deps: CatalogueDeps, url: URL): Promise<Rou
   const agents: CatalogueCard[] = loaded.packages.map((pkg) => {
     const view = entryView(pkg, packageState(pkg, state), deps.ctx.timezone);
     const missing = missingViews(view.missing ?? [], listings);
-    const { missing: _missing, ...rest } = view;
-    return { ...rest, ...(view.missing ? { missing } : {}), addable: addable(view, missing) };
+    const { missing: _missing, skills: _skills, ...rest } = view;
+    return {
+      ...rest,
+      skills: pkg.skills.map((skill) => ({ name: skill.name, description: skill.description, text: skill.body })),
+      ...(view.missing ? { missing } : {}),
+      addable: addable(view, missing),
+    };
   });
   const listed = new Set(loaded.packages.map((p) => p.manifest.name));
   const delisted = state.added
     .filter((a) => a.provenance.source === 'market' && a.provenance.package !== undefined && !listed.has(a.provenance.package))
-    .map((a) => ({ agentId: a.agentId, handle: state.handleOf(a.agentId), package: a.provenance.package as string, version: a.provenance.version }));
+    .map((a) => ({
+      agentId: a.agentId,
+      handle: state.handleOf(a.agentId),
+      name: deps.binding.catalog.get(a.agentId)?.name ?? a.agentId,
+      package: a.provenance.package as string,
+      version: a.provenance.version,
+    }));
   return {
     status: 200,
     body: {
@@ -125,6 +149,8 @@ export async function catalogueRoute(deps: CatalogueDeps, url: URL): Promise<Rou
       agents,
       fromPlugins,
       delisted,
+      // "Uses your mailbox" on a card that reads mail, said only when one is connected.
+      mailbox: state.needs.mailbox === true,
       ...(loaded.problems.length > 0 ? { problems: loaded.problems } : {}),
     },
   };
@@ -144,6 +170,69 @@ function proposalCards(deps: CatalogueDeps, packages: readonly AgentPackage[]): 
       text: agent.offer?.text ?? agent.description,
       state: deps.binding.catalog.get(agent.id) ? 'installed' : 'ready',
     }));
+}
+
+/** Where an agent from the catalogue stands, as its own page draws it (`GET /api/agents` → `catalogue`). */
+export interface AgentCatalogueProvenance {
+  source: 'market';
+  /** The package it came from (or, with `via`, the one that does its job now). */
+  package: string;
+  title: string;
+  /** The version written; with `via`, the older agent's own version. */
+  version: string;
+  /** The version the kept list has, or null when there is no copy or it is no longer listed. */
+  latest: string | null;
+  drift: Drift;
+  /** The kept list no longer has it: it keeps working, and no update will come. */
+  delisted: boolean;
+  /** `buddi/planner`, when this is an older agent the package replaces. */
+  via?: string;
+}
+
+/**
+ * Every agent on disk that came from the catalogue (or that a package replaces),
+ * with its drift against the kept copy of the list. Never fetches: an agent's
+ * page asks on every load, and without a copy only what the sidecar knows is said.
+ */
+export async function agentsCatalogue(
+  deps: Pick<CatalogueDeps, 'service' | 'binding'>,
+): Promise<Record<string, AgentCatalogueProvenance>> {
+  const added = addedAgents(deps.binding.agentsDir);
+  if (added.length === 0) return {};
+  const loaded = await deps.service.load({ cachedOnly: true }).catch(() => ({ unavailable: 'unreadable' }) as const);
+  const packages = 'unavailable' in loaded ? null : loaded.packages;
+  const handleOf = (id: string): string => deps.binding.catalog.get(id)?.handle ?? id;
+  const out: Record<string, AgentCatalogueProvenance> = {};
+  for (const a of added) {
+    if (a.provenance.source === 'market' && a.provenance.package !== undefined) {
+      const pkg = packages?.find((p) => p.manifest.name === a.provenance.package);
+      const name = a.provenance.package;
+      out[a.agentId] = {
+        source: 'market',
+        package: name,
+        title: pkg?.manifest.title ?? name.charAt(0).toUpperCase() + name.slice(1).replace(/-/g, ' '),
+        version: a.provenance.version,
+        latest: pkg?.manifest.version ?? null,
+        drift: pkg ? (installedAsFor(pkg, [a], handleOf)?.drift ?? 'current') : a.edited ? 'edited' : 'current',
+        delisted: packages !== null && pkg === undefined,
+      };
+      continue;
+    }
+    const pkg = packages?.find((p) => matchesPackage(p, a) === 'replaces');
+    const as = pkg ? installedAsFor(pkg, [a], handleOf) : undefined;
+    if (!pkg || !as) continue;
+    out[a.agentId] = {
+      source: 'market',
+      package: pkg.manifest.name,
+      title: pkg.manifest.title,
+      version: a.provenance.version,
+      latest: pkg.manifest.version,
+      drift: as.drift,
+      delisted: false,
+      ...(as.via ? { via: as.via } : {}),
+    };
+  }
+  return out;
 }
 
 async function findListed(deps: CatalogueDeps, name: string): Promise<{ pkg: AgentPackage } | { reply: RouteReply }> {

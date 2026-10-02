@@ -402,7 +402,8 @@ export const OFFER_EXPIRED = 'This offer has expired.';
 /** Start the offer's prompt as a turn of its own conversation. */
 export type SendOfferTurn = (input: {
   agentId: string;
-  conversationId: string;
+  /** Absent: a new conversation (a handoff to the maker starts one). */
+  conversationId?: string;
   prompt: string;
   offer: { id: string; label: string };
 }) => Promise<
@@ -425,6 +426,8 @@ export interface TakeOfferResultBody {
   /** The conversation the turn is running in, when it ran in the thread. */
   conversationId?: string;
   runId?: string;
+  /** Set when the take moved the owner to another agent (the front desk's handoff to the maker). */
+  agentId?: string;
 }
 
 /**
@@ -455,6 +458,11 @@ export async function takeOfferFromWeb(
   offerId: string,
   options: TakeOfferOptions = {},
 ): Promise<WriteResult<TakeOfferResultBody>> {
+  // An install handoff opens the catalogue's sheet on the page; there is nothing to claim or run.
+  const peek = await getOffer(deps.pool, offerId).catch(() => null);
+  if (peek?.handoff?.kind === 'install') {
+    return fail(409, `That button opens ${peek.handoff.title}'s install sheet: Agents → Add a teammate → ${peek.handoff.title}.`);
+  }
   const taken = await takeOffer(deps.pool, { id: offerId, via: 'web', now: deps.now() });
   if (!taken.ok) {
     // Expired is said in the page's own words: the store's sentence is written
@@ -468,6 +476,28 @@ export async function takeOfferFromWeb(
     );
   }
   const offer = taken.offer;
+
+  /*
+   * "Continue with Agent Father": the owner's tap — and only that — moves the
+   * request to the maker, as the owner's turn in a fresh conversation with it.
+   * The front desk wrote the button; it never reaches the maker itself.
+   */
+  if (offer.handoff?.kind === 'maker' && options.send !== undefined) {
+    const sent = await options.send({
+      agentId: offer.handoff.agentId,
+      prompt: offer.prompt,
+      offer: { id: offer.id, label: offer.label },
+    });
+    if (!sent.ok) {
+      await releaseOffer(deps.pool, offer.id).catch(() => false);
+      return fail(sent.status, sent.error);
+    }
+    return {
+      ok: true,
+      status: 200,
+      body: { id: offer.id, label: offer.label, jobId: null, agentId: offer.handoff.agentId, conversationId: sent.conversationId, runId: sent.runId },
+    };
+  }
 
   const inThread =
     options.send !== undefined &&
@@ -507,7 +537,7 @@ export async function takeOfferFromWeb(
     const job = await enqueue(deps.pool, {
       kind: 'agent-run',
       payload: {
-        agentId: offer.agentId,
+        agentId: offer.handoff?.kind === 'maker' ? offer.handoff.agentId : offer.agentId,
         prompt: offer.prompt,
         conversationHint: `offer:${offer.id}`,
       },

@@ -59,6 +59,7 @@ import {
   withdrawTurnOffers,
   type OfferSink,
 } from '../surfaces/offered-actions.js';
+import { createHandoffManifest, handoffTargets, HANDOFF_POLICY_SUFFIX, HANDOFF_TOOLS, isFrontDesk } from '../surfaces/handoff.js';
 import type { Pool } from 'pg';
 import type { ApprovalResume } from '@buddi/runtime';
 import { memoryPreambleFor } from '../agents/catalog.js';
@@ -532,6 +533,9 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
       for (const manifest of deps.registry.manifests()) registry.register(manifest);
       registry.register(createAskManifest(sink));
       registry.register(createOfferManifest(offers));
+      // The front desk's handoff: an inline button to a catalogue agent or to the maker, never a call to either.
+      const handsOff = isFrontDesk(deps.catalog.resolve(agent.id));
+      if (handsOff) registry.register(createHandoffManifest(offers, handoffTargets(deps.registry, deps.catalog)));
 
       // An offer belongs to the turn that made it: the moment the owner says
       // the next thing, whatever the last turn offered is withdrawn, so no
@@ -551,7 +555,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
 
       const base = deps.catalog.resolve(agent.id).definition(now(), deps.ctx.timezone);
       const options: RunAgentOptions = {
-        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS] },
+        agent: { ...base, tools: [...base.tools, ...ASK_TOOLS, ...OFFER_TOOLS, ...(handsOff ? HANDOFF_TOOLS : [])] },
         provider: deps.providerFor ? deps.providerFor(deps.catalog.resolve(agent.id)) : deps.provider,
         registry,
         // A resume carries the owner's decision, which is the owner acting in
@@ -577,6 +581,7 @@ export async function startTelegram(deps: TelegramDeps): Promise<TelegramHandle>
         systemSuffix: [
           ASK_POLICY_SUFFIX,
           OFFER_POLICY_SUFFIX,
+          ...(handsOff ? [HANDOFF_POLICY_SUFFIX] : []),
           ...(systemSuffix === undefined ? [] : [systemSuffix]),
         ].join('\n\n'),
         memoryPreamble: memoryPreambleFor(pool),

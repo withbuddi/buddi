@@ -335,8 +335,8 @@ export const API_ROUTES: readonly ApiRoute[] = [
 
   /* ---------------- agents ---------------- */
   {
-    method: 'GET', path: '/api/agents', area: 'agents', summary: 'Every agent, their engines, the model accounts and which agent is the default.',
-    answer: '{ agents: AgentView[], engines, providers, providerAccounts, default }',
+    method: 'GET', path: '/api/agents', area: 'agents', summary: 'Every agent, their engines, the model accounts, which agent is the default, and which came from the catalogue (package, version, the listed version, drift, delisted; read from the kept list, never fetched).',
+    answer: '{ agents: AgentView[], engines, providers, providerAccounts, default, catalogue: { [agentId]: { source, package, title, version, latest, drift, delisted, via? } } }',
   },
   { method: 'POST', path: '/api/agents/default', area: 'agents', summary: 'Make an agent the default (where a chat that names nobody lands).', body: '{ agentId: string }', errors: '400; 404' },
   { method: 'GET', path: '/api/agents/:id/profile', area: 'agents', summary: "One agent whole: its grant with every tool's tier, engine, skills, delegates.", errors: '404 no such agent' },
@@ -425,18 +425,17 @@ export const API_ROUTES: readonly ApiRoute[] = [
     body: 'multipart/form-data with one image', answer: '{ picture: string, side: number, source, note? }', errors: '404; 413; 415',
   },
   { method: 'DELETE', path: '/api/agents/:id/avatar', area: 'agents', summary: "Remove the uploaded picture; the agent's icon is drawn again.", answer: '204', errors: '404' },
-  { method: 'GET', path: '/api/teammates', area: 'agents', summary: 'The agents installed plugins propose with an offer line, each added, addable, or why not. The catalogue replaces it.' },
   {
     method: 'GET', path: '/api/catalogue', area: 'agents',
     summary: 'The agent catalogue from withbuddi.com, each package with where it stands here; fetched when stale, the kept copy offline.',
     query: 'refresh?: 1',
     answer:
       '{ fetchedAt, stale?, agents: [{ name, version, handle, title, pitch, description, about, category, trust, author, requires, optional, ' +
-      'needs, tools, missions: [{ id, name, cron, when, prompt }], fills: [{ id, kind, label, optional, default }], examples, skills, changes, ' +
+      'needs, tools, missions: [{ id, name, cron, when, prompt }], fills: [{ id, kind, label, optional, default }], examples, skills: [{ name, description, text }], changes, ' +
       'replaces, avatar, page, claims?, state: ready|needs|installed|unavailable, missing?: [{ kind: plugin, name, range, fix, title, listed, ' +
       'byBuddi } | { kind: need, name, fix }], installed?: { agentId, handle, version, drift: current|update|edited|edited-update, via? }, ' +
-      'reason?, addable }], fromPlugins: [{ plugin, agent, handle, name, text, state }], delisted: [{ agentId, handle, package, version }], ' +
-      'problems?, unavailable? }',
+      'reason?, addable }], fromPlugins: [{ plugin, agent, handle, name, text, state }], delisted: [{ agentId, handle, name, package, version }], ' +
+      'mailbox, problems?, unavailable? }',
   },
   {
     method: 'POST', path: '/api/catalogue/:name/plan', area: 'agents', summary: 'What adding this agent would do, writing nothing: plugins installed on the way, picks with defaults and choices, the handle, tools with tiers, missions, the approval preview.',
@@ -1213,7 +1212,6 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'GET /api/agents/:id/avatar': '0.1.0-pre.15',
   'POST /api/agents/:id/avatar': '0.1.0-pre.15',
   'DELETE /api/agents/:id/avatar': '0.1.0-pre.15',
-  'GET /api/teammates': '0.1.0-pre.22',
   'GET /api/agent-offers': '0.1.0-pre.15',
   'POST /api/agent-offers/:plugin/:agent/dismiss': '0.1.0-pre.15',
   'GET /api/approvals': '0.1.0-pre.15',

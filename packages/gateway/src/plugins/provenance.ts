@@ -32,7 +32,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { SuggestedAgent } from '@buddi/core';
+import { applyFrontmatterPatch, type SuggestedAgent } from '@buddi/core';
 
 /** The sidecar's file name, beside `agent.md` in the agent's own directory. */
 export const PROVENANCE_FILE = 'plugin.json';
@@ -68,6 +68,31 @@ export interface AgentProvenance {
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+/**
+ * The agent file as its package (or plugin) owns it: without the `skills:`
+ * line. Which skills an agent holds is the owner's grant (the Skills page
+ * writes it), not an edit of what was installed, so granting or taking one
+ * never counts as an owner edit for update drift; the persona, the tools and
+ * every other key still do. A file that does not parse is hashed as it is.
+ */
+export function packageOwnedText(text: string): string {
+  try {
+    return applyFrontmatterPatch(text, { skills: null });
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * Has the owner edited this agent file since it was written? Against the
+ * sidecar's hash, taken either of the whole file (sidecars written before
+ * grants were set aside) or of its package-owned part (`packageOwnedText`).
+ */
+export function fileEdited(recorded: string, text: string): boolean {
+  if (recorded === '') return true;
+  return recorded !== sha256(text) && recorded !== sha256(packageOwnedText(text));
 }
 
 /**
@@ -208,7 +233,7 @@ export function driftFor(opts: {
     provenance.version === opts.pluginVersion
       ? `you accepted ${provenance.version} and the plugin still says ${opts.pluginVersion}, but its proposal changed`
       : `you accepted ${provenance.version}, this is ${opts.pluginVersion}`;
-  const edited = provenance.file !== '' && provenance.file !== sha256(readFileSync(opts.agentFile, 'utf8'));
+  const edited = provenance.file !== '' && fileEdited(provenance.file, readFileSync(opts.agentFile, 'utf8'));
   const changed = provenance.proposal !== proposalChecksum(opts.suggestion);
   if (edited && changed) {
     return {

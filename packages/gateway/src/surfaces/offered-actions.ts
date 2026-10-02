@@ -86,6 +86,8 @@ export const OFFER_TOOLS: readonly string[] = [OFFER_TOOL];
 /** Where the tool records what this turn offered. One per run. */
 export interface OfferSink {
   offered?: OfferedAction[];
+  /** The front desk's handoff (`handoff.ts`), stored first so the cap never cuts it. */
+  handoff?: OfferedAction;
 }
 
 const offerInput = z.object({
@@ -284,7 +286,7 @@ export async function storeTurnOffers(
     log?: (line: string) => void;
   },
 ): Promise<Offer[]> {
-  const declared = input.sink.offered ?? [];
+  const declared = [...(input.sink.handoff ? [input.sink.handoff] : []), ...(input.sink.offered ?? [])];
   if (declared.length === 0) return [];
   try {
     return await offerActions(pool, {

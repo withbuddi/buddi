@@ -161,6 +161,11 @@ export interface ChatOffer {
   label: string;
   prompt: string;
   expiresAt: string;
+  /**
+   * The front desk's handoff: `install` opens that catalogue agent's install
+   * sheet; `maker` moves the request to the maker in a new conversation.
+   */
+  handoff?: { kind: 'install'; package: string; title: string } | { kind: 'maker'; agentId: string };
 }
 
 export interface ChatQuestionOption {
