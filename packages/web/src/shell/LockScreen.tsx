@@ -19,7 +19,8 @@
  * five the server makes it wait, and the field counts down.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, api, isUnreachable, type FocusState, type LockClockView, type LockScreenData, type LockState } from '../api';
+import { ApiError, api, isUnreachable, type FocusState, type LockBackground, type LockClockView, type LockScreenData, type LockState } from '../api';
+import { earthSource } from './earth';
 import { useMediaQuery } from '../useMediaQuery';
 import { useMinute } from './useMinute';
 import { WidgetBodyView } from '../views/parts/WidgetBody';
@@ -28,6 +29,15 @@ import { Button, Icon, Mark, Modal } from '../ui';
 import { FOCUS_LABELS, focusUntilLabel } from './Rail';
 import { fmtClock, fmtDate, fmtMoment, underFormats } from '../format';
 import { NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE } from '../routes';
+
+/**
+ * What the lock screen is drawn on: the owner's pick, Earth (the default)
+ * before the state has answered, and Earth again for a picture that is gone.
+ */
+export function lockBackgroundOf(background: LockBackground | undefined, image: string | null | undefined): LockBackground {
+  if (!background || (background === 'image' && !image)) return 'earth';
+  return background;
+}
 
 /** A phone: the glance first, then the pad. */
 export const LOCK_PHONE_QUERY = '(max-width: 720px)';
@@ -279,12 +289,17 @@ export interface LockFaceData {
 export function LockFace({ data, now, phone, pad = false, after, onPick }: { data: LockFaceData | null; now: Date; phone: boolean; pad?: boolean; after?: LockAfter | null; onPick?: (next: LockAfter | null) => void }): JSX.Element {
   const timezone = data?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const clock = lockClockText(now, timezone, data?.clockView);
-  const background = data?.background === 'image' && !data.image ? 'field' : (data?.background ?? 'field');
+  const background = lockBackgroundOf(data?.background, data?.image);
   const focus = data?.focus ?? null;
   const focusText = focus ? inLockFormats(data?.clockView, () => (phone ? capital(focusUntilLabel(focus, timezone, now)) : `${FOCUS_LABELS[focus.mode]} ${focusUntilLabel(focus, timezone, now)}`)) : '';
   return (
     <>
-      {background === 'image' && data?.image ? (
+      {background === 'earth' ? (
+        <div className="lk-ground" aria-hidden="true">
+          <img className="lk-photo" data-earth="true" src={earthSource(phone)} alt="" decoding="async" />
+          <div className="lk-scrim" />
+        </div>
+      ) : background === 'image' && data?.image ? (
         <div className="lk-ground" aria-hidden="true">
           <img className="lk-photo" src={data.image} alt="" />
           <div className="lk-scrim" />
@@ -426,7 +441,7 @@ export function LockScreen({ initial, onUnlocked }: { initial: LockState | null;
   };
 
   const timezone = data?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const background = state?.background === 'image' && !state.image ? 'field' : (state?.background ?? 'field');
+  const background = lockBackgroundOf(state?.background, state?.image);
   const owner = data?.owner ?? null;
   const note = down
     ? { tone: 'critical' as const, text: 'buddi isn’t answering. The lock stays until it does.' }

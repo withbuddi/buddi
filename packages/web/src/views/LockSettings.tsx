@@ -9,10 +9,13 @@
 import { useRef, useState, type FormEvent } from 'react';
 import { ApiError, api, type LockBackground, type LockState } from '../api';
 import { LockFaceEditor } from './LockFaceEditor';
+import { EARTH_CREDIT, EARTH_PHOTO } from '../shell/earth';
 import { useLock } from '../shell/lock';
 import { Button, ErrorBanner, Field, Icon, Modal, Notice, Section, Segment, Stack, Toolbar, useAsync } from '../ui';
 
+/** Earth first: the default, a photo; then the gradients. */
 const BACKGROUNDS: ReadonlyArray<{ id: Exclude<LockBackground, 'image'>; label: string }> = [
+  { id: 'earth', label: 'Earth' },
   { id: 'field', label: 'Buddi' },
   { id: 'dawn', label: 'Dawn' },
   { id: 'sea', label: 'Sea' },
@@ -156,7 +159,7 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
       title={label}
       onClick={() => change(api.setLockSettings({ background: id }))}
     >
-      {id === 'image' && state.image ? <img src={state.image} alt="" /> : <span className="lk-swatch-field" />}
+      {id === 'image' && state.image ? <img src={state.image} alt="" /> : id === 'earth' ? <img src={EARTH_PHOTO.thumb} alt="" /> : <span className="lk-swatch-field" />}
       <span className="lk-swatch-label">{label}</span>
     </button>
   );
@@ -214,6 +217,7 @@ export function LockSettings(_props: { navigate: (route: string) => void }): JSX
               <span className="lk-swatch-label">{uploading ? 'Adding…' : state.image ? 'Replace' : 'Your picture'}</span>
             </label>
           </div>
+          <p className="lk-credit">Earth: photo by <a href={EARTH_CREDIT.authorUrl} target="_blank" rel="noreferrer">{EARTH_CREDIT.author}</a> on <a href={EARTH_CREDIT.photoUrl} target="_blank" rel="noreferrer">Unsplash</a></p>
           {state.image ? (
             <Toolbar align="end">
               <Button size="sm" variant="ghost" onClick={() => change(api.removeLockBackground())}>Remove picture</Button>

@@ -30,7 +30,7 @@ import {
   type WidgetsAnswer,
 } from '../api';
 import { fmtDate, profileTimeLabel, underFormats } from '../format';
-import { LockFace } from '../shell/LockScreen';
+import { LockFace, lockBackgroundOf } from '../shell/LockScreen';
 import { useMinute } from '../shell/useMinute';
 import { ActionMenu, Button, ErrorBanner, Field, Icon, Section, Segment, useAsync } from '../ui';
 import { newPlacementKey } from './parts/HomeWidgets';
@@ -62,7 +62,7 @@ function Preview({ data, phone }: { data: LockScreenData | undefined; phone: boo
       <div
         className="lk"
         data-preview="true"
-        data-bg={data?.background === 'image' && !data.image ? 'field' : (data?.background ?? 'field')}
+        data-bg={lockBackgroundOf(data?.background, data?.image)}
         data-phone={phone ? 'true' : undefined}
         data-view="glance"
         style={{ width, height, transform: `scale(${scale})` }}

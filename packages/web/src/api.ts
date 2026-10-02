@@ -1005,7 +1005,8 @@ export interface LockClockView {
   zone: { label: string; timezone: string } | null;
 }
 
-export type LockBackground = 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image';
+/** Earth (the default) is the photo the dashboard ships; field (Buddi) and the four colours are gradients; image is the owner's picture. */
+export type LockBackground = 'earth' | 'field' | 'dawn' | 'sea' | 'moss' | 'dusk' | 'image';
 
 /** What the lock screen draws (GET /api/lock/screen): counts only, and the widgets that are not sensitive. */
 export interface LockScreenData extends LockState {

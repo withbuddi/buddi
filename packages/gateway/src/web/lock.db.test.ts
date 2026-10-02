@@ -110,9 +110,26 @@ suite('the lock screen', () => {
 
   it('is off until a PIN is set: nothing locks, Lock now says so', async () => {
     const b = await browser();
-    expect((await b.get('/api/lock')).body).toMatchObject({ pin: false, locked: false, delayMinutes: 5, background: 'field' });
+    expect((await b.get('/api/lock')).body).toMatchObject({ pin: false, locked: false, delayMinutes: 5, background: 'earth' });
     expect((await b.post('/api/lock')).status).toBe(409);
     expect((await b.get('/api/overview')).status).toBe(200);
+  });
+
+  it('draws on Earth until the owner picks a background, and keeps the one they picked', async () => {
+    const b = await browser();
+    // Before Earth, every write carried the old default: that is not a pick.
+    await pool.query(`insert into core.web_settings (key, value) values ('lock', '{"delayMinutes":15,"background":"field"}'::jsonb) on conflict (key) do update set value = excluded.value`);
+    clock = new Date(clock.getTime() + 60_000);
+    expect((await b.get('/api/lock')).body).toMatchObject({ delayMinutes: 15, background: 'earth' });
+    expect((await b.put('/api/lock/settings', { delayMinutes: 60 })).body).toMatchObject({ delayMinutes: 60, background: 'earth' });
+    // A pick stays, Buddi included, through later changes.
+    expect((await b.put('/api/lock/settings', { background: 'field' })).body).toMatchObject({ background: 'field' });
+    expect((await b.put('/api/lock/settings', { delayMinutes: 5 })).body).toMatchObject({ delayMinutes: 5, background: 'field' });
+    // A colour picked before Earth existed stays too.
+    await pool.query(`update core.web_settings set value = '{"delayMinutes":5,"background":"dusk"}'::jsonb where key = 'lock'`);
+    clock = new Date(clock.getTime() + 60_000);
+    expect((await b.get('/api/lock')).body).toMatchObject({ background: 'dusk' });
+    expect((await b.put('/api/lock/settings', { background: 'nebula' })).status).toBe(400);
   });
 
   it('keeps only a scrypt hash of the PIN, and refuses one that is not four to eight digits', async () => {
@@ -398,7 +415,7 @@ suite('the lock screen', () => {
     expect(jpeg.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))).toBe(true);
 
     await b.post('/api/lock/unlock', { pin: '2468' });
-    expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'field', image: null });
+    expect((await b.del('/api/lock/background')).body).toMatchObject({ background: 'earth', image: null });
   });
 
   it('fails closed when the PIN cannot be read: a locked session stays locked, a new one is refused', async () => {

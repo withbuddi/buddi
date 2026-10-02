@@ -4064,10 +4064,18 @@ a.wg-body:focus-visible { outline: none; border-radius: var(--radius); box-shado
 [data-theme='dark'] .lk[data-bg='moss'] { --field-a: #3d6129; --field-b: #5f5626; --field-c: #22503a; --field-base: #0f170f; }
 [data-theme='dark'] .lk[data-bg='dusk'] { --field-a: #4b3a9c; --field-b: #7a3366; --field-c: #2c3f8f; --field-base: #120f22; }
 /* The owner's picture: light ink over a scrim, whatever the theme. */
-.lk[data-bg='image'] { color-scheme: dark; --text: #f4f7fb; --text-muted: rgb(244 247 251 / 80%); --text-faint: rgb(244 247 251 / 62%); --surface: #101b2e; --surface-sunken: rgb(255 255 255 / 10%); --line: rgb(255 255 255 / 22%); --accent: #7db3ff; --accent-contrast: #0b1426; --accent-soft: rgb(125 179 255 / 18%); --critical: #ff9e93; --field-base: #101b2e;
+.lk[data-bg='image'], .lk[data-bg='earth'] { color-scheme: dark; --text: #f4f7fb; --text-muted: rgb(244 247 251 / 80%); --text-faint: rgb(244 247 251 / 62%); --surface: #101b2e; --surface-sunken: rgb(255 255 255 / 10%); --line: rgb(255 255 255 / 22%); --accent: #7db3ff; --accent-contrast: #0b1426; --accent-soft: rgb(125 179 255 / 18%); --critical: #ff9e93; --field-base: #101b2e;
   --lk-glass: rgb(16 27 46 / 46%); --lk-glass-line: rgb(255 255 255 / 18%); }
-.lk[data-bg='image'] .lk-time, .lk[data-bg='image'] .lk-date { text-shadow: 0 1px var(--space-4) rgb(0 0 0 / 30%); }
-
+.lk[data-bg='image'] .lk-time, .lk[data-bg='image'] .lk-date, .lk[data-bg='earth'] .lk-time, .lk[data-bg='earth'] .lk-date { text-shadow: 0 1px var(--space-4) rgb(0 0 0 / 30%); }
+/* Earth, the default: a photo that ships with buddi, the same in light and dark.
+       Until it loads, the ground is the photo's own colours — deep space over the
+       blue limb and the land, tilted like its horizon. The dark sky carries the
+       clock; the scrim deepens only the land, where the PIN sits. */
+    .lk[data-bg='earth'] { --field-base: #06060b; }
+    .lk[data-bg='earth'] .lk-ground { background: linear-gradient(193deg, #06060b 0%, #090916 36%, #0b152f 50%, #1d4f8c 62%, #8fb0d8 71%, #6c7194 80%, #4b4a62 100%); }
+    .lk-photo[data-earth='true'] { object-position: 38% 62%; }
+    .lk[data-bg='earth'] .lk-scrim { background: linear-gradient(180deg, rgb(6 8 16 / 16%), transparent 38%, rgb(6 8 16 / 20%) 64%, rgb(6 8 16 / 62%)); }
+    
 .lk-top { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-5); }
 .lk-brand { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); font-weight: var(--weight-semibold); }
 .lk-top-spacer { flex: 1 1 auto; }
@@ -4187,6 +4195,9 @@ body:has(.lk) .ui-modal { z-index: 62; }
 .lk-swatch-field[data-kind='add'] { display: inline-flex; align-items: center; justify-content: center; border-style: dashed; border-color: var(--line-strong); background: var(--surface); background-image: none; color: var(--text-muted); }
 .lk-swatch[aria-pressed='true'] > img, .lk-swatch[aria-pressed='true'] .lk-swatch-field { box-shadow: 0 0 0 var(--space-0) var(--surface), 0 0 0 calc(var(--space-0) * 2) var(--accent); }
 .lk-swatch[aria-pressed='true'] .lk-swatch-label { color: var(--text); font-weight: var(--weight-medium); }
+.lk-credit { flex-basis: 100%; margin: 0; font-size: var(--text-xs); color: var(--text-faint); }
+.lk-credit a { color: var(--text-muted); text-decoration: underline; text-underline-offset: 0.2em; }
+.lk-credit a:hover { color: var(--text); }
 .lk-swatch:focus-visible { outline: none; }
 .lk-swatch:focus-visible > img, .lk-swatch:focus-visible .lk-swatch-field, .lk-swatch:focus-within .lk-swatch-field[data-kind='add'] { box-shadow: var(--shadow-focus); }
 

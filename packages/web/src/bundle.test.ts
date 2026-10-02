@@ -46,6 +46,8 @@ const ALLOWED_LITERALS = [
   'http://www.w3.org', 'https://reactjs.org', 'https://react.dev',
   // Example sites in placeholders and test fixtures: named, never fetched.
   'https://en.wikipedia.org', 'https://*.wikimedia.org', 'https://auth.wikimedia.org',
+  // The Earth photo's credit: links the owner may follow, never fetched (the photo itself is in the bundle).
+  'https://unsplash.com/@actionvance', 'https://unsplash.com/photos/outer-space-photography-of-earth-',
 ];
 
 function externalUrls(text: string): string[] {

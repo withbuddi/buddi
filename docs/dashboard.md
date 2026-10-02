@@ -429,10 +429,23 @@ minutes unless you pick 1, 15 or 60, or Never — and whenever you lock it:
 **Lock now** in the owner menu, the padlock at the end of the status line,
 **⌃⌘L** on a Mac or **Ctrl+Alt+L** elsewhere, from any page, a text field
 included. The same panel changes or removes the PIN (each asks for the current
-one), picks the background — Buddi, Dawn, Sea, Moss, Dusk, each with a light
-and a dark, or your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at
-most 2560 pixels, turned upright, without its location or any other details).
-Under it, **What it shows** is the lock screen editor: a live preview of the
+one), picks the background — Earth, the default, a photo of the planet's
+limb from high above that is the same in light and dark (a phone gets its own
+portrait crop); Buddi, Dawn, Sea, Moss, Dusk, each with a light and a dark; or
+your own picture (a JPEG or PNG; buddi keeps it as a JPEG of at most 2560
+pixels, turned upright, without its location or any other details). A
+background you picked stays yours; until you pick one, the lock screen is on
+Earth.
+
+The Earth photo is "outer space photography of earth" by
+[ActionVance](https://unsplash.com/@actionvance) on
+[Unsplash](https://unsplash.com/photos/outer-space-photography-of-earth-t7EL2iG3jMc),
+used under the [Unsplash License](https://unsplash.com/license) (free to use
+and redistribute; credit appreciated). It ships in the dashboard as two WebP
+files without any of the original's metadata, credited under the background
+swatches and in `packages/web/src/shell/earth/ATTRIBUTION.md`.
+
+Under the panel, **What it shows** is the lock screen editor: a live preview of the
 lock screen (on a desk or a phone) beside its clock — Time (Profile, saying
 what it reads as now, such as "Profile (12-hour)"; 12-hour; 24-hour — nothing is
 kept until you pick one), Date (Profile, three spellings, or none), A second clock (one of your

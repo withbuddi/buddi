@@ -51,6 +51,7 @@ import {
   readFocusState,
   readLockPin,
   readLockSettings,
+  DEFAULT_LOCK_BACKGROUND,
   removeLockPin,
   verifyPin,
   writeLockPin,
@@ -180,7 +181,7 @@ export function createLock(deps: LockDeps) {
     const pin = pinRead.ok ? pinRead.pin : known!.pin;
     const settings = settingsRead.ok
       ? settingsRead.settings
-      : (known?.settings ?? { delayMinutes: 5, background: 'field', clock: { ...DEFAULT_LOCK_CLOCK } });
+      : (known?.settings ?? { delayMinutes: 5, background: DEFAULT_LOCK_BACKGROUND, clock: { ...DEFAULT_LOCK_CLOCK } });
     const hadPin = known?.pin != null;
     if (pinRead.ok) known = { pin, settings };
     else if (settingsRead.ok && known) known = { ...known, settings };
@@ -246,7 +247,7 @@ export function createLock(deps: LockDeps) {
       lockedAt: pin && session.lockedAt ? session.lockedAt.toISOString() : null,
       reason: pin && session.lockedAt ? (session.lockReason ?? 'owner') : null,
       delayMinutes: state.settings.delayMinutes,
-      background: state.settings.background === 'image' && !state.image ? 'field' : state.settings.background,
+      background: state.settings.background === 'image' && !state.image ? DEFAULT_LOCK_BACKGROUND : state.settings.background,
       image: state.image ? `/api/lock/background?v=${state.image.slice(0, 16)}` : null,
       waitUntil,
       triesLeft: pin && pin.failures > 0 ? Math.max(0, PIN_FREE_TRIES - pin.failures) : null,
@@ -432,7 +433,7 @@ export function createLock(deps: LockDeps) {
       if (method === 'DELETE') {
         await deps.pool.query('delete from core.lock_background where id = 1');
         const state = await current(true);
-        if (state.settings.background === 'image') await writeLockSettings(deps.pool, { ...state.settings, background: 'field' });
+        if (state.settings.background === 'image') await writeLockSettings(deps.pool, { ...state.settings, background: DEFAULT_LOCK_BACKGROUND });
         invalidate();
         return { status: 200, body: stateOf(session, await current(true)) };
       }

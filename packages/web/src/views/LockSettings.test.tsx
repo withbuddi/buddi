@@ -51,6 +51,22 @@ describe('Settings → Lock screen', { timeout: 180_000 }, () => {
     expect(screen.getByRole('button', { name: 'Buddi' })).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('offers Earth first, pressed when it is the background, with the photo’s credit linked under the swatches', async () => {
+    vi.spyOn(api, 'lockState').mockResolvedValue({ ...set, background: 'earth' });
+    const save = vi.spyOn(api, 'setLockSettings').mockResolvedValue({ ...set, background: 'field' });
+    render(<LockSettings navigate={() => {}} />);
+    const earth = await screen.findByRole('button', { name: 'Earth' });
+    expect(earth).toHaveAttribute('aria-pressed', 'true');
+    expect(earth.querySelector('img')).not.toBeNull();
+    const swatches = within(screen.getByRole('group', { name: 'Background' })).getAllByRole('button');
+    expect(swatches.map((b) => b.getAttribute('aria-label'))).toEqual(['Earth', 'Buddi', 'Dawn', 'Sea', 'Moss', 'Dusk']);
+    expect(screen.getByText(/Earth: photo by/)).toHaveTextContent('Earth: photo by ActionVance on Unsplash');
+    expect(screen.getByRole('link', { name: 'ActionVance' })).toHaveAttribute('href', 'https://unsplash.com/@actionvance');
+    expect(screen.getByRole('link', { name: 'Unsplash' })).toHaveAttribute('href', 'https://unsplash.com/photos/outer-space-photography-of-earth-t7EL2iG3jMc');
+    await user().click(screen.getByRole('button', { name: 'Buddi' }));
+    expect(save).toHaveBeenLastCalledWith({ background: 'field' });
+  });
+
   it('removes the PIN only with the current one, and says how many tries are left', async () => {
     vi.spyOn(api, 'lockState').mockResolvedValue(set);
     const remove = vi.spyOn(api, 'removePin')

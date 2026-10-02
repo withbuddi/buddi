@@ -8,7 +8,8 @@
  *  - `lock.pin` in `core.web_settings`: the PIN's scrypt hash (never the PIN),
  *    how many wrong tries in a row, and until when the next try must wait.
  *  - `lock` in `core.web_settings`: how long a session may sit unused before
- *    it locks, and the background the lock screen is drawn on.
+ *    it locks, and the background the lock screen is drawn on (Earth until the
+ *    owner picks another).
  *
  * The per-session half (which session is locked, when it was last used) is on
  * the session rows the gateway keeps. `removeLockPin` clears both, which is
@@ -39,9 +40,22 @@ export type LockDelay = (typeof LOCK_DELAYS)[number] | null;
 /** What a PIN starts with until the owner picks another. */
 export const DEFAULT_LOCK_DELAY: LockDelay = 5;
 
-/** The built-in fields the lock screen can be drawn on; `image` is the owner's picture. */
-export const LOCK_BACKGROUNDS = ['field', 'dawn', 'sea', 'moss', 'dusk', 'image'] as const;
+/**
+ * The built-in backgrounds the lock screen can be drawn on: `earth` is the
+ * photo that ships with the dashboard, `field` (Buddi) and the four colours
+ * are gradients, `image` is the owner's picture.
+ */
+export const LOCK_BACKGROUNDS = ['earth', 'field', 'dawn', 'sea', 'moss', 'dusk', 'image'] as const;
 export type LockBackground = (typeof LOCK_BACKGROUNDS)[number];
+/** What the lock screen is drawn on until the owner picks another. */
+export const DEFAULT_LOCK_BACKGROUND: LockBackground = 'earth';
+/**
+ * The stored record's shape. Before 2 every write carried `background`, even
+ * when only the delay or the clock changed, so a stored `field` (the default
+ * then) does not say the owner picked it: it reads as the default. From 2 a
+ * stored background is always the owner's own.
+ */
+const LOCK_SETTINGS_VERSION = 2;
 
 /** The lock screen's clock: the time and the date the owner's way unless picked here, and a second zone. */
 export const LOCK_CLOCK_TIMES = ['profile', '12h', '24h'] as const;
@@ -191,13 +205,14 @@ export async function readLockSettings(db: Queryable): Promise<LockSettings> {
   const value = (await readWebSetting<Partial<Record<string, unknown>>>(db, LOCK_SETTINGS_KEY)) ?? {};
   const delay = value.delayMinutes;
   const background = value.background;
+  const picked = (LOCK_BACKGROUNDS as readonly unknown[]).includes(background) && (background !== 'field' || value.v === LOCK_SETTINGS_VERSION);
   return {
     delayMinutes: delay === null ? null : (LOCK_DELAYS as readonly unknown[]).includes(delay) ? (delay as LockDelay) : DEFAULT_LOCK_DELAY,
-    background: (LOCK_BACKGROUNDS as readonly unknown[]).includes(background) ? (background as LockBackground) : 'field',
+    background: picked ? (background as LockBackground) : DEFAULT_LOCK_BACKGROUND,
     clock: lockClockOf(value.clock) ?? { ...DEFAULT_LOCK_CLOCK },
   };
 }
 
 export async function writeLockSettings(db: Queryable, settings: LockSettings): Promise<void> {
-  await writeWebSetting(db, LOCK_SETTINGS_KEY, settings);
+  await writeWebSetting(db, LOCK_SETTINGS_KEY, { ...settings, v: LOCK_SETTINGS_VERSION });
 }
