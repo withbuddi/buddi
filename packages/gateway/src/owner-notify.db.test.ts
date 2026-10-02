@@ -19,6 +19,9 @@ import {
   decideApproval,
   listNotifications,
   migrateCore,
+  notificationsTick,
+  notifyOwner,
+  setFocus,
   ownerPresent,
   pairSurfaceIdentity,
   registerChannel,
@@ -146,6 +149,32 @@ suite('reaching the owner from the gateway', () => {
     expect(ownerMessageText({ title: 'One line' })).toBe('One line');
     // What a message asks the owner to do is said last, on its own line.
     expect(ownerMessageText({ title: 'Charged twice', text: 'At Monoprix.', action: 'Confirm with the bank?' })).toBe('Charged twice\n\nAt Monoprix.\n\n→ Confirm with the bank?');
+    expect(ownerMessageText({
+      title: 'Today, 2 things:',
+      text: '- finance: Charged twice\n- finance: Rain later',
+      parts: [{ title: 'Charged twice', action: ' Confirm with the bank? ' }, { title: 'Rain later' }],
+    })).toBe('Today, 2 things:\n\n- finance: Charged twice\n- finance: Rain later\n\n→ Charged twice: Confirm with the bank?');
+  });
+
+  it('says each part\'s action in a batch: the end of the day and the end of a focus', async () => {
+    const { texts } = telegram();
+    // Held for the end of the day (18:00 New York; NOW is 10:00 there).
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Charged twice', action: 'Confirm with the bank?' });
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'today', title: 'Rain later' });
+    expect(texts).toHaveLength(0);
+    await notificationsTick(pool, deps, new Date('2026-09-14T22:30:00.000Z'));
+    expect(texts).toHaveLength(1);
+    expect(texts[0]!.text).toContain('→ Charged twice: Confirm with the bank?');
+    expect(texts[0]!.text).not.toContain('→ Rain later');
+
+    // Held by Do not disturb, said when it ends.
+    texts.length = 0;
+    await setFocus(pool, deps, { mode: 'do-not-disturb', duration: 'indefinite', by: 'dashboard' });
+    await notifyOwner(pool, deps, { kind: 'plugin', pluginId: 'finance', urgency: 'now', title: 'Rent went up', action: 'Approve the new amount?' });
+    expect(texts).toHaveLength(0);
+    await setFocus(pool, deps, { mode: 'normal', by: 'dashboard' });
+    expect(texts).toHaveLength(1);
+    expect(texts[0]!.text).toContain('→ Rent went up: Approve the new amount?');
   });
 
   it('keeps the message and throws nothing when there is no channel, unless asked to be strict', async () => {
@@ -256,7 +285,7 @@ suite('reaching the owner from the gateway', () => {
         ['@scout: Charged twice at Monoprix', true],
         ['@scout: The parcel was delivered', false],
       ]);
-      const needs = (await listNotificationsRoute(pool, null, { needs: true, now: NOW })).body as { notifications: Array<{ action: string }> };
+      const needs = (await listNotificationsRoute(pool, null, { needs: true })).body as { notifications: Array<{ action: string }> };
       expect(needs.notifications.map((n) => n.action)).toEqual(['Confirm with the bank?']);
       const input = tool.input as { safeParse(v: unknown): { success: boolean } };
       expect(input.safeParse({ title: 'x', action: 'y'.repeat(81) }).success).toBe(false);

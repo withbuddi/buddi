@@ -22,12 +22,26 @@ export function unlinkSignatures(text: string): string {
   return text.replace(/(^|\n|- )@(?=[A-Za-z0-9_-]+: )/g, '$1@\u2060');
 }
 
-/** The one message text a channel with no title field sends; what it asks of the owner, if anything, last. */
-export function ownerMessageText(message: { title: string; text?: string; action?: string }): string {
+/**
+ * The one message text a channel with no title field sends; what it asks of
+ * the owner, if anything, last. A batch (the end-of-day or end-of-focus
+ * message) lists titles only in its text, so each part that asks for
+ * something adds its own line: the part's title and its action.
+ */
+export function ownerMessageText(message: {
+  title: string;
+  text?: string;
+  action?: string;
+  parts?: ReadonlyArray<{ title: string; action?: string }>;
+}): string {
   const text = message.text?.trim();
   const body = text ? `${message.title}\n\n${text}` : message.title;
+  const asks = (message.parts ?? [])
+    .filter((part) => (part.action?.trim() ?? '') !== '')
+    .map((part) => `→ ${part.title.trim()}: ${part.action!.trim()}`);
   const action = message.action?.trim();
-  return action ? `${body}\n\n→ ${action}` : body;
+  const lines = [...asks, ...(action ? [`→ ${action}`] : [])];
+  return lines.length > 0 ? `${body}\n\n${lines.join('\n')}` : body;
 }
 
 export interface TelegramChannelOptions {
