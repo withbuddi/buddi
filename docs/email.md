@@ -591,8 +591,12 @@ visible and switchable on the Watchers page:
   own server authenticated as coming from the sender's domain raises nothing
   either when that domain is a well-known account provider (`google.com`,
   `apple.com`, `microsoft.com`, `github.com`, `paypal.com`, subdomains
-  included; never a consumer mailbox domain) or one the owner writes to (his
-  bank, his agency). A wire or gift-card ask is spared only for the well-known
+  included; never a consumer mailbox domain) or the sender is a correspondent:
+  the exact address the owner writes to, or any address at a domain he writes
+  to (his bank, his agency) — but never a whole shared mailbox domain
+  (`SHARED_MAIL_PROVIDERS`: gmail.com, outlook/hotmail/live.com, yahoo,
+  icloud/me.com, proton, aol, gmx, mail.ru, yandex and the like), where
+  writing to one user says nothing about the next. A wire or gift-card ask is spared only for the well-known
   providers: a correspondent's real, hijacked mailbox asking for a transfer is
   the fraud itself. "Authenticated" is `messages.auth_domain` (migration
   `024`), read at ingest from the **first** `Authentication-Results` header —

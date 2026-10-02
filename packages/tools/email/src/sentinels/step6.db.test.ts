@@ -1032,6 +1032,42 @@ suite('email watchers, step 6 (postgres)', () => {
       expect(await raise(suspiciousSender, ctx())).toHaveLength(0);
     });
 
+    it('still warns about a stranger\'s authenticated Gmail after the owner wrote to one Gmail user', async () => {
+      await write({
+        from: 'owner@example.test',
+        to: '"Lea" <lea.friend@gmail.com>',
+        subject: 'Dinner',
+        threadKey: `<dinner-${uid}@example.test>`,
+        at: daysBefore(10),
+        body: 'See you then.',
+        direction: 'out',
+      });
+      const stranger = await fromImpostor({
+        from: '"IT desk" <it.desk.helper@gmail.com>',
+        body: 'Please reply with your password immediately so we can keep your mailbox open.',
+      });
+      await vouched(stranger.messageId, 'gmail.com');
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(1);
+    });
+
+    it('stays quiet about the exact Gmail address the owner writes to', async () => {
+      await write({
+        from: 'owner@example.test',
+        to: '"Lea" <lea.friend@gmail.com>',
+        subject: 'Dinner',
+        threadKey: `<dinner2-${uid}@example.test>`,
+        at: daysBefore(10),
+        body: 'See you then.',
+        direction: 'out',
+      });
+      const lea = await fromImpostor({
+        from: '"Lea" <Lea.Friend@gmail.com>',
+        body: 'Please reply with your password immediately so we can keep your mailbox open.',
+      });
+      await vouched(lea.messageId, 'gmail.com');
+      expect(await raise(suspiciousSender, ctx())).toHaveLength(0);
+    });
+
     it('still warns about a transfer from a known correspondent\'s real domain — the hijacked mailbox', async () => {
       await knowsAna();
       const { messageId } = await fromImpostor({

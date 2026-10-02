@@ -171,11 +171,45 @@ export const ASK_URGENT_ABOVE = 0.8;
 export const CREDENTIAL_ASK_MIN = 0.7;
 
 /**
+ * Mailbox domains anyone can sign up for. Authenticated mail from one of them
+ * proves only that the sender has an account there, so the owner writing to
+ * one Gmail user says nothing about every other Gmail user: on these domains
+ * only the exact address he writes to counts as a correspondent. Subdomains
+ * count; country variants are listed one by one.
+ */
+export const SHARED_MAIL_PROVIDERS: readonly string[] = [
+  'gmail.com', 'googlemail.com',
+  'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'passport.com',
+  'outlook.fr', 'hotmail.fr', 'live.fr', 'hotmail.co.uk', 'live.co.uk', 'hotmail.de', 'hotmail.it', 'hotmail.es',
+  'yahoo.com', 'ymail.com', 'rocketmail.com', 'yahoo.fr', 'yahoo.co.uk', 'yahoo.de', 'yahoo.es', 'yahoo.it', 'yahoo.co.jp',
+  'icloud.com', 'me.com', 'mac.com',
+  'proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me',
+  'aol.com', 'aim.com',
+  'gmx.com', 'gmx.net', 'gmx.de', 'gmx.fr', 'web.de',
+  'mail.com', 'email.com',
+  'mail.ru', 'inbox.ru', 'list.ru', 'bk.ru',
+  'yandex.ru', 'yandex.com', 'ya.ru',
+  'zoho.com', 'zohomail.com',
+  'fastmail.com', 'fastmail.fm',
+  'tutanota.com', 'tuta.io',
+  'hey.com',
+  'qq.com', '163.com', '126.com',
+  'orange.fr', 'wanadoo.fr', 'free.fr', 'laposte.net', 'sfr.fr',
+  'libero.it', 't-online.de', 'seznam.cz',
+];
+
+export function isSharedMailProvider(domain: string | null): boolean {
+  if (domain === null || domain === '') return false;
+  return SHARED_MAIL_PROVIDERS.some((shared) => domain === shared || domain.endsWith(`.${shared}`));
+}
+
+/**
  * Senders whose own-domain, authenticated mail is never called phishing for
- * asking about a password: the account providers whose security notices are
- * what this watcher kept mistaking for fraud. Subdomains count
- * (`accounts.google.com`). Deliberately no consumer mailbox domain — anyone
- * can send authenticated mail from gmail.com or outlook.com.
+ * asking about a password: the account providers' own notification domains
+ * (`accounts.google.com`, Google's corporate senders), whose security notices
+ * are what this watcher kept mistaking for fraud. Subdomains count. Never a
+ * consumer mailbox domain (`isSharedMailProvider`) — anyone can send
+ * authenticated mail from gmail.com or outlook.com.
  */
 export const WELL_KNOWN_SENDERS: readonly string[] = [
   'google.com',
@@ -186,7 +220,7 @@ export const WELL_KNOWN_SENDERS: readonly string[] = [
 ];
 
 export function isWellKnownSender(domain: string | null): boolean {
-  if (domain === null) return false;
+  if (domain === null || isSharedMailProvider(domain)) return false;
   return WELL_KNOWN_SENDERS.some((known) => domain === known || domain.endsWith(`.${known}`));
 }
 
@@ -195,23 +229,29 @@ export function isWellKnownSender(domain: string | null): boolean {
  *
  *  - a **credential** ask below `CREDENTIAL_ASK_MIN` — named, not demanded;
  *  - a **credential** ask on mail the owner's server authenticated as coming
- *    from the sender's own domain, when that domain is a well-known account
- *    provider or one the owner writes to (his bank, his landlord's agency):
- *    that is the service itself talking about his account;
+ *    from the sender's own domain, when that sender is a well-known account
+ *    provider or a correspondent: the exact address the owner writes to, or
+ *    any address at a domain he writes to when that domain is an
+ *    organisation's own (his bank, his landlord's agency) rather than a
+ *    shared mailbox provider (`isSharedMailProvider`);
  *  - a **wire or gift-card** ask authenticated from a well-known provider.
- *    Not from a correspondent's domain: a known colleague's real, hijacked
- *    mailbox asking for a transfer is exactly the fraud this exists for.
+ *    Not from a correspondent: a known colleague's real, hijacked mailbox
+ *    asking for a transfer is exactly the fraud this exists for.
  */
 export function askWorthRaising(ask: {
   kind: string;
   confidence: number;
   authDomain: string | null;
+  /** The owner has written to this exact From address, from this mailbox. */
+  knownAddress: boolean;
+  /** The owner has written to someone at `authDomain`, from this mailbox. */
   knownDomain: boolean;
 }): boolean {
   if (ask.kind === 'credentials') {
     if (ask.confidence < CREDENTIAL_ASK_MIN) return false;
-    if (ask.authDomain !== null && (isWellKnownSender(ask.authDomain) || ask.knownDomain)) return false;
-    return true;
+    if (ask.authDomain === null) return true;
+    const correspondent = ask.knownAddress || (ask.knownDomain && !isSharedMailProvider(ask.authDomain));
+    return !(isWellKnownSender(ask.authDomain) || correspondent);
   }
   return !isWellKnownSender(ask.authDomain);
 }

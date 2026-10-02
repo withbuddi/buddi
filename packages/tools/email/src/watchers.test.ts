@@ -36,6 +36,9 @@ import {
   severityForSuspicion,
   suspiciousFinding,
   askWorthRaising,
+  isSharedMailProvider,
+  isWellKnownSender,
+  WELL_KNOWN_SENDERS,
   ASK_URGENT_ABOVE,
   DEFAULT_NUDGE_DAYS,
   DEFAULT_PROMISED_DAYS,
@@ -534,12 +537,40 @@ describe('every mail watcher speaks to the owner in an owner line (host API 1.23
 });
 
 describe('askWorthRaising', () => {
+  const ask = (over: Partial<Parameters<typeof askWorthRaising>[0]>) =>
+    askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: null, knownAddress: false, knownDomain: false, ...over });
+
   it('leaves named credential vocabulary and authenticated account notices alone, never a hijacked transfer', () => {
-    expect(askWorthRaising({ kind: 'credentials', confidence: 0.6, authDomain: null, knownDomain: false })).toBe(false);
-    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: null, knownDomain: false })).toBe(true);
-    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'accounts.google.com', knownDomain: false })).toBe(false);
-    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'mybank.test', knownDomain: true })).toBe(false);
-    expect(askWorthRaising({ kind: 'credentials', confidence: 0.85, authDomain: 'gmail.com', knownDomain: false })).toBe(true);
-    expect(askWorthRaising({ kind: 'wire', confidence: 0.9, authDomain: 'supplier.test', knownDomain: true })).toBe(true);
+    expect(ask({ confidence: 0.6 })).toBe(false);
+    expect(ask({})).toBe(true);
+    expect(ask({ authDomain: 'accounts.google.com' })).toBe(false);
+    expect(ask({ authDomain: 'mybank.test', knownDomain: true })).toBe(false);
+    expect(ask({ authDomain: 'gmail.com' })).toBe(true);
+    expect(ask({ kind: 'wire', confidence: 0.9, authDomain: 'supplier.test', knownDomain: true })).toBe(true);
+  });
+
+  it('trusts a shared mailbox domain only for the exact address the owner writes to', () => {
+    // The owner wrote to one Gmail user: a stranger's authenticated Gmail
+    // asking for a password still warns, even at full confidence.
+    expect(ask({ confidence: 1, authDomain: 'gmail.com', knownDomain: true })).toBe(true);
+    expect(ask({ authDomain: 'outlook.com', knownDomain: true })).toBe(true);
+    expect(ask({ authDomain: 'proton.me', knownDomain: true })).toBe(true);
+    // The very correspondent he writes to stays quiet.
+    expect(ask({ authDomain: 'gmail.com', knownAddress: true, knownDomain: true })).toBe(false);
+    // Unauthenticated, an exact address proves nothing.
+    expect(ask({ knownAddress: true, knownDomain: true })).toBe(true);
+  });
+});
+
+describe('shared mail providers', () => {
+  it('are never well-known senders, while the providers\' own notification domains are', () => {
+    for (const d of ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com', 'proton.me', 'protonmail.com', 'aol.com', 'gmx.de', 'mail.ru', 'yandex.ru']) {
+      expect(isSharedMailProvider(d), d).toBe(true);
+      expect(isWellKnownSender(d), d).toBe(false);
+    }
+    expect(isSharedMailProvider('mybank.test')).toBe(false);
+    expect(isWellKnownSender('accounts.google.com')).toBe(true);
+    expect(isWellKnownSender('google.com')).toBe(true);
+    for (const d of WELL_KNOWN_SENDERS) expect(isSharedMailProvider(d), d).toBe(false);
   });
 });
