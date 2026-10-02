@@ -4,6 +4,8 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+## 0.1.0-pre.33 — 2026-10-02
+
 ### Fixed
 
 - Adding a catalogue agent whose skill is named like one of your shared skills (Researcher's `answering-with-sources` beside the one the web plugin imported) no longer fails: that agent uses its own and every other agent keeps the shared one. The Skills page lists both, and giving the shared one to that agent is refused with a reason.
