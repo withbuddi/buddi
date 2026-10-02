@@ -257,8 +257,11 @@ reason the log gives, never naming a login). While a lockout runs it says "Too
 many tries — wait N min" (status `429`), and that a fresh link works right
 away. API calls, event streams and script fetches still get an empty status.
 
-**What counts toward the lockout** (10 failed sign-ins a minute per address; all
-tailnet and tunnel traffic shares 127.0.0.1): only a presented credential that
+**What counts toward the lockout** (10 failed sign-ins a minute per bucket,
+counted per arrival path: a direct loopback request with no proxy headers, each
+tailnet address Tailscale Serve forwards for, every other forwarded request as
+one bucket, and any non-loopback address on its own, so failures through a
+tunnel never lock out the Mac itself or the tailnet): only a presented credential that
 is wrong — a ticket that does not verify, or a session cookie the gateway does
 not know, each distinct value once a minute. A refusal of a cookie also expires
 it in the browser, so a forgotten tab stops presenting it. A request with no

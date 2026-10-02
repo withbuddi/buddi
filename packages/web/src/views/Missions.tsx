@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { api, type MissionRow } from '../api';
 import { fmtRelative, fmtTime, truncate } from '../format';
-import { Button, Card, Code, Empty, ErrorBanner, Field, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync, EmptyState } from '../ui';
+import { Button, Card, Code, Empty, ErrorBanner, Field, Notice, PageFrame, Panel, Pill, Section, Stack, StatePill, Table, Toolbar, useAsync, EmptyState } from '../ui';
 
 const POLICIES = ['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'] as const;
 
@@ -66,7 +66,7 @@ function Mission({
         <>
           <Pill mono>{mission.agentId}</Pill>
           {mission.alwaysDeliver ? <Pill>always delivers</Pill> : null}
-          {!mission.enabled ? <Pill tone="warning">disabled</Pill> : null}
+          {!mission.enabled ? <Pill tone="warning">{mission.endedAt ? 'ended' : 'disabled'}</Pill> : null}
           {mission.pausedReason ? <Pill tone="warning">{mission.pausedReason}</Pill> : null}
         </>
       }
@@ -81,6 +81,26 @@ function Mission({
         </>
       }
     >
+      {mission.stillUsefulAskedAt ? (
+        <Notice
+          tone="warning"
+          title="Still useful?"
+          action={(
+            <Toolbar align="end">
+              <Button size="sm" onClick={() => onRun(api.setMissionEnabled(mission.id, false))}>Stop</Button>
+              <Button size="sm" variant="accent" onClick={() => onRun(api.keepMission(mission.id))}>Keep</Button>
+            </Toolbar>
+          )}
+        >
+          {`It has run ${mission.quietRuns ?? 'many'} times in a row without anything to tell you.`}
+        </Notice>
+      ) : null}
+      {mission.stopWhen || mission.endsAt ? (
+        <p className="ui-card-meta">
+          {mission.stopWhen ? `Stops itself when ${mission.stopWhen}. ` : ''}
+          {mission.endedAt ? `Ended ${fmtTime(mission.endedAt, timezone)}.` : mission.endsAt ? `Ends ${fmtTime(mission.endsAt, timezone)}.` : ''}
+        </p>
+      ) : null}
       <p className="ui-card-meta">
         {mission.schedule ? (
           <>

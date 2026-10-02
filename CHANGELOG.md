@@ -33,6 +33,14 @@ What changes in buddi from one release to the next, newest first.
 
 - `GET /api/teammates`, the old Add a teammate list; the catalogue replaced it.
 
+### Fixed
+
+- Missions stop themselves: every mission run is told its own id, and a run of an agent's own watch is told to call `schedule.cancel_mine` and say so once when its goal is met or no longer applies (it now holds that tool whatever its file grants), so a watch whose answer is known stops firing every hour.
+- A watch an agent proposes carries when it is done (`stopWhen`) and an end (`endsOn`, 30 days unless it names a day); past its end it switches off quietly and stays listed as ended. Your own missions and plugins' have no end.
+- An agent's watch that told you nothing for 48 runs in a row asks once in Needs you, "Still useful?", and its card on Missions offers Keep (the count starts again) and Stop. Route `POST /api/missions/:id/keep`.
+- Take over in "Your browser" mode with Chrome closed on the host no longer shows an empty live view: it says "Your browser isn't connected", with Try again once Chrome is open, or Use buddi's browser instead (releases the session and switches to buddi's own browser).
+- Failed sign-ins are counted per arrival path: a tunnel or another forwarded path that runs into the lockout no longer locks out the Mac itself or a tailnet device, which each keep their own count.
+
 ## 0.1.0-pre.31 — 2026-10-02
 
 ### Added

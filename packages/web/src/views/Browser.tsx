@@ -540,18 +540,47 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
    */
   const [driving, setDriving] = useState<string | null>(null);
   const [handNote, setHandNote] = useState<string | null>(null);
+  /*
+   * "Your browser" with Chrome closed on the host: the agent is paused, but
+   * there is no tab anywhere to show. The gateway says so (`handReason`), and
+   * the panel offers the two ways out instead of an empty live view.
+   */
+  const [offline, setOffline] = useState(false);
+  const machine = useThisMachine();
   const control = async (action: 'stop' | 'takeover' | 'resume' | 'release') => {
     setBusy(true);
     setFailure(null);
     setHandNote(null);
+    setOffline(false);
     try {
       const next = action !== 'stop' && data?.session
         ? await api.browserControl(action, data.session.id)
         : await api.browserControl(action);
       if (action === 'takeover') {
         if (next.hand && next.session) setDriving(next.session.id);
+        else if (next.handReason === 'browser-offline') setOffline(true);
         else setHandNote(next.handMessage ?? null);
       } else setDriving(null);
+    }
+    catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); reload(); }
+  };
+  /*
+   * The other way out: buddi's own browser. The mode is one setting for the
+   * whole installation, and it changes only with no session open, so this
+   * conversation's session is released first; the agent opens the page again
+   * in buddi's browser on the next message.
+   */
+  const switchToOwnBrowser = async () => {
+    if (!data?.settings) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      if (data.session) await api.browserControl('release', data.session.id);
+      await api.browserSettings({ ...data.settings, mode: 'playwright' });
+      setOffline(false);
+      setDriving(null);
+      setHandNote('Switched to buddi\u2019s browser. Send the agent a message and it opens the page there.');
     }
     catch (err) { setFailure(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); reload(); }
@@ -592,7 +621,22 @@ export function BrowserPanel({ data, error, reload, compact = false, refresh, sc
       ) : null}
       {!controls ? null : compact ? <Details summary="About these controls"><p className="muted">{help}</p></Details> : <p className="muted">{help}</p>}
       {handNote ? <Notice tone="warning" role="status">{handNote}</Notice> : null}
-      {data?.message && !hand ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
+      {offline && yours ? (
+        <Notice
+          tone="warning"
+          role="status"
+          title="Your browser isn’t connected."
+          action={(
+            <Toolbar align="end">
+              {data?.settings ? <Button size="sm" disabled={busy} onClick={() => void switchToOwnBrowser()}>Use buddi’s browser instead</Button> : null}
+              <Button size="sm" variant="accent" disabled={busy} onClick={() => void control('takeover')}>Try again</Button>
+            </Toolbar>
+          )}
+        >
+          {`There is no Chrome tab to show or drive. Open Chrome on ${machine}: the buddi extension reconnects by itself, then try again. Or let the agent carry on in buddi’s own browser.`}
+        </Notice>
+      ) : null}
+      {data?.message && !hand && !(offline && yours) ? <Notice tone="warning" role="status">{data.message}</Notice> : null}
       {data?.session ? (
         <div className="browser-task">
           <div className="ui-row"><strong>{data.session.agentId}</strong><span className="muted">{data.session.steps} / {data.session.maxSteps} steps</span></div>

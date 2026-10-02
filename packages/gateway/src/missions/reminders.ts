@@ -45,7 +45,9 @@ import {
   parseCron,
   parseReminderWhen,
   setMissionEnabled,
+  setMissionLifespan,
   setSchedule,
+  AGENT_MISSION_DEFAULT_DAYS,
   upsertMission,
   type PluginManifest,
   type Reminder,
@@ -495,6 +497,22 @@ const proposeInput = z.object({
     .enum(['replay-all', 'coalesce', 'latest-only', 'skip-after-deadline'])
     .optional()
     .describe('What to do about runs missed while the machine slept. "coalesce" is the sensible default.'),
+  stopWhen: z
+    .string()
+    .max(300)
+    .optional()
+    .describe(
+      'For a watch: when it is done, in a few words ("the extension is approved", "the parcel is delivered"). ' +
+        'Every run is reminded of it, and the run that finds it true calls schedule.cancel_mine.',
+    ),
+  endsOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .describe(
+      `The last day it runs, YYYY-MM-DD in the owner's zone. Left out, it ends after ${AGENT_MISSION_DEFAULT_DAYS} days; ` +
+        'after that it switches itself off quietly and stays listed.',
+    ),
 });
 
 export interface ScheduleEnvelope {
@@ -507,6 +525,10 @@ export interface ScheduleEnvelope {
   prompt: string;
   misfirePolicy: string;
   nextThreeRuns: string[];
+  /** When the watch is done, in the agent's words; absent when it named none. */
+  stopWhen?: string;
+  /** When it switches itself off (ISO): the day it named, or 30 days on. */
+  endsAt: string;
 }
 
 export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
@@ -526,8 +548,41 @@ export function renderSchedulePreview(envelope: ScheduleEnvelope): string {
     'Each run does exactly this:',
     envelope.prompt,
     '',
+    ...(envelope.stopWhen ? [`It stops itself when: ${envelope.stopWhen}`] : []),
+    `It ends on its own after ${localDateTimeString(new Date(envelope.endsAt), envelope.timezone)}.`,
+    '',
     `It speaks only when it decides to (mission.report). Stop it later with: buddi missions disable ${envelope.missionId}`,
   ].join('\n');
+}
+
+/**
+ * When an agent's watch ends: the end of the day it named, in `timezone`, or
+ * 30 days from now. A day already past, or more than a year out, is refused:
+ * the first is a watch that would never run, the second is not a watch.
+ */
+export function missionEnd(endsOn: string | undefined, timezone: string, now: Date): Date {
+  if (!endsOn) return new Date(now.getTime() + AGENT_MISSION_DEFAULT_DAYS * 86_400_000);
+  const [y, m, d] = endsOn.split('-').map(Number) as [number, number, number];
+  // The last instant of that day where the owner is: midnight after it, in
+  // the zone, found by correcting a UTC guess by the zone's offset there.
+  const guess = Date.UTC(y, m - 1, d + 1);
+  const offset = zoneOffsetMs(new Date(guess), timezone);
+  const end = new Date(guess - offset - 1);
+  if (Number.isNaN(end.getTime()) || end.getTime() <= now.getTime()) {
+    throw new Error(`endsOn ${endsOn} is not a day still to come`);
+  }
+  if (end.getTime() - now.getTime() > 366 * 86_400_000) throw new Error('endsOn may be at most a year away');
+  return end;
+}
+
+/** The zone's offset from UTC at `at`, in ms (positive east of Greenwich). */
+function zoneOffsetMs(at: Date, timezone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(at);
+  const get = (type: string): number => Number(parts.find((p) => p.type === type)?.value);
+  const local = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return local - Math.floor(at.getTime() / 1000) * 1000;
 }
 
 /** The schedule tools: propose (gated), list mine, cancel mine. */
@@ -556,6 +611,8 @@ export function createScheduleManifest(): PluginManifest {
         prompt: input.prompt.trim(),
         misfirePolicy: input.misfirePolicy ?? 'coalesce',
         nextThreeRuns: nextRuns(input.cron, timezone, ctx.now(), 3),
+        ...(input.stopWhen?.trim() ? { stopWhen: input.stopWhen.trim() } : {}),
+        endsAt: missionEnd(input.endsOn, timezone, ctx.now()).toISOString(),
       };
       if (tooFrequent(envelope.cron, timezone, ctx.now())) {
         throw new Error(
@@ -591,8 +648,13 @@ export function createScheduleManifest(): PluginManifest {
         timezoneExplicit: (input.timezone ?? '').trim() !== '',
         misfirePolicy: input.misfirePolicy ?? 'coalesce',
       });
+      // A watch the agent asked for ends: on the day it named, or 30 days on.
+      // The owner's own missions and plugins' never get here.
+      const endsAt = missionEnd(input.endsOn, timezone, ctx.now());
+      await setMissionLifespan(ctx.db, mission.id, { stopWhen: input.stopWhen?.trim() || null, endsAt });
       return {
         missionId: mission.id,
+        endsAt: endsAt.toISOString(),
         cron: spec.cron,
         timezone: spec.timezone,
         revision: spec.revision,
@@ -623,6 +685,8 @@ export function createScheduleManifest(): PluginManifest {
           cron: spec?.cron ?? null,
           timezone: spec?.timezone ?? null,
           followsOwnerZone: spec ? !spec.timezoneExplicit : null,
+          stopWhen: mission.stopWhen ?? null,
+          endsAt: mission.endsAt ? mission.endsAt.toISOString() : null,
           cadence: spec ? describeCadence(spec.cron, spec.timezone) : null,
           nextRun:
             spec && mission.enabled
@@ -639,7 +703,8 @@ export function createScheduleManifest(): PluginManifest {
     description:
       'Stop one of your own recurring schedules. Always allowed and never needs approval — you may always ' +
       'stop yourself, even though you may not start without the owner saying yes. It stays listed as disabled, ' +
-      'so the owner can see what you stopped.',
+      'so the owner can see what you stopped. In a run of one of your own missions, call it the moment that ' +
+      'mission\'s goal is met or no longer applies, and say so once.',
     tier: 'auto',
     input: z
       .object({ missionId: z.string().min(1).describe('The id schedule.list_mine reports.') })

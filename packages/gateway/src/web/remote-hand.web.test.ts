@@ -233,6 +233,15 @@ describe('the remote hand socket', () => {
     expect(driverHand.stop).toHaveBeenCalled();
   });
 
+  it('says "Your browser isn\u2019t connected" when Take over finds the extension offline', async () => {
+    const { browser } = controller();
+    // What the extension driver offers with Chrome closed: paused, no screen.
+    browser.hand = () => ({ supported: true, message: 'Use this conversation\u2019s host tab for login or manual work.' });
+    const { headers, origin } = await setup(browser);
+    const taken = await fetch(`${origin}/api/browser/takeover`, { method: 'POST', headers, body: JSON.stringify({ sessionId: SESSION }) });
+    expect(await taken.json()).toMatchObject({ state: 'paused', hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn\u2019t connected.' });
+  });
+
   it('says so when the mode has no hand of its own', async () => {
     const { browser } = controller();
     browser.hand = () => ({ supported: false, message: 'Take over at the computer for this mode.' });

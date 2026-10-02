@@ -702,6 +702,21 @@ three instants in the owner's zone, and the exact instruction. Only
 and `alwaysDeliver: false`. `schedule.cancel_mine` is `auto`: an agent may
 always take its own foot off the pedal.
 
+**Missions that stop themselves.** A watch the agent proposed carries its own
+end: `stopWhen` (its words for "done", shown in the preview and to every run)
+and `endsOn` (the last day, in the owner's zone; left out, 30 days on). Past
+its end the scheduler switches it off quietly (`enabled` false, `ended_at`
+set, a `mission.ended` event, no message) and it stays listed as ended;
+switching it back on drops the end. The owner's own missions and plugins'
+defaults have no end. Every mission run is told its id; a run of the agent's
+own mission (`agent:<id>:<slug>`) also gets the rule — goal met or moot, call
+`schedule.cancel_mine` and say so once — and holds `schedule.list_mine` and
+`schedule.cancel_mine` whatever its file grants. The safety net: 48 silent runs
+in a row (`quiet_runs`, reset by any delivered report) raise one Needs-you
+notification, "Still useful? <name>" with the action "Keep or stop it?",
+linking to Missions, where the card offers **Stop** and **Keep** (`POST
+/api/missions/:id/keep` resets the count and lets the question come again).
+
 Goals, a target with a clock over a plugin's metric, are in [goals.md](goals.md).
 
 ## Effectful side effects

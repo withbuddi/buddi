@@ -41,6 +41,7 @@ import {
   listFailureGroups,
   takeOffer,
   setMissionEnabled,
+  keepMission,
   setPaused,
   setSchedule,
   toActionRecord,
@@ -223,6 +224,16 @@ export async function setMissionEnabledFromWeb(
   enabled: boolean,
 ): Promise<WriteResult<{ id: string; enabled: boolean }>> {
   const mission = await setMissionEnabled(deps.pool, missionId, enabled);
+  if (!mission) return fail(404, `no such mission: ${missionId}`);
+  return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
+}
+
+/** The owner's Keep on "Still useful?": the quiet count starts again. */
+export async function keepMissionFromWeb(
+  deps: WriteDeps,
+  missionId: string,
+): Promise<WriteResult<{ id: string; enabled: boolean }>> {
+  const mission = await keepMission(deps.pool, missionId);
   if (!mission) return fail(404, `no such mission: ${missionId}`);
   return { ok: true, status: 200, body: { id: mission.id, enabled: mission.enabled } };
 }

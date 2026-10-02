@@ -1,7 +1,7 @@
 /** Missions: a schedule that follows the owner's zone says so; one with a zone named on purpose shows it. */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import { render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { api, type MissionRow } from '../api';
 import { Missions } from './Missions';
 
@@ -32,5 +32,35 @@ describe('Missions', () => {
     expect(follows).toHaveAttribute('title', 'Europe/Lisbon');
     expect(screen.getByText(/Asia\/Tokyo/)).toBeInTheDocument();
     expect(screen.queryByText(/Europe\/Lisbon ·/)).toBeNull();
+  });
+});
+
+describe('missions that stop themselves', () => {
+  afterEach(() => cleanup());
+  const watch: MissionRow = {
+    ...mission('agent:keeper:store-watch', 'UTC', false),
+    name: 'Store watch',
+    stopWhen: 'the extension is approved', endsAt: '2026-10-31T23:59:59Z', quietRuns: 48, stillUsefulAskedAt: '2026-10-02T10:00:00Z',
+  };
+
+  it('asks "Still useful?" with Keep and Stop, and says when the watch stops and ends', async () => {
+    vi.mocked(api.missions).mockResolvedValue({ missions: [watch] });
+    const keep = vi.spyOn(api, 'keepMission').mockResolvedValue({ id: watch.id, enabled: true });
+    const stop = vi.spyOn(api, 'setMissionEnabled').mockResolvedValue({ id: watch.id, enabled: false });
+    render(<Missions timezone="UTC" />);
+    expect(await screen.findByText('Still useful?')).toBeInTheDocument();
+    expect(screen.getByText(/48 times in a row/)).toBeInTheDocument();
+    expect(screen.getByText(/Stops itself when the extension is approved/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(keep).toHaveBeenCalledWith(watch.id));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(stop).toHaveBeenCalledWith(watch.id, false));
+  });
+
+  it('lists a watch past its end as ended, with no question', async () => {
+    vi.mocked(api.missions).mockResolvedValue({ missions: [{ ...watch, enabled: false, endedAt: '2026-10-31T23:59:59Z', stillUsefulAskedAt: undefined }] });
+    render(<Missions timezone="UTC" />);
+    expect(await screen.findByText('ended')).toBeInTheDocument();
+    expect(screen.queryByText('Still useful?')).not.toBeInTheDocument();
   });
 });

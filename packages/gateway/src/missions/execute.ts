@@ -19,7 +19,10 @@
  */
 import {
   appendEvent,
+  endExpiredMissions,
   getAction,
+  noteMissionRun,
+  notifyOwner,
   markFindingDelivered,
   mutedFindingKeys,
   offerActions,
@@ -50,6 +53,7 @@ import {
   type MissionDecision,
 } from './report.js';
 import { findingsOf, renderFindings, type FindingPayload } from './sentinel-wake.js';
+import { missionOwnerAgent } from './reminders.js';
 
 /** Re-exported so callers keep catching the error they always caught. */
 export { UnknownAgentError };
@@ -260,6 +264,30 @@ function registryForRun(base: ToolRegistry, sink: DecisionSink): ToolRegistry {
 
 const MISSION_TOOLS = ['mission.report', 'mission.silent'];
 
+/**
+ * An agent's own mission may always stop itself: its run holds the two
+ * schedule tools whatever the agent's file grants, and `schedule.cancel_mine`
+ * still refuses any mission that is not the agent's.
+ */
+const OWN_MISSION_TOOLS = ['schedule.list_mine', 'schedule.cancel_mine'];
+
+/**
+ * What a run of a mission knows about the mission itself (docs/missions.md,
+ * "When a mission stops"): its id, and, when it is the agent's own, the one
+ * rule that lets a watch end when its point has passed.
+ */
+export function missionSelfContext(mission: Mission, ownedByRunAgent: boolean): string {
+  const lines = [`This run is mission "${mission.name}" (id ${mission.id}).`];
+  if (ownedByRunAgent) {
+    if (mission.stopWhen) lines.push(`It is done when: ${mission.stopWhen}.`);
+    lines.push(
+      `When this mission's goal is met or no longer applies, call schedule.cancel_mine with missionId "${mission.id}" ` +
+        'and say so once in your report. Do not keep running a watch whose answer is already known.',
+    );
+  }
+  return lines.join(' ');
+}
+
 /** Build the `execute` callback `runScheduler` calls. */
 export function createMissionExecutor(
   deps: MissionExecutorDeps,
@@ -303,11 +331,29 @@ export function createMissionExecutor(
     }
     const finding = findings[0] ?? null;
     const agentId = finding?.agentId || mission.agentId;
+    // An agent's watch past its end switches off quietly, before any model
+    // call: an occurrence made before the end does not get one more run.
+    if (!control?.resume && mission.endsAt && mission.endsAt.getTime() <= deps.now().getTime()) {
+      for (const ended of await endExpiredMissions(deps.pool, deps.now())) {
+        await appendEvent(deps.pool, 'mission.ended', { missionId: ended, reason: 'end-date' });
+      }
+      log(`mission ${mission.id}: occurrence ${occurrence.id} not run — the mission reached its end`);
+      return { conversationId: '', text: '', delivered: false, decision: 'silent', reason: 'ended' };
+    }
     const selectedAgent = catalog.resolve(agentId);
     const base = selectedAgent.definition(deps.now(), deps.ctx.timezone);
+    // Proposed by this very agent (`agent:<id>:<slug>`): it may stop it.
+    const ownMission = missionOwnerAgent(mission.id) === agentId;
     // The mission tools exist for this run only; the agent's own file never
     // needs to know about them, and nothing outside a mission run can call them.
-    const agent = { ...base, tools: [...base.tools, ...MISSION_TOOLS] };
+    const agent = {
+      ...base,
+      tools: [
+        ...base.tools,
+        ...MISSION_TOOLS,
+        ...(ownMission ? OWN_MISSION_TOOLS.filter((t) => !base.tools.includes(t) && deps.registry.has(t)) : []),
+      ],
+    };
 
     const sink: DecisionSink = {};
     const registry = registryForRun(deps.registry, sink);
@@ -317,6 +363,7 @@ export function createMissionExecutor(
       mission.prompt,
       findings.length > 0 ? renderFindings(findings) : '',
       prepared?.appendix ?? '',
+      missionSelfContext(mission, ownMission),
     ]
       .filter((part) => part.trim() !== '')
       .join('\n\n');
@@ -337,6 +384,33 @@ export function createMissionExecutor(
       ...deps.ctx,
       ...(control?.jobId ? { jobId: control.jobId } : {}),
       ...(control?.signal ? { signal: control.signal } : {}),
+    };
+
+    /*
+     * The safety net under the rule above: an agent's own watch that has told
+     * the owner nothing for 48 runs in a row asks once, "Still useful?", with
+     * Keep and Stop on the Missions page it links to. A report resets the
+     * count; so does Keep. Counting never fails the run.
+     */
+    const countQuiet = async (spoke: boolean): Promise<void> => {
+      if (missionOwnerAgent(mission.id) === null) return;
+      try {
+        const counted = await noteMissionRun(deps.pool, mission.id, spoke, deps.now());
+        if (!counted.ask) return;
+        await notifyOwner(deps.pool, { now: deps.now, timezone: deps.ctx.timezone, log }, {
+          kind: 'watcher',
+          urgency: 'today',
+          title: `Still useful? ${mission.name}`,
+          text: `It has run ${counted.quietRuns} times in a row without anything to tell you. Keep it, or stop it.`,
+          action: 'Keep or stop it?',
+          link: { route: '#/missions' },
+          agentId: mission.agentId,
+          dedupeKey: `still-useful:${mission.id}`,
+        });
+        await appendEvent(deps.pool, 'mission.still_useful', { missionId: mission.id, quietRuns: counted.quietRuns });
+      } catch (err) {
+        log(`mission ${mission.id}: could not count a quiet run: ${err instanceof Error ? err.message : String(err)}`);
+      }
     };
 
     const result = await runAgent({
@@ -418,6 +492,7 @@ export function createMissionExecutor(
         },
         conversationId,
       );
+      await countQuiet(false);
       return { conversationId, text, delivered: false, decision: kind, reason };
     }
 
@@ -498,6 +573,7 @@ export function createMissionExecutor(
     }
     // Only now is the digest consumed: a recap that never sent keeps its items.
     if (prepared?.commit) await prepared.commit();
+    await countQuiet(true);
 
     return {
       conversationId,

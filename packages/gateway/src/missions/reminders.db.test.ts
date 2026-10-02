@@ -21,6 +21,11 @@ import {
   executeApproved,
   getActiveSchedule,
   getMission,
+  endExpiredMissions,
+  keepMission,
+  noteMissionRun,
+  setMissionEnabled,
+  upsertMission,
   listJobs,
   listPendingActions,
   listReminders,
@@ -330,6 +335,63 @@ suite('reminders and proposed schedules (postgres)', () => {
     // Registered again unchanged: up to date, no new revision.
     const again = await registerDefault(pool, { mission: { id: 'zone-follows', name: 'f', ...base }, cron: '0 8 * * *' }, 'Europe/Lisbon');
     expect(again).toMatchObject({ schedule: 'up-to-date', revision: 1 });
+  });
+
+  it('gives an agent\'s watch its stop condition and an end, then ends it quietly and keeps it listed', async () => {
+    const registry = createToolRegistry();
+    const agentCtx: CoreToolContext = { ...ctx, agentId: 'finance-advisor' };
+    const proposed = await registry.invoke(
+      'schedule.propose',
+      { name: 'Store watch', cron: '0 * * * *', prompt: 'Check whether the listing is approved.', stopWhen: 'the listing is approved' },
+      agentCtx,
+    );
+    if (proposed.ok || proposed.reason !== 'approval-required') throw new Error('expected an approval');
+    const pending = await listPendingActions(pool, { now: NOW });
+    expect(pending[0]?.preview).toContain('It stops itself when: the listing is approved');
+    expect(pending[0]?.preview).toContain('It ends on its own after');
+    await decideApproval(pool, { actionId: proposed.actionId, decision: 'approved', by: 'owner', via: 'telegram', now: NOW });
+    expect((await executeApproved(pool, { actionId: proposed.actionId, registry, ctx, worker: 'test', now: NOW })).ok).toBe(true);
+
+    const id = agentMissionId('finance-advisor', 'store-watch');
+    const mission = await getMission(pool, id);
+    expect(mission?.stopWhen).toBe('the listing is approved');
+    // Thirty days, as nothing else was named.
+    expect(mission?.endsAt?.getTime()).toBe(NOW.getTime() + 30 * 86_400_000);
+
+    // The day after: switched off quietly, still listed, as ended.
+    const after = new Date(NOW.getTime() + 31 * 86_400_000);
+    expect(await endExpiredMissions(pool, after)).toEqual([id]);
+    expect(await getMission(pool, id)).toMatchObject({ enabled: false, endedAt: after });
+    // Switched back on by the owner: the end goes with it.
+    expect(await setMissionEnabled(pool, id, true)).toMatchObject({ enabled: true, endsAt: null, endedAt: null });
+    expect(await endExpiredMissions(pool, after)).toEqual([]);
+  });
+
+  it('refuses an end date already past', async () => {
+    const registry = createToolRegistry();
+    await expect(registry.invoke(
+      'schedule.propose',
+      { name: 'Late watch', cron: '0 * * * *', prompt: 'p', endsOn: '2020-01-01' },
+      { ...ctx, agentId: 'finance-advisor' },
+    )).resolves.toMatchObject({ ok: false });
+    expect(await listPendingActions(pool, { now: NOW })).toHaveLength(0);
+  });
+
+  it('asks "Still useful?" once after 48 quiet runs; a report or Keep starts the count again', async () => {
+    const id = agentMissionId('finance-advisor', 'quiet-watch');
+    await upsertMission(pool, { id, name: 'Quiet watch', agentId: 'finance-advisor', prompt: 'p' });
+    let asks = 0;
+    for (let i = 0; i < 47; i++) if ((await noteMissionRun(pool, id, false, NOW)).ask) asks += 1;
+    expect(asks).toBe(0);
+    // A report in between resets the count.
+    expect(await noteMissionRun(pool, id, true, NOW)).toEqual({ quietRuns: 0, ask: false });
+    for (let i = 0; i < 47; i++) await noteMissionRun(pool, id, false, NOW);
+    expect(await noteMissionRun(pool, id, false, NOW)).toEqual({ quietRuns: 48, ask: true });
+    // Asked once, not on every run after.
+    expect(await noteMissionRun(pool, id, false, NOW)).toEqual({ quietRuns: 49, ask: false });
+    expect((await getMission(pool, id))?.stillUsefulAskedAt).toEqual(NOW);
+    // Keep: the count and the question start again.
+    expect(await keepMission(pool, id)).toMatchObject({ quietRuns: 0, stillUsefulAskedAt: null });
   });
 
   it('refuses a cron that would run more often than hourly, recording nothing', async () => {

@@ -519,6 +519,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   /* ---------------- missions, jobs, reminders, watchers ---------------- */
   { method: 'GET', path: '/api/missions', area: 'work', summary: 'Every mission, its schedule, next run and recent occurrences.', answer: '{ missions: MissionView[] }' },
   { method: 'POST', path: '/api/missions/:id/enabled', area: 'work', summary: 'Switch a mission on or off.', body: '{ enabled: boolean }', errors: '404' },
+  { method: 'POST', path: '/api/missions/:id/keep', area: 'work', summary: 'Keep an agent’s quiet watch after “Still useful?”: its count of silent runs starts again.', answer: '{ id, enabled }', errors: '404' },
   {
     method: 'POST', path: '/api/missions/:id/schedule', area: 'work', summary: 'Change a mission’s schedule (a new revision).',
     body: "{ cron?: string, timezone?: string, misfirePolicy?: 'skip'|'run-once', deadlineMinutes?: number|null }", errors: '400; 404',

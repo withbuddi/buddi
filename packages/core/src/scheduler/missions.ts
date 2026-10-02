@@ -39,7 +39,7 @@ export type SetScheduleInput = {
 };
 
 const MISSION_COLUMNS =
-  'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, coalesce_window_seconds, coalesce_max_wait_seconds, created_at';
+  'id, name, agent_id, prompt, enabled, always_deliver, paused_reason, stop_when, ends_at, ended_at, quiet_runs, still_useful_asked_at, coalesce_window_seconds, coalesce_max_wait_seconds, created_at';
 const SPEC_COLUMNS =
   'id, mission_id, revision, cron, timezone, timezone_explicit, misfire_policy, deadline_minutes, active, created_at';
 
@@ -261,8 +261,99 @@ export async function setMissionEnabled(
   enabled: boolean,
 ): Promise<Mission | null> {
   const { rows } = await pool.query<MissionRow>(
-    `update core.missions set enabled = $2 where id = $1 returning ${MISSION_COLUMNS}`,
+    // Switching an ended watch back on is the owner saying it is not over:
+    // its end goes with the switch, or the next tick would end it again.
+    `update core.missions
+        set enabled = $2,
+            ends_at = case when $2 and ended_at is not null then null else ends_at end,
+            ended_at = case when $2 then null else ended_at end
+      where id = $1 returning ${MISSION_COLUMNS}`,
     [missionId, enabled],
+  );
+  return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Missions that stop themselves (docs/missions.md, "When a mission stops")
+ * ------------------------------------------------------------------ */
+
+/** How long an agent-proposed watch runs when it names no end of its own. */
+export const AGENT_MISSION_DEFAULT_DAYS = 30;
+
+/** Silent runs in a row after which the owner is asked "Still useful?". */
+export const STILL_USEFUL_AFTER_QUIET_RUNS = 48;
+
+/**
+ * When a watch is done and when it ends. A mission given a new lifespan is a
+ * live one again: a previous end and its quiet count go.
+ */
+export async function setMissionLifespan(
+  pool: Pool,
+  missionId: string,
+  input: { stopWhen: string | null; endsAt: Date | null },
+): Promise<Mission | null> {
+  const { rows } = await pool.query<MissionRow>(
+    `update core.missions set stop_when = $2, ends_at = $3, ended_at = null, quiet_runs = 0, still_useful_asked_at = null
+      where id = $1 returning ${MISSION_COLUMNS}`,
+    [missionId, input.stopWhen, input.endsAt],
+  );
+  return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
+}
+
+/**
+ * Switch off every enabled mission whose end has come, quietly: no message,
+ * just `enabled = false` and `ended_at`, so it stays listed as ended. Returns
+ * the ids it ended.
+ */
+export async function endExpiredMissions(pool: Pool, now: Date): Promise<string[]> {
+  const { rows } = await pool.query<{ id: string }>(
+    `update core.missions set enabled = false, ended_at = $1
+      where enabled and ends_at is not null and ends_at <= $1
+      returning id`,
+    [now],
+  );
+  return rows.map((r) => r.id);
+}
+
+/**
+ * One run's outcome on the quiet counter: a report resets it, a silent run adds
+ * one. Answers the count after, and whether this run is the one that should
+ * ask the owner "Still useful?" (the threshold reached, not asked yet). The
+ * ask is claimed in the same statement, so two runs cannot both ask.
+ */
+export async function noteMissionRun(
+  pool: Pool,
+  missionId: string,
+  spoke: boolean,
+  now: Date,
+  threshold: number = STILL_USEFUL_AFTER_QUIET_RUNS,
+): Promise<{ quietRuns: number; ask: boolean }> {
+  if (spoke) {
+    await pool.query(`update core.missions set quiet_runs = 0 where id = $1`, [missionId]);
+    return { quietRuns: 0, ask: false };
+  }
+  const { rows } = await pool.query<{ quiet_runs: number; ask: boolean }>(
+    `with before as (select still_useful_asked_at from core.missions where id = $1 for update)
+     update core.missions m
+        set quiet_runs = m.quiet_runs + 1,
+            still_useful_asked_at = case
+              when m.still_useful_asked_at is null and m.quiet_runs + 1 >= $3 then $2
+              else m.still_useful_asked_at end
+       from before
+      where m.id = $1
+      returning m.quiet_runs, (before.still_useful_asked_at is null and m.quiet_runs >= $3) as ask`,
+    [missionId, now, threshold],
+  );
+  const row = rows[0];
+  return row ? { quietRuns: row.quiet_runs, ask: row.ask } : { quietRuns: 0, ask: false };
+}
+
+/** The owner's Keep on "Still useful?": the counter starts again, and so may the question. */
+export async function keepMission(pool: Pool, missionId: string): Promise<Mission | null> {
+  const { rows } = await pool.query<MissionRow>(
+    `update core.missions set quiet_runs = 0, still_useful_asked_at = null
+      where id = $1 returning ${MISSION_COLUMNS}`,
+    [missionId],
   );
   return rows.length > 0 ? toMission(rows[0] as MissionRow) : null;
 }

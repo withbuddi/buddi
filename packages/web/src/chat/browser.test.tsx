@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, chatApi, type BrowserStatus } from '../api';
 import { ChatPage, type ChatPageProps } from './ChatPage';
 import { conversationBrowser } from './browser';
+import { BrowserPanel } from '../views/Browser';
 import type { ChatConversation } from './types';
 
 vi.mock('./stream', () => ({ openChatStream: () => ({ close() {} }) }));
@@ -246,5 +247,35 @@ describe('conversation browser canvas', () => {
     expect(conversationBrowser(undefined, 'keeper', 'c1')).toBeNull();
     expect(conversationBrowser(status, 'keeper', null)).toBeNull();
     expect(conversationBrowser(status, 'keeper', 'c1')).toMatchObject({ source: 'browser', substantial: false });
+  });
+});
+
+describe('Take over with no browser connected', () => {
+  const extension: BrowserStatus = { ...status, mode: 'extension', settings: { mode: 'extension', browserApp: '', allowedApps: [] } };
+  const offline: BrowserStatus = { ...extension, state: 'paused', hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn\u2019t connected.' };
+  beforeEach(() => { vi.spyOn(api, 'session').mockResolvedValue({ platform: 'darwin' } as never); });
+
+  it('says the browser is not connected, and Try again asks again', async () => {
+    vi.mocked(api.browserControl).mockResolvedValue(offline);
+    render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+    expect(await screen.findByText('Your browser isn\u2019t connected.')).toBeInTheDocument();
+    expect(screen.getByText(/Open Chrome on this Mac/)).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-hand')).not.toBeInTheDocument();
+    vi.mocked(api.browserControl).mockResolvedValue({ ...offline, hand: true, handReason: undefined, handMessage: undefined });
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByText('Your browser isn\u2019t connected.')).not.toBeInTheDocument());
+    expect(api.browserControl).toHaveBeenLastCalledWith('takeover', 's1');
+  });
+
+  it('switches to buddi\u2019s browser, releasing this session first', async () => {
+    vi.mocked(api.browserControl).mockResolvedValue(offline);
+    const settings = vi.spyOn(api, 'browserSettings').mockResolvedValue({ ...status, mode: 'playwright' });
+    render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use buddi\u2019s browser instead' }));
+    await waitFor(() => expect(settings).toHaveBeenCalledWith({ mode: 'playwright', browserApp: '', allowedApps: [] }));
+    expect(api.browserControl).toHaveBeenCalledWith('release', 's1');
+    expect(await screen.findByText(/Switched to buddi\u2019s browser/)).toBeInTheDocument();
   });
 });

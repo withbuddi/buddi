@@ -425,6 +425,16 @@ here is kept*, with **Give it back** beside it and a **Keyboard** toggle that
 raises a phone's keyboard. **Give it back** is `resume`: the agent's evidence is
 invalidated and it must observe again before acting.
 
+**With no browser connected.** In "Your browser" mode with the extension
+offline (Chrome closed on the host), Take over still pauses the agent but there
+is no tab to show. The gateway says so (`handReason: 'browser-offline'` on the
+take-over's answer) and the panel shows *Your browser isn't connected* with two
+ways out: open Chrome on the host (the extension reconnects by itself) and
+**Try again**, or **Use buddi's browser instead**, which releases this
+conversation's session and switches the mode to Playwright (the mode is one
+setting for the installation and changes only with no session open, so another
+conversation's open session refuses it with that sentence).
+
 Computer mode has no remote hand and says so — *Take over at the computer for
 this mode* — because the native helper acts on accessibility targets and has no
 raw pointer or keystroke to forward. Telegram is unchanged; it still says to

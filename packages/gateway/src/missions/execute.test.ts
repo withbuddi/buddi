@@ -30,6 +30,10 @@ class FakeDb {
   delivered: string[] = [];
   /** Finding keys a mute the owner set covers now. */
   muted = new Set<string>();
+  /** Missions `endExpiredMissions` finds past their end. */
+  ended: string[] = [];
+  /** The quiet counter of the one agent mission a test runs. */
+  quiet = 0;
 
   async query(sql: string, params: any[] = []): Promise<{ rows: any[] }> {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -85,6 +89,17 @@ class FakeDb {
     }
     if (text.startsWith('update core.sentinel_findings set delivered_at')) {
       this.delivered.push(params[0]);
+      return { rows: [] };
+    }
+    if (text.startsWith('update core.missions set enabled = false, ended_at')) {
+      return { rows: this.ended.map((id) => ({ id })) };
+    }
+    if (text.startsWith('with before as') && text.includes('quiet_runs')) {
+      this.quiet += 1;
+      return { rows: [{ quiet_runs: this.quiet, ask: this.quiet === 48 }] };
+    }
+    if (text.startsWith('update core.missions set quiet_runs = 0')) {
+      this.quiet = 0;
       return { rows: [] };
     }
     // The memory preamble reads the plugin's own schema; a mission run in this
@@ -254,7 +269,7 @@ describe('createMissionExecutor', () => {
     expect(delivered).toEqual([result.text]);
     expect(db.messages[0]).toMatchObject({ role: 'user' });
     expect(db.messages[0]?.content).toEqual([
-      { type: 'text', text: 'Produce the weekly recap.' },
+      { type: 'text', text: 'Produce the weekly recap.\n\nThis run is mission "Friday recap" (id friday-recap).' },
     ]);
   });
 
@@ -738,3 +753,62 @@ describe('the weekly digest', () => {
     expect(committed).toBe(0);
   });
 });
+
+describe('missions that stop themselves', () => {
+  const own: Mission = {
+    ...checkMission,
+    id: `agent:${MISSION_AGENT}:store-watch`,
+    name: 'Store watch',
+    prompt: 'Check whether the store listing is approved.',
+    stopWhen: 'the listing is approved',
+    endsAt: new Date('2026-10-11T12:00:00Z'),
+  };
+
+  it('tells an agent\'s own mission its id and the rule, and lends it schedule.cancel_mine', async () => {
+    const seen: { tools: string[]; text: string }[] = [];
+    const provider: RuntimeProvider = {
+      async complete(req): Promise<CompletionResponse> {
+        const first = req.messages[0]?.content as unknown;
+        seen.push({ tools: req.tools.map((t) => t.name), text: JSON.stringify(first) });
+        return { content: [{ type: 'tool_use', id: 'c1', name: 'mission.silent', input: { reason: 'not yet' } }], stopReason: 'tool_use', usage: { input: 1, output: 1 }, model: 'claude-test' };
+      },
+    };
+    const { db, deps: d } = deps({ provider });
+    const result = await createMissionExecutor(d)({ ...occurrence, missionId: own.id }, own);
+    expect(result.decision).toBe('silent');
+    expect(seen[0]!.tools).toEqual(expect.arrayContaining(['schedule.cancel_mine', 'schedule.list_mine', 'mission.silent']));
+    expect(seen[0]!.text).toContain(`id ${own.id}`);
+    expect(seen[0]!.text).toContain('It is done when: the listing is approved.');
+    expect(seen[0]!.text).toContain('call schedule.cancel_mine');
+    // The silent run counted once.
+    expect(db.quiet).toBe(1);
+  });
+
+  it('gives the owner\'s missions their id, but neither the rule nor the tool', async () => {
+    const seen: { tools: string[]; text: string }[] = [];
+    const provider: RuntimeProvider = {
+      async complete(req): Promise<CompletionResponse> {
+        seen.push({ tools: req.tools.map((t) => t.name), text: JSON.stringify(req.messages[0]?.content) });
+        return { content: [{ type: 'tool_use', id: 'c1', name: 'mission.silent', input: { reason: 'nothing' } }], stopReason: 'tool_use', usage: { input: 1, output: 1 }, model: 'claude-test' };
+      },
+    };
+    const { db, deps: d } = deps({ provider });
+    await createMissionExecutor(d)({ ...occurrence, missionId: checkMission.id }, checkMission);
+    expect(seen[0]!.tools).not.toContain('schedule.cancel_mine');
+    expect(seen[0]!.text).toContain('id daily-check');
+    expect(seen[0]!.text).not.toContain('schedule.cancel_mine');
+    expect(db.quiet).toBe(0);
+  });
+
+  it('switches a watch past its end off quietly, without a model call', async () => {
+    let calls = 0;
+    const provider: RuntimeProvider = { async complete() { calls += 1; throw new Error('no call expected'); } };
+    const { db, deps: d } = deps({ provider });
+    db.ended = [own.id];
+    const result = await createMissionExecutor(d)({ ...occurrence, missionId: own.id }, { ...own, endsAt: new Date('2026-09-10T00:00:00Z') });
+    expect(result).toMatchObject({ delivered: false, decision: 'silent', reason: 'ended' });
+    expect(calls).toBe(0);
+    expect(db.events.map((e) => e.kind)).toContain('mission.ended');
+  });
+});
+

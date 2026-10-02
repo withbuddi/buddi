@@ -451,6 +451,16 @@ export interface MissionView {
     runConversationId: string | null;
   }>;
   lastNotification: { kind: string; at: string; reason?: string; chars?: number } | null;
+  /** An agent's watch: when it is done, in the agent's words. */
+  stopWhen?: string;
+  /** When it switches itself off (ISO); absent when it runs until stopped. */
+  endsAt?: string;
+  /** When it did switch itself off at its end. */
+  endedAt?: string;
+  /** Runs in a row that told the owner nothing (an agent's own missions). */
+  quietRuns?: number;
+  /** Set while "Still useful?" waits for Keep or Stop. */
+  stillUsefulAskedAt?: string;
 }
 
 export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]> {
@@ -467,6 +477,11 @@ export async function readMissions(pool: Pool, now: Date): Promise<MissionView[]
       prompt: mission.prompt,
       enabled: mission.enabled,
       ...(mission.pausedReason === null ? {} : { pausedReason: mission.pausedReason }),
+      ...(mission.stopWhen ? { stopWhen: mission.stopWhen } : {}),
+      ...(mission.endsAt ? { endsAt: mission.endsAt.toISOString() } : {}),
+      ...(mission.endedAt ? { endedAt: mission.endedAt.toISOString() } : {}),
+      ...(mission.quietRuns ? { quietRuns: mission.quietRuns } : {}),
+      ...(mission.stillUsefulAskedAt && mission.enabled ? { stillUsefulAskedAt: mission.stillUsefulAskedAt.toISOString() } : {}),
       alwaysDeliver: mission.alwaysDeliver,
       createdAt: mission.createdAt.toISOString(),
       schedule: spec

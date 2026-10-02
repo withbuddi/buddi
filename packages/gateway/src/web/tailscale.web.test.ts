@@ -31,6 +31,7 @@ import {
   tailscaleLogSize,
   toTailscaleSetting,
 } from './tailscale.js';
+import { clientKey } from './client-key.js';
 
 const servers: WebServer[] = [];
 afterEach(async () => {
@@ -768,4 +769,35 @@ it('falls back to the tailscaled socket when there is no binary but a socket', a
   expect(await tailscaleSelf(nothing)).toEqual({ available: false, self: null });
   await expect(whoisOnce(TAILNET_IP, nothing)).rejects.toThrow();
   expect(await tailscaleIdentity(req(), { setting: setting(), whois: daemonWhois(nothing) })).toBeNull();
+});
+
+/* ------------------------------------------------------------------ *
+ * The lockout per arrival path (specs/trusted-access.md §7.5)
+ * ------------------------------------------------------------------ */
+
+it('counts sign-in failures per arrival path', () => {
+  const at = (headers: Record<string, string>, remote = '127.0.0.1') => clientKey({ headers, socket: { remoteAddress: remote } } as never);
+  expect(at({ host: '127.0.0.1:4317' })).toBe('loopback');
+  expect(at({ host: 'localhost' }, '::ffff:127.0.0.1')).toBe('loopback');
+  expect(at({ 'x-forwarded-for': TAILNET_IP, 'tailscale-user-login': OWNER })).toBe(`tailnet:${TAILNET_IP}`);
+  expect(at({ 'x-forwarded-for': '203.0.113.9' })).toBe('forwarded');
+  expect(at({ 'x-forwarded-for': `${TAILNET_IP}, 203.0.113.9` })).toBe('forwarded');
+  expect(at({ 'cf-connecting-ip': '203.0.113.9', 'x-forwarded-proto': 'https' })).toBe('forwarded');
+  expect(at({}, '192.168.1.20')).toBe('addr:192.168.1.20');
+});
+
+it('a lockout through a tunnel never locks out the machine itself or the tailnet', async () => {
+  const app = await dashboard({ enabled: true, login: OWNER });
+  const origin = `http://127.0.0.1:${app.port}`;
+  const tunnel = { 'X-Forwarded-For': '203.0.113.9', 'X-Forwarded-Proto': 'https', Host: 'buddi.example.com' };
+  let status = 0;
+  for (let i = 0; i < 30 && status !== 429; i++) {
+    status = (await fetch(`${origin}/?t=wrong${i}`, { headers: tunnel, redirect: 'manual' })).status;
+  }
+  expect(status).toBe(429);
+  // The owner at the Mac, and a tailnet device, each still get an honest 401.
+  expect((await fetch(`${origin}/?t=wrong-local`, { redirect: 'manual' })).status).toBe(401);
+  expect((await fetch(`${origin}/?t=wrong-tailnet`, { headers: SERVE_HEADERS, redirect: 'manual' })).status).toBe(401);
+  // And the tunnel stays locked.
+  expect((await fetch(`${origin}/?t=wrong-again`, { headers: tunnel, redirect: 'manual' })).status).toBe(429);
 });

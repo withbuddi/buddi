@@ -169,6 +169,7 @@ import {
   type TailscaleProfile,
   type TailscaleWhois,
 } from './tailscale.js';
+import { clientKey } from './client-key.js';
 import { retryHref, sendSignedOut, wantsSignedOutPage, type SignedOutOptions } from './signed-out.js';
 import { extensionEndpoint, type ExtensionEndpoint } from './extension.js';
 import { REMOTE_HAND_SOCKET_PATH, RemoteHandEndpoint } from './remote-hand.js';
@@ -183,7 +184,6 @@ import {
   parseCookies,
   parseUrl,
   readJsonBody,
-  remoteKey,
   requestOrigin,
   requestScope,
   sendEmpty,
@@ -295,6 +295,7 @@ import {
   dismissJobsFromWeb,
   undismissJobsFromWeb,
   setMissionEnabledFromWeb,
+  keepMissionFromWeb,
   setPausedFromWeb,
   setScheduleFromWeb,
   dismissOfferFromWeb,
@@ -849,7 +850,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     const arrived: SignedOutOptions['arrived'] =
       proxied || (publicHost !== undefined && host === publicHost) ? 'tailnet' : scope === 'local' ? 'local' : 'remote';
     const setting = arrived === 'tailnet' ? await readTailscaleSetting() : null;
-    const lockedForMs = limiter.retryAfterMs(remoteKey(req), now);
+    const lockedForMs = limiter.retryAfterMs(clientKey(req), now);
     return {
       retry: retryHref(pathname, search),
       arrived,
@@ -936,7 +937,7 @@ export function createWebApp(deps: WebServerDeps): Server {
     const now = deps.now();
     const method = (req.method ?? 'GET').toUpperCase();
     const url = parseUrl(req);
-    const key = remoteKey(req);
+    const key = clientKey(req);
 
     // No CORS, and therefore no preflight.
     if (method === 'OPTIONS') return sendEmpty(res, 405);
@@ -2500,6 +2501,15 @@ export function createWebApp(deps: WebServerDeps): Server {
         // shows the mode's own sentence when it cannot.
         const taken = sessionId ?? status.session?.id;
         const offer = action === 'takeover' && taken ? browser.hand?.({ sessionId: taken }) : undefined;
+        /*
+         * "Your browser" with Chrome closed: the take-over itself succeeds (the
+         * agent is paused), but there is no tab anywhere to show or drive. Said
+         * as that, with a reason the dashboard offers its ways out on, rather
+         * than the mode's "use this conversation's host tab".
+         */
+        if (offer && offer.supported && !offer.hand && status.mode === 'extension' && !extension.connected()) {
+          return sendJson(res, 200, { ...status, hand: false, handReason: 'browser-offline', handMessage: 'Your browser isn’t connected.' });
+        }
         return sendJson(res, 200, offer
           ? { ...status, hand: !!offer.hand, ...(offer.hand ? {} : { handMessage: offer.message }) }
           : status);
@@ -2808,6 +2818,9 @@ export function createWebApp(deps: WebServerDeps): Server {
         ),
       );
     }
+
+    const missionKeep = /^\/api\/missions\/([^/]+)\/keep$/.exec(path);
+    if (missionKeep) return finish(res, await keepMissionFromWeb(writeDeps, decodeURIComponent(missionKeep[1] as string)));
 
     const missionSchedule = /^\/api\/missions\/([^/]+)\/schedule$/.exec(path);
     if (missionSchedule) {

@@ -541,6 +541,16 @@ export interface MissionRow {
     runConversationId: string | null;
   }>;
   lastNotification: { kind: string; at: string; reason?: string; chars?: number } | null;
+  /** An agent's watch: when it is done, in the agent's words. */
+  stopWhen?: string;
+  /** When it switches itself off; absent when it runs until stopped. */
+  endsAt?: string;
+  /** When it did switch itself off at its end. */
+  endedAt?: string;
+  /** Runs in a row that told the owner nothing. */
+  quietRuns?: number;
+  /** Set while "Still useful?" waits for Keep or Stop. */
+  stillUsefulAskedAt?: string;
 }
 
 export interface JobRow {
@@ -2845,6 +2855,7 @@ export const api = {
     sendArchive<{ job: BackupJob }>('/onboarding/restore', file, { passphrase }),
   setMissionEnabled: (id: string, enabled: boolean) =>
     post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/enabled`, { enabled }),
+  keepMission: (id: string) => post<{ id: string; enabled: boolean }>(`/missions/${encodeURIComponent(id)}/keep`, {}),
   setMisfirePolicy: (id: string, misfirePolicy: string, deadlineMinutes?: number | null) =>
     post<unknown>(`/missions/${encodeURIComponent(id)}/schedule`, {
       misfirePolicy,
@@ -2935,6 +2946,8 @@ export interface BrowserStatus {
   hand?: boolean;
   /** Why it cannot, in the mode's own words. */
   handMessage?: string;
+  /** Take over only: `browser-offline` is "Your browser" with the extension not connected. */
+  handReason?: 'browser-offline';
   sessions?: BrowserStatus[];
   /** The agents' own browser on this machine. Own-browser mode only. */
   browser?: {

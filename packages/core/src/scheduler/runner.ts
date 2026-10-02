@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { appendEvent } from '../events.js';
 import { claimNextOccurrence, finishOccurrence } from './claim.js';
 import { materializeOccurrences } from './materialize.js';
-import { getMission } from './missions.js';
+import { endExpiredMissions, getMission } from './missions.js';
 import type { Mission, Occurrence } from './types.js';
 
 export type ExecuteResult = {
@@ -82,6 +82,12 @@ export function runScheduler(opts: RunSchedulerOptions): SchedulerHandle {
       } catch (err) {
         opts.onError?.(err);
       }
+    }
+
+    // A watch past its end switches itself off before anything new is made
+    // for it, quietly: the event is the only trace besides the row itself.
+    for (const missionId of await endExpiredMissions(pool, now())) {
+      await appendEvent(pool, 'mission.ended', { missionId, reason: 'end-date' });
     }
 
     const materialized = await materializeOccurrences(pool, now());

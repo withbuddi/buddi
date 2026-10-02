@@ -39,6 +39,16 @@ export type Mission = {
    * materializes nothing, like a disabled one.
    */
   pausedReason: string | null;
+  /** The agent's own words for when this watch is done; null when it named none. */
+  stopWhen?: string | null;
+  /** When it switches itself off, quietly; null runs until someone stops it. */
+  endsAt?: Date | null;
+  /** When it did switch itself off at `endsAt`. */
+  endedAt?: Date | null;
+  /** Runs in a row that told the owner nothing. */
+  quietRuns?: number;
+  /** When the owner was asked "Still useful?"; null when not (or since Keep). */
+  stillUsefulAskedAt?: Date | null;
   /**
    * Gather this mission's event-driven occurrences for the same agent into one
    * run (`enqueueOccurrence`). Null or absent: one run per occurrence.
@@ -90,6 +100,11 @@ export type MissionRow = {
   enabled: boolean;
   always_deliver: boolean;
   paused_reason: string | null;
+  stop_when?: string | null;
+  ends_at?: Date | null;
+  ended_at?: Date | null;
+  quiet_runs?: number | null;
+  still_useful_asked_at?: Date | null;
   coalesce_window_seconds?: number | null;
   coalesce_max_wait_seconds?: number | null;
   created_at: Date;
@@ -130,6 +145,11 @@ export function toMission(row: MissionRow): Mission {
     enabled: row.enabled,
     alwaysDeliver: row.always_deliver ?? false,
     pausedReason: row.paused_reason ?? null,
+    stopWhen: row.stop_when ?? null,
+    endsAt: row.ends_at ?? null,
+    endedAt: row.ended_at ?? null,
+    quietRuns: row.quiet_runs ?? 0,
+    stillUsefulAskedAt: row.still_useful_asked_at ?? null,
     coalesce: row.coalesce_window_seconds && row.coalesce_max_wait_seconds
       ? { windowSeconds: row.coalesce_window_seconds, maxWaitSeconds: row.coalesce_max_wait_seconds }
       : null,
