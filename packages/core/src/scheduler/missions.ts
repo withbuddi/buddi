@@ -174,24 +174,50 @@ export async function rezoneSchedules(pool: Pool, to: string): Promise<string[]>
 }
 
 /**
- * Settle the schedules made before `timezone_explicit` existed (null): one
- * in any of `following` — the zone that was the default when it was made, or
- * the owner's zone now — follows the owner from now on; one in any other zone
- * was named on purpose and keeps it. Returns how many were settled each way.
+ * A schedule buddi itself made without naming a zone, so one from before
+ * `timezone_explicit` existed can be proven to follow the owner: a default
+ * mission a plugin suggests without a timezone, the learning digest, a
+ * starter's or a plugin agent's declared mission. `cron` null matches any
+ * cron (the digest's day and hour are the owner's to change and still follow).
+ */
+export interface OwnerFollowingDeclaration {
+  missionId: string;
+  cron: string | null;
+}
+
+/**
+ * Settle the schedules made before `timezone_explicit` existed (null) by
+ * provenance, not by zone alone: one follows the owner from now on only when
+ * buddi made it without a zone — its mission is in `declared` (and its cron
+ * matches, when the declaration names one) — and it still sits in one of
+ * `following` (the default zone of the time, or the owner's zone now). Any
+ * other — made by schedule.propose, by the owner on the dashboard, by an agent
+ * naming a zone, or simply unknown — was possibly named on purpose and keeps
+ * its zone. Returns how many active ones were settled each way.
  */
 export async function settleUnflaggedSchedules(
   pool: Pool,
   following: readonly string[],
+  declared: readonly OwnerFollowingDeclaration[] = [],
 ): Promise<{ following: number; explicit: number }> {
   const { rows } = await pool.query<{ explicit: boolean; n: string }>(
-    `with settled as (
-       update core.schedule_specs
-          set timezone_explicit = not (timezone = any($1::text[]))
-        where timezone_explicit is null
-       returning active, timezone_explicit
+    `with declared as (
+       select d.mission_id, d.cron
+         from unnest($2::text[], $3::text[]) as d(mission_id, cron)
+     ), settled as (
+       update core.schedule_specs s
+          set timezone_explicit = not (
+                s.timezone = any($1::text[])
+                and exists (
+                  select 1 from declared d
+                   where d.mission_id = s.mission_id and (d.cron is null or d.cron = s.cron)
+                )
+              )
+        where s.timezone_explicit is null
+       returning s.active, s.timezone_explicit
      )
      select timezone_explicit as explicit, count(*)::text as n from settled where active group by timezone_explicit`,
-    [[...following]],
+    [[...following], declared.map((d) => d.missionId), declared.map((d) => d.cron)],
   );
   const count = (explicit: boolean): number => Number(rows.find((r) => r.explicit === explicit)?.n ?? 0);
   return { following: count(false), explicit: count(true) };

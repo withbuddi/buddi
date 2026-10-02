@@ -90,6 +90,7 @@ import { createMailWatcherPrepare } from './missions/watcher-mail.js';
 import { createReminderTick } from './missions/reminders.js';
 import { PROPOSAL_SWEEP_MS, adoptPluginPolicies, createProposalSweep } from './agents/learning.js';
 import { LEARNING_DIGEST_ID, ensureDigestMission, runLearningDigest } from './agents/learning-digest.js';
+import { ownerFollowingDeclarations } from './missions/zone-provenance.js';
 import { startLoop } from './loop.js';
 import { createRequirements } from './plugins/requires.js';
 import { dashboardRouteUrl, ensureWebToken, extensionEndpoint, startWebServer, webConfig, type WebServer } from './web/index.js';
@@ -881,10 +882,15 @@ export async function main(): Promise<void> {
       await seedOwnerFromEnv(pool, process.env).catch((err) =>
         console.error(`owner: seeding from the environment failed: ${err instanceof Error ? err.message : String(err)}`));
       // Schedules from before buddi recorded whether a zone was named on
-      // purpose are settled (the default zone of the time, or the Profile's,
-      // follows the owner; any other stays), and every schedule that follows
+      // purpose are settled by provenance (one buddi made without a zone, in
+      // the default zone of the time or the Profile's, follows the owner; any
+      // other, ambiguous ones included, stays), and every schedule that follows
       // the owner moves to the owner's zone if it is elsewhere.
-      await settleScheduleZones(pool, process.env)
+      await settleScheduleZones(
+        pool,
+        process.env,
+        ownerFollowingDeclarations(wiring.registry.manifests(), wiring.catalog.list().map((a) => a.id)),
+      )
         .then((r) => { if (r.missions.length > 0) console.log(`owner: schedules moved to ${r.to}: ${r.missions.join(', ')}`); })
         .catch((err) => console.error(`owner: schedules not moved to the profile's zone: ${err instanceof Error ? err.message : String(err)}`));
     }

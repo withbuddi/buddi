@@ -8,9 +8,11 @@
 --
 --   timezone_explicit  true: named on purpose, kept; false: follows the owner.
 --                      null: made before this column; settled once at the
---                      next start (`settleScheduleZones`), where a schedule in
---                      the zone that was the default when it was made (the
---                      install's BUDDI_TZ, else New York) or in the Profile's
---                      zone follows the owner and any other keeps its zone.
+--                      next start (`settleScheduleZones`) by provenance: one
+--                      buddi itself made without a zone (a default mission,
+--                      the digest, a plugin agent's declared mission) still in
+--                      the zone that was the default (BUDDI_TZ, else New York)
+--                      or the Profile's follows the owner; any other, ambiguous
+--                      ones included, keeps its zone.
 alter table core.schedule_specs
   add column if not exists timezone_explicit boolean null;

@@ -101,25 +101,45 @@ suite('owner timezone (postgres)', () => {
     expect(await getActiveSchedule(pool, 'standup')).toMatchObject({ timezone: 'Europe/Lisbon' });
   });
 
-  it('at start, settles the schedules from before the flag: the default zone of the time or the Profile follows, any other stays', async () => {
+  it('at start, settles the schedules from before the flag by provenance: only one buddi made without a zone follows', async () => {
     // As an older buddi left it: made in the install's default (New York), the profile saying Lisbon.
     await unflagged('learning-digest', 'America/New_York');
     await unflagged('scout-standup', 'America/New_York');
     await unflagged('already-moved', 'Europe/Lisbon'); // moved by pre.29's save
     await unflagged('tokyo-market', 'Asia/Tokyo'); // named on purpose
+    await unflagged('ny-open', 'America/New_York'); // the owner's (or schedule.propose's) New York: no provenance
+    await unflagged('custom-cron', 'America/New_York'); // a declared id, but its cron is no longer the declared one
+    await pool.query(`update core.schedule_specs set cron = '0 6 * * *' where mission_id = 'custom-cron'`);
     await setOwnerProfile(pool, { timezone: 'Europe/Lisbon' });
+    const declared = [
+      { missionId: 'learning-digest', cron: null },
+      { missionId: 'scout-standup', cron: '0 8 * * *' },
+      { missionId: 'already-moved', cron: '0 8 * * *' },
+      { missionId: 'tokyo-market', cron: '0 8 * * *' }, // declared, but sits in a zone that was never a default
+      { missionId: 'custom-cron', cron: '0 8 * * *' },
+    ];
 
-    const first = await settleScheduleZones(pool, ENV);
-    expect(first).toEqual({ to: 'Europe/Lisbon', missions: ['learning-digest', 'scout-standup'], settled: { following: 3, explicit: 1 } });
+    const first = await settleScheduleZones(pool, ENV, declared);
+    expect(first).toEqual({ to: 'Europe/Lisbon', missions: ['learning-digest', 'scout-standup'], settled: { following: 3, explicit: 3 } });
     expect(await getActiveSchedule(pool, 'scout-standup')).toMatchObject({ timezone: 'Europe/Lisbon', timezoneExplicit: false });
     expect(await getActiveSchedule(pool, 'already-moved')).toMatchObject({ timezone: 'Europe/Lisbon', timezoneExplicit: false, revision: 1 });
     expect(await getActiveSchedule(pool, 'tokyo-market')).toMatchObject({ timezone: 'Asia/Tokyo', timezoneExplicit: true });
+    expect(await getActiveSchedule(pool, 'ny-open')).toMatchObject({ timezone: 'America/New_York', timezoneExplicit: true, revision: 1 });
+    expect(await getActiveSchedule(pool, 'custom-cron')).toMatchObject({ timezone: 'America/New_York', timezoneExplicit: true });
 
     // Nothing left to settle or move; and a later Profile change moves the ones that follow.
-    expect(await settleScheduleZones(pool, ENV)).toEqual({ to: 'Europe/Lisbon', missions: [], settled: { following: 0, explicit: 0 } });
+    expect(await settleScheduleZones(pool, ENV, declared)).toEqual({ to: 'Europe/Lisbon', missions: [], settled: { following: 0, explicit: 0 } });
     const saved = await saveOwnerProfile(pool, { timezone: 'Asia/Tokyo' }, ENV);
     expect(saved.zoneChange?.missions).toEqual(['already-moved', 'learning-digest', 'scout-standup']);
     expect(await getActiveSchedule(pool, 'tokyo-market')).toMatchObject({ revision: 1 });
+  });
+
+  it('without provenance every legacy schedule stays where it is, even in the default zone', async () => {
+    await unflagged('recap', 'America/New_York');
+    await setOwnerProfile(pool, { timezone: 'Europe/Lisbon' });
+    const r = await settleScheduleZones(pool, ENV);
+    expect(r).toEqual({ to: 'Europe/Lisbon', missions: [], settled: { following: 0, explicit: 1 } });
+    expect(await getActiveSchedule(pool, 'recap')).toMatchObject({ timezone: 'America/New_York', timezoneExplicit: true });
   });
 
   it('settles against BUDDI_TZ when the install named one, and catches a Profile change made while stopped', async () => {
@@ -129,7 +149,11 @@ suite('owner timezone (postgres)', () => {
     // The Profile changed under a stopped buddi: written to the row, nothing moved.
     await setOwnerProfile(pool, { timezone: 'Europe/Berlin' });
     rememberOwnerTimezone(null);
-    const r = await settleScheduleZones(pool, env);
+    const declared = [
+      { missionId: 'chicago-made', cron: '0 8 * * *' },
+      { missionId: 'ny-made', cron: '0 8 * * *' },
+    ];
+    const r = await settleScheduleZones(pool, env, declared);
     expect(r.to).toBe('Europe/Berlin');
     expect(r.missions).toEqual(['chicago-made']);
     expect(await getActiveSchedule(pool, 'ny-made')).toMatchObject({ timezone: 'America/New_York', timezoneExplicit: true });

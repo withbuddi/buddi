@@ -30,9 +30,13 @@ scheduled runs and delegates. No agent-file edits or approval grants are needed.
   new zone. One whose creator named a zone (the tool's `timezone`, a mission
   that declares one, a zone chosen through `POST /api/missions/:id/schedule`)
   keeps it. At every start, schedules that follow the owner and sit in another
-  zone move to it. Schedules from before the flag are settled once at start:
-  one in the zone that was the default when it was made (`BUDDI_TZ`, else New
-  York) or in the Profile's zone follows the owner; any other keeps its zone.
+  zone move to it. Schedules from before the flag are settled once at start,
+  by provenance: one buddi itself made without a zone (a plugin's default
+  mission that names none, the learning digest, the first-run arc, a starter's
+  or plugin agent's declared mission, matched by mission id and cron) that sits
+  in the default zone of the time (`BUDDI_TZ`, else New York) or the Profile's
+  follows the owner; any other, `schedule.propose` and dashboard ones
+  included, keeps its zone, since nothing recorded whether it was named.
   Missions on the dashboard say "follows your timezone" instead of the zone;
   `buddi missions` adds it to the schedule line. A one-off reminder is an
   instant and does not move.
