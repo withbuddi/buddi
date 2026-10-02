@@ -1710,7 +1710,7 @@ export function createWebApp(deps: WebServerDeps): Server {
             },
           });
         case '/api/notifications':
-          return reply(res, await listNotificationsRoute(deps.pool, q.get('limit'), { needs: q.get('needs') === '1', now }));
+          return reply(res, await listNotificationsRoute(deps.pool, q.get('limit'), { needs: q.get('needs') === '1', offset: q.get('offset') }));
         case '/api/notifications/settings':
           return reply(res, await notificationSettingsRoute(deps.pool, 'GET'));
         case '/api/notifications/focus':

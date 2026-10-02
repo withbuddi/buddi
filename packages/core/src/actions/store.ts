@@ -184,6 +184,31 @@ export async function listPendingActions(
   return rows.map(toActionRecord);
 }
 
+/** How many approvals are pending and still decidable: uncapped, unlike the list. */
+export async function countPendingActions(pool: Queryable, opts: { now?: Date } = {}): Promise<number> {
+  const { rows } = await pool.query(
+    `select count(*)::int as n from core.actions a join core.approvals ap on ap.action_id = a.id
+      where ap.state = 'pending' and a.expires_at > $1`,
+    [opts.now ?? new Date()],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Every pending, decidable approval for one tool, oldest first: uncapped. */
+export async function listPendingActionsForTool(
+  pool: Queryable,
+  tool: string,
+  opts: { now?: Date } = {},
+): Promise<ActionRecord[]> {
+  const { rows } = await pool.query(
+    `${SELECT_ACTION}
+      where ap.state = 'pending' and a.expires_at > $1 and a.tool = $2
+      order by a.created_at asc`,
+    [opts.now ?? new Date(), tool],
+  );
+  return rows.map(toActionRecord);
+}
+
 /**
  * Move every pending approval whose action has expired to `expired`.
  *

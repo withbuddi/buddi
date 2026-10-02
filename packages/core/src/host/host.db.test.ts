@@ -219,7 +219,7 @@ suite('ctx.buddi', () => {
     const registry = new ToolRegistry();
     registry.register(plugin('weather', { uses: ['owner:notify'] }));
     const host = await hostOf(registry, 'weather.host');
-    const before = await countOpenAsks(pool, now);
+    const before = await countOpenAsks(pool);
     const asked = await host.owner.notify!({ urgency: 'today', title: 'Frost tonight', action: '  Bring the plants in?  ' });
     const plain = await host.owner.notify!({ urgency: 'today', title: 'Sunny all week', action: '   ' });
     const { rows } = await pool.query(
@@ -231,7 +231,7 @@ suite('ctx.buddi', () => {
       { id: plain.id, kind: 'plugin', plugin_id: 'weather', action: null },
     ]);
     // The one rule (core needsOwner): the ask counts in Needs you, the news does not.
-    expect(await countOpenAsks(pool, now)).toBe(before + 1);
+    expect(await countOpenAsks(pool)).toBe(before + 1);
     await expect(host.owner.notify!({ urgency: 'now', title: 'Too long', action: 'y'.repeat(81) })).rejects.toThrow(/at most 80/);
   });
 

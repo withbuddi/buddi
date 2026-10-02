@@ -262,10 +262,21 @@ suite('an agent tells the owner', () => {
     expect(needsOwner({ kind: 'approval', action: null })).toBe(true);
     expect(needsOwner({ kind: 'question', action: null })).toBe(true);
     expect(needsOwner({ kind: 'agent', action: '   ' })).toBe(false);
-    expect(await countOpenAsks(pool, clock)).toBe(1);
-    expect((await listOpenAsks(pool, clock)).map((r) => r.action)).toEqual(['Confirm with the bank?']);
+    expect(await countOpenAsks(pool)).toBe(1);
+    expect((await listOpenAsks(pool)).map((r) => r.action)).toEqual(['Confirm with the bank?']);
+
+    // A month old and still unresolved: it waits, in the count and the list.
+    await pool.query(`update core.owner_notifications set created_at = now() - interval '30 days' where id = $1`, [ask.id]);
+    expect(await countOpenAsks(pool)).toBe(1);
+    expect((await listOpenAsks(pool)).map((r) => r.id)).toEqual([ask.id]);
+    // The list pages; the count stays the total.
+    const second = await notifyFromAgent(pool, deps, { agentId: 'ledger', title: 'Rent went up', action: 'Approve the new amount?' });
+    expect(await countOpenAsks(pool)).toBe(2);
+    expect((await listOpenAsks(pool, { limit: 1 })).map((r) => r.id)).toEqual([second.id]);
+    expect((await listOpenAsks(pool, { limit: 1, offset: 1 })).map((r) => r.id)).toEqual([ask.id]);
+    await pool.query('update core.owner_notifications set seen_at = $2 where id = $1', [second.id, clock]);
 
     await pool.query('update core.owner_notifications set seen_at = $2 where id = $1', [ask.id, clock]);
-    expect(await countOpenAsks(pool, clock)).toBe(0);
+    expect(await countOpenAsks(pool)).toBe(0);
   });
 });

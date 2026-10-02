@@ -45,27 +45,33 @@ export const OPEN_FOR_OWNER_SQL =
  * Open actionable messages other than approvals and questions, which every
  * surface counts from their own records (the pending actions, the held
  * questions) rather than from the message that told the owner about them.
- * From the last week, like the lock screen always counted.
+ * No age cutoff: an ask waits until it is opened, marked Done or acted on,
+ * however long the owner was away.
  */
-export async function countOpenAsks(db: Queryable, now: Date = new Date()): Promise<number> {
-  const { rows } = await db.query(
-    `select count(*)::int as n from core.owner_notifications where ${OPEN_ASKS_WHERE}`,
-    [weekBefore(now)],
-  );
+export async function countOpenAsks(db: Queryable): Promise<number> {
+  const { rows } = await db.query(`select count(*)::int as n from core.owner_notifications where ${OPEN_ASKS_WHERE}`);
   return Number(rows[0]?.n ?? 0);
 }
 
-/** The rows `countOpenAsks` counts, newest first: what Home lists under Needs you. */
-export async function listOpenAsks(db: Queryable, now: Date = new Date()): Promise<OwnerNotification[]> {
+/**
+ * A page of the rows `countOpenAsks` counts, newest first: what Home lists
+ * under Needs you. The count is the total; the list is paged (`limit` up to
+ * 100, default 100; `offset` from 0).
+ */
+export async function listOpenAsks(
+  db: Queryable,
+  page: { limit?: number; offset?: number } = {},
+): Promise<OwnerNotification[]> {
+  const limit = Math.min(OPEN_ASKS_MAX, Math.max(1, Math.floor(page.limit ?? OPEN_ASKS_MAX)));
+  const offset = Math.max(0, Math.floor(page.offset ?? 0));
   const { rows } = await db.query(
     `select ${NOTIFICATION_COLUMNS} from core.owner_notifications
-      where ${OPEN_ASKS_WHERE} order by created_at desc, id limit ${OPEN_ASKS_MAX}`,
-    [weekBefore(now)],
+      where ${OPEN_ASKS_WHERE} order by created_at desc, id limit $1 offset $2`,
+    [limit, offset],
   );
   return rows.map(toNotification);
 }
 
-/** More than any owner should have open; the count is not capped, the list is. */
+/** The largest page of open asks one call lists; the count is never capped. */
 const OPEN_ASKS_MAX = 100;
-const OPEN_ASKS_WHERE = `${OPEN_FOR_OWNER_SQL} and kind not in ('approval', 'question') and created_at > $1`;
-const weekBefore = (now: Date): Date => new Date(now.getTime() - 7 * 86_400_000);
+const OPEN_ASKS_WHERE = `${OPEN_FOR_OWNER_SQL} and kind not in ('approval', 'question')`;

@@ -23,7 +23,7 @@
  * A source that cannot be read counts 0 rather than failing the read: a badge
  * that is one short is better than a Home that does not load.
  */
-import { countJobsByState, countOpenAsks, countOpenProposals, listPendingActions, type ActionRecord } from '@buddi/core';
+import { countJobsByState, countOpenAsks, countOpenProposals, countPendingActions, listPendingActionsForTool, type ActionRecord } from '@buddi/core';
 import type { ToolRegistry } from '@buddi/core';
 import type { Pool } from 'pg';
 import { readAlertDecisions } from './alerts.js';
@@ -64,27 +64,30 @@ const zero = <T>(fallback: T) => (): T => fallback;
 /** The one count. */
 export async function readNeedsYou(deps: NeedsYouDeps): Promise<NeedsYou> {
   const { pool, now } = deps;
-  const [pending, attention, decisions, jobs, proposals, asks, offers, signals, recovering, dismissed] = await Promise.all([
-    listPendingActions(pool, { now }).catch(zero<ActionRecord[]>([])),
+  const [approvals, accepts, attention, decisions, jobs, proposals, asks, offers, signals, recovering, dismissed] = await Promise.all([
+    countPendingActions(pool, { now }).catch(() => 0),
+    // Checked on their own, not within a page of approvals: one past the
+    // first fifty still covers its offer.
+    listPendingActionsForTool(pool, 'platform.accept_plugin_agent', { now }).catch(zero<ActionRecord[]>([])),
     readAgentAttention(pool, now).catch(() => ({ at: now.toISOString(), agents: [] })),
     readAlertDecisions(pool, deps.registry, now).catch(() => []),
     countJobsByState(pool).catch(() => ({ failed: 0 })),
     countOpenProposals(pool).catch(() => 0),
-    countOpenAsks(pool, now).catch(() => 0),
+    countOpenAsks(pool).catch(() => 0),
     deps.agentOffers ? deps.agentOffers().catch(() => []) : Promise.resolve([]),
     deps.signals ? deps.signals().catch(() => []) : Promise.resolve([]),
     deps.recoveryActive ? deps.recoveryActive().catch(() => false) : Promise.resolve(false),
     readHomeDismissed(pool).catch(() => ({}) as Record<string, string>),
   ]);
   const counts = {
-    approvals: pending.length,
+    approvals,
     questions: attention.agents.filter((a) => a.question !== null).length,
     urgent: decisions.length,
     failed: jobs.failed ?? 0,
     proposals,
     asks,
     // An offer whose accept is already waiting is counted once, as the approval.
-    agentsToSetUp: offers.filter((o) => !pending.some((action) => isPendingAccept(action, o.plugin, o.agent))).length,
+    agentsToSetUp: offers.filter((o) => !accepts.some((action) => isPendingAccept(action, o.plugin, o.agent))).length,
     signIns: signals.filter((s) => dismissed[`connection:${s.id}`] !== s.sentence).length,
     recovery: recovering ? 1 : 0,
   };

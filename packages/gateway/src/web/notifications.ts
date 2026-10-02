@@ -48,10 +48,17 @@ export const WEB_PRESENCE_SURFACE = 'web';
  * `needs` the open actionable ones alone — what Home lists under Needs you and
  * the counts count.
  */
-export async function listNotificationsRoute(pool: Queryable, limit: string | null, opts: { needs?: boolean; now?: Date } = {}): Promise<NotificationsRouteReply> {
+export async function listNotificationsRoute(
+  pool: Queryable,
+  limit: string | null,
+  opts: { needs?: boolean; offset?: string | null } = {},
+): Promise<NotificationsRouteReply> {
   const n = limit === null ? 20 : Number(limit);
   const rows = opts.needs
-    ? await listOpenAsks(pool, opts.now ?? new Date())
+    ? await listOpenAsks(pool, {
+        ...(limit !== null && Number.isFinite(n) ? { limit: n } : {}),
+        offset: Number.isFinite(Number(opts.offset ?? 0)) ? Number(opts.offset ?? 0) : 0,
+      })
     : await listNotifications(pool, { limit: Number.isFinite(n) ? n : 20 });
   return { status: 200, body: { notifications: rows.map((row) => ({ ...row, needsOwner: needsOwner(row) })) } };
 }
