@@ -285,4 +285,44 @@ suite('needs you: the one rule (postgres)', () => {
     await verdict(other.messageId, 'reply-needed', 1, daysBefore(1));
     expect(await reasonOf(asking.threadId)).toBe('asked');
   });
+
+  // Last too: it moves a conversation the counts above expect.
+  it('stops waiting on the owner once he files the message in another app, and waits again when it comes back', async () => {
+    const reasonOf = async (id: string): Promise<string | undefined> => {
+      const thread = await findThread(pool, id);
+      return (await attentionReasons(pool, [thread!], NOW)).get(id);
+    };
+    const needing = async (): Promise<string[]> =>
+      (await ask('threads', { show: 'needs-reply' })).threads.map((t: any) => t.id);
+    const widgetCount = async (): Promise<string> =>
+      ((await registry.widget('email.waiting')!.produce(ctx, { size: 'small' })) as any).value;
+
+    expect(await reasonOf(threads.known)).toBe('known');
+    const before = await widgetCount();
+    const selectedCount = async (): Promise<number> =>
+      (await selectMessages(pool, [{ id: accountId, address: OWNER }], { needsReply: true }, NOW)).count;
+    const selectedBefore = await selectedCount();
+    const row = String((await pool.query(`select last_message_id from email.threads where id = $1`, [threads.known])).rows[0].last_message_id);
+
+    // Archived on the phone, on a server where buddi only learns it is gone.
+    await pool.query(`update email.messages set gone_at = $2 where id = $1`, [row, NOW]);
+    expect(await reasonOf(threads.known)).toBe('filed');
+    expect(await needing()).not.toContain(threads.known);
+    expect(await widgetCount()).toBe(String(Number(before) - 1));
+    expect((await ask('thread', { id: threads.known })).stateLabel).toBe('They wrote — no reply expected: it is no longer in the inbox.');
+    expect(await selectedCount()).toBe(selectedBefore - 1);
+
+    // On Gmail the row follows the message to All Mail, a folder buddi does not sync.
+    const allMail = String((await pool.query(
+      `insert into email.folders (account_id, name, kind, synced) values ($1, '[Gmail]/All Mail', 'other', false) returning id`,
+      [accountId],
+    )).rows[0].id);
+    await pool.query(`update email.messages set gone_at = null, folder_id = $2 where id = $1`, [row, allMail]);
+    expect(await reasonOf(threads.known)).toBe('filed');
+
+    // Moved back into the inbox: the same row in INBOX, waiting on him again.
+    await pool.query(`update email.messages set folder_id = $2 where id = $1`, [row, inbox]);
+    expect(await reasonOf(threads.known)).toBe('known');
+    expect(await widgetCount()).toBe(before);
+  });
 });

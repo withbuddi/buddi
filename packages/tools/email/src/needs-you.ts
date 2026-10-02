@@ -12,6 +12,9 @@
  * For a `waiting-on-me` thread, read off its newest inbound message, the
  * first of these that holds is its reason:
  *
+ *  0. `filed` — it is no longer in the inbox: gone, archived, labelled or
+ *     trashed, in another mail app or by a change the owner approved
+ *     (migration 026);
  *  1. `no-reply` — the sender is an address nobody reads (`no-reply@`,
  *     `…-noreply@`, `notifications@`, `mailer-daemon@`, `@noreply.host`);
  *  2. `bulk` — it was sent to many: `List-Unsubscribe`, `Precedence: bulk`,
@@ -32,6 +35,7 @@ import type { ThreadState } from './threads.js';
 export const ATTENTION_REASONS = [
   'known',
   'asked',
+  'filed',
   'no-reply',
   'bulk',
   'ignored',
@@ -59,6 +63,7 @@ export const ATTENTION_LABELS: Record<AttentionView, string> = {
 export const ATTENTION_WHY: Record<AttentionReason, string> = {
   known: 'you’ve written to them before',
   asked: 'they asked you something',
+  filed: 'no reply expected: it is no longer in the inbox',
   'no-reply': 'no reply expected: a no-reply sender',
   bulk: 'no reply expected: sent to a list',
   ignored: 'no reply expected: you ignore this sender',

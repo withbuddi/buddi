@@ -56,13 +56,14 @@ uidvalidity, uid)`, versioned triage rows, drafts and the send effect, and:
   inbound thread is `waiting-on-me`, security alerts and newsletters included.
   Whether a conversation actually needs the owner is one rule, in one SQL
   function, `email.thread_attention(thread, now)` (migration
-  `023_attention.sql`, its thread match fixed in `025_thread_ignore.sql`;
-  `needs-you.ts` holds the words). For a `waiting-on-me`
+  `023_attention.sql`, its thread match fixed in `025_thread_ignore.sql`,
+  `filed` added in `026_attention_filed.sql`; `needs-you.ts` holds the words). For a `waiting-on-me`
   thread it reads the newest inbound message and gives the first reason that
   holds:
 
   | Reason | When | Shown as |
   |---|---|---|
+  | `filed` | the message is no longer in the inbox: gone (`messages.gone_at`), or its row in a folder buddi does not sync (archived, labelled or trashed in another mail app, or by a change the owner approved); moved back into the inbox, it is read as before | They wrote |
   | `no-reply` | the sender is an address nobody reads: a `no-reply` / `noreply` / `donotreply` token in the local part (`chromewebstore-noreply@`), `notifications@`, `mailer-daemon@`, `postmaster@`, `bounce@`, `automated@`, or a `noreply.` host (`@noreply.github.com`) | Notification |
   | `bulk` | the message was sent to many: `List-Unsubscribe` or `Precedence: bulk/list/junk` (`messages.bulk`), or a `List-Id` | Notification |
   | `ignored` | a live ignore rule the owner kept covers its sender, domain, list or thread (a thread rule by the conversation's id, and only for the sender recorded with it, as the policy gate applies it) | They wrote |

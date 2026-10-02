@@ -13,6 +13,7 @@ What changes in buddi from one release to the next, newest first.
 
 - Home: Done on a Needs you card now sticks. A line held for the end of the day (like "buddi learned 1 rule: quieted 1 newsletter") showed in Needs you even after Done and came back on every reload; Needs you now lists only what asks for you now, quiet lines stay in Notifications → Recent and the evening message, and a quiet line that says more later stays read instead of coming back unread.
 - Home: a plugin's card is named by its page ("Mail"), not its id ("email").
+- Mail: a conversation you archive, label or delete in another mail app (or with a change you approved) no longer says "Waiting on you" — on the Mail page, the Waiting on you widget, the waiting watcher and `email.select_messages` alike. Moved back into the inbox, it waits on you again.
 
 ### Changed
 
