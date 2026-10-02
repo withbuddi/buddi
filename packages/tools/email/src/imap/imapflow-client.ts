@@ -30,7 +30,7 @@ import type {
   MoveResult,
   AccountRecord,
 } from '../ports.js';
-import { authenticatedDomain, isBulkHeaders, normalizeMessageId, parseReferences } from '../mail.js';
+import { authenticatedDomain, isBulkHeaders, normalizeMessageId, parseReferences, trustedAuthResults } from '../mail.js';
 import { isPartId, safeFilename } from '../attachments/safety.js';
 
 /** Only what this adapter uses. Keeps the port independent of imapflow's d.ts. */
@@ -174,7 +174,14 @@ class ImapFlowClient implements ImapWriter {
   /** Whether the open mailbox was selected read-write (only the writes below ask for that). */
   #writable = false;
 
-  constructor(private readonly client: ImapFlowLike) {}
+  /**
+   * @param imapHost the account's IMAP host: whose receiving server's
+   *   `Authentication-Results` is the only one believed (`trustedAuthResults`).
+   */
+  constructor(
+    private readonly client: ImapFlowLike,
+    private readonly imapHost: string = '',
+  ) {}
 
   /**
    * Every folder, with what the server says each is for.
@@ -340,7 +347,10 @@ class ImapFlowClient implements ImapWriter {
         references: parseReferences(headers['references']),
         listId: headers['list-id'] ?? null,
         bulk: isBulkHeaders(headers),
-        authDomain: authenticatedDomain(firstHeader(msg.headers, 'authentication-results'), addressList(envelope.from)[0] ?? ''),
+        authDomain: authenticatedDomain(
+          trustedAuthResults(allHeaders(msg.headers, 'authentication-results'), this.imapHost),
+          addressList(envelope.from)[0] ?? '',
+        ),
         from: addressList(envelope.from)[0] ?? '(unknown)',
         to: addressList(envelope.to),
         cc: addressList(envelope.cc),
@@ -532,10 +542,29 @@ export function parseHeaders(raw: unknown): Record<string, string> {
   return out;
 }
 
+/** Every occurrence of one header, unfolded, in order from the top. */
+export function allHeaders(raw: unknown, name: string): string[] {
+  if (!raw) return [];
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
+  const wanted = name.toLowerCase();
+  const out: string[] = [];
+  let inWanted = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s/.test(line)) {
+      if (inWanted && out.length > 0) out[out.length - 1] = `${out[out.length - 1]} ${line.trim()}`;
+      continue;
+    }
+    const match = /^([A-Za-z0-9-]+):\s*(.*)$/.exec(line);
+    inWanted = match !== null && (match[1] as string).toLowerCase() === wanted;
+    if (inWanted) out.push((match![2] as string).trim());
+  }
+  return out;
+}
+
 /**
  * The first occurrence of one header, unfolded — where `parseHeaders` keeps
- * the last. For `Authentication-Results` the first is the owner's own server's
- * verdict, written on top of whatever the message arrived with.
+ * the last. Not for `Authentication-Results`: the first one there is not
+ * necessarily the owner's server's (`allHeaders` + `trustedAuthResults`).
  */
 export function firstHeader(raw: unknown, name: string): string | null {
   if (!raw) return null;
@@ -575,7 +604,7 @@ export const imapflowFactory: ImapClientFactory = async (
     qresync: true,
   });
   await client.connect();
-  return new ImapFlowClient(client);
+  return new ImapFlowClient(client, account.imapHost);
 };
 
 /** What the IDLE connection uses of imapflow, beside `connect` and `logout`. */

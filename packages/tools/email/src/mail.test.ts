@@ -16,9 +16,12 @@ import {
   triagePrompt,
   alignedDomains,
   authenticatedDomain,
+  authservIdOf,
+  authservMatches,
+  trustedAuthResults,
 } from './mail.js';
 import { fakeMessage } from './imap/fake.js';
-import { collectAttachments, findTextPart, firstHeader, parseHeaders } from './imap/imapflow-client.js';
+import { allHeaders, collectAttachments, findTextPart, firstHeader, parseHeaders } from './imap/imapflow-client.js';
 import { renderPreview, sha256, type SendEnvelope } from './tools/send.js';
 
 describe('addresses', () => {
@@ -552,6 +555,56 @@ describe('authenticatedDomain — what the owner\'s server vouched for', () => {
     expect(authenticatedDomain('mx; dkim=pass header.d=test', 'a@bank.test')).toBeNull();
     expect(authenticatedDomain(null, 'a@bank.test')).toBeNull();
     expect(alignedDomains('google.com', 'evilgoogle.com')).toBe(false);
+  });
+});
+
+describe('trustedAuthResults — only the owner\'s own receiving server', () => {
+  const pass = 'dkim=pass header.d=accounts.google.com; dmarc=pass header.from=accounts.google.com';
+  const from = '"Google" <no-reply@accounts.google.com>';
+
+  it('reads the authserv-id, comments and version aside', () => {
+    expect(authservIdOf('mx.google.com; dkim=pass')).toBe('mx.google.com');
+    expect(authservIdOf('(c) MX1.Example.ORG 1; spf=pass')).toBe('mx1.example.org');
+    expect(authservIdOf('spf=pass (sender IP is 1.2.3.4) smtp.mailfrom=x.test')).toBe('');
+  });
+
+  it('knows each provider\'s receiving server, and falls back to the IMAP host\'s domain', () => {
+    expect(authservMatches('mx.google.com', 'imap.gmail.com')).toBe(true);
+    expect(authservMatches('mx.evil.test', 'imap.gmail.com')).toBe(false);
+    expect(authservMatches('google.com', 'imap.gmail.com')).toBe(false);
+    expect(authservMatches('mx6.messagingengine.com', 'imap.fastmail.com')).toBe(true);
+    expect(authservMatches('mx1.example.org', 'imap.example.org')).toBe(true);
+    expect(authservMatches('example.org', 'mail.example.org')).toBe(true);
+    expect(authservMatches('mx.notexample.org', 'imap.example.org')).toBe(false);
+    expect(authservMatches('mx.mail.example.co.uk', 'imap.example.co.uk')).toBe(true);
+    expect(authservMatches('mx.other.co.uk', 'imap.example.co.uk')).toBe(false);
+    expect(authservMatches('', 'imap.example.org')).toBe(false);
+  });
+
+  it('ignores a header a sender wrote, wherever it sits', () => {
+    // Spoofed by the sender, and Gmail wrote none: unauthenticated.
+    const spoofed = trustedAuthResults([`attacker.test; ${pass}`], 'imap.gmail.com');
+    expect(spoofed).toBeNull();
+    expect(authenticatedDomain(spoofed, from)).toBeNull();
+    // A relay's header on top of Gmail's own: Gmail's verdict is the one read.
+    const relayOnTop = trustedAuthResults([`relay.test; ${pass}`, 'mx.google.com; dmarc=fail header.from=accounts.google.com'], 'imap.gmail.com');
+    expect(authenticatedDomain(relayOnTop, from)).toBeNull();
+    // Gmail's own verdict, a forged copy of its id underneath: the top one wins.
+    const forgedBelow = trustedAuthResults(['mx.google.com; dmarc=fail header.from=accounts.google.com', `mx.google.com; ${pass}`], 'imap.gmail.com');
+    expect(authenticatedDomain(forgedBelow, from)).toBeNull();
+    // The genuine article.
+    expect(authenticatedDomain(trustedAuthResults([`mx.google.com; ${pass}`], 'imap.gmail.com'), from)).toBe('accounts.google.com');
+    // No authserv-id at all (Microsoft's style) proves nothing.
+    expect(trustedAuthResults([pass], 'outlook.office365.com')).toBeNull();
+    expect(trustedAuthResults([], 'imap.gmail.com')).toBeNull();
+  });
+});
+
+describe('allHeaders', () => {
+  it('reads every occurrence in order, unfolded', () => {
+    const raw = 'Authentication-Results: mx.example; dkim=fail\r\n header.d=bank.test\r\nSubject: hi\r\nAuthentication-Results: forged; dkim=pass header.d=bank.test\r\n';
+    expect(allHeaders(raw, 'authentication-results')).toEqual(['mx.example; dkim=fail header.d=bank.test', 'forged; dkim=pass header.d=bank.test']);
+    expect(allHeaders(raw, 'x-none')).toEqual([]);
   });
 });
 

@@ -666,9 +666,8 @@ export function alignedDomains(a: string, b: string): boolean {
  * envelope sender aligned with it (`smtp.mailfrom`). Alignment is relaxed
  * (`accounts.google.com` and `google.com` are one organisation). Anything
  * else — a fail, a neutral, a pass for some unrelated relay's domain — is
- * null. The header passed in must be the **first** one (`firstHeader`): the
- * owner's server writes its verdict on top, and a sender can write any number
- * of forged ones underneath.
+ * null. The header passed in must be the owner's own receiving server's
+ * (`trustedAuthResults`): a sender can write any number of forged ones.
  */
 export function authenticatedDomain(authResults: string | null | undefined, from: string): string | null {
   const fromDomain = domainOf(from);
@@ -688,6 +687,78 @@ export function authenticatedDomain(authResults: string | null | undefined, from
           ? prop('header.d') || prop('header.i').replace(/^.*@/, '')
           : prop('smtp.mailfrom').replace(/^.*@/, '');
     if (alignedDomains(domain.replace(/\.$/, ''), fromDomain)) return fromDomain;
+  }
+  return null;
+}
+
+/**
+ * The authserv-id of one `Authentication-Results` header (RFC 8601): the
+ * token before the first `;`, comments and the version number aside,
+ * lowercased. '' when the header carries none — Microsoft's, for one, starts
+ * straight with `spf=pass`.
+ */
+export function authservIdOf(header: string): string {
+  const head = (header.split(';')[0] ?? '').replace(/\([^)]*\)/g, ' ').trim().toLowerCase();
+  const token = head.split(/\s+/)[0] ?? '';
+  return token.includes('=') ? '' : token.replace(/\.$/, '');
+}
+
+/**
+ * The receiving servers of the big providers, by IMAP host. `exact` ids are
+ * matched whole (Gmail always writes `mx.google.com`), `suffixes` match the
+ * domain or any subdomain of it (Fastmail's `mx6.messagingengine.com`).
+ */
+const KNOWN_RECEIVERS: ReadonlyArray<{ hosts: readonly string[]; exact?: readonly string[]; suffixes?: readonly string[] }> = [
+  { hosts: ['imap.gmail.com', 'imap.googlemail.com'], exact: ['mx.google.com'] },
+  { hosts: ['outlook.office365.com', 'imap-mail.outlook.com', 'imap.outlook.com'], suffixes: ['outlook.com'] },
+  { hosts: ['imap.fastmail.com'], suffixes: ['messagingengine.com', 'fastmail.com'] },
+  { hosts: ['imap.mail.me.com'], suffixes: ['icloud.com', 'me.com'] },
+  { hosts: ['imap.mail.yahoo.com', 'export.imap.mail.yahoo.com'], suffixes: ['yahoo.com'] },
+  { hosts: ['imap.aol.com'], suffixes: ['aol.com', 'yahoo.com'] },
+  { hosts: ['imap.zoho.com', 'imap.zoho.eu'], suffixes: ['zoho.com', 'zoho.eu'] },
+  { hosts: ['127.0.0.1', 'localhost'], suffixes: [] },
+];
+
+/** Second-level labels under which a registrable domain takes three labels (`example.co.uk`). */
+const SHORT_SECOND_LEVEL = new Set(['co', 'com', 'net', 'org', 'ac', 'gov', 'edu', 'ne', 'or']);
+
+/** The organisation's domain of a host: `imap.example.org` → `example.org`. */
+function registrableDomain(host: string): string {
+  const labels = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.');
+  const second = labels[labels.length - 2] as string;
+  const take = SHORT_SECOND_LEVEL.has(second) && (labels[labels.length - 1] as string).length === 2 ? 3 : 2;
+  return labels.slice(-take).join('.');
+}
+
+/**
+ * Is `id` the authserv-id of the mailbox's own receiving server? A known
+ * provider's table entry when the IMAP host is one of theirs; otherwise the
+ * IMAP host's own organisation domain (`mx1.example.org` for
+ * `imap.example.org`). Nothing else — not a relay, not a sender.
+ */
+export function authservMatches(id: string, imapHost: string): boolean {
+  if (id === '' || !id.includes('.')) return false;
+  const host = imapHost.toLowerCase().replace(/\.$/, '');
+  const known = KNOWN_RECEIVERS.find((r) => r.hosts.includes(host));
+  const exact = known ? known.exact ?? [] : [];
+  const suffixes = known ? known.suffixes ?? [] : [registrableDomain(host)].filter((d) => d.includes('.'));
+  return exact.includes(id) || suffixes.some((d) => id === d || id.endsWith(`.${d}`));
+}
+
+/**
+ * The `Authentication-Results` header the owner's own receiving server wrote,
+ * or null. Of the message's headers, in order from the top, the first whose
+ * authserv-id is that server's (`authservMatches`): a border server writes its
+ * verdict on top and removes any older copy of its own id (RFC 8601 §5), so a
+ * header with another id — a relay's, or one the sender wrote — is never read,
+ * and a forged copy of the right id sits below the real one. No such header
+ * (Microsoft writes none with an id) means unauthenticated: the watchers then
+ * warn more, never less.
+ */
+export function trustedAuthResults(headers: readonly string[], imapHost: string): string | null {
+  for (const header of headers) {
+    if (authservMatches(authservIdOf(header), imapHost)) return header;
   }
   return null;
 }

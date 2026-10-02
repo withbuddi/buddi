@@ -599,8 +599,16 @@ visible and switchable on the Watchers page:
   writing to one user says nothing about the next. A wire or gift-card ask is spared only for the well-known
   providers: a correspondent's real, hijacked mailbox asking for a transfer is
   the fraud itself. "Authenticated" is `messages.auth_domain` (migration
-  `024`), read at ingest from the **first** `Authentication-Results` header —
-  the one the receiving server wrote on top — and kept only when DMARC passed
+  `024`), read at ingest from the `Authentication-Results` header the
+  mailbox's **own receiving server** wrote (`trustedAuthResults` in
+  `mail.ts`): the topmost one whose authserv-id is that server's —
+  `mx.google.com` for a Gmail account, `*.messagingengine.com` for Fastmail,
+  the provider's domain for Outlook, iCloud, Yahoo, AOL and Zoho, and for any
+  other account the IMAP host's own domain (`mx1.example.org` for
+  `imap.example.org`). A header with any other id — a relay's, or one the
+  sender wrote — is never read, and a message with none (Microsoft writes its
+  header without an id) counts as unauthenticated, so the watcher warns more,
+  never less. The verdict is kept only when DMARC passed
   for the From domain or DKIM/SPF passed for a domain aligned with it; mail
   stored before it is null, so only the confidence line protects it. Anything
   else the owner trusts he silences from the row with **Stop telling me this**

@@ -62,8 +62,9 @@ export interface FetchedMessage {
    */
   bulk?: boolean;
   /**
-   * The From domain when the receiving server vouched for it in the first
-   * `Authentication-Results` header (`authenticatedDomain`), else null or
+   * The From domain when the mailbox's own receiving server vouched for it in
+   * an `Authentication-Results` header bearing its authserv-id
+   * (`trustedAuthResults`, `authenticatedDomain`), else null or
    * absent. Stored as `messages.auth_domain`; the suspicious-sender watcher
    * reads it.
    */
