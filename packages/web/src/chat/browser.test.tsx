@@ -273,7 +273,7 @@ describe('Take over with no browser connected', () => {
     const settings = vi.spyOn(api, 'browserSettings').mockResolvedValue({ ...status, mode: 'playwright' });
     render(<BrowserPanel data={extension} error={null} reload={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Take over' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Use buddi\u2019s browser instead' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch to buddi\u2019s browser' }));
     await waitFor(() => expect(settings).toHaveBeenCalledWith({ mode: 'playwright', browserApp: '', allowedApps: [] }));
     expect(api.browserControl).toHaveBeenCalledWith('release', 's1');
     expect(await screen.findByText(/Switched to buddi\u2019s browser/)).toBeInTheDocument();
