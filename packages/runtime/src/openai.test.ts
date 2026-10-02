@@ -769,4 +769,18 @@ describe('createOpenAiProvider — Gemini thought signatures', () => {
     expect(sent.messages[2].tool_calls[0].extra_content).toEqual({ google: { thought_signature: 'skip_thought_signature_validator' } });
     expect(sent.messages[2].tool_calls[1]).not.toHaveProperty('extra_content');
   });
+
+  it('vouches for a first call that lost its signature even when a later step in the message kept its own', async () => {
+    // Two steps merged into one message: the first written before signatures
+    // were kept, the second signed on its first call.
+    const merged: CompletionRequest['messages'][number]['content'] = [
+      { type: 'tool_use', id: 'function-call-1', name: 'finance.project_cashflow', input: { horizonDays: 30 } },
+      { type: 'tool_use', id: 'function-call-2', name: 'finance.project_cashflow', input: { horizonDays: 60 }, thoughtSignature: 'CiQBSIG-B==' },
+    ];
+    const { sent } = await sendTo(gemini(), { ...request, tools, messages: history(merged) });
+    expect(sent.messages[2].tool_calls.map((c: { extra_content?: unknown }) => c.extra_content)).toEqual([
+      { google: { thought_signature: 'skip_thought_signature_validator' } },
+      { google: { thought_signature: 'CiQBSIG-B==' } },
+    ]);
+  });
 });

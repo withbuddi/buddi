@@ -8,6 +8,8 @@ import {
   createAnthropicProvider,
   toolNameMap,
   type CompletionRequest,
+  type ContentBlock,
+  type NeutralMessage,
 } from './anthropic.js';
 
 const AGENT_PROMPT = 'You are the finance agent.';
@@ -932,7 +934,7 @@ describe('createAnthropicProvider — prompt caching', () => {
     expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(2);
   });
 
-  it('skips a thinking block (and the empty stand-in for an unsigned one) at the edge', async () => {
+  it('skips a thinking block at the edge, and never sends an unsigned one', async () => {
     const body = await sent({
       ...request,
       tools: [],
@@ -946,7 +948,6 @@ describe('createAnthropicProvider — prompt caching', () => {
     expect(body.messages[1].content).toEqual([
       { type: 'text', text: 'looking', cache_control: E },
       { type: 'thinking', thinking: 'hm', signature: 's' },
-      { type: 'text', text: '' },
     ]);
   });
 
@@ -1009,5 +1010,98 @@ describe('createAnthropicProvider — prompt caching', () => {
     const provider = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
     const res = await provider.complete({ ...request, onDelta: () => {} });
     expect(res.usage).toEqual({ input: 7, output: 6, cacheRead: 5000, cacheWrite: 40 });
+  });
+});
+
+describe('createAnthropicProvider — thinking handed back', () => {
+  const REFUSED = 'messages.1.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified. These blocks must remain as they were in the original response.';
+  const redacted = { type: 'redacted_thinking', data: 'ENCRYPTED' };
+  // One long tool-using turn the way the API wrote it: thinking interleaved
+  // with the calls, a redacted block among them.
+  const turn: ContentBlock[] = [
+    { type: 'thinking', text: '', signature: 'sig-a' },
+    { type: 'provider_native', provider: 'anthropic', raw: redacted },
+    { type: 'thinking', text: '', signature: 'sig-b' },
+    { type: 'tool_use', id: 'tu-1', name: 'web.read', input: { url: 'a' } },
+    { type: 'thinking', text: 'then b', signature: 'sig-c' },
+    { type: 'tool_use', id: 'tu-2', name: 'web.read', input: { url: 'b' } },
+  ];
+  const wireTurn = [
+    { type: 'thinking', thinking: '', signature: 'sig-a' },
+    redacted,
+    { type: 'thinking', thinking: '', signature: 'sig-b' },
+    { type: 'tool_use', id: 'tu-1', name: 'web_read', input: { url: 'a' } },
+    { type: 'thinking', thinking: 'then b', signature: 'sig-c' },
+    { type: 'tool_use', id: 'tu-2', name: 'web_read', input: { url: 'b' } },
+  ];
+  const results: NeutralMessage = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'A' }, { type: 'tool_result', tool_use_id: 'tu-2', content: 'B' }] };
+  const webTools = [{ name: 'web.read', description: 'Read.', input_schema: { type: 'object' } }];
+  const strip = (blocks: Record<string, unknown>[]) => blocks.map(({ cache_control: _c, ...b }) => b);
+
+  function provider(responses: Response[]) {
+    const fetchMock = vi.fn(async () => responses.shift()!);
+    const p = createAnthropicProvider(resolve('api-key'), { fetch: fetchMock as unknown as typeof fetch, sleep: noSleep });
+    const bodies = () => fetchMock.mock.calls.map((c) => JSON.parse(((c as unknown as [string, RequestInit])[1].body) as string));
+    return { p, fetchMock, bodies };
+  }
+
+  it('reads an interleaved turn in the order the API wrote it, redacted block included', async () => {
+    const { p } = provider([jsonResponse(200, okBody({ stop_reason: 'tool_use', content: wireTurn }))]);
+    const res = await p.complete({ ...request, tools: webTools });
+    expect(res.content).toEqual(turn);
+  });
+
+  it('hands the turn in progress back exactly: same blocks, signatures and places', async () => {
+    const { p, bodies } = provider([jsonResponse(200, okBody())]);
+    await p.complete({ ...request, tools: webTools, thinking: 'on', messages: [{ role: 'user', content: [{ type: 'text', text: 'research' }] }, { role: 'assistant', content: turn }, results] });
+    expect(strip(bodies()[0].messages[1].content)).toEqual(wireTurn);
+    expect(bodies()[0].thinking).toEqual({ type: 'adaptive' });
+  });
+
+  it('keeps an earlier turn\'s thinking in place on the next turn, so the cached prefix holds', async () => {
+    const { p, bodies } = provider([jsonResponse(200, okBody())]);
+    await p.complete({ ...request, tools: webTools, thinking: 'on', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'research' }] }, { role: 'assistant', content: turn }, results,
+      { role: 'assistant', content: [{ type: 'text', text: 'found it' }] },
+      { role: 'user', content: [{ type: 'text', text: 'and the price?' }] },
+    ] });
+    expect(strip(bodies()[0].messages[1].content)).toEqual(wireTurn);
+  });
+
+  it('recovers a refused replay by dropping earlier turns\' thinking, once, instead of failing for good', async () => {
+    const { p, bodies } = provider([jsonResponse(400, { error: { type: 'invalid_request_error', message: REFUSED } }), jsonResponse(200, okBody())]);
+    const res = await p.complete({ ...request, tools: webTools, thinking: 'on', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'research' }] }, { role: 'assistant', content: turn }, results,
+      { role: 'assistant', content: [{ type: 'text', text: 'found it' }] },
+      { role: 'user', content: [{ type: 'text', text: 'and the price?' }] },
+    ] });
+    expect(res.content).toEqual([{ type: 'text', text: 'ok' }]);
+    const [, second] = bodies();
+    expect(strip(second.messages[1].content)).toEqual(wireTurn.filter((b) => b.type === 'tool_use'));
+    expect(second.thinking).toEqual({ type: 'adaptive' });
+  });
+
+  it('goes without thinking for the one request when the turn in progress itself is refused', async () => {
+    const refused = () => jsonResponse(400, { error: { type: 'invalid_request_error', message: REFUSED } });
+    const { p, bodies } = provider([refused(), jsonResponse(200, okBody())]);
+    await p.complete({ ...request, tools: webTools, thinking: 'on', messages: [{ role: 'user', content: [{ type: 'text', text: 'research' }] }, { role: 'assistant', content: turn }, results] });
+    // 'live' would send the same bytes as 'all' here, so it is skipped.
+    expect(bodies()).toHaveLength(2);
+    expect(strip(bodies()[1].messages[1].content)).toEqual(wireTurn.filter((b) => b.type === 'tool_use'));
+    expect(bodies()[1].thinking).toBeUndefined();
+  });
+
+  it('stops after the last step and never retries any other 400', async () => {
+    const refused = () => jsonResponse(400, { error: { type: 'invalid_request_error', message: REFUSED } });
+    const a = provider([refused(), refused(), refused()]);
+    await expect(a.p.complete({ ...request, tools: webTools, thinking: 'on', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'research' }] }, { role: 'assistant', content: turn }, results,
+      { role: 'assistant', content: [{ type: 'text', text: 'found it' }] },
+      { role: 'user', content: [{ type: 'text', text: 'more' }] },
+    ] })).rejects.toThrow(/cannot be modified/);
+    expect(a.fetchMock).toHaveBeenCalledTimes(3);
+    const b = provider([jsonResponse(400, { error: { type: 'invalid_request_error', message: 'max_tokens: too large' } })]);
+    await expect(b.p.complete({ ...request, thinking: 'on' })).rejects.toThrow(/max_tokens/);
+    expect(b.fetchMock).toHaveBeenCalledTimes(1);
   });
 });

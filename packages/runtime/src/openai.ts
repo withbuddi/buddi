@@ -225,15 +225,16 @@ export function toWireMessages(
       .join('\n');
     const calls = message.content
       .filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use');
-    // Gemini refuses a call from the current turn without its signature. A
-    // turn that has none at all — written before signatures were kept, or by
-    // another model — has its first call vouched for with Google's documented
-    // placeholder, so the conversation can go on instead of failing for good.
-    const unsigned = options.gemini === true && !calls.some((b) => typeof b.thoughtSignature === 'string' && b.thoughtSignature !== '');
+    // Gemini refuses a step whose first call comes back without a signature;
+    // a parallel call after it carries none of its own. A first call with no
+    // signature — the turn was written before signatures were kept, or by
+    // another model, or two steps were merged into one message — is vouched
+    // for with Google's documented placeholder, so the conversation can go on
+    // instead of failing for good.
     const toolCalls: WireToolCall[] = calls.map((b, i) => {
       const signature = options.gemini !== true ? undefined
         : typeof b.thoughtSignature === 'string' && b.thoughtSignature !== '' ? b.thoughtSignature
-          : unsigned && i === 0 ? GEMINI_SKIP_SIGNATURE : undefined;
+          : i === 0 ? GEMINI_SKIP_SIGNATURE : undefined;
       return {
         id: b.id,
         type: 'function' as const,

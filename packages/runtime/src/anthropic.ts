@@ -117,9 +117,12 @@ export type ContentBlock =
    * the adapter reads `raw`, and `provider` is there so one vendor's blocks are
    * never posted to another's endpoint.
    *
-   * It is never persisted. The loop strips these before writing `core.messages`
-   * — untrusted search results belong in the answer's citations, not in durable
-   * history that gets replayed for ever.
+   * The server-tool pair is never persisted. The loop strips it before writing
+   * `core.messages` — untrusted search results belong in the answer's
+   * citations, not in durable history that gets replayed for ever. A
+   * `redacted_thinking` block is the one kept: it is the API's own encrypted
+   * thinking, and dropping it from a turn changes the place of every signed
+   * thinking block after it, which the API refuses (see `persistable`).
    */
   | { type: 'provider_native'; provider: string; raw: unknown };
 
@@ -553,12 +556,8 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
       // this same endpoint; it is never constructed here and never read.
       return block.raw as Record<string, unknown>;
     case 'thinking':
-      // Only a block this endpoint signed goes back; one from another wire
-      // has no signature and would be refused. It is stated as empty text
-      // rather than omitted so the caller's block count still lines up.
-      return block.signature
-        ? { type: 'thinking', thinking: block.text, signature: block.signature }
-        : { type: 'text', text: '' };
+      // `wireMessages` lets only a signed block through; this is the shape.
+      return { type: 'thinking', thinking: block.text, signature: block.signature ?? '' };
     case 'artifact_ref':
       // The loop hydrates these before calling a provider. Reaching here means
       // an un-hydrated history — say so rather than dropping the block.
@@ -577,6 +576,81 @@ function toWireBlock(block: ContentBlock, names: Map<string, string>): WireBlock
             content: block.content,
           };
   }
+}
+
+/**
+ * How much of the model's past thinking a request hands back.
+ *
+ * - `all`: every signed thinking block, where it was. The normal case, and
+ *   the cache-friendly one: the history is the same bytes it was last time.
+ * - `live`: only the turn in progress (see `liveTurnStart`); earlier turns go
+ *   without. The API allows dropping an earlier turn's thinking outright.
+ * - `none`: no thinking anywhere, and none asked for. Always valid.
+ *
+ * The API refuses a thinking block that is not exactly what it signed, in
+ * its original place. A history written before a fix, or edited by anything
+ * between two requests, would otherwise kill its conversation for good, so a
+ * refusal steps down this list once each (see `refusesThinkingReplay`).
+ */
+export type ThinkingReplay = 'all' | 'live' | 'none';
+
+/** A block of the model's own thinking, as stored or as carried raw. */
+export function isThinkingBlock(block: ContentBlock): boolean {
+  if (block.type === 'thinking') return true;
+  if (block.type !== 'provider_native') return false;
+  const type = (block.raw as { type?: unknown } | null)?.type;
+  return type === 'redacted_thinking' || type === 'thinking';
+}
+
+/**
+ * Where the turn in progress begins: just after the last user message that
+ * says something other than tool results. Everything from there on is one
+ * assistant turn to the API, however many tool rounds it took, and is the
+ * part whose thinking has to come back exactly.
+ */
+export function liveTurnStart(messages: readonly NeutralMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!;
+    if (message.role === 'user' && message.content.some((b) => b.type !== 'tool_result')) return i + 1;
+  }
+  return 0;
+}
+
+/**
+ * Neutral messages -> wire messages, with thinking replayed as `replay` says.
+ *
+ * An unsigned thinking block (another wire wrote it, or its signature was
+ * deliberately not kept) is never sent: the API would refuse it, and an
+ * empty stand-in text block is refused too. Dropping blocks can empty a
+ * message, so empty ones go and same-role neighbours merge, order intact.
+ */
+export function wireMessages(
+  messages: readonly NeutralMessage[],
+  names: Map<string, string>,
+  replay: ThinkingReplay = 'all',
+): { role: MessageRole; content: WireBlock[] }[] {
+  const live = liveTurnStart(messages);
+  const out: { role: MessageRole; content: WireBlock[] }[] = [];
+  messages.forEach((message, i) => {
+    const keep = (b: ContentBlock): boolean => {
+      if (!isThinkingBlock(b)) return true;
+      if (b.type === 'thinking' && !b.signature) return false;
+      return replay === 'all' || (replay === 'live' && i >= live);
+    };
+    const content = message.content.filter(keep).map((b) => toWireBlock(b, names));
+    if (content.length === 0) return;
+    const last = out[out.length - 1];
+    if (last && last.role === message.role) last.content = [...last.content, ...content];
+    else out.push({ role: message.role, content });
+  });
+  return out;
+}
+
+/** Did the API refuse this request for the thinking it was handed back? */
+export function refusesThinkingReplay(error: unknown): boolean {
+  if (!(error instanceof ProviderError) || error.status !== 400) return false;
+  const message = error.message;
+  return /thinking/i.test(message) && /cannot be modified|must remain|must start with|signature/i.test(message);
 }
 
 /**
@@ -810,15 +884,12 @@ export function createAnthropicProvider(
     return h;
   }
 
-  function body(req: CompletionRequest, names: Map<string, string>): WireRequest {
+  function body(req: CompletionRequest, names: Map<string, string>, replay: ThinkingReplay = 'all'): WireRequest {
     const wire: WireRequest = {
       model: resolved.model,
       max_tokens: req.maxTokens ?? defaultMaxTokens,
       system: isSubscription ? withClaudeCodeIdentity(req.system) : req.system,
-      messages: req.messages.map((m) => ({
-        role: m.role,
-        content: m.content.map((b) => toWireBlock(b, names)),
-      })),
+      messages: wireMessages(req.messages, names, replay),
     };
     const tools: NonNullable<WireRequest['tools']> = req.tools.map((t) => ({
       name: wireNameFor(names, t.name),
@@ -835,7 +906,7 @@ export function createAnthropicProvider(
       });
     }
     if (tools.length > 0) wire.tools = tools;
-    const shape = thinkingShape(resolved.model, req.thinking);
+    const shape = replay === 'none' ? null : thinkingShape(resolved.model, req.thinking);
     if (shape === 'budget') {
       // The budget must sit under max_tokens; a fixed slice of it, never all.
       const budget = Math.max(THINKING_MIN_BUDGET, Math.floor(wire.max_tokens / 2));
@@ -887,7 +958,25 @@ export function createAnthropicProvider(
         ANTHROPIC_TOOL_NAME_MAX,
         req.nativeSearch ? [WEB_SEARCH_TOOL_NAME] : [],
       );
-      const payload = JSON.stringify(body(req, names));
+      // A refused thinking replay steps down once per level, and only to a
+      // level that actually sends something different (see `ThinkingReplay`).
+      let sent = '';
+      for (const replay of ['all', 'live', 'none'] as const) {
+        const payload = JSON.stringify(body(req, names, replay));
+        if (payload === sent) continue;
+        sent = payload;
+        try {
+          return await send(req, names, payload);
+        } catch (err) {
+          if (replay === 'none' || !refusesThinkingReplay(err)) throw err;
+        }
+      }
+      throw new ProviderError({ status: 0, type: 'unknown', message: 'request failed with no response' });
+    },
+  };
+
+  async function send(req: CompletionRequest, names: Map<string, string>, payload: string): Promise<CompletionResponse> {
+    {
       const startedAt = now();
       /**
        * Two budgets, counted separately, because they are answers to two
@@ -982,8 +1071,8 @@ export function createAnthropicProvider(
           message: 'request failed with no response',
         })
       );
-    },
-  };
+    }
+  }
 }
 
 /**

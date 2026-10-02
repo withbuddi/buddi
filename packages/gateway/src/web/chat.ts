@@ -951,6 +951,10 @@ function toChatBlock(
         sizeBytes: row?.sizeBytes ?? (typeof block.sizeBytes === 'number' ? block.sizeBytes : null),
       };
     }
+    case 'provider_native':
+      // A provider's opaque block (today, Anthropic's encrypted
+      // `redacted_thinking`): nothing a page can show, so its payload stays home.
+      return { type: 'unknown', raw: { type: 'provider_native' } };
     default:
       return { type: 'unknown', raw: block };
   }

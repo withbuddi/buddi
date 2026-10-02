@@ -9,7 +9,7 @@ import type {
   NeutralMessage,
   RuntimeProvider,
 } from './anthropic.js';
-import { ProviderError } from './anthropic.js';
+import { ProviderError, liveTurnStart, wireMessages } from './anthropic.js';
 import { providerCapabilities, type ProviderCapabilities } from './capabilities.js';
 import { createOpenAiProvider } from './openai.js';
 import {
@@ -24,6 +24,7 @@ import {
   loadMessages,
   maxTurnsNotice,
   normalizeForReplay,
+  persistable,
   producedArtifactIds,
   runAgent,
   runningAgentRuns,
@@ -2522,5 +2523,80 @@ describe('Gemini thought signatures through the loop', () => {
     await runAgent({ agent: geminiAgent, provider, registry: registryWithDouble(), ctx, pool: db, conversationId, userMessage: 'double' });
     expect(JSON.stringify(bodies[1])).not.toContain('extra_content');
     expect(JSON.stringify(bodies[1])).not.toContain('sigA');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Thinking survives the round trip through core.messages
+ * ------------------------------------------------------------------ */
+
+describe('a long thinking turn, replayed on the next one', () => {
+  const redacted = { type: 'redacted_thinking', data: 'ENCRYPTED' };
+  const call = (id: string, n: number) => ({ type: 'tool_use' as const, id, name: 'demo.double', input: { n } });
+  // The shape that killed a conversation: interleaved thinking, a redacted
+  // block among it, several calls in one step and several steps.
+  const step1: ContentBlock[] = [
+    { type: 'thinking', text: '', signature: 'sig-a' },
+    { type: 'provider_native', provider: 'anthropic', raw: redacted },
+    { type: 'thinking', text: '', signature: 'sig-b' },
+    call('d1', 1),
+    call('d2', 2),
+  ];
+  const step2: ContentBlock[] = [{ type: 'thinking', text: 'one more', signature: 'sig-c' }, call('d3', 3), { type: 'thinking', text: '', signature: 'sig-d' }, call('d4', 4)];
+  const thinkingAgent = { ...agent, thinking: 'on' as const };
+
+  it('stores every thinking block where the API put it, and hands it back unchanged', async () => {
+    const db = new FakeDb();
+    await runAgent({
+      agent: thinkingAgent, registry: registryWithDouble(), ctx, pool: db, conversationId: 'research', userMessage: 'dig',
+      provider: scriptedProvider([
+        { content: step1, stopReason: 'tool_use', usage, model: 'claude-sonnet-5' },
+        { content: step2, stopReason: 'tool_use', usage, model: 'claude-sonnet-5' },
+        { content: [{ type: 'text', text: 'here it is' }], stopReason: 'end_turn', usage, model: 'claude-sonnet-5' },
+      ]),
+    });
+    const next = scriptedProvider([endTurn('the price')]);
+    await runAgent({ agent: thinkingAgent, registry: registryWithDouble(), ctx, pool: db, conversationId: 'research', userMessage: 'and the price?', provider: next });
+    const sent = next.calls[0]!.messages;
+    expect(sent[1]!.content).toEqual(step1);
+    expect(sent[3]!.content).toEqual(step2);
+    // And on the wire, exactly what the API wrote.
+    const wire = wireMessages(sent, new Map([['demo_double', 'demo.double']]));
+    expect(wire[1]!.content).toEqual([
+      { type: 'thinking', thinking: '', signature: 'sig-a' },
+      redacted,
+      { type: 'thinking', thinking: '', signature: 'sig-b' },
+      { type: 'tool_use', id: 'd1', name: 'demo_double', input: { n: 1 } },
+      { type: 'tool_use', id: 'd2', name: 'demo_double', input: { n: 2 } },
+    ]);
+  });
+
+  it('after a failed turn, the next one carries the stored steps intact', async () => {
+    const db = new FakeDb();
+    const failing = scriptedProvider([{ content: step1, stopReason: 'tool_use', usage, model: 'claude-sonnet-5' }]);
+    const complete = failing.complete;
+    let n = 0;
+    failing.complete = async (req) => {
+      if (n++ > 0) throw new ProviderError({ status: 529, type: 'overloaded_error', message: 'Overloaded' });
+      return complete(req);
+    };
+    await expect(runAgent({ agent: thinkingAgent, registry: registryWithDouble(), ctx, pool: db, conversationId: 'failed', userMessage: 'dig', provider: failing })).rejects.toThrow(/Overloaded/);
+    const next = scriptedProvider([endTurn('again')]);
+    await runAgent({ agent: thinkingAgent, registry: registryWithDouble(), ctx, pool: db, conversationId: 'failed', userMessage: 'try again', provider: next });
+    const sent = next.calls[0]!.messages;
+    expect(sent[1]!.content).toEqual(step1);
+    // The tool results and the owner's new words share one user turn, so the
+    // failed step is an earlier turn and its thinking may go if refused.
+    expect(liveTurnStart(sent)).toBe(sent.length);
+  });
+
+  it('stores no signature for thinking whose turn lost a search block, so it is never replayed', () => {
+    const search: ContentBlock = { type: 'provider_native', provider: 'anthropic', raw: { type: 'server_tool_use', id: 's', name: 'web_search', input: {} } };
+    expect(persistable([{ type: 'thinking', text: 'a', signature: 's1' }, search, { type: 'thinking', text: 'b', signature: 's2' }, { type: 'text', text: 'x' }])).toEqual([
+      { type: 'thinking', text: 'a' },
+      { type: 'thinking', text: 'b' },
+      { type: 'text', text: 'x' },
+    ]);
+    expect(persistable(step1)).toEqual(step1);
   });
 });

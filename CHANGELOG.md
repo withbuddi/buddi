@@ -8,6 +8,12 @@ What changes in buddi from one release to the next, newest first.
 
 - The chat canvas gathers a turn's web reads and searches into one **Sources** tab with a count, instead of a "Web · Read" tab per call: each page as a card (site tile, linked title, when read, length, the text taken behind Show more, failures in plain words) and each search with its results, the ones read marked. Raw JSON stays one quiet link away.
 
+### Fixed
+
+- A conversation with Claude no longer dies after a long tool-using turn with "`thinking` or `redacted_thinking` blocks … cannot be modified": Claude's encrypted (redacted) thinking is now kept with the turn, so every thinking block goes back exactly where it was; and when Claude still refuses the thinking it is handed back, buddi retries that request once without the earlier turns' thinking (then without thinking at all) instead of failing every turn from then on. Conversations already stuck this way work again.
+- Thinking that came from another provider is no longer sent to Claude as an empty text block, which Claude refuses.
+- Gemini: a tool call that comes back without its thought signature in first place (two steps of a turn merged into one) is vouched for with Google's placeholder, so the request is not refused. The mission failures with "missing a thought_signature" seen before 0.1.0-pre.30 were runs from before that fix.
+
 ## 0.1.0-pre.33 — 2026-10-02
 
 ### Fixed

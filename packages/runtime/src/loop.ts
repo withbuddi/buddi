@@ -22,7 +22,7 @@ import type {
   Usage,
   CompletionDelta,
 } from './anthropic.js';
-import { ProviderError } from './anthropic.js';
+import { ProviderError, isThinkingBlock } from './anthropic.js';
 import { NATIVE_SEARCH_SYSTEM_NOTE, planNativeSearch } from './search.js';
 import { compactObservations } from './projection.js';
 import {
@@ -698,7 +698,7 @@ export function selectTools(registry: ToolRegistry, agent: AgentDefinition): Too
 /**
  * What goes into `core.messages`, which is not quite what went over the wire.
  *
- * `provider_native` blocks are dropped. Two reasons, and both matter. They are
+ * `provider_native` blocks are dropped, `redacted_thinking` aside. Two reasons, and both matter. They are
  * one vendor's private shapes, and a conversation can be continued by an agent
  * on another provider tomorrow — posting Anthropic's `server_tool_use` to
  * OpenAI is a 400 waiting to happen. And they carry untrusted search results:
@@ -707,7 +707,14 @@ export function selectTools(registry: ToolRegistry, agent: AgentDefinition): Too
  * citations; the raw results do not need to outlive the turn that used them.
  */
 export function persistable(content: readonly ContentBlock[]): ContentBlock[] {
-  return content.filter((b) => b.type !== 'provider_native');
+  // `redacted_thinking` is kept: it is the API's own encrypted thinking, no
+  // stranger's words, and the turn is not the one it signed without it.
+  const kept = content.filter((b) => b.type !== 'provider_native' || isThinkingBlock(b));
+  if (kept.length === content.length) return kept;
+  // Something else was dropped, so the signed thinking left behind no longer
+  // sits where the API put it, and replaying it would be refused. Its words
+  // stay for the page; its signature goes, so it is never sent back.
+  return kept.map((b) => (b.type === 'thinking' && b.signature !== undefined ? { type: 'thinking', text: b.text } : b));
 }
 
 function textOf(content: ContentBlock[]): string {
