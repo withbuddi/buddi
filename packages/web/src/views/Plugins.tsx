@@ -45,7 +45,7 @@ import {
   type StagedPluginView,
 } from '../api';
 import { fmtRelative } from '../format';
-import { AGENTS_ROUTE, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute } from '../routes';
+import { AGENTS_ROUTE, catalogueRoute, parseBrowseKind, parsePluginsInstall, parsePluginsTab, pluginPageRoute, pluginSettingsRoute, settingsRoute, type BrowseKind } from '../routes';
 import type { PluginPageDescriptor } from '../pages/types';
 import { announcePagesChanged } from '../pages/usePages';
 import { pluginWords, restartWhile } from '../shell/restart';
@@ -82,6 +82,7 @@ import {
 } from '../ui';
 import { AgentReady, useAcceptPluginAgent } from './parts/AgentOffer';
 import { PluginFolders } from './parts/PluginFolders';
+import { CatCard, cardState, useLoadedPlugins } from './Catalogue';
 
 /** The line under Plugins' title, which Settings draws. */
 export const PLUGINS_LEDE =
@@ -362,6 +363,8 @@ export function Plugins({
   const [failed, setFailed] = useState<string | null>(null);
   const [tab, setTab] = useState<PluginsTab>(() => parsePluginsTab(hash));
   useEffect(() => setTab(parsePluginsTab(hash)), [hash]);
+  const [kind, setKind] = useState<BrowseKind>(() => parseBrowseKind(hash));
+  useEffect(() => setKind(parseBrowseKind(hash)), [hash]);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [asking, setAsking] = useState<Asking | null>(null);
   /** What the last disable, enable or remove said, and about which plugin. */
@@ -632,6 +635,9 @@ export function Plugins({
         {tabs}
         <ErrorBanner message={failed} />
         <Browse
+          kind={kind}
+          onKind={setKind}
+          navigate={navigate}
           market={market}
           loading={marketLoading}
           busy={stagingBusy}
@@ -2204,6 +2210,9 @@ function ListingSheet({
 }
 
 function Browse({
+  kind = 'all',
+  onKind,
+  navigate,
   market,
   loading,
   busy,
@@ -2212,6 +2221,10 @@ function Browse({
   onInstall,
   onUpdate,
 }: {
+  /** All, only plugins, or the catalogue's agents (`&kind=agents`). */
+  kind?: BrowseKind;
+  onKind?: (kind: BrowseKind) => void;
+  navigate?: ((route: string) => void) | undefined;
   market: MarketView | null;
   loading: boolean;
   busy: boolean;
@@ -2234,8 +2247,27 @@ function Browse({
     return matches(entry, query);
   });
   const q = query.trim();
+  const kinds = (
+    <div className="plugins-kind">
+      <Segment<BrowseKind> label="Show" options={BROWSE_KINDS} value={kind} onChange={(next) => onKind?.(next)} />
+    </div>
+  );
+  const teammates = kind === 'plugins' ? null : <BrowseAgents kind={kind} navigate={navigate} />;
+  if (kind === 'agents') {
+    return (
+      <Stack gap="lg">
+        {kinds}
+        <p className="plugins-quiet">
+          <Icon name="globe" size={14} />
+          Opening this tab fetched the list from withbuddi.com. Nothing else leaves.
+        </p>
+        {teammates}
+      </Stack>
+    );
+  }
   return (
     <Stack gap="lg">
+      {kinds}
       <Toolbar>
         <SearchField
           grow
@@ -2305,6 +2337,54 @@ function Browse({
           )}
         </>
       )}
+      {teammates}
     </Stack>
+  );
+}
+
+const BROWSE_KINDS: ReadonlyArray<{ value: BrowseKind; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: 'plugins', label: 'Plugins' },
+  { value: 'agents', label: 'Agents' },
+];
+
+/**
+ * The catalogue's teammates in Browse, drawn with its cards: three ready ones
+ * under All with "See all N", every one under Agents with "Open the
+ * catalogue". A card, Add or Update opens the teammate's catalogue page,
+ * where the sheets are.
+ */
+function BrowseAgents({ kind, navigate }: { kind: BrowseKind; navigate?: ((route: string) => void) | undefined }): JSX.Element | null {
+  const read = useAsync(() => api.catalogue(), []);
+  const loaded = useLoadedPlugins();
+  const go = (route: string): void => navigate?.(route);
+  const view = read.data;
+  if (!view) return read.error ? <Notice tone="warning">{read.error}</Notice> : <Empty>Asking withbuddi.com…</Empty>;
+  if (view.unavailable) return kind === 'agents' ? <Notice tone="warning">{view.unavailable}</Notice> : null;
+  const ready = view.agents.filter((a) => cardState(a) === 'ready');
+  const shown = kind === 'all' ? ready.slice(0, 3) : view.agents;
+  if (shown.length === 0) return null;
+  return (
+    <Section
+      title={kind === 'all' ? 'Teammates' : undefined}
+      aside={
+        <a href={catalogueRoute()} onClick={(e) => { e.preventDefault(); go(catalogueRoute()); }}>
+          {kind === 'all' ? `See all ${view.agents.length}` : 'Open the catalogue'}
+        </a>
+      }
+    >
+      <div className="plugins-grid" data-testid="browse-agents">
+        {shown.map((a) => (
+          <CatCard
+            key={a.name}
+            entry={a}
+            loaded={loaded}
+            onOpen={() => go(catalogueRoute(a.name))}
+            onAdd={() => go(catalogueRoute(a.name))}
+            onUpdate={() => go(catalogueRoute(a.name))}
+          />
+        ))}
+      </div>
+    </Section>
   );
 }

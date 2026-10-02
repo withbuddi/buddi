@@ -24,7 +24,7 @@ const SAMPLES: unknown[][] = [
   ['Amen', 'America/New_York'],
   [['Weather', 'Calendar'], 1, 2],
   [2],
-  [{ days: true, mail: true, mailbox: false }, ['Planner', 'Mail Triage']],
+  [{ days: true, mail: true, mailbox: false }, ['Mail Triage']],
   [{ days: false, mail: true, mailbox: false }, []],
   [['Mail Triage is waiting for a mailbox', 'Calendar wants your calendar’s private link']],
 ];

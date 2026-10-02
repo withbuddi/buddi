@@ -92,6 +92,10 @@ const GLYPHS = {
   // The Listening panel: ✓ stops and transcribes, × throws the recording away.
   check: [16, 1.8, <path d="M3.5 8.4 6.6 11.4 12.5 4.8" />],
   close: [16, 1.8, <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />],
+  /** A search field's mark (the catalogue's search). */
+  search: [16, 1.6, <><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" /></>],
+  /** A step that failed: a ring and an exclamation. */
+  alert: [16, 1.6, <><circle cx="8" cy="8" r="6.2" /><path d="M8 4.8v3.8M8 11.2v.01" /></>],
 
   // ---- the thread ----
   thought: [13, 1.4, <><path d="M4.2 9.6a3.6 3.6 0 1 1 4.6 0v1.2H4.2z" /><path d="M5.2 12.2h2.6" /></>],

@@ -155,7 +155,12 @@ needs me, what is my team up to, what is coming.
   greeting is the first widget; an older plugin's glance card appears as a
   small widget too.
 - **Your team**: one face per agent, with what it is waiting on or what it
-  does. A face opens a conversation with it.
+  does. A face opens a conversation with it. While the team is the front desk
+  and the maker plus at most one more, three teammates from the catalogue are
+  suggested under the faces, from what is set up (Chief of Staff; CFO once
+  Finance is in; then Researcher and Tutor), each with **Add**, and the
+  section's link reads **See all teammates**. After that, one dashed **Add a
+  teammate** tile closes the faces and opens the catalogue.
 - **On offer**: up to six next steps your agents suggested, each a chip.
   Under it, when the browser has offered an install, one quiet line to
   install buddi as an app.
@@ -265,7 +270,8 @@ Try it: drop a bank statement on the chat and ask what changed since last month.
 
 ## Agents
 
-Your team, and one page per agent. The index has four tabs:
+Your team, and one page per agent. **Add a teammate**, on the right of the
+head, opens the catalogue. The index has four tabs:
 
 - **Team**: every agent with its face and whether it can run, a **Talk**
   button, and the choice of default agent (the "front desk").
@@ -280,7 +286,58 @@ budget, language, and thinking where the provider honours the switch: Anthropic 
 who it may ask: the front desk and the maker ask everyone until you limit them,
 any other agent only the colleagues ticked there).
 
+An agent that came from the catalogue says so under its name ("From the
+catalogue · Chef 1.0"), with **Update to 1.1** when a newer version is out, or
+**See what changed** when you edited its file. **Remove from team**, at the foot
+of Setup, shows what it does before it does it: the folder goes to the trash
+folder, its missions are paused, and the plugins no other agent uses are named
+(they stay installed); the click is the approval. The front desk and the maker
+are not removed from here.
+
 Try it: move an agent to another model under Setup → Brain.
+
+### The catalogue
+
+`#/agents/catalogue`: buddi's ready-made agents, tested with the plugins they
+use. A search, the categories All, Work, Money, Home, Health, Learning and
+Life, and one grid of cards: the agent's picture, its title and category, the
+pitch, then what it lacks as one warning chip ("Needs Finance") or what it uses
+in muted words, and the action on the right: **Add**, **Added**, **Update**
+(an untouched agent with a newer version listed, its changes line above it) or
+**See what changed** (you changed its file and a newer version is out). A
+plugin's own agent shows too, "From Mail", added through the plugin's accept.
+No match says "No teammate for that yet" with **Show all** and **Ask Agent
+Father**, which opens the maker's chat with your words in the composer.
+Loading draws quiet cards; with no connection and no saved copy the page says
+the catalogue needs withbuddi.com, with **Try again**; a copy kept from before
+says so in the quiet line.
+
+A card opens its page, `#/agents/catalogue/<name>` (the link withbuddi.com's
+"Add in buddi" opens): the picture, pitch, by buddi, category and version, and
+**Add <name>** on the right (**Open chat** once added). Then: What it does; Ask
+it (the three examples; once added a tap opens a chat with the ask in the
+composer); Skills (its text skills, read-only, editable on its Skills tab once
+added); What it can reach, family by family in words; Missions ("off until you
+turn it on"); Plugins (needed or better-with, each with its state or its one
+fix); Version.
+
+**Add** opens the install sheet: the By-buddi plugins it installs on the way,
+a few picks filled in for you (a mailbox, calendars, a place, a mission's
+hour, one line about you), the handle, the missions with their switches (off),
+and the reach in one line with **See all**. **Add <name>** is the one approval.
+The sheet then follows the install in place ("Installing Finance…", "Adding
+CFO…") and ends on "CFO is on your team" with the example asks and **Say
+hello**, or on what failed and why, nothing added, any staged plugin waiting in
+Settings → Plugins, with **Try again**. Something Add cannot install on the way
+(a drawing account, a plugin not made by buddi) holds the button and offers
+its one fix. If the install waits on an approval, the sheet says so and opens
+Needs you.
+
+**Update** opens the update sheet: the changes line, what changes in its file,
+the reach and the missions in a sentence each, **Not now** / **Update**. An
+agent you edited is never updated on its own: the sheet says what is new, your
+file against the new version behind **See what changed**, and **Keep mine** /
+**Replace my changes** (your version goes to the trash folder).
 
 ## Activity
 
@@ -403,7 +460,11 @@ A list of sections in four groups.
   data, once you type its name, and offers **Disable instead**. **Ships with
   buddi**, folded, names the plugins compiled in and how many tools each adds.
   **Browse** is the plugin list from withbuddi.com, fetched through buddi only
-  when you open the tab and kept an hour (Refresh asks again): a search field, filter chips (All,
+  when you open the tab and kept an hour (Refresh asks again). On top, **All ·
+  Plugins · Agents**: All shows the plugins and then three teammates from the
+  catalogue with **See all**; Agents shows every catalogue card with **Open
+  the catalogue** (`#/settings/plugins?tab=browse&kind=agents`), each card
+  opening its page there. For plugins: a search field, filter chips (All,
   **Recommended** — the plugins buddi publishes that you do not have — and each
   category: Your days, Money, Voice, Work, Home, Other), and one grid of cards
   with who made it, how it is trusted and what you have installed. A card opens

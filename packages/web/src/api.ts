@@ -650,21 +650,155 @@ export interface AgentOfferRow {
   text: string;
 }
 
-/** One card under "Add a teammate" (`/api/teammates`). */
-export interface TeammateRow {
-  /** `buddi` for the starter team; the plugin's name for a plugin agent. */
+/* ---- the agent catalogue (`/api/catalogue`, agent-catalogue.md §5) ---- */
+
+/** The catalogue's categories, in the order the chips are drawn. */
+export const CATALOGUE_CATEGORIES = ['work', 'money', 'home', 'health', 'learning', 'life'] as const;
+export type CatalogueCategory = (typeof CATALOGUE_CATEGORIES)[number];
+
+/** Something a package needs that is not here: a plugin (with its one fix) or a mailbox / a drawing account. */
+export type CatalogueMissing =
+  | { kind: 'plugin'; name: string; range: string; fix: 'install' | 'enable' | 'update'; installed?: string; title: string; listed: boolean; byBuddi: boolean; version?: string }
+  | { kind: 'need'; name: 'mailbox' | 'image-account'; fix: 'mailbox' | 'accounts' };
+
+/** Where an installed package stands against the listing: `edited` means the owner changed its file. */
+export type CatalogueDrift = 'current' | 'update' | 'edited' | 'edited-update';
+
+/** One listed agent package with where it stands here. */
+export interface CatalogueAgent {
+  name: string;
+  version: string;
+  handle: string;
+  title: string;
+  pitch: string;
+  description: string;
+  about: string;
+  category: CatalogueCategory | string;
+  trust: string;
+  author: { name: string; url?: string };
+  requires: Record<string, string>;
+  optional: Record<string, string>;
+  /** `mailbox`, `mailbox?` (better with one), `image-account`. */
+  needs: string[];
+  tools: string[];
+  missions: Array<{ id: string; name: string; cron: string; when: string; prompt: string }>;
+  fills: Array<{ id: string; kind: string; label: string; optional: boolean; default: string }>;
+  examples: string[];
+  /** Its text skills, by file name. */
+  skills: string[];
+  changes: string;
+  replaces: string[];
+  /** The picture on withbuddi.com, shown through `api.marketAssetUrl`. */
+  avatar: string | null;
+  page: string | null;
+  claims?: { tools?: Array<{ name: string; tier?: string; ownerOnly?: boolean }> } & Record<string, unknown>;
+  state: 'ready' | 'needs' | 'installed' | 'unavailable';
+  missing?: CatalogueMissing[];
+  installed?: { agentId: string; handle: string; version: string; drift: CatalogueDrift; via?: string };
+  reason?: string;
+  /** Add works now: nothing missing, or only By-buddi plugins it installs on the way. */
+  addable: boolean;
+}
+
+/** An agent an installed plugin proposes, shown "From <plugin>"; added through the plugin's own accept. */
+export interface CataloguePluginAgent {
   plugin: string;
+  pluginVersion: string;
   agent: string;
   handle: string;
   name: string;
+  description: string;
   text: string;
-  /** What it needs, in the card's muted line. */
-  needs: string;
-  state: 'available' | 'added' | 'unavailable';
-  /** Why it is greyed, when it is. */
-  reason?: string;
-  /** Where the owner lifts the greying. */
-  fix?: 'plugins' | 'mailbox' | 'accounts';
+  state: 'installed' | 'ready';
+}
+
+export interface CatalogueView {
+  fetchedAt?: string;
+  /** The kept copy, answered because withbuddi.com did not answer just now. */
+  stale?: boolean;
+  agents: CatalogueAgent[];
+  fromPlugins: CataloguePluginAgent[];
+  delisted: Array<{ agentId: string; handle: string; package: string; version?: string }>;
+  /** No list and no copy: the sentence to show. */
+  unavailable?: string;
+  problems?: string[];
+}
+
+/** One pick the install sheet asks, with its default and, for a mailbox or calendar, the choices. */
+export interface CatalogueFill {
+  id: string;
+  kind: 'mailbox' | 'calendar' | 'place' | 'time' | 'text' | string;
+  label: string;
+  optional?: boolean;
+  mission?: string;
+  value: string;
+  choices?: string[];
+}
+
+/** What adding a package would do (`POST /api/catalogue/:name/plan`), writing nothing. */
+export interface CataloguePlan {
+  name: string;
+  version: string;
+  title: string;
+  plugins: Array<{ name: string; title: string; version: string | null; byBuddi: boolean; fix: string }>;
+  /** What holds it back that it cannot install on the way. */
+  blocked: CatalogueMissing[];
+  handle: string;
+  fills: CatalogueFill[];
+  tools: Array<{ name: string; tier: string; description?: string }>;
+  missions: Array<{ id: string; name: string; cron: string; enabled: boolean; prompt: string }>;
+  preview: string | null;
+  note?: string;
+}
+
+export type CatalogueStepState = 'waiting' | 'fetching' | 'reading' | 'installing' | 'loading' | 'adding' | 'done' | 'failed';
+
+/** The install job (`GET /api/catalogue/jobs/:id`). */
+export interface CatalogueJob {
+  id: string;
+  name: string;
+  version: string;
+  title: string;
+  state: 'running' | 'done' | 'failed';
+  steps: Array<{ kind: 'plugin' | 'agent'; name: string; title: string; state: CatalogueStepState; reason?: string }>;
+  agent?: { id: string; handle: string; name: string };
+  /** The approval the agent step recorded: still open when the job waits on it. */
+  approvalId?: string;
+  error?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+/** The update sheet (`POST /api/catalogue/:name/update/plan`). */
+export interface CatalogueUpdatePlan {
+  agentId: string;
+  handle: string;
+  name: string;
+  title: string;
+  fromVersion: string;
+  version: string;
+  changes: string;
+  via?: string;
+  /** The owner changed the file: nothing is touched unless they replace it. */
+  edited: boolean;
+  /** A tool or a required plugin was added: the approval lists the reach. */
+  widened: boolean;
+  added: Array<{ name: string; tier: string; description?: string }>;
+  removed: string[];
+  /** The persona's lines that differ, `- ` in the file and `+ ` in the new version. */
+  personaDiff: string[];
+  missionsAdded: Array<{ id: string; name: string; cron: string; enabled: boolean; prompt: string }>;
+  preview: string | null;
+}
+
+/** What removing an agent does (`GET /api/agents/:id/remove`): nothing changes until it is confirmed. */
+export interface AgentRemovePreview {
+  id: string;
+  handle: string;
+  name: string;
+  pausesMissions: Array<string | { id?: string; name?: string }>;
+  unusedPlugins: string[];
+  preview: string | null;
 }
 
 /**
@@ -2244,7 +2378,22 @@ export const api = {
   /** Agents a plugin offers on Home while nobody has them (`SuggestedAgent.offer`). */
   agentOffers: () => get<{ offers: AgentOfferRow[] }>('/agent-offers'),
   /** The starter team and the plugin agents, as "Add a teammate" draws them. */
-  teammates: () => get<{ teammates: TeammateRow[] }>('/teammates'),
+  /* ---- the agent catalogue ---- */
+  /** The listed agents with where each stands here; `refresh` asks withbuddi.com again past the day-old copy. */
+  catalogue: (refresh = false) => get<CatalogueView>(`/catalogue${refresh ? '?refresh=1' : ''}`),
+  cataloguePlan: (name: string, body: { fills?: Record<string, string>; handle?: string; missionsOn?: string[] } = {}) =>
+    post<CataloguePlan>(`/catalogue/${encodeURIComponent(name)}/plan`, body),
+  /** The owner's click on Add is the approval; answers the job at once. */
+  catalogueInstall: (name: string, body: { version: string; fills?: Record<string, string>; handle?: string; missionsOn?: string[] }) =>
+    post<{ jobId: string }>(`/catalogue/${encodeURIComponent(name)}/install`, body),
+  catalogueJob: (id: string) => get<CatalogueJob>(`/catalogue/jobs/${encodeURIComponent(id)}`),
+  catalogueUpdatePlan: (name: string, agentId: string) => post<CatalogueUpdatePlan>(`/catalogue/${encodeURIComponent(name)}/update/plan`, { agentId }),
+  /** Update, or with `replace` "Replace my changes": the click is the approval. Refused (409) for an edited file without `replace`. */
+  catalogueUpdate: (name: string, agentId: string, replace = false) =>
+    post<{ approvalId: string | null; result: unknown }>(`/catalogue/${encodeURIComponent(name)}/update`, { agentId, ...(replace ? { replace: true } : {}) }),
+  agentRemovePreview: (id: string) => get<AgentRemovePreview>(`/agents/${encodeURIComponent(id)}/remove`),
+  /** Remove from team: the click is the approval; its folder goes to the trash. */
+  removeAgent: (id: string) => post<{ approvalId: string | null; result: unknown }>(`/agents/${encodeURIComponent(id)}/remove`),
   /** Home stops offering this one. It stays on the Plugins page. */
   dismissAgentOffer: (plugin: string, agent: string) =>
     post<{ dismissed: boolean }>(`/agent-offers/${encodeURIComponent(plugin)}/${encodeURIComponent(agent)}/dismiss`, {}),

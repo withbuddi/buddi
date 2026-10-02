@@ -11,14 +11,16 @@ import type { PlaceProps } from '../App';
 import { api, chatApi, type AgentsView, type DefaultAgentView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtRelative, truncate } from '../format';
-import { AGENTS_ROUTE, agentRoute, chatRoute, parseAgentRoute, settingsRoute } from '../routes';
+import { AGENTS_ROUTE, agentRoute, catalogueRoute, chatRoute, parseAgentRoute, parseCatalogueRoute, settingsRoute } from '../routes';
 import { ROLE_MAKER, cannotRunFix, cannotRunSentence, orderAgents, waitingText } from '../shell/roster';
 import { Avatar, Button, ButtonLink, Empty, ErrorBanner, List, ListRow, Notice, PageHeader, Panel, Pill, Sheet, Tab, Tabs, Tag, Toolbar, useAsync, EmptyState } from '../ui';
 import { Missions } from './Missions';
 import { Offers } from './Offers';
 import { useThisMachine } from '../useThisMachine';
 import { PluginAgentOffers, useAgentOffers } from './parts/AgentOffer';
-import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
+import { Catalogue } from './Catalogue';
+import { CatalogueLine, RemoveFromTeam, useCatalogueEntryFor } from './parts/AgentCatalogueBits';
+import { FRONT_DESK_ROLE } from '../shell/roles';
 import { Memory } from './Memory';
 import { AgentSkills } from './parts/AgentSkills';
 import { Reminders } from './Reminders';
@@ -42,7 +44,14 @@ const AGENT_TABS = [
   { id: 'setup', label: 'Setup' },
 ] as const;
 
-export function Agents({ hash, timezone, navigate, agents, attention, defaultAgentId: shellDefault }: PlaceProps): JSX.Element {
+export function Agents(props: PlaceProps): JSX.Element {
+  // The catalogue is a page of its own under Agents: `#/agents/catalogue[/<name>]`.
+  const catalogue = parseCatalogueRoute(props.hash);
+  if (catalogue) return <Catalogue name={catalogue.name} agents={props.agents} navigate={props.navigate} pluginPages={props.pluginPages} />;
+  return <Team {...props} />;
+}
+
+function Team({ hash, timezone, navigate, agents, attention, defaultAgentId: shellDefault }: PlaceProps): JSX.Element {
   const location = parseAgentRoute(hash);
   const tab = /[?&]tab=([a-z]+)/.exec(hash)?.[1] ?? 'team';
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
@@ -53,18 +62,14 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
   const agentOffers = useAgentOffers();
   const offerCount = (offers.data?.offers.length ?? 0) + agentOffers.offers.length;
   const defaultAgentId = team.data?.default?.defaultAgentId ?? shellDefault ?? null;
-  // A new agent is a conversation with the maker, found by its role: the same
-  // door the profile's "Ask the maker to change this" opens, nothing made here.
-  const maker = agents.find((a) => a.roles.includes(ROLE_MAKER));
-  // The starter team is always on the Team tab: first thing on day one, under
-  // the owner's agents after that.
-  const dayOne = onlyDeskAndMaker(agents, defaultAgentId);
+  // A new teammate is picked from the catalogue; one it does not list is Agent
+  // Father's to make, from the catalogue's "Ask Agent Father".
   return (
     <div className="ui-page">
       <PageHeader
         title="Agents"
         lede={`Your team. Each one is a file on ${thisMachine} — what it can reach is listed on its page.`}
-        actions={maker ? <ButtonLink variant="accent" href={chatRoute(maker.id)} onClick={go(chatRoute(maker.id))}>Add an agent</ButtonLink> : null}
+        actions={<ButtonLink variant="accent" href={catalogueRoute()} onClick={go(catalogueRoute())}>Add a teammate</ButtonLink>}
       />
       <Tabs>
         {INDEX_TABS.map((t) => (
@@ -77,7 +82,6 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
       {tab === 'offers' ? <PluginAgentOffers offers={agentOffers.offers} reload={agentOffers.reload} /> : null}
       {tab === 'offers' ? <Offers embedded /> : null}
       {tab === 'reminders' ? <Reminders timezone={timezone} embedded /> : null}
-      {tab === 'team' && dayOne ? <AddTeammate navigate={navigate} standing /> : null}
       {tab === 'team' ? <DefaultAgentPicker data={team.data} error={team.error} reload={team.reload} /> : null}
       {tab === 'team' ? (
         agents.length === 0 ? (
@@ -119,7 +123,6 @@ export function Agents({ hash, timezone, navigate, agents, attention, defaultAge
           </div>
         )
       ) : null}
-      {tab === 'team' && !dayOne ? <AddTeammate navigate={navigate} standing /> : null}
       {location ? (
         <Sheet title={agents.find((a) => a.id === location.agentId)?.name ?? location.agentId} size="wide" onClose={() => navigate(AGENTS_ROUTE)}>
           <AgentPage
@@ -248,12 +251,16 @@ function AgentPage({
   const go = (route: string) => (e: { preventDefault: () => void }): void => { e.preventDefault(); navigate(route); };
   const waiting = waitingText(attention.get(agentId));
   const name = agent?.name ?? agentId;
+  const fromCatalogue = useCatalogueEntryFor(agentId);
+  // The front desk and the maker hold the team together: they are not removed from here.
+  const removable = agent !== undefined && !agent.roles.includes(ROLE_MAKER) && !agent.roles.includes(FRONT_DESK_ROLE);
   return (
     <div className="ui-stack" data-gap="lg">
       <header className="agent-head">
         <Avatar id={agentId} name={name} size="xl" unavailable={agent ? !agent.available : false} face={agent} />
         <div className="agent-head-text">
           <p className="ui-page-lede">{agent?.description ?? 'This agent is not in the roster right now.'}</p>
+          {fromCatalogue.entry ? <CatalogueLine entry={fromCatalogue.entry} navigate={navigate} onUpdated={fromCatalogue.reload} /> : null}
           <div className="ui-row">
             {agent ? <span className="muted mono">@{agent.handle}</span> : null}
             {agent ? <span className="muted">{agent.model}</span> : null}
@@ -283,6 +290,7 @@ function AgentPage({
       {tab === 'memory' ? <Memory embedded agents={agents} timezone={timezone} agentId={agentId} /> : null}
       {tab === 'skills' ? <AgentSkills agentId={agentId} agentName={name} /> : null}
       {tab === 'setup' ? <AgentSetup agentId={agentId} section={section} navigate={navigate} /> : null}
+      {tab === 'setup' && removable ? <RemoveFromTeam agentId={agentId} name={name} navigate={navigate} /> : null}
     </div>
   );
 }

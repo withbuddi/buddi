@@ -64,6 +64,9 @@ vi.mock('../api', async (load) => {
       pageQuery: vi.fn(),
       firstRunRestore: vi.fn(),
       backupJob: vi.fn(),
+      catalogue: vi.fn(),
+      catalogueInstall: vi.fn(),
+      catalogueJob: vi.fn(),
     },
     chatApi: {
       ...real.chatApi,
@@ -161,6 +164,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   resetInstallPrompt();
   quiet();
+  vi.mocked(api.catalogue).mockResolvedValue({ agents: [], fromPlugins: [], delisted: [] });
 });
 
 const meet = (navigate: (next: string, replace?: boolean) => void = () => {}): JSX.Element => (
@@ -1249,7 +1253,7 @@ describe('chapter 5: your assistant', () => {
     atAssistant(['days', 'mail']);
     render(meet());
     expect(await screen.findByText(SCRIPT.assistant.title)).toBeInTheDocument();
-    expect(screen.getByText(SCRIPT.assistant.ask + SCRIPT.assistant.team(['Planner', 'Mail Triage']))).toBeInTheDocument();
+    expect(screen.getByText(SCRIPT.assistant.ask + SCRIPT.assistant.team(['Mail Triage']))).toBeInTheDocument();
     // The persona, whole, in a field that holds more than a line.
     const purpose = screen.getByLabelText(SCRIPT.assistant.purpose);
     expect(purpose.tagName).toBe('TEXTAREA');
@@ -1341,10 +1345,30 @@ describe('the handover', () => {
     const navigate = vi.fn();
     render(meet(navigate));
     const starters = within(await screen.findByRole('group', { name: SCRIPT.handover.starterLabel })).getAllByRole('button');
-    expect(starters.map((b) => b.textContent)).toEqual(['What’s my day like?', 'Meet Planner and Mail Triage', 'Link my calendar', 'Remind me at 9 tomorrow']);
+    expect(starters.map((b) => b.textContent)).toEqual(['What’s my day like?', 'Show me around', 'Link my calendar', 'Remind me at 9 tomorrow']);
     fireEvent.click(starters[0]!);
     await waitFor(() => expect(chatApi.send).toHaveBeenCalledWith('ada', { conversationId: 'c1', text: 'What’s my day like?' }));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('#/chat/ada/c1', true));
+  });
+
+  it('asks who the owner wants on the team, from what chapters 3 and 4 set up', async () => {
+    ready({ accountId: 'a0', conversationId: 'c1', takeOn: ['days', 'money'], reach: {} });
+    hello();
+    const listed = (name: string, title: string) => ({
+      name, version: '1.0.0', handle: name, title, pitch: `${title} pitch.`, description: '', about: '', category: 'work', trust: 'by-buddi',
+      author: { name: 'withbuddi' }, requires: {}, optional: {}, needs: [], tools: ['memory.*'], missions: [], fills: [], examples: [],
+      skills: [], changes: '', replaces: [], avatar: null, page: null, state: 'ready' as const, addable: true,
+    });
+    vi.mocked(api.catalogue).mockResolvedValue({
+      agents: [listed('chief-of-staff', 'Chief of Staff'), listed('cfo', 'CFO'), listed('researcher', 'Researcher'), listed('tutor', 'Tutor')],
+      fromPlugins: [], delisted: [],
+    });
+    render(meet());
+    const card = await screen.findByTestId('handover-team');
+    expect(within(card).getByText('Who do you want on your team?')).toBeInTheDocument();
+    expect([...card.querySelectorAll('.cat-pick-name')].map((n) => n.textContent)).toEqual(['Chief of Staff', 'CFO', 'Researcher']);
+    expect(within(card).getAllByRole('checkbox').every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    expect(within(card).getByRole('button', { name: 'Add these' })).toBeEnabled();
   });
 
   it('shows the warm card with exactly what is still waiting, and Open Home', async () => {

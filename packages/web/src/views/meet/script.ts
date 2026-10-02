@@ -68,12 +68,12 @@ const NUMBER = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Ei
 
 /** The six outcomes of chapter 3, in the order the tiles are drawn. */
 export const TAKE_ON = [
-  { id: 'days', title: 'My days', plugins: 'Weather · Calendar', line: 'Weather and your calendars. A morning brief from Planner.', mate: 'Planner', note: 'Weather needs nothing. Calendar asks for your calendar’s private link later, on its own page.' },
+  { id: 'days', title: 'My days', plugins: 'Weather · Calendar', line: 'Weather and your calendars, for a brief every morning.', note: 'Weather needs nothing. Calendar asks for your calendar’s private link later, on its own page.' },
   { id: 'mail', title: 'My mail', plugins: 'Mail Triage (built in)', line: 'Mail Triage reads new mail and brings you only what needs you.', mate: 'Mail Triage', note: 'Mail asks for a mailbox in chapter 4.' },
-  { id: 'money', title: 'My money', plugins: 'Finance', line: 'Accounts, cards and cash flow. Ledger answers “can I afford this?”.', mate: 'Ledger', note: 'Finance asks for your bank on its own page.' },
+  { id: 'money', title: 'My money', plugins: 'Finance', line: 'Accounts, cards and cash flow, kept on this computer.', note: 'Finance asks for your bank on its own page.' },
   { id: 'voice', title: 'Voice', plugins: 'Speech', line: 'Talk to me and hear me back, here and on your phone. Runs on this computer.', note: 'Speech needs nothing.' },
   { id: 'code', title: 'My code', plugins: 'Developer', line: 'Developer works in one folder you name, and shows you what it changed.', mate: 'Developer', note: 'Developer asks for its folder the first time you talk.' },
-  { id: 'pictures', title: 'Pictures', plugins: 'Image', line: 'Illustrator makes one image from a prompt, with an account you pick.', mate: 'Illustrator', note: 'Image asks which account to draw with.' },
+  { id: 'pictures', title: 'Pictures', plugins: 'Image', line: 'One picture from a prompt, with an account you pick.', note: 'Image asks which account to draw with.' },
 ] as const;
 export type TakeOnTile = (typeof TAKE_ON)[number]['id'];
 
@@ -100,7 +100,7 @@ export const SCRIPT = {
   mapNotes: [
     'Two minutes. Everything can be changed later in Settings, and nothing leaves this computer until you say so.',
     'One line decides which company sees your assistant’s conversations. You can add more brains later and give each agent its own.',
-    'Each choice installs a plugin from withbuddi.com and proposes an agent for it. Only plugins made by buddi are installed for you; you can remove any of them later.',
+    'Each choice installs a plugin from withbuddi.com. At the end I suggest teammates for what you picked; nothing runs until you have read its card, and you can say no to any of them.',
     'All three are optional. The mailbox is what “My mail” needs; the phone is how I reach you when you are away.',
     'The persona is a plain text file the assistant grows over time. Keep it, rewrite it, or let Agent Father write one after an interview.',
   ],
@@ -431,10 +431,10 @@ export const SCRIPT = {
     silent:
       "Your assistant isn't answering. The AI you picked may be down; try again, or pick another brain.",
     again: 'Pick another brain',
-    /** The four first questions, from what chapter 3 and 4 set up. */
-    starters: (has: { days: boolean; mail: boolean; mailbox: boolean }, mates: readonly string[]): string[] => [
+    /** The four first questions, from what chapter 3 and 4 set up. Teammates are the card under them. */
+    starters: (has: { days: boolean; mail: boolean; mailbox: boolean }): string[] => [
       has.days ? 'What’s my day like?' : 'What can you do?',
-      mates.length > 0 ? `Meet ${and(mates)}` : 'Show me around',
+      'Show me around',
       has.days ? 'Link my calendar' : has.mail && !has.mailbox ? 'Add my mailbox' : 'What do you know about me?',
       'Remind me at 9 tomorrow',
     ],

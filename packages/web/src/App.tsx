@@ -662,7 +662,7 @@ function Place({ place, pluginPages, ...props }: PlaceProps & { place: string; p
   }
   switch (place) {
     case AGENTS_ROUTE:
-      return <Agents {...props} />;
+      return <Agents {...withPages} />;
     case ACTIVITY_ROUTE:
       return <Activity {...props} />;
     case SETTINGS_ROUTE:

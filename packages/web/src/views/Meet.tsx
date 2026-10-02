@@ -96,6 +96,7 @@ import {
   type MeetAnswers,
 } from './meet/machine';
 import { PairingSquare, useTelegramPairing } from './parts/TelegramPairing';
+import { HandoverTeam } from './parts/CatalogueSuggest';
 import { fmtClock } from '../format';
 
 /**
@@ -3250,11 +3251,9 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
   }, [spoken, carriesOn, onSpoken]);
 
   const tiles = answers.takeOn ?? [];
-  const mates = TAKE_ON.filter((tile) => tiles.includes(tile.id) && 'mate' in tile).map((tile) => (tile as { mate: string }).mate);
-  const starters = SCRIPT.handover.starters(
-    { days: tiles.includes('days'), mail: tiles.includes('mail'), mailbox: answers.reach?.mailbox === true },
-    mates,
-  );
+  const starters = SCRIPT.handover.starters({ days: tiles.includes('days'), mail: tiles.includes('mail'), mailbox: answers.reach?.mailbox === true });
+  // "Who do you want on your team?": catalogue teammates picked from what chapters 3 and 4 set up.
+  const setUp = { days: tiles.includes('days'), mailbox: answers.reach?.mailbox === true, money: tiles.includes('money'), pictures: tiles.includes('pictures') };
   const waiting = progress?.waiting ?? [];
   /** A first question, sent as the owner's first message; the conversation carries on in the shell. */
   const ask = (text: string): void => {
@@ -3314,6 +3313,8 @@ function Handover({ answers, assistantAgent, met, onMet, navigate, onPickAnother
           ))}
         </div>
       ) : null}
+
+      {spoken ? <HandoverTeam setUp={setUp} navigate={(route) => navigate(route, true)} /> : null}
 
       {spoken && waiting.length > 0 ? (
         <Notice

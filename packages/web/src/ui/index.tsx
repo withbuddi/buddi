@@ -70,6 +70,29 @@ export function ButtonLink({
   );
 }
 
+/**
+ * An on/off switch: a checkbox drawn as a track and a knob. `label` names it
+ * for a screen reader; the words beside it say what it turns on.
+ */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+}): JSX.Element {
+  return (
+    <label className="ui-switch" data-disabled={disabled ? 'true' : undefined}>
+      <input type="checkbox" role="switch" checked={checked} disabled={disabled} aria-label={label} onChange={(event) => onChange(event.target.checked)} />
+      <i aria-hidden="true" />
+    </label>
+  );
+}
+
 export function Toolbar({
   children,
   align,

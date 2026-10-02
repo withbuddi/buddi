@@ -14,7 +14,7 @@ vi.mock('../api', async (load) => {
   const real = await load<typeof import('../api')>();
   return {
     ...real,
-    api: { ...real.api, agents: vi.fn(), offers: vi.fn(), agentOffers: vi.fn(), dismissAgentOffer: vi.fn(), acceptPluginAgent: vi.fn(), approvals: vi.fn() },
+    api: { ...real.api, agents: vi.fn(), offers: vi.fn(), agentOffers: vi.fn(), dismissAgentOffer: vi.fn(), acceptPluginAgent: vi.fn(), approvals: vi.fn(), catalogue: vi.fn(), plugins: vi.fn() },
     chatApi: { ...real.chatApi, conversations: vi.fn() },
   };
 });
@@ -45,6 +45,8 @@ beforeEach(() => {
   vi.mocked(api.offers).mockResolvedValue({ offers: [], closed: [] } as never);
   vi.mocked(api.agentOffers).mockResolvedValue({ offers: [] });
   vi.mocked(api.approvals).mockResolvedValue({ pending: [], recent: [] } as never);
+  vi.mocked(api.catalogue).mockResolvedValue({ agents: [], fromPlugins: [], delisted: [] });
+  vi.mocked(api.plugins).mockResolvedValue({ installed: [], staged: [], trust: '', restartNeeded: false, checkout: false } as never);
 });
 
 /*
@@ -91,17 +93,20 @@ it('resolves a deep link to a part of Setup, and keeps Setup the current tab', (
   expect(screen.getByRole('link', { name: 'Brain', current: 'page' })).toHaveAttribute('href', '#/agents/developer/setup/brain');
 });
 
-it('adds an agent by opening a chat with the maker, found by its role', () => {
+it('adds a teammate from the catalogue: the head\'s one button opens it', () => {
   render(<Harness start="#/agents" agents={[dev, father]} />);
-  const add = screen.getByRole('link', { name: 'Add an agent' });
-  expect(add).toHaveAttribute('href', '#/chat/agent-father');
+  const add = screen.getByRole('link', { name: 'Add a teammate' });
+  expect(add).toHaveAttribute('href', '#/agents/catalogue');
   fireEvent.click(add);
-  expect(visited).toEqual(['#/chat/agent-father']);
+  expect(visited).toEqual(['#/agents/catalogue']);
+  expect(screen.queryByRole('link', { name: 'Add an agent' })).not.toBeInTheDocument();
 });
 
-it('has no Add an agent without a maker in the team', () => {
-  render(<Harness start="#/agents" />);
-  expect(screen.queryByRole('link', { name: 'Add an agent' })).not.toBeInTheDocument();
+it('opens the catalogue page on its own hash, never as an agent called "catalogue"', async () => {
+  vi.mocked(api.catalogue).mockResolvedValue({ agents: [], fromPlugins: [], delisted: [], unavailable: "The catalogue needs withbuddi.com; try again when you're online." });
+  render(<Harness start="#/agents/catalogue" />);
+  expect(await screen.findByText('The catalogue needs withbuddi.com')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Conversations' })).not.toBeInTheDocument();
 });
 
 it('counts the open offers on the Offers tab and tags the default agent', async () => {

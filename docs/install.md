@@ -485,8 +485,10 @@ unpacked). Nothing about it is macOS-only.
 to the npm registry, both through buddi's shared transport, both listed on the
 security screen: the daily version check and a plugin install. Settings →
 Plugins → Browse makes one more: the plugin and agent list from withbuddi.com,
-when you open Browse or the agent catalogue (`buddi agents catalogue`), and an
-agent's picture when you add it. A folder copy of
+when you open Browse or the agent catalogue (Agents → Add a teammate, or
+`buddi agents catalogue`), and while your team is new when Home or first run's
+handover suggests teammates (at most once a day: the list is kept a day), and
+an agent's picture when it is shown or added. A folder copy of
 your backups goes wherever that folder syncs, and only encrypted.
 
 ---

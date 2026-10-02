@@ -16,10 +16,11 @@
  * exactly as a click would have left it. The one difference is who approves;
  * see `installOne`.
  *
- * Teammates are not created here. A tile's teammate (Ledger for My money,
- * Illustrator for Pictures) stays the *offer* it already is — a plugin's
- * proposal on Home — and the handover card says it is ready to be introduced.
- * buddi's own ready-made agents are the catalogue's (`GET /api/catalogue`).
+ * Teammates are not created here. buddi's ready-made agents are the
+ * catalogue's (`GET /api/catalogue`): the handover card suggests them from
+ * the tiles ticked here ("Who do you want on your team?"). Only Mail Triage,
+ * the email plugin's own agent, is still an offer the card says is ready to be
+ * introduced once there is a mailbox.
  */
 import type { Pool } from 'pg';
 import { beginOnboarding, getOnboarding, markStepDone, setOnboardingDetails, type Queryable } from '@buddi/core';
@@ -46,11 +47,13 @@ export const TILE_PLUGINS: Readonly<Record<TakeOnTile, readonly string[]>> = {
   pictures: ['image'],
 };
 
-/** The teammate an outcome suggests, as an offer; `plugin` is who proposes it. */
+/**
+ * The teammate an outcome brings as a plugin's offer; `plugin` is who proposes
+ * it. Ledger and Illustrator left with the finance and image plugins' 0.1.4:
+ * CFO and Illustrator are catalogue packages, suggested on the handover card.
+ */
 export const TILE_TEAMMATES: Readonly<Partial<Record<TakeOnTile, { agent: string; name: string; plugin: string }>>> = {
   mail: { agent: 'mail-triage', name: 'Mail Triage', plugin: 'email' },
-  money: { agent: 'ledger', name: 'Ledger', plugin: 'finance' },
-  pictures: { agent: 'illustrator', name: 'Illustrator', plugin: 'image' },
 };
 
 /** What a plugin is called on the page when the listing names nothing better. */

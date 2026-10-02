@@ -104,7 +104,7 @@ export function agentRoute(agentId: string, tab?: string, section?: string): str
 
 export function parseAgentRoute(hash: string): { agentId: string; tab?: string; section?: string } | null {
   const match = /^#\/agents\/([^/]+)(?:\/([a-z-]+)(?:\/([a-z-]+))?)?$/.exec(hash);
-  if (!match) return null;
+  if (!match || match[1] === CATALOGUE_SEGMENT) return null;
   try {
     return {
       agentId: decodeURIComponent(match[1]!),
@@ -112,6 +112,25 @@ export function parseAgentRoute(hash: string): { agentId: string; tab?: string; 
       ...(match[3] ? { section: match[3] } : {}),
     };
   } catch { return null; }
+}
+
+/**
+ * The agent catalogue: `#/agents/catalogue`, and one package's page under it
+ * (`#/agents/catalogue/<name>`, the link withbuddi.com's "Add in buddi"
+ * opens). `catalogue` is never an agent id: a package name is kebab-case and
+ * the agent page's parser steps aside for it.
+ */
+const CATALOGUE_SEGMENT = 'catalogue';
+export const CATALOGUE_ROUTE = `${AGENTS_ROUTE}/${CATALOGUE_SEGMENT}`;
+
+export function catalogueRoute(name?: string | null): string {
+  return name ? `${CATALOGUE_ROUTE}/${encodeURIComponent(name)}` : CATALOGUE_ROUTE;
+}
+
+export function parseCatalogueRoute(hash: string): { name?: string } | null {
+  const match = /^#\/agents\/catalogue(?:\/([a-z0-9-]+))?(?:\?.*)?$/.exec(hash);
+  if (!match) return null;
+  return match[1] ? { name: match[1] } : {};
 }
 
 export function transcriptRoute(conversationId: string): string {
@@ -276,6 +295,12 @@ export function pluginInstallRoute(spec: string): string {
 /** Settings → Plugins on its Browse tab. */
 export const PLUGINS_BROWSE_ROUTE = `${settingsRoute('plugins')}?tab=browse`;
 
+/** Browse's kind filter: All, Plugins, or the catalogue's Agents (`&kind=agents`). */
+export type BrowseKind = 'all' | 'plugins' | 'agents';
+export function pluginsBrowseRoute(kind: BrowseKind = 'all'): string {
+  return kind === 'all' ? PLUGINS_BROWSE_ROUTE : `${PLUGINS_BROWSE_ROUTE}&kind=${kind}`;
+}
+
 /**
  * Settings → Proposals, optionally filtered to one plugin's rules:
  * `#/settings/proposals?plugin=<name>`. The name comes from wherever the
@@ -315,6 +340,12 @@ function pluginsQuery(hash: string): URLSearchParams | null {
 export function parsePluginsInstall(hash: string): string | null {
   const spec = pluginsQuery(hash)?.get('install')?.trim();
   return spec ? spec : null;
+}
+
+/** Which kind Browse opens on: `&kind=plugins|agents`, else All. */
+export function parseBrowseKind(hash: string): BrowseKind {
+  const kind = pluginsQuery(hash)?.get('kind');
+  return kind === 'plugins' || kind === 'agents' ? kind : 'all';
 }
 
 /** Which tab of Settings → Plugins a hash opens: `?tab=browse`, else Installed. */

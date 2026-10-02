@@ -39,6 +39,7 @@ vi.mock('../api', async (load) => {
       acceptPluginAgent: vi.fn(),
       approval: vi.fn(),
       decide: vi.fn(),
+      catalogue: vi.fn(async () => ({ agents: [], fromPlugins: [], delisted: [] })),
     },
   };
 });

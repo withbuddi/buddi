@@ -16,7 +16,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type ApprovalRow, type ConnectionSignal, type NeedsYouCounts, type NotificationRow, type ConversationSummary, type DigestRow, type HomeBlock, type MissionRow, type AgentOfferRow, type OfferRow, type Overview, type ReminderRow, type VersionView } from '../api';
 import type { ChatAgent } from '../chat/types';
 import { fmtDate, fmtNumber, fmtRelative, fmtTime, notificationTitle, truncate } from '../format';
-import { agentRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, BACKUP_ROUTE, NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE, settingsRoute, transcriptRoute } from '../routes';
+import { agentRoute, catalogueRoute, chatRoute, ACTIVITY_ROUTE, AGENTS_ROUTE, BACKUP_ROUTE, NEEDS_ROUTE, NOTIFICATIONS_RECENT_ROUTE, settingsRoute, transcriptRoute } from '../routes';
 import { RECOVERY_BANNER } from './Recovery';
 import type { AgentAttention } from '../shell/roster';
 import { orderAgents, waitingText } from '../shell/roster';
@@ -44,7 +44,7 @@ import {
 import { ApprovalCard, useDecide } from './parts/ApprovalCard';
 import { DismissAll } from './parts/DismissOffers';
 import { AgentOffer, isPendingAccept } from './parts/AgentOffer';
-import { AddTeammate, onlyDeskAndMaker } from './parts/AddTeammate';
+import { HomeSuggestions, teamIsNew } from './parts/CatalogueSuggest';
 import { HomeAsk } from './parts/HomeAsk';
 import { KeepClose } from './parts/KeepClose';
 import { TipCard, previewTipOf } from './parts/TipCard';
@@ -92,6 +92,9 @@ export function Home({
   const notifications = useAsync(() => api.notificationsNeedingYou(), [], 30_000);
   // The same order as the rail and the Agents page: front desk first, the maker last.
   const team = useMemo(() => orderAgents(agents, defaultAgentId ?? null), [agents, defaultAgentId]);
+  // The front desk and the maker plus at most one more: Home suggests teammates instead of the tile.
+  const newTeam = teamIsNew(agents, defaultAgentId);
+
   const { busy, note, failure, decide } = useDecide(() => { approvals.reload(); overview.reload(); });
 
   const data = overview.data;
@@ -331,7 +334,11 @@ export function Home({
 
       <Section
         title="Your team"
-        aside={<a href={AGENTS_ROUTE} onClick={go(AGENTS_ROUTE)}>All agents</a>}
+        aside={
+          newTeam
+            ? <a href={catalogueRoute()} onClick={go(catalogueRoute())}>See all teammates</a>
+            : <a href={AGENTS_ROUTE} onClick={go(AGENTS_ROUTE)}>All agents</a>
+        }
       >
         {agents.length === 0 ? (
           <Empty mascot>No agents yet. Add one under Agents.</Empty>
@@ -359,12 +366,17 @@ export function Home({
                 </a>
               );
             })}
+            {/* Once the team is past new: one dashed tile that opens the catalogue. */}
+            {newTeam ? null : (
+              <a className="team-add" href={catalogueRoute()} onClick={go(catalogueRoute())} data-testid="team-add">
+                <Icon name="plus" size={14} />Add a teammate
+              </a>
+            )}
           </div>
         )}
+        {/* While the team is new: teammates suggested from what was set up, each with Add. */}
+        {newTeam ? <HomeSuggestions navigate={navigate} /> : null}
       </Section>
-
-      {/* Day one: the front desk and the maker, and the teammates one tap away. */}
-      {onlyDeskAndMaker(agents, defaultAgentId) ? <AddTeammate navigate={navigate} /> : null}
 
       {onOffer.length > 0 ? (
         <Section

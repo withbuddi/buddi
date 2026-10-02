@@ -14,6 +14,7 @@
  * knowing a canvas exists. Properties and the live host-browser session are
  * trusted platform panels beside those results, not agent-authored views.
  */
+import { takeDraft } from './draft';
 import { effectiveProviderKind, thinkingIsHonoured } from '../shell/thinking';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { ApiError, api, chatApi, type AgentProfile, type ApprovalRow } from '../api';
@@ -1547,25 +1548,7 @@ function DropIcon(): JSX.Element {
 
 
 
-export const DRAFT_KEY = 'buddi.chatDraft';
-
-/** Leave a sentence for an agent; the chat picks it up when it opens on that agent. */
-export function leaveDraft(agentId: string, text: string): void {
-  try { window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ agentId, text })); } catch { /* a private window forgets */ }
-}
-
-function takeDraft(agentId: string): string | null {
-  try {
-    const raw = window.sessionStorage.getItem(DRAFT_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { agentId?: string; text?: string };
-    if (parsed.agentId !== agentId || typeof parsed.text !== 'string') return null;
-    window.sessionStorage.removeItem(DRAFT_KEY);
-    return parsed.text;
-  } catch {
-    return null;
-  }
-}
+export { DRAFT_KEY, leaveDraft } from './draft';
 
 /** A clock face with its hand: what came before. */
 function HistoryIcon(): JSX.Element {

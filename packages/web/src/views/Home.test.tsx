@@ -34,6 +34,8 @@ vi.mock('../api', async (importOriginal) => {
       homeDismiss: vi.fn(async () => ({ dismissed: {} })),
       currentTip: vi.fn(async () => ({ tip: null, enabled: true })),
       tips: vi.fn(async () => ({ tips: [], enabled: true })),
+      catalogue: vi.fn(async () => ({ agents: [], fromPlugins: [], delisted: [] })),
+      plugins: vi.fn(async () => ({ installed: [], staged: [], trust: '', restartNeeded: false, checkout: false })),
     },
     chatApi: {
       ...original.chatApi,
@@ -575,5 +577,43 @@ describe('notices with a way out', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Hide Money from Home' })); });
     expect(api.homeDismiss).toHaveBeenCalledWith('block:finance.home', 'hidden');
     expect(screen.queryByText('Money')).not.toBeInTheDocument();
+  });
+});
+
+describe('your team and the catalogue', () => {
+  const entry = (name: string, title: string) => ({
+    name, version: '1.0.0', handle: name, title, pitch: `${title} pitch.`, description: '', about: '', category: 'work', trust: 'by-buddi',
+    author: { name: 'withbuddi' }, requires: {}, optional: {}, needs: [], tools: ['memory.*'], missions: [], fills: [], examples: [],
+    skills: [], changes: '', replaces: [], avatar: null, page: null, state: 'ready', addable: true,
+  });
+  const FATHER = { ...DESK, id: 'father', handle: 'father', name: 'Agent Father', roles: ['maker'] } as ChatAgent;
+
+  it('while the team is new: three suggestions from the catalogue and See all teammates', async () => {
+    vi.mocked(api.catalogue).mockResolvedValue({
+      agents: [entry('chief-of-staff', 'Chief of Staff'), entry('researcher', 'Researcher'), entry('tutor', 'Tutor'), entry('chef', 'Chef')],
+      fromPlugins: [], delisted: [],
+    } as never);
+    const navigate = vi.fn();
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={navigate} agents={[DESK, FATHER]} defaultAgentId="concierge" attention={new Map()} />);
+    });
+    const shelf = await screen.findByTestId('home-suggestions');
+    expect(within(shelf).getAllByRole('button', { name: /^Add / }).map((b) => b.getAttribute('aria-label'))).toEqual(['Add Chief of Staff', 'Add Researcher', 'Add Tutor']);
+    expect(screen.getByRole('link', { name: 'See all teammates' })).toHaveAttribute('href', '#/agents/catalogue');
+    expect(screen.queryByTestId('team-add')).not.toBeInTheDocument();
+  });
+
+  it('after that: the faces and one dashed Add a teammate tile that opens the catalogue', async () => {
+    const more = ['ledger', 'scout'].map((id) => ({ ...DESK, id, handle: id, name: id }) as ChatAgent);
+    const navigate = vi.fn();
+    await act(async () => {
+      render(<Home timezone="UTC" navigate={navigate} agents={[DESK, FATHER, ...more]} defaultAgentId="concierge" attention={new Map()} />);
+    });
+    const tile = screen.getByTestId('team-add');
+    expect(tile).toHaveTextContent('Add a teammate');
+    fireEvent.click(tile);
+    expect(navigate).toHaveBeenCalledWith('#/agents/catalogue');
+    expect(screen.queryByTestId('home-suggestions')).not.toBeInTheDocument();
+    expect(api.catalogue).not.toHaveBeenCalled();
   });
 });
