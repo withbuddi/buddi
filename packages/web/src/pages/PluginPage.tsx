@@ -19,7 +19,7 @@
  *    search's fields are page parameters, and a reload lands where the owner
  *    was — on a phone as much as on a desk.
  */
-import { createContext, useContext, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { api, type ApprovalRow } from '../api';
 import { downloadUrl } from '../chat/attachments';
 import { fmtDay, fmtValue } from '../canvas/format';
@@ -1810,6 +1810,7 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
                   const text = column.pill ? null : fmtValue(readPath(row, column.key), column.type ?? 'text', null);
                   return (
                     <td key={column.key} data-fit={column.fit} title={cellTitle(column, row, text)}>
+                      {column.pill ? null : <Swatch column={column} row={row} />}
                       {column.pill ? (
                         <PillCell column={column} row={row} />
                       ) : column.fit === 'truncate' ? (
@@ -1845,6 +1846,21 @@ function TablePiece({ component, data }: { component: Of<'table'>; data: unknown
       )}
     </PieceSection>
   );
+}
+
+/** A colour the row names, as `#rgb`, `#rrggbb` or `#rrggbbaa`: nothing else is drawn. */
+const SWATCH = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/**
+ * The row's own colour as a dot before the cell's text (`swatch`, host API
+ * 1.26): a calendar's colour beside its name. A value that is not a plain hex
+ * colour draws nothing, so a row cannot style the page.
+ */
+function Swatch({ column, row }: { column: ColumnMap; row: unknown }): JSX.Element | null {
+  if (!column.swatch) return null;
+  const value = readPath(row, column.swatch);
+  if (typeof value !== 'string' || !SWATCH.test(value)) return null;
+  return <span className="ui-table-swatch" aria-hidden="true" style={{ '--swatch': value } as CSSProperties} />;
 }
 
 /**

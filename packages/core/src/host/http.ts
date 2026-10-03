@@ -259,6 +259,84 @@ export function isOwnUrlBinding(binding: { kind: string; target: unknown }, plug
   return binding.kind === HTTP_URL_KIND && asUrlTarget(binding.target)?.plugin === plugin;
 }
 
+/* ------------------------------------------------------------------ *
+ * The `http.basic` destination (since host API 1.26)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Core's own Basic-auth destination (docs/owner-secrets.md §3): a secret that
+ * is a password, sent as `Authorization: Basic base64(username:password)` to
+ * the hosts its binding names — a CalDAV account's app-specific password. The
+ * plugin names the user (it is not the secret); core reads the password,
+ * builds the header after the address checks and inserts it, so the plugin
+ * never holds the password.
+ */
+export const HTTP_BASIC_KIND = 'http.basic';
+
+/** The methods a Basic-auth request may use: reads and the WebDAV verbs a calendar or contacts server needs. */
+export const HTTP_BASIC_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS', 'PROPFIND', 'REPORT', 'PUT', 'DELETE']);
+/** The largest body a Basic-auth request may carry: an event, not an upload. */
+export const HTTP_BASIC_MAX_BODY = 256 * 1024;
+/** The largest answer it may read, whatever the caller asks for. */
+export const HTTP_BASIC_MAX_RESPONSE = 10 * 1024 * 1024;
+/** How many Basic-auth requests one plugin may make with one secret in a minute. */
+export const HTTP_BASIC_PER_MINUTE = 120;
+
+/**
+ * A Basic target: the plugin that may use it and the host it is sent to —
+ * exact, or `*.` and a domain of at least two labels (`*.icloud.com`) for a
+ * service whose account lives on a numbered host found at discovery.
+ */
+export interface HttpBasicTarget {
+  plugin: string;
+  host: string;
+}
+
+function asBasicTarget(target: unknown): HttpBasicTarget | undefined {
+  if (typeof target !== 'object' || target === null) return undefined;
+  const { plugin, host } = target as Record<string, unknown>;
+  if (typeof plugin !== 'string' || typeof host !== 'string' || plugin.trim() === '') return undefined;
+  const h = host.toLowerCase();
+  if (h.startsWith('*.')) {
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h.slice(2))) return undefined;
+  } else if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(h)) return undefined;
+  return { plugin: plugin.trim(), host: h };
+}
+
+/** Whether a request host is one a bound host names: the same, or under its `*.` domain. */
+export function basicHostCovers(bound: string, host: string): boolean {
+  if (bound.startsWith('*.')) return host.endsWith(bound.slice(1)) && host.length > bound.length - 1;
+  return bound === host;
+}
+
+/** Register `http.basic` under core's own name, beside `http.header` and `http.url`. */
+export function registerHttpBasicDestination(): void {
+  registerSecretDestination(HTTP_HEADER_PLUGIN, {
+    kind: HTTP_BASIC_KIND,
+    maxRule: 'pre-approved',
+    checkTarget(target, bound) {
+      const asked = asBasicTarget(target);
+      const boundBasic = asBasicTarget(bound);
+      if (asked === undefined || boundBasic === undefined || asked.host.startsWith('*.')) return false;
+      return asked.plugin === boundBasic.plugin && basicHostCovers(boundBasic.host, asked.host);
+    },
+    describe(target) {
+      const asked = asBasicTarget(target);
+      return asked === undefined
+        ? 'the password of a web sign-in'
+        : `the password ${asked.plugin} signs in with at ${asked.host}`;
+    },
+    deliver() {
+      throw new Error('http.basic delivers through the http area itself, never through a destination');
+    },
+  });
+}
+
+/** Whether a binding names `http.basic` for this plugin (`secrets.put`, since 1.26). */
+export function isOwnBasicBinding(binding: { kind: string; target: unknown }, plugin: string): boolean {
+  return binding.kind === HTTP_BASIC_KIND && asBasicTarget(binding.target)?.plugin === plugin;
+}
+
 /**
  * How the area asks for a secret's value for one header. Built by the host
  * over `useOwnerSecret` with `deliverInto`, so the value crosses only this
@@ -272,6 +350,11 @@ export interface HttpSecretDelivery {
   ): Promise<{ ok: true; value: string } | { pending: string } | { refused: string }>;
   /** The same for a whole address (`http.url`, since 1.9): the plugin is the area's own. */
   deliverUrlFor?(
+    name: string,
+    host: string,
+  ): Promise<{ ok: true; value: string } | { pending: string } | { refused: string }>;
+  /** The same for a sign-in's password (`http.basic`, since 1.26): the plugin is the area's own. */
+  deliverBasicFor?(
     name: string,
     host: string,
   ): Promise<{ ok: true; value: string } | { pending: string } | { refused: string }>;
@@ -326,6 +409,8 @@ export interface HttpAreaOptions {
   policy?: AddressPolicy;
   /** How names are resolved. A test answers here instead of asking a resolver. */
   resolve?: LookupAll;
+  /** The clock the Basic-auth budget counts by. A test moves it. */
+  now?: () => number;
 }
 
 /** Hosts already said to be undeclared, per plugin, so a loop logs once. */
@@ -349,6 +434,9 @@ function hostMatches(declared: string, host: string): boolean {
 export function createHttpArea(options: HttpAreaOptions): HttpArea {
   const policy = options.policy ?? DEFAULT_POLICY;
   let transport: PluginHostTransport | undefined;
+  /** When each recent Basic-auth request went, per secret: the minute's budget. */
+  const basicSent = new Map<string, number[]>();
+  const now = options.now ?? (() => Date.now());
   return {
     async request(req) {
       let parsedUrl: URL;
@@ -378,6 +466,7 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
        */
       let url = req.url;
       let secretUrl: { name: string; value: string } | undefined;
+      let basicCap = false;
       if (req.auth !== undefined && req.auth.as === 'url') {
         if (parsedUrl.protocol !== 'https:') throw new Error('a secret goes only into an HTTPS request');
         if ((req.method ?? 'GET').toUpperCase() !== 'GET' || req.body !== undefined) {
@@ -403,6 +492,43 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         checkUrl(stored.toString(), policy);
         url = stored.toString();
         secretUrl = { name, value: url };
+      } else if (req.auth !== undefined && req.auth.as === 'basic') {
+        /*
+         * A sign-in's password (`as: 'basic'`, since 1.26): the caller names
+         * the user, core reads the password the binding allows for this
+         * plugin and this host, and builds the Authorization header itself.
+         * HTTPS only, the WebDAV verbs and no others, a small body, a capped
+         * answer and a per-minute budget, so a plugin holding a sign-in
+         * cannot turn it into an upload channel or a flood.
+         */
+        if (parsedUrl.protocol !== 'https:') throw new Error('a secret goes only into an HTTPS request');
+        const method = (req.method ?? 'GET').toUpperCase();
+        if (!HTTP_BASIC_METHODS.has(method)) {
+          throw new Error(`a sign-in is sent only with ${[...HTTP_BASIC_METHODS].join(', ')}, not ${method}`);
+        }
+        if (req.auth.header !== undefined) throw new Error('a sign-in always goes into Authorization');
+        const username = req.auth.username;
+        if (typeof username !== 'string' || username.length === 0 || username.length > 256 || /[:\r\n\u0000]/.test(username)) {
+          throw new Error('a sign-in needs a user name without a colon or a line break');
+        }
+        const size = req.body === undefined ? 0 : typeof req.body === 'string' ? Buffer.byteLength(req.body) : req.body.length;
+        if (size > HTTP_BASIC_MAX_BODY) throw new Error(`a request with a sign-in carries at most ${HTTP_BASIC_MAX_BODY / 1024} KiB`);
+        if (options.secrets?.deliverBasicFor === undefined) {
+          throw new Error('This process cannot deliver a secret into a request.');
+        }
+        const at = now();
+        const recent = (basicSent.get(req.auth.secret) ?? []).filter((t) => at - t < 60_000);
+        if (recent.length >= HTTP_BASIC_PER_MINUTE) {
+          throw new Error(`too many requests with "${req.auth.secret}" this minute (at most ${HTTP_BASIC_PER_MINUTE}); try again shortly`);
+        }
+        recent.push(at);
+        basicSent.set(req.auth.secret, recent);
+        const delivered = await options.secrets.deliverBasicFor(req.auth.secret, host);
+        if ('pending' in delivered) throw new SecretPendingError(delivered.pending);
+        if ('refused' in delivered) throw new Error(delivered.refused);
+        headers = Object.fromEntries(Object.entries(req.headers ?? {}).filter(([name]) => name.toLowerCase() !== 'authorization'));
+        headers.Authorization = `Basic ${Buffer.from(`${username}:${delivered.value}`, 'utf8').toString('base64')}`;
+        basicCap = true;
       } else if (req.auth !== undefined) {
         if (parsedUrl.protocol !== 'https:') {
           throw new Error('a secret goes only into an HTTPS request');
@@ -445,7 +571,9 @@ export function createHttpArea(options: HttpAreaOptions): HttpArea {
         ...(req.body === undefined ? {} : { body: req.body }),
         ...(req.signal === undefined ? {} : { signal: req.signal }),
         ...(req.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: req.idleTimeoutMs }),
-        ...(req.maxBytes === undefined ? {} : { maxBytes: req.maxBytes }),
+        ...(basicCap
+          ? { maxBytes: Math.min(req.maxBytes ?? HTTP_BASIC_MAX_RESPONSE, HTTP_BASIC_MAX_RESPONSE) }
+          : req.maxBytes === undefined ? {} : { maxBytes: req.maxBytes }),
       });
       if (secretUrl === undefined) return sent;
       const { name, value } = secretUrl;

@@ -601,6 +601,8 @@ fieldset:disabled { opacity: 0.6; }
 .ui-table td[data-fit='wrap'] { overflow-wrap: anywhere; min-width: 12ch; }
 .ui-table td[data-fit='truncate'] { max-width: 24ch; }
 .ui-table-cut { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A row's own colour before its text: a calendar's dot beside its name. */
+.ui-table-swatch { display: inline-block; width: calc(var(--space-2) + var(--space-1) / 2); aspect-ratio: 1; margin-inline-end: var(--space-2); border-radius: 50%; vertical-align: baseline; background: var(--swatch); box-shadow: 0 0 0 1px color-mix(in oklab, var(--text) 12%, transparent); }
 .ui-table:has(td[data-fit]) th { white-space: normal; }
 
 /* ================================================================== *

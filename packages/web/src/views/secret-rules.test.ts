@@ -29,6 +29,8 @@ import {
   secretTitle,
   unusedLine,
   whereLine,
+  placeWords,
+  kindWords,
 } from './secret-rules';
 import type { SecretListingView } from '../api';
 
@@ -239,12 +241,16 @@ describe('which group a secret sits in', () => {
     expect(secretGroup(secret({ usedBy: [CONNECTION] }))).toBe('connections');
     expect(secretGroup(secret({ name: 'MCP_TOKEN_abc' }))).toBe('connections');
     expect(secretGroup(secret({ bindings: [bound('http.url', { plugin: 'calendar', host: 'calendar.google.com' })] }))).toBe('plugin:calendar');
+    expect(secretGroup(secret({ bindings: [bound('http.basic', { plugin: 'calendar', host: '*.icloud.com' })] }))).toBe('plugin:calendar');
+    expect(secretTitle(secret({ name: 'Calendar sign-in: iCloud sam@icloud.com', bindings: [bound('http.basic', { plugin: 'calendar', host: '*.icloud.com' })] }))).toBe('iCloud sam@icloud.com');
+    expect(placeWords('http.basic', { plugin: 'calendar', host: '*.icloud.com' })).toBe('Sent only to *.icloud.com');
+    expect(kindWords('http.basic')).toBe('A plugin’s sign-in');
     expect(secretGroup(secret({ bindings: [bound('browser.field', 'https://www.pnc.com')] }))).toBe('mine');
     expect(secretGroup(secret({}))).toBe('mine');
   });
 
   it('heads each group in a word and orders them: yours, Mail, the plugins’, then the two managed elsewhere', () => {
-    expect(groupHeading('plugin:calendar').title).toBe('Calendar links');
+    expect(groupHeading('plugin:calendar').title).toBe('Calendar links and sign-ins');
     expect(groupHeading('plugin:weather').title).toBe('Weather');
     const order = (['connections', 'models', 'plugin:calendar', 'mail', 'mine'] as const).slice().sort(groupOrder);
     expect(order).toEqual(['mine', 'mail', 'plugin:calendar', 'models', 'connections']);

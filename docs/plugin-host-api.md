@@ -237,7 +237,17 @@ names only the host; core fetches the stored address once it is HTTPS on that
 host and passes the address rules, GET only. Its binding's target is `{
 plugin, host }`, the plugin filled in by the area, so only the plugin that
 stored the link can fetch it; `secrets.put` accepts that one core kind from a
-plugin that declares `http`. `checkUrl` lives in
+plugin that declares `http`. Since 1.26 a secret may be a sign-in's password
+(`auth: { secret, as: 'basic', username }`, kind `http.basic`): core builds
+`Authorization: Basic base64(username:password)` after the address checks,
+for a CalDAV or WebDAV account. HTTPS; GET, HEAD, OPTIONS, PROPFIND, REPORT,
+PUT and DELETE only; a body of at most 256 KiB; an answer capped at 10 MB
+whatever `maxBytes` asks; 120 requests a minute per secret. Its binding's
+target is `{ plugin, host }`, the host exact or `*.` a domain of at least two
+labels (`*.icloud.com`, where an account's calendars live on a numbered host
+found at discovery), the plugin filled in by the area; `secrets.put` accepts
+it from a plugin that declares `http`. The plugin keeps the user name; it
+never holds the password. `checkUrl` lives in
 `@buddi/core/plugin`; `guardedLookup` lives in core but not in `/plugin`, and
 the gateway hands it to browser's proxy.
 
@@ -402,7 +412,7 @@ returns plain data.
 
 ## 7. Versioning
 
-`ctx.buddi.version` is `major.minor`; this buddi is `1.25`
+`ctx.buddi.version` is `major.minor`; this buddi is `1.26`
 (`packages/core/src/plugin/version.ts`). A plugin declares the version it was
 built against as `buddi.hostApi` in `package.json` (`"^1.0"`), and one that
 asks for more than this buddi has is refused at stage time with both numbers.
@@ -507,6 +517,16 @@ that sets it need not ask for `^1.24`.
 conversation, allocated under a lock) and, on what it returns, `version` and
 `existed` (the bytes were already in Files). An older buddi ignores
 `version` and saves under `filename`.
+
+1.26 adds an optional argument: `http.request`'s `auth: { as: 'basic',
+username }` and the core kind `http.basic` that `secrets.put` accepts with it
+(§4.2, http) — a sign-in's password sent as Basic auth by core, with the
+WebDAV verbs, so a plugin can read and write a CalDAV account without
+holding its password. An older buddi treats the auth as a header secret and
+refuses the binding, so a plugin that uses it asks for `^1.26`. It also adds
+`swatch` on a page table's column: a path within the row to a `#rrggbb`
+colour, drawn as a small dot before the cell's text (a calendar's own colour
+beside its name); an older buddi refuses a descriptor that carries it.
 
 A minor adds a method, an optional argument or an optional field on a
 return; it never changes what an existing call does. A major removes or

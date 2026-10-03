@@ -58,6 +58,7 @@ and in that one `deliver` call, and nowhere else.
 | `browser.field` | browser (extension and Playwright backends) | exact origin (scheme, host, port), or a wildcard origin | pre-approved |
 | `http.header` | core's `http` area | exact host and header name, HTTPS only | pre-approved |
 | `http.url` | core's `http` area (1.9) | the plugin that stored it and the exact host, HTTPS and GET only | pre-approved |
+| `http.basic` | core's `http` area (1.26) | the plugin that stored it and the host (exact, or `*.` a domain), HTTPS, WebDAV verbs only | pre-approved |
 | `developer.env` | developer, for `start` and `run` | workspace and variable name | pre-approved per workspace |
 | `browser.native.type` | browser (macOS accessibility) | the app's bundle id | every time |
 | `browser.form.data` | browser | exact or wildcard origin, and field | every time, every use logged |
@@ -100,6 +101,16 @@ and in that one `deliver` call, and nowhere else.
   naming only the host. Core reads the value, checks it is HTTPS on that host
   and passes the address rules, and sends one GET; the plugin never holds the
   link, and no other plugin can fetch it. The calendar plugin is the first.
+- **A sign-in password.** A CalDAV account signs in with a user name and an
+  app-specific password. A plugin stores the password with `secrets.put`,
+  bound to `http.basic` with `{ plugin, host }` (the host exact, or `*.` a
+  domain such as `*.icloud.com`, whose accounts live on numbered hosts), and
+  asks with `auth: { secret, as: 'basic', username }`. Core builds
+  `Authorization: Basic` itself, for GET, HEAD, OPTIONS, PROPFIND, REPORT,
+  PUT and DELETE only, a body of at most 256 KiB, an answer of at most 10 MB
+  and 120 requests a minute per secret; the plugin keeps the user name and
+  never holds the password. The calendar plugin's CalDAV accounts are the
+  first.
 - **Process environment.** `developer.start` and `developer.run` deliver
   every binding for their workspace into the child's environment, subject
   to each rule; the card on first use names the variables and the command.
@@ -211,7 +222,8 @@ heading, hairlines between them; a group with nothing in it is not drawn.
   Set password form, `#/settings/p.email.settings?account=<id>&set=password`),
   which tests the login before it keeps anything.
 - **One group per plugin** that keeps secrets — **Calendar links** for the
-  calendar plugin's private links (an `http.url` binding names its plugin).
+  calendar plugin's private links and CalDAV passwords (an `http.url` or
+  `http.basic` binding names its plugin).
 - **Model accounts** and **Connections** — read-only here; each row links to
   where it is managed.
 

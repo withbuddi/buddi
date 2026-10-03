@@ -131,10 +131,10 @@ describe('the groups and their rows', { timeout: 180_000 }, () => {
   it('sorts secrets into Your secrets, Mail, the plugin’s own group and Model accounts, in that order', async () => {
     await openPage();
     const headings = screen.getAllByRole('region').map((region) => within(region).getByRole('heading').textContent);
-    expect(headings).toEqual(['Your secrets', 'Mail', 'Calendar links', 'Model accounts']);
+    expect(headings).toEqual(['Your secrets', 'Mail', 'Calendar links and sign-ins', 'Model accounts']);
     expect(within(group('Your secrets')).getByText('GitHub token')).toBeInTheDocument();
     expect(within(group('Mail')).getByText('Gmail app password')).toBeInTheDocument();
-    expect(within(group('Calendar links')).getByText('Family')).toBeInTheDocument();
+    expect(within(group('Calendar links and sign-ins')).getByText('Family')).toBeInTheDocument();
     expect(within(group('Model accounts')).getByText('Claude')).toBeInTheDocument();
   });
 
@@ -173,8 +173,8 @@ describe('the groups and their rows', { timeout: 180_000 }, () => {
     await openPage();
     expect(screen.getByText(/Held back 2\d seconds ago: it was asked for at uploads\.github\.com, where it may not go\./)).toBeInTheDocument();
     expect(within(group('Your secrets')).getByRole('button', { name: 'Change where it may go' })).toBeInTheDocument();
-    expect(within(group('Calendar links')).getByText('No value stored.')).toBeInTheDocument();
-    expect(within(group('Calendar links')).getByRole('button', { name: 'Set a value' })).toBeInTheDocument();
+    expect(within(group('Calendar links and sign-ins')).getByText('No value stored.')).toBeInTheDocument();
+    expect(within(group('Calendar links and sign-ins')).getByRole('button', { name: 'Set a value' })).toBeInTheDocument();
     // A healthy row: no pill, no status line, no fix.
     expect(screen.queryByText('delivered')).toBeNull();
     expect(screen.queryByText('refused')).toBeNull();

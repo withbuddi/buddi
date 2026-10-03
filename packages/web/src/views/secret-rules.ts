@@ -52,6 +52,7 @@ export function targetPlaceholder(kind: string): string {
   if (kind === 'browser.native.type') return 'the app’s bundle id, e.g. com.bank.app';
   if (kind === 'http.header') return 'the host, then the header name — e.g. localhost:9200 Authorization';
   if (kind === 'http.url') return 'the plugin, then the host — e.g. calendar calendar.google.com';
+  if (kind === 'http.basic') return 'the plugin, then the host — e.g. calendar *.icloud.com';
   if (kind === 'developer.env') return 'the workspace, then the variable name — e.g. cour des comptes ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'the account id, e.g. acct-1';
   return 'the place, as JSON — e.g. {"host":"localhost","header":"Authorization"}';
@@ -62,6 +63,7 @@ const TWO_PART_KINDS: Record<string, { hint: string; build: (first: string, seco
   'browser.form.data': { hint: 'an origin, then the field name', build: (origin, field) => ({ origin, field }) },
   'http.header': { hint: 'a host, then the header name', build: (host, header) => ({ host, header }) },
   'http.url': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
+  'http.basic': { hint: 'a plugin, then the host', build: (plugin, host) => ({ plugin, host }) },
   'developer.env': { hint: 'a workspace, then the variable name', build: (workspace, variable) => ({ workspace, variable }) },
 };
 
@@ -250,7 +252,7 @@ export function secretGroup(secret: SecretListingView): SecretGroupId {
   if (users.some((u) => u.kind === 'model-account') || kinds.includes(PROVIDER_ACCOUNT_KIND) || MODEL_NAME.test(secret.name)) return 'models';
   if (users.some((u) => u.kind === 'connection') || kinds.includes('mcp.env') || CONNECTION_NAME.test(secret.name)) return 'connections';
   for (const binding of secret.bindings) {
-    if (binding.kind === 'http.url' && isRecord(binding.target) && typeof binding.target.plugin === 'string') return `plugin:${binding.target.plugin}`;
+    if ((binding.kind === 'http.url' || binding.kind === 'http.basic') && isRecord(binding.target) && typeof binding.target.plugin === 'string') return `plugin:${binding.target.plugin}`;
     if (isAccountKind(binding.kind)) return `plugin:${binding.kind.slice(0, -'.account'.length)}`;
   }
   return 'mine';
@@ -263,7 +265,7 @@ export function groupHeading(group: SecretGroupId): { title: string; aside: stri
   if (group === 'models') return { title: 'Model accounts', aside: 'Managed in Model accounts.' };
   if (group === 'connections') return { title: 'Connections', aside: 'Managed in Connections.' };
   const plugin = group.slice('plugin:'.length);
-  if (plugin === 'calendar') return { title: 'Calendar links', aside: 'Private links, fetched only by the calendar plugin.' };
+  if (plugin === 'calendar') return { title: 'Calendar links and sign-ins', aside: 'Private links and app passwords, used only by the calendar plugin.' };
   return { title: plugin.charAt(0).toUpperCase() + plugin.slice(1), aside: `Kept for the ${plugin} plugin.` };
 }
 
@@ -333,7 +335,7 @@ export function placeWords(kind: string, target: unknown): string {
   if (kind === 'browser.field' && typeof target === 'string') return `Filled on ${siteWords(target)}`;
   if (kind === 'browser.form.data' && str('origin')) return `Filled into “${str('field')}” on ${siteWords(str('origin'))}`;
   if (kind === 'browser.native.type' && typeof target === 'string') return `Typed into the app ${target}`;
-  if ((kind === 'http.header' || kind === 'http.url') && str('host')) return `Sent only to ${str('host')}`;
+  if ((kind === 'http.header' || kind === 'http.url' || kind === 'http.basic') && str('host')) return `Sent only to ${str('host')}`;
   if (kind === 'developer.env' && str('variable')) return `Given to ${str('workspace')} as ${str('variable')}`;
   if (kind === 'mcp.env' && str('variable')) return `Given to a program as ${str('variable')}`;
   if (kind === 'email.account') return 'Used by a mailbox';
@@ -532,6 +534,7 @@ export function kindWords(kind: string): string {
     'browser.native.type': 'An app on this computer',
     'http.header': 'A request to a host',
     'http.url': 'A plugin’s web address',
+    'http.basic': 'A plugin’s sign-in',
     'developer.env': 'A workspace variable',
     'mcp.env': 'A program’s variable',
     [PROVIDER_ACCOUNT_KIND]: 'A model account',
@@ -566,6 +569,7 @@ export function placeExample(kind: string): string {
   if (kind === 'browser.native.type') return 'com.bank.app';
   if (kind === 'http.header') return 'api.github.com Authorization';
   if (kind === 'http.url') return 'calendar calendar.google.com';
+  if (kind === 'http.basic') return 'calendar caldav.fastmail.com';
   if (kind === 'developer.env') return 'my-app ADMIN_PASSWORD';
   if (isAccountKind(kind)) return 'acct-1';
   return '{"host":"localhost","header":"Authorization"}';

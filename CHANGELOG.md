@@ -7,6 +7,8 @@ What changes in buddi from one release to the next, newest first.
 ### Added
 
 - Two scripts for working on buddi: `pnpm test:db` runs the suites against a throwaway Postgres in Docker (migrated first, removed afterwards, never the dev database), and `pnpm release pre.N` cuts a release: stamps new API routes, dates the changelog, refreshes the API and CLI pages, commits, tags and pushes.
+- Plugins can sign in to a CalDAV or WebDAV account without holding its password (host API 1.26): the password is an owner secret bound to the plugin and the account's host, and buddi itself adds the sign-in to the plugin's requests, for the calendar verbs only, with small bodies, capped answers and at most 120 requests a minute. Settings → Secrets shows such a password under its plugin, as "A plugin’s sign-in".
+- A plugin page's table can show a row's own colour as a dot before a cell (`swatch`, host API 1.26): Settings → Calendar draws each account calendar's colour beside its name.
 
 ### Changed
 

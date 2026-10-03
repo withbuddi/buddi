@@ -298,8 +298,16 @@ export interface HttpRequest {
    * address instead, once it is HTTPS on that same host and passes the
    * address rules. GET only, no body, no `header`; the binding names this
    * plugin and the host, so no other plugin can fetch it.
+   *
+   * `as: 'basic'` (since 1.26): the secret is a password (`http.basic`), and
+   * core sends `Authorization: Basic base64(username:password)` with the
+   * `username` the caller names — a CalDAV account's app-specific password.
+   * HTTPS only; GET, HEAD, OPTIONS, PROPFIND, REPORT, PUT or DELETE; a body
+   * of at most 256 KiB; an answer of at most 10 MB; 120 requests a minute per
+   * secret. The binding names this plugin and the host (or `*.` a domain),
+   * so no other plugin can sign in with it.
    */
-  auth?: { secret: string; header?: string; as?: 'header' | 'url' };
+  auth?: { secret: string; header?: string; as?: 'header' | 'url' | 'basic'; username?: string };
   body?: string | Buffer;
   signal?: AbortSignal;
   /** How long the request may go silent. */

@@ -69,6 +69,8 @@ export interface ColumnMap {
   fit?: 'wrap' | 'truncate';
   /** A path within the row whose value is the cell's tooltip. */
   hint?: string;
+  /** A path within the row to a `#rrggbb` colour drawn as a dot before the text (pages' tables). */
+  swatch?: string;
 }
 
 export interface TableMap {

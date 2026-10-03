@@ -45,7 +45,15 @@ import { parsePluginUses, type PluginUse } from '../plugin/uses.js';
 import { PluginCallRefusal, parsePluginRequires } from '../plugin/requires.js';
 import { listOwnerPlaces } from '../places.js';
 import { localDateString, ownerTimezone } from '../time.js';
-import { createHttpArea, isOwnUrlBinding, registerHttpHeaderDestination, registerHttpUrlDestination, type HttpTransportFactory } from './http.js';
+import {
+  createHttpArea,
+  isOwnBasicBinding,
+  isOwnUrlBinding,
+  registerHttpBasicDestination,
+  registerHttpHeaderDestination,
+  registerHttpUrlDestination,
+  type HttpTransportFactory,
+} from './http.js';
 import { registerSecretDestination } from '../secrets/destinations.js';
 import { primeSecretScrubber, scrubText, setSecretScrubSource, loadScrubEntries } from '../secrets/scrub.js';
 import {
@@ -197,6 +205,9 @@ export function configurePluginHost(more: PluginHostServices): void {
   // And `http.url` (1.9): a secret that is a whole address, fetched only by
   // the plugin its binding names.
   registerHttpUrlDestination();
+  // And `http.basic` (1.26): a sign-in's password, sent only by the plugin
+  // its binding names, to the hosts it names.
+  registerHttpBasicDestination();
 }
 
 /** Forget them. Tests only. */
@@ -488,6 +499,31 @@ export function createPluginHost(binding: HostBinding, facts: HostFacts): BuddiH
                 if ('pending' in result) return { pending: result.pending };
                 return { refused: result.refused };
               },
+              // A sign-in's password (`http.basic`, 1.26), likewise this host's plugin.
+              async deliverBasicFor(name, requestHost) {
+                let value: string | undefined;
+                const result = await useOwnerSecret(
+                  {
+                    pool: facts.db,
+                    vault: services.vault,
+                    plugin: 'http',
+                    buddi: host,
+                    agentId: facts.agentId,
+                    conversationId: facts.conversationId,
+                    now: () => facts.now(),
+                    deliverInto: (delivered) => {
+                      value = delivered;
+                    },
+                  },
+                  { name, kind: 'http.basic', target: { plugin, host: requestHost } },
+                );
+                if ('done' in result) {
+                  if (value === undefined) return { refused: `The destination did not take "${name}".` };
+                  return { ok: true, value };
+                }
+                if ('pending' in result) return { pending: result.pending };
+                return { refused: result.refused };
+              },
             },
     });
   }
@@ -733,12 +769,14 @@ function secretsArea(binding: HostBinding, facts: HostFacts, host: BuddiHost): S
     if (facts.agentId !== OWNER_AGENT_ID) throw new Error(`Only the owner ${what}, from ${plugin}'s own page.`);
   };
   /*
-   * A plugin's own kinds, and one of core's: `http.url` naming this plugin
-   * (1.9), so a plugin that declares `http` can keep the private link the
+   * A plugin's own kinds, and two of core's: `http.url` naming this plugin
+   * (1.9) and `http.basic` naming it (1.26), so a plugin that declares `http` can keep the private link the
    * owner typed on its page as a secret it fetches without reading.
    */
   const ownBinding = (b: { kind: string; target?: unknown }): boolean =>
-    own(b.kind) || (binding.uses.includes('http') && isOwnUrlBinding({ kind: b.kind, target: b.target }, plugin));
+    own(b.kind) ||
+    (binding.uses.includes('http') &&
+      (isOwnUrlBinding({ kind: b.kind, target: b.target }, plugin) || isOwnBasicBinding({ kind: b.kind, target: b.target }, plugin)));
   const ownKinds = (bindings: readonly { kind: string; target?: unknown }[]): void => {
     const foreign = bindings.find((b) => !ownBinding(b));
     if (foreign !== undefined) throw new Error(`${plugin} may bind a secret only to its own destinations, not ${foreign.kind}.`);

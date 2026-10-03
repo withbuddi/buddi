@@ -5,7 +5,7 @@
  * One flush panel of groups, each a short heading over its rows, hairlines
  * between them, an empty group not drawn: Your secrets (the owner's own, that
  * agents fill through `secret.fill`), Mail (mailbox passwords), one group per
- * plugin that keeps secrets (Calendar links), Model accounts and Connections
+ * plugin that keeps secrets (Calendar links and sign-ins), Model accounts and Connections
  * — the last two read-only here, each row linking to where it is managed.
  *
  * A row is a glyph for its kind, a human name, one plain line on where it may

@@ -15,7 +15,11 @@ import {
   HTTP_HEADER_KIND,
   HTTP_HEADER_PLUGIN,
   HTTP_URL_KIND,
+  HTTP_BASIC_KIND,
+  HTTP_BASIC_PER_MINUTE,
+  isOwnBasicBinding,
   isOwnUrlBinding,
+  registerHttpBasicDestination,
   registerHttpUrlDestination,
   SecretPendingError,
   createHttpArea,
@@ -274,6 +278,106 @@ describe('the http.url destination', () => {
     expect(isOwnUrlBinding({ kind: HTTP_URL_KIND, target: bound }, 'calendar')).toBe(true);
     expect(isOwnUrlBinding({ kind: HTTP_URL_KIND, target: bound }, 'weather')).toBe(false);
     expect(isOwnUrlBinding({ kind: HTTP_HEADER_KIND, target: bound }, 'calendar')).toBe(false);
+    resetSecretDestinations();
+  });
+});
+
+/*
+ * `as: 'basic'` (host API 1.26, `http.basic`): the secret is a password; core
+ * builds `Authorization: Basic` from the caller's user name and it, for the
+ * WebDAV verbs only, with a small body, a capped answer and a minute's budget.
+ */
+describe('a sign-in password', () => {
+  type Delivery = { ok: true; value: string } | { pending: string } | { refused: string };
+  const calls: Array<{ url: string; headers: Record<string, string>; maxBytes?: number }> = [];
+  const transport = () => async (url: string, init: { headers: Record<string, string>; maxBytes?: number }) => {
+    calls.push({ url, headers: init.headers, ...(init.maxBytes === undefined ? {} : { maxBytes: init.maxBytes }) });
+    return { ok: true, status: 207, statusText: 'Multi-Status', headers: { get: () => null }, text: async () => '', json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+  let clock = 0;
+  const basicArea = (deliver: (name: string, host: string) => Promise<Delivery>) =>
+    createHttpArea({
+      plugin: 'calendar',
+      network: ['*.icloud.com'],
+      log: () => {},
+      transport: transport as never,
+      now: () => clock,
+      secrets: { deliverFor: async () => ({ refused: 'no' }), deliverBasicFor: deliver },
+    });
+
+  it('builds the header from the user and the delivered password, replacing any the caller set', async () => {
+    calls.length = 0;
+    const asked: string[] = [];
+    const a = basicArea(async (name, host) => {
+      asked.push(`${name}@${host}`);
+      return { ok: true, value: 'abcd-efgh-ijkl-mnop' };
+    });
+    await a.request({
+      url: 'https://caldav.icloud.com/',
+      method: 'propfind',
+      headers: { authorization: 'Basic forged', Depth: '0' },
+      body: '<x/>',
+      maxBytes: 50_000_000,
+      auth: { secret: 'iCloud', as: 'basic', username: 'me@icloud.com' },
+    });
+    expect(asked).toEqual(['iCloud@caldav.icloud.com']);
+    expect(calls[0]!.headers).toEqual({ Depth: '0', Authorization: `Basic ${Buffer.from('me@icloud.com:abcd-efgh-ijkl-mnop').toString('base64')}` });
+    expect(calls[0]!.maxBytes).toBe(10 * 1024 * 1024);
+  });
+
+  it('refuses another method, a big body, a bad user, plain HTTP or a header, before asking for the password', async () => {
+    let asked = 0;
+    const a = basicArea(async () => {
+      asked++;
+      return { ok: true, value: 'p' };
+    });
+    const auth = { secret: 'S', as: 'basic' as const, username: 'me' };
+    await expect(a.request({ url: 'https://caldav.icloud.com/', method: 'POST', auth })).rejects.toThrow(/not POST/);
+    await expect(a.request({ url: 'https://caldav.icloud.com/', method: 'PUT', body: 'x'.repeat(300 * 1024), auth })).rejects.toThrow(/at most 256 KiB/);
+    await expect(a.request({ url: 'https://caldav.icloud.com/', auth: { ...auth, username: 'a:b' } })).rejects.toThrow(/user name/);
+    await expect(a.request({ url: 'https://caldav.icloud.com/', auth: { secret: 'S', as: 'basic' } })).rejects.toThrow(/user name/);
+    await expect(a.request({ url: 'http://caldav.icloud.com/', auth })).rejects.toThrow(/HTTPS/);
+    await expect(a.request({ url: 'https://caldav.icloud.com/', auth: { ...auth, header: 'X' } })).rejects.toThrow(/Authorization/);
+    expect(asked).toBe(0);
+  });
+
+  it('keeps to a budget per secret per minute', async () => {
+    calls.length = 0;
+    clock = 1_000_000;
+    const a = basicArea(async () => ({ ok: true, value: 'p' }));
+    const auth = { secret: 'Budget', as: 'basic' as const, username: 'me' };
+    for (let i = 0; i < HTTP_BASIC_PER_MINUTE; i++) await a.request({ url: 'https://caldav.icloud.com/', auth });
+    await expect(a.request({ url: 'https://caldav.icloud.com/', auth })).rejects.toThrow(/too many requests/);
+    clock += 61_000;
+    await a.request({ url: 'https://caldav.icloud.com/', auth });
+    expect(calls).toHaveLength(HTTP_BASIC_PER_MINUTE + 1);
+  });
+
+  it('a pending approval is the same typed error', async () => {
+    const a = basicArea(async () => ({ pending: 'action-3' }));
+    const err = await a.request({ url: 'https://caldav.icloud.com/', auth: { secret: 'P', as: 'basic', username: 'me' } }).catch((e) => e);
+    expect(err).toBeInstanceOf(SecretPendingError);
+  });
+});
+
+describe('the http.basic destination', () => {
+  it('checks the plugin and the host, a *. domain covering its hosts', () => {
+    registerHttpBasicDestination();
+    const destination = secretDestination(HTTP_BASIC_KIND)!;
+    expect(destination.plugin).toBe(HTTP_HEADER_PLUGIN);
+    const bound = { plugin: 'calendar', host: '*.icloud.com' };
+    expect(destination.checkTarget({ plugin: 'calendar', host: 'p52-caldav.icloud.com' }, bound, {} as never)).toBe(true);
+    expect(destination.checkTarget({ plugin: 'calendar', host: 'icloud.com.evil.test' }, bound, {} as never)).toBe(false);
+    expect(destination.checkTarget({ plugin: 'calendar', host: 'evilicloud.com' }, bound, {} as never)).toBe(false);
+    expect(destination.checkTarget({ plugin: 'weather', host: 'caldav.icloud.com' }, bound, {} as never)).toBe(false);
+    expect(destination.checkTarget({ plugin: 'calendar', host: '*.icloud.com' }, bound, {} as never)).toBe(false);
+    const exact = { plugin: 'calendar', host: 'caldav.fastmail.com' };
+    expect(destination.checkTarget({ plugin: 'calendar', host: 'caldav.fastmail.com' }, exact, {} as never)).toBe(true);
+    expect(destination.checkTarget({ plugin: 'calendar', host: 'x.caldav.fastmail.com' }, exact, {} as never)).toBe(false);
+    expect(destination.describe(bound)).toBe('the password calendar signs in with at *.icloud.com');
+    expect(isOwnBasicBinding({ kind: HTTP_BASIC_KIND, target: bound }, 'calendar')).toBe(true);
+    expect(isOwnBasicBinding({ kind: HTTP_BASIC_KIND, target: { plugin: 'calendar', host: '*.com' } }, 'calendar')).toBe(false);
+    expect(isOwnBasicBinding({ kind: HTTP_URL_KIND, target: bound }, 'calendar')).toBe(false);
     resetSecretDestinations();
   });
 });

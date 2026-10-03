@@ -126,6 +126,13 @@ export interface ColumnMap {
    * behind a short cell ("In the vault", and the secret's name on hover).
    */
   hint?: string;
+  /**
+   * A path within the row to a colour (`#rgb`, `#rrggbb` or `#rrggbbaa`)
+   * drawn as a small dot before the cell's text: a calendar's own colour
+   * beside its name. Anything else draws no dot. On a page's table; since
+   * host API 1.26.
+   */
+  swatch?: string;
 }
 
 export interface TableMap {
@@ -446,6 +453,7 @@ export const columnMapSchema = z
       .optional(),
     fit: z.enum(['wrap', 'truncate']).optional(),
     hint: viewPathSchema.pipe(z.string().min(1)).optional(),
+    swatch: viewPathSchema.pipe(z.string().min(1)).optional(),
   })
   .strict();
 

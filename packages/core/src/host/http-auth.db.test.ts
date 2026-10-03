@@ -153,6 +153,48 @@ suite('ctx.buddi.http auth (postgres)', () => {
     resetPluginHost();
   });
 
+  it('a plugin signs in with a password it stored and never reads (http.basic, 1.26)', async () => {
+    configurePluginHost({ vault, httpTransport: transportFactory as never });
+    const calendar: PluginManifest = {
+      ...manifest,
+      name: 'calendar',
+      network: [{ host: '*.dav.example.test', why: 'the fixture CalDAV server' }],
+    };
+    const asOwner = createPluginHost(hostBindingOf(calendar), facts({ agentId: 'owner' }));
+    await expect(
+      asOwner.secrets!.put('CalDAV: Me', 'app-pass-1234', [
+        { kind: 'http.basic', target: { plugin: 'caller', host: '*.dav.example.test' }, rule: 'pre-approved' },
+      ]),
+    ).rejects.toThrow(/only to its own destinations/);
+    await asOwner.secrets!.put('CalDAV: Me', 'app-pass-1234', [
+      { kind: 'http.basic', target: { plugin: 'calendar', host: '*.dav.example.test' }, rule: 'pre-approved' },
+    ]);
+    calls.length = 0;
+    const host = createPluginHost(hostBindingOf(calendar), facts());
+    await host.http!.request({
+      url: 'https://p12.dav.example.test/123/calendars/',
+      method: 'PROPFIND',
+      headers: { Depth: '1' },
+      body: '<propfind/>',
+      auth: { secret: 'CalDAV: Me', as: 'basic', username: 'me@example.test' },
+    });
+    expect(calls[0]?.headers).toEqual({
+      Depth: '1',
+      Authorization: `Basic ${Buffer.from('me@example.test:app-pass-1234').toString('base64')}`,
+    });
+    // Not under the bound domain, and not for another plugin.
+    await expect(
+      host.http!.request({ url: 'https://dav.other.test/', auth: { secret: 'CalDAV: Me', as: 'basic', username: 'me' } }),
+    ).rejects.toThrow(/not bound/);
+    const other = createPluginHost(hostBindingOf(manifest), facts());
+    await expect(
+      other.http!.request({ url: 'https://p12.dav.example.test/', auth: { secret: 'CalDAV: Me', as: 'basic', username: 'me' } }),
+    ).rejects.toThrow(/not bound/);
+    expect(calls).toHaveLength(1);
+    expect(await asOwner.secrets!.delete('CalDAV: Me')).toBe(true);
+    resetPluginHost();
+  });
+
   it('plain HTTP is refused before the vault is opened', async () => {
     configurePluginHost({ vault, httpTransport: transportFactory as never });
     const host = createPluginHost(hostBindingOf(manifest), facts());
