@@ -485,7 +485,7 @@ Check a Cloudflare API token (omit it to use the kept one) and list the domains 
 - **Body:** `{ token?: string }`
 - **Answer:** `{ zones: [{ id, name }] }`
 - **Errors:** 400 a token Cloudflare refuses, one that cannot list domains (Zone · DNS · Edit missing), or no token kept or given; 403 not from the computer buddi runs on; 502 Cloudflare unreachable or failing
-- **Since:** 0.1.0-pre.39
+- **Since:** 0.1.0-pre.38
 
 ```sh
 curl -X POST -b cookies.txt -H "X-Buddi-CSRF: $CSRF" -H "Origin: $BUDDI_URL" -H "Content-Type: application/json" -d '{}' "$BUDDI_URL/api/access/cloudflare-access/zones"

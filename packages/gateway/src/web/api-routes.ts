@@ -1263,7 +1263,7 @@ export const API_SINCE: Readonly<Record<string, string>> = {
   'POST /api/access/cloudflare-access/setup': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/stop': '0.1.0-pre.38',
   'POST /api/access/cloudflare-access/setup/remove': '0.1.0-pre.38',
-  'POST /api/access/cloudflare-access/zones': '0.1.0-pre.39',
+  'POST /api/access/cloudflare-access/zones': '0.1.0-pre.38',
   'POST /api/browser/pin': '0.1.0-pre.38',
   'POST /api/browser/card': '0.1.0-pre.38',
   'GET /api/browser/telemetry': '0.1.0-pre.38',

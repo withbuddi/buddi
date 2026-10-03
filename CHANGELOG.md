@@ -4,11 +4,11 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
-- Cloudflare setup: after the token is checked, type just the name and pick the domain from your Cloudflare zones; the full hostname is still accepted when the token lists none.
-- Cloudflare setup: the Done line says Cloudflare needs a minute or two before the first sign-in works, and to reload if its page can’t find the application.
 
 ## 0.1.0-pre.38 — 2026-10-03
 
+- Cloudflare setup: after the token is checked, type just the name and pick the domain from your Cloudflare zones; the full hostname is still accepted when the token lists none.
+- Cloudflare setup: the Done line says Cloudflare needs a minute or two before the first sign-in works, and to reload if its page can’t find the application.
 - Trusted access: the Cloudflare "Open Cloudflare" button opens the token form pre-filled with the four permissions buddi needs (Cloudflare template URL); the owner names and creates the token, then pastes it.
 
 ### Added
