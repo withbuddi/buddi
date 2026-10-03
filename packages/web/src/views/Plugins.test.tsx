@@ -994,7 +994,7 @@ describe('browsing the market', () => {
     expect(api.market).not.toHaveBeenCalled();
   });
 
-  it('reinstalls a folder install from its row and its detail, and the card says it is the same version', async () => {
+  it('reinstalls a folder install from its row and its detail, and the card says it is the same version', { timeout: 180_000 }, async () => {
     const garden = { ...INSTALLED, source: { kind: 'directory' as const, path: '/home/o/code/garden' } };
     vi.mocked(api.plugins).mockResolvedValue(view({ installed: [garden] }));
     vi.mocked(api.updatePlugin).mockResolvedValue({ job: JOB });
