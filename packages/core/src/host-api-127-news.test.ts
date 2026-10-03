@@ -76,7 +76,7 @@ describe('host API 1.27: the News page grammar', () => {
       { kind: 'link', label: 'Latest edition', to: { chat: { path: 'anchor' } }, tone: 'accent', when: { path: 'anchor', not: true, equals: null } },
     ];
     expect(() => parse(page([stories()], { actions }), [settings])).not.toThrow();
-    expect(() => parse(page([stories()], { actions: [{ kind: 'notice', text: 'x' }] }))).toThrow(/links and buttons/);
+    expect(() => parse(page([stories()], { actions: [{ kind: 'notice', text: 'x' }] }))).toThrow(/links, buttons and menus/);
     expect(() => parse({ ...settings, actions: [actions[0]] })).toThrow(/rail page/);
   });
 
