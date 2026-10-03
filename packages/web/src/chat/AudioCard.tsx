@@ -25,17 +25,11 @@ export function clock(seconds: number | null): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
 }
 
-export function AudioCard({
-  artifactId,
-  name,
-  mime,
-  sizeBytes,
-}: {
-  artifactId: string;
-  name: string;
-  mime: string;
-  sizeBytes?: number | null;
-}): JSX.Element {
+/**
+ * The player's state and its one action, for any face drawn over it (this
+ * card, the edition card's waveform). `bind` goes on the `<audio>` element.
+ */
+export function useAudioPlayer(artifactId: string, mime: string) {
   const audio = useRef<HTMLAudioElement | null>(null);
   const objectUrl = useRef<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -74,6 +68,31 @@ export function AudioCard({
     }
   };
 
+  const bind = {
+    ref: audio,
+    preload: 'none' as const,
+    onPlay: () => setPlaying(true),
+    onPause: () => setPlaying(false),
+    onEnded: () => { setPlaying(false); setPosition(0); },
+    onTimeUpdate: (event: { currentTarget: HTMLAudioElement }) => setPosition(event.currentTarget.currentTime),
+    onLoadedMetadata: (event: { currentTarget: HTMLAudioElement }) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null),
+    onDurationChange: (event: { currentTarget: HTMLAudioElement }) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null),
+  };
+  return { playing, loading, failed, position, duration, toggle, bind };
+}
+
+export function AudioCard({
+  artifactId,
+  name,
+  mime,
+  sizeBytes,
+}: {
+  artifactId: string;
+  name: string;
+  mime: string;
+  sizeBytes?: number | null;
+}): JSX.Element {
+  const { playing, loading, failed, position, duration, toggle, bind } = useAudioPlayer(artifactId, mime);
   const meta = failed ? 'Could not play. Download it instead.' : `${clock(position)} / ${clock(duration)}`;
   return (
     <span className="wb-audio" data-testid="audio-card" data-playing={playing ? 'true' : undefined}>
@@ -97,16 +116,7 @@ export function AudioCard({
       <a className="ui-icon-btn wb-audio-download" data-size="sm" href={downloadUrl(artifactId)} download={name} aria-label={`Download ${name}`} title="Download">
         <Icon name="download" size={14} />
       </a>
-      <audio
-        ref={audio}
-        preload="none"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => { setPlaying(false); setPosition(0); }}
-        onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
-        onLoadedMetadata={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null)}
-        onDurationChange={(event) => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : null)}
-      />
+      <audio {...bind} />
     </span>
   );
 }

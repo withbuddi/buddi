@@ -4709,6 +4709,43 @@ button.lk-chip:disabled { cursor: default; }
 .wb-report { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-1); }
 .wb-report-link { align-self: flex-start; }
 
+/* A news edition in chat (the kit's News.jsx, "edition in chat"): the report drawn as the edition card. */
+.ed-report { align-items: stretch; }
+.ed-bubble { white-space: normal; width: 100%; max-width: min(100%, calc(var(--read-max) + var(--space-8))); }
+.ed { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-panel); }
+.ed-loading { min-height: calc(var(--space-12) * 2); }
+.ed-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.ed-kicker { font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; color: var(--agent-research-ink, var(--accent)); }
+.ed-when { font-size: var(--text-xs); color: var(--text-faint); }
+.ed-audio { display: flex; align-items: center; gap: var(--space-3); width: 100%; padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2); border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--surface-sunken); color: var(--text); cursor: pointer; font: inherit; }
+.ed-audio:hover { border-color: var(--line-strong); }
+.ed-audio:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.ed-audio:disabled { cursor: progress; }
+.ed-play { display: inline-flex; align-items: center; justify-content: center; width: var(--control-h-sm); height: var(--control-h-sm); border-radius: 50%; background: var(--accent); color: var(--accent-contrast); flex: 0 0 auto; }
+.ed-wave { flex: 1 1 auto; display: flex; align-items: center; gap: var(--space-0); height: var(--space-5); min-width: 0; overflow: hidden; }
+.ed-wave i { flex: 1 1 0; max-width: var(--space-1); min-width: var(--space-0); height: var(--h); border-radius: var(--space-0); background: var(--line-strong); }
+.ed-wave i[data-on='true'] { background: var(--accent); }
+.ed-dur { flex: 0 0 auto; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ed-lede { margin: 0; font-size: var(--text-md); line-height: var(--leading); }
+.ed-group { display: flex; flex-direction: column; gap: var(--space-1); padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.ed-topic { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-muted); }
+.ed-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.ed-story { display: flex; align-items: flex-start; gap: var(--space-3); padding-right: var(--space-8); }
+.ed-story .pl-logo { margin-top: var(--space-0); }
+.ed-story-text { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
+.ed-story-title { font-size: var(--text-md); font-weight: var(--weight-semibold); line-height: var(--leading-tight); }
+.ed-story-line { font-size: var(--text-md); line-height: var(--leading); color: var(--text); }
+.ed-story-src { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1); font-size: var(--text-sm); color: var(--text-muted); }
+.ed-story-src .wb-src-link { color: var(--text-muted); font-weight: var(--weight-medium); }
+.ed-more { color: var(--text-faint); }
+.ed-mark { display: inline-flex; margin-right: var(--space-2); padding: 0 var(--space-1); border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: var(--text-2xs); font-weight: var(--weight-semibold); letter-spacing: .05em; text-transform: uppercase; color: var(--text-faint); vertical-align: middle; position: relative; top: -1px; }
+.ed-mark[data-kind='update'] { border-color: transparent; background: var(--accent-soft); color: var(--accent); }
+.ed-foot { margin: 0; padding-top: var(--space-3); border-top: 1px solid var(--line); font-size: var(--text-sm); color: var(--text-muted); }
+/* Show as text on the left, the edition's page on the right. */
+.ed-actions { display: flex; align-items: center; gap: var(--space-2); max-width: min(100%, calc(var(--read-max) + var(--space-8))); }
+.ed-actions .wb-report-link { margin-left: auto; }
+@media (max-width: 720px) { .ed { padding: var(--space-3); } }
+
 /* ---- Host API 1.27: the News page's grammar (the kit's News.jsx) ---- */
 /* A pick drawn as chips that wrap; the tab switch on the right of the same bar. */
 .pg-tabs-bar[data-chips='true'] { flex-wrap: wrap; align-items: center; }

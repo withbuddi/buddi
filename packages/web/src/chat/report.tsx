@@ -8,6 +8,7 @@
  * tool row. The link is a dashboard route only; a web address is no button.
  */
 import { AudioCard, isPlayableAudio } from './AudioCard';
+import { EditionReport, editionIdOf } from './EditionCard';
 import { Markdown } from './markdown';
 
 export const REPORT_TOOL = 'mission.report';
@@ -44,19 +45,31 @@ export function reportView(input: unknown, output: unknown): ReportView {
   };
 }
 
-/** The report as it was sent: the player above the text, the link under it. */
+/**
+ * The report as it was sent: the player above the text, the link under it.
+ * A report whose link names a saved news edition is drawn as the edition
+ * card, its text one tap away.
+ *
+ * The text keeps its lines: a single newline is a line break here (the
+ * Markdown renderer's rule for every paragraph), so a brief written as plain
+ * lines reads as lines.
+ */
 export function MissionReport({ view }: { view: ReportView }): JSX.Element | null {
   if (!view.text && !view.audio) return null;
+  const audio = view.audio ? (
+    <AudioCard artifactId={view.audio.fileId} name={view.audio.filename ?? 'Voice note'} mime={view.audio.mime} sizeBytes={view.audio.sizeBytes} />
+  ) : null;
+  const text = view.text ? (
+    <div className="wb-bubble" data-rich="true">
+      <Markdown text={view.text} />
+    </div>
+  ) : null;
+  const edition = editionIdOf(view.link?.route);
+  if (edition && view.link && view.text) return <EditionReport editionId={edition} text={text} audio={view.audio} link={view.link} />;
   return (
     <div className="wb-report" data-testid="mission-report">
-      {view.audio ? (
-        <AudioCard artifactId={view.audio.fileId} name={view.audio.filename ?? 'Voice note'} mime={view.audio.mime} sizeBytes={view.audio.sizeBytes} />
-      ) : null}
-      {view.text ? (
-        <div className="wb-bubble" data-rich="true">
-          <Markdown text={view.text} />
-        </div>
-      ) : null}
+      {audio}
+      {text}
       {view.link ? (
         <a className="ui-btn wb-report-link" data-size="sm" href={view.link.route}>
           {view.link.label}

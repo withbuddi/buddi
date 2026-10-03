@@ -4,6 +4,14 @@ What changes in buddi from one release to the next, newest first.
 
 ## Unreleased
 
+### Added
+
+- A news edition in chat is drawn as an edition card: its name and time, the voice note as a waveform, its first sentence, each topic with its stories (the outlet's logo, the headline with Update or Opinion, Anchor's line, the outlet linked out and "and N more"), and the next edition's time. The text as sent is one tap away under "Show as text", and is what shows when News cannot read the edition back.
+
+### Changed
+
+- Reports on Telegram keep their formatting: headings become bold lines, bold, italic and code show as such, and a link sits on its words instead of being spelled out; raw addresses stay as they are, and a long report still splits at a paragraph (before a topic when one is near), never inside a link. If Telegram refuses the markup, the report goes as plain text.
+
 ## 0.1.0-pre.36 — 2026-10-03
 
 ### Added

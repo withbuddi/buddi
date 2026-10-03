@@ -21,6 +21,7 @@ import {
 } from '@buddi/core';
 import type { Pool } from 'pg';
 import { TelegramApi } from './api.js';
+import { ownerMessageHtml } from './html.js';
 import { notifyOwner, ownerChatId, OwnerNotPairedError } from './notify.js';
 import { stillUsefulKeyboard } from './still-useful.js';
 
@@ -154,9 +155,13 @@ export function createTelegramChannel(opts: TelegramChannelOptions): OwnerChanne
         if (!voiceChat) throw new OwnerNotPairedError();
         await sendReportVoice(opts, voiceChat, message.audio);
       }
-      const chatId = await sendText(unlinkSignatures(ownerMessageText(stillUseful ? withoutAction : message)), {
+      const shown = stillUseful ? withoutAction : message;
+      const chatId = await sendText(unlinkSignatures(ownerMessageText(shown)), {
         pool: opts.pool,
         env: opts.env ?? process.env,
+        // A report's Markdown (headings, bold, italic, links) as Telegram
+        // HTML; an agent's own message stays the plain text it signed.
+        ...(message.kind !== 'agent' ? { html: ownerMessageHtml(shown).map(unlinkSignatures) } : {}),
         ...(offers.length > 0 ? { offers } : {}),
         ...(stillUseful ? { replyMarkup: stillUsefulKeyboard(message.id) } : {}),
       });
