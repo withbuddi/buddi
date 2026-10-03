@@ -6,7 +6,7 @@ import { BrowserManager } from './manager.js';
 import { PlaywrightHost, type LaunchProblem } from './host.js';
 import type { GuardedLookup } from './proxy.js';
 import { PlaywrightDriver } from './driver.js';
-import { ComputerDriver, NativeComputerBridge, resolveApp, settingsSchema, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type ControlSettings, type InstalledApp } from './computer.js';
+import { COMPUTER_HELPER_MISSING, ComputerDriver, computerHelperPresent, NativeComputerBridge, resolveApp, settingsSchema, spotlightApps, type AppResolver, type ComputerBridge, type ComputerPermissions, type ControlSettings, type InstalledApp } from './computer.js';
 import { ExtensionDriver, NOT_CONNECTED, type ExtensionBridge } from './extension.js';
 import type { BrowserController, BrowserEngineStatus, BrowserHandOffer, BrowserScope, BrowserStatus, BrowserRollover, SecretFillInput, SecretTypeInput } from './service.js';
 import { BrowserPreconditionError, type BrowserCommand } from './types.js';
@@ -54,6 +54,8 @@ export class HostController implements BrowserController {
     launch?: ProbeDeps['launch'];
     /** How an app name or bundle id is found on this Mac. Defaults to Spotlight. Injectable for tests. */
     resolveApp?: AppResolver;
+    /** Whether the native computer helper is on disk. Defaults to a stat of `dist/native/buddi-computer`. */
+    helperPresent?: () => boolean;
   } = {}) { this.#extension = options.extensionBridge; this.#manager = this.#create(); }
   /**
    * The gateway hands its WebSocket endpoint over once it exists.
@@ -152,7 +154,9 @@ export class HostController implements BrowserController {
   }
   status(scope?: BrowserScope): BrowserStatus {
     const status = this.#manager.status(scope);
-    const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions,
+    // On macOS, whether "Use my apps" can run at all: an install without the helper says so on that card.
+    const helper = this.#macOS ? { helper: (this.options.helperPresent ?? computerHelperPresent)() ? { present: true } : { present: false, message: COMPUTER_HELPER_MISSING } } : {};
+    const metadata = { mode: this.#settings.mode, settings: { ...this.#settings, allowedApps: [...this.#settings.allowedApps] }, permissions: this.#permissions, ...helper,
       ...(this.#settings.mode === 'playwright' ? { browser: this.#engine() } : {}) };
     const once = (entry: BrowserStatus): BrowserStatus => {
       const allowed = entry.session ? this.#once.get(entry.session.conversationId) : undefined;
@@ -336,7 +340,9 @@ export class HostController implements BrowserController {
     if (this.#changing || this.#manager.status().busy || this.#manager.status().sessions?.length) throw new Error('Release computer/browser sessions before checking permissions.');
     this.#changing = true;
     try {
-    if (process.platform !== 'darwin') this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: 'Computer mode requires macOS 14+. Browser automation remains an explicit alternative.' };
+    if (!this.#macOS) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: 'Computer mode requires macOS 14+. Browser automation remains an explicit alternative.' };
+    // No helper on disk: a fact the "Use my apps" card already shows, not a failure to shout about.
+    else if (!this.options.bridge && !(this.options.helperPresent ?? computerHelperPresent)()) this.#permissions = { supported: false, accessibility: false, screenRecording: false, message: COMPUTER_HELPER_MISSING };
     else {
       const bridge = this.options.bridge?.() ?? new NativeComputerBridge();
       const result = await bridge.run({ operation: 'permissions', prompt });

@@ -120,7 +120,7 @@ export { PlaywrightHost } from './host.js';
 export type { GuardedLookup } from './proxy.js';
 export { PlaywrightDriver } from './driver.js';
 export { HostController } from './controller.js';
-export { ComputerDriver, NativeComputerBridge, settingsSchema } from './computer.js';
+export { ComputerDriver, NativeComputerBridge, settingsSchema, COMPUTER_HELPER, COMPUTER_HELPER_MISSING, computerHelperPresent, computerHelperFacts } from './computer.js';
 export { ExtensionDriver, EXTENSION_COMMANDS, HAND_COMMANDS, NOT_CONNECTED } from './extension.js';
 export type { ExtensionBridge, ExtensionCommand, ExtensionCommandName, ExtensionResult } from './extension.js';
 export { commandSchema, UNTRUSTED, OBSERVE_AGAIN, MAILED_CODE, observedLine, BrowserPreconditionError, HAND_QUALITY, HAND_QUALITY_LOW } from './types.js';

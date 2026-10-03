@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { checkUrl } from '@buddi/core/plugin';
@@ -126,10 +127,28 @@ export function computerEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJ
     .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
 }
 
+/** Where the built helper lives: `dist/native/buddi-computer`, in a checkout and in the npm tarball alike. */
+export const COMPUTER_HELPER = fileURLToPath(new URL('../dist/native/buddi-computer', import.meta.url));
+/** The health line "Use my apps" carries when this install has no helper. */
+export const COMPUTER_HELPER_MISSING = 'The computer helper is missing from this install. Update buddi (npm install -g @withbuddi/buddi), or in a checkout run pnpm --filter @buddi/tool-browser build.';
+/** Is the helper on disk? A stat, cheap enough for a status the dashboard polls. */
+export function computerHelperPresent(executable = COMPUTER_HELPER): boolean { return existsSync(executable); }
+/** For `buddi doctor`: present or not, and the version the helper answers. */
+export async function computerHelperFacts(executable = COMPUTER_HELPER): Promise<{ path: string; present: boolean; version?: string; problem?: string }> {
+  if (!computerHelperPresent(executable)) return { path: executable, present: false };
+  try {
+    const answer = await new NativeComputerBridge(executable).run({ operation: 'version' });
+    return { path: executable, present: true, ...(typeof answer.version === 'string' ? { version: answer.version } : {}) };
+  } catch (error) {
+    // A helper built before the version operation refuses it: present, version unknown.
+    return { path: executable, present: true, problem: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** One-shot, bounded, fixed native executable. No shell or model-supplied code. */
 export class NativeComputerBridge implements ComputerBridge {
   #children = new Set<ChildProcessWithoutNullStreams>();
-  constructor(readonly executable = fileURLToPath(new URL('../dist/native/buddi-computer', import.meta.url))) {}
+  constructor(readonly executable = COMPUTER_HELPER) {}
   run(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (process.platform !== 'darwin') return Promise.reject(new BrowserPreconditionError('Computer control currently requires macOS 14+. Select Browser automation explicitly to use Playwright on this host.'));
     return new Promise((resolve, reject) => {
@@ -145,7 +164,7 @@ export class NativeComputerBridge implements ComputerBridge {
       });
       child.stderr.resume(); // Never log captured content or input values.
       child.stdin.on('error', () => {});
-      child.on('error', (error) => { failure = new Error(`Computer helper unavailable: ${error.message}. Build @buddi/tool-browser on macOS first.`); });
+      child.on('error', (error) => { failure = new BrowserPreconditionError((error as NodeJS.ErrnoException).code === 'ENOENT' ? COMPUTER_HELPER_MISSING : `Computer helper unavailable: ${error.message}.`); });
       child.on('close', (code, signal) => {
         clearTimeout(timer); this.#children.delete(child);
         if (failure) { reject(failure); return; }

@@ -2954,6 +2954,8 @@ export interface BrowserStatus {
   mode?: BrowserMode;
   settings?: ControlSettings;
   permissions?: { supported: boolean; accessibility: boolean; screenRecording: boolean; message?: string };
+  /** macOS only: whether this install has the native computer helper, and the fix when it does not. */
+  helper?: { present: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;
   busy: boolean;

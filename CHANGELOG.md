@@ -16,6 +16,8 @@ What changes in buddi from one release to the next, newest first.
 
 ### Fixed
 
+- The npm release now ships the macOS computer helper behind "Use my apps" (a universal arm64 + x86_64 binary, signed ad hoc, built by a macOS job in the release workflow); before, a Mac installed from npm had none and Settings said "Computer helper unavailable … ENOENT".
+- Settings → Computer & browser no longer shows a red error when the computer helper is missing: the "Use my apps" choice carries one line saying so and how to fix it, and Check again answers instead of failing. `buddi doctor` prints a "computer helper" row on macOS (present, and its version).
 - A tool name in a catalogue listing's owner-facing text (pitch, description, about, what changed, examples, mission names, skill descriptions), such as "(artifacts.write)", is rewritten in words from the tool's description, or dropped, wherever buddi shows it.
 
 ## 0.1.0-pre.35 — 2026-10-03

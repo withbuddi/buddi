@@ -34,6 +34,7 @@ import {
   createToolRegistry,
   dataDir,
   readExtensionRecord,
+  computerHelperFacts,
   defaultHttpTransport,
   describeDatabaseError,
   hydrateSecrets,
@@ -82,6 +83,7 @@ import {
   checkTailscale,
   checkSubscriptionSignIns,
   checkNodeVersion,
+  checkComputerHelper,
   checkPlugins,
   checkVault,
   type AgentEngineFact,
@@ -725,6 +727,12 @@ export function createProbes(env: NodeJS.ProcessEnv = process.env, opts: ProbeOp
         changed,
         disabled: (plugins.disabled ?? []).map((r) => r.name),
       });
+    },
+
+    /** macOS only: the native helper behind "Use my apps", present or not, and its version. */
+    async computerHelper(): Promise<ProbeResult | null> {
+      if (process.platform !== 'darwin') return null;
+      return checkComputerHelper(await computerHelperFacts());
     },
 
     /**

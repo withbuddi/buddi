@@ -41,6 +41,20 @@ describe('owner-controlled driver selection', () => {
     expect(JSON.parse(await readFile(path.join(dir, 'settings.json'), 'utf8')).mode).toBe('computer');
     await expect(linux.configure({ ...linux.status().settings!, mode: 'computer' })).rejects.toThrow('macOS-only');
   });
+  it('on macOS says whether the computer helper is there, and a check without it answers its fix instead of failing', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'buddi-computer-'));
+    const manager = () => new BrowserManager(() => ({} as BrowserDriver), { controlFile: path.join(dir, 'control.json') });
+    const missing = new HostController(dir, { manager, platform: 'darwin', helperPresent: () => false });
+    resources.push({ dir, controller: missing }); await missing.enable();
+    expect(missing.status().helper).toEqual({ present: false, message: expect.stringContaining('computer helper is missing') });
+    await expect(missing.checkPermissions(false)).resolves.toMatchObject({ permissions: { supported: false, message: expect.stringContaining('npm install -g @withbuddi/buddi') } });
+    const present = new HostController(dir, { manager, platform: 'darwin', helperPresent: () => true });
+    resources.push({ dir: await mkdtemp(path.join(tmpdir(), 'buddi-computer-')), controller: present }); await present.enable();
+    expect(present.status().helper).toEqual({ present: true });
+    const linux = new HostController(dir, { manager, platform: 'linux', helperPresent: () => false });
+    resources.push({ dir: await mkdtemp(path.join(tmpdir(), 'buddi-computer-')), controller: linux }); await linux.enable();
+    expect(linux.status().helper).toBeUndefined();
+  });
   it('serializes conversations on the desktop in computer mode', async () => {
     const { controller } = await setup();
     expect(controller.status().mode).toBe('computer');

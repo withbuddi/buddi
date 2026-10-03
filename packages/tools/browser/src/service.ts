@@ -59,6 +59,8 @@ export interface BrowserStatus {
   mode?: BrowserMode;
   settings?: { mode: BrowserMode; browserApp: string; allowedApps: string[]; browserProfile?: string };
   permissions?: { accessibility: boolean; screenRecording: boolean; supported: boolean; message?: string };
+  /** macOS only: whether the native computer helper ships with this install, and the fix when it does not. */
+  helper?: { present: boolean; message?: string };
   state: 'unavailable' | 'idle' | 'starting' | 'running' | 'paused' | 'stopped' | 'expired' | 'error';
   enabled: boolean;
   busy: boolean;

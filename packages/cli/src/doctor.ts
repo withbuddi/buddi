@@ -62,6 +62,11 @@ export interface DoctorProbes {
    */
   browser?(): Promise<ProbeResult>;
   /**
+   * macOS only: whether the native computer helper ("Use my apps") ships
+   * with this install, and the version it answers. `null` off macOS.
+   */
+  computerHelper?(): Promise<ProbeResult | null>;
+  /**
    * The mailboxes this installation reads and sends as, and when each last
    * saw mail. Optional for the same reason `config` is.
    */
@@ -130,6 +135,7 @@ const ROWS: Array<{ name: string; critical: boolean; probe: keyof DoctorProbes }
   // whose agents cannot open a website, which is a lost capability, not a
   // broken buddi.
   { name: 'browser', critical: false, probe: 'browser' },
+  { name: 'computer helper', critical: false, probe: 'computerHelper' },
   // Never critical: an installation with no mailbox is one that does no mail,
   // which is a capability the owner has not set up rather than a fault. What
   // it is not is silent — an account whose password left the vault stops
@@ -281,6 +287,13 @@ export function checkVault(facts: VaultFacts): ProbeResult {
 }
 
 /** Node's own floor. Kept here so the version rule is testable without a process. */
+/** The `computer helper` row, from what `computerHelperFacts` found. */
+export function checkComputerHelper(facts: { path: string; present: boolean; version?: string; problem?: string }): ProbeResult {
+  if (!facts.present) return { status: 'warn', detail: `missing (${facts.path}) — "Use my apps" cannot run; update buddi (npm install -g @withbuddi/buddi), or in a checkout pnpm --filter @buddi/tool-browser build` };
+  if (facts.version) return { status: 'ok', detail: `present, version ${facts.version}` };
+  return { status: 'ok', detail: `present, version unknown${facts.problem ? ` (${facts.problem})` : ''} — an older build; rebuild it to see one` };
+}
+
 export const MIN_NODE_MAJOR = 22;
 
 export function checkNodeVersion(version: string): ProbeResult {

@@ -58,6 +58,24 @@ describe('computer & browser settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Request macOS permissions' }));
     await waitFor(() => expect(api.computerPermissions).toHaveBeenCalledWith(true));
   });
+  it('says a missing computer helper once, as the “Use my apps” health line, with no banner and no permission checklist', async () => {
+    const message = 'The computer helper is missing from this install. Update buddi (npm install -g @withbuddi/buddi), or in a checkout run pnpm --filter @buddi/tool-browser build.';
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: false, accessibility: false, screenRecording: false, message }, helper: { present: false, message } });
+    render(<Browser />);
+    const card = await screen.findByRole('radio', { name: /Use my apps/ });
+    expect(card).toHaveTextContent(message);
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('Accessibility')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Ready\./)).not.toBeInTheDocument();
+    expect(screen.getByText(/cannot run on this install/)).toBeInTheDocument();
+  });
+  it('carries no health line when the helper is there, and none in another mode either', async () => {
+    vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'playwright', session: undefined, settings: { ...settings, mode: 'playwright' }, browser: { engine: 'chromium', headless: false }, helper: { present: true } });
+    render(<Browser />);
+    const card = await screen.findByRole('radio', { name: /Use my apps/ });
+    expect(card.querySelector('.mode-option-health')).toBeNull();
+  });
   it('off macOS, offers no computer control and shows a stored choice of it as the agents\' own browser', async () => {
     vi.mocked(api.session).mockResolvedValue({ csrf: 'c', timezone: 'UTC', host: '127.0.0.1', port: 1, platform: 'linux' });
     vi.mocked(api.browser).mockResolvedValue({ ...status, mode: 'computer', session: undefined, settings, permissions: { supported: false, accessibility: false, screenRecording: false } });

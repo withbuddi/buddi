@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md', 'feedback/**']
+  workflow_dispatch:
 jobs:
   # Code an owner or a plugin author runs changed, so CHANGELOG.md has to say
   # how. Seconds, with no install: git alone answers it.
@@ -40,3 +41,6 @@ jobs:
           echo "Changelog check passed."
   gate:
     uses: ./.github/workflows/gate.yml
+  # The macOS computer helper the release ships: still compiles, universal, signed.
+  native:
+    uses: ./.github/workflows/native.yml

@@ -50,7 +50,10 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
   const own = mode === 'playwright' ? data.browser : undefined;
   const installing = own?.install?.state === 'running';
   const noBrowser = own?.engine === 'none';
-  const ready = !!data.enabled && !noBrowser && !own?.problem && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
+  // An install without the native helper (an older npm release): "Use my apps" says so on its card, once.
+  const helperMissing = macOS && data.helper?.present === false;
+  const helperLine = helperMissing ? data.helper?.message ?? 'The computer helper is missing from this install. Update buddi.' : undefined;
+  const ready = !!data.enabled && !noBrowser && !own?.problem && !(computer && helperMissing) && (!computer || !perms?.supported || (perms.accessibility && perms.screenRecording));
   const readyLine = computer ? 'Ready. Agents can use your computer within the apps you allow below.'
     : mode === 'extension' ? 'Ready. Agents work in your Chrome, in background tabs, through the buddi extension.'
     : own?.engine === 'chrome' ? 'Ready. Agents work in their own browser, a separate Google Chrome profile. Your apps are never touched.'
@@ -80,12 +83,14 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
             </Notice>
           ) : own?.problem ? (
             <Notice tone="warning">{own.message}</Notice>
+          ) : computer && helperMissing ? (
+            <p className="muted">“Use my apps” cannot run on this install; see its card below.</p>
           ) : ready ? (
             <Notice tone="good">{readyLine}</Notice>
           ) : (
             <Notice tone="warning">macOS has not granted everything yet. Grant the permissions below, then check again.</Notice>
           )}
-          {!computer ? null : perms?.supported ? (
+          {!computer || helperMissing ? null : perms?.supported ? (
             <ul className="perm-list">
               <li className="perm-row">
                 <Pill tone={perms.accessibility ? 'good' : 'warning'}>{perms.accessibility ? 'Granted' : 'Needed'}</Pill>
@@ -112,7 +117,7 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
             </p>
           ) : null}
           {own?.headless && !noBrowser ? <p className="muted">The agents’ browser runs headless on this machine, since it has no display. Watch it and take over from the conversation’s Canvas.</p> : null}
-          {computer && perms?.message ? <p className="muted">{perms.message}</p> : null}
+          {computer && !helperMissing && perms?.message ? <p className="muted">{perms.message}</p> : null}
           {computer && perms?.supported && !ready ? <p className="muted">macOS may ask you to restart buddi after granting them.</p> : null}
         </Stack>
       </Section>
@@ -151,6 +156,7 @@ function ControlSettingsView({ data, macOS, reload, timezone }: { data: BrowserS
                 <ModeOption
                   current={settings.mode} value="computer" disabled={busy || active || !data.enabled}
                   title="Use my apps"
+                  health={helperLine}
                   body="Agents work in your own windows, signed in as you, in the browser profile you choose below. One agent at a time. Releasing control leaves everything open."
                   onPick={() => save({ ...settings, mode: 'computer' })}
                 />
@@ -378,7 +384,7 @@ function ExtensionPairing({ busy, timezone }: { busy: boolean; timezone?: string
   );
 }
 
-function ModeOption({ current, value, title, body, disabled, onPick }: { current: string; value: string; title: string; body: string; disabled: boolean; onPick: () => void }): JSX.Element {
+function ModeOption({ current, value, title, body, health, disabled, onPick }: { current: string; value: string; title: string; body: string; health?: string; disabled: boolean; onPick: () => void }): JSX.Element {
   const on = current === value;
   return (
     <button type="button" role="radio" aria-checked={on} className="mode-option" disabled={disabled} onClick={() => { if (!on) onPick(); }}>
@@ -386,6 +392,7 @@ function ModeOption({ current, value, title, body, disabled, onPick }: { current
       <span className="mode-option-text">
         <span className="mode-option-title">{title}</span>
         <span className="mode-option-body">{body}</span>
+        {health ? <span className="mode-option-health" role="status">{health}</span> : null}
       </span>
     </button>
   );

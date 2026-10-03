@@ -158,13 +158,18 @@ func click(_ point: CGPoint, _ s: State) throws {
     guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left), let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else { try refuse("Cannot create mouse event") }
     down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
 }
+/** Raised when the request/answer shape changes; `buddi doctor` prints it. */
+let helperVersion = "1"
 @main struct Computer {
     @MainActor static func main() async {
         var dispatched = false
         do {
             guard let request = try JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as? [String: Any], let operation = request["operation"] as? String else { try refuse("Invalid request") }
             var result: [String: Any] = [:]
-            if operation == "permissions" {
+            if operation == "version" {
+                // What `buddi doctor` prints: the helper's own protocol version, no permissions needed.
+                result = ["version": helperVersion]
+            } else if operation == "permissions" {
                 let prompt = request["prompt"] as? Bool == true
                 let ax = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary)
                 var screen = CGPreflightScreenCaptureAccess()
